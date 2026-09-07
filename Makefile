@@ -9,6 +9,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
 	build run start stop restart status test test-live fmt fmt-check lint check clean \
+	migrate migrate-down db-reset \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
 	check-all clean-all
@@ -28,6 +29,9 @@ help:
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --all -- --check"
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
+	@echo "  make migrate       apply pending db/migrations/ (up)"
+	@echo "  make migrate-down  revert the most recently applied migration"
+	@echo "  make db-reset      wipe the database (drop+recreate public schema) and reapply all migrations"
 	@echo "  make check         fmt-check + lint + test — what CI runs"
 	@echo "  make clean         remove Rust build artifacts and PID/log files"
 	@echo ""
@@ -110,6 +114,17 @@ check: fmt-check lint test
 clean:
 	cargo clean
 	rm -rf $(RUN_DIR)
+
+# --- Database (db/migrations/<version>_<description>/{up,down}.sql) --------
+
+migrate:
+	cargo run -p avalon-server --bin migrate -- up
+
+migrate-down:
+	cargo run -p avalon-server --bin migrate -- down
+
+db-reset:
+	cargo run -p avalon-server --bin migrate -- reset
 
 # --- JS/TS workspace (apps/hub, apps/mobile-hub, packages/ui) ---------------
 # npm workspaces, declared in the repo-root package.json. Nothing here has

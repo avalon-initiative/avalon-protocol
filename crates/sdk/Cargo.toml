@@ -10,3 +10,11 @@ description = "Rust reference SDK for integrating a game with Avalon. Thin over 
 avalon-protocol = { path = "../protocol" }
 async-trait.workspace = true
 thiserror.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+serde_json.workspace = true
