@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/vue3'
-import AvalonButton from './AvalonButton.vue'
+import AvalonButton from '../components/AvalonButton.vue'
 
 const meta: Meta<typeof AvalonButton> = {
   title: 'Avalon/Button',
