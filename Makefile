@@ -12,7 +12,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	migrate migrate-down db-reset \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
-	inspect-ledger \
+	inspect-ledger create-identity \
 	check-all clean-all
 
 help:
@@ -50,6 +50,7 @@ help:
 	@echo "  make csharp-test   dotnet test bindings/csharp/AvalonSdk.sln"
 	@echo ""
 	@echo "  make inspect-ledger   pretty-print the hash-chained ledger (avalon-cli)"
+	@echo "  make create-identity  prompt for username/password (and optional server) and register"
 	@echo ""
 	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
@@ -171,6 +172,9 @@ csharp-test:
 
 inspect-ledger:
 	cargo run -p avalon-cli -- inspect-ledger
+
+create-identity:
+	@bash scripts/create-identity.sh
 
 # --- Everything -------------------------------------------------------------
 
