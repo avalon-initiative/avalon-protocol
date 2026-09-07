@@ -32,9 +32,7 @@ infrastructure between games, not a platform that owns them.
 - **History is verifiable, not just shared.** Achievements are signed attestations
   a receiving game can independently verify and decide whether to trust — not
   arbitrary rows in someone else's database.
-- **Blockchain is optional, not foundational.** Milestone 1 is a signed,
-  append-only ledger; whether and how an actual chain fits in later is a real open
-  decision, not assumed — see [ADR: Attestations Before Blockchain](https://github.com/LunarVagabond/avalon-protocol/issues/68).
+- **Settlement is a public transparency log, not federation or blockchain consensus.** Milestone 1 is a signed, append-only ledger. Long-term, durable facts are independently verifiable and mirrorable by anyone — not gated behind servers whitelisting each other, and not requiring mining/consensus to referee a scarcity problem Avalon doesn't have — see [ADR: Attestations Before Blockchain](https://github.com/LunarVagabond/avalon-protocol/issues/68) and [ADR: Settlement Is a Public Transparency Log](https://github.com/LunarVagabond/avalon-protocol/issues/70).
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination.
 

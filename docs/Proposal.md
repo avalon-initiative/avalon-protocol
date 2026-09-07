@@ -528,6 +528,14 @@ Blockchain may eventually be useful for:
 
 Avalon should not require blockchain adoption in order to provide value.
 
+When a durable settlement layer exists, it takes the shape of a public, append-only, cryptographically verifiable log — not a network of servers each deciding whether to trust the others, and not a mining-based consensus network.
+
+Federation solves the wrong problem here. It makes visibility conditional on which server a game happens to trust, which quietly recreates the walled gardens Avalon exists to avoid.
+
+Mining-based consensus also solves the wrong problem. It exists to let mutually distrusting parties agree on who writes next when they're contesting something scarce. Avalon's writes are already unambiguous — a game signs its own achievement issuance, a player signs their own identity claim. There is no scarce resource being contested.
+
+What Avalon actually needs is simpler than either: anyone can verify an entry without asking permission, and anyone can mirror the log without being trusted first. That is a transparency log, not a blockchain in the currency sense.
+
 ---
 
 # 15. Economy and Currency
@@ -691,9 +699,11 @@ Possible operators include:
 * Hosting providers
 * Gaming organizations
 
-The initial implementation does not need federation.
+Multiple operators does not mean federation in the walled-garden sense — one server deciding whether to trust another. It means multiple organizations mirroring and serving reads from the same public, verifiable record, the way multiple parties can mirror a Certificate Transparency log today.
 
-The architecture should simply avoid making future federation impossible.
+The initial implementation does not need multiple mirrors.
+
+The architecture should simply avoid making that impossible later.
 
 Do not claim decentralization before it actually exists.
 
@@ -965,9 +975,9 @@ Achievements and attestations can survive individual games.
 
 An asset does not need identical functionality everywhere.
 
-### 7. Blockchain is optional.
+### 7. Blockchain is optional. Federation is not the model.
 
-Use it where it provides meaningful value.
+Durable settlement, when it exists, is a public log anyone can verify and mirror without permission — not servers that whitelist each other, and not consensus built to referee a scarcity problem Avalon doesn't have.
 
 ### 8. Open source first.
 
