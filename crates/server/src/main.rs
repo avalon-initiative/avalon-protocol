@@ -33,7 +33,8 @@ async fn main() {
         .await
         .expect("failed to run migrations");
 
-    let app = avalon_server::router(AppState { pool });
+    let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone());
+    let app = avalon_server::router(AppState { pool, chain });
 
     println!("avalon-server listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr)

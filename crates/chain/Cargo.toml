@@ -4,12 +4,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Avalon's trust and attestation ledger. Milestone 1: a signed, append-only Postgres-backed SettlementProvider — not a blockchain. See docs/adr/0002-attestations-before-blockchain.md."
+description = "Avalon's trust and attestation ledger. Milestone 1: a hash-chained, append-only Postgres-backed SettlementProvider — not a blockchain. See GitHub issues #68 and #70."
 
 [dependencies]
 avalon-protocol = { path = "../protocol" }
 async-trait.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 time.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+sqlx.workspace = true
+sha2 = "0.10"
+hex.workspace = true
+
+[dev-dependencies]
+dotenvy.workspace = true
+tokio.workspace = true

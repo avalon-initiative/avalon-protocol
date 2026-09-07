@@ -15,7 +15,7 @@
 
 mod postgres;
 
-pub use postgres::PostgresSettlementProvider;
+pub use postgres::{LedgerEntryView, PostgresSettlementProvider};
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch};

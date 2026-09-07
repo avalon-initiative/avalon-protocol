@@ -64,9 +64,15 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "avalon-protocol",
+ "dotenvy",
+ "hex",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
  "thiserror",
  "time",
+ "tokio",
  "uuid",
 ]
 
@@ -74,8 +80,11 @@ dependencies = [
 name = "avalon-cli"
 version = "0.1.0"
 dependencies = [
+ "avalon-chain",
  "avalon-protocol",
  "avalon-sdk",
+ "dotenvy",
+ "sqlx",
  "tokio",
 ]
 

@@ -1,3 +1,6 @@
+use avalon_chain::SettlementProvider;
+use avalon_protocol::events::{EventBatch, ProtocolEvent};
+use avalon_protocol::ids::GlobalId;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
@@ -88,6 +91,28 @@ pub async fn register(
     insert_credential?;
 
     tx.commit().await?;
+
+    // Committed in a separate step from the transaction above: this is a
+    // milestone-1 simplification, not the final word — a crash between the
+    // two could leave an identity without a ledger entry. Real event
+    // batching/outbox handling is issue #38, still open.
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.created".to_string(),
+        issuer: GlobalId::new("network", "avalon-server", "system", "registration"),
+        subject: GlobalId::new("identity", &identity_id.to_string(), "self", "created"),
+        payload: serde_json::json!({ "identity_id": identity_id, "username": body.username }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    state
+        .chain
+        .commit(&EventBatch {
+            id: Uuid::new_v4(),
+            events: vec![event],
+            created_at: OffsetDateTime::now_utc(),
+        })
+        .await?;
 
     Ok(Json(RegisterResponse { identity_id }))
 }

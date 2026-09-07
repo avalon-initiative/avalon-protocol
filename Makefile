@@ -12,6 +12,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	migrate migrate-down db-reset \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
+	inspect-ledger \
 	check-all clean-all
 
 help:
@@ -47,6 +48,8 @@ help:
 	@echo "C# SDK (bindings/csharp) — flagship external SDK for game developers"
 	@echo "  make csharp-build  dotnet build bindings/csharp/AvalonSdk.sln"
 	@echo "  make csharp-test   dotnet test bindings/csharp/AvalonSdk.sln"
+	@echo ""
+	@echo "  make inspect-ledger   pretty-print the hash-chained ledger (avalon-cli)"
 	@echo ""
 	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
@@ -163,6 +166,11 @@ csharp-build:
 
 csharp-test:
 	cd bindings/csharp && dotnet test AvalonSdk.sln
+
+# --- Ledger inspection -------------------------------------------------------
+
+inspect-ledger:
+	cargo run -p avalon-cli -- inspect-ledger
 
 # --- Everything -------------------------------------------------------------
 

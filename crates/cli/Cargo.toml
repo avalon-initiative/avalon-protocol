@@ -9,7 +9,10 @@ description = "Local dev/ops tooling: register a game, issue a test achievement,
 [dependencies]
 avalon-protocol = { path = "../protocol" }
 avalon-sdk = { path = "../sdk" }
+avalon-chain = { path = "../chain" }
 tokio.workspace = true
+sqlx.workspace = true
+dotenvy.workspace = true
 
 [[bin]]
 name = "avalon"
