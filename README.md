@@ -4,7 +4,7 @@
 `server`, `sdk`, `cli`), the web/mobile Hub apps, and the C# SDK skeleton all exist
 and build, but no real server, database, or auth logic is wired up yet. See
 [`docs/Proposal.md`](docs/Proposal.md) for the full design and
-[`docs/adr/`](docs/adr/) for decisions made along the way.
+[`docs/WhyAvalon.md`](docs/WhyAvalon.md) for the case for why this needs to exist.
 
 Avalon Protocol is an open, Rust-based interoperability layer for independent games:
 one persistent player identity, one social graph, that a player carries between
@@ -23,7 +23,7 @@ infrastructure between games, not a platform that owns them.
 ## Why Avalon
 
 - **Identity is separate from characters.** One persistent identity, any number of
-  unrelated characters across games — see [ADR 0001](docs/adr/0001-identity-separate-from-characters.md).
+  unrelated characters across games — see [ADR: Identity Is Separate From Game Characters](https://github.com/LunarVagabond/avalon-protocol/issues/67).
 - **Interoperability is opt-in.** A game chooses which Avalon capabilities it wants
   (identity, guilds, achievements, ...) and which other issuers' attestations it
   trusts. Nothing is forced.
@@ -34,7 +34,7 @@ infrastructure between games, not a platform that owns them.
   arbitrary rows in someone else's database.
 - **Blockchain is optional, not foundational.** Milestone 1 is a signed,
   append-only ledger; whether and how an actual chain fits in later is a real open
-  decision, not assumed — see [ADR 0002](docs/adr/0002-attestations-before-blockchain.md).
+  decision, not assumed — see [ADR: Attestations Before Blockchain](https://github.com/LunarVagabond/avalon-protocol/issues/68).
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination.
 
@@ -60,15 +60,25 @@ bindings/
   csharp/     flagship external SDK for game developers (Unity-targeted)
 
 docs/
-  Proposal.md   the living design document
-  adr/          architecture decision records
+  Proposal.md    the living design document
+  WhyAvalon.md   the case for why this needs to exist
+  players/       docs for people playing games that use Avalon
+  developers/    docs for game developers integrating the SDKs
+  maintainers/   docs for contributors to this repo
+  stakeholders/  docs for people evaluating Avalon from the outside
 ```
+
+Architecture decisions are tracked as closed GitHub issues labeled
+`architecture-decision-record`, not as files in this repo — see
+[decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record)
+and [still-open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen)
+decisions.
 
 ## Learn more
 
 | Design | Decisions | Process |
 |---|---|---|
-| [Proposal](docs/Proposal.md) — the full design, phased roadmap, and open questions | [Decisions](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision) · [ADRs](docs/adr/) | [Contributing](CONTRIBUTING.md) |
+| [Proposal](docs/Proposal.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](CONTRIBUTING.md) |
 
 ## Contributing
 
