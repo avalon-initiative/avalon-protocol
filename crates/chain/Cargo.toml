@@ -1,0 +1,15 @@
+[package]
+name = "avalon-chain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Avalon's trust and attestation ledger. Milestone 1: a signed, append-only Postgres-backed SettlementProvider — not a blockchain. See docs/adr/0002-attestations-before-blockchain.md."
+
+[dependencies]
+avalon-protocol = { path = "../protocol" }
+async-trait.workspace = true
+serde.workspace = true
+time.workspace = true
+uuid.workspace = true
+thiserror.workspace = true

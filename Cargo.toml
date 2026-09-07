@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/chain",
+    "crates/server",
+    "crates/indexer",
+    "crates/sdk",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/LunarVagabond/avalon-protocol"
+
+[workspace.dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+time = { version = "0.3", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

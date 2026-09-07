@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <<If this project has a design-principles doc or a "does this belong in core"
+        filter, mention it here so requests get checked against it up front. Delete this
+        line if the project has no such filter yet.>>
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      placeholder: e.g. <<a concrete situation where the current behavior falls short>>
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach (optional)
+      placeholder: Rough ideas welcome.
+
+  # Delete this whole block if the project has no scope/design filter to check
+  # feature requests against.
+  - type: checkboxes
+    id: acceptance
+    attributes:
+      label: Feature filter
+      options:
+        - label: <<one-line restatement of the project's core scope filter>>
+          required: true

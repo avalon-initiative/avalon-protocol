@@ -1,0 +1,99 @@
+# Rust
+/target/
+crates/*/target/
+
+# Node / npm workspaces (apps/hub, apps/mobile-hub, packages/ui)
+node_modules/
+dist/
+apps/*/dist/
+apps/*/node_modules/
+packages/*/node_modules/
+storybook-static/
+
+# Tauri
+apps/mobile-hub/src-tauri/target/
+apps/mobile-hub/src-tauri/gen/
+
+# .NET (bindings/csharp)
+bindings/csharp/**/bin/
+bindings/csharp/**/obj/
+
+# -----------------------------------------------------------------------------
+# Common patterns — OS junk, editors, secrets, scratch. Stack-specific entries
+# (target/, node_modules/, __pycache__/, etc.) go above this block, added
+# fresh per project.
+# -----------------------------------------------------------------------------
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.key
+
+# Logs
+logs/
+*.log
+
+# make start/stop (Makefile) — per-service pid/log files
+_running/
+
+# Test and coverage output
+coverage/
+*.lcov
+
+# Caches and incremental build metadata
+.cache/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor and IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.iml
+.fleet/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+
+# Vim / Emacs swap files
+*.swp
+*.swo
+*~
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+Session.vim
+.netrwhist
+
+# Windows / Visual Studio
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+!bindings/csharp/*.sln
+*.sw?
+
+# Debug and profiling
+*.prof
+*.profraw
+
+# Patch and merge leftovers
+*.orig
+*.rej
+
+# Optional local scratch
+tmp/
+temp/
+scratch/

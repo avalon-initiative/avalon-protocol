@@ -1,0 +1,17 @@
+.avalonButton {
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  border: none;
+  cursor: pointer;
+}
+
+.primary {
+  background: #5b4dff;
+  color: white;
+}
+
+.secondary {
+  background: transparent;
+  border: 1px solid #5b4dff;
+  color: #5b4dff;
+}

@@ -1,0 +1,12 @@
+[package]
+name = "avalon-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust reference SDK for integrating a game with Avalon. Thin over avalon-protocol and the avalon-server API — never exposes internal database structures. The C# SDK (bindings/csharp) is the flagship developer-facing surface; this crate is both the reference implementation and directly usable by Rust-based games/tools."
+
+[dependencies]
+avalon-protocol = { path = "../protocol" }
+async-trait.workspace = true
+thiserror.workspace = true

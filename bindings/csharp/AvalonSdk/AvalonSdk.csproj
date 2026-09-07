@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <!-- netstandard2.1, not net8+: Unity's Mono/IL2CPP runtimes are the primary
+         target for this SDK, and Unity's minimum supported C# API compatibility
+         level is netstandard2.1 as of writing. Revisit if/when engine support
+         moves on. -->
+    <!-- No ImplicitUsings: the generated global-using file requires C# 10+,
+         but netstandard2.1's default langversion is 8.0. Explicit usings
+         below instead of bumping langversion, to stay conservative for
+         whatever C# compiler version a consuming Unity project pins. -->
+    <Nullable>enable</Nullable>
+    <RootNamespace>Avalon.Sdk</RootNamespace>
+    <PackageId>Avalon.Sdk</PackageId>
+    <Description>Flagship external SDK for integrating a game with Avalon Protocol. Targets game engines (Unity, and anything else on a netstandard2.1-compatible runtime) as the primary developer-facing surface — see docs/Proposal.md §24.</Description>
+  </PropertyGroup>
+
+</Project>

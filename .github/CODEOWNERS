@@ -1,0 +1,9 @@
+# Default: everything not matched more specifically below.
+* @<<OWNER>>
+
+# Per-area ownership — only fill this in if this project is a multi-crate/
+# multi-package workspace where different areas genuinely have different
+# owners. Delete this whole block for a single-package project.
+# /<<path/to/area>>/   @<<OWNER>>
+# /docs/               @<<OWNER>>
+# /.github/            @<<OWNER>>

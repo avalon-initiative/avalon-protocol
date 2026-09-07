@@ -1,0 +1,16 @@
+[package]
+name = "avalon-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local dev/ops tooling: register a game, issue a test achievement, inspect the ledger, drive the milestone-1 vertical slice without a game client."
+
+[dependencies]
+avalon-protocol = { path = "../protocol" }
+avalon-sdk = { path = "../sdk" }
+tokio.workspace = true
+
+[[bin]]
+name = "avalon"
+path = "src/main.rs"

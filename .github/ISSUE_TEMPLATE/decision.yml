@@ -1,0 +1,57 @@
+name: Decision
+description: Record an architecture/design decision as its own issue
+title: "[Decision] "
+labels: ["decision"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One decision per issue — don't reuse this for a decision that already has its own
+        thread elsewhere. Leave this open while it's still being discussed, close it the
+        moment the decision is made (that's the signal, not a comment saying so), and if
+        it changes later, open a new decision issue with "Supersedes #<this one>" rather
+        than editing this one.
+        <<If this project documents its own decision-log convention (e.g. under
+        docs/project-management/), link it here instead of this generic version.>>
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why does this decision need making at all?
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision
+      description: What was actually decided. Leave blank while still under discussion.
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      placeholder: |
+        - Reason
+        - Reason
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: |
+        - Option A
+        - Option B
+
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What does this commit us to? What gets harder or easier as a result?
+
+  - type: input
+    id: related
+    attributes:
+      label: Related
+      placeholder: "#42, or \"Supersedes #17\""
