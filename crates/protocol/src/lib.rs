@@ -5,9 +5,10 @@
 //! definitions as the source of truth for what Avalon *is*, independent of how
 //! any particular deployment implements it.
 //!
-//! See `docs/Proposal.md` for the narrative version of this model and
-//! `docs/adr/` for the decisions behind specific boundaries (e.g. why identity
-//! and game characters are modeled separately: ADR 0001).
+//! See `docs/Proposal.md` for the narrative version of this model. Real
+//! architecture decisions are recorded as closed GitHub issues labeled
+//! `architecture-decision-record`, not as files in this repo (e.g. why
+//! identity and game characters are modeled separately: issue #67).
 
 pub mod achievements;
 pub mod events;

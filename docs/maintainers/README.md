@@ -9,7 +9,7 @@ scaffolded templates, this is where local dev setup, release process, and
 
 Until then, see:
 
-- [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) — contribution workflow
+- [`../../.github/CONTRIBUTING.md`](../../.github/CONTRIBUTING.md) — contribution workflow
   (still template placeholders pending a fill-in pass)
 - [`../../.claude/CLAUDE.md`](../../.claude/CLAUDE.md) — current architecture
   map and conventions (local-only, not committed)

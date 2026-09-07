@@ -74,6 +74,13 @@ for it — the piece every platform-locked and character-locked attempt so far h
 skipped, because none of them had a reason to make their version of this work for
 someone else's game too.
 
+"Open" here means something specific: a player's identity is a fact any
+integrated game can read, not a fact that depends on which server a game
+happens to trust. That rules out federation (separate servers deciding whether
+to recognize each other) as much as it rules out one company's walled garden —
+both make identity conditional on a relationship between servers instead of a
+property of the player.
+
 See [`Proposal.md`](Proposal.md) for what that actually looks like in practice —
 identity separate from characters, guilds and friends as network entities,
 achievements as attestations, and games that stay fully sovereign while opting in

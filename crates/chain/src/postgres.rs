@@ -1,9 +1,12 @@
 //! Postgres-backed `SettlementProvider` — milestone 1's only implementation.
 //!
-//! Deliberately stubbed out at scaffolding time: which Postgres driver to use
-//! (sqlx vs. tokio-postgres vs. diesel-async) is its own small decision, not
-//! yet made. The shape below is what the rest of the workspace should be able
-//! to compile against once that decision lands and this is filled in.
+//! Still stubbed: `crates/server` already settled on `sqlx` as the Postgres
+//! driver, so this crate should follow suit rather than reopening that
+//! choice. What's still open (issue #40) is the entry format itself — this
+//! needs to store hash-chained, signed entries from the start (per issue
+//! #70's transparency-log decision), not a plain row per commitment, so a
+//! future mirror can independently verify the log rather than trusting this
+//! database.
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch};

@@ -1,7 +1,7 @@
 //! Player identity, separate from any game's character model.
 //!
-//! See ADR 0001 (`docs/adr/0001-identity-separate-from-characters.md`) for why
-//! this boundary is mandatory rather than incidental.
+//! See GitHub issue #67 ("ADR: Identity Is Separate From Game Characters") for
+//! why this boundary is mandatory rather than incidental.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

@@ -76,11 +76,11 @@ decisions.
 
 | Design | Decisions | Process |
 |---|---|---|
-| [Proposal](docs/Proposal.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](CONTRIBUTING.md) |
+| [Proposal](docs/Proposal.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
 
 ## Contributing
 
-This repo is private and pre-release; see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+This repo is private and pre-release; see [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the
 workflow once it opens up.
 
 ## License
