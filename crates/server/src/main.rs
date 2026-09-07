@@ -14,7 +14,7 @@ use avalon_server::{migrate, state::AppState};
 use sqlx::postgres::PgPoolOptions;
 
 fn migrations_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../db/migrations")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
 }
 
 #[tokio::main]

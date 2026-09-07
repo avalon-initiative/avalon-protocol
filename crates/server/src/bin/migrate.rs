@@ -8,7 +8,7 @@ use avalon_server::migrate;
 use sqlx::postgres::PgPoolOptions;
 
 fn migrations_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../db/migrations")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("db/migrations")
 }
 
 #[tokio::main]
