@@ -67,3 +67,36 @@ export interface UpdateProfileRequest {
   display_name?: string
   avatar_url?: string
 }
+
+// Friends/presence wire types (issue #18), matching
+// crates/server/src/friends.rs and crates/server/src/presence.rs
+// field-for-field — plain snake_case, unlike the WebAuthn challenge shapes
+// above.
+
+export interface FriendshipResponse {
+  a: string
+  b: string
+  since: string
+}
+
+export interface CreateFriendRequestRequest {
+  to: string
+}
+
+export interface FriendRequestResponse {
+  id: string
+  from: string
+  to: string
+  requested_at: string
+}
+
+export type PresenceStatus = 'Online' | 'Away' | 'Offline'
+
+export interface PresenceResponse {
+  identity_id: string
+  status: PresenceStatus
+  // Always null today — no game-side presence-publish path exists yet
+  // (see #16's scope cut, and #18's own correction note on the issue).
+  playing: string | null
+  updated_at: string
+}

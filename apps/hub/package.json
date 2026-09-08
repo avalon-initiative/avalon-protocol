@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.0",
+    "@vue/test-utils": "^2.4.0",
     "sass": "^1.79.0",
     "typescript": "^5.6.0",
     "vue-tsc": "^2.1.0",

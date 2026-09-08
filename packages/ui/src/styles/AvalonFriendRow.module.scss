@@ -1,0 +1,30 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: #e5e5e5;
+  flex-shrink: 0;
+}
+
+.name {
+  flex: 1;
+  font-size: 0.9375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remove {
+  border: none;
+  background: transparent;
+  color: #d92d20;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
