@@ -97,6 +97,16 @@ export interface ResolveHandleResponse {
   identity_id: string
 }
 
+// GET /me/history (issue #121) — the caller's own protocol event history,
+// matching crates/server/src/handlers.rs's HistoryEntryResponse.
+export interface HistoryEntryResponse {
+  event_id: string
+  kind: string
+  subject: string
+  payload: unknown
+  timestamp: string
+}
+
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'
 
 export interface PresenceResponse {

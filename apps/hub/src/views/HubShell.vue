@@ -37,13 +37,14 @@ onMounted(async () => {
   }
 })
 
-// Real tabs today are exactly Profile and Friends — add a new entry here
-// (plus a matching child route) when a future ticket (#24 guild, #35
-// achievements, #105 DMs) adds real tab content. Don't add a tab for
-// something that has no route/content yet.
+// Real tabs today are exactly Profile, Friends, and Activity (#121) — add a
+// new entry here (plus a matching child route) when a future ticket (#24
+// guild, #35 achievements, #105 DMs) adds real tab content. Don't add a tab
+// for something that has no route/content yet.
 const tabs = computed<AvalonTabItem[]>(() => [
   { label: 'Profile', to: '/profile', active: route.path === '/profile' },
   { label: 'Friends', to: '/friends', active: route.path === '/friends' },
+  { label: 'Activity', to: '/activity', active: route.path === '/activity' },
 ])
 
 function onSelectTab(to: string) {

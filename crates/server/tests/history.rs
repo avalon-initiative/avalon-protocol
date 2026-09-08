@@ -1,0 +1,133 @@
+//! Exercises `GET /me/history` (issue #121) against a real, running
+//! `avalon-server` and Postgres. Gated `--ignored` since it needs live
+//! infra — see `make test-live` / `make start`.
+//!
+//! Ledger entries are seeded directly via SQL rather than through the
+//! outbox worker — same reasoning `crates/server/tests/friends.rs` already
+//! documents for seeding identities/sessions directly: this endpoint
+//! doesn't care how an entry got into `ledger_entries`, only that it reads
+//! back correctly filtered by issuer.
+
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+fn server_url() -> String {
+    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
+}
+
+async fn test_pool() -> PgPool {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    PgPoolOptions::new()
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres — is it reachable?")
+}
+
+async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
+    let identity_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+        .bind(identity_id)
+        .execute(pool)
+        .await
+        .expect("failed to seed identity");
+    sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
+        .bind(identity_id)
+        .bind(format!("history-test-{identity_id}"))
+        .execute(pool)
+        .await
+        .expect("failed to seed profile");
+
+    let token = format!("test-token-{}", Uuid::new_v4());
+    let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
+    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(&token)
+        .bind(identity_id)
+        .bind(expires_at)
+        .execute(pool)
+        .await
+        .expect("failed to seed session");
+
+    (identity_id, token)
+}
+
+/// Appends one ledger entry directly, issued by `identity_id` under `verb`
+/// (mirrors `crates/server/src/friends.rs`'s `identity_ref` issuer shape:
+/// `identity:<id>:self:<verb>`). `prev_hash`/`entry_hash` are junk — this
+/// endpoint doesn't verify chain integrity (see
+/// `avalon_chain::PostgresSettlementProvider::list_entries_for_issuer_prefix`'s
+/// own docs on why), only reads issuer/kind/subject/payload/timestamp back.
+async fn seed_ledger_entry(pool: &PgPool, identity_id: Uuid, kind: &str, verb: &str) {
+    let issuer = format!("identity:{identity_id}:self:{verb}");
+    sqlx::query(
+        r#"
+        INSERT INTO ledger_entries
+            (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash)
+        VALUES ($1, $2, $3, $4, $5, $6, 1, 'seed', $7)
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(kind)
+    .bind(&issuer)
+    .bind(&issuer)
+    .bind(serde_json::json!({ "identity_id": identity_id }))
+    .bind(OffsetDateTime::now_utc())
+    .bind(format!("seed-{}", Uuid::new_v4()))
+    .execute(pool)
+    .await
+    .expect("failed to seed ledger entry");
+}
+
+fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
+    request.bearer_auth(token)
+}
+
+#[tokio::test]
+#[ignore]
+async fn my_history_returns_only_the_callers_own_events() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (bob_id, bob_token) = seed_identity_session(&pool).await;
+
+    seed_ledger_entry(&pool, alice_id, "identity.created", "created").await;
+    seed_ledger_entry(&pool, alice_id, "friend.requested", "friend_requested").await;
+    seed_ledger_entry(&pool, bob_id, "identity.created", "created").await;
+
+    let alice_history: serde_json::Value =
+        auth(http.get(format!("{base}/me/history")), &alice_token)
+            .send()
+            .await
+            .expect("history request failed — is `make start` running?")
+            .json()
+            .await
+            .unwrap();
+    let alice_entries = alice_history.as_array().unwrap();
+    assert_eq!(alice_entries.len(), 2);
+    assert!(alice_entries.iter().all(|e| e["subject"]
+        .as_str()
+        .unwrap()
+        .contains(&alice_id.to_string())));
+
+    let bob_history: serde_json::Value = auth(http.get(format!("{base}/me/history")), &bob_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(bob_history.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+#[ignore]
+async fn my_history_requires_a_session() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http.get(format!("{base}/me/history")).send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+}

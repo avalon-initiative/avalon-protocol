@@ -146,6 +146,18 @@ candidates for both before it closes.
   together ([#71](https://github.com/LunarVagabond/avalon-protocol/issues/71)).
 - The ledger shares `avalon-server`'s `PgPool` and migrations; milestone 1 has
   one database. Split when `chain` gets its own deployment, not before.
+- `list_entries_for_issuer_prefix` — a narrower, unverified issuer-filtered
+  read (no hash/link recomputation, unlike `list_entries`), behind
+  `GET /me/history` (issue #121, `crates/server/src/handlers.rs::my_history`).
+  **Design decision**: reads the ledger directly rather than through the
+  indexer, since `crates/indexer` is still scaffolding (no real projection
+  store exists yet) — a ledger read is the only real read path today. This
+  stays a narrow, server-constructed, caller-scoped read (the issuer prefix
+  is always built from the authenticated identity id, never accepted as a
+  request parameter) rather than a general query surface, so it doesn't
+  cross this document's "settlement is not the general-purpose query
+  database" boundary. Revisit once the indexer (#42/#43) is real — see
+  [query-and-indexing.md](./query-and-indexing.md).
 
 ## Decisions and tickets
 

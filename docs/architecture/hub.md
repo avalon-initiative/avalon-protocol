@@ -97,18 +97,19 @@ is visibly marked.
   (display name, handle, identity id, log out) plus tab navigation
   (`AvalonTabs`, `packages/ui`), with `<RouterView />` swapping tab
   content in place. Tabs are real nested routes under a shared parent
-  (`/profile`, `/friends` as children of `HubShell.vue` in
+  (`/profile`, `/friends`, `/activity` as children of `HubShell.vue` in
   `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable, not
   client-side-only state; `requiresAuth` is set once on the parent route
   and inherited by every child via `vue-router`'s meta-merging across
-  matched records. Today's two real tabs are Profile (`Profile.vue`, just
+  matched records. Today's three real tabs are Profile (`Profile.vue`, just
   the display-name/avatar-url edit form now — the identity header/logout it
-  used to own moved to the shell) and Friends (`Friends.vue`, #18, trimmed
+  used to own moved to the shell), Friends (`Friends.vue`, #18, trimmed
   of the card wrapper and manual cross-navigation link the tab nav now
-  replaces). **Every future Hub UI ticket should add a new tab (a child
-  route + a `tabs` entry in `HubShell.vue`) instead of a new standalone
-  route** — this is what #24 (guild view + chat), #35 (achievements), #105
-  (DMs), and #121 (my activity) should build against.
+  replaces), and Activity (`Activity.vue`, #121 — see below). **Every future
+  Hub UI ticket should add a new tab (a child route + a `tabs` entry in
+  `HubShell.vue`) instead of a new standalone route** — this is what #24
+  (guild view + chat), #35 (achievements), and #105 (DMs) should build
+  against.
 - `Friends.vue` (#18) polls `GET /friends` + `GET /friends/requests` +
   `GET /presence` every 60s (no server-configured interval is knowable
   client-side; a push subscription is #119, not built) and merges
@@ -125,6 +126,15 @@ is visibly marked.
   shareable form. One remaining scope cut, documented not silent: there is
   no "Playing &lt;game&gt;" label (no game registry exists, `Presence.playing`
   is always `null` in practice today).
+- `Activity.vue` (#121) — "what does the network know about me": a plain
+  list of the caller's own protocol events from `GET /me/history`
+  (`crates/server/src/handlers.rs::my_history`), which reads the ledger
+  directly rather than through the indexer (see
+  [settlement](./settlement.md)'s "Today in the repo" for why). Not a
+  chain/block explorer — that's a separate, unscoped idea; just the
+  caller's own events, kind + subject + timestamp + raw payload, newest
+  first. An empty list (a fresh identity, only `identity.created` pending in
+  the outbox) renders a sensible message rather than a blank page.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).

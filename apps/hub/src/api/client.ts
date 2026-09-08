@@ -6,6 +6,7 @@ import type {
   CreateFriendRequestRequest,
   FriendRequestResponse,
   FriendshipResponse,
+  HistoryEntryResponse,
   PresenceResponse,
   ProfileResponse,
   RegisterFinishRequest,
@@ -72,6 +73,10 @@ export function getMe(token: string): Promise<ProfileResponse> {
 
 export function updateProfile(token: string, body: UpdateProfileRequest): Promise<ProfileResponse> {
   return request('/me', { method: 'PATCH', body, token })
+}
+
+export function getMyHistory(token: string): Promise<HistoryEntryResponse[]> {
+  return request('/me/history', { token })
 }
 
 export function listFriends(token: string): Promise<FriendshipResponse[]> {
