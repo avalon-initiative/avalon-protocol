@@ -130,6 +130,26 @@ protocol and the domain model in `crates/protocol`; they never pull in
   fed by a background task for the connection's lifetime. `friends()`
   itself is unchanged — still a one-shot `presence_of` batch, not
   auto-subscribed.
+- `crates/sdk/src/guilds.rs` (#23) — `Session::guilds()` (`guilds.read`,
+  wired to `GET /me/guilds`, with one follow-up `GET /guilds/{id}` per
+  membership to fill in the full `Guild` that endpoint doesn't itself
+  return) and `Session::guild(id)`, a `GuildHandle` closing over a guild id
+  with `roster()` (`guilds.read`, `GET /guilds/{id}/members`) and
+  `channels()` (`guilds.chat`, `GET /guilds/{id}/channels`), plus
+  `GuildHandle::channel(cid)`, a `ChannelHandle` with `messages(before,
+  limit)` and `send(body)` (both `guilds.chat`, wired to `GET`/`POST
+  /guilds/{id}/channels/{cid}/messages`). No `guilds.*` blanket check —
+  reads use `guilds.read`, chat uses `guilds.chat`. `roster()` embeds each
+  member's `Presence` only when `presence.read` is also granted, same
+  batched-`presence_of` pattern `friends()` uses, and returns
+  `GuildRosterMember` (an SDK-side view type wrapping the protocol
+  `GuildMember`) rather than the raw protocol type, for the same reason
+  `friends()` returns `Friend` instead of `Friendship` — there's nowhere on
+  the protocol type to put the merged `Presence`. `roster()`/`channels()`/
+  `messages()` apply no visibility scoping (#87, same gap `presence_of`
+  already has). Creating guilds, inviting, kicking, changing roles, and
+  managing channels are deliberately not on the SDK — player-authority-only
+  actions taken through the Hub.
 - `crates/sdk/tests/authenticate.rs` — live test (`make test-live`) covering a
   successful authenticate, an invalid token, and a capability being rejected.
 - `crates/sdk/tests/social.rs` — live tests (`make test-live`) covering
@@ -138,6 +158,13 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `update_presence`/`presence`/`presence_of` round-tripping through a real
   server, and `subscribe_presence` receiving a real pushed update (plus its
   own capability check) over a real websocket connection.
+- `crates/sdk/tests/guilds.rs` — live tests (`make test-live`) covering
+  `guilds()` listing a membership created through `POST /guilds`,
+  `roster()` returning the owner as a member with no presence embedded
+  without `presence.read`, `channel(cid).send()` then `.messages()`
+  round-tripping a message through the default `general` channel every
+  guild is seeded with, and `guilds.chat` being required independently of
+  `guilds.read`.
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — `AvalonClient.cs`, `Session.cs` skeleton; no

@@ -215,6 +215,13 @@ with Game A becomes historical.
   (via #21's `guild_members` table, now merged alongside #22); moderators
   (`manage_channels`) can hard-delete a message outright, since there's no
   history to preserve.
+- The Rust SDK's guild surface (issue #23) is real:
+  `crates/sdk/src/guilds.rs`'s `Session::guilds()` (`guilds.read`) lists the
+  caller's own memberships, `Session::guild(id).roster()` (`guilds.read`)
+  and `.channels()`/`.channel(cid).messages()`/`.send()` (`guilds.chat`)
+  read the roster and chat and post as the player — never as the game.
+  Creating guilds, inviting, kicking, changing roles, and managing channels
+  stay Hub-only, not exposed on the SDK. See `docs/architecture/sdk.md`.
 - Hub guild views (`apps/hub`, `apps/mobile-hub`, `packages/ui`) are scaffolding.
 
 ## Decisions and tickets
