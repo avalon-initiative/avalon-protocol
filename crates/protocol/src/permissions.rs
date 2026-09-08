@@ -4,22 +4,162 @@
 //! has actually authorized, never everything associated with an identity.
 //! See `Proposal.md` §13.
 
-use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::fmt;
+use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::OffsetDateTime;
 
 use crate::ids::{GameId, IdentityId};
 
-/// A single scoped permission string, e.g. `"achievements.issue"`.
+/// A single scoped permission, e.g. `presence.read`.
 ///
-/// Kept as a newtype over `String` rather than a closed enum so the
-/// capability list can grow without a protocol version bump for every
-/// addition — see `Proposal.md` §13 for the starting list.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Capability(pub String);
+/// Enum-backed with a permanent-string mapping, not a bare `String` and not
+/// a closed enum — a plain newtype-over-`String` (this type's original
+/// shape) meant nothing stopped `"achievements.read"` and
+/// `"achievement.read"` from both compiling and silently failing to match at
+/// a `Session::require(...)` call site; a fully closed enum would need a
+/// protocol version bump for every new capability. `Other(String)` is the
+/// escape hatch that keeps the old shape's extensibility: an unrecognized
+/// wire string round-trips through it rather than erroring, so a client
+/// running an older build never breaks on a capability it doesn't know
+/// about yet.
+///
+/// **The wire string (`as_str()`) is the permanent identifier, the Rust
+/// variant name is not.** These strings already flow into durable ledger
+/// payloads (permission-grant events) that must decode forever — renaming a
+/// variant is always safe, changing what string it maps to, once anything
+/// has shipped referencing it, is not. Serde (de)serializes through the
+/// string for exactly this reason, never through the variant name.
+///
+/// This is the template issue #82's event-kind catalogue (and later
+/// `GlobalId`'s namespace-kind segment) should reuse — same shape, applied
+/// there once actually needed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Capability {
+    IdentityRead,
+    ProfileRead,
+    FriendsRead,
+    PresenceRead,
+    PresencePublish,
+    GuildsRead,
+    GuildsChat,
+    GuildsIssue,
+    AchievementsRead,
+    AchievementsIssue,
+    AssetsRead,
+    AssetsIssue,
+    WalletRead,
+    WalletWrite,
+    /// Anything not yet known to this build — never dropped, never
+    /// rejected.
+    Other(String),
+}
 
 impl Capability {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
+    /// Every known (non-`Other`) variant — the one place that enumerates
+    /// the full capability set, for `Session::require(...)` callers,
+    /// permission-grant validation, and the Hub's consent UI to draw from
+    /// instead of hand-listing strings at each call site.
+    pub const KNOWN: &'static [Capability] = &[
+        Capability::IdentityRead,
+        Capability::ProfileRead,
+        Capability::FriendsRead,
+        Capability::PresenceRead,
+        Capability::PresencePublish,
+        Capability::GuildsRead,
+        Capability::GuildsChat,
+        Capability::GuildsIssue,
+        Capability::AchievementsRead,
+        Capability::AchievementsIssue,
+        Capability::AssetsRead,
+        Capability::AssetsIssue,
+        Capability::WalletRead,
+        Capability::WalletWrite,
+    ];
+
+    /// The permanent wire string this capability (de)serializes as. See
+    /// this type's own doc comment: this string, not the variant name, is
+    /// the identifier that must never change once shipped.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Capability::IdentityRead => "identity.read",
+            Capability::ProfileRead => "profile.read",
+            Capability::FriendsRead => "friends.read",
+            Capability::PresenceRead => "presence.read",
+            Capability::PresencePublish => "presence.publish",
+            Capability::GuildsRead => "guilds.read",
+            Capability::GuildsChat => "guilds.chat",
+            Capability::GuildsIssue => "guilds.issue",
+            Capability::AchievementsRead => "achievements.read",
+            Capability::AchievementsIssue => "achievements.issue",
+            Capability::AssetsRead => "assets.read",
+            Capability::AssetsIssue => "assets.issue",
+            Capability::WalletRead => "wallet.read",
+            Capability::WalletWrite => "wallet.write",
+            Capability::Other(s) => s,
+        }
+    }
+}
+
+impl fmt::Display for Capability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Infallible on purpose — an unrecognized string is a valid `Capability`
+/// (`Other`), never a parse error. `Err` is `Infallible` rather than `()`
+/// or a real error type so the type system itself documents that this
+/// conversion cannot fail.
+impl FromStr for Capability {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "identity.read" => Capability::IdentityRead,
+            "profile.read" => Capability::ProfileRead,
+            "friends.read" => Capability::FriendsRead,
+            "presence.read" => Capability::PresenceRead,
+            "presence.publish" => Capability::PresencePublish,
+            "guilds.read" => Capability::GuildsRead,
+            "guilds.chat" => Capability::GuildsChat,
+            "guilds.issue" => Capability::GuildsIssue,
+            "achievements.read" => Capability::AchievementsRead,
+            "achievements.issue" => Capability::AchievementsIssue,
+            "assets.read" => Capability::AssetsRead,
+            "assets.issue" => Capability::AssetsIssue,
+            "wallet.read" => Capability::WalletRead,
+            "wallet.write" => Capability::WalletWrite,
+            other => Capability::Other(other.to_string()),
+        })
+    }
+}
+
+impl From<&str> for Capability {
+    fn from(s: &str) -> Self {
+        // Infallible per FromStr above.
+        s.parse().unwrap_or_else(|_: Infallible| unreachable!())
+    }
+}
+
+impl From<String> for Capability {
+    fn from(s: String) -> Self {
+        Capability::from(s.as_str())
+    }
+}
+
+impl Serialize for Capability {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Capability {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Capability::from(s))
     }
 }
 
@@ -42,5 +182,70 @@ impl PermissionGrant {
             Some(revoked_at) => revoked_at > now,
             None => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the exact wire string every known variant maps to — the test
+    /// that catches an accidental rename of the *wire* string, which must
+    /// never happen once anything ships (see this module's doc comment).
+    #[test]
+    fn known_variants_map_to_their_permanent_wire_string() {
+        let expected: &[(Capability, &str)] = &[
+            (Capability::IdentityRead, "identity.read"),
+            (Capability::ProfileRead, "profile.read"),
+            (Capability::FriendsRead, "friends.read"),
+            (Capability::PresenceRead, "presence.read"),
+            (Capability::PresencePublish, "presence.publish"),
+            (Capability::GuildsRead, "guilds.read"),
+            (Capability::GuildsChat, "guilds.chat"),
+            (Capability::GuildsIssue, "guilds.issue"),
+            (Capability::AchievementsRead, "achievements.read"),
+            (Capability::AchievementsIssue, "achievements.issue"),
+            (Capability::AssetsRead, "assets.read"),
+            (Capability::AssetsIssue, "assets.issue"),
+            (Capability::WalletRead, "wallet.read"),
+            (Capability::WalletWrite, "wallet.write"),
+        ];
+        assert_eq!(expected.len(), Capability::KNOWN.len());
+        for (capability, wire) in expected {
+            assert_eq!(capability.as_str(), *wire);
+        }
+    }
+
+    #[test]
+    fn every_known_variant_round_trips_through_its_string() {
+        for capability in Capability::KNOWN {
+            let round_tripped: Capability = capability.as_str().parse().unwrap();
+            assert_eq!(&round_tripped, capability);
+        }
+    }
+
+    #[test]
+    fn an_unrecognized_string_round_trips_through_other_with_no_data_loss() {
+        let capability: Capability = "some.future.capability".parse().unwrap();
+        assert_eq!(
+            capability,
+            Capability::Other("some.future.capability".to_string())
+        );
+        assert_eq!(capability.as_str(), "some.future.capability");
+    }
+
+    #[test]
+    fn serde_round_trips_through_the_string_not_the_variant_name() {
+        let json = serde_json::to_string(&Capability::FriendsRead).unwrap();
+        assert_eq!(json, "\"friends.read\"");
+        let back: Capability = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Capability::FriendsRead);
+
+        let unknown_json = "\"a.brand.new.capability\"";
+        let unknown: Capability = serde_json::from_str(unknown_json).unwrap();
+        assert_eq!(
+            unknown,
+            Capability::Other("a.brand.new.capability".to_string())
+        );
     }
 }

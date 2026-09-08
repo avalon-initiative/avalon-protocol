@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 
 use avalon_protocol::ids::IdentityId;
+use avalon_protocol::permissions::Capability;
 use avalon_protocol::social::{Friendship, Presence, PresenceStatus};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -114,7 +115,7 @@ impl Session {
     /// [`Presence`] when `presence.read` is granted too, via a single batched
     /// `presence_of` call rather than one request per friend.
     pub async fn friends(&self) -> Result<Vec<Friend>, SdkError> {
-        self.require("friends.read")?;
+        self.require(Capability::FriendsRead)?;
 
         let response = self
             .http
@@ -127,19 +128,20 @@ impl Session {
         }
         let friendships: Vec<Friendship> = response.json().await?;
 
-        let presence_by_id = if self.require("presence.read").is_ok() && !friendships.is_empty() {
-            let other_ids: Vec<IdentityId> = friendships
-                .iter()
-                .map(|f| if f.a == self.identity().id { f.b } else { f.a })
-                .collect();
-            self.presence_of(&other_ids)
-                .await?
-                .into_iter()
-                .map(|p| (p.identity_id, p))
-                .collect()
-        } else {
-            HashMap::new()
-        };
+        let presence_by_id =
+            if self.require(Capability::PresenceRead).is_ok() && !friendships.is_empty() {
+                let other_ids: Vec<IdentityId> = friendships
+                    .iter()
+                    .map(|f| if f.a == self.identity().id { f.b } else { f.a })
+                    .collect();
+                self.presence_of(&other_ids)
+                    .await?
+                    .into_iter()
+                    .map(|p| (p.identity_id, p))
+                    .collect()
+            } else {
+                HashMap::new()
+            };
 
         Ok(friendships
             .iter()
@@ -150,7 +152,7 @@ impl Session {
     /// The calling player's own presence, as the server currently has it.
     /// Requires `presence.read`.
     pub async fn presence(&self) -> Result<Presence, SdkError> {
-        self.require("presence.read")?;
+        self.require(Capability::PresenceRead)?;
         let mine = self.presence_of(&[self.identity().id]).await?;
         // The store always answers for any id (missing/stale reads as
         // Offline — see crates/server/src/presence.rs), so this is always
@@ -165,7 +167,7 @@ impl Session {
     /// `GET /presence?ids=…` for the given identities. Requires
     /// `presence.read`. No visibility filtering — see module docs.
     pub async fn presence_of(&self, ids: &[IdentityId]) -> Result<Vec<Presence>, SdkError> {
-        self.require("presence.read")?;
+        self.require(Capability::PresenceRead)?;
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -224,7 +226,7 @@ impl Session {
         &self,
         ids: &[IdentityId],
     ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Presence>, SdkError> {
-        self.require("presence.read")?;
+        self.require(Capability::PresenceRead)?;
 
         let url = websocket_url(
             &self.server_url,
@@ -266,7 +268,6 @@ impl Session {
 mod tests {
     use super::*;
     use avalon_protocol::identity::{Identity, Profile};
-    use avalon_protocol::permissions::Capability;
     use time::OffsetDateTime;
     use uuid::Uuid;
 
@@ -302,7 +303,7 @@ mod tests {
                 display_name: "test".to_string(),
                 avatar_url: None,
             },
-            granted: granted.into_iter().map(Capability::new).collect(),
+            granted: granted.into_iter().map(Capability::from).collect(),
             http: reqwest::Client::new(),
             // Deliberately unroutable — these tests must never actually
             // reach the network; an attempted connection here would hang or

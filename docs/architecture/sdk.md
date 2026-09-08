@@ -76,10 +76,16 @@ is exactly the authority Avalon does not have.
 A `Session` is scoped to the capabilities the player actually granted the game
 under an active [binding](./game-bindings.md). `achievements()` requires
 `achievements.read`; `issue_achievement()` requires `achievements.issue`;
-`friends()` will require `friends.read`; and so on. A method with no grant
-fails with `CapabilityNotGranted` rather than silently returning less. The
-starting capability list is in
-[Proposal §13](../stakeholders/Proposal.md#13-permission-model).
+`friends()` requires `friends.read`; and so on. A method with no grant
+fails with `CapabilityNotGranted` rather than silently returning less.
+
+`Capability` (`crates/protocol/src/permissions.rs`, #98) is an enum with a
+permanent-string mapping, not a bare `String`: `Capability::KNOWN` lists
+every known variant, `as_str()`/`Display` give the wire string each one
+(de)serializes as, and `Other(String)` preserves any capability string this
+build doesn't know about yet rather than erroring — the wire string, not the
+Rust variant name, is the permanent identifier. The starting capability list
+is in [Proposal §13](../stakeholders/Proposal.md#13-permission-model).
 
 ## Languages
 
