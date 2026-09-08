@@ -16,9 +16,12 @@ export interface RegisterStartRequest {
 
 export interface RegisterStartResponse {
   ticket_id: string
-  // Server sends { public_key: PublicKeyCredentialCreationOptionsJSON } —
-  // see crates/server/src/handlers.rs's CreationChallengeResponse.
-  challenge: { public_key: PublicKeyCredentialCreationOptionsJSON }
+  // Server sends { publicKey: PublicKeyCredentialCreationOptionsJSON } —
+  // camelCase here even though the rest of this response is snake_case,
+  // because CreationChallengeResponse (crates/server/src/handlers.rs, from
+  // webauthn-rs-proto) mirrors the browser's native CredentialCreationOptions
+  // shape, which is camelCase per the WebAuthn spec itself.
+  challenge: { publicKey: PublicKeyCredentialCreationOptionsJSON }
 }
 
 export interface RegisterFinishRequest {
@@ -38,8 +41,9 @@ export interface SessionStartRequest {
 
 export interface SessionStartResponse {
   ticket_id: string
-  // Server's RequestChallengeResponse: { public_key: ..., mediation? }.
-  challenge: { public_key: PublicKeyCredentialRequestOptionsJSON; mediation?: string }
+  // Server's RequestChallengeResponse: { publicKey: ..., mediation? } — same
+  // camelCase-nested-in-snake_case shape as RegisterStartResponse above.
+  challenge: { publicKey: PublicKeyCredentialRequestOptionsJSON; mediation?: string }
 }
 
 export interface SessionFinishRequest {

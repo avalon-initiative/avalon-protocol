@@ -6,7 +6,7 @@
 // picking this library — see issue #55's PR description for that check;
 // the shapes line up exactly (camelCase, base64url-no-pad fields, and the
 // same clientExtensionResults/extensions aliasing on the response side), no
-// adapter needed beyond unwrapping the server's `{ public_key: ... }`
+// adapter needed beyond unwrapping the server's `{ publicKey: ... }`
 // envelope before calling in.
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/browser'

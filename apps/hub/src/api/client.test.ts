@@ -33,7 +33,7 @@ describe('api client', () => {
   })
 
   it('sends no Authorization header for unauthenticated calls', async () => {
-    mockFetchOnce(200, { ticket_id: 't', challenge: { public_key: {} } })
+    mockFetchOnce(200, { ticket_id: 't', challenge: { publicKey: {} } })
 
     await registerStart({ identity_id: 'id', display_name: 'name' })
 

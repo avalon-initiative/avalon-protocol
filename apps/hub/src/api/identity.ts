@@ -25,7 +25,7 @@ export async function createIdentity(displayName: string): Promise<CreateIdentit
     display_name: displayName,
   })
 
-  const webauthnCredential = await runRegistrationCeremony(challenge.public_key)
+  const webauthnCredential = await runRegistrationCeremony(challenge.publicKey)
 
   const { publicKey, secretKey } = generateAndStoreSigningKey(identityId)
   const signingBytes = identityCreatedSigningBytes(identityId, displayName)
@@ -49,7 +49,7 @@ export interface LoginResult {
 export async function login(identityId: string): Promise<LoginResult> {
   const { ticket_id, challenge } = await api.sessionStart({ identity_id: identityId })
 
-  const credential = await runAuthenticationCeremony(challenge.public_key)
+  const credential = await runAuthenticationCeremony(challenge.publicKey)
 
   const { token, expires_at } = await api.sessionFinish({ ticket_id, credential })
 
