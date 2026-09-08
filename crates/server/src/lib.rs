@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod devices;
 pub mod error;
 pub mod friends;
+pub mod guilds;
 pub mod handlers;
 pub mod migrate;
 pub mod outbox;
@@ -96,6 +97,21 @@ pub fn router(state: AppState) -> Router {
         .route("/me/devices", get(devices::list_devices))
         .route("/me/devices/:id", patch(devices::rename_device))
         .route("/me/devices/:id/revoke", post(devices::revoke_device))
+        .route("/guilds", post(guilds::create_guild))
+        .route(
+            "/guilds/:id",
+            get(guilds::get_guild).patch(guilds::update_guild),
+        )
+        .route(
+            "/guilds/:id/roles",
+            get(guilds::list_roles).post(guilds::create_role),
+        )
+        .route("/guilds/:id/roles/:idx", patch(guilds::update_role))
+        .route(
+            "/guilds/:id/transfer-ownership",
+            post(guilds::transfer_ownership),
+        )
+        .route("/guilds/:id/games/:game_id", post(guilds::associate_game))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

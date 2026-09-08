@@ -25,6 +25,55 @@ pub struct GuildRole {
     pub name_index: u32,
 }
 
+/// Guild-level permissions a role can carry. Deliberately a small, fixed
+/// set for milestone 1 (issue #20) rather than an open/extensible bitset —
+/// custom role *names* are allowed, custom permissions are not, yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuildPermission {
+    ManageGuild,
+    ManageRoles,
+    ManageMembers,
+    ManageChannels,
+}
+
+impl GuildPermission {
+    pub const ALL: [GuildPermission; 4] = [
+        GuildPermission::ManageGuild,
+        GuildPermission::ManageRoles,
+        GuildPermission::ManageMembers,
+        GuildPermission::ManageChannels,
+    ];
+
+    /// [`Self::ALL`], pre-rendered as strings — for seeding the starter
+    /// `owner` role's `permissions` column without an allocation per call.
+    pub const ALL_STRS: &'static [&'static str] = &[
+        "manage_guild",
+        "manage_roles",
+        "manage_members",
+        "manage_channels",
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GuildPermission::ManageGuild => "manage_guild",
+            GuildPermission::ManageRoles => "manage_roles",
+            GuildPermission::ManageMembers => "manage_members",
+            GuildPermission::ManageChannels => "manage_channels",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<GuildPermission> {
+        Some(match s {
+            "manage_guild" => GuildPermission::ManageGuild,
+            "manage_roles" => GuildPermission::ManageRoles,
+            "manage_members" => GuildPermission::ManageMembers,
+            "manage_channels" => GuildPermission::ManageChannels,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuildMember {
     pub guild_id: GuildId,
