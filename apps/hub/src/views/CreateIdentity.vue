@@ -22,12 +22,19 @@ const error = ref('')
 const createdIdentityId = ref('')
 const copied = ref(false)
 
+// The signing key's BIP39 recovery phrase (#134) — shown exactly once,
+// right here, same reasoning as the identity id above: this is the only
+// moment the player will ever see it, since it's never stored anywhere.
+const signingKeyMnemonic = ref('')
+const mnemonicCopied = ref(false)
+
 async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    const { identityId } = await createIdentity(displayName.value)
+    const { identityId, signingKeyMnemonic: mnemonic } = await createIdentity(displayName.value)
     createdIdentityId.value = identityId
+    signingKeyMnemonic.value = mnemonic
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -38,6 +45,11 @@ async function onSubmit() {
 async function copyIdentityId() {
   await navigator.clipboard.writeText(createdIdentityId.value)
   copied.value = true
+}
+
+async function copyMnemonic() {
+  await navigator.clipboard.writeText(signingKeyMnemonic.value)
+  mnemonicCopied.value = true
 }
 
 async function continueToProfile() {
@@ -59,12 +71,27 @@ async function continueToProfile() {
     <code :class="styles.identityId">{{ createdIdentityId }}</code>
     <div :class="styles.actions">
       <AvalonButton :label="copied ? 'Copied' : 'Copy'" variant="secondary" @click="copyIdentityId" />
-      <AvalonButton label="Continue to profile" variant="primary" @click="continueToProfile" />
     </div>
     <p :class="styles.copyHint">
       If your browser or password manager saved a passkey just now, it should also remember this id
       as the login username — but save it somewhere yourself too, just in case.
     </p>
+
+    <h2>Save your recovery phrase</h2>
+    <p :class="styles.copyHint">
+      This is the only time you'll see this phrase — write it down and keep it somewhere safe. If
+      you ever use a new device or clear this browser's storage, this phrase is how you recover
+      your signing key.
+    </p>
+    <code :class="styles.identityId">{{ signingKeyMnemonic }}</code>
+    <div :class="styles.actions">
+      <AvalonButton
+        :label="mnemonicCopied ? 'Copied' : 'Copy'"
+        variant="secondary"
+        @click="copyMnemonic"
+      />
+      <AvalonButton label="Continue to profile" variant="primary" @click="continueToProfile" />
+    </div>
   </AvalonAuthCard>
   <AvalonAuthCard
     v-else
