@@ -92,30 +92,27 @@ is visibly marked.
   repo" for the crypto/API layer underneath registration/login (#55). All
   server traffic goes through `apps/hub/src/api/`; nothing calls `fetch`
   directly outside it.
-- **The logged-in Hub is a persistent shell with tabs, not separate pages
-  (issue #130).** `HubShell.vue` renders an always-visible identity header
-  (display name, handle, identity id, log out) plus tab navigation
-  (`AvalonTabs`, `packages/ui`), with `<RouterView />` swapping tab
-  content in place. Tabs are real nested routes under a shared parent
-  (`/profile`, `/friends`, `/activity` as children of `HubShell.vue` in
+- **The logged-in Hub is a persistent shell with tabs, not separate pages.**
+  `HubShell.vue` renders an always-visible identity header (display name,
+  handle, identity id, log out) plus tab navigation (`AvalonTabs`,
+  `packages/ui`), with `<RouterView />` swapping tab content in place. Tabs
+  are real nested routes under a shared parent (`/profile`, `/friends`,
+  `/activity` as children of `HubShell.vue` in
   `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable, not
   client-side-only state; `requiresAuth` is set once on the parent route
   and inherited by every child via `vue-router`'s meta-merging across
-  matched records. Today's three real tabs are Profile (`Profile.vue`, just
-  the display-name/avatar-url edit form now — the identity header/logout it
-  used to own moved to the shell), Friends (`Friends.vue`, #18, trimmed
-  of the card wrapper and manual cross-navigation link the tab nav now
-  replaces), and Activity (`Activity.vue`, #121 — see below). **Every future
-  Hub UI ticket should add a new tab (a child route + a `tabs` entry in
-  `HubShell.vue`) instead of a new standalone route** — this is what #24
-  (guild view + chat), #35 (achievements), and #105 (DMs) should build
-  against.
+  matched records. Today's three real tabs are Profile (`Profile.vue` —
+  display-name/avatar-url edit form; the identity header/logout lives in
+  the shell instead), Friends (`Friends.vue`, #18), and Activity
+  (`Activity.vue`, #121 — see below). **Every future Hub UI ticket should
+  add a new tab (a child route + a `tabs` entry in `HubShell.vue`) instead
+  of a new standalone route** — this is what #24 (guild view + chat), #35
+  (achievements), and #105 (DMs) should build against.
 - `Friends.vue` (#18) keeps each friend's presence live via
   `apps/hub/src/api/client.ts::openPresenceSocket` (`GET /ws/presence`,
   #136), re-subscribed with the current friend-id set on every refresh.
-  `GET /friends` + `GET /friends/requests` still poll (5 min, was 60s
-  before #136 — presence itself no longer depends on that interval for
-  liveness; only friend-*list* membership changes, which aren't pushed,
+  `GET /friends` + `GET /friends/requests` still poll every 5 minutes
+  (membership changes — accept/decline/remove — aren't pushed, so they
   still need it) and merge with a one-shot presence catch-up client-side in
   `apps/hub/src/api/friends.ts` — `GET /friends` does not embed presence
   server-side (see
@@ -161,8 +158,6 @@ is visibly marked.
   `DELETE /friends/:id`, `GET /presence` — a real WebAuthn + Ed25519 flow
   for identity, not the plain-credential shape earlier drafts of this doc
   set implied.
-- `npm install` at the repo root has been run and verified in this
-  environment.
 
 ## Decisions and tickets
 
