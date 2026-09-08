@@ -8,10 +8,12 @@ import { describe, expect, it } from 'vitest'
 import {
   AvalonAvatar,
   AvalonBottomNav,
+  AvalonCapabilityConsentRow,
   AvalonCard,
   AvalonChannelList,
   AvalonChatComposer,
   AvalonChatMessage,
+  AvalonConnectionCard,
   AvalonFilterBar,
   AvalonForm,
   AvalonFriendRequestRow,
@@ -399,5 +401,65 @@ describe('AvalonFilterBar', () => {
     expect(select.exists()).toBe(true)
     await select.setValue('name')
     expect(wrapper.emitted('update:sortValue')?.[0]).toEqual(['name'])
+  })
+})
+
+describe('AvalonCapabilityConsentRow', () => {
+  const baseProps = { capability: 'friends.read', description: 'See your friends list', checked: false }
+
+  it('renders the capability and its description', () => {
+    const wrapper = mount(AvalonCapabilityConsentRow, { props: baseProps })
+    expect(wrapper.text()).toContain('friends.read')
+    expect(wrapper.text()).toContain('See your friends list')
+  })
+
+  it('is unchecked by default', () => {
+    const wrapper = mount(AvalonCapabilityConsentRow, { props: baseProps })
+    expect((wrapper.find('input[type=checkbox]').element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('reflects a checked prop', () => {
+    const wrapper = mount(AvalonCapabilityConsentRow, { props: { ...baseProps, checked: true } })
+    expect((wrapper.find('input[type=checkbox]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('emits update:checked when toggled', async () => {
+    const wrapper = mount(AvalonCapabilityConsentRow, { props: baseProps })
+    await wrapper.find('input[type=checkbox]').setValue(true)
+    expect(wrapper.emitted('update:checked')?.[0]).toEqual([true])
+  })
+})
+
+describe('AvalonConnectionCard', () => {
+  const baseProps = {
+    gameName: 'Ashen Realms',
+    slug: 'ashen-realms',
+    establishedAt: '2026-09-01',
+    grants: [{ capability: 'friends.read', description: 'See your friends list' }],
+  }
+
+  it('renders the game name, slug, and grant descriptions', () => {
+    const wrapper = mount(AvalonConnectionCard, { props: baseProps })
+    expect(wrapper.text()).toContain('Ashen Realms')
+    expect(wrapper.text()).toContain('ashen-realms')
+    expect(wrapper.text()).toContain('See your friends list')
+  })
+
+  it('shows a message when there are no active grants', () => {
+    const wrapper = mount(AvalonConnectionCard, { props: { ...baseProps, grants: [] } })
+    expect(wrapper.text()).toContain('No active capability grants.')
+  })
+
+  it('emits revoke-grant with the capability when a revoke button is clicked', async () => {
+    const wrapper = mount(AvalonConnectionCard, { props: baseProps })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('revoke-grant')?.[0]).toEqual(['friends.read'])
+  })
+
+  it('emits disconnect when the disconnect button is clicked', async () => {
+    const wrapper = mount(AvalonConnectionCard, { props: baseProps })
+    const buttons = wrapper.findAll('button')
+    await buttons[buttons.length - 1].trigger('click')
+    expect(wrapper.emitted('disconnect')).toHaveLength(1)
   })
 })

@@ -192,6 +192,7 @@ dependencies = [
  "avalon-chain",
  "avalon-indexer",
  "avalon-protocol",
+ "avalon-sdk",
  "axum",
  "base64 0.22.1",
  "dotenvy",

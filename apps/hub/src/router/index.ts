@@ -38,6 +38,8 @@ const router = createRouter({
           name: 'guild-channel',
           component: () => import('../views/GuildChannel.vue'),
         },
+        { path: 'connect/:slug', name: 'connect-game', component: () => import('../views/ConnectGame.vue') },
+        { path: 'connections', name: 'connections', component: () => import('../views/Connections.vue') },
       ],
     },
   ],

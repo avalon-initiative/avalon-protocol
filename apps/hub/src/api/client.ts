@@ -5,6 +5,8 @@ import { AvalonApiError, messageForStatus } from './errors'
 import type {
   ApproveDeviceGrantRequest,
   ChannelResponse,
+  ConnectGameRequest,
+  ConnectGameResponse,
   CreateChannelRequest,
   CreateFriendRequestRequest,
   CreateGuildInviteRequest,
@@ -14,11 +16,14 @@ import type {
   DeviceResponse,
   FriendRequestResponse,
   FriendshipResponse,
+  GameBindingResponse,
+  GameResponse,
   GuildInviteResponse,
   GuildMemberResponse,
   GuildResponse,
   HistoryEntryResponse,
   MessageResponse,
+  MyConnectionsResponse,
   MyGuildMembershipResponse,
   PresenceResponse,
   ProfileResponse,
@@ -410,6 +415,37 @@ export function deleteMessage(
     method: 'DELETE',
     token,
   })
+}
+
+// Game registration read (#26) + the binding/grant consent flow (#27,
+// #83), matching crates/server/src/games.rs's #27 companion module
+// field-for-field.
+
+export function getGame(token: string, slug: string): Promise<GameResponse> {
+  return request(`/games/${slug}`, { token })
+}
+
+// Player-session only — a game credential never grants itself anything
+// (see the ticket's own invariant). Idempotent: reconnecting to an
+// already-bound game doesn't duplicate the binding.
+export function connectGame(
+  token: string,
+  slug: string,
+  body: ConnectGameRequest,
+): Promise<ConnectGameResponse> {
+  return request(`/games/${slug}/connect`, { method: 'POST', body, token })
+}
+
+export function revokeGrant(token: string, slug: string, capability: string): Promise<void> {
+  return request(`/games/${slug}/grants/${capability}`, { method: 'DELETE', token })
+}
+
+export function disconnectGame(token: string, slug: string): Promise<void> {
+  return request(`/games/${slug}/connect`, { method: 'DELETE', token })
+}
+
+export function listMyConnections(token: string): Promise<MyConnectionsResponse> {
+  return request('/me/connections', { token })
 }
 
 // BASE_URL is http(s)://…; the websocket endpoint needs ws(s)://… — same
