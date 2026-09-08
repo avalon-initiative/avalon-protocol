@@ -25,6 +25,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use url::Url;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
@@ -582,6 +583,37 @@ pub struct UpdateProfileRequest {
     pub avatar_url: Option<String>,
 }
 
+/// Nothing renders `avatar_url` as an actual image anywhere in the Hub
+/// today, so there's no live XSS path yet — but that's incidental, not a
+/// guarantee: the field exists so a player-supplied avatar shows up
+/// somewhere later (friends list, guild roster), and an unvalidated
+/// `javascript:`/`data:`-scheme string sitting in storage is exactly the
+/// kind of thing that becomes a real problem the moment something renders
+/// it with `<img :src>` without re-checking this. Validated before the
+/// `UPDATE profiles` write, never after.
+const MAX_AVATAR_URL_LEN: usize = 2048;
+
+/// An empty string is treated as "clear the avatar" (stored as `NULL`), not
+/// rejected — the Hub's `Profile.vue` always sends this field as a plain
+/// string, using empty to mean "no avatar" rather than omitting the field
+/// the way a bare `None` does at the wire level (see `update_profile`'s use
+/// of this alongside `avatar_url_provided`). A non-empty value must be an
+/// `http`/`https` URL within the length cap, or the request is rejected —
+/// never silently stored, never silently stripped.
+fn validate_avatar_url(avatar_url: &str) -> Result<Option<String>, AppError> {
+    if avatar_url.is_empty() {
+        return Ok(None);
+    }
+    if avatar_url.len() > MAX_AVATAR_URL_LEN {
+        return Err(AppError::InvalidAvatarUrl);
+    }
+    let parsed = Url::parse(avatar_url).map_err(|_| AppError::InvalidAvatarUrl)?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(AppError::InvalidAvatarUrl);
+    }
+    Ok(Some(avatar_url.to_string()))
+}
+
 /// A display-name change can collide with someone else's existing handle
 /// (same name, same discriminator) — the discriminator itself never changes
 /// on its own, but if the *new* name collides under it, a fresh one has to
@@ -627,11 +659,23 @@ pub async fn update_profile(
         None => None,
     };
 
+    // Three states, not two: `avatar_url` omitted (leave the column alone),
+    // provided as `""` (clear it to NULL), or provided as a real value
+    // (validate, then set it). A single `COALESCE($n, ...)` bind can't tell
+    // "omitted" apart from "explicitly clear" — both are SQL NULL — so
+    // `avatar_url_provided` carries that distinction into the query
+    // separately from the (possibly NULL) value itself.
+    let avatar_url_provided = body.avatar_url.is_some();
+    let avatar_url = match &body.avatar_url {
+        Some(raw) => validate_avatar_url(raw)?,
+        None => None,
+    };
+
     let row = sqlx::query(
         r#"
         UPDATE profiles p
         SET display_name = COALESCE($2, p.display_name),
-            avatar_url = COALESCE($3, p.avatar_url),
+            avatar_url = CASE WHEN $5 THEN $3 ELSE p.avatar_url END,
             discriminator = COALESCE($4, p.discriminator)
         FROM identities i
         WHERE p.identity_id = $1 AND i.id = p.identity_id
@@ -640,10 +684,85 @@ pub async fn update_profile(
     )
     .bind(identity_id)
     .bind(body.display_name)
-    .bind(body.avatar_url)
+    .bind(avatar_url)
     .bind(discriminator)
+    .bind(avatar_url_provided)
     .fetch_one(&state.pool)
     .await?;
 
     Ok(Json(profile_row_to_response(identity_id, &row)?))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pure validation logic only — no live Postgres reachable here. The
+    //! full `PATCH /me` request/response round trip (including the
+    //! avatar-url-clearing three-state SQL) is covered by
+    //! `crates/server/tests/friends.rs`-style `--ignored` integration
+    //! coverage where it exists; this module exercises
+    //! `validate_avatar_url` directly since it's a pure function.
+
+    use super::*;
+
+    #[test]
+    fn accepts_a_valid_https_url() {
+        assert_eq!(
+            validate_avatar_url("https://example.com/avatar.png").unwrap(),
+            Some("https://example.com/avatar.png".to_string())
+        );
+    }
+
+    #[test]
+    fn accepts_a_valid_http_url() {
+        assert_eq!(
+            validate_avatar_url("http://example.com/avatar.png").unwrap(),
+            Some("http://example.com/avatar.png".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_string_means_clear_the_avatar_not_an_error() {
+        assert_eq!(validate_avatar_url("").unwrap(), None);
+    }
+
+    #[test]
+    fn rejects_a_javascript_scheme() {
+        assert!(matches!(
+            validate_avatar_url("javascript:alert(1)"),
+            Err(AppError::InvalidAvatarUrl)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_data_scheme() {
+        assert!(matches!(
+            validate_avatar_url("data:text/html,<script>alert(1)</script>"),
+            Err(AppError::InvalidAvatarUrl)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_string_that_is_not_a_url_at_all() {
+        assert!(matches!(
+            validate_avatar_url("not a url"),
+            Err(AppError::InvalidAvatarUrl)
+        ));
+    }
+
+    #[test]
+    fn rejects_an_over_length_url() {
+        let overlong = format!("https://example.com/{}", "a".repeat(MAX_AVATAR_URL_LEN));
+        assert!(matches!(
+            validate_avatar_url(&overlong),
+            Err(AppError::InvalidAvatarUrl)
+        ));
+    }
+
+    #[test]
+    fn accepts_a_url_exactly_at_the_length_cap() {
+        let path_len = MAX_AVATAR_URL_LEN - "https://example.com/".len();
+        let exactly_at_cap = format!("https://example.com/{}", "a".repeat(path_len));
+        assert_eq!(exactly_at_cap.len(), MAX_AVATAR_URL_LEN);
+        assert!(validate_avatar_url(&exactly_at_cap).is_ok());
+    }
 }
