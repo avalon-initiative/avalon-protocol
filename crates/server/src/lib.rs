@@ -25,14 +25,14 @@ pub fn router(state: AppState) -> Router {
             get(friends::list_friend_requests).post(friends::create_friend_request),
         )
         .route(
-            "/friends/requests/{id}/accept",
+            "/friends/requests/:id/accept",
             post(friends::accept_friend_request),
         )
         .route(
-            "/friends/requests/{id}",
+            "/friends/requests/:id",
             delete(friends::decline_or_withdraw_friend_request),
         )
         .route("/friends", get(friends::list_friends))
-        .route("/friends/{identity_id}", delete(friends::remove_friend))
+        .route("/friends/:identity_id", delete(friends::remove_friend))
         .with_state(state)
 }
