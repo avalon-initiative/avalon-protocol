@@ -74,6 +74,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/friends", get(friends::list_friends))
         .route("/friends/:identity_id", delete(friends::remove_friend))
+        .route("/friends/handle/:handle", get(friends::resolve_handle))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

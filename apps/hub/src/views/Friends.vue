@@ -66,12 +66,21 @@ onUnmounted(() => {
   if (pollHandle) clearInterval(pollHandle)
 })
 
+// Accepts either a raw identity id (already worked pre-#128) or a
+// `display_name#1234` handle — resolved to an identity id first via
+// GET /friends/handle/:handle, since createFriendRequest itself always
+// targets an identity id on the wire. A handle is anything containing '#';
+// a raw identity id never does.
 async function onAddFriend() {
   if (!session.token) return
   addFriendError.value = ''
   addingFriend.value = true
   try {
-    await api.createFriendRequest(session.token, { to: addFriendId.value })
+    const input = addFriendId.value.trim()
+    const to = input.includes('#')
+      ? (await api.resolveHandle(session.token, input)).identity_id
+      : input
+    await api.createFriendRequest(session.token, { to })
     addFriendId.value = ''
     await refresh()
   } catch (e) {
@@ -122,7 +131,11 @@ async function onRemoveFriend(identityId: string) {
       :error="addFriendError"
       @submit="onAddFriend"
     >
-      <AvalonTextField v-model="addFriendId" label="Identity id" placeholder="Their identity id" />
+      <AvalonTextField
+        v-model="addFriendId"
+        label="Handle or identity id"
+        placeholder="alice#4821"
+      />
     </AvalonForm>
 
     <section>

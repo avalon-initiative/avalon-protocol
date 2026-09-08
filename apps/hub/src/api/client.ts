@@ -12,6 +12,7 @@ import type {
   RegisterFinishResponse,
   RegisterStartRequest,
   RegisterStartResponse,
+  ResolveHandleResponse,
   SessionFinishRequest,
   SessionFinishResponse,
   SessionStartRequest,
@@ -100,6 +101,13 @@ export function declineOrWithdrawFriendRequest(token: string, requestId: string)
 
 export function removeFriend(token: string, identityId: string): Promise<void> {
   return request(`/friends/${identityId}`, { method: 'DELETE', token })
+}
+
+// Resolves a `display_name#1234` handle (issue #128) to an identity id for
+// the "add friend" flow — exact match only. `#` isn't safe unencoded in a
+// URL path segment, so it's escaped here rather than left to the caller.
+export function resolveHandle(token: string, handle: string): Promise<ResolveHandleResponse> {
+  return request(`/friends/handle/${encodeURIComponent(handle)}`, { token })
 }
 
 export function getPresence(token: string, ids: string[]): Promise<PresenceResponse[]> {

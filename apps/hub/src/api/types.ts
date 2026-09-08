@@ -61,6 +61,9 @@ export interface ProfileResponse {
   identity_created_at: string
   display_name: string
   avatar_url: string | null
+  // `display_name#discriminator` (issue #128) — the short handle players
+  // share with each other instead of a raw identity id.
+  handle: string
 }
 
 export interface UpdateProfileRequest {
@@ -88,6 +91,10 @@ export interface FriendRequestResponse {
   from: string
   to: string
   requested_at: string
+}
+
+export interface ResolveHandleResponse {
+  identity_id: string
 }
 
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'

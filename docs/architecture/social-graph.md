@@ -80,6 +80,18 @@ informed by the network fact. This is listed as open in
   Ed25519 signature (#73); see [protocol-events.md](./protocol-events.md).
 - `crates/server/db/migrations/0004_social_graph/` — `friendships` (`a < b`
   enforced), `friend_requests` (at most one pending request per direction).
+- `crates/server/db/migrations/0005_friend_handles/` — a short handle for
+  adding friends without pasting a raw identity id
+  ([#128](https://github.com/LunarVagabond/avalon-protocol/issues/128)):
+  `profiles.discriminator`, a 4-digit string generated server-side (unique
+  together with `display_name`, exposed as `display_name#discriminator` on
+  `ProfileResponse.handle`). `GET /friends/handle/:handle` resolves a handle
+  to an identity id — exact match only, session-authenticated like every
+  other route in this module. A display-name change keeps its existing
+  discriminator unless the new pair collides, in which case a fresh one is
+  generated so uniqueness holds without the handle churning on every rename.
+  Fuzzy/partial handle lookup is out of scope here — that's player discovery
+  ([#129](https://github.com/LunarVagabond/avalon-protocol/issues/129), not decided).
 - Reads are restricted to the caller's own session for now — the capability/
   visibility composition in [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87)
   (which this doc's "What a game sees" section describes) is not built yet, so

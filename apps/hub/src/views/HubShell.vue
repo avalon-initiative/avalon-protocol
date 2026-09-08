@@ -19,6 +19,7 @@ const session = useSessionStore()
 
 const displayName = ref('')
 const identityId = ref('')
+const handle = ref('')
 const loading = ref(true)
 const error = ref('')
 
@@ -28,6 +29,7 @@ onMounted(async () => {
     const profile = await getMe(session.token)
     displayName.value = profile.display_name
     identityId.value = profile.identity_id
+    handle.value = profile.handle
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -59,6 +61,10 @@ async function onLogout() {
     <header v-if="!loading" :class="styles.header">
       <div :class="styles.identity">
         <span :class="styles.displayName">{{ displayName }}</span>
+        <!-- The handle (issue #128) is what a friend actually needs to add
+             you — the identity id below is still shown for anyone who
+             prefers it directly, but the handle is the shareable form. -->
+        <span :class="styles.identityId">{{ handle }}</span>
         <span :class="styles.identityId">{{ identityId }}</span>
       </div>
       <AvalonButton label="Log out" variant="secondary" @click="onLogout" />

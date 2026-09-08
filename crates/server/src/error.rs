@@ -31,6 +31,10 @@ pub enum AppError {
     NotFriends,
     #[error("invalid presence query")]
     InvalidPresenceQuery,
+    #[error("no profile matches that handle")]
+    HandleNotFound,
+    #[error("could not generate a unique handle, try a different display name")]
+    HandleGenerationFailed,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -48,6 +52,8 @@ impl IntoResponse for AppError {
             AppError::SelfFriendRequest | AppError::InvalidPresenceQuery => StatusCode::BAD_REQUEST,
             AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
+            AppError::HandleNotFound => StatusCode::NOT_FOUND,
+            AppError::HandleGenerationFailed => StatusCode::CONFLICT,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
