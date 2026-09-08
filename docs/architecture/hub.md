@@ -120,9 +120,18 @@ is visibly marked.
   `/activity`. Friends + live presence loading is shared with `Friends.vue`
   through `apps/hub/src/composables/useFriendsPresence.ts`. Game/guild/
   message cards arrive with those features.
-- `Profile.vue` — avatar/name/handle hero with log out, the profile edit
-  form, and the device setup / recovery / pending-approval / device-list
-  cards (#134/#135/#145). `Login.vue`/`CreateIdentity.vue` sit in
+- **Read-only until Edit.** Nothing on a logged-in page is an open input by
+  default: a value renders as a styled read-only display
+  (`AvalonEditableField`) and only becomes editable when the player
+  presses Edit — Enter, Save, or leaving the field commits (only if it
+  changed), Escape/Cancel reverts. Actions that need input (add a friend,
+  recover with a phrase) sit behind a button that reveals the form. Login
+  and Create Identity are the exception, since entering an id/name is the
+  whole screen.
+- `Profile.vue` — avatar/name/handle hero with log out, the profile fields
+  (display name, avatar URL — each saves on its own edit, one change per
+  `profile.updated`), and the device setup / recovery / pending-approval /
+  device-list cards (#134/#135/#145); device names are editable fields too. `Login.vue`/`CreateIdentity.vue` sit in
   `AuthLayout.vue` (wordmark above a centered `AvalonAuthCard`); auth is
   identity-id + passkey only.
 - `Friends.vue` (#18) keeps each friend's presence live via

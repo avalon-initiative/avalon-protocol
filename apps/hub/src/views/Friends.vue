@@ -3,7 +3,14 @@
 // live presence, and the membership poll live in useFriendsPresence — this
 // view owns only the add/accept/decline/remove actions.
 import { ref } from 'vue'
-import { AvalonCard, AvalonFriendRequestRow, AvalonFriendRow, AvalonForm, AvalonTextField } from '@avalon/ui'
+import {
+  AvalonButton,
+  AvalonCard,
+  AvalonFriendRequestRow,
+  AvalonFriendRow,
+  AvalonForm,
+  AvalonTextField,
+} from '@avalon/ui'
 import * as api from '../api/client'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useSessionStore } from '../stores/session'
@@ -20,9 +27,18 @@ const {
   refresh,
 } = useFriendsPresence()
 
+// Button-first: the add-friend input only appears once the player says
+// they want to add someone — no open entry sits on the page by default.
+const showAddFriend = ref(false)
 const addFriendId = ref('')
 const addingFriend = ref(false)
 const addFriendError = ref('')
+
+function cancelAddFriend() {
+  showAddFriend.value = false
+  addFriendId.value = ''
+  addFriendError.value = ''
+}
 
 // Accepts either a raw identity id or a `display_name#1234` handle (#128) —
 // a handle (anything containing '#') is resolved to an identity id first,
@@ -37,7 +53,7 @@ async function onAddFriend() {
       ? (await api.resolveHandle(session.token, input)).identity_id
       : input
     await api.createFriendRequest(session.token, { to })
-    addFriendId.value = ''
+    cancelAddFriend()
     await refresh()
   } catch (e) {
     addFriendError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -113,15 +129,24 @@ async function onRemoveFriend(identityId: string) {
       </div>
 
       <div :class="styles.sideColumn">
-        <AvalonCard title="Add a friend" subtitle="Enter their handle (e.g. alice#4821) or identity id.">
-          <AvalonForm
-            submit-label="Send request"
-            :submitting="addingFriend"
-            :error="addFriendError"
-            @submit="onAddFriend"
-          >
-            <AvalonTextField v-model="addFriendId" label="Handle or identity id" placeholder="alice#4821" />
-          </AvalonForm>
+        <AvalonCard title="Add a friend" subtitle="By handle (e.g. alice#4821) or identity id.">
+          <AvalonButton
+            v-if="!showAddFriend"
+            label="Add a friend"
+            variant="primary"
+            @click="showAddFriend = true"
+          />
+          <template v-else>
+            <AvalonForm
+              submit-label="Send request"
+              :submitting="addingFriend"
+              :error="addFriendError"
+              @submit="onAddFriend"
+            >
+              <AvalonTextField v-model="addFriendId" label="Handle or identity id" placeholder="alice#4821" />
+            </AvalonForm>
+            <AvalonButton label="Cancel" variant="secondary" @click="cancelAddFriend" />
+          </template>
         </AvalonCard>
 
         <AvalonCard

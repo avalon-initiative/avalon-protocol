@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// The "you" page: profile editing, device setup/recovery (#134/#135), the
-// device list, and log out. Sections are cards on the shared page grid
-// (issue #148).
+// The "you" page: profile, device setup/recovery (#134/#135), the device
+// list, and log out. Everything is a styled read-only display until the
+// player presses Edit (AvalonEditableField) or a button that starts an
+// action — no open inputs sit on the page by default.
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '../api/client'
@@ -15,7 +16,14 @@ import {
 import type { DeviceGrantResponse, DeviceResponse } from '../api/types'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
-import { AvalonAvatar, AvalonButton, AvalonCard, AvalonForm, AvalonTextField } from '@avalon/ui'
+import {
+  AvalonAvatar,
+  AvalonButton,
+  AvalonCard,
+  AvalonEditableField,
+  AvalonForm,
+  AvalonTextField,
+} from '@avalon/ui'
 import page from './page.module.scss'
 import styles from './Profile.module.scss'
 
@@ -33,7 +41,6 @@ const avatarUrl = ref('')
 const handle = ref('')
 const identityId = ref('')
 const loading = ref(true)
-const submitting = ref(false)
 const error = ref('')
 
 // #134: this device has no signing key for the current identity — either
@@ -76,25 +83,33 @@ async function onLogout() {
   await router.push({ name: 'login' })
 }
 
-async function onSubmit() {
+// Each profile field saves on its own — PATCH /me takes any subset, and
+// the display name and avatar are independently promised-durable (#86),
+// so one edit is one change, one event.
+type ProfileField = 'display_name' | 'avatar_url'
+const savingField = ref<ProfileField | ''>('')
+const fieldErrors = ref<Partial<Record<ProfileField, string>>>({})
+
+async function saveProfileField(field: ProfileField, value: string) {
   if (!session.token) return
-  error.value = ''
-  submitting.value = true
+  fieldErrors.value = { ...fieldErrors.value, [field]: undefined }
+  savingField.value = field
   try {
-    const profile = await api.updateProfile(session.token, {
-      display_name: displayName.value,
-      avatar_url: avatarUrl.value,
-    })
+    const profile = await api.updateProfile(session.token, { [field]: value })
     displayName.value = profile.display_name
     avatarUrl.value = profile.avatar_url ?? ''
     handle.value = profile.handle
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Something went wrong.'
+    fieldErrors.value = {
+      ...fieldErrors.value,
+      [field]: e instanceof Error ? e.message : 'Something went wrong.',
+    }
   } finally {
-    submitting.value = false
+    savingField.value = ''
   }
 }
 
+const showRecovery = ref(false)
 const recoveryPhrase = ref('')
 const recovering = ref(false)
 const recoveryError = ref('')
@@ -105,6 +120,7 @@ function onRecoverSigningKey() {
   try {
     recoverSigningKey(identityId.value, recoveryPhrase.value.trim())
     hasSigningKey.value = true
+    showRecovery.value = false
     recoveryPhrase.value = ''
     refreshDevicesAndPendingGrants()
   } catch (e) {
@@ -160,6 +176,8 @@ const approvingGrantId = ref('')
 const approveError = ref('')
 const revokingId = ref('')
 const revokeError = ref('')
+const renamingId = ref('')
+const renameError = ref('')
 
 async function refreshDevicesAndPendingGrants() {
   if (!session.token) return
@@ -170,7 +188,6 @@ async function refreshDevicesAndPendingGrants() {
     ])
     myDevices.value = devices
     pendingGrants.value = grants
-    seedRenameLabels(devices)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -209,28 +226,13 @@ async function onRevokeDevice(device: DeviceResponse) {
 }
 
 // #145: every device (including the first one) can be renamed after the
-// fact. Seeded from each device's current label on refresh, but only for a
-// device not already being edited — an in-flight edit shouldn't get
-// clobbered by the next poll tick.
-const renameLabels = ref<Record<string, string>>({})
-const renamingId = ref('')
-const renameError = ref('')
-
-function seedRenameLabels(devices: DeviceResponse[]) {
-  for (const device of devices) {
-    if (!(device.id in renameLabels.value)) {
-      renameLabels.value[device.id] = device.label ?? ''
-    }
-  }
-}
-
-async function onRenameDevice(device: DeviceResponse) {
+// fact — from the field's own Edit, never an always-open input.
+async function onRenameDevice(device: DeviceResponse, label: string) {
   if (!session.token) return
-  const newLabel = (renameLabels.value[device.id] ?? '').trim()
   renameError.value = ''
   renamingId.value = device.id
   try {
-    await api.renameDevice(session.token, device.id, { label: newLabel })
+    await api.renameDevice(session.token, device.id, { label })
     await refreshDevicesAndPendingGrants()
   } catch (e) {
     renameError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -253,14 +255,29 @@ async function onRenameDevice(device: DeviceResponse) {
         <AvalonButton label="Log out" variant="secondary" @click="onLogout" />
       </div>
     </header>
+    <p v-if="error" :class="page.error">{{ error }}</p>
 
     <div :class="page.grid">
       <div :class="page.mainColumn">
         <AvalonCard title="Profile" subtitle="How other players see you.">
-          <AvalonForm submit-label="Save changes" :submitting="submitting" :error="error" @submit="onSubmit">
-            <AvalonTextField v-model="displayName" label="Display name" />
-            <AvalonTextField v-model="avatarUrl" label="Avatar URL" placeholder="https://…" />
-          </AvalonForm>
+          <div :class="styles.fields">
+            <AvalonEditableField
+              label="Display name"
+              :value="displayName"
+              :saving="savingField === 'display_name'"
+              :error="fieldErrors.display_name"
+              @save="saveProfileField('display_name', $event)"
+            />
+            <AvalonEditableField
+              label="Avatar URL"
+              :value="avatarUrl"
+              empty-text="No avatar"
+              placeholder="https://…"
+              :saving="savingField === 'avatar_url'"
+              :error="fieldErrors.avatar_url"
+              @save="saveProfileField('avatar_url', $event)"
+            />
+          </div>
         </AvalonCard>
 
         <AvalonCard v-if="!hasSigningKey" title="Set up this device">
@@ -275,27 +292,39 @@ async function onRenameDevice(device: DeviceResponse) {
               This device doesn't have a signing key for this identity yet. Request access from
               another device you're already signed in on, or recover from a saved phrase.
             </p>
-            <AvalonForm
-              submit-label="Request access from another device"
-              :submitting="requestingGrant"
-              :error="grantRequestError"
-              @submit="onRequestDeviceGrant"
-            />
+            <p v-if="grantRequestError" :class="page.error">{{ grantRequestError }}</p>
+            <div :class="styles.actions">
+              <AvalonButton
+                :label="requestingGrant ? 'Requesting…' : 'Request access from another device'"
+                variant="primary"
+                :disabled="requestingGrant"
+                @click="onRequestDeviceGrant"
+              />
+              <AvalonButton
+                v-if="!showRecovery"
+                label="Recover with a phrase"
+                variant="secondary"
+                @click="showRecovery = true"
+              />
+            </div>
           </section>
 
-          <h3 :class="styles.subheading">Or recover your signing key</h3>
-          <AvalonForm
-            submit-label="Recover"
-            :submitting="recovering"
-            :error="recoveryError"
-            @submit="onRecoverSigningKey"
-          >
-            <AvalonTextField
-              v-model="recoveryPhrase"
-              label="Recovery phrase"
-              placeholder="twelve words separated by spaces"
-            />
-          </AvalonForm>
+          <template v-if="showRecovery">
+            <h3 :class="styles.subheading">Recover your signing key</h3>
+            <AvalonForm
+              submit-label="Recover"
+              :submitting="recovering"
+              :error="recoveryError"
+              @submit="onRecoverSigningKey"
+            >
+              <AvalonTextField
+                v-model="recoveryPhrase"
+                label="Recovery phrase"
+                placeholder="twelve words separated by spaces"
+              />
+            </AvalonForm>
+            <AvalonButton label="Cancel" variant="secondary" @click="showRecovery = false" />
+          </template>
         </AvalonCard>
       </div>
 
@@ -327,19 +356,15 @@ async function onRenameDevice(device: DeviceResponse) {
           <p v-if="renameError" :class="page.error">{{ renameError }}</p>
           <ul :class="styles.list">
             <li v-for="device in myDevices" :key="device.id" :class="styles.device">
-              <AvalonTextField
-                v-model="renameLabels[device.id]"
+              <AvalonEditableField
                 label="Device name"
-                placeholder="Unlabeled device"
+                :value="device.label ?? ''"
+                empty-text="Unlabeled device"
+                :saving="renamingId === device.id"
+                @save="onRenameDevice(device, $event)"
               />
               <div :class="styles.deviceActions">
                 <span v-if="device.revoked_at" :class="styles.revoked">Revoked</span>
-                <AvalonButton
-                  :label="renamingId === device.id ? 'Saving…' : 'Rename'"
-                  variant="secondary"
-                  :disabled="renamingId === device.id"
-                  @click="onRenameDevice(device)"
-                />
                 <AvalonButton
                   v-if="!device.revoked_at"
                   :label="revokingId === device.id ? 'Revoking…' : 'Revoke'"

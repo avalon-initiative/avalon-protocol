@@ -1,0 +1,106 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+  font-family: inherit;
+}
+
+.label {
+  font-size: var(--av-text-sm);
+  font-weight: 500;
+  color: var(--av-color-text-secondary);
+}
+
+.readRow,
+.editRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+  min-height: 2.75rem;
+}
+
+.value {
+  flex: 1;
+  min-width: 0;
+  padding: 0.625rem var(--av-space-3);
+  border-radius: var(--av-radius-md);
+  border: 1px solid transparent;
+  background: var(--av-color-surface-raised);
+  color: var(--av-color-text);
+  font-size: var(--av-text-base);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  color: var(--av-color-text-muted);
+  font-style: italic;
+}
+
+.editButton,
+.saveButton,
+.cancelButton {
+  flex-shrink: 0;
+  padding: 0.5rem var(--av-space-3);
+  border-radius: var(--av-radius-md);
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.editButton,
+.cancelButton {
+  border: 1px solid var(--av-color-border);
+  background: transparent;
+  color: var(--av-color-text-secondary);
+
+  &:hover:not(:disabled) {
+    border-color: var(--av-color-border-strong);
+    color: var(--av-color-text);
+  }
+}
+
+.saveButton {
+  border: 1px solid var(--av-color-primary);
+  background: var(--av-color-primary);
+  color: var(--av-color-primary-text);
+
+  &:hover {
+    background: var(--av-color-primary-hover);
+    border-color: var(--av-color-primary-hover);
+  }
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--av-radius-md);
+  border: 1px solid var(--av-color-primary);
+  background: var(--av-color-bg);
+  color: var(--av-color-text);
+  padding: 0.625rem var(--av-space-3);
+  font-size: var(--av-text-base);
+  box-shadow: 0 0 0 3px var(--av-color-primary-soft);
+
+  &::placeholder {
+    color: var(--av-color-text-muted);
+  }
+
+  &:focus {
+    outline: none;
+  }
+}
+
+.error {
+  color: var(--av-color-danger);
+  font-size: var(--av-text-sm);
+}
