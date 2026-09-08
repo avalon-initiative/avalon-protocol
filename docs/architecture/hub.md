@@ -110,11 +110,15 @@ is visibly marked.
   `HubShell.vue`) instead of a new standalone route** — this is what #24
   (guild view + chat), #35 (achievements), and #105 (DMs) should build
   against.
-- `Friends.vue` (#18) polls `GET /friends` + `GET /friends/requests` +
-  `GET /presence` every 60s (no server-configured interval is knowable
-  client-side; a push subscription is #119, not built) and merges
-  friendship + presence client-side in `apps/hub/src/api/friends.ts` —
-  `GET /friends` does not embed presence server-side (see
+- `Friends.vue` (#18) keeps each friend's presence live via
+  `apps/hub/src/api/client.ts::openPresenceSocket` (`GET /ws/presence`,
+  #136), re-subscribed with the current friend-id set on every refresh.
+  `GET /friends` + `GET /friends/requests` still poll (5 min, was 60s
+  before #136 — presence itself no longer depends on that interval for
+  liveness; only friend-*list* membership changes, which aren't pushed,
+  still need it) and merge with a one-shot presence catch-up client-side in
+  `apps/hub/src/api/friends.ts` — `GET /friends` does not embed presence
+  server-side (see
   [social-graph](./social-graph.md)/[presence](./presence.md)), the same
   merge the Rust SDK's `Session::friends()` does (#17), ported to
   TypeScript since the Hub doesn't consume the Rust SDK directly. "Add

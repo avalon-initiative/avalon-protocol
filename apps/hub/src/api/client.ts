@@ -122,3 +122,65 @@ export function getPresence(token: string, ids: string[]): Promise<PresenceRespo
   const params = new URLSearchParams({ ids: ids.join(',') })
   return request(`/presence?${params.toString()}`, { token })
 }
+
+// BASE_URL is http(s)://…; the websocket endpoint needs ws(s)://… — same
+// scheme swap crates/sdk/src/social.rs's websocket_url does, ported here
+// since the Hub doesn't consume the Rust SDK directly.
+function websocketUrl(path: string): string {
+  if (BASE_URL.startsWith('https://')) {
+    return `wss://${BASE_URL.slice('https://'.length)}${path}`
+  }
+  if (BASE_URL.startsWith('http://')) {
+    return `ws://${BASE_URL.slice('http://'.length)}${path}`
+  }
+  return `${BASE_URL}${path}`
+}
+
+export interface PresenceSocket {
+  // Additive — calling this again with more ids grows the subscription
+  // rather than replacing it, mirroring the server's own `ClientMessage`
+  // semantics (crates/server/src/presence.rs). Queued until the socket
+  // finishes connecting if called before `open`.
+  subscribe(ids: string[]): void
+  close(): void
+}
+
+// GET /ws/presence (issue #136) — live presence push, additive to
+// getPresence's point-in-time reads. `onUpdate` fires once per pushed
+// PresenceResponse, including the immediate catch-up snapshot the server
+// sends for each newly-subscribed id (so a caller doesn't need a separate
+// getPresence call just to get the current state before the first push).
+export function openPresenceSocket(
+  token: string,
+  onUpdate: (presence: PresenceResponse) => void,
+): PresenceSocket {
+  const socket = new WebSocket(websocketUrl(`/ws/presence?token=${encodeURIComponent(token)}`))
+  const pendingSubscriptions: string[][] = []
+
+  function send(ids: string[]) {
+    socket.send(JSON.stringify({ type: 'subscribe', ids }))
+  }
+
+  socket.addEventListener('open', () => {
+    for (const ids of pendingSubscriptions.splice(0)) {
+      send(ids)
+    }
+  })
+  socket.addEventListener('message', (event) => {
+    onUpdate(JSON.parse(event.data as string) as PresenceResponse)
+  })
+
+  return {
+    subscribe(ids: string[]) {
+      if (ids.length === 0) return
+      if (socket.readyState === WebSocket.OPEN) {
+        send(ids)
+      } else {
+        pendingSubscriptions.push(ids)
+      }
+    },
+    close() {
+      socket.close()
+    },
+  }
+}

@@ -96,8 +96,34 @@ realtime connections is a separate axis from scaling history or queries
   or capability-grant system in this repo yet (#26/#28/#83). Player-set
   visibility scopes and opting `playing` out of view are deferred for the
   same reason, to #87.
-- `avalon-server` has no websocket or push path; how presence is delivered to
-  clients beyond polling `GET /presence` is undesigned.
+- `GET /ws/presence?token=…` (issue #136, decided in #119: websocket over
+  SSE/polling, chosen because this roadmap already commits to bidirectional
+  push for guild chat/#24 and DMs/#105) — a live push transport, additive to
+  `GET /presence`, not a replacement. Auth is a `?token=` query parameter,
+  not the usual `Authorization` header — a browser `WebSocket` handshake
+  can't set custom headers (`handlers::authenticate_token`). A connected
+  client sends `{"type":"subscribe","ids":[...]}` (additive — sending it
+  again with more ids grows the subscription, doesn't replace it); the
+  server immediately replies with a catch-up snapshot for each newly
+  subscribed id, then pushes every subsequent `PresenceStore::set()` for a
+  subscribed id as it happens. Fan-out is a bounded, lossy
+  `tokio::sync::broadcast` channel (`PresenceStore::subscribe`) — a slow
+  consumer drops interim ticks rather than backing up the publisher, an
+  acceptable tradeoff for ephemeral presence, unlike the outbox's durable
+  delivery guarantee for real protocol events. Same "no visibility
+  filtering yet" cut as `GET /presence` above (deferred to #87) — any valid
+  session may subscribe to any ids it names.
+- `crates/sdk/src/social.rs::Session::subscribe_presence` — the Rust SDK's
+  client for the above, additive to `presence()`/`presence_of()`. Returns a
+  `tokio::sync::mpsc::UnboundedReceiver<Presence>`; a background task
+  forwards every pushed update onto it, and dropping the receiver ends that
+  task on its next send attempt (no separate unsubscribe call).
+- `apps/hub/src/api/client.ts::openPresenceSocket` — the Hub's client for
+  the same endpoint (a plain browser `WebSocket`, not the Rust SDK, which
+  the Hub doesn't consume directly). `Friends.vue` (#18) uses it to keep
+  each friend's presence live; the friend-*list* poll (membership changes —
+  a request accepted/declined, a friend removed) still runs, just much
+  slower now that presence itself doesn't depend on it for liveness.
 
 ## Decisions and tickets
 

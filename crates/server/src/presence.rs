@@ -23,20 +23,22 @@
 //!   capability/visibility model yet" cut `crates/server/src/friends.rs`
 //!   (#15) already established, deferred to #87.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use avalon_protocol::social::PresenceStatus;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::handlers::authenticate;
+use crate::handlers::{authenticate, authenticate_token};
 use crate::state::AppState;
 
 /// A published presence entry that hasn't been refreshed within this window
@@ -53,12 +55,27 @@ struct PresenceEntry {
     seen_at: Instant,
 }
 
+/// Bounded so a burst of publishes can't grow this unboundedly if a
+/// subscriber is slow to drain — a lagging receiver drops the oldest
+/// messages instead (see `handle_presence_socket`'s `Lagged` handling)
+/// rather than the channel growing without limit.
+const UPDATE_CHANNEL_CAPACITY: usize = 256;
+
 /// `Arc<RwLock<_>>` around a plain map — deliberately not a migrated table
 /// or `ledger_entries`; see module docs. Cheap to clone into `AppState`.
 #[derive(Clone)]
 pub struct PresenceStore {
     entries: Arc<RwLock<HashMap<Uuid, PresenceEntry>>>,
     ttl: Duration,
+    /// Fan-out for `presence::presence_ws` (issue #136) — every `set()`
+    /// call also broadcasts the new status, so a subscribed websocket
+    /// client learns about a friend coming online without polling
+    /// `GET /presence`. A lossy broadcast, not a queue: a slow/absent
+    /// subscriber simply misses ticks (or drops the oldest under
+    /// `UPDATE_CHANNEL_CAPACITY` pressure) rather than backing up the
+    /// publisher — acceptable for ephemeral presence, unlike the outbox's
+    /// durable delivery guarantee for real protocol events.
+    updates: tokio::sync::broadcast::Sender<PresenceResponse>,
 }
 
 impl PresenceStore {
@@ -67,10 +84,19 @@ impl PresenceStore {
     }
 
     pub fn with_ttl(ttl: Duration) -> Self {
+        let (updates, _) = tokio::sync::broadcast::channel(UPDATE_CHANNEL_CAPACITY);
         Self {
             entries: Arc::new(RwLock::new(HashMap::new())),
             ttl,
+            updates,
         }
+    }
+
+    /// A new receiver for every presence update published from now on —
+    /// each websocket connection gets its own, so one slow connection
+    /// lagging never affects another's.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<PresenceResponse> {
+        self.updates.subscribe()
     }
 
     /// Reads `AVALON_PRESENCE_TTL_SECS` if set, otherwise `DEFAULT_PRESENCE_TTL`.
@@ -90,16 +116,26 @@ impl PresenceStore {
         playing: Option<Uuid>,
     ) -> OffsetDateTime {
         let now = OffsetDateTime::now_utc();
-        let mut entries = self.entries.write().expect("presence lock poisoned");
-        entries.insert(
+        {
+            let mut entries = self.entries.write().expect("presence lock poisoned");
+            entries.insert(
+                identity_id,
+                PresenceEntry {
+                    status,
+                    playing,
+                    updated_at: now,
+                    seen_at: Instant::now(),
+                },
+            );
+        }
+        // No receivers is not an error — most publishes happen with nobody
+        // subscribed to that particular identity yet.
+        let _ = self.updates.send(PresenceResponse {
             identity_id,
-            PresenceEntry {
-                status,
-                playing,
-                updated_at: now,
-                seen_at: Instant::now(),
-            },
-        );
+            status,
+            playing,
+            updated_at: now,
+        });
         now
     }
 
@@ -140,7 +176,7 @@ struct PresenceView {
     updated_at: OffsetDateTime,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PresenceResponse {
     pub identity_id: Uuid,
     pub status: PresenceStatus,
@@ -215,6 +251,95 @@ pub async fn get_presence(
         .map(|id| state.presence.get(id).into())
         .collect();
     Ok(Json(views))
+}
+
+/// `token` is a query parameter, not a header — the issue #136 tradeoff a
+/// websocket upgrade forces: the browser `WebSocket` constructor has no way
+/// to set an `Authorization` header on the handshake request the way every
+/// other route in this crate expects. See `handlers::authenticate_token`'s
+/// own doc comment.
+#[derive(Deserialize)]
+pub struct PresenceWsQuery {
+    pub token: String,
+}
+
+/// `GET /ws/presence?token=…` — issue #136's live push transport, additive
+/// to `GET /presence` above, not a replacement for it. Authenticates before
+/// upgrading (a bad/missing token gets a real 401, not a socket that opens
+/// and then silently closes) and hands off to `handle_presence_socket` for
+/// the connection's lifetime. Same "no visibility filtering yet" cut as
+/// `GET /presence` (deferred to #87, see module docs) — any valid session
+/// may subscribe to any ids it names.
+pub async fn presence_ws(
+    State(state): State<AppState>,
+    Query(query): Query<PresenceWsQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, AppError> {
+    authenticate_token(&state, &query.token).await?;
+    Ok(ws.on_upgrade(move |socket| handle_presence_socket(socket, state)))
+}
+
+/// What a subscribed client can send. `Subscribe` is additive — sending it
+/// again with more ids grows the connection's subscription set rather than
+/// replacing it, so a client doesn't need to remember and resend its whole
+/// friends list every time it adds one.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientMessage {
+    Subscribe { ids: Vec<Uuid> },
+}
+
+async fn handle_presence_socket(mut socket: WebSocket, state: AppState) {
+    let mut subscribed: HashSet<Uuid> = HashSet::new();
+    let mut updates = state.presence.subscribe();
+
+    loop {
+        tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        let Ok(ClientMessage::Subscribe { ids }) = serde_json::from_str(&text) else {
+                            continue;
+                        };
+                        // Send a catch-up snapshot for each newly-subscribed
+                        // id immediately, rather than making the client wait
+                        // for that identity's next publish to learn its
+                        // current status.
+                        for id in ids {
+                            if subscribed.insert(id) {
+                                let view: PresenceResponse = state.presence.get(id).into();
+                                let payload =
+                                    serde_json::to_string(&view).expect("PresenceResponse always serializes");
+                                if socket.send(Message::Text(payload)).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                    Some(Ok(_)) => {}
+                }
+            }
+            update = updates.recv() => {
+                match update {
+                    Ok(update) if subscribed.contains(&update.identity_id) => {
+                        let payload =
+                            serde_json::to_string(&update).expect("PresenceResponse always serializes");
+                        if socket.send(Message::Text(payload)).await.is_err() {
+                            return;
+                        }
+                    }
+                    Ok(_) => {}
+                    // A slow consumer missed some ticks — its next
+                    // subscribe (or a plain `GET /presence` poll) catches
+                    // it back up; dropping interim ticks is the documented
+                    // tradeoff of a lossy broadcast channel, not a bug.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -234,3 +234,74 @@ async fn presence_of_reflects_multiple_published_statuses() {
     assert_eq!(alice_view.status, PresenceStatus::Online);
     assert_eq!(bob_view.status, PresenceStatus::Away);
 }
+
+#[tokio::test]
+#[ignore]
+async fn subscribe_presence_receives_a_live_update_pushed_by_another_identity() {
+    let pool = test_pool().await;
+    let (alice_id, alice_token) =
+        seed_identity_session(&pool, &format!("sdk-ws-alice-{}", Uuid::new_v4())).await;
+    let (bob_id, bob_token) =
+        seed_identity_session(&pool, &format!("sdk-ws-bob-{}", Uuid::new_v4())).await;
+    let client = client();
+
+    let alice_session = client
+        .authenticate(&alice_token)
+        .await
+        .unwrap()
+        .grant_for_testing("presence.read");
+    let bob_session = client
+        .authenticate(&bob_token)
+        .await
+        .unwrap()
+        .grant_for_testing("presence.read");
+
+    let mut updates = alice_session
+        .subscribe_presence(&[avalon_protocol::ids::IdentityId(bob_id)])
+        .await
+        .expect("subscribe_presence should connect");
+
+    // The subscribe call sends an immediate catch-up snapshot for bob
+    // (Offline, nothing published yet) before any real update — drain it
+    // so the assertion below is unambiguously about the *pushed* update.
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), updates.recv())
+        .await
+        .expect("catch-up snapshot should arrive")
+        .expect("channel should still be open");
+    assert_eq!(snapshot.identity_id.0, bob_id);
+    assert_eq!(snapshot.status, PresenceStatus::Offline);
+
+    bob_session
+        .update_presence(PresenceStatus::Online)
+        .await
+        .expect("update_presence should succeed");
+
+    let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), updates.recv())
+        .await
+        .expect("a pushed update should arrive without polling")
+        .expect("channel should still be open");
+    assert_eq!(pushed.identity_id.0, bob_id);
+    assert_eq!(pushed.status, PresenceStatus::Online);
+
+    let _ = alice_id;
+}
+
+#[tokio::test]
+#[ignore]
+async fn subscribe_presence_without_grant_is_rejected_before_any_connection_live() {
+    let pool = test_pool().await;
+    let (_id, token) =
+        seed_identity_session(&pool, &format!("sdk-ws-nogrant-{}", Uuid::new_v4())).await;
+    let client = client();
+
+    // No grant_for_testing call — this session has zero capabilities.
+    let session = client.authenticate(&token).await.unwrap();
+
+    let result = session
+        .subscribe_presence(&[avalon_protocol::ids::IdentityId(Uuid::new_v4())])
+        .await;
+    assert!(matches!(
+        result,
+        Err(avalon_sdk::SdkError::CapabilityNotGranted(_))
+    ));
+}

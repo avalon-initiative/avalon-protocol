@@ -116,16 +116,22 @@ protocol and the domain model in `crates/protocol`; they never pull in
   this issue originally described, since that needs a game-credential/binding
   system (#26/#28/#83) that doesn't exist — see the module doc comment for
   the full reasoning. `presence_of` applies no visibility filtering (#87).
-  Delivery is still poll-only from the game's side too; a push transport is
-  tracked separately in
-  [#119](https://github.com/LunarVagabond/avalon-protocol/issues/119).
+  `Session::subscribe_presence(&[IdentityId])` (`presence.read`, #136 —
+  decided in #119) is the live push counterpart, additive to `presence()`/
+  `presence_of()`: connects to `GET /ws/presence` (auth via `?token=`, not
+  a header — a websocket handshake can't send one), sends one `subscribe`
+  message, and returns a `tokio::sync::mpsc::UnboundedReceiver<Presence>`
+  fed by a background task for the connection's lifetime. `friends()`
+  itself is unchanged — still a one-shot `presence_of` batch, not
+  auto-subscribed.
 - `crates/sdk/tests/authenticate.rs` — live test (`make test-live`) covering a
   successful authenticate, an invalid token, and a capability being rejected.
 - `crates/sdk/tests/social.rs` — live tests (`make test-live`) covering
   `friends()` returning a friendship created through the HTTP API,
-  `presence.read` gating whether presence is embedded in `friends()`, and
+  `presence.read` gating whether presence is embedded in `friends()`,
   `update_presence`/`presence`/`presence_of` round-tripping through a real
-  server.
+  server, and `subscribe_presence` receiving a real pushed update (plus its
+  own capability check) over a real websocket connection.
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — `AvalonClient.cs`, `Session.cs` skeleton; no

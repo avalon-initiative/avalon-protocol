@@ -49,7 +49,17 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
 /// `AppError::Unauthorized` — never distinguished in the response, so a
 /// caller can't probe for which tokens once existed.
 pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Uuid, AppError> {
-    let token = bearer_token(headers)?;
+    authenticate_token(state, bearer_token(headers)?).await
+}
+
+/// The same check as [`authenticate`], taking the token directly rather than
+/// pulling it from an `Authorization` header — for the one caller that
+/// can't send that header at all: a browser's `WebSocket` constructor has no
+/// way to set custom headers on the handshake request, so
+/// `presence::presence_ws` authenticates off a `?token=` query parameter
+/// instead. Every other route keeps using [`authenticate`]; this exists
+/// only because the websocket upgrade genuinely can't.
+pub(crate) async fn authenticate_token(state: &AppState, token: &str) -> Result<Uuid, AppError> {
     let row = sqlx::query("SELECT identity_id, expires_at FROM sessions WHERE token = $1")
         .bind(token)
         .fetch_optional(&state.pool)
