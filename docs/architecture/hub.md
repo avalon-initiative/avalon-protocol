@@ -127,15 +127,20 @@ is visibly marked.
   shareable form. One remaining scope cut, documented not silent: there is
   no "Playing &lt;game&gt;" label (no game registry exists, `Presence.playing`
   is always `null` in practice today).
-- `Activity.vue` (#121) — "what does the network know about me": a plain
-  list of the caller's own protocol events from `GET /me/history`
+- `Activity.vue` (#121) — "what does the network know about me": the
+  caller's own protocol events from `GET /me/history`
   (`crates/server/src/handlers.rs::my_history`), which reads the ledger
   directly rather than through the indexer (see
   [settlement](./settlement.md)'s "Today in the repo" for why). Not a
-  chain/block explorer — that's a separate, unscoped idea; just the
-  caller's own events, kind + subject + timestamp + raw payload, newest
-  first. An empty list (a fresh identity, only `identity.created` pending in
-  the outbox) renders a sensible message rather than a blank page.
+  chain/block explorer — that's a separate, unscoped idea. Each entry
+  renders as a human-readable summary line, not the raw `kind` string
+  (`apps/hub/src/api/activityFeed.ts::summarizeActivityEntry`, #146) — an
+  event kind this build doesn't recognize falls back to the raw kind
+  rather than erroring, since the kind catalogue (#82) keeps growing.
+  Timestamps render relative ("3 hours ago") via
+  `formatActivityTimestamp`. An empty list (a fresh identity, only
+  `identity.created` pending in the outbox) renders a sensible message
+  rather than a blank page.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).

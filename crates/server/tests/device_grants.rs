@@ -284,3 +284,50 @@ async fn revoking_one_device_does_not_affect_another() {
     .unwrap();
     assert_eq!(second_revoke.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_device_can_be_renamed_and_the_rename_is_scoped_to_its_own_identity() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (identity_a, token_a) = seed_identity_session(&pool).await;
+    let (key_id, _key) = seed_signing_key(&pool, identity_a).await;
+    let (_identity_b, token_b) = seed_identity_session(&pool).await;
+
+    let rename = auth(http.patch(format!("{base}/me/devices/{key_id}")), &token_a)
+        .json(&serde_json::json!({ "label": "Renamed device" }))
+        .send()
+        .await
+        .expect("rename request failed — is `make start` running?");
+    assert!(rename.status().is_success(), "{:?}", rename.status());
+    let renamed: serde_json::Value = rename.json().await.unwrap();
+    assert_eq!(renamed["label"], "Renamed device");
+
+    let devices: serde_json::Value = auth(http.get(format!("{base}/me/devices")), &token_a)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let device = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"].as_str().unwrap() == key_id.to_string())
+        .unwrap();
+    assert_eq!(device["label"], "Renamed device");
+
+    // A different identity's session can't rename someone else's device.
+    let cross_identity_rename = auth(http.patch(format!("{base}/me/devices/{key_id}")), &token_b)
+        .json(&serde_json::json!({ "label": "Hijacked" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        cross_identity_rename.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+}

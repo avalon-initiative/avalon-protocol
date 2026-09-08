@@ -1,0 +1,84 @@
+import { describe, expect, it } from 'vitest'
+import { formatActivityTimestamp, summarizeActivityEntry } from './activityFeed'
+import type { HistoryEntryResponse } from './types'
+
+function makeEntry(kind: string, payload: unknown = {}): HistoryEntryResponse {
+  return {
+    event_id: 'evt-1',
+    kind,
+    subject: 'identity:id-1:self:test',
+    payload,
+    timestamp: '2026-09-08T00:00:00Z',
+  }
+}
+
+describe('summarizeActivityEntry', () => {
+  it('summarizes identity.created', () => {
+    expect(summarizeActivityEntry(makeEntry('identity.created'))).toBe(
+      'You created your identity.',
+    )
+  })
+
+  it('summarizes friend.requested/accepted/removed', () => {
+    expect(summarizeActivityEntry(makeEntry('friend.requested'))).toBe(
+      'You sent a friend request.',
+    )
+    expect(summarizeActivityEntry(makeEntry('friend.accepted'))).toBe(
+      'You accepted a friend request.',
+    )
+    expect(summarizeActivityEntry(makeEntry('friend.removed'))).toBe('You removed a friend.')
+  })
+
+  it('includes the device label for identity.signing_key_added when present', () => {
+    expect(
+      summarizeActivityEntry(
+        makeEntry('identity.signing_key_added', { device_label: 'Work laptop' }),
+      ),
+    ).toBe('New device added: Work laptop.')
+  })
+
+  it('falls back sensibly when identity.signing_key_added has no label', () => {
+    expect(summarizeActivityEntry(makeEntry('identity.signing_key_added', {}))).toBe(
+      'New device added.',
+    )
+  })
+
+  it('summarizes identity.signing_key_revoked', () => {
+    expect(summarizeActivityEntry(makeEntry('identity.signing_key_revoked'))).toBe(
+      'Device access revoked.',
+    )
+  })
+
+  it('falls back to the raw kind for an unrecognized event, never throwing', () => {
+    expect(summarizeActivityEntry(makeEntry('some.future.kind', { anything: 'here' }))).toBe(
+      'some.future.kind',
+    )
+  })
+
+  it('never throws on a malformed payload', () => {
+    expect(() =>
+      summarizeActivityEntry(makeEntry('identity.signing_key_added', 'not an object')),
+    ).not.toThrow()
+    expect(() => summarizeActivityEntry(makeEntry('identity.signing_key_added', null))).not.toThrow()
+  })
+})
+
+describe('formatActivityTimestamp', () => {
+  const now = new Date('2026-09-08T12:00:00Z')
+
+  it('renders "just now" for anything under a minute old', () => {
+    expect(formatActivityTimestamp('2026-09-08T11:59:45Z', now)).toBe('just now')
+  })
+
+  it('renders relative minutes for a recent timestamp', () => {
+    expect(formatActivityTimestamp('2026-09-08T11:55:00Z', now)).toBe('5 minutes ago')
+  })
+
+  it('renders relative hours for an older-same-day timestamp', () => {
+    expect(formatActivityTimestamp('2026-09-08T09:00:00Z', now)).toBe('3 hours ago')
+  })
+
+  it('renders relative days for a multi-day-old timestamp', () => {
+    expect(formatActivityTimestamp('2026-09-06T12:00:00Z', now)).toBe('2 days ago')
+  })
+})

@@ -411,6 +411,49 @@ pub async fn list_devices(
     Ok(Json(devices))
 }
 
+#[derive(Deserialize)]
+pub struct RenameDeviceRequest {
+    pub label: String,
+}
+
+/// `PATCH /me/devices/:id` — issue #145: the first device (registered by
+/// `handlers::register_finish`) previously had no way to be labeled after
+/// the fact, and no device could be renamed at all. Same ownership check as
+/// `revoke_device` — any authenticated session for the identity may rename
+/// any of its own signing-key rows, active or revoked, unilaterally.
+pub async fn rename_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(signing_key_id): Path<Uuid>,
+    Json(body): Json<RenameDeviceRequest>,
+) -> Result<Json<DeviceResponse>, AppError> {
+    let identity_id = authenticate(&state, &headers).await?;
+
+    let row = sqlx::query(
+        r#"
+        UPDATE identity_signing_keys
+        SET label = $3
+        WHERE id = $1 AND identity_id = $2
+        RETURNING id, label, public_key, added_at, revoked_at
+        "#,
+    )
+    .bind(signing_key_id)
+    .bind(identity_id)
+    .bind(&body.label)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::SigningKeyNotFound)?;
+
+    let public_key: Vec<u8> = row.try_get("public_key")?;
+    Ok(Json(DeviceResponse {
+        id: row.try_get("id")?,
+        label: row.try_get("label")?,
+        public_key: BASE64.encode(&public_key),
+        added_at: row.try_get("added_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+    }))
+}
+
 /// `POST /me/devices/:id/revoke` — unilateral, per the ticket's invariant:
 /// any currently-authenticated session for the identity can revoke any
 /// signing-key row (including the one it's revoking itself with, for a

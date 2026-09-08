@@ -10,7 +10,7 @@ pub mod presence;
 pub mod state;
 
 use axum::http::{HeaderValue, Method};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use state::AppState;
 use tower_http::cors::CorsLayer;
@@ -94,6 +94,7 @@ pub fn router(state: AppState) -> Router {
             post(devices::approve_device_grant),
         )
         .route("/me/devices", get(devices::list_devices))
+        .route("/me/devices/:id", patch(devices::rename_device))
         .route("/me/devices/:id/revoke", post(devices::revoke_device))
         .with_state(state)
         .layer(cors_layer_from_env())

@@ -16,6 +16,7 @@ import type {
   RegisterFinishResponse,
   RegisterStartRequest,
   RegisterStartResponse,
+  RenameDeviceRequest,
   RequestDeviceGrantRequest,
   ResolveHandleResponse,
   SessionFinishRequest,
@@ -173,6 +174,14 @@ export function approveDeviceGrant(
 
 export function listDevices(token: string): Promise<DeviceResponse[]> {
   return request('/me/devices', { token })
+}
+
+export function renameDevice(
+  token: string,
+  signingKeyId: string,
+  body: RenameDeviceRequest,
+): Promise<DeviceResponse> {
+  return request(`/me/devices/${signingKeyId}`, { method: 'PATCH', body, token })
 }
 
 export function revokeDevice(token: string, signingKeyId: string): Promise<void> {

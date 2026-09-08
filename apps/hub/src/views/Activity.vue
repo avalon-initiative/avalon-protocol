@@ -6,8 +6,10 @@
 // identity's full history render the same way, just with more rows.
 import { onMounted, ref } from 'vue'
 import { getMyHistory } from '../api/client'
+import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
 import type { HistoryEntryResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
+import styles from './Activity.module.scss'
 
 const session = useSessionStore()
 
@@ -33,10 +35,12 @@ onMounted(async () => {
     <p v-else-if="entries.length === 0">
       No activity yet — your history starts as soon as the network processes your first event.
     </p>
-    <ul v-else>
-      <li v-for="entry in entries" :key="entry.event_id">
-        <span>{{ entry.kind }}</span>
-        <time :datetime="entry.timestamp">{{ entry.timestamp }}</time>
+    <ul v-else :class="styles.feed">
+      <li v-for="entry in entries" :key="entry.event_id" :class="styles.entry">
+        <span :class="styles.summary">{{ summarizeActivityEntry(entry) }}</span>
+        <time :class="styles.timestamp" :datetime="entry.timestamp">
+          {{ formatActivityTimestamp(entry.timestamp) }}
+        </time>
       </li>
     </ul>
   </section>

@@ -140,6 +140,7 @@ async function refreshDevicesAndPendingGrants() {
     ])
     myDevices.value = devices
     pendingGrants.value = grants
+    seedRenameLabels(devices)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -174,6 +175,37 @@ async function onRevokeDevice(device: DeviceResponse) {
     revokeError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     revokingId.value = ''
+  }
+}
+
+// #145: every device (including the first one, previously unlabeled) can
+// be renamed after the fact. Seeded from each device's current label on
+// refresh, but only for a device not already being edited — an in-flight
+// edit shouldn't get clobbered by the next poll tick.
+const renameLabels = ref<Record<string, string>>({})
+const renamingId = ref('')
+const renameError = ref('')
+
+function seedRenameLabels(devices: DeviceResponse[]) {
+  for (const device of devices) {
+    if (!(device.id in renameLabels.value)) {
+      renameLabels.value[device.id] = device.label ?? ''
+    }
+  }
+}
+
+async function onRenameDevice(device: DeviceResponse) {
+  if (!session.token) return
+  const newLabel = (renameLabels.value[device.id] ?? '').trim()
+  renameError.value = ''
+  renamingId.value = device.id
+  try {
+    await api.renameDevice(session.token, device.id, { label: newLabel })
+    await refreshDevicesAndPendingGrants()
+  } catch (e) {
+    renameError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    renamingId.value = ''
   }
 }
 
@@ -258,13 +290,28 @@ async function onSubmit() {
 
     <section v-if="hasSigningKey && myDevices.length > 0">
       <h2>Your devices</h2>
+      <p>
+        To add another device, log into this identity there — with no signing key yet, it'll
+        offer to request access, and the request will show up here for you to approve.
+      </p>
       <p v-if="revokeError">{{ revokeError }}</p>
+      <p v-if="renameError">{{ renameError }}</p>
       <ul>
         <li v-for="device in myDevices" :key="device.id">
-          {{ device.label ?? 'Unlabeled device' }}
+          <AvalonTextField
+            v-model="renameLabels[device.id]"
+            label="Device name"
+            placeholder="Unlabeled device"
+          />
           <span v-if="device.revoked_at">(revoked)</span>
           <AvalonButton
-            v-else
+            :label="renamingId === device.id ? 'Saving…' : 'Rename'"
+            variant="secondary"
+            :disabled="renamingId === device.id"
+            @click="onRenameDevice(device)"
+          />
+          <AvalonButton
+            v-if="!device.revoked_at"
             :label="revokingId === device.id ? 'Revoking…' : 'Revoke'"
             variant="secondary"
             :disabled="revokingId === device.id"

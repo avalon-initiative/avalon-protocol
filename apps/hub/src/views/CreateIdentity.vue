@@ -10,6 +10,10 @@ const router = useRouter()
 const session = useSessionStore()
 
 const displayName = ref('')
+// #145: labeled from the start, same as any device added later through
+// #135's grant flow — previously the first device's signing-key row was
+// always unlabeled.
+const deviceLabel = ref('')
 const submitting = ref(false)
 const error = ref('')
 
@@ -32,7 +36,10 @@ async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    const { identityId, signingKeyMnemonic: mnemonic } = await createIdentity(displayName.value)
+    const { identityId, signingKeyMnemonic: mnemonic } = await createIdentity(
+      displayName.value,
+      deviceLabel.value.trim() || null,
+    )
     createdIdentityId.value = identityId
     signingKeyMnemonic.value = mnemonic
   } catch (e) {
@@ -103,6 +110,11 @@ async function continueToProfile() {
         v-model="displayName"
         label="Display name"
         placeholder="How other players see you"
+      />
+      <AvalonTextField
+        v-model="deviceLabel"
+        label="This device's name (optional)"
+        placeholder="e.g. Work laptop"
       />
     </AvalonForm>
     <RouterLink to="/login">Already have an identity? Log in</RouterLink>

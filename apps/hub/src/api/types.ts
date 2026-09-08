@@ -29,6 +29,9 @@ export interface RegisterFinishRequest {
   webauthn_credential: RegistrationResponseJSON
   event_signing_public_key: string
   event_signature: string
+  // A player-chosen label for the device completing this ceremony (#145) —
+  // purely descriptive.
+  device_label: string | null
 }
 
 export interface RegisterFinishResponse {
@@ -138,6 +141,10 @@ export interface DeviceResponse {
   // ProfileResponse.avatar_url's own precedent for an optional field that
   // isn't always present on the wire.
   revoked_at?: string
+}
+
+export interface RenameDeviceRequest {
+  label: string
 }
 
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'
