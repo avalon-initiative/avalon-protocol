@@ -100,7 +100,7 @@ milestone-1 stand-in until actor signatures exist.
 
 | Kind | Issuer → subject | Payload (canonical) | Drives | Signed by |
 |---|---|---|---|---|
-| `identity.created` | identity → identity | identity id | identities | identity key (#73); network today |
+| `identity.created` | identity → identity | identity id | identities | identity's Ed25519 event-signing key (#73, done) |
 | `profile.updated` | identity → identity | changed promised-durable fields | profiles | identity key |
 | `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
 | `game.binding_established` | identity → game | identity, game | bindings, registry players | identity key |
@@ -165,11 +165,14 @@ the record — [`./revocation.md`](./revocation.md).
 ## Today in the repo
 
 - Types: `crates/protocol/src/events.rs` as shown above.
-- Exactly one emitter: `register` in `crates/server/src/handlers.rs` writes
-  `identity.created` with `issuer = network:avalon-server:system:registration`
-  and a payload containing `identity_id` and `username`. The `username` field
-  disappears with #73; the node-as-issuer shape is a milestone-1 stand-in noted
-  on that issue.
+- Exactly one emitter: `register_finish` in `crates/server/src/handlers.rs`
+  writes `identity.created` with `issuer = identity:<id>:self:created` — the
+  identity's own Ed25519 event-signing key signs it, verified independently
+  of the WebAuthn ceremony that authenticated the registration request — and
+  a payload containing only `identity_id`. No `username` field exists
+  anywhere anymore (#73, done). Enqueued into `protocol_outbox`
+  (`crates/server/src/outbox.rs`) in the same transaction as the identity/
+  profile/key rows, closing #71 for this path.
 - `profile.updated` does not exist yet — `update_profile` writes Postgres only
   ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)).
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`; the

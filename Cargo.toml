@@ -25,10 +25,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 axum = "0.7"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "migrate", "macros"] }
-argon2 = "0.5"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 base64 = "0.22"
 anyhow = "1"
 hex = "0.4"
 dotenvy = "0.15"
+webauthn-rs = { version = "0.5", features = ["resident-key-support", "danger-allow-state-serialisation", "conditional-ui"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
+url = { version = "2", features = ["serde"] }
+passkey-types = "0.5"
+passkey-client = "0.5"
+passkey-authenticator = { version = "0.5", features = ["testable"] }

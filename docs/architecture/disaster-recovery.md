@@ -64,11 +64,21 @@ answer for the current code is: partly, and not yet provably.
 - **Profile updates emit no event.** `update_profile` writes the `profiles`
   table only, so a display name or avatar set after registration is
   unrecoverable — [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86).
-- **Identity creation is not atomic with its ledger entry.** A failure between
-  the app transaction and `chain.commit` leaves an identity with no history —
-  [#71](https://github.com/LunarVagabond/avalon-protocol/issues/71). The same
-  shape will affect every future write path until an outbox or equivalent
-  exists.
+- ~~Identity creation is not atomic with its ledger entry.~~ Fixed
+  ([#71](https://github.com/LunarVagabond/avalon-protocol/issues/71)):
+  `register_finish` inserts the `identity.created` event into
+  `protocol_outbox` in the same transaction as the identity/profile/key rows
+  (`crates/server/src/outbox.rs`), so a crash before the ledger ever sees it
+  cannot orphan an identity — the event is already durable, just not yet
+  published. The pattern is generic; every future write path reuses the same
+  table and worker rather than needing its own fix.
+- **`identity_keys`' passkey counter/backup-state is not reconstructable from
+  history.** A rebuild from genesis would restore the identity, its
+  `identity_signing_keys` public key, and every event it signed — but the
+  WebAuthn passkey's operational clone-detection counter lives only in
+  Postgres. Accepted trade-off: a rebuilt system's counter resets to a fresh
+  baseline, a minor security regression (clone detection re-learns its
+  baseline) rather than a correctness one.
 - **The ledger and the app tables share one database.** Losing Postgres today
   loses the log too. Mirrors and an export format
   ([#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)) are what
@@ -88,7 +98,8 @@ answer for the current code is: partly, and not yet provably.
 ## Decisions and tickets
 
 - #75 durable history is canonical
-- #43 rebuild proof; #86 profile events; #71 atomic commit
+- #43 rebuild proof; #86 profile events
+- #71 atomic commit — done for the identity path via the outbox pattern
 - #40 export / mirror format;
   [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) the event
   catalogue every rebuild decodes

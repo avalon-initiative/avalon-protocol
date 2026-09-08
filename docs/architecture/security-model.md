@@ -35,17 +35,20 @@ This holds because every durable claim is signed by the party with authority
 over it, and the log is independently verifiable
 ([`./settlement.md`](./settlement.md),
 [ADR #70](https://github.com/LunarVagabond/avalon-protocol/issues/70)). The
-same guarantee extends to identities once
-[#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) lands: an
-identity signs its own creation and profile events, so a node cannot mint
-identities either. Today the `identity.created` event is issued by the server,
-which is the milestone-1 gap #73's comment records.
+same guarantee now extends to identities
+([#73](https://github.com/LunarVagabond/avalon-protocol/issues/73), done): an
+identity signs its own `identity.created` with its Ed25519 event-signing key,
+verified independently of the WebAuthn ceremony that authenticated the
+request — a node cannot mint an identity that never actually registered.
+`profile.updated` doesn't emit an event at all yet ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)),
+so that gap remains until #86 lands.
 
 ## Three key domains
 
 | Key | Held by | Compromise means | Response |
 |---|---|---|---|
-| player key (#73) | the player | attacker can mutate that one identity's data | revoke/rotate via recovery path; history stays |
+| player passkey (#73) | the player | attacker can log in as that identity | revoke/replace via a second registered passkey (#99, not built) — total loss if it was the only one |
+| player event-signing key (#73) | the player | attacker can author events for that identity going forward | rotate from an authenticated session (not built); historical events signed by the old key stay valid, same principle as issuer keys below |
 | issuer key (#80) | the game | attacker can issue authentic-looking claims under that game | revoke key as of T; claims after T rejected, before T untouched |
 | log operator key (#39) | settlement operator / validator | attacker can sign bogus log entries / tree heads | mirrors detect divergence; the validator set (#40) limits any one signer's rewrite power |
 
@@ -65,10 +68,11 @@ different facts and both stay answerable —
 ## Credentials never enter the ledger
 
 A password hash, a session token, a private key, or any other secret is never
-part of a protocol event. Public keys are fine — they are public. The
-`identity.created` event carrying `username` today is a milestone-1 leftover
-removed with #73/#86. Event schemas get a negative test for secret-shaped
-fields ([#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)).
+part of a protocol event. Public keys are fine — they are public. There is no
+password anywhere in the system anymore (#73): the `identity.created` event
+no longer carries a `username`, and there is no `credentials` table. Event
+schemas get a negative test for secret-shaped fields
+([#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)).
 
 ## Transport
 
@@ -92,20 +96,26 @@ deployment blocker, not an optional hardening step.
 - **Persistent identity makes harassment persistent.** Blocking and
   cross-game moderation are open questions (Proposal §31–32) and interact with
   [`./privacy.md`](./privacy.md).
-- **Recovery is unsolved.** A lost passkey needs a designed recovery path
-  before #73 is the only login (Proposal §32).
+- **Recovery is unsolved.** #73 is the only login mechanism and a lost
+  passkey (with no second one registered) is total, permanent loss of the
+  identity today — tracked as its own open decision,
+  [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99).
 
 ## Today in the repo
 
-- `crates/server/src/auth.rs` — Argon2id password hashing, opaque CSPRNG
-  session tokens (revocable by row deletion).
+- `crates/server/src/auth.rs` — builds the `Webauthn` instance, verifies
+  Ed25519 event signatures, generates opaque CSPRNG session tokens (revocable
+  by row deletion). No passwords anywhere.
 - `crates/server/src/error.rs` — internal error text never reaches the
   client.
-- `crates/server/src/handlers.rs` — bearer-token auth; unknown/expired tokens
-  are indistinguishable to the caller.
+- `crates/server/src/handlers.rs` — bearer-token auth for `me`/`update_profile`;
+  unknown/expired tokens are indistinguishable to the caller. Registration
+  verifies a WebAuthn ceremony and an Ed25519 event signature, both, before
+  writing anything.
 - `crates/chain/src/postgres.rs` — hash-chained entries, content re-verified
   on read; no signatures yet (#39).
-- No issuer keys, no player keys, no TLS, no visibility scopes (#87).
+- Player passkeys and event-signing keys exist (#73). No issuer keys yet
+  (#80/#84), no TLS (#72), no visibility scopes (#87).
 
 ## Decisions and tickets
 
@@ -114,7 +124,9 @@ deployment blocker, not an optional hardening step.
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) — TLS
   before any non-local deployment.
 - [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) — player
-  identity as a self-custodied keypair.
+  identity as a self-custodied keypair. Done.
+- [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) — open
+  decision: identity recovery when every passkey is lost.
 - [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) — log
   signing scheme.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) — issuer
