@@ -108,46 +108,37 @@ migrating an existing username/password identity (none exist outside
 development, so not applicable yet), and whether identities can be
 transferred (Proposal §32).
 
-### Where the Ed25519 signing key lives in a browser (#55, #134)
+### Where the Ed25519 signing key lives in a browser
 
 The Hub derives the identity's Ed25519 signing keypair client-side during
-registration from a freshly generated BIP39 mnemonic phrase (#134, decided in
-[#122](https://github.com/LunarVagabond/avalon-protocol/issues/122)) and
-stores the resulting secret key in plain `localStorage`, keyed by identity
-id, unencrypted. Storage itself is still the same deliberate, explicitly-
-flagged milestone-1 stopgap as before #134, not a default to assume is
-final:
-
-- The secret key never leaves the browser it was derived in — the same
-  `localStorage`-only exposure as before #134.
-- It sits in plaintext at rest, same exposure as any other `localStorage`
-  value (readable by any script running on the origin).
-
-What #134 actually changes: the key is no longer *only* reachable from the
-browser that generated it. It's deterministically derived
+registration from a freshly generated BIP39 mnemonic phrase
 (`apps/hub/src/crypto/signingKey.ts::deriveSigningKeyFromMnemonic` —
 `sha256(BIP39 seed ‖ a versioned domain-separation label)`, not a BIP32 HD
 derivation, since there's exactly one signing key per identity, not a
-hierarchy) from a phrase shown to the player exactly once, at creation
-(`CreateIdentity.vue`), and never stored anywhere itself. Any device holding
-that phrase can re-derive the identical key entirely offline
-(`Profile.vue`'s "recover your signing key" section, shown automatically
-when the current device has none) — no server round-trip, and the server
-still only ever sees the resulting *public* key, exactly as before.
+hierarchy) and stores the resulting secret key in plain `localStorage`,
+keyed by identity id, unencrypted:
 
-This is the disaster-recovery fallback #122 decided on, not the primary
-path: the real primary design — a device-registration / linked-device grant
-model, no phrase involved in the common case — is tracked separately,
-[#135](https://github.com/LunarVagabond/avalon-protocol/issues/135), not yet
-built. #122 is distinct from #99: #99 is about recovering a *lost passkey*
-(the login credential); #122/#134/#135 are about custody and deliberate
-transfer of the *signing key* (what authenticates a player's authored
-events) — the phrase does not by itself authenticate a login, WebAuthn
-passkey login is unaffected. The WebAuthn passkey itself has no equivalent
-client-storage decision to make here — it never leaves the platform
-authenticator/browser passkey store, which is already synced across a
-player's devices by whatever passkey provider they use (iCloud Keychain,
-Google Password Manager, etc.), independent of anything Avalon does.
+- It sits in plaintext at rest, same exposure as any other `localStorage`
+  value (readable by any script running on the origin).
+- The mnemonic itself is shown to the player exactly once, at creation
+  (`CreateIdentity.vue`), and is never stored anywhere — any device holding
+  it can re-derive the identical key offline, with no server round-trip
+  (`Profile.vue`'s "recover your signing key" section, shown when the
+  current device has none). The server only ever sees the resulting
+  *public* key.
+
+This mnemonic recovery is the fallback path; the primary path — a
+device-registration/linked-device grant model, no phrase in the common
+case — is a separate, not-yet-built piece
+([#135](https://github.com/LunarVagabond/avalon-protocol/issues/135)). Both
+were decided together in
+[#122](https://github.com/LunarVagabond/avalon-protocol/issues/122), which
+is distinct from [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99):
+#99 covers a lost *passkey* (login credential), #122 covers the *signing
+key* (what authenticates a player's authored events) — recovering it never
+by itself authenticates a login. The WebAuthn passkey has no equivalent
+client-storage decision here: it never leaves the platform authenticator,
+already synced across devices by whatever passkey provider the player uses.
 
 ## What identity is not
 
@@ -222,12 +213,10 @@ Google Password Manager, etc.), independent of anything Avalon does.
 - [#55](https://github.com/LunarVagabond/avalon-protocol/issues/55) — Hub
   identity creation/login UI: the real WebAuthn + Ed25519 flow, in-browser.
 - [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122) —
-  decided, release blocker: Ed25519 signing-key custody is both a
-  device-registration/linked-device grant model
-  ([#135](https://github.com/LunarVagabond/avalon-protocol/issues/135), the
-  primary path, not yet built) and a BIP39 mnemonic recovery phrase
-  ([#134](https://github.com/LunarVagabond/avalon-protocol/issues/134), the
-  disaster-recovery fallback, done).
+  release-blocking decision: Ed25519 signing-key custody. See the section
+  above; [#134](https://github.com/LunarVagabond/avalon-protocol/issues/134)
+  and [#135](https://github.com/LunarVagabond/avalon-protocol/issues/135)
+  are the two halves it decided on.
 - [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86) — profile
   updates still emit no event; classify promised-durable identity state.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:

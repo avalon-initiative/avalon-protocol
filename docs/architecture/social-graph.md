@@ -96,18 +96,17 @@ informed by the network fact. This is listed as open in
   visibility composition in [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87)
   (which this doc's "What a game sees" section describes) is not built yet, so
   there is no game-facing read path at all.
-- `crates/sdk/src/lib.rs` — `Session::require(capability)` is the per-method
-  capability check that `friends()` and presence reads will use; those methods
-  don't exist yet (#17).
-- **Decided: a friendship is promised-durable history**, not server-only state.
-  It is inherently a social fact between two identities, not something any
-  game owns or can lose custody of — the same reasoning [guilds](./guilds.md)
-  already apply. `friend.requested`, `friend.accepted`, and `friend.removed`
-  are protocol events (catalogued in [protocol-events.md](./protocol-events.md)),
-  emitted atomically with the projection row per [#71](https://github.com/LunarVagabond/avalon-protocol/issues/71),
-  and in scope for the rebuild proof in [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43).
-  A declined or withdrawn *request* is not itself durable history — only an
-  established or ended friendship is.
+- `crates/sdk/src/social.rs` (#17) — `Session::friends()`,
+  `presence()`/`presence_of()`, `update_presence()`, and
+  `subscribe_presence()` (#136), each gated behind
+  `Session::require(capability)`.
+- **A friendship is promised-durable history**, not server-only state — the
+  same reasoning [guilds](./guilds.md) apply, since it's a social fact
+  between two identities, not something any game owns. `friend.requested`,
+  `friend.accepted`, and `friend.removed` are protocol events (catalogued in
+  [protocol-events.md](./protocol-events.md)), emitted atomically with the
+  projection row via the outbox (#71). A declined or withdrawn *request* is
+  not itself durable history — only an established or ended friendship is.
 
 ## Decisions and tickets
 

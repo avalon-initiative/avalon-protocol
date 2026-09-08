@@ -96,10 +96,9 @@ realtime connections is a separate axis from scaling history or queries
   or capability-grant system in this repo yet (#26/#28/#83). Player-set
   visibility scopes and opting `playing` out of view are deferred for the
   same reason, to #87.
-- `GET /ws/presence?token=…` (issue #136, decided in #119: websocket over
-  SSE/polling, chosen because this roadmap already commits to bidirectional
-  push for guild chat/#24 and DMs/#105) — a live push transport, additive to
-  `GET /presence`, not a replacement. Auth is a `?token=` query parameter,
+- `GET /ws/presence?token=…` (#136, transport chosen in #119) — a live push
+  transport, additive to `GET /presence`, not a replacement. Auth is a
+  `?token=` query parameter,
   not the usual `Authorization` header — a browser `WebSocket` handshake
   can't set custom headers (`handlers::authenticate_token`). A connected
   client sends `{"type":"subscribe","ids":[...]}` (additive — sending it
