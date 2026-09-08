@@ -117,6 +117,8 @@ pub enum AppError {
     BindingNotFound,
     #[error("no active grant for that capability")]
     GrantNotFound,
+    #[error("forbidden")]
+    Forbidden,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -184,6 +186,14 @@ impl IntoResponse for AppError {
             | AppError::InvalidGameSignature => StatusCode::UNAUTHORIZED,
             AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,
             AppError::BindingNotFound | AppError::GrantNotFound => StatusCode::NOT_FOUND,
+            // Issue #28's guard: authenticated (as *some* game), but that
+            // game lacks the specific capability it needs for this
+            // request. Generic 403 body, same as every other authorization
+            // (as opposed to authentication) failure in this file — see
+            // `require_capability`'s own doc comment for why the body
+            // never says *which* of "no binding" / "wrong game" / "no
+            // grant" / "revoked grant" applied.
+            AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
