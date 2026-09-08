@@ -66,8 +66,9 @@ fn guild_ref(guild_id: Uuid, verb: &str) -> GlobalId {
 /// ownership is structural (the `guilds.owner` column), not a role grant,
 /// so it can never be revoked by editing a role row. Anyone else needs
 /// `permission` present in their own role's permission list, resolved by
-/// [`actor_role_permissions`].
-fn has_guild_permission(
+/// [`actor_role_permissions`]. `pub(crate)` so `channels.rs`/`guild_messages.rs`
+/// (#22) can reuse it for `manage_channels` checks.
+pub(crate) fn has_guild_permission(
     guild_owner: Uuid,
     actor: Uuid,
     actor_permissions: &[String],
@@ -250,6 +251,17 @@ pub async fn create_guild(
     .bind(created_at)
     .execute(&mut *tx)
     .await?;
+
+    // Issue #22: every guild gets a default `general` channel on creation.
+    // Deliberately just the row insert here, no `guild.channel_created`
+    // event — see `crates/server/src/channels.rs`'s module doc comment for
+    // why this stays a minimal, localized addition to this transaction.
+    sqlx::query("INSERT INTO guild_channels (id, guild_id, name) VALUES ($1, $2, $3)")
+        .bind(Uuid::new_v4())
+        .bind(guild_id)
+        .bind("general")
+        .execute(&mut *tx)
+        .await?;
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),

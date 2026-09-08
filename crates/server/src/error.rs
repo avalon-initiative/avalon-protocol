@@ -83,6 +83,16 @@ pub enum AppError {
     CannotRemoveOwner,
     #[error("cannot assign the owner role through this endpoint")]
     CannotAssignOwnerRole,
+    #[error("guild channel not found")]
+    ChannelNotFound,
+    #[error("channel name must be 1-100 characters")]
+    InvalidChannelName,
+    #[error("guild channel is archived")]
+    ChannelArchived,
+    #[error("message body must be non-empty and 4000 characters or fewer")]
+    MessageTooLong,
+    #[error("message not found")]
+    MessageNotFound,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -119,12 +129,21 @@ impl IntoResponse for AppError {
             AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {
                 StatusCode::FORBIDDEN
             }
-            AppError::GuildInviteNotFound | AppError::NotGuildMember => StatusCode::NOT_FOUND,
+            AppError::GuildInviteNotFound => StatusCode::NOT_FOUND,
             AppError::AlreadyGuildMember => StatusCode::CONFLICT,
             AppError::GuildNotOpen => StatusCode::FORBIDDEN,
             AppError::OwnerMustTransferBeforeLeaving
             | AppError::CannotRemoveOwner
             | AppError::CannotAssignOwnerRole => StatusCode::FORBIDDEN,
+            // "Not a guild member" is an authorization fact, not a missing
+            // resource — the guild exists, the caller just isn't in it —
+            // so this is 403 everywhere it's used, whether that's a
+            // membership-gated read/write (#22) or a row-not-affected
+            // check on a leave/remove/role-change mutation (#21).
+            AppError::NotGuildMember => StatusCode::FORBIDDEN,
+            AppError::ChannelNotFound | AppError::MessageNotFound => StatusCode::NOT_FOUND,
+            AppError::InvalidChannelName | AppError::MessageTooLong => StatusCode::BAD_REQUEST,
+            AppError::ChannelArchived => StatusCode::CONFLICT,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
