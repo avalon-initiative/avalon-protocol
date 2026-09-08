@@ -4,7 +4,11 @@
 //!
 //! `authenticate()` is wired to a real `avalon-server` (GET /me). Everything
 //! capability-gated (achievements, guilds, ...) still stubs `NotImplemented`
-//! until those endpoints exist — see the epics for each.
+//! until those endpoints exist — see the epics for each. Friends/presence
+//! (issue #17) are the first capability-gated surface that's actually wired
+//! to a live endpoint rather than stubbed — see `social`.
+
+pub mod social;
 
 use avalon_protocol::achievements::AchievementAttestation;
 use avalon_protocol::identity::{Identity, Profile};
@@ -20,6 +24,8 @@ pub enum SdkError {
     AuthenticationFailed,
     #[error("request to avalon-server failed: {0}")]
     Request(#[from] reqwest::Error),
+    #[error("avalon-server returned {0}")]
+    ServerError(reqwest::StatusCode),
     #[error("not yet implemented")]
     NotImplemented,
 }
@@ -83,6 +89,9 @@ impl AvalonClient {
             // correctly rejects until that lands, rather than silently
             // allowing everything.
             granted: Vec::new(),
+            http: self.http.clone(),
+            server_url: self.config.server_url.clone(),
+            token: player_token.to_string(),
         })
     }
 }
@@ -94,6 +103,13 @@ pub struct Session {
     identity: Identity,
     profile: Profile,
     granted: Vec<Capability>,
+    http: reqwest::Client,
+    server_url: String,
+    /// The player's own session bearer token, kept so `Session` methods can
+    /// call `avalon-server` on the player's behalf (e.g. `social::friends`,
+    /// `social::update_presence`) without the caller having to thread it
+    /// through again.
+    token: String,
 }
 
 impl Session {
@@ -103,6 +119,23 @@ impl Session {
         } else {
             Err(SdkError::CapabilityNotGranted(capability.to_string()))
         }
+    }
+
+    /// Test-only escape hatch: `authenticate()` always returns a `Session`
+    /// with no grants (the capability-grant system, #26–#28, isn't built
+    /// yet), so integration tests that need to exercise a capability-gated
+    /// method against a real server have no other way to get one. Delete
+    /// this once `authenticate()` can populate `granted` from the server.
+    ///
+    /// Gated behind the `test-util` feature (on for this crate's own dev
+    /// builds, off otherwise) rather than merely `#[doc(hidden)]` — the
+    /// server doesn't enforce capability grants yet either (#28), so a
+    /// `pub` method that self-grants capabilities would otherwise ship as
+    /// a real, callable capability bypass in every game's build.
+    #[cfg(feature = "test-util")]
+    pub fn grant_for_testing(mut self, capability: &str) -> Self {
+        self.granted.push(Capability::new(capability));
+        self
     }
 
     pub fn identity(&self) -> &Identity {

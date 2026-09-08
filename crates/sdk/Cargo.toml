@@ -15,8 +15,16 @@ serde.workspace = true
 time.workspace = true
 uuid.workspace = true
 
+[features]
+# Exposes Session::grant_for_testing, a capability-grant escape hatch that
+# has no business in a real game's build — see its doc comment in
+# crates/sdk/src/lib.rs. Enabled for this crate's own tests only, below.
+test-util = []
+
 [dev-dependencies]
+avalon-sdk = { path = ".", features = ["test-util"] }
 tokio.workspace = true
+sqlx.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 ed25519-dalek.workspace = true

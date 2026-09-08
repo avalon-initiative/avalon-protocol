@@ -163,6 +163,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "avalon-protocol",
+ "avalon-sdk",
  "base64 0.22.1",
  "ed25519-dalek",
  "passkey-authenticator",
@@ -172,6 +173,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 2.0.20",
  "time",
  "tokio",
