@@ -34,6 +34,7 @@ passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
 reqwest.workspace = true
+avalon-sdk = { path = "../sdk" }
 
 [[bin]]
 name = "avalon-server"

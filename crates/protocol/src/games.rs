@@ -75,6 +75,32 @@ pub struct GameCredential {
     pub key_id: String,
 }
 
+/// "This identity participates in this game" — nothing more (issue #83). No
+/// characters, race, class, level, appearance, or progression: those stay in
+/// the game's own database, and this type deliberately has no field for any
+/// of them. See `docs/architecture/game-bindings.md`.
+///
+/// A binding is established by the **player**, through the consent flow
+/// (issue #27, `POST /games/{slug}/connect`) — never created by a game
+/// unilaterally. Capability grants (`PermissionGrant`, `permissions.rs`) are
+/// scoped to a binding: no active binding, no grants, and ending a binding
+/// ends every grant under it. Ending a binding does not delete history —
+/// `ended_at` records when, it does not remove the row or the durable
+/// `game.binding_established`/`game.binding_ended` events behind it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameBinding {
+    pub identity_id: crate::ids::IdentityId,
+    pub game_id: GameId,
+    pub established_at: OffsetDateTime,
+    pub ended_at: Option<OffsetDateTime>,
+}
+
+impl GameBinding {
+    pub fn is_active(&self) -> bool {
+        self.ended_at.is_none()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

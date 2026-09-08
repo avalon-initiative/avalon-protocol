@@ -2,10 +2,13 @@
 //! or `avalon-chain` directly — see `docs/Proposal.md` §17 and
 //! `docs/architecture/sdk.md`.
 //!
-//! `authenticate()` is wired to a real `avalon-server` (GET /me). Achievements
-//! still stub `NotImplemented` until that epic's endpoints exist. Friends/
-//! presence (issue #17, see `social`) and guild membership/roster/channels/
-//! chat (issue #23, see `guilds`) are wired to live endpoints rather than
+//! `authenticate()` is wired to a real `avalon-server`: `GET /me` for
+//! identity/profile, `GET /me/grants` (issue #27) for this game's own
+//! active capability grants for the authenticating player, identified via
+//! `AvalonConfig::game_credential_key_id`. Achievements still stub
+//! `NotImplemented` until that epic's endpoints exist. Friends/presence
+//! (issue #17, see `social`) and guild membership/roster/channels/chat
+//! (issue #23, see `guilds`) are wired to live endpoints rather than
 //! stubbed.
 
 pub mod guilds;
@@ -77,6 +80,16 @@ impl AvalonClient {
 
         let body: MeResponse = response.json().await?;
 
+        // Permission grants (#27) — `GET /me/grants` returns this game's own
+        // active grants for the authenticating player, identified via
+        // `game_credential_key_id` (`x-avalon-game-key-id`). A non-success
+        // response (e.g. an unrecognized/placeholder key id, or the game has
+        // no grants yet) is treated as "no grants" rather than an
+        // authentication failure — the player token already proved who they
+        // are; an unknown game key just means this game has nothing granted,
+        // same as if it had never connected.
+        let granted = self.fetch_granted(player_token).await.unwrap_or_default();
+
         Ok(Session {
             identity: Identity {
                 id: IdentityId(body.identity_id),
@@ -87,16 +100,38 @@ impl AvalonClient {
                 display_name: body.display_name,
                 avatar_url: body.avatar_url,
             },
-            // Permission grants aren't implemented yet (Epic: Game
-            // Registration & Permissions) — every capability-gated method
-            // correctly rejects until that lands, rather than silently
-            // allowing everything.
-            granted: Vec::new(),
+            granted,
             http: self.http.clone(),
             server_url: self.config.server_url.clone(),
             token: player_token.to_string(),
         })
     }
+
+    async fn fetch_granted(&self, player_token: &str) -> Result<Vec<Capability>, SdkError> {
+        let response = self
+            .http
+            .get(format!("{}/me/grants", self.config.server_url))
+            .bearer_auth(player_token)
+            .header("x-avalon-game-key-id", &self.config.game_credential_key_id)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        let body: MyGrantsResponse = response.json().await?;
+        Ok(body
+            .capabilities
+            .into_iter()
+            .map(Capability::from)
+            .collect())
+    }
+}
+
+#[derive(Deserialize)]
+struct MyGrantsResponse {
+    capabilities: Vec<String>,
 }
 
 /// An authenticated player session scoped to whichever capabilities were
@@ -129,11 +164,15 @@ impl Session {
         }
     }
 
-    /// Test-only escape hatch: `authenticate()` always returns a `Session`
-    /// with no grants (the capability-grant system, #26–#28, isn't built
-    /// yet), so integration tests that need to exercise a capability-gated
-    /// method against a real server have no other way to get one. Delete
-    /// this once `authenticate()` can populate `granted` from the server.
+    /// Test-only escape hatch, kept even now that `authenticate()`
+    /// populates `granted` from a real `GET /me/grants` call (#27): using
+    /// the real flow end to end means driving a full game registration +
+    /// player consent (`POST /games/{slug}/connect`) for every test that
+    /// needs a granted capability, which `crates/sdk/tests/guilds.rs` and
+    /// `crates/sdk/tests/social.rs` do not otherwise need to exercise —
+    /// they're testing `guilds.rs`/`social.rs`'s methods, not the consent
+    /// flow itself (that's `crates/server/tests/connections.rs`'s job).
+    /// This escape hatch still lets them get a granted `Session` directly.
     ///
     /// Gated behind the `test-util` feature (on for this crate's own dev
     /// builds, off otherwise) rather than merely `#[doc(hidden)]` — the

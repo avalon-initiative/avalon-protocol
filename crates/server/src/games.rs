@@ -43,8 +43,15 @@
 //! signature over that nonce against the key recorded for the claimed
 //! `key_id`, reusing `crate::auth::verify_event_signature` rather than
 //! reimplementing signature verification. `GET /games/whoami` exists only to
-//! prove this extractor works end to end; #27 owns the real
-//! capability-bearing endpoints that will use it.
+//! prove this extractor works end to end; `crate::connections` (#27) owns
+//! the real capability-bearing endpoints that use it.
+//!
+//! `GET /games/{slug}` ([`get_game`]) is a public, unauthenticated read of
+//! a game's registration — no credential fields, unlike the one-time
+//! [`GameResponse`] `register_game` itself returns. `crate::connections`
+//! reads it to validate a player's approved capabilities against what the
+//! game actually declared, and the Hub's consent view reads it to render
+//! the game's name/developer/requested capabilities.
 //!
 //! Deferred to #84: key rotation, multiple keys, revocation, issuer status
 //! transitions — this only ever records the first key and sets
@@ -83,7 +90,10 @@ const GAME_SIGNATURE_HEADER: &str = "x-avalon-game-signature";
 /// later authenticate.
 const SUPPORTED_KEY_ALGORITHM: &str = "ed25519";
 
-fn game_ref(slug: &str, verb: &str) -> GlobalId {
+/// `pub(crate)` so `connections.rs` (#27/#83) can build the same
+/// `game:<slug>:self:<verb>` `GlobalId` shape for `game.binding_established`/
+/// `game.binding_ended` subjects, rather than reimplementing this format.
+pub(crate) fn game_ref(slug: &str, verb: &str) -> GlobalId {
     GlobalId::new("game", slug, "self", verb)
 }
 
@@ -250,13 +260,68 @@ pub async fn register_game(
     }))
 }
 
-async fn fetch_game_id_by_slug(state: &AppState, slug: &str) -> Result<Uuid, AppError> {
+/// `pub(crate)` so `connections.rs` can resolve a slug to a game id without
+/// duplicating this lookup.
+pub(crate) async fn fetch_game_id_by_slug(state: &AppState, slug: &str) -> Result<Uuid, AppError> {
     let row = sqlx::query("SELECT id FROM games WHERE slug = $1")
         .bind(slug)
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::GameNotFound)?;
     Ok(row.try_get("id")?)
+}
+
+#[derive(Serialize)]
+pub struct GamePublicResponse {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub developer: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub registered_at: OffsetDateTime,
+    pub status: String,
+    pub requested_capabilities: Vec<String>,
+}
+
+/// A public read of a game's registration — no credential fields, unlike
+/// [`GameResponse`] (which only `register_game` itself ever returns, to the
+/// registrant, once). This is what the Hub's consent view (#27) and
+/// `connections.rs`'s `POST /games/{slug}/connect` (to validate approved
+/// capabilities against what the game actually declared) both read; same
+/// visibility level `crates/server/src/guilds.rs`'s `get_guild` uses — no
+/// auth required, nothing here is sensitive.
+pub async fn get_game(
+    State(state): State<AppState>,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> Result<Json<GamePublicResponse>, AppError> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, developer, registered_at, status FROM games WHERE slug = $1",
+    )
+    .bind(&slug)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::GameNotFound)?;
+
+    let game_id: Uuid = row.try_get("id")?;
+    let capability_rows =
+        sqlx::query("SELECT capability FROM game_requested_capabilities WHERE game_id = $1")
+            .bind(game_id)
+            .fetch_all(&state.pool)
+            .await?;
+    let requested_capabilities = capability_rows
+        .into_iter()
+        .map(|r| r.try_get::<String, _>("capability"))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(GamePublicResponse {
+        id: game_id,
+        slug: row.try_get("slug")?,
+        name: row.try_get("name")?,
+        developer: row.try_get("developer")?,
+        registered_at: row.try_get("registered_at")?,
+        status: row.try_get("status")?,
+        requested_capabilities,
+    }))
 }
 
 #[derive(Serialize)]

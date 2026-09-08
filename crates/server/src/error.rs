@@ -111,6 +111,12 @@ pub enum AppError {
     GameKeyNotFound,
     #[error("game signature verification failed")]
     InvalidGameSignature,
+    #[error("requested capability was not declared by the game at registration")]
+    CapabilityNotRequested,
+    #[error("no active binding to this game")]
+    BindingNotFound,
+    #[error("no active grant for that capability")]
+    GrantNotFound,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -176,6 +182,8 @@ impl IntoResponse for AppError {
             | AppError::GameChallengeExpired
             | AppError::GameKeyNotFound
             | AppError::InvalidGameSignature => StatusCode::UNAUTHORIZED,
+            AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,
+            AppError::BindingNotFound | AppError::GrantNotFound => StatusCode::NOT_FOUND,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —

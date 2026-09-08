@@ -278,3 +278,48 @@ export interface MessageResponse {
 export interface SendMessageRequest {
   body: string
 }
+
+// Game registration (#26) / binding + grant consent flow (#27, #83) wire
+// types, matching crates/server/src/games.rs and its #27 companion module
+// field-for-field. `requested_capabilities` is a declaration only — see
+// games.rs's own module doc comment — never itself a grant.
+
+export interface GameResponse {
+  id: string
+  slug: string
+  name: string
+  developer: string
+  registered_at: string
+  status: string
+  requested_capabilities: string[]
+}
+
+export interface ConnectGameRequest {
+  capabilities: string[]
+}
+
+export interface ConnectGameResponse {
+  binding_id: string
+  game_id: string
+  established_at: string
+  granted_capabilities: string[]
+}
+
+export interface GrantResponse {
+  capability: string
+  granted_at: string
+}
+
+export interface GameBindingResponse {
+  binding_id: string
+  game_id: string
+  slug: string
+  name: string
+  established_at: string
+  grants: GrantResponse[]
+}
+
+// GET /me/connections only lists active bindings (no `ended_at` — an ended
+// binding simply stops appearing), so the response is a bare array, not a
+// wrapper object.
+export type MyConnectionsResponse = GameBindingResponse[]

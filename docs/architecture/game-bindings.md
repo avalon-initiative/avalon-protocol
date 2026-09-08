@@ -83,14 +83,32 @@ about Game B's unless X's permissions expose it.
 
 ## Today in the repo
 
-- No binding type exists yet. The nearest thing is
-  `PermissionGrant { identity_id, game_id, capability, ... }` in
-  `crates/protocol/src/permissions.rs`, which answers "what may Game Y do" but
-  not "is X a player of Y".
-- `crates/protocol/src/games.rs` — `Game`, `GameRegistration`,
-  `GameCredential`; the game side of the relationship.
-- `crates/sdk/src/lib.rs` — `authenticate()` returns a game-scoped `Session`
-  with an empty grant list; it does not yet check for a binding.
+- `crates/protocol/src/games.rs` — `GameBinding { identity_id, game_id,
+  established_at, ended_at }`, real now (#83), alongside `Game`,
+  `GameRegistration`, `GameCredential`. No game-specific field exists on it,
+  by design.
+- `crates/server/src/connections.rs` (#27/#83) — `POST /games/{slug}/connect`
+  is the consent flow: it validates every approved capability against what
+  the game declared at registration (`GET /games/{slug}` /
+  `game_requested_capabilities`, rejecting anything undeclared), creates the
+  `bindings` row only if the caller has no active binding to that game yet
+  (idempotent — reconnecting grants any newly-approved capabilities without
+  duplicating the binding or re-firing `game.binding_established`), and
+  inserts one `permission_grants` row per approved capability, all in one
+  transaction via the outbox. `DELETE /games/{slug}/grants/{capability}`
+  revokes a single grant; `DELETE /games/{slug}/connect` ends the binding
+  and revokes every active grant under it in the same transaction; `GET
+  /me/connections` lists the caller's active bindings with their active
+  grants. `bindings`/`permission_grants` (migration `0012_game_bindings`)
+  are projections — `game.binding_established`, `game.binding_ended`,
+  `permission.granted`, `permission.revoked` are the durable history, and
+  are network-attributed for now (the same milestone-1 stand-in
+  `game.registered` uses), not yet player-signed despite what the
+  event-kind catalogue eventually intends.
+- `crates/sdk/src/lib.rs` — `authenticate()` now calls `GET /me/grants`
+  (identified by `AvalonConfig::game_credential_key_id`) and populates
+  `Session.granted` from the caller's real active grants for that game,
+  rather than always returning an empty list.
 
 ## Decisions and tickets
 

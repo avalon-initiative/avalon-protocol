@@ -107,6 +107,8 @@ milestone-1 stand-in until actor signatures exist.
 | `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
 | `game.binding_established` | identity → game | identity, game | bindings, registry players | identity key |
 | `game.binding_ended` | identity → game | binding ref | bindings | identity key |
+| `permission.granted` | identity → game (per capability) | binding, capability | permission grants | identity key |
+| `permission.revoked` | identity → game (per capability) | binding, capability, reason | permission grants | identity key |
 | `issuer.registered` | issuer → issuer | issuer id, initial key set | issuers | issuer key |
 | `issuer.key_added` | issuer → issuer | key id, public key, algorithm, validity window | issuer keys | existing issuer key |
 | `issuer.key_revoked` | issuer → issuer | key id, reason (`rotated`, `compromised`, …) | issuer keys | issuer key |
@@ -209,6 +211,21 @@ the record — [`./revocation.md`](./revocation.md).
   yet at the point this event is built, so a real signature claim would be
   false. Payload is `game_id`, `slug`, `name`, `developer`,
   `requested_capabilities`, and the initial key's id/algorithm/public key.
+- A fifth emitter: `crates/server/src/connections.rs` (#27/#83) writes
+  `game.binding_established` (only on the first `POST /games/{slug}/connect`
+  for a given identity/game pair — reconnecting to an already-active binding
+  emits nothing), `game.binding_ended` (`DELETE /games/{slug}/connect`),
+  and one `permission.granted`/`permission.revoked` per capability
+  (`connect`, `DELETE /games/{slug}/grants/{capability}`, and every grant a
+  `disconnect` revokes), all enqueued into `protocol_outbox` in the same
+  transaction as the `bindings`/`permission_grants` row change they
+  accompany. `issuer` is `identity:<id>:self:<verb>` (the acting player);
+  `subject` is `game:<slug>:self:<verb>` for binding events and
+  `game:<slug>:self:<capability>` for grant events. Network-attributed
+  rather than identity-signed, same "network as signer" milestone-1
+  stand-in as `game.registered` and the social-graph events — no general
+  per-event signing ceremony exists yet, so claiming the catalogue's
+  eventual "identity key" signer here would be false.
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`; the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
   `timestamp`, `version` (`crates/chain/src/postgres.rs`).
