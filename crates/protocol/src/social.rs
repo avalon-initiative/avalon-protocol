@@ -12,6 +12,7 @@ use crate::ids::{GameId, IdentityId};
 pub struct Friendship {
     pub a: IdentityId,
     pub b: IdentityId,
+    #[serde(with = "time::serde::rfc3339")]
     pub since: OffsetDateTime,
 }
 
@@ -23,6 +24,7 @@ pub struct Friendship {
 pub struct FriendRequest {
     pub from: IdentityId,
     pub to: IdentityId,
+    #[serde(with = "time::serde::rfc3339")]
     pub requested_at: OffsetDateTime,
 }
 
@@ -40,5 +42,6 @@ pub struct Presence {
     pub status: PresenceStatus,
     /// The game the player is currently in, if any and if shared.
     pub playing: Option<GameId>,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
