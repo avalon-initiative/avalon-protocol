@@ -112,7 +112,9 @@ own research spike and written comparison before it closes.
   transaction and returns the last entry hash as the `Commitment.proof`.
 - `verify` checks that a claimed hash exists; `list_entries` rehashes every row
   and checks each link, which is what `avalon inspect-ledger`
-  (`crates/cli/src/main.rs`, `make inspect-ledger`) prints.
+  (`crates/cli/src/main.rs`, `make inspect-ledger`) prints — `avalon
+  inspect-ledger-full` / `make inspect-ledger-full` is the same view plus
+  each entry's actual JSON payload.
 - Not yet: signatures (#39), a `batch_id` column or real batching (#38 —
   `get_commitment` returns `BatchNotFound`), Merkle roots or signed tree heads
   (#40), an export/mirror format, an outbox so app rows and ledger rows commit

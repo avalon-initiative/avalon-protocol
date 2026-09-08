@@ -1,6 +1,7 @@
 //! `avalon` — local dev/ops CLI.
 //!
-//! Commands: `avalon inspect-ledger`, `avalon create-identity`,
+//! Commands: `avalon inspect-ledger`, `avalon inspect-ledger-full` (same
+//! view, plus each entry's payload), `avalon create-identity`,
 //! `avalon outbox-status`. `register-game` and `issue-achievement` (per
 //! `docs/Proposal.md` §23's milestone-1 vertical slice) aren't wired up yet —
 //! they depend on the Game Registration and Achievements epics, still
@@ -27,11 +28,14 @@ async fn main() {
 
     let command = std::env::args().nth(1);
     match command.as_deref() {
-        Some("inspect-ledger") => inspect_ledger().await,
+        Some("inspect-ledger") => inspect_ledger(false).await,
+        Some("inspect-ledger-full") => inspect_ledger(true).await,
         Some("create-identity") => create_identity().await,
         Some("outbox-status") => outbox_status().await,
         _ => {
-            eprintln!("usage: avalon <inspect-ledger|create-identity|outbox-status>");
+            eprintln!(
+                "usage: avalon <inspect-ledger|inspect-ledger-full|create-identity|outbox-status>"
+            );
             std::process::exit(1);
         }
     }
@@ -181,7 +185,14 @@ async fn outbox_status() {
     }
 }
 
-async fn inspect_ledger() {
+/// `full: false` is `avalon inspect-ledger` — the concise chain-integrity
+/// view. `full: true` is `avalon inspect-ledger-full` — the same view plus
+/// each entry's actual payload (pretty-printed JSON) and version, for
+/// answering "what's actually inside this block" rather than just "is the
+/// chain intact." Same query either way (`list_entries` always fetches the
+/// payload, since it needs it to re-verify each entry's hash) — this only
+/// changes what gets printed.
+async fn inspect_ledger(full: bool) {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -211,6 +222,15 @@ async fn inspect_ledger() {
         println!("│ issuer:    {}", entry.issuer);
         println!("│ subject:   {}", entry.subject);
         println!("│ timestamp: {}", entry.event_timestamp);
+        if full {
+            println!("│ version:   {}", entry.version);
+            let pretty = serde_json::to_string_pretty(&entry.payload)
+                .unwrap_or_else(|_| entry.payload.to_string());
+            println!("│ payload:");
+            for line in pretty.lines() {
+                println!("│   {line}");
+            }
+        }
         println!("│ hash:      {}", short_hash(&entry.entry_hash));
         println!("│ prev:      {}", short_hash(&entry.prev_hash));
         println!("│ verified:  {verified}");

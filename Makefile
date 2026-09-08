@@ -12,7 +12,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	migrate migrate-down db-reset \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
-	inspect-ledger create-identity outbox-status \
+	inspect-ledger inspect-ledger-full create-identity outbox-status \
 	check-all clean-all
 
 help:
@@ -49,7 +49,8 @@ help:
 	@echo "  make csharp-build  dotnet build bindings/csharp/AvalonSdk.sln"
 	@echo "  make csharp-test   dotnet test bindings/csharp/AvalonSdk.sln"
 	@echo ""
-	@echo "  make inspect-ledger   pretty-print the hash-chained ledger (avalon-cli)"
+	@echo "  make inspect-ledger        pretty-print the hash-chained ledger (avalon-cli)"
+	@echo "  make inspect-ledger-full   same, plus each entry's actual payload"
 	@echo "  make create-identity  register a new self-custodied (passkey) identity via avalon-cli"
 	@echo "  make outbox-status    pending/oldest-pending count for the settlement outbox (issue #71)"
 	@echo ""
@@ -173,6 +174,9 @@ csharp-test:
 
 inspect-ledger:
 	cargo run -p avalon-cli -- inspect-ledger
+
+inspect-ledger-full:
+	cargo run -p avalon-cli -- inspect-ledger-full
 
 create-identity:
 	cargo run -p avalon-cli -- create-identity

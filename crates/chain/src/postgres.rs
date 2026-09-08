@@ -154,6 +154,8 @@ impl PostgresSettlementProvider {
                 kind,
                 issuer,
                 subject,
+                payload,
+                version,
                 event_timestamp,
                 prev_hash,
                 entry_hash,
@@ -166,13 +168,17 @@ impl PostgresSettlementProvider {
 
 /// One ledger entry plus whether it's actually intact — computed by
 /// `list_entries` — both that its own content still matches its claimed
-/// hash, and that it correctly links to the entry before it.
+/// hash, and that it correctly links to the entry before it. `payload` is
+/// carried through mainly for `avalon inspect-ledger-full`; the concise
+/// `avalon inspect-ledger` view doesn't print it.
 pub struct LedgerEntryView {
     pub seq: i64,
     pub event_id: Uuid,
     pub kind: String,
     pub issuer: String,
     pub subject: String,
+    pub payload: serde_json::Value,
+    pub version: i32,
     pub event_timestamp: time::OffsetDateTime,
     pub prev_hash: String,
     pub entry_hash: String,
