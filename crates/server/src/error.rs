@@ -95,6 +95,22 @@ pub enum AppError {
     MessageTooLong,
     #[error("message not found")]
     MessageNotFound,
+    #[error("game slug must be lowercase and match [a-z0-9-], 2-64 characters")]
+    InvalidGameSlug,
+    #[error("game slug is already taken")]
+    GameSlugTaken,
+    #[error("unsupported or invalid initial signing key")]
+    InvalidGameKey,
+    #[error("game not found")]
+    GameNotFound,
+    #[error("game challenge not found or already used")]
+    GameChallengeNotFound,
+    #[error("game challenge has expired")]
+    GameChallengeExpired,
+    #[error("game signing key not found")]
+    GameKeyNotFound,
+    #[error("game signature verification failed")]
+    InvalidGameSignature,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -148,6 +164,18 @@ impl IntoResponse for AppError {
             AppError::ChannelNotFound | AppError::MessageNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidChannelName | AppError::MessageTooLong => StatusCode::BAD_REQUEST,
             AppError::ChannelArchived => StatusCode::CONFLICT,
+            AppError::InvalidGameSlug | AppError::InvalidGameKey => StatusCode::BAD_REQUEST,
+            AppError::GameSlugTaken => StatusCode::CONFLICT,
+            AppError::GameNotFound => StatusCode::NOT_FOUND,
+            // Auth-failure reasons for the game challenge-response scheme
+            // (#26) all collapse to 401, same as `WebauthnFailed`/
+            // `InvalidEventSignature` above — the specific reason is useful
+            // for a legitimate caller debugging its own integration, not
+            // something worth a different status code for.
+            AppError::GameChallengeNotFound
+            | AppError::GameChallengeExpired
+            | AppError::GameKeyNotFound
+            | AppError::InvalidGameSignature => StatusCode::UNAUTHORIZED,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —

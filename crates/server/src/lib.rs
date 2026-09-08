@@ -4,6 +4,7 @@ pub mod channels;
 pub mod devices;
 pub mod error;
 pub mod friends;
+pub mod games;
 pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
@@ -100,6 +101,9 @@ pub fn router(state: AppState) -> Router {
         .route("/me/devices", get(devices::list_devices))
         .route("/me/devices/:id", patch(devices::rename_device))
         .route("/me/devices/:id/revoke", post(devices::revoke_device))
+        .route("/games", post(games::register_game))
+        .route("/games/:slug/challenge", post(games::create_game_challenge))
+        .route("/games/whoami", get(games::game_whoami))
         .route("/guilds", post(guilds::create_guild))
         .route(
             "/guilds/:id",
