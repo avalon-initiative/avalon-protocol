@@ -15,10 +15,11 @@ const props = withDefaults(defineProps<AvalonGuildMemberRowProps>(), {
 })
 defineEmits<{ 'change-role': []; kick: [] }>()
 
-// No endpoint resolves another identity's display name yet (#161 — batch
-// identity lookup, tracked as a real backend gap, not a Hub bug). Until
-// then, fall back to a shortened id rather than a raw UUID wall — still
-// obviously not a real name, just less jarring in a roster list.
+// #161's batch identity lookup resolves real display names now, wired in
+// via apps/hub/src/api/guilds.ts. `displayName` can still be undefined for
+// an edge case the lookup doesn't cover (e.g. a profile row missing for
+// some reason) — fall back to a shortened id rather than a raw UUID wall,
+// still obviously not a real name, just less jarring in a roster list.
 function shortenIdentityId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id
 }

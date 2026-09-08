@@ -43,7 +43,7 @@ describe('mergeGuildMember', () => {
     expect(merged.status).toBe('Online')
   })
 
-  it('never resolves display name — no lookup endpoint exists yet', () => {
+  it('leaves display name undefined when the profile map has no entry (#161)', () => {
     const member: GuildMemberResponse = {
       guild_id: 'g1',
       identity_id: MEMBER,
@@ -51,6 +51,17 @@ describe('mergeGuildMember', () => {
       joined_at: 't',
     }
     expect(mergeGuildMember(member, new Map()).displayName).toBeUndefined()
+  })
+
+  it('resolves display name from the profile map when present (#161)', () => {
+    const member: GuildMemberResponse = {
+      guild_id: 'g1',
+      identity_id: MEMBER,
+      role_index: 2,
+      joined_at: 't',
+    }
+    const merged = mergeGuildMember(member, new Map(), new Map([[MEMBER, 'raid-leader-99']]))
+    expect(merged.displayName).toBe('raid-leader-99')
   })
 })
 
@@ -233,6 +244,14 @@ describe('filterMembersByIdentityId', () => {
   it('returns no members when nothing matches', () => {
     expect(filterMembersByIdentityId(members, 'nope')).toEqual([])
   })
+
+  it('also matches on a resolved display name (#161)', () => {
+    const withNames: GuildMember[] = [
+      { identityId: 'identity:1', displayName: 'raid-leader-99', roleIndex: 2, status: 'Online', joinedAt: 't' },
+      { identityId: 'identity:2', displayName: 'healer-bot', roleIndex: 2, status: 'Online', joinedAt: 't' },
+    ]
+    expect(filterMembersByIdentityId(withNames, 'raid').map((m) => m.identityId)).toEqual(['identity:1'])
+  })
 })
 
 describe('sortMembers', () => {
@@ -247,6 +266,15 @@ describe('sortMembers', () => {
 
   it('leaves order unchanged when order is "role"', () => {
     expect(sortMembers(members, 'role')).toEqual(members)
+  })
+
+  it('sorts by resolved display name when present, falling back to id (#161)', () => {
+    const mixed: GuildMember[] = [
+      { identityId: 'identity:1', displayName: 'zeta-player', roleIndex: 2, status: 'Online', joinedAt: 't' },
+      { identityId: 'identity:2', displayName: 'alpha-player', roleIndex: 2, status: 'Online', joinedAt: 't' },
+      { identityId: 'identity:3', roleIndex: 2, status: 'Online', joinedAt: 't' },
+    ]
+    expect(sortMembers(mixed, 'name').map((m) => m.identityId)).toEqual(['identity:2', 'identity:3', 'identity:1'])
   })
 })
 

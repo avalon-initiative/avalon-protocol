@@ -22,6 +22,7 @@ import type {
   MyGuildMembershipResponse,
   PresenceResponse,
   ProfileResponse,
+  PublicProfileResponse,
   RegisterFinishRequest,
   RegisterFinishResponse,
   RegisterStartRequest,
@@ -170,6 +171,16 @@ export function getPresence(token: string, ids: string[]): Promise<PresenceRespo
   }
   const params = new URLSearchParams({ ids: ids.join(',') })
   return request(`/presence?${params.toString()}`, { token })
+}
+
+// GET /identities/profiles?ids=... (issue #161) — batched, public-fields-only
+// profile lookup, used to resolve display names for friends/guild rosters.
+export function getProfiles(token: string, ids: string[]): Promise<PublicProfileResponse[]> {
+  if (ids.length === 0) {
+    return Promise.resolve([])
+  }
+  const params = new URLSearchParams({ ids: ids.join(',') })
+  return request(`/identities/profiles?${params.toString()}`, { token })
 }
 
 // Device-registration / linked-device grant model (issue #135).

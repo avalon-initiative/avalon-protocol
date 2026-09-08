@@ -162,6 +162,15 @@ export interface PresenceResponse {
   updated_at: string
 }
 
+// GET /identities/profiles?ids=... (issue #161) — another identity's
+// public profile fields only, batched.
+export interface PublicProfileResponse {
+  identity_id: string
+  display_name: string
+  discriminator: string
+  avatar_url: string | null
+}
+
 // Guild/roster/channel/message wire types (issue #24), matching
 // crates/server/src/guilds.rs, crates/server/src/channels.rs, and
 // crates/server/src/guild_messages.rs field-for-field.

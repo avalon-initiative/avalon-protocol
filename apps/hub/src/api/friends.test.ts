@@ -26,10 +26,16 @@ describe('mergeFriend', () => {
     expect(friend.status).toBe('Online')
   })
 
-  it('never resolves display name — no lookup endpoint exists yet', () => {
+  it('leaves display name undefined when the profile map has no entry (#161)', () => {
     const friendship: FriendshipResponse = { a: SELF, b: OTHER, since: 't' }
     const friend = mergeFriend(friendship, SELF, new Map())
     expect(friend.displayName).toBeUndefined()
+  })
+
+  it('resolves display name from the profile map when present (#161)', () => {
+    const friendship: FriendshipResponse = { a: SELF, b: OTHER, since: 't' }
+    const friend = mergeFriend(friendship, SELF, new Map(), new Map([[OTHER, 'best-friend-42']]))
+    expect(friend.displayName).toBe('best-friend-42')
   })
 })
 
