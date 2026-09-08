@@ -6,6 +6,7 @@ import {
   getMe,
   getMyHistory,
   getPresence,
+  getProfiles,
   listDeviceGrants,
   listDevices,
   listFriends,
@@ -157,6 +158,20 @@ describe('api client', () => {
   it('short-circuits presence lookups with no ids, never calling fetch', async () => {
     vi.stubGlobal('fetch', vi.fn())
     const result = await getPresence('token', [])
+    expect(result).toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('sends the ids query param for profile lookups', async () => {
+    mockFetchOnce(200, [])
+    await getProfiles('token', ['id1', 'id2'])
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/identities/profiles?ids=id1%2Cid2')
+  })
+
+  it('short-circuits profile lookups with no ids, never calling fetch', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const result = await getProfiles('token', [])
     expect(result).toEqual([])
     expect(fetch).not.toHaveBeenCalled()
   })

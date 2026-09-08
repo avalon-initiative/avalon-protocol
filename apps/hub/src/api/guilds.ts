@@ -1,17 +1,26 @@
-// Orchestrates guild rosters + presence for issue #24: fetches both
-// separately and merges them client-side, since GET /guilds/{id}/members
-// does not embed presence server-side (see crates/server/src/guilds.rs) —
-// the same gap apps/hub/src/api/friends.ts's listFriendsWithPresence
-// already documents and merges around for friends. Mirrors that module's
-// shape closely.
+// Orchestrates guild rosters + presence + display names for issue #24:
+// fetches all three separately and merges them client-side, since
+// GET /guilds/{id}/members embeds neither presence nor a display name
+// server-side (see crates/server/src/guilds.rs) — the same gap
+// apps/hub/src/api/friends.ts's listFriendsWithPresence already documents
+// and merges around for friends. Display names are resolved via
+// GET /identities/profiles (issue #161); mirrors that module's shape
+// closely.
 import * as api from './client'
-import type { GuildMemberResponse, GuildResponse, PresenceResponse, PresenceStatus, RoleResponse } from './types'
+import type {
+  GuildMemberResponse,
+  GuildResponse,
+  PresenceResponse,
+  PresenceStatus,
+  PublicProfileResponse,
+  RoleResponse,
+} from './types'
 
 export interface GuildMember {
   identityId: string
-  // Always undefined today — no endpoint resolves another identity's
-  // display name yet, same gap apps/hub/src/api/friends.ts's Friend type
-  // already documents.
+  // Undefined only if #161's batch lookup has no profile for this id
+  // (shouldn't happen for a real member, but the UI still falls back to a
+  // shortened id rather than assuming).
   displayName?: string
   roleIndex: number
   status: PresenceStatus
@@ -25,9 +34,11 @@ export interface GuildMember {
 export function mergeGuildMember(
   member: GuildMemberResponse,
   presenceByStatus: Map<string, PresenceStatus>,
+  displayNameById: Map<string, string> = new Map(),
 ): GuildMember {
   return {
     identityId: member.identity_id,
+    displayName: displayNameById.get(member.identity_id),
     roleIndex: member.role_index,
     status: presenceByStatus.get(member.identity_id) ?? 'Offline',
     joinedAt: member.joined_at,
@@ -40,15 +51,19 @@ export async function listMembersWithPresence(token: string, guildId: string): P
     return []
   }
 
-  const presences = await api.getPresence(
-    token,
-    members.map((m) => m.identity_id),
-  )
+  const ids = members.map((m) => m.identity_id)
+  const [presences, profiles] = await Promise.all([
+    api.getPresence(token, ids),
+    api.getProfiles(token, ids),
+  ])
   const presenceByStatus = new Map<string, PresenceStatus>(
     presences.map((p: PresenceResponse) => [p.identity_id, p.status]),
   )
+  const displayNameById = new Map<string, string>(
+    profiles.map((p: PublicProfileResponse) => [p.identity_id, p.display_name]),
+  )
 
-  return members.map((m) => mergeGuildMember(m, presenceByStatus))
+  return members.map((m) => mergeGuildMember(m, presenceByStatus, displayNameById))
 }
 
 export interface RoleGroup {
@@ -122,24 +137,30 @@ export function filterGuildsByNameOrTag<T extends Pick<GuildResponse, 'name' | '
 // Case-insensitive, partial match against identity id — the only field
 // there's anything to search on until #161 (batch identity lookup)
 // resolves display names. Pure, unit-testable independent of any fetch.
+// Matches against the resolved display name when available (#161), and
+// always against the identity id too — a caller who still only has an id
+// on hand (e.g. from an invite) can still find the row.
 export function filterMembersByIdentityId(members: GuildMember[], query: string): GuildMember[] {
   const needle = query.trim().toLowerCase()
   if (!needle) {
     return members
   }
-  return members.filter((m) => m.identityId.toLowerCase().includes(needle))
+  return members.filter(
+    (m) => m.identityId.toLowerCase().includes(needle) || (m.displayName?.toLowerCase().includes(needle) ?? false),
+  )
 }
 
 export type MemberSortOrder = 'role' | 'name'
 
-// "by name" really means "by identity id string" until #161 resolves real
-// display names — kept honest in the type/behavior rather than pretending
-// this sorts by a name that doesn't exist yet. "by role" is a no-op here;
-// role ordering is applied by groupMembersByRole itself, so this exists to
-// give the UI a single sort-order switch that covers both cases.
+// "by name" sorts by the resolved display name (#161) when available,
+// falling back to the identity id for any member it isn't (shouldn't
+// normally happen, but stays honest rather than assuming). "by role" is a
+// no-op here; role ordering is applied by groupMembersByRole itself, so
+// this exists to give the UI a single sort-order switch that covers both
+// cases.
 export function sortMembers(members: GuildMember[], order: MemberSortOrder): GuildMember[] {
   if (order === 'name') {
-    return [...members].sort((a, b) => a.identityId.localeCompare(b.identityId))
+    return [...members].sort((a, b) => (a.displayName ?? a.identityId).localeCompare(b.displayName ?? b.identityId))
   }
   return members
 }
