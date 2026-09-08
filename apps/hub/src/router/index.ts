@@ -18,17 +18,21 @@ const router = createRouter({
       name: 'login',
       component: () => import('../views/Login.vue'),
     },
+    // The logged-in shell (issue #130) — its own path never resolves
+    // directly (there's no exact-'/' record here, that's the redirect
+    // above); children below are what's actually reachable
+    // ('/profile', '/friends'), rendered inside HubShell.vue's persistent
+    // identity header + tab nav rather than as standalone pages.
+    // `requiresAuth` here is inherited by every child via vue-router's
+    // meta-merging across matched records — no need to repeat it below.
     {
-      path: '/profile',
-      name: 'profile',
-      component: () => import('../views/Profile.vue'),
+      path: '/',
+      component: () => import('../views/HubShell.vue'),
       meta: { requiresAuth: true },
-    },
-    {
-      path: '/friends',
-      name: 'friends',
-      component: () => import('../views/Friends.vue'),
-      meta: { requiresAuth: true },
+      children: [
+        { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue') },
+        { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
+      ],
     },
   ],
 })

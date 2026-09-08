@@ -1,0 +1,33 @@
+.shell {
+  max-width: 640px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+}
+
+.displayName {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.identityId {
+  font-size: 0.8125rem;
+  color: #666;
+}
+
+.content {
+  margin-top: 1rem;
+}

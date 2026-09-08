@@ -1,12 +1,9 @@
 <script setup lang="ts">
+// Friends/presence tab (issue #18) inside the shell (issue #130). No more
+// AvalonAuthCard wrapper or manual "back to profile" link — the shell's
+// tab nav replaces both.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import {
-  AvalonAuthCard,
-  AvalonFriendRequestRow,
-  AvalonFriendRow,
-  AvalonForm,
-  AvalonTextField,
-} from '@avalon/ui'
+import { AvalonFriendRequestRow, AvalonFriendRow, AvalonForm, AvalonTextField } from '@avalon/ui'
 import * as api from '../api/client'
 import { listFriendsWithPresence, splitFriendRequests } from '../api/friends'
 import type { Friend, FriendRequestView } from '../api/friends'
@@ -116,7 +113,7 @@ async function onRemoveFriend(identityId: string) {
 </script>
 
 <template>
-  <AvalonAuthCard v-if="!loading" title="Friends" subtitle="Your Avalon network, across every game.">
+  <section v-if="!loading">
     <p v-if="error">{{ error }}</p>
 
     <AvalonForm
@@ -172,7 +169,5 @@ async function onRemoveFriend(identityId: string) {
         @remove="onRemoveRequest(request.id)"
       />
     </section>
-
-    <RouterLink to="/profile">Back to profile</RouterLink>
-  </AvalonAuthCard>
+  </section>
 </template>
