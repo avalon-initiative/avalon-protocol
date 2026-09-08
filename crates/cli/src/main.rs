@@ -4,10 +4,11 @@
 //! view, plus each entry's payload), `avalon create-identity`,
 //! `avalon login <identity_id>` (issue #115 — drives a real login ceremony
 //! against a passkey `create-identity` saved locally, prints a session
-//! token), `avalon outbox-status`. `register-game` and `issue-achievement`
-//! (per `docs/Proposal.md` §23's milestone-1 vertical slice) aren't wired up
-//! yet — they depend on the Game Registration and Achievements epics, still
-//! unbuilt.
+//! token), `avalon outbox-status`, `avalon register-game` (issue #29 —
+//! registers a test game against #26's `POST /games`, generating and
+//! printing its one-time signing key). `issue-achievement` (per
+//! `docs/Proposal.md` §23's milestone-1 vertical slice) isn't wired up yet —
+//! it depends on the Achievements epic, still unbuilt.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -45,9 +46,20 @@ async fn main() {
             login(identity_id).await;
         }
         Some("outbox-status") => outbox_status().await,
+        Some("register-game") => {
+            let raw_args: Vec<String> = args.collect();
+            match RegisterGameArgs::parse(&raw_args) {
+                Ok(parsed) => register_game(parsed).await,
+                Err(message) => {
+                    eprintln!("{message}");
+                    eprintln!("{REGISTER_GAME_USAGE}");
+                    std::process::exit(1);
+                }
+            }
+        }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|create-identity|login <identity_id>|outbox-status>"
+                "usage: avalon <inspect-ledger|inspect-ledger-full|create-identity|login <identity_id>|outbox-status|register-game --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]>"
             );
             std::process::exit(1);
         }
@@ -375,6 +387,216 @@ async fn login(identity_id: Uuid) {
     println!("throwaway database, not a pattern to carry into any real deployment.");
 }
 
+const REGISTER_GAME_USAGE: &str = "usage: avalon register-game --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]";
+
+/// Parsed `avalon register-game` arguments. Hand-rolled to match this file's
+/// existing `match command.as_deref()` style rather than pulling in `clap`
+/// (not already a dependency of this crate).
+#[derive(Debug)]
+struct RegisterGameArgs {
+    slug: String,
+    name: String,
+    developer: String,
+    capabilities: Vec<String>,
+    server: Option<String>,
+}
+
+impl RegisterGameArgs {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut slug = None;
+        let mut name = None;
+        let mut developer = None;
+        let mut capabilities = Vec::new();
+        let mut server = None;
+
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--slug" => slug = Some(iter.next().ok_or("--slug requires a value")?.clone()),
+                "--name" => name = Some(iter.next().ok_or("--name requires a value")?.clone()),
+                "--developer" => {
+                    developer = Some(iter.next().ok_or("--developer requires a value")?.clone())
+                }
+                "--capability" => {
+                    capabilities.push(iter.next().ok_or("--capability requires a value")?.clone())
+                }
+                "--server" => {
+                    server = Some(iter.next().ok_or("--server requires a value")?.clone())
+                }
+                other => return Err(format!("unrecognized argument: {other}")),
+            }
+        }
+
+        Ok(Self {
+            slug: slug.ok_or("--slug is required")?,
+            name: name.ok_or("--name is required")?,
+            developer: developer.ok_or("--developer is required")?,
+            capabilities,
+            server,
+        })
+    }
+}
+
+/// `avalon register-game` (issue #29) — registers a test game against #26's
+/// `POST /games`, generating a fresh Ed25519 signing keypair locally (the
+/// only algorithm `crate::auth::verify_event_signature` on the server side
+/// can verify — see `crates/server/src/games.rs`). Only the public key is
+/// ever sent to the server; the private key is saved locally (mirroring
+/// `create_identity`'s event-signing-key persistence) and printed exactly
+/// once, since the server never stores or returns it again.
+async fn register_game(args: RegisterGameArgs) {
+    let base = args.server.clone().unwrap_or_else(server_url);
+    let http = reqwest::Client::new();
+
+    let mut csprng = rand::rngs::OsRng;
+    let signing_key = SigningKey::generate(&mut csprng);
+    let public_key_base64 = BASE64.encode(signing_key.verifying_key().to_bytes());
+    let private_key_base64 = BASE64.encode(signing_key.to_bytes());
+
+    let request_body = json!({
+        "slug": args.slug,
+        "name": args.name,
+        "developer": args.developer,
+        "requested_capabilities": args.capabilities,
+        "initial_key": {
+            "algorithm": "ed25519",
+            "public_key": public_key_base64,
+        },
+    });
+
+    let response = http
+        .post(format!("{base}/games"))
+        .json(&request_body)
+        .send()
+        .await
+        .expect("POST /games request failed — is `make start` running?");
+
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        eprintln!(
+            "game registration failed: slug '{}' is already taken.",
+            args.slug
+        );
+        eprintln!("slugs are forever and can't be renamed or reused — pick a different --slug.");
+        std::process::exit(1);
+    }
+    if !response.status().is_success() {
+        eprintln!(
+            "game registration failed: {:?}\n{}",
+            response.status(),
+            response.text().await.unwrap_or_default()
+        );
+        std::process::exit(1);
+    }
+
+    let response_body: serde_json::Value = response
+        .json()
+        .await
+        .expect("POST /games response was not JSON");
+    let game_id = response_body["id"]
+        .as_str()
+        .expect("POST /games response missing id")
+        .to_string();
+    let key_id = response_body["credential"]["key_id"]
+        .as_str()
+        .expect("POST /games response missing credential.key_id")
+        .to_string();
+
+    // The game's signing key: nothing else lets this CLI reuse it later
+    // (e.g. for the challenge-response sanity check just below, or a future
+    // `avalon` command acting as this game) except a local file — same
+    // rationale as `create_identity`'s event-signing-key persistence.
+    let key_dir = key_dir();
+    std::fs::create_dir_all(&key_dir).ok();
+    let key_path = key_dir.join(format!("game-{}.signing-key", args.slug));
+    std::fs::write(&key_path, &private_key_base64).expect("failed to write signing key file");
+
+    println!();
+    println!("Game registered: {} ({game_id})", args.slug);
+    println!("Key ID:               {key_id}");
+    println!("Signing key saved to: {}", key_path.display());
+    println!();
+    println!("Private signing key (base64):");
+    println!("  {private_key_base64}");
+    println!();
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│ WARNING                                                      │");
+    println!("│ This is the ONLY time this private signing key is shown.    │");
+    println!("│ Avalon only ever stores the public key — if this key is     │");
+    println!(
+        "│ lost, '{:<12}' can no longer authenticate as this game    │",
+        args.slug
+    );
+    println!("│ and there is no recovery; register a new key/game instead.  │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+
+    match register_game_auth_sanity_check(&http, &base, &args.slug, &key_id, &signing_key).await {
+        Ok(whoami_game_id) => {
+            println!();
+            println!("Challenge-response sanity check passed (whoami: {whoami_game_id}).");
+        }
+        Err(message) => {
+            println!();
+            println!(
+                "Challenge-response sanity check failed ({message}) — registration itself succeeded."
+            );
+        }
+    }
+}
+
+/// Exercises the challenge-response round trip #26 built
+/// (`crates/server/src/games.rs`'s `create_game_challenge`/
+/// `authenticate_game`) once, as a sanity check that the freshly registered
+/// key actually works end to end. Not load-bearing for registration itself —
+/// any failure here is reported but doesn't fail the command.
+async fn register_game_auth_sanity_check(
+    http: &reqwest::Client,
+    base: &str,
+    slug: &str,
+    key_id: &str,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    let challenge: serde_json::Value = http
+        .post(format!("{base}/games/{slug}/challenge"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let challenge_id = challenge["challenge_id"]
+        .as_str()
+        .ok_or("challenge response missing challenge_id")?;
+    let nonce = BASE64
+        .decode(
+            challenge["nonce"]
+                .as_str()
+                .ok_or("challenge response missing nonce")?,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let signature = signing_key.sign(&nonce);
+
+    let response = http
+        .get(format!("{base}/games/whoami"))
+        .header("x-avalon-game-key-id", key_id)
+        .header("x-avalon-game-challenge-id", challenge_id)
+        .header(
+            "x-avalon-game-signature",
+            BASE64.encode(signature.to_bytes()),
+        )
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("whoami returned {}", response.status()));
+    }
+    let whoami: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok(whoami["game_id"]
+        .as_str()
+        .ok_or("whoami response missing game_id")?
+        .to_string())
+}
+
 async fn outbox_status() {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
@@ -520,5 +742,83 @@ mod tests {
         .expect("StoredPasskey should deserialize");
 
         assert_eq!(reconstructed.user_handle, original.user_handle);
+    }
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn register_game_args_parses_required_fields() {
+        let parsed = RegisterGameArgs::parse(&args(&[
+            "--slug",
+            "ashen-realms",
+            "--name",
+            "Ashen Realms",
+            "--developer",
+            "Ashen Studios",
+        ]))
+        .expect("should parse with only required args");
+
+        assert_eq!(parsed.slug, "ashen-realms");
+        assert_eq!(parsed.name, "Ashen Realms");
+        assert_eq!(parsed.developer, "Ashen Studios");
+        assert!(parsed.capabilities.is_empty());
+        assert_eq!(parsed.server, None);
+    }
+
+    #[test]
+    fn register_game_args_collects_repeated_capability_flags() {
+        let parsed = RegisterGameArgs::parse(&args(&[
+            "--slug",
+            "ashen-realms",
+            "--name",
+            "Ashen Realms",
+            "--developer",
+            "Ashen Studios",
+            "--capability",
+            "friends.read",
+            "--capability",
+            "achievements.write",
+            "--server",
+            "http://example.test",
+        ]))
+        .expect("should parse with repeated --capability flags");
+
+        assert_eq!(
+            parsed.capabilities,
+            vec!["friends.read".to_string(), "achievements.write".to_string()]
+        );
+        assert_eq!(parsed.server.as_deref(), Some("http://example.test"));
+    }
+
+    #[test]
+    fn register_game_args_rejects_missing_required_args() {
+        let err = RegisterGameArgs::parse(&args(&["--slug", "ashen-realms"]))
+            .expect_err("missing --name and --developer should fail to parse");
+        assert!(err.contains("--name"));
+    }
+
+    #[test]
+    fn register_game_args_rejects_flag_missing_its_value() {
+        let err = RegisterGameArgs::parse(&args(&["--slug"]))
+            .expect_err("a trailing flag with no value should fail to parse");
+        assert!(err.contains("--slug"));
+    }
+
+    #[test]
+    fn register_game_args_rejects_unrecognized_flags() {
+        let err = RegisterGameArgs::parse(&args(&[
+            "--slug",
+            "ashen-realms",
+            "--name",
+            "Ashen Realms",
+            "--developer",
+            "Ashen Studios",
+            "--bogus",
+            "value",
+        ]))
+        .expect_err("an unrecognized flag should fail to parse");
+        assert!(err.contains("--bogus"));
     }
 }
