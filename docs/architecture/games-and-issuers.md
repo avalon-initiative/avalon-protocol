@@ -109,12 +109,31 @@ Game A continues issuing under k2.
 ## Today in the repo
 
 - `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
-  registered_at }`, `GameRegistration { game, requested_capabilities }`,
-  `GameCredential { game_id, key_id }`. The credential is a key *id* with no
-  public key behind it, so nothing can be verified.
+  registered_at, status }` (`GameStatus`, currently just `Active`),
+  `GameRegistration { game, requested_capabilities, initial_key }`,
+  `IssuerKeyInfo { key_id, algorithm, public_key }`, `GameCredential
+  { game_id, key_id }`.
+- `crates/server/src/games.rs` (#26) — `POST /games` registers a game: slug
+  (unique, lowercase `[a-z0-9-]`, 409 on collision — enforced with a unique
+  index + `is_unique_violation()`, same pattern `guilds.rs::create_guild`
+  uses), name, developer, `requested_capabilities`, and an initial Ed25519
+  public key, all recorded atomically with a `game.registered` event via the
+  outbox pattern. Projection tables: `games`,
+  `game_requested_capabilities`, and a minimal `issuer_keys` (`key_id,
+  game_id, algorithm, public_key, created_at`) shaped for #84 to extend
+  rather than replace — this only ever inserts the one key recorded at
+  registration. `game.registered`'s `issuer`/`subject` name the game itself
+  but the event is network-attributed, not game-signed — see the module doc
+  comment on why (the registrant's key isn't proven to control anything yet
+  at that point). `POST /games/{slug}/challenge` +
+  `authenticate_game`/`GET /games/whoami` implement the milestone-1
+  challenge-response stand-in this ticket's own text calls for pending #80:
+  a short-lived random nonce (`game_challenges`, same ephemeral-ceremony
+  shape as `webauthn_ceremonies`), signed by the game's registered key,
+  verified via `auth::verify_event_signature`. Registering grants no
+  capability — #27 owns the actual grant/consent logic.
 - `crates/protocol/src/achievements.rs` — `Issuer::Game(GameId)`; no status,
   no key set.
-- `crates/server` — no registration endpoint yet (#26).
 - `crates/cli` — no `register-game` yet (#29, #48).
 
 ## Decisions and tickets

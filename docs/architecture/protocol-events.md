@@ -198,6 +198,17 @@ the record — [`./revocation.md`](./revocation.md).
   `register_finish` verifies `identity.created`'s signature) and
   `identity.signing_key_revoked` when a signing key is revoked
   (network-attributed, same milestone-1 stand-in `friend.requested` uses).
+- A fourth emitter: `crates/server/src/games.rs` (#26) writes
+  `game.registered` on `POST /games`, enqueued into `protocol_outbox` in the
+  same transaction as the `games`/`game_requested_capabilities`/
+  `issuer_keys` rows it accompanies. `issuer`/`subject` are both
+  `game:<slug>:self:registered` `GlobalId`s (`game_ref`, mirroring
+  `guilds.rs`'s `guild_ref`); network-attributed rather than signed by the
+  game's own key even though the catalogue above lists that as the eventual
+  signer — nothing has verified the registrant controls the submitted key
+  yet at the point this event is built, so a real signature claim would be
+  false. Payload is `game_id`, `slug`, `name`, `developer`,
+  `requested_capabilities`, and the initial key's id/algorithm/public key.
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`; the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
   `timestamp`, `version` (`crates/chain/src/postgres.rs`).
