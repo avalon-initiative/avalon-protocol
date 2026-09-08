@@ -1,0 +1,57 @@
+/* Base page styles shared by every Avalon client. Imported once per app
+   entry point, after tokens.css. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--av-color-bg-gradient), var(--av-color-bg);
+  background-attachment: fixed;
+  color: var(--av-color-text);
+  font-family: var(--av-font-sans);
+  font-size: var(--av-text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--av-color-text);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--av-color-primary-hover);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

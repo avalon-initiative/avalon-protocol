@@ -149,6 +149,10 @@ export interface RenameDeviceRequest {
 
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'
 
+export interface UpdatePresenceRequest {
+  status: PresenceStatus
+}
+
 export interface PresenceResponse {
   identity_id: string
   status: PresenceStatus

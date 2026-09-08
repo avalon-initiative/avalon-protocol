@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon/ui'
 import { login } from '../api/identity'
 import { useSessionStore } from '../stores/session'
+import AuthLayout from './AuthLayout.vue'
+import styles from './CreateIdentity.module.scss'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -18,7 +20,7 @@ async function onSubmit() {
   try {
     const { token } = await login(identityId.value)
     session.login(token)
-    await router.push({ name: 'profile' })
+    await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -28,10 +30,14 @@ async function onSubmit() {
 </script>
 
 <template>
-  <AvalonAuthCard title="Log in to Avalon" subtitle="Use the passkey you registered with.">
-    <AvalonForm submit-label="Log in" :submitting="submitting" :error="error" @submit="onSubmit">
-      <AvalonTextField v-model="identityId" label="Identity id" placeholder="Your identity id" />
-    </AvalonForm>
-    <RouterLink to="/create-identity">Don't have an identity yet? Create one</RouterLink>
-  </AvalonAuthCard>
+  <AuthLayout>
+    <AvalonAuthCard title="Welcome to Avalon" subtitle="Your identity. Your games. Your community.">
+      <AvalonForm submit-label="Log in with passkey" :submitting="submitting" :error="error" @submit="onSubmit">
+        <AvalonTextField v-model="identityId" label="Identity id" placeholder="Your identity id" />
+      </AvalonForm>
+      <p :class="styles.switchLink">
+        <RouterLink to="/create-identity">Don't have an identity yet? Create one</RouterLink>
+      </p>
+    </AvalonAuthCard>
+  </AuthLayout>
 </template>

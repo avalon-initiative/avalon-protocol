@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
 import { createIdentity, login } from '../api/identity'
 import { useSessionStore } from '../stores/session'
+import AuthLayout from './AuthLayout.vue'
 import styles from './CreateIdentity.module.scss'
 
 const router = useRouter()
@@ -59,64 +60,68 @@ async function copyMnemonic() {
   mnemonicCopied.value = true
 }
 
-async function continueToProfile() {
+async function continueToHome() {
   // Registration only proves the passkey/signing-key ceremony; it does not
   // itself start a session — log in now that the player has acknowledged
   // their id, rather than sending them to a second manual login step.
   const { token } = await login(createdIdentityId.value)
   session.login(token)
-  await router.push({ name: 'profile' })
+  await router.push({ name: 'home' })
 }
 </script>
 
 <template>
-  <AvalonAuthCard
-    v-if="createdIdentityId"
-    title="Save your identity id"
-    subtitle="You'll need this exact id to log in later — your display name alone won't work."
-  >
-    <code :class="styles.identityId">{{ createdIdentityId }}</code>
-    <div :class="styles.actions">
-      <AvalonButton :label="copied ? 'Copied' : 'Copy'" variant="secondary" @click="copyIdentityId" />
-    </div>
-    <p :class="styles.copyHint">
-      If your browser or password manager saved a passkey just now, it should also remember this id
-      as the login username — but save it somewhere yourself too, just in case.
-    </p>
+  <AuthLayout>
+    <AvalonAuthCard
+      v-if="createdIdentityId"
+      title="Save your identity id"
+      subtitle="You'll need this exact id to log in later — your display name alone won't work."
+    >
+      <code :class="styles.secret">{{ createdIdentityId }}</code>
+      <div :class="styles.actions">
+        <AvalonButton :label="copied ? 'Copied' : 'Copy'" variant="secondary" @click="copyIdentityId" />
+      </div>
+      <p :class="styles.hint">
+        If your browser or password manager saved a passkey just now, it should also remember this id
+        as the login username — but save it somewhere yourself too, just in case.
+      </p>
 
-    <h2>Save your recovery phrase</h2>
-    <p :class="styles.copyHint">
-      This is the only time you'll see this phrase — write it down and keep it somewhere safe. If
-      you ever use a new device or clear this browser's storage, this phrase is how you recover
-      your signing key.
-    </p>
-    <code :class="styles.identityId">{{ signingKeyMnemonic }}</code>
-    <div :class="styles.actions">
-      <AvalonButton
-        :label="mnemonicCopied ? 'Copied' : 'Copy'"
-        variant="secondary"
-        @click="copyMnemonic"
-      />
-      <AvalonButton label="Continue to profile" variant="primary" @click="continueToProfile" />
-    </div>
-  </AvalonAuthCard>
-  <AvalonAuthCard
-    v-else
-    title="Create your Avalon identity"
-    subtitle="One identity, every game connected to Avalon."
-  >
-    <AvalonForm submit-label="Create identity" :submitting="submitting" :error="error" @submit="onSubmit">
-      <AvalonTextField
-        v-model="displayName"
-        label="Display name"
-        placeholder="How other players see you"
-      />
-      <AvalonTextField
-        v-model="deviceLabel"
-        label="This device's name (optional)"
-        placeholder="e.g. Work laptop"
-      />
-    </AvalonForm>
-    <RouterLink to="/login">Already have an identity? Log in</RouterLink>
-  </AvalonAuthCard>
+      <h2 :class="styles.sectionTitle">Save your recovery phrase</h2>
+      <p :class="styles.hint">
+        This is the only time you'll see this phrase — write it down and keep it somewhere safe. If
+        you ever use a new device or clear this browser's storage, this phrase is how you recover
+        your signing key.
+      </p>
+      <code :class="styles.secret">{{ signingKeyMnemonic }}</code>
+      <div :class="styles.actions">
+        <AvalonButton
+          :label="mnemonicCopied ? 'Copied' : 'Copy'"
+          variant="secondary"
+          @click="copyMnemonic"
+        />
+        <AvalonButton label="Continue" variant="primary" @click="continueToHome" />
+      </div>
+    </AvalonAuthCard>
+    <AvalonAuthCard
+      v-else
+      title="Create your Avalon identity"
+      subtitle="One identity, every game connected to Avalon."
+    >
+      <AvalonForm submit-label="Create identity" :submitting="submitting" :error="error" @submit="onSubmit">
+        <AvalonTextField
+          v-model="displayName"
+          label="Display name"
+          placeholder="How other players see you"
+        />
+        <AvalonTextField
+          v-model="deviceLabel"
+          label="This device's name (optional)"
+          placeholder="e.g. Work laptop"
+        />
+      </AvalonForm>
+      <p :class="styles.switchLink">
+        <RouterLink to="/login">Already have an identity? Log in</RouterLink>
+      </p>
+    </AvalonAuthCard>
+  </AuthLayout>
 </template>
