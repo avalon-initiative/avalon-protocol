@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest'
 import {
   canChangeMemberRole,
   canKickMember,
+  filterGuildsByNameOrTag,
+  filterMembersByIdentityId,
   groupMembersByRole,
   hasGuildPermission,
+  membershipStatusText,
   mergeGuildMember,
   permissionsForMember,
   roleVariantForIndex,
+  sortMembers,
+  sortMembersByPresence,
 } from './guilds'
 import type { GuildMember } from './guilds'
-import type { GuildMemberResponse, RoleResponse } from './types'
+import type { GuildMemberResponse, GuildResponse, RoleResponse } from './types'
 
 const OWNER = 'owner-id'
 const OFFICER = 'officer-id'
@@ -179,5 +184,91 @@ describe('canChangeMemberRole', () => {
 
   it('is true for the owner regardless of their permission list', () => {
     expect(canChangeMemberRole(guild, OWNER, [], memberTarget)).toBe(true)
+  })
+})
+
+describe('membershipStatusText', () => {
+  it('says owner when isOwner is true, regardless of isMember', () => {
+    expect(membershipStatusText(true, true)).toBe('You are the owner of this guild.')
+    expect(membershipStatusText(true, false)).toBe('You are the owner of this guild.')
+  })
+
+  it('says member when isMember is true and not the owner', () => {
+    expect(membershipStatusText(false, true)).toBe('You are a member.')
+  })
+
+  it('says not a member otherwise', () => {
+    expect(membershipStatusText(false, false)).toBe('You are not a member of this guild.')
+  })
+})
+
+describe('sortMembersByPresence', () => {
+  it('orders online (and away) members before offline ones', () => {
+    const members: GuildMember[] = [
+      { identityId: 'a', roleIndex: 2, status: 'Offline', joinedAt: 't' },
+      { identityId: 'b', roleIndex: 2, status: 'Online', joinedAt: 't' },
+      { identityId: 'c', roleIndex: 2, status: 'Away', joinedAt: 't' },
+      { identityId: 'd', roleIndex: 2, status: 'Offline', joinedAt: 't' },
+    ]
+    expect(sortMembersByPresence(members).map((m) => m.identityId)).toEqual(['b', 'c', 'a', 'd'])
+  })
+})
+
+describe('filterMembersByIdentityId', () => {
+  const members: GuildMember[] = [
+    { identityId: 'identity:Alice123', roleIndex: 2, status: 'Online', joinedAt: 't' },
+    { identityId: 'identity:bob456', roleIndex: 2, status: 'Online', joinedAt: 't' },
+  ]
+
+  it('matches case-insensitively on a partial substring', () => {
+    expect(filterMembersByIdentityId(members, 'alice').map((m) => m.identityId)).toEqual([
+      'identity:Alice123',
+    ])
+  })
+
+  it('returns every member for an empty/whitespace query', () => {
+    expect(filterMembersByIdentityId(members, '   ')).toEqual(members)
+  })
+
+  it('returns no members when nothing matches', () => {
+    expect(filterMembersByIdentityId(members, 'nope')).toEqual([])
+  })
+})
+
+describe('sortMembers', () => {
+  const members: GuildMember[] = [
+    { identityId: 'zeta', roleIndex: 2, status: 'Online', joinedAt: 't' },
+    { identityId: 'alpha', roleIndex: 2, status: 'Online', joinedAt: 't' },
+  ]
+
+  it('sorts by identity id when order is "name"', () => {
+    expect(sortMembers(members, 'name').map((m) => m.identityId)).toEqual(['alpha', 'zeta'])
+  })
+
+  it('leaves order unchanged when order is "role"', () => {
+    expect(sortMembers(members, 'role')).toEqual(members)
+  })
+})
+
+describe('filterGuildsByNameOrTag', () => {
+  const guilds: Pick<GuildResponse, 'name' | 'tag'>[] = [
+    { name: 'Ashen Vanguard', tag: 'ASHV' },
+    { name: 'Twilight Order', tag: 'TWIL' },
+  ]
+
+  it('matches case-insensitively on a partial name substring', () => {
+    expect(filterGuildsByNameOrTag(guilds, 'ashen')).toEqual([guilds[0]])
+  })
+
+  it('matches case-insensitively on a partial tag substring', () => {
+    expect(filterGuildsByNameOrTag(guilds, 'twil')).toEqual([guilds[1]])
+  })
+
+  it('returns every guild for an empty query', () => {
+    expect(filterGuildsByNameOrTag(guilds, '')).toEqual(guilds)
+  })
+
+  it('returns no guilds when nothing matches', () => {
+    expect(filterGuildsByNameOrTag(guilds, 'nope')).toEqual([])
   })
 })

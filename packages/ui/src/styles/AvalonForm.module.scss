@@ -10,7 +10,14 @@
   margin: 0;
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-3);
+}
+
 .submit {
+  flex: 1;
   border-radius: var(--av-radius-md);
   padding: 0.6875rem var(--av-space-4);
   border: none;

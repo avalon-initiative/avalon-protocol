@@ -11,6 +11,7 @@ import {
   AvalonCard,
   AvalonChannelList,
   AvalonEditableField,
+  AvalonFilterBar,
   AvalonForm,
   AvalonGuildMemberRow,
   AvalonTextField,
@@ -19,9 +20,14 @@ import * as api from '../api/client'
 import {
   canChangeMemberRole,
   canKickMember,
+  filterMembersByIdentityId,
   groupMembersByRole,
   hasGuildPermission,
+  membershipStatusText,
   roleVariantForIndex,
+  sortMembers,
+  sortMembersByPresence,
+  type MemberSortOrder,
 } from '../api/guilds'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useSessionStore } from '../stores/session'
@@ -54,7 +60,29 @@ const canManageChannels = computed(
     guild.value !== null && hasGuildPermission(guild.value, selfId.value, selfPermissions.value, 'manage_channels'),
 )
 const isMember = computed(() => members.value.some((m) => m.identityId === selfId.value))
-const roleGroups = computed(() => groupMembersByRole(members.value, roles.value))
+
+// Roster search/filter/sort — milestone-1 polish, plain pure functions
+// from api/guilds.ts (mirroring groupMembersByRole's own pattern). Search
+// only matches identity id since display names aren't resolvable yet
+// (#161). "By role" keeps groupMembersByRole's own ordering; "by name"
+// really means "by identity id string" until #161 lands.
+const memberQuery = ref('')
+const memberSortOrder = ref<MemberSortOrder>('role')
+const memberSortOptions = [
+  { value: 'role', label: 'By role' },
+  { value: 'name', label: 'By identity id' },
+]
+const visibleMembers = computed(() => {
+  const filtered = filterMembersByIdentityId(members.value, memberQuery.value)
+  return sortMembers(filtered, memberSortOrder.value)
+})
+const roleGroups = computed(() => {
+  const groups = groupMembersByRole(visibleMembers.value, roles.value)
+  // Within each role group, online members before offline — same
+  // online-before-offline precedent Friends.vue already applies.
+  return groups.map((group) => ({ ...group, members: sortMembersByPresence(group.members) }))
+})
+const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMember.value))
 
 // --- Rename / retag / redescribe ------------------------------------------
 
@@ -356,6 +384,18 @@ function onSelectChannel(channelId: string) {
     <div :class="styles.grid">
       <div :class="styles.mainColumn">
         <AvalonCard title="Members">
+          <AvalonFilterBar
+            label="Search by identity id"
+            placeholder="identity:ab12…"
+            :query="memberQuery"
+            :sort-options="memberSortOptions"
+            :sort-value="memberSortOrder"
+            @update:query="memberQuery = $event"
+            @update:sort-value="memberSortOrder = $event as MemberSortOrder"
+          />
+          <p v-if="memberQuery && visibleMembers.length === 0" :class="styles.empty">
+            No members match "{{ memberQuery }}".
+          </p>
           <div v-for="group in roleGroups" :key="group.roleIndex">
             <p :class="styles.empty">{{ group.roleName }} — {{ group.members.length }}</p>
             <AvalonGuildMemberRow
@@ -388,8 +428,10 @@ function onSelectChannel(channelId: string) {
                   </option>
                 </select>
               </label>
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelChangeRole" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelChangeRole" />
           </div>
         </AvalonCard>
 
@@ -417,8 +459,10 @@ function onSelectChannel(channelId: string) {
                   {{ permission }}
                 </label>
               </div>
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelAddRole" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelAddRole" />
           </div>
         </AvalonCard>
 
@@ -441,14 +485,17 @@ function onSelectChannel(channelId: string) {
               @submit="onCreateChannel"
             >
               <AvalonTextField v-model="newChannelName" label="Channel name" placeholder="general" />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateChannel" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateChannel" />
           </div>
         </AvalonCard>
       </div>
 
       <div :class="styles.sideColumn">
         <AvalonCard title="Membership">
+          <p :class="styles.empty">{{ membershipStatus }}</p>
           <AvalonButton
             v-if="guild.join_policy === 'open' && !isMember"
             label="Join guild"
@@ -476,8 +523,10 @@ function onSelectChannel(channelId: string) {
               @submit="onInvite"
             >
               <AvalonTextField v-model="inviteIdentityId" label="Identity id" />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelInvite" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelInvite" />
           </div>
         </AvalonCard>
 
@@ -498,8 +547,10 @@ function onSelectChannel(channelId: string) {
               @submit="onAssociateGame"
             >
               <AvalonTextField v-model="associateGameId" label="Game id" />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelAssociateGame" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelAssociateGame" />
           </div>
         </AvalonCard>
 
@@ -518,8 +569,10 @@ function onSelectChannel(channelId: string) {
               @submit="onTransferOwnership"
             >
               <AvalonTextField v-model="transferTo" label="New owner's identity id" />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelTransfer" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelTransfer" />
           </div>
         </AvalonCard>
       </div>

@@ -2,10 +2,11 @@
 // "My guilds" landing page (issue #24): every guild the caller belongs to
 // (GET /me/guilds), plus a button-first "create guild" form — same
 // read-only-until-action shape as Friends.vue's "Add a friend".
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonForm, AvalonGuildCard, AvalonTextField } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonForm, AvalonGuildCard, AvalonTextField } from '@avalon/ui'
 import * as api from '../api/client'
+import { filterGuildsByNameOrTag } from '../api/guilds'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useSessionStore } from '../stores/session'
 import styles from './page.module.scss'
@@ -13,6 +14,9 @@ import styles from './page.module.scss'
 const router = useRouter()
 const session = useSessionStore()
 const { guilds, loading, error, refresh } = useMyGuilds()
+
+const guildQuery = ref('')
+const visibleGuilds = computed(() => filterGuildsByNameOrTag(guilds.value, guildQuery.value))
 
 const showCreateGuild = ref(false)
 const createName = ref('')
@@ -68,8 +72,19 @@ function openGuild(guildId: string) {
           <p v-if="guilds.length === 0" :class="styles.empty">
             You're not in any guilds yet — create one to get started.
           </p>
+          <template v-else>
+            <AvalonFilterBar
+              label="Search by name or tag"
+              placeholder="Ashen Vanguard"
+              :query="guildQuery"
+              @update:query="guildQuery = $event"
+            />
+            <p v-if="guildQuery && visibleGuilds.length === 0" :class="styles.empty">
+              No guilds match "{{ guildQuery }}".
+            </p>
+          </template>
           <AvalonGuildCard
-            v-for="guild in guilds"
+            v-for="guild in visibleGuilds"
             :key="guild.id"
             :name="guild.name"
             :tag="guild.tag"
@@ -102,8 +117,10 @@ function openGuild(guildId: string) {
                 label="Description (optional)"
                 placeholder="What's this guild about?"
               />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateGuild" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateGuild" />
           </div>
         </AvalonCard>
       </div>

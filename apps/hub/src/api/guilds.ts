@@ -82,6 +82,68 @@ export function groupMembersByRole(members: GuildMember[], roles: RoleResponse[]
     }))
 }
 
+// Plain status line describing the caller's relationship to a guild,
+// shown in the "Membership" card regardless of which action buttons (if
+// any) also apply — a guild owner of an invite-only guild otherwise sees
+// neither a Join nor a Leave button, and an otherwise-empty card reads as
+// broken rather than simply "nothing to do here". Pure, unit-testable.
+export function membershipStatusText(isOwner: boolean, isMember: boolean): string {
+  if (isOwner) return 'You are the owner of this guild.'
+  if (isMember) return 'You are a member.'
+  return 'You are not a member of this guild.'
+}
+
+// Splits a roster into online vs. offline, online first — the same
+// online-before-offline precedent apps/hub/src/composables/useFriendsPresence.ts
+// already establishes for friends (an 'Away' member counts as online, only
+// 'Offline' is offline). Pure, unit-testable independent of any fetch.
+export function sortMembersByPresence(members: GuildMember[]): GuildMember[] {
+  const online = members.filter((m) => m.status !== 'Offline')
+  const offline = members.filter((m) => m.status === 'Offline')
+  return [...online, ...offline]
+}
+
+// Case-insensitive, partial match against a guild's name or tag — for the
+// "my guilds" list on apps/hub/src/views/Guilds.vue. Pure, unit-testable
+// independent of any fetch.
+export function filterGuildsByNameOrTag<T extends Pick<GuildResponse, 'name' | 'tag'>>(
+  guilds: T[],
+  query: string,
+): T[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) {
+    return guilds
+  }
+  return guilds.filter(
+    (g) => g.name.toLowerCase().includes(needle) || g.tag.toLowerCase().includes(needle),
+  )
+}
+
+// Case-insensitive, partial match against identity id — the only field
+// there's anything to search on until #161 (batch identity lookup)
+// resolves display names. Pure, unit-testable independent of any fetch.
+export function filterMembersByIdentityId(members: GuildMember[], query: string): GuildMember[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) {
+    return members
+  }
+  return members.filter((m) => m.identityId.toLowerCase().includes(needle))
+}
+
+export type MemberSortOrder = 'role' | 'name'
+
+// "by name" really means "by identity id string" until #161 resolves real
+// display names — kept honest in the type/behavior rather than pretending
+// this sorts by a name that doesn't exist yet. "by role" is a no-op here;
+// role ordering is applied by groupMembersByRole itself, so this exists to
+// give the UI a single sort-order switch that covers both cases.
+export function sortMembers(members: GuildMember[], order: MemberSortOrder): GuildMember[] {
+  if (order === 'name') {
+    return [...members].sort((a, b) => a.identityId.localeCompare(b.identityId))
+  }
+  return members
+}
+
 // Mirrors crates/server/src/guilds.rs::has_guild_permission exactly: the
 // guild owner can always act, structurally, regardless of their role's
 // permission list — never derived from role_index/permissions alone. Used

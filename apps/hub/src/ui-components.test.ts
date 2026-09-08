@@ -12,6 +12,8 @@ import {
   AvalonChannelList,
   AvalonChatComposer,
   AvalonChatMessage,
+  AvalonFilterBar,
+  AvalonForm,
   AvalonFriendRequestRow,
   AvalonFriendRow,
   AvalonGuildCard,
@@ -244,6 +246,19 @@ describe('AvalonGuildMemberRow', () => {
     await wrapper.find('button').trigger('click')
     expect(wrapper.emitted('kick')).toHaveLength(1)
   })
+
+  it('uses the display name when set, instead of the identity id', () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, displayName: 'Alice' } })
+    expect(wrapper.text()).toContain('Alice')
+    expect(wrapper.text()).not.toContain('id-1')
+  })
+
+  it('shortens a long identity id when no display name is set', () => {
+    const longId = 'identity:0123456789abcdef'
+    const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, identityId: longId } })
+    expect(wrapper.text()).not.toContain(longId)
+    expect(wrapper.text()).toContain(longId.slice(0, 8))
+  })
 })
 
 describe('AvalonChannelList', () => {
@@ -333,5 +348,56 @@ describe('AvalonChatComposer', () => {
   it('shows the character counter against maxChars', () => {
     const wrapper = mount(AvalonChatComposer, { props: { modelValue: 'hello', maxChars: 4000 } })
     expect(wrapper.text()).toContain('5 / 4000')
+  })
+})
+
+describe('AvalonForm', () => {
+  it('renders both the submit button and secondary-actions slot content in the same row', () => {
+    const wrapper = mount(AvalonForm, {
+      props: { submitLabel: 'Save' },
+      slots: { 'secondary-actions': '<button type="button">Cancel</button>' },
+    })
+    const submit = wrapper.find('button[type="submit"]')
+    const cancel = wrapper.find('button[type="button"]')
+    expect(submit.exists()).toBe(true)
+    expect(cancel.exists()).toBe(true)
+    // Both buttons are children of the same row container.
+    expect(submit.element.parentElement).toBe(cancel.element.parentElement)
+  })
+
+  it('renders normally with no secondary-actions slot provided', () => {
+    const wrapper = mount(AvalonForm, { props: { submitLabel: 'Save' } })
+    expect(wrapper.find('button[type="submit"]').exists()).toBe(true)
+    expect(wrapper.findAll('button')).toHaveLength(1)
+  })
+})
+
+describe('AvalonFilterBar', () => {
+  it('emits update:query as the search input changes', async () => {
+    const wrapper = mount(AvalonFilterBar, { props: { query: '' } })
+    await wrapper.find('input').setValue('alice')
+    expect(wrapper.emitted('update:query')?.[0]).toEqual(['alice'])
+  })
+
+  it('renders no sort control when sortOptions is omitted', () => {
+    const wrapper = mount(AvalonFilterBar, { props: { query: '' } })
+    expect(wrapper.find('select').exists()).toBe(false)
+  })
+
+  it('renders a sort control and emits update:sortValue when sortOptions is set', async () => {
+    const wrapper = mount(AvalonFilterBar, {
+      props: {
+        query: '',
+        sortOptions: [
+          { value: 'role', label: 'By role' },
+          { value: 'name', label: 'By identity id' },
+        ],
+        sortValue: 'role',
+      },
+    })
+    const select = wrapper.find('select')
+    expect(select.exists()).toBe(true)
+    await select.setValue('name')
+    expect(wrapper.emitted('update:sortValue')?.[0]).toEqual(['name'])
   })
 })
