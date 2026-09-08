@@ -86,16 +86,24 @@ is visibly marked.
 
 ## Today in the repo
 
-- `apps/hub/` — Vue 3 + Vite + TypeScript scaffold (`App.vue`, `App.module.scss`,
-  `main.ts`). No API calls yet.
+- `apps/hub/` — Vue 3 + Vite + TypeScript, routed with `vue-router`. Identity
+  creation (`CreateIdentity.vue`), login (`Login.vue`), and a minimal
+  profile view (`Profile.vue`) are real, wired against a live `avalon-server`
+  — see [identity](./identity.md)'s "Today in the repo" for the crypto/API
+  layer underneath them (#55). All server traffic goes through
+  `apps/hub/src/api/`; nothing calls `fetch` directly outside it.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
-  own Cargo package, not a workspace member.
-- `packages/ui/` — `@avalon/ui`, one component (`AvalonButton`) in the
-  `components/` / `styles/` / `stories/` split. No `<style>` blocks in `.vue`
-  files; styling lives in `.module.scss`.
-- The only server surface the Hub could call today is identity/auth
-  (`POST /identities`, `POST /sessions`, `GET|PATCH /me`).
-- Nothing has been `npm install`ed in a verified environment yet.
+  own Cargo package, not a workspace member. Not wired to the identity flow
+  yet (#60).
+- `packages/ui/` — `@avalon/ui`: `AvalonButton`, `AvalonTextField`,
+  `AvalonForm`, `AvalonAuthCard` in the `components/` / `styles/` / `stories/`
+  split. No `<style>` blocks in `.vue` files; styling lives in `.module.scss`.
+- The server surface the Hub calls today: `POST /identities/register/start`
+  + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me` — a real
+  WebAuthn + Ed25519 flow, not the plain-credential shape earlier drafts of
+  this doc set implied.
+- `npm install` at the repo root has been run and verified in this
+  environment.
 
 ## Decisions and tickets
 
