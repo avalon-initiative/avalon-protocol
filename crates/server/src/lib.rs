@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod blocks;
 pub mod error;
 pub mod friends;
 pub mod handlers;
@@ -77,6 +78,11 @@ pub fn router(state: AppState) -> Router {
         .route("/friends", get(friends::list_friends))
         .route("/friends/:identity_id", delete(friends::remove_friend))
         .route("/friends/handle/:handle", get(friends::resolve_handle))
+        .route(
+            "/blocks",
+            get(blocks::list_blocks).post(blocks::create_block),
+        )
+        .route("/blocks/:identity_id", delete(blocks::remove_block))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

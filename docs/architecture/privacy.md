@@ -76,8 +76,18 @@ durable.
 
 - `crates/protocol/src/permissions.rs` — `Capability` and `PermissionGrant`
   (game-visible only). No `Visibility` type.
-- `crates/server/src/handlers.rs` — `/me` reads the caller's own profile; there is
-  no cross-identity read path yet, so no scope check exists yet either.
+- `crates/server/src/handlers.rs` — `/me` reads the caller's own profile.
+  Several cross-identity read paths exist now (`GET /friends`,
+  `GET /presence`, `GET /ws/presence`, `GET /friends/handle/:handle`), all
+  session-gated only, with no visibility-scope check at all — that's #87's
+  open decision, not yet built.
+- `crates/server/src/blocks.rs` (#97) — a block is visible only to the
+  identity that created it; no endpoint, anywhere in this crate, reveals to
+  the blocked party that they've been blocked. A blocked pair's friend
+  request is rejected identically to a request naming a nonexistent
+  identity, and a blocked identity's presence reads as `Offline`,
+  indistinguishable from a genuinely missing entry — never a
+  distinguishable "hidden" error code or presence state.
 - The ledger (`crates/server/db/migrations/0002_ledger`) is readable by anyone
   with database access; the `identity.created` payload currently includes a
   username, which is removed under

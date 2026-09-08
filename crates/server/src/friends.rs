@@ -116,6 +116,14 @@ pub async fn create_friend_request(
         return Err(AppError::IdentityNotFound);
     }
 
+    // Same error as a nonexistent identity, deliberately — issue #97's
+    // "the blocked party is never told, not even indirectly" invariant
+    // means a block and a missing identity must be indistinguishable from
+    // this endpoint's response alone.
+    if crate::blocks::has_block_between(&state, from, to).await? {
+        return Err(AppError::IdentityNotFound);
+    }
+
     let (a, b) = ordered_pair(from, to);
     let already_friends = sqlx::query("SELECT 1 FROM friendships WHERE a = $1 AND b = $2")
         .bind(a)

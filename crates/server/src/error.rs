@@ -37,6 +37,12 @@ pub enum AppError {
     HandleGenerationFailed,
     #[error("avatar_url must be an http(s) URL of 2048 characters or fewer")]
     InvalidAvatarUrl,
+    #[error("cannot block yourself")]
+    SelfBlock,
+    #[error("already blocked")]
+    AlreadyBlocked,
+    #[error("not blocked")]
+    BlockNotFound,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -57,6 +63,9 @@ impl IntoResponse for AppError {
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
             AppError::HandleGenerationFailed => StatusCode::CONFLICT,
             AppError::InvalidAvatarUrl => StatusCode::BAD_REQUEST,
+            AppError::SelfBlock => StatusCode::BAD_REQUEST,
+            AppError::AlreadyBlocked => StatusCode::CONFLICT,
+            AppError::BlockNotFound => StatusCode::NOT_FOUND,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
