@@ -47,7 +47,7 @@ None of them widens the others.
 
 - friends lists in the Hub and in any game that asks
 - "who's online and where" (with presence)
-- cross-game invitations and coordination (later, via communication primitives)
+- cross-game invitations and coordination (later, via [communication primitives](./communication.md))
 - guild rosters intersected with friends
 - matchmaking integrations that a game chooses to build on top
 
