@@ -91,13 +91,38 @@ needs them.
   scarce resource to referee) or its rejection of federation (every validator
   proposes into, and every mirror reads from, the same canonical chain).
 
+## What is decided (continued): block storage is not Postgres
+
+Real chains don't use a shared relational database for the blocks/entries
+themselves — confirmed against how the two closest reference systems
+actually work: Bitcoin Core stores raw blocks in flat files (`blk*.dat`) with
+LevelDB only for rebuildable indexes (block metadata, the UTXO set); Kaspa's
+Rust node (`rusty-kaspa`) uses RocksDB for blocks, DAG structure, and UTXO
+state. Both are embedded, per-node key-value stores or flat files — each
+full node holds its own complete local copy, synced peer-to-peer, never a
+shared central SQL server every participant reaches into. **Avalon's ledger
+data follows the same shape**: each validator/mirror holds its own local
+copy in an embedded store, not a connection string into one shared Postgres.
+Kaspa is the specific reference given its block-rate requirements are the
+closer analog to a high-throughput commitment log's needs.
+
+This does not change Postgres's role anywhere else — the indexer's
+projections and ephemeral state (sessions, presence, ceremony state) stay
+exactly where they are. This decision is scoped to settlement data
+specifically, sharpening the boundary this document already draws
+("settlement is not the general-purpose query database").
+
 ## What is open
 
-**The consensus and validator design** — now scoped inside
-[#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) alongside
-the log's own hash/Merkle/signed-tree-head design: which BFT algorithm,
-validator admission and rotation, block/round cadence and finality. Needs its
-own research spike and written comparison before it closes.
+**The consensus and validator design, and the storage engine choice** — both
+scoped inside [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
+alongside the log's own hash/Merkle/signed-tree-head design: which BFT
+algorithm, validator admission and rotation, block/round cadence and
+finality; and which embedded engine (RocksDB, `sled`, `redb`, or a
+comparable alternative) actually backs the per-node storage above — the
+*shape* (embedded, per-node, not Postgres) is decided, the specific engine
+is not. Needs its own research spike and written comparison of real
+candidates for both before it closes.
 
 ## Today in the repo
 

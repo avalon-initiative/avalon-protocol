@@ -66,6 +66,7 @@ established it.
 | Settlement | Settlement is not the general-purpose query database. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68), [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
 | Settlement | Settlement is a public, verifiable, mirrorable log — never federation. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
 | Settlement | Avalon operates its own chain, long term; no native currency or token at launch. | [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) |
+| Settlement | Block/entry storage is an embedded per-node store (Kaspa/Bitcoin-shaped), not a shared Postgres — Postgres stays the query/index layer only. | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
 | Batching | One event is never one settlement transaction. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Gameplay | Real-time gameplay stays game-side. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Query | Query databases are projections. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
@@ -83,7 +84,7 @@ Still open, and deliberately so:
 
 | Question | Issue |
 |---|---|
-| Transparency log, validator set, and consensus design (hash structure, signed tree heads, mirror sync, BFT algorithm, validator admission) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
+| Transparency log, validator set, consensus, and storage-engine design (hash structure, signed tree heads, mirror sync, BFT algorithm, validator admission, RocksDB/sled/redb choice) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
 | Identity recovery when every passkey is lost | [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) |
 | Issuer signing keys and key lifecycle | [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) |
 | Revocation mechanics | [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) |
