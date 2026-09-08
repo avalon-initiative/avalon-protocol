@@ -15,6 +15,17 @@ pub struct Friendship {
     pub since: OffsetDateTime,
 }
 
+/// A friend request awaiting a response. Distinct from [`Friendship`] — a
+/// request never becomes durable history on its own; only the resulting
+/// `friend.accepted` (or nothing, if declined/withdrawn) does. See
+/// `docs/architecture/social-graph.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FriendRequest {
+    pub from: IdentityId,
+    pub to: IdentityId,
+    pub requested_at: OffsetDateTime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresenceStatus {
     Online,

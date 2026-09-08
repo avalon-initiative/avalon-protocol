@@ -17,6 +17,18 @@ pub enum AppError {
     WebauthnFailed,
     #[error("event signature verification failed")]
     InvalidEventSignature,
+    #[error("identity not found")]
+    IdentityNotFound,
+    #[error("cannot friend yourself")]
+    SelfFriendRequest,
+    #[error("already friends")]
+    AlreadyFriends,
+    #[error("a friend request is already pending")]
+    FriendRequestExists,
+    #[error("friend request not found")]
+    FriendRequestNotFound,
+    #[error("not friends")]
+    NotFriends,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -30,6 +42,10 @@ impl IntoResponse for AppError {
             AppError::IdentityIdTaken => StatusCode::CONFLICT,
             AppError::CeremonyNotFound | AppError::CeremonyExpired => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
+            AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
+            AppError::SelfFriendRequest => StatusCode::BAD_REQUEST,
+            AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
+            AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —

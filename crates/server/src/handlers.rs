@@ -48,7 +48,7 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
 /// identity it belongs to. A missing, unknown, or expired token is always
 /// `AppError::Unauthorized` — never distinguished in the response, so a
 /// caller can't probe for which tokens once existed.
-async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Uuid, AppError> {
+pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Uuid, AppError> {
     let token = bearer_token(headers)?;
     let row = sqlx::query("SELECT identity_id, expires_at FROM sessions WHERE token = $1")
         .bind(token)
