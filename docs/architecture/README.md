@@ -30,6 +30,7 @@ Each document below links the ones that govern it.
 | Games & issuers | [games-and-issuers.md](games-and-issuers.md) | Registration, issuer identity, key lifecycle, issuer status |
 | Guilds | [guilds.md](guilds.md) | Network-level primitives; a game is a client of a guild, never its owner |
 | Social graph | [social-graph.md](social-graph.md) | Friends persist across games; games never get the whole graph |
+| Communication | [communication.md](communication.md) | Direct messages, voice, notifications — realtime, never settlement |
 | Presence | [presence.md](presence.md) | The realtime vertical; ephemeral, never ledgered |
 | Communication | [communication.md](communication.md) | DMs, voice, notifications: realtime infrastructure, not a Discord replacement |
 | Game events | [game-events.md](game-events.md) | Durable cross-game/special-event results as attestations — tournaments are one example |

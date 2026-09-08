@@ -49,6 +49,14 @@ The hot/cold split guild chat already established carries over unchanged:
   to be enforced on send, not just on friend requests and presence.
 - A game may render a conversation as a client of it, exactly as it may render
   a guild channel — it never becomes the conversation's host.
+- **Sending while offline is not this domain's problem to solve.** A message
+  composed with no connectivity queues through the SDK's sync journal and
+  submission engine ([`./synchronization.md`](./synchronization.md)) like any
+  other deferrable operation — a conversation is a consumer of that
+  infrastructure, not a second place that invents a pending-message queue.
+  The UI pattern it enables: a queued message shows *pending* until the
+  submission engine confirms it, never silent loss and never a false
+  "delivered."
 
 ## Voice
 
@@ -114,4 +122,9 @@ into a Hub-only or game-only corner.
   [#104](https://github.com/LunarVagabond/avalon-protocol/issues/104) SDK
   conversation API,
   [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105) Hub
-  direct-message UI. Backlog — not scheduled ahead of #73/#71 or #14/#19.
+  direct-message UI. Backlog — not scheduled ahead of #73/#71 (done) or
+  #14/#19.
+- [#108](https://github.com/LunarVagabond/avalon-protocol/issues/108) — Epic:
+  Offline & Deferred Protocol Synchronization
+  ([`./synchronization.md`](./synchronization.md)) — direct-message queuing
+  while offline is this epic's job, consumed by #102, not reinvented here.
