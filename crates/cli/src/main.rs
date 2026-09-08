@@ -1,7 +1,7 @@
 //! `avalon` — local dev/ops CLI.
 //!
 //! Commands: `avalon inspect-ledger`. `register-game` and `issue-achievement`
-//! (per PROMPT.md §7's milestone-1 vertical slice) aren't wired up yet — they
+//! (per `docs/Proposal.md` §23's milestone-1 vertical slice) aren't wired up yet — they
 //! depend on the Game Registration and Achievements epics, still unbuilt.
 
 use avalon_chain::PostgresSettlementProvider;

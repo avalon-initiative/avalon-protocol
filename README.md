@@ -1,9 +1,14 @@
 # Avalon Protocol
 
-**Status:** scaffolding stage. The Rust workspace (`protocol`, `chain`, `indexer`,
-`server`, `sdk`, `cli`), the web/mobile Hub apps, and the C# SDK skeleton all exist
-and build, but no real server, database, or auth logic is wired up yet. See
-[`docs/Proposal.md`](docs/Proposal.md) for the full design and
+**Status:** early. The Rust workspace (`protocol`, `chain`, `indexer`, `server`,
+`sdk`, `cli`), the web/mobile Hub apps, and the C# SDK skeleton all exist and
+build. Identity and auth work end to end against a live Postgres (register,
+login, authenticated profile read/update, the Rust SDK's `authenticate()`), and
+every identity creation lands in a hash-chained ledger you can inspect with
+`make inspect-ledger`. Social, guilds, achievements, permissions, the indexer,
+and the Hub UIs are still scaffolding. See [`docs/stakeholders/Proposal.md`](docs/stakeholders/Proposal.md)
+for the full design, [`docs/architecture/`](docs/architecture/README.md) for the
+normative architecture and its invariants, and
 [`docs/WhyAvalon.md`](docs/WhyAvalon.md) for the case for why this needs to exist.
 
 Avalon Protocol is an open, Rust-based interoperability layer for independent games:
@@ -58,8 +63,10 @@ bindings/
   csharp/     flagship external SDK for game developers (Unity-targeted)
 
 docs/
-  Proposal.md    the living design document
+  stakeholders/
+    Proposal.md  the living design document (narrative)
   WhyAvalon.md   the case for why this needs to exist
+  architecture/  the normative architecture reference, one file per topic
   players/       docs for people playing games that use Avalon
   developers/    docs for game developers integrating the SDKs
   maintainers/   docs for contributors to this repo
@@ -76,7 +83,7 @@ decisions.
 
 | Design | Decisions | Process |
 |---|---|---|
-| [Proposal](docs/Proposal.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
+| [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
 
 ## Contributing
 

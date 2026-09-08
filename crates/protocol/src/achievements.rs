@@ -1,8 +1,9 @@
 //! Achievements as verifiable claims (attestations), not shared database rows.
 //!
 //! Avalon records that an issuer made a claim about a player. It never
-//! dictates what a receiving game does with that claim — see `Proposal.md`
-//! §8–9 and `PROMPT.md` §11.
+//! dictates what a receiving game does with that claim — see `docs/Proposal.md`
+//! §8–9, `docs/architecture/achievements-and-attestations.md`, and the trust
+//! model in `docs/architecture/trust-model.md` (issue #76).
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

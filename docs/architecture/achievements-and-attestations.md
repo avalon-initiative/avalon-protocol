@@ -1,0 +1,116 @@
+# Achievements and Attestations
+
+**An achievement is an issuer attestation, not a `player_id → achievement_id`
+row.** The durable fact is "Game A asserts that Player X accomplished Y", signed
+by Game A's key, with a timestamp and a schema. Avalon records that claim and
+its provenance. **It never dictates what another game does with it.**
+
+Narrative: [`../stakeholders/Proposal.md` §8](../stakeholders/Proposal.md#8-achievements-and-history) and
+[§9](../stakeholders/Proposal.md#9-trust-and-attestations).
+
+## Shape
+
+```text
+Issuer (Game A, signing key k1)
+    │
+    ▼
+Attestation
+    ├── achievement     game:ashen-realms:achievement:dragon_slayer
+    ├── subject         Avalon Identity X
+    ├── issued_at       2027-03-14T21:07:00Z
+    ├── schema/version  achievement.v1
+    ├── evidence        opaque reference the issuer chooses to attach
+    ├── signature       over all of the above, by k1
+    └── status          derived: Active | Revoked | Superseded
+```
+
+The signature answers "did Game A issue this". Nothing in the attestation
+answers "was this hard", and nothing can — see
+[`./trust-model.md`](./trust-model.md).
+
+## Namespacing
+
+Human-readable names are never globally unique. Achievement ids are namespaced
+under the issuing game via `GlobalId`:
+
+```text
+game:ashen-realms:achievement:dragon_slayer
+game:worldzero:achievement:dragon_slayer
+game:random-mmo-47:achievement:dragon_slayer
+```
+
+Three distinct claims that happen to share a title. The display name stays
+"Dragon Slayer"; provenance makes the distinction.
+
+## Same title, different provenance
+
+- Game A issues Dragon Slayer after a brutal endgame raid.
+- Game B issues Dragon Slayer after a different hard achievement.
+- Game C lets every player click a button labelled Dragon Slayer.
+
+All three are cryptographically authentic. Avalon does not pretend they are
+semantically identical, and it does not rank them. The Hub shows each with its
+issuer; a consuming game recognizes whichever it chooses; a player features or
+hides whichever they like.
+
+## The receiving game decides meaning
+
+Game A: "Player X defeated the Dragon Lord."
+Game B may unlock a title. Game C may unlock a quest. Game D may ignore it.
+
+A consuming game verifies authenticity and validity (universal) and then
+applies its own recognition policy (contextual). The SDK exposes those three
+results separately so a game can *display* claims it doesn't *recognize*.
+
+## Definitions
+
+A game defines its achievements before it issues them. An
+`AchievementDefinition` carries the namespaced id, the issuer, a name, and a
+description. Definitions are durable (`achievement.defined`) so the registry
+and the Hub can render an issued attestation even after the game is gone.
+
+## Lifecycle
+
+```text
+achievement.defined  →  achievement.issued  →  (achievement.revoked | attestation.superseded)
+```
+
+Every step is an appended protocol event. Revocation never removes the issuance
+— see [`./revocation.md`](./revocation.md). Game event results (tournaments,
+seasonal championships, community campaigns, ...) are attestations with a
+game-event schema, not a separate mechanism — see
+[`./game-events.md`](./game-events.md).
+
+## Today in the repo
+
+- `crates/protocol/src/achievements.rs` — `AchievementDefinition`,
+  `Issuer::Game(GameId)`, `AchievementAttestation { id, issuer, subject,
+  achievement, issued_at, proof, revoked_at }`, `TrustRelationship`. The
+  `proof` bytes are opaque; no verification exists yet. `revoked_at` is a
+  mutable field on the record, which #85 replaces with revocation entries.
+- `crates/protocol/src/ids.rs` — `GlobalId::new(namespace, owner, kind, key)`
+  and `AttestationId`.
+- `crates/sdk/src/lib.rs` — `Session::achievements()` and
+  `issue_achievement()` check the capability, then return `NotImplemented`.
+- No server endpoints, no definition storage, no signing.
+
+## Decisions and tickets
+
+- [#30](https://github.com/LunarVagabond/avalon-protocol/issues/30) — Epic:
+  Achievements & Attestations.
+- [#31](https://github.com/LunarVagabond/avalon-protocol/issues/31) —
+  definition CRUD per game.
+- [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue an
+  achievement → signed attestation.
+- [#33](https://github.com/LunarVagabond/avalon-protocol/issues/33) — verify
+  attestation + trust relationships.
+- [#34](https://github.com/LunarVagabond/avalon-protocol/issues/34) — SDK
+  methods wired to a real server.
+- [#35](https://github.com/LunarVagabond/avalon-protocol/issues/35) — Hub
+  achievements list.
+- [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
+  attestation trust model.
+- [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
+  catalogue (the `achievement.*` kinds).
+- [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — game
+  event result attestations.

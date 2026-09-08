@@ -2,8 +2,9 @@
 //! considers interoperable or durable.
 //!
 //! Not every game action is a protocol event; ordinary gameplay (combat,
-//! movement, XP ticks) never becomes one. See `Proposal.md` §14 and
-//! `PROMPT.md` §12–13 for the hot-data/durable-fact distinction.
+//! movement, XP ticks) never becomes one. See `docs/Proposal.md` §14 and
+//! `docs/architecture/protocol-events.md` for the hot-data/durable-fact
+//! distinction, and issue #75 for why durable history is canonical.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

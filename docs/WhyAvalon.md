@@ -81,7 +81,7 @@ to recognize each other) as much as it rules out one company's walled garden —
 both make identity conditional on a relationship between servers instead of a
 property of the player.
 
-See [`Proposal.md`](Proposal.md) for what that actually looks like in practice —
+See [`stakeholders/Proposal.md`](stakeholders/Proposal.md) for what that actually looks like in practice —
 identity separate from characters, guilds and friends as network entities,
 achievements as attestations, and games that stay fully sovereign while opting in
 to whichever of it they want.
