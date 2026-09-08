@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod blocks;
+pub mod devices;
 pub mod error;
 pub mod friends;
 pub mod handlers;
@@ -83,6 +84,17 @@ pub fn router(state: AppState) -> Router {
             get(blocks::list_blocks).post(blocks::create_block),
         )
         .route("/blocks/:identity_id", delete(blocks::remove_block))
+        .route(
+            "/me/devices/grants",
+            get(devices::list_device_grants).post(devices::request_device_grant),
+        )
+        .route("/me/devices/grants/:id", get(devices::get_device_grant))
+        .route(
+            "/me/devices/grants/:id/approve",
+            post(devices::approve_device_grant),
+        )
+        .route("/me/devices", get(devices::list_devices))
+        .route("/me/devices/:id/revoke", post(devices::revoke_device))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

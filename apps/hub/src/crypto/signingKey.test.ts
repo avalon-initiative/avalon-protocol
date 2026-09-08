@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
+  base64ToBytes,
   bytesToBase64,
   deriveSigningKeyFromMnemonic,
+  deviceGrantApprovalSigningBytes,
   generateAndStoreSigningKey,
+  generateGrantRequestKeyPair,
   identityCreatedSigningBytes,
   loadSigningKey,
+  publicKeyFromSecretKey,
   recoverAndStoreSigningKey,
   signWithKey,
+  storeSigningKey,
 } from './signingKey'
 import { ed25519 } from '@noble/curves/ed25519'
 import { generateMnemonic } from '@scure/bip39'
@@ -91,5 +96,59 @@ describe('mnemonic derivation and recovery', () => {
     expect(() =>
       recoverAndStoreSigningKey(crypto.randomUUID(), 'not a real bip39 phrase at all'),
     ).toThrow(/not valid/)
+  })
+})
+
+// #135
+describe('device grant helpers', () => {
+  it('generateGrantRequestKeyPair produces a valid, usable Ed25519 keypair', () => {
+    const { publicKey, secretKey } = generateGrantRequestKeyPair()
+    const message = new TextEncoder().encode('a test message')
+    const signature = signWithKey(secretKey, message)
+    expect(ed25519.verify(signature, message, publicKey)).toBe(true)
+  })
+
+  it('generateGrantRequestKeyPair does not persist anything to localStorage', () => {
+    const identityId = crypto.randomUUID()
+    generateGrantRequestKeyPair()
+    expect(loadSigningKey(identityId)).toBeNull()
+  })
+
+  it('storeSigningKey persists a keypair generated independently of it', () => {
+    const identityId = crypto.randomUUID()
+    const { secretKey } = generateGrantRequestKeyPair()
+    storeSigningKey(identityId, secretKey)
+    const loaded = loadSigningKey(identityId)
+    expect(loaded).not.toBeNull()
+    expect(bytesToBase64(loaded!)).toBe(bytesToBase64(secretKey))
+  })
+
+  it('publicKeyFromSecretKey matches the public key produced at generation time', () => {
+    const { publicKey, secretKey } = generateGrantRequestKeyPair()
+    expect(bytesToBase64(publicKeyFromSecretKey(secretKey))).toBe(bytesToBase64(publicKey))
+  })
+
+  it('base64ToBytes round-trips with bytesToBase64', () => {
+    const { publicKey } = generateGrantRequestKeyPair()
+    expect(bytesToBase64(base64ToBytes(bytesToBase64(publicKey)))).toBe(bytesToBase64(publicKey))
+  })
+
+  it('deviceGrantApprovalSigningBytes matches the exact byte format crates/server/src/devices.rs verifies against', () => {
+    const grantId = '22222222-2222-2222-2222-222222222222'
+    const identityId = '11111111-1111-1111-1111-111111111111'
+    const key = new Uint8Array([1, 2, 3, 4])
+    const bytes = deviceGrantApprovalSigningBytes(grantId, identityId, key)
+    const text = new TextDecoder().decode(bytes)
+    expect(text).toBe(
+      `avalon:device_grant.approved:v1:${grantId}:${identityId}:${bytesToBase64(key)}`,
+    )
+  })
+
+  it('deviceGrantApprovalSigningBytes differs for a different grant id', () => {
+    const identityId = crypto.randomUUID()
+    const key = new Uint8Array([1, 2, 3])
+    const a = deviceGrantApprovalSigningBytes(crypto.randomUUID(), identityId, key)
+    const b = deviceGrantApprovalSigningBytes(crypto.randomUUID(), identityId, key)
+    expect(bytesToBase64(a)).not.toBe(bytesToBase64(b))
   })
 })
