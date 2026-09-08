@@ -31,6 +31,8 @@ pub enum AppError {
     NotFriends,
     #[error("invalid presence query")]
     InvalidPresenceQuery,
+    #[error("invalid profile query")]
+    InvalidProfileQuery,
     #[error("no profile matches that handle")]
     HandleNotFound,
     #[error("could not generate a unique handle, try a different display name")]
@@ -107,7 +109,9 @@ impl IntoResponse for AppError {
             AppError::CeremonyNotFound | AppError::CeremonyExpired => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
             AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
-            AppError::SelfFriendRequest | AppError::InvalidPresenceQuery => StatusCode::BAD_REQUEST,
+            AppError::SelfFriendRequest
+            | AppError::InvalidPresenceQuery
+            | AppError::InvalidProfileQuery => StatusCode::BAD_REQUEST,
             AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
