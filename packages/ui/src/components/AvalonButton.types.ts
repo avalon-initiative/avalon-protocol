@@ -1,4 +1,4 @@
 export interface AvalonButtonProps {
   label: string
-  variant?: 'primary' | 'secondary'
+  variant?: 'primary' | 'secondary' | 'danger'
 }

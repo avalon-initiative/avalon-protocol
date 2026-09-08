@@ -23,6 +23,7 @@ import type {
   SessionFinishResponse,
   SessionStartRequest,
   SessionStartResponse,
+  UpdatePresenceRequest,
   UpdateProfileRequest,
 } from './types'
 
@@ -133,6 +134,17 @@ export function removeFriend(token: string, identityId: string): Promise<void> {
 // URL path segment, so it's escaped here rather than left to the caller.
 export function resolveHandle(token: string, handle: string): Promise<ResolveHandleResponse> {
   return request(`/friends/handle/${encodeURIComponent(handle)}`, { token })
+}
+
+// PUT /me/presence — the caller publishing their own status. The shell
+// heartbeats this while the Hub is open so the player actually reads as
+// Online to their friends (the store's TTL expires a stale entry to
+// Offline otherwise — see crates/server/src/presence.rs).
+export function updateMyPresence(
+  token: string,
+  body: UpdatePresenceRequest,
+): Promise<PresenceResponse> {
+  return request('/me/presence', { method: 'PUT', body, token })
 }
 
 export function getPresence(token: string, ids: string[]): Promise<PresenceResponse[]> {

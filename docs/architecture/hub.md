@@ -92,22 +92,39 @@ is visibly marked.
   repo" for the crypto/API layer underneath registration/login (#55). All
   server traffic goes through `apps/hub/src/api/`; nothing calls `fetch`
   directly outside it.
-- **The logged-in Hub is a persistent shell with tabs, not separate pages.**
-  `HubShell.vue` renders an always-visible identity header (display name,
-  handle, identity id, log out) plus tab navigation (`AvalonTabs`,
-  `packages/ui`), with `<RouterView />` swapping tab content in place. Tabs
-  are real nested routes under a shared parent (`/profile`, `/friends`,
-  `/activity` as children of `HubShell.vue` in
-  `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable, not
-  client-side-only state; `requiresAuth` is set once on the parent route
-  and inherited by every child via `vue-router`'s meta-merging across
-  matched records. Today's three real tabs are Profile (`Profile.vue` —
-  display-name/avatar-url edit form; the identity header/logout lives in
-  the shell instead), Friends (`Friends.vue`, #18), and Activity
-  (`Activity.vue`, #121 — see below). **Every future Hub UI ticket should
-  add a new tab (a child route + a `tabs` entry in `HubShell.vue`) instead
-  of a new standalone route** — this is what #24 (guild view + chat), #35
+- **The logged-in Hub is a persistent shell, not separate pages.**
+  `HubShell.vue` renders a fixed left sidebar on desktop (wordmark,
+  `AvalonSidebarNav`, the caller's own presence at the bottom) that
+  collapses to an `AvalonBottomNav` bar on mobile (≤768px), plus a top
+  header (a disabled search field — player discovery is #129, undecided — a
+  notifications placeholder, and an `AvalonUserChip` with the caller's real
+  avatar/name/handle linking to Profile), with `<RouterView />` swapping
+  the page in place. Pages are nested child routes under a shared parent
+  (`/home`, `/profile`, `/friends`, `/activity` in
+  `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable;
+  `requiresAuth` is set once on the parent route and inherited by every
+  child via `vue-router`'s meta-merging. Nav entries for features that
+  don't exist yet (Games, Guilds, Chat, Discover) render disabled with a
+  "Soon" tag rather than being hidden. The shell also heartbeats
+  `PUT /me/presence` (Online, every 60s, inside the server's 120s TTL) so
+  the player actually reads as online to their friends while the Hub is
+  open. Visual language: one dark theme via CSS custom properties in
+  `packages/ui/src/styles/tokens.css` (+ `global.css`), imported once in
+  `apps/hub/src/main.ts`; component styles reference tokens only. **A
+  future Hub feature adds a child route plus a nav entry in
+  `HubShell.vue`** — this is what #24 (guild view + chat), #35
   (achievements), and #105 (DMs) should build against.
+- `Home.vue` — the landing page after login: welcome header, Quick Actions
+  (add a friend, set up this device, edit profile), Friends Online, and the
+  six most recent entries from `GET /me/history` with a "View all" link to
+  `/activity`. Friends + live presence loading is shared with `Friends.vue`
+  through `apps/hub/src/composables/useFriendsPresence.ts`. Game/guild/
+  message cards arrive with those features.
+- `Profile.vue` — avatar/name/handle hero with log out, the profile edit
+  form, and the device setup / recovery / pending-approval / device-list
+  cards (#134/#135/#145). `Login.vue`/`CreateIdentity.vue` sit in
+  `AuthLayout.vue` (wordmark above a centered `AvalonAuthCard`); auth is
+  identity-id + passkey only.
 - `Friends.vue` (#18) keeps each friend's presence live via
   `apps/hub/src/api/client.ts::openPresenceSocket` (`GET /ws/presence`,
   #136), re-subscribed with the current friend-id set on every refresh.
@@ -146,16 +163,17 @@ is visibly marked.
   yet (#60).
 - `packages/ui/` — `@avalon/ui`: `AvalonButton`, `AvalonTextField`,
   `AvalonForm`, `AvalonAuthCard`, `AvalonPresenceBadge`, `AvalonFriendRow`,
-  `AvalonFriendRequestRow`, `AvalonTabs` (#130 — takes a plain
-  `{ label, to, active }[]` and emits which one was picked; no route
-  awareness inside the component itself, same invariant as the rest of this
-  package) in the `components/` / `styles/` / `stories/`
-  split. No `<style>` blocks in `.vue` files; styling lives in
-  `.module.scss`. Has no test runner or working Storybook config of its own
-  yet (pre-existing gaps, noted in #55's PR) — the three friends components
-  are instead tested from `apps/hub/src/ui-components.test.ts`, which
-  already has a working vitest setup and consumes them the same way the app
-  does.
+  `AvalonFriendRequestRow`, `AvalonAvatar`, `AvalonCard`, `AvalonIcon` (a
+  small inline-SVG set, no icon library), `AvalonSidebarNav`,
+  `AvalonBottomNav`, `AvalonUserChip` — all presentational (props in,
+  events out; the nav components take `{ label, to, icon, active, disabled }[]`
+  and emit which entry was picked, never emitting for a disabled one) in
+  the `components/` / `styles/` / `stories/` split, plus `styles/tokens.css`
+  and `styles/global.css`. No `<style>` blocks in `.vue` files; styling
+  lives in `.module.scss` and references tokens only. Has no test runner or
+  working Storybook config of its own yet — components are tested from
+  `apps/hub/src/ui-components.test.ts`, which already has a working vitest
+  setup and consumes them the same way the app does.
 - The server surface the Hub calls today: `POST /identities/register/start`
   + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me`,
   `GET /friends`, `GET|POST /friends/requests`,

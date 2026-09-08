@@ -1,21 +1,14 @@
 .row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0;
-}
-
-.avatar {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  background: #e5e5e5;
-  flex-shrink: 0;
+  gap: var(--av-space-3);
+  padding: var(--av-space-2) 0;
 }
 
 .name {
   flex: 1;
-  font-size: 0.9375rem;
+  min-width: 0;
+  font-size: var(--av-text-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -24,7 +17,14 @@
 .remove {
   border: none;
   background: transparent;
-  color: #d92d20;
+  color: var(--av-color-text-muted);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--av-text-sm);
+  padding: var(--av-space-1) var(--av-space-2);
+  border-radius: var(--av-radius-sm);
+
+  &:hover {
+    color: var(--av-color-danger);
+    background: var(--av-color-danger-soft);
+  }
 }

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// Identity/display-name editing — the "you" tab inside the shell (issue
-// #130). The identity header (display name, identity id, logout) lives in
-// HubShell.vue now, shown on every tab, not just this one.
+// The "you" page: profile editing, device setup/recovery (#134/#135), the
+// device list, and log out. Sections are cards on the shared page grid
+// (issue #148).
 import { onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import * as api from '../api/client'
 import { recoverSigningKey } from '../api/identity'
 import {
@@ -14,18 +15,22 @@ import {
 import type { DeviceGrantResponse, DeviceResponse } from '../api/types'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
-import { AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
+import { AvalonAvatar, AvalonButton, AvalonCard, AvalonForm, AvalonTextField } from '@avalon/ui'
+import page from './page.module.scss'
+import styles from './Profile.module.scss'
 
-// #135's device-grant flow polls rather than pushes (see the design's own
-// reasoning: identity-management events don't need #136's presence-grade
-// latency). Used both for a requesting device waiting on its own grant and
-// for an already-set-up device refreshing the pending-approvals list.
+// #135's device-grant flow polls rather than pushes (identity-management
+// events don't need #136's presence-grade latency). Used both for a
+// requesting device waiting on its own grant and for an already-set-up
+// device refreshing the pending-approvals list.
 const POLL_INTERVAL_MS = 5_000
 
+const router = useRouter()
 const session = useSessionStore()
 
 const displayName = ref('')
 const avatarUrl = ref('')
+const handle = ref('')
 const identityId = ref('')
 const loading = ref(true)
 const submitting = ref(false)
@@ -45,6 +50,7 @@ onMounted(async () => {
     const profile = await api.getMe(session.token)
     displayName.value = profile.display_name
     avatarUrl.value = profile.avatar_url ?? ''
+    handle.value = profile.handle
     identityId.value = profile.identity_id
     hasSigningKey.value = loadSigningKey(profile.identity_id) !== null
     if (hasSigningKey.value) {
@@ -64,6 +70,30 @@ onMounted(async () => {
 onUnmounted(() => {
   if (pollHandle) clearInterval(pollHandle)
 })
+
+async function onLogout() {
+  session.logout()
+  await router.push({ name: 'login' })
+}
+
+async function onSubmit() {
+  if (!session.token) return
+  error.value = ''
+  submitting.value = true
+  try {
+    const profile = await api.updateProfile(session.token, {
+      display_name: displayName.value,
+      avatar_url: avatarUrl.value,
+    })
+    displayName.value = profile.display_name
+    avatarUrl.value = profile.avatar_url ?? ''
+    handle.value = profile.handle
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    submitting.value = false
+  }
+}
 
 const recoveryPhrase = ref('')
 const recovering = ref(false)
@@ -178,10 +208,10 @@ async function onRevokeDevice(device: DeviceResponse) {
   }
 }
 
-// #145: every device (including the first one, previously unlabeled) can
-// be renamed after the fact. Seeded from each device's current label on
-// refresh, but only for a device not already being edited — an in-flight
-// edit shouldn't get clobbered by the next poll tick.
+// #145: every device (including the first one) can be renamed after the
+// fact. Seeded from each device's current label on refresh, but only for a
+// device not already being edited — an in-flight edit shouldn't get
+// clobbered by the next poll tick.
 const renameLabels = ref<Record<string, string>>({})
 const renamingId = ref('')
 const renameError = ref('')
@@ -208,117 +238,120 @@ async function onRenameDevice(device: DeviceResponse) {
     renamingId.value = ''
   }
 }
-
-async function onSubmit() {
-  if (!session.token) return
-  error.value = ''
-  submitting.value = true
-  try {
-    const profile = await api.updateProfile(session.token, {
-      display_name: displayName.value,
-      avatar_url: avatarUrl.value,
-    })
-    displayName.value = profile.display_name
-    avatarUrl.value = profile.avatar_url ?? ''
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Something went wrong.'
-  } finally {
-    submitting.value = false
-  }
-}
 </script>
 
 <template>
-  <section v-if="!loading">
-    <AvalonForm submit-label="Save changes" :submitting="submitting" :error="error" @submit="onSubmit">
-      <AvalonTextField v-model="displayName" label="Display name" />
-      <AvalonTextField v-model="avatarUrl" label="Avatar URL" placeholder="https://…" />
-    </AvalonForm>
+  <div v-if="!loading" :class="page.page">
+    <header :class="styles.hero">
+      <AvalonAvatar :src="avatarUrl || null" :name="displayName" size="xl" />
+      <div :class="styles.heroText">
+        <h1 :class="page.title">{{ displayName }}</h1>
+        <p :class="styles.handle">{{ handle }}</p>
+        <p :class="styles.identityId">{{ identityId }}</p>
+      </div>
+      <div :class="styles.heroActions">
+        <AvalonButton label="Log out" variant="secondary" @click="onLogout" />
+      </div>
+    </header>
 
-    <section v-if="!hasSigningKey">
-      <h2>Set up this device</h2>
+    <div :class="page.grid">
+      <div :class="page.mainColumn">
+        <AvalonCard title="Profile" subtitle="How other players see you.">
+          <AvalonForm submit-label="Save changes" :submitting="submitting" :error="error" @submit="onSubmit">
+            <AvalonTextField v-model="displayName" label="Display name" />
+            <AvalonTextField v-model="avatarUrl" label="Avatar URL" placeholder="https://…" />
+          </AvalonForm>
+        </AvalonCard>
 
-      <section v-if="pendingRequest">
-        <p>
-          Waiting for another device to approve this one
-          <span v-if="pendingRequest.grant.status !== 'pending'">({{ pendingRequest.grant.status }})</span>.
-        </p>
-      </section>
-      <section v-else>
-        <p>
-          This device doesn't have a signing key for this identity yet. Request access from
-          another device you're already signed in on, or recover from a saved phrase.
-        </p>
-        <AvalonForm
-          submit-label="Request access from another device"
-          :submitting="requestingGrant"
-          :error="grantRequestError"
-          @submit="onRequestDeviceGrant"
-        />
-      </section>
+        <AvalonCard v-if="!hasSigningKey" title="Set up this device">
+          <section v-if="pendingRequest">
+            <p :class="page.empty">
+              Waiting for another device to approve this one
+              <span v-if="pendingRequest.grant.status !== 'pending'">({{ pendingRequest.grant.status }})</span>.
+            </p>
+          </section>
+          <section v-else :class="styles.stack">
+            <p :class="page.empty">
+              This device doesn't have a signing key for this identity yet. Request access from
+              another device you're already signed in on, or recover from a saved phrase.
+            </p>
+            <AvalonForm
+              submit-label="Request access from another device"
+              :submitting="requestingGrant"
+              :error="grantRequestError"
+              @submit="onRequestDeviceGrant"
+            />
+          </section>
 
-      <h3>Or recover your signing key</h3>
-      <AvalonForm
-        submit-label="Recover"
-        :submitting="recovering"
-        :error="recoveryError"
-        @submit="onRecoverSigningKey"
-      >
-        <AvalonTextField
-          v-model="recoveryPhrase"
-          label="Recovery phrase"
-          placeholder="twelve words separated by spaces"
-        />
-      </AvalonForm>
-    </section>
+          <h3 :class="styles.subheading">Or recover your signing key</h3>
+          <AvalonForm
+            submit-label="Recover"
+            :submitting="recovering"
+            :error="recoveryError"
+            @submit="onRecoverSigningKey"
+          >
+            <AvalonTextField
+              v-model="recoveryPhrase"
+              label="Recovery phrase"
+              placeholder="twelve words separated by spaces"
+            />
+          </AvalonForm>
+        </AvalonCard>
+      </div>
 
-    <section v-if="hasSigningKey && pendingGrants.length > 0">
-      <h2>Devices waiting for your approval</h2>
-      <p v-if="approveError">{{ approveError }}</p>
-      <ul>
-        <li v-for="grant in pendingGrants" :key="grant.id">
-          {{ grant.device_label ?? 'A device' }} requested access at {{ grant.requested_at }}.
-          <AvalonButton
-            :label="approvingGrantId === grant.id ? 'Approving…' : 'Approve'"
-            variant="secondary"
-            :disabled="approvingGrantId === grant.id"
-            @click="onApproveGrant(grant)"
-          />
-        </li>
-      </ul>
-    </section>
+      <div :class="page.sideColumn">
+        <AvalonCard v-if="hasSigningKey && pendingGrants.length > 0" title="Devices waiting for your approval">
+          <p v-if="approveError" :class="page.error">{{ approveError }}</p>
+          <ul :class="styles.list">
+            <li v-for="grant in pendingGrants" :key="grant.id" :class="styles.listRow">
+              <span :class="styles.listText">
+                <span :class="styles.listLabel">{{ grant.device_label ?? 'A device' }}</span>
+                <span :class="styles.listDetail">requested access {{ grant.requested_at }}</span>
+              </span>
+              <AvalonButton
+                :label="approvingGrantId === grant.id ? 'Approving…' : 'Approve'"
+                variant="primary"
+                :disabled="approvingGrantId === grant.id"
+                @click="onApproveGrant(grant)"
+              />
+            </li>
+          </ul>
+        </AvalonCard>
 
-    <section v-if="hasSigningKey && myDevices.length > 0">
-      <h2>Your devices</h2>
-      <p>
-        To add another device, log into this identity there — with no signing key yet, it'll
-        offer to request access, and the request will show up here for you to approve.
-      </p>
-      <p v-if="revokeError">{{ revokeError }}</p>
-      <p v-if="renameError">{{ renameError }}</p>
-      <ul>
-        <li v-for="device in myDevices" :key="device.id">
-          <AvalonTextField
-            v-model="renameLabels[device.id]"
-            label="Device name"
-            placeholder="Unlabeled device"
-          />
-          <span v-if="device.revoked_at">(revoked)</span>
-          <AvalonButton
-            :label="renamingId === device.id ? 'Saving…' : 'Rename'"
-            variant="secondary"
-            :disabled="renamingId === device.id"
-            @click="onRenameDevice(device)"
-          />
-          <AvalonButton
-            v-if="!device.revoked_at"
-            :label="revokingId === device.id ? 'Revoking…' : 'Revoke'"
-            variant="secondary"
-            :disabled="revokingId === device.id"
-            @click="onRevokeDevice(device)"
-          />
-        </li>
-      </ul>
-    </section>
-  </section>
+        <AvalonCard
+          v-if="hasSigningKey && myDevices.length > 0"
+          title="Your devices"
+          subtitle="To add another device, log into this identity there — with no signing key yet, it'll offer to request access, and the request will show up here for you to approve."
+        >
+          <p v-if="revokeError" :class="page.error">{{ revokeError }}</p>
+          <p v-if="renameError" :class="page.error">{{ renameError }}</p>
+          <ul :class="styles.list">
+            <li v-for="device in myDevices" :key="device.id" :class="styles.device">
+              <AvalonTextField
+                v-model="renameLabels[device.id]"
+                label="Device name"
+                placeholder="Unlabeled device"
+              />
+              <div :class="styles.deviceActions">
+                <span v-if="device.revoked_at" :class="styles.revoked">Revoked</span>
+                <AvalonButton
+                  :label="renamingId === device.id ? 'Saving…' : 'Rename'"
+                  variant="secondary"
+                  :disabled="renamingId === device.id"
+                  @click="onRenameDevice(device)"
+                />
+                <AvalonButton
+                  v-if="!device.revoked_at"
+                  :label="revokingId === device.id ? 'Revoking…' : 'Revoke'"
+                  variant="danger"
+                  :disabled="revokingId === device.id"
+                  @click="onRevokeDevice(device)"
+                />
+              </div>
+            </li>
+          </ul>
+        </AvalonCard>
+      </div>
+    </div>
+  </div>
 </template>

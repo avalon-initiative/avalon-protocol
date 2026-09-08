@@ -1,8 +1,7 @@
-// Confirms issue #130's actual point: the identity header is present
-// regardless of which tab is active, and switching tabs doesn't lose the
-// shell. Uses a real router (memory history) with the real nested-route
-// config so a regression in the route nesting/meta-inheritance itself
-// would fail this, not just a HubShell-in-isolation mount.
+// The shell is present regardless of which page is active, and switching
+// pages doesn't lose it. Uses a real router (memory history) with the real
+// nested-route shape so a regression in the route nesting itself would
+// fail this, not just a HubShell-in-isolation mount.
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
@@ -11,17 +10,14 @@ import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
 import Friends from './Friends.vue'
 import { useSessionStore } from '../stores/session'
+import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
-function mockFetchOnce(body: unknown) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve(body),
-      text: () => Promise.resolve(JSON.stringify(body)),
-    }),
-  )
+const profile = {
+  identity_id: 'id-1',
+  identity_created_at: 'now',
+  display_name: 'Avalon Player',
+  avatar_url: null,
+  handle: 'Avalon Player#1234',
 }
 
 function testRouter() {
@@ -43,44 +39,56 @@ function testRouter() {
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
+  vi.stubGlobal('WebSocket', FakeWebSocket)
+  mockFetchByPath({
+    '/me': profile,
+    '/me/presence': { identity_id: 'id-1', status: 'Online', playing: null, updated_at: 'now' },
+    '/me/devices': [],
+    '/me/devices/grants': [],
+    '/friends': [],
+    '/friends/requests': [],
+    '/presence': [],
+  })
 })
 
 describe('HubShell', () => {
-  it('shows the identity header on the profile tab', async () => {
+  it('shows the sidebar, user chip, and coming-soon entries on the profile page', async () => {
     useSessionStore().login('a-token')
-    mockFetchOnce({
-      identity_id: 'id-1',
-      identity_created_at: 'now',
-      display_name: 'Avalon Player',
-      avatar_url: null,
-      handle: 'Avalon Player#1234',
-    })
 
     const router = testRouter()
     router.push('/profile')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player'))
-    expect(wrapper.text()).toContain('id-1')
-    expect(wrapper.text()).toContain('Avalon Player#1234')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player#1234'))
+    expect(wrapper.text()).toContain('AVALON')
+    expect(wrapper.text()).toContain('Home')
+    expect(wrapper.text()).toContain('Soon')
+    // Logout lives on the Profile page now, not in the shell header.
     expect(wrapper.text()).toContain('Log out')
   })
 
-  it('keeps the identity header when navigating to the friends tab', async () => {
+  it('keeps the shell when navigating to the friends page', async () => {
     useSessionStore().login('a-token')
-    mockFetchOnce({
-      identity_id: 'id-1',
-      identity_created_at: 'now',
-      display_name: 'Avalon Player',
-      avatar_url: null,
-      handle: 'Avalon Player#1234',
-    })
 
     const router = testRouter()
     router.push('/friends')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player'))
-    expect(wrapper.text()).toContain('Friends')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player#1234'))
+    expect(wrapper.text()).toContain('Add a friend')
+    expect(wrapper.find('nav[aria-label="Primary"]').exists()).toBe(true)
+  })
+
+  it('publishes an Online heartbeat so the player reads as online to friends', async () => {
+    useSessionStore().login('a-token')
+
+    const router = testRouter()
+    router.push('/profile')
+    await router.isReady()
+    const wrapper = mount(HubShell, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Online'))
+    const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls as [string, RequestInit][]
+    const presenceCall = calls.find(([url, init]) => url.endsWith('/me/presence') && init.method === 'PUT')
+    expect(presenceCall).toBeDefined()
   })
 })

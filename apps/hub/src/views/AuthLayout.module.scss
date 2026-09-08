@@ -1,0 +1,32 @@
+.layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--av-space-6);
+  padding: var(--av-space-6) var(--av-space-4);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-3);
+}
+
+.brandMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--av-radius-lg);
+  background: var(--av-color-primary-soft);
+  color: var(--av-color-primary-hover);
+}
+
+.brandName {
+  font-size: var(--av-text-lg);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+}

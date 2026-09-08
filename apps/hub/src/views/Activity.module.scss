@@ -1,28 +1,38 @@
 .feed {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0;
-  margin: 0;
-  list-style: none;
+  gap: var(--av-space-2);
 }
 
 .entry {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
-  border-radius: 8px;
-  background: #f5f5f5;
+  align-items: center;
+  gap: var(--av-space-3);
+  padding: var(--av-space-3);
+  border-radius: var(--av-radius-md);
+  background: var(--av-color-surface-raised);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--av-color-primary-soft);
+  color: var(--av-color-primary-hover);
 }
 
 .summary {
-  font-size: 0.9375rem;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--av-text-base);
 }
 
 .timestamp {
   flex-shrink: 0;
-  font-size: 0.8125rem;
-  color: #666;
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
 }

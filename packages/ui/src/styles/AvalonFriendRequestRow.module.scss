@@ -1,42 +1,56 @@
 .row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0;
+  gap: var(--av-space-3);
+  padding: var(--av-space-2) 0;
+  flex-wrap: wrap;
 }
 
 .name {
   flex: 1;
-  font-size: 0.9375rem;
+  min-width: 0;
+  font-size: var(--av-text-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .direction {
-  font-size: 0.8125rem;
-  color: #666;
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
 }
 
 .actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--av-space-2);
 }
 
 .accept {
   border: none;
-  border-radius: 6px;
-  padding: 0.25rem 0.625rem;
-  background: #5b4dff;
-  color: white;
+  border-radius: var(--av-radius-sm);
+  padding: var(--av-space-1) 0.625rem;
+  background: var(--av-color-primary);
+  color: var(--av-color-primary-text);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+
+  &:hover {
+    background: var(--av-color-primary-hover);
+  }
 }
 
 .remove {
   border: none;
+  border-radius: var(--av-radius-sm);
+  padding: var(--av-space-1) 0.625rem;
   background: transparent;
-  color: #d92d20;
+  color: var(--av-color-text-muted);
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--av-text-sm);
+
+  &:hover {
+    color: var(--av-color-danger);
+    background: var(--av-color-danger-soft);
+  }
 }
