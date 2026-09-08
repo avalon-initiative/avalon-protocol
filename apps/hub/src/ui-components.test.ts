@@ -9,7 +9,7 @@
 // test pipeline for three components.
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
-import { AvalonFriendRequestRow, AvalonFriendRow, AvalonPresenceBadge } from '@avalon/ui'
+import { AvalonFriendRequestRow, AvalonFriendRow, AvalonPresenceBadge, AvalonTabs } from '@avalon/ui'
 
 describe('AvalonPresenceBadge', () => {
   it.each(['Online', 'Away', 'Offline'] as const)('renders the %s status', (status) => {
@@ -82,3 +82,24 @@ describe('AvalonFriendRequestRow', () => {
     expect(wrapper.emitted('remove')).toHaveLength(1)
   })
 })
+
+describe('AvalonTabs', () => {
+  const tabs = [
+    { label: 'Profile', to: '/profile', active: true },
+    { label: 'Friends', to: '/friends', active: false },
+  ]
+
+  it('renders every tab label', () => {
+    const wrapper = mount(AvalonTabs, { props: { tabs } })
+    expect(wrapper.text()).toContain('Profile')
+    expect(wrapper.text()).toContain('Friends')
+  })
+
+  it('emits select with the clicked tab\'s `to` value', async () => {
+    const wrapper = mount(AvalonTabs, { props: { tabs } })
+    const buttons = wrapper.findAll('button')
+    await buttons[1].trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['/friends']])
+  })
+})
+

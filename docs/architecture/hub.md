@@ -87,12 +87,28 @@ is visibly marked.
 ## Today in the repo
 
 - `apps/hub/` — Vue 3 + Vite + TypeScript, routed with `vue-router`. Identity
-  creation (`CreateIdentity.vue`), login (`Login.vue`), a minimal profile
-  view (`Profile.vue`), and a friends view (`Friends.vue`, #18) are real,
-  wired against a live `avalon-server` — see [identity](./identity.md)'s
-  "Today in the repo" for the crypto/API layer underneath registration/login
-  (#55). All server traffic goes through `apps/hub/src/api/`; nothing calls
-  `fetch` directly outside it.
+  creation (`CreateIdentity.vue`) and login (`Login.vue`) are their own
+  pre-authenticated pages — see [identity](./identity.md)'s "Today in the
+  repo" for the crypto/API layer underneath registration/login (#55). All
+  server traffic goes through `apps/hub/src/api/`; nothing calls `fetch`
+  directly outside it.
+- **The logged-in Hub is a persistent shell with tabs, not separate pages
+  (issue #130).** `HubShell.vue` renders an always-visible identity header
+  (display name, identity id, log out) plus tab navigation
+  (`AvalonTabs`, `packages/ui`), with `<RouterView />` swapping tab
+  content in place. Tabs are real nested routes under a shared parent
+  (`/profile`, `/friends` as children of `HubShell.vue` in
+  `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable, not
+  client-side-only state; `requiresAuth` is set once on the parent route
+  and inherited by every child via `vue-router`'s meta-merging across
+  matched records. Today's two real tabs are Profile (`Profile.vue`, just
+  the display-name/avatar-url edit form now — the identity header/logout it
+  used to own moved to the shell) and Friends (`Friends.vue`, #18, trimmed
+  of the card wrapper and manual cross-navigation link the tab nav now
+  replaces). **Every future Hub UI ticket should add a new tab (a child
+  route + a `tabs` entry in `HubShell.vue`) instead of a new standalone
+  route** — this is what #24 (guild view + chat), #35 (achievements), #105
+  (DMs), and #121 (my activity) should build against.
 - `Friends.vue` (#18) polls `GET /friends` + `GET /friends/requests` +
   `GET /presence` every 60s (no server-configured interval is knowable
   client-side; a push subscription is #119, not built) and merges
@@ -110,7 +126,10 @@ is visibly marked.
   yet (#60).
 - `packages/ui/` — `@avalon/ui`: `AvalonButton`, `AvalonTextField`,
   `AvalonForm`, `AvalonAuthCard`, `AvalonPresenceBadge`, `AvalonFriendRow`,
-  `AvalonFriendRequestRow` in the `components/` / `styles/` / `stories/`
+  `AvalonFriendRequestRow`, `AvalonTabs` (#130 — takes a plain
+  `{ label, to, active }[]` and emits which one was picked; no route
+  awareness inside the component itself, same invariant as the rest of this
+  package) in the `components/` / `styles/` / `stories/`
   split. No `<style>` blocks in `.vue` files; styling lives in
   `.module.scss`. Has no test runner or working Storybook config of its own
   yet (pre-existing gaps, noted in #55's PR) — the three friends components
