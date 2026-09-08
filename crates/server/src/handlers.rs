@@ -111,11 +111,19 @@ pub async fn register_start(
         return Err(AppError::IdentityIdTaken);
     }
 
+    // WebAuthn's `user.name` (2nd param) is what password managers key off of
+    // for the credential's "username" — distinct from `user.displayName`
+    // (3rd param), the purely cosmetic label. Login here is identity-id-first
+    // (see this module's own docs above), so `user.name` must be the
+    // identity id itself, not the display name — passing the display name
+    // for both, as an earlier version of this did, made a password manager
+    // save the display name as the login credential, which is wrong: the
+    // display name is never enough to log in with.
     let (challenge, webauthn_state) = state
         .webauthn
         .start_passkey_registration(
             body.identity_id,
-            &body.display_name,
+            &body.identity_id.to_string(),
             &body.display_name,
             None,
         )

@@ -9,6 +9,7 @@ apps/*/dist/
 apps/*/node_modules/
 packages/*/node_modules/
 storybook-static/
+*.tsbuildinfo
 
 # Tauri
 apps/mobile-hub/src-tauri/target/

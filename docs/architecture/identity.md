@@ -108,6 +108,31 @@ migrating an existing username/password identity (none exist outside
 development, so not applicable yet), and whether identities can be
 transferred (Proposal §32).
 
+### Where the Ed25519 signing key lives in a browser (#55)
+
+The Hub generates the identity's Ed25519 signing keypair client-side during
+registration and stores the secret key in plain `localStorage`, keyed by
+identity id, unencrypted. This is a deliberate, explicitly-flagged
+milestone-1 stopgap, not a default to assume is final:
+
+- It never leaves the browser it was created in — no recovery if that
+  browser's storage is cleared, and no way to use the same identity from a
+  second device.
+- It sits in plaintext at rest, same exposure as any other `localStorage`
+  value (readable by any script running on the origin).
+
+The real design — a device-registration / linked-device grant model, not a
+hardware cold-storage key — is tracked as its own release-blocking decision:
+[#122](https://github.com/LunarVagabond/avalon-protocol/issues/122). That
+issue is distinct from #99: #99 is about recovering a *lost passkey* (the
+login credential); #122 is about custody and deliberate transfer of the
+*signing key* (what authenticates a player's authored events). The WebAuthn
+passkey itself has no equivalent client-storage decision to make here — it
+never leaves the platform authenticator/browser passkey store, which is
+already synced across a player's devices by whatever passkey provider they
+use (iCloud Keychain, Google Password Manager, etc.), independent of
+anything Avalon does.
+
 ## What identity is not
 
 - Not a universal game account. A game asks for scoped capabilities and gets
@@ -152,6 +177,14 @@ transferred (Proposal §32).
 - `crates/sdk/src/lib.rs` — `AvalonClient::authenticate()` exchanges a player
   token for a game-scoped `Session`, unchanged by any of this — a game never
   creates identities or logs a player in itself.
+- `apps/hub/src/crypto/webauthn.ts` — the real browser WebAuthn ceremonies via
+  `@simplewebauthn/browser`, verified field-for-field against
+  `crates/server/src/handlers.rs`'s request/response shapes (both follow the
+  same base64url/camelCase WebAuthn JSON convention, no adapter layer
+  needed). `apps/hub/src/crypto/signingKey.ts` — Ed25519 keygen/signing via
+  `@noble/curves`, storage per the section above. `apps/hub/src/api/identity.ts`
+  ties both together with the `/identities/register/*` and `/sessions/*` API
+  calls into `createIdentity()`/`login()`.
 
 ## Decisions and tickets
 
@@ -166,6 +199,11 @@ transferred (Proposal §32).
   identity path; the outbox pattern generalizes to every future emitter.
 - [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) — open
   decision: identity recovery when every passkey is lost.
+- [#55](https://github.com/LunarVagabond/avalon-protocol/issues/55) — Hub
+  identity creation/login UI: the real WebAuthn + Ed25519 flow, in-browser.
+- [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122) — open
+  decision, release blocker: Ed25519 signing-key custody and cross-device
+  transfer.
 - [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86) — profile
   updates still emit no event; classify promised-durable identity state.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:
