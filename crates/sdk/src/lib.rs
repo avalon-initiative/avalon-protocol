@@ -2,12 +2,13 @@
 //! or `avalon-chain` directly — see `docs/Proposal.md` §17 and
 //! `docs/architecture/sdk.md`.
 //!
-//! `authenticate()` is wired to a real `avalon-server` (GET /me). Everything
-//! capability-gated (achievements, guilds, ...) still stubs `NotImplemented`
-//! until those endpoints exist — see the epics for each. Friends/presence
-//! (issue #17) are the first capability-gated surface that's actually wired
-//! to a live endpoint rather than stubbed — see `social`.
+//! `authenticate()` is wired to a real `avalon-server` (GET /me). Achievements
+//! still stub `NotImplemented` until that epic's endpoints exist. Friends/
+//! presence (issue #17, see `social`) and guild membership/roster/channels/
+//! chat (issue #23, see `guilds`) are wired to live endpoints rather than
+//! stubbed.
 
+pub mod guilds;
 pub mod social;
 
 use avalon_protocol::achievements::AchievementAttestation;
