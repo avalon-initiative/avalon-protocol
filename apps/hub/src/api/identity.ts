@@ -5,6 +5,7 @@ import {
   bytesToBase64,
   generateAndStoreSigningKey,
   identityCreatedSigningBytes,
+  recoverAndStoreSigningKey,
   signWithKey,
 } from '../crypto/signingKey'
 import * as api from './client'
@@ -15,6 +16,11 @@ function newIdentityId(): string {
 
 export interface CreateIdentityResult {
   identityId: string
+  // The BIP39 recovery phrase (#134) the signing key was derived from —
+  // shown to the player exactly once, immediately after this call returns.
+  // Never stored anywhere; the caller's own state is the only copy once
+  // this function returns.
+  signingKeyMnemonic: string
 }
 
 export async function createIdentity(displayName: string): Promise<CreateIdentityResult> {
@@ -27,7 +33,7 @@ export async function createIdentity(displayName: string): Promise<CreateIdentit
 
   const webauthnCredential = await runRegistrationCeremony(challenge.publicKey)
 
-  const { publicKey, secretKey } = generateAndStoreSigningKey(identityId)
+  const { publicKey, secretKey, mnemonic } = generateAndStoreSigningKey(identityId)
   const signingBytes = identityCreatedSigningBytes(identityId, displayName)
   const signature = signWithKey(secretKey, signingBytes)
 
@@ -38,7 +44,16 @@ export async function createIdentity(displayName: string): Promise<CreateIdentit
     event_signature: bytesToBase64(signature),
   })
 
-  return { identityId: identity_id }
+  return { identityId: identity_id, signingKeyMnemonic: mnemonic }
+}
+
+// Re-derives and re-stores the signing key for an existing identity from a
+// previously saved recovery phrase (#134) — the "new device" / "cleared
+// storage" path. Does not touch WebAuthn/login at all: recovering the
+// signing key and logging in are unrelated (see crypto/signingKey.ts's
+// module docs and #99).
+export function recoverSigningKey(identityId: string, mnemonic: string): void {
+  recoverAndStoreSigningKey(identityId, mnemonic)
 }
 
 export interface LoginResult {

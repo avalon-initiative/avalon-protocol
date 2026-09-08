@@ -5,13 +5,34 @@
 // Storage: plain `localStorage`, unencrypted, keyed by identity id. This is a
 // deliberate milestone-1 stopgap, not a default anyone should assume is
 // final — see issue #122 for the actual planned design (a device-registration
-// / linked-device grant model, not a hardware key). Losing this key today
-// means the identity can never sign another event from this browser; nothing
-// currently depends on that beyond the one-time identity.created signature,
-// but that will stop being true as more event kinds require self-attribution.
+// / linked-device grant model, #135, is the *primary* path off this browser;
+// this module's mnemonic derivation, #134, is the disaster-recovery
+// fallback underneath it — #122 decided to build both, not either/or).
+//
+// Key derivation (#134): the secret key is never random on its own anymore —
+// it's deterministically derived from a BIP39 mnemonic phrase, the same
+// wordlist/entropy-encoding standard every crypto wallet already uses. Any
+// device that has the phrase can re-derive the exact same key entirely
+// offline, with no server round-trip: the server only ever sees the
+// resulting *public* key (identical to before this change), never the
+// phrase or the private key.
 import { ed25519 } from '@noble/curves/ed25519'
+import { sha256 } from '@noble/hashes/sha256'
+import { concatBytes } from '@noble/hashes/utils'
+import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
+import { wordlist } from '@scure/bip39/wordlists/english'
 
 const STORAGE_PREFIX = 'avalon:signingKey:'
+
+/// Domain-separation label for deriving a 32-byte Ed25519 seed out of
+/// BIP39's 64-byte PBKDF2 seed. Versioned explicitly (`v1`) rather than
+/// silently reusing raw BIP39 seed bytes: BIP39 seeds are normally fed into
+/// BIP32 HD derivation, which this repo doesn't use (there's exactly one
+/// signing key per identity, not a hierarchy) — hashing with a distinct
+/// label documents that this is Avalon's own derivation, not a
+/// BIP32-compatible one, and keeps the door open to a different scheme
+/// later under a `v2` label without breaking `v1`-derived keys.
+const DERIVATION_LABEL = new TextEncoder().encode('avalon:signing-key-seed:v1')
 
 export interface SigningKeyPair {
   secretKey: Uint8Array
@@ -39,11 +60,46 @@ function fromBase64(value: string): Uint8Array {
   return bytes
 }
 
-/** Generates a fresh Ed25519 keypair and persists the secret key for `identityId`. */
-export function generateAndStoreSigningKey(identityId: string): SigningKeyPair {
-  const { secretKey, publicKey } = ed25519.keygen()
+/** A newly generated keypair plus the mnemonic it was derived from, so the caller can show it once. */
+export interface GeneratedSigningKey extends SigningKeyPair {
+  mnemonic: string
+}
+
+/** Turns a BIP39 mnemonic into the same Ed25519 keypair every time — see `DERIVATION_LABEL` above. */
+export function deriveSigningKeyFromMnemonic(mnemonic: string): SigningKeyPair {
+  const bip39Seed = mnemonicToSeedSync(mnemonic)
+  const secretKey = sha256(concatBytes(bip39Seed, DERIVATION_LABEL))
+  return { secretKey, publicKey: ed25519.getPublicKey(secretKey) }
+}
+
+/**
+ * Generates a fresh BIP39 mnemonic, derives its Ed25519 keypair, and
+ * persists the secret key for `identityId` — same storage shape as before
+ * #134, just no longer random on its own. The mnemonic itself is never
+ * stored anywhere; it's returned once so the caller (`CreateIdentity.vue`)
+ * can show it to the player exactly once.
+ */
+export function generateAndStoreSigningKey(identityId: string): GeneratedSigningKey {
+  const mnemonic = generateMnemonic(wordlist)
+  const { secretKey, publicKey } = deriveSigningKeyFromMnemonic(mnemonic)
   localStorage.setItem(storageKey(identityId), toBase64(secretKey))
-  return { secretKey, publicKey }
+  return { secretKey, publicKey, mnemonic }
+}
+
+/**
+ * Recovers a signing key from a previously saved mnemonic and persists it
+ * for `identityId` — the "I'm on a new device" / "I cleared my browser
+ * storage" path. Throws if `mnemonic` isn't a valid BIP39 phrase, so the
+ * caller can show a real error instead of silently deriving nonsense from a
+ * typo.
+ */
+export function recoverAndStoreSigningKey(identityId: string, mnemonic: string): SigningKeyPair {
+  if (!validateMnemonic(mnemonic, wordlist)) {
+    throw new Error('That recovery phrase is not valid — check it for typos and try again.')
+  }
+  const keyPair = deriveSigningKeyFromMnemonic(mnemonic)
+  localStorage.setItem(storageKey(identityId), toBase64(keyPair.secretKey))
+  return keyPair
 }
 
 /** Reads back a previously stored secret key, if this browser has one for `identityId`. */
