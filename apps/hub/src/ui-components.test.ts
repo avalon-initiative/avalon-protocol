@@ -9,9 +9,15 @@ import {
   AvalonAvatar,
   AvalonBottomNav,
   AvalonCard,
+  AvalonChannelList,
+  AvalonChatComposer,
+  AvalonChatMessage,
   AvalonFriendRequestRow,
   AvalonFriendRow,
+  AvalonGuildCard,
+  AvalonGuildMemberRow,
   AvalonPresenceBadge,
+  AvalonRoleBadge,
   AvalonSidebarNav,
   AvalonUserChip,
 } from '@avalon/ui'
@@ -174,5 +180,158 @@ describe('AvalonUserChip', () => {
     const wrapper = mount(AvalonUserChip, { props: { name: 'Nova', detail: 'Nova#4821' } })
     expect(wrapper.text()).toContain('Nova')
     expect(wrapper.text()).toContain('Nova#4821')
+  })
+})
+
+describe('AvalonRoleBadge', () => {
+  it.each(['owner', 'officer', 'member'] as const)('renders the %s variant', (variant) => {
+    const wrapper = mount(AvalonRoleBadge, { props: { name: variant, variant } })
+    expect(wrapper.text()).toBe(variant)
+  })
+})
+
+describe('AvalonGuildCard', () => {
+  it('renders name, tag, and member count', () => {
+    const wrapper = mount(AvalonGuildCard, {
+      props: { name: 'Ashen Vanguard', tag: 'ASHV', memberCount: 3 },
+    })
+    expect(wrapper.text()).toContain('Ashen Vanguard')
+    expect(wrapper.text()).toContain('ASHV')
+    expect(wrapper.text()).toContain('3 members')
+  })
+
+  it('uses singular "member" for a count of 1', () => {
+    const wrapper = mount(AvalonGuildCard, { props: { name: 'Solo', tag: 'SOLO', memberCount: 1 } })
+    expect(wrapper.text()).toContain('1 member')
+    expect(wrapper.text()).not.toContain('1 members')
+  })
+
+  it('emits select when clicked', async () => {
+    const wrapper = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
+    await wrapper.trigger('click')
+    expect(wrapper.emitted('select')).toHaveLength(1)
+  })
+})
+
+describe('AvalonGuildMemberRow', () => {
+  const baseProps = { identityId: 'id-1', status: 'Online' as const, roleName: 'member' }
+
+  it('renders the role name and falls back to identity id for the display name', () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: baseProps })
+    expect(wrapper.text()).toContain('member')
+    expect(wrapper.text()).toContain('id-1')
+  })
+
+  it('shows no management buttons by default', () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: baseProps })
+    expect(wrapper.findAll('button')).toHaveLength(0)
+  })
+
+  it('shows only Change role when canChangeRole is set without canKick', () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, canChangeRole: true } })
+    expect(wrapper.text()).toContain('Change role')
+    expect(wrapper.text()).not.toContain('Kick')
+  })
+
+  it('shows only Kick when canKick is set without canChangeRole', () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, canKick: true } })
+    expect(wrapper.text()).not.toContain('Change role')
+    expect(wrapper.text()).toContain('Kick')
+  })
+
+  it('emits kick when the kick button is clicked', async () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, canKick: true } })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('kick')).toHaveLength(1)
+  })
+})
+
+describe('AvalonChannelList', () => {
+  const channels = [
+    { id: 'c1', name: 'general', archived: false },
+    { id: 'c2', name: 'old', archived: true },
+  ]
+
+  it('renders an empty message when there are no channels', () => {
+    const wrapper = mount(AvalonChannelList, { props: { channels: [] } })
+    expect(wrapper.text()).toContain('No channels yet.')
+  })
+
+  it('renders every channel name and marks archived ones', () => {
+    const wrapper = mount(AvalonChannelList, { props: { channels } })
+    expect(wrapper.text()).toContain('general')
+    expect(wrapper.text()).toContain('old')
+    expect(wrapper.text()).toContain('Archived')
+  })
+
+  it('emits select with the clicked channel id', async () => {
+    const wrapper = mount(AvalonChannelList, { props: { channels } })
+    await wrapper.findAll('button')[0].trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['c1']])
+  })
+
+  it('only shows the create-channel affordance when canManage is true', () => {
+    const withoutManage = mount(AvalonChannelList, { props: { channels } })
+    expect(withoutManage.text()).not.toContain('New channel')
+
+    const withManage = mount(AvalonChannelList, { props: { channels, canManage: true } })
+    expect(withManage.text()).toContain('New channel')
+  })
+})
+
+describe('AvalonChatMessage', () => {
+  it('renders the author id and body when no display name is given', () => {
+    const wrapper = mount(AvalonChatMessage, {
+      props: { authorId: 'id-1', body: 'hello guild', sentAtLabel: '8:00 PM' },
+    })
+    expect(wrapper.text()).toContain('id-1')
+    expect(wrapper.text()).toContain('hello guild')
+    expect(wrapper.text()).toContain('8:00 PM')
+  })
+
+  it('shows no delete button by default', () => {
+    const wrapper = mount(AvalonChatMessage, {
+      props: { authorId: 'id-1', body: 'hi', sentAtLabel: 't' },
+    })
+    expect(wrapper.find('button').exists()).toBe(false)
+  })
+
+  it('emits delete when canDelete is set and the button is clicked', async () => {
+    const wrapper = mount(AvalonChatMessage, {
+      props: { authorId: 'id-1', body: 'hi', sentAtLabel: 't', canDelete: true },
+    })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('delete')).toHaveLength(1)
+  })
+})
+
+describe('AvalonChatComposer', () => {
+  it('emits update:modelValue as the textarea is typed into', async () => {
+    const wrapper = mount(AvalonChatComposer, { props: { modelValue: '', maxChars: 4000 } })
+    await wrapper.find('textarea').setValue('hello')
+    expect(wrapper.emitted('update:modelValue')).toEqual([['hello']])
+  })
+
+  it('disables Send for an empty or whitespace-only body', () => {
+    const wrapper = mount(AvalonChatComposer, { props: { modelValue: '   ', maxChars: 4000 } })
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('disables Send once the body exceeds maxChars', () => {
+    const wrapper = mount(AvalonChatComposer, {
+      props: { modelValue: 'a'.repeat(11), maxChars: 10 },
+    })
+    expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('emits send when a valid body is submitted', async () => {
+    const wrapper = mount(AvalonChatComposer, { props: { modelValue: 'hello', maxChars: 4000 } })
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('send')).toHaveLength(1)
+  })
+
+  it('shows the character counter against maxChars', () => {
+    const wrapper = mount(AvalonChatComposer, { props: { modelValue: 'hello', maxChars: 4000 } })
+    expect(wrapper.text()).toContain('5 / 4000')
   })
 })

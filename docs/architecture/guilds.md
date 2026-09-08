@@ -222,7 +222,39 @@ with Game A becomes historical.
   read the roster and chat and post as the player — never as the game.
   Creating guilds, inviting, kicking, changing roles, and managing channels
   stay Hub-only, not exposed on the SDK. See `docs/architecture/sdk.md`.
-- Hub guild views (`apps/hub`, `apps/mobile-hub`, `packages/ui`) are scaffolding.
+- Hub guild views (issue #24) are real: `/guilds` (my guilds + create),
+  `/guilds/:id` (overview, roster grouped by role, roles, channels,
+  management actions), `/guilds/:id/channels/:cid` (chat) in `apps/hub`,
+  nested under the authenticated `HubShell` layout like every other page.
+  Six new `packages/ui` components (`AvalonGuildCard`,
+  `AvalonGuildMemberRow`, `AvalonRoleBadge`, `AvalonChannelList`,
+  `AvalonChatMessage`, `AvalonChatComposer`) follow the same props-in/
+  events-out, CSS-Modules pattern as the friends components from #18.
+  Presence on roster rows is merged client-side
+  (`apps/hub/src/api/guilds.ts::listMembersWithPresence`), same gap and
+  same fix as `GET /friends`. Every management action (rename/describe,
+  define roles, invite, kick, change role, transfer ownership, create/
+  archive channels, associate a game) is gated client-side on the caller's
+  own resolved permission list, but the server is the real authority — a
+  hidden-but-still-reachable action shows a plain error on a 403 rather
+  than crashing. `apps/mobile-hub` isn't wired to guilds yet (still #60).
+  **Correction (2026-09-08, issue #24):** building this surfaced that
+  `crates/server/src/channels.rs`'s `manage_channels` check was still
+  calling a leftover stub (always-empty permissions) from when #22 was
+  written concurrently with #21, rather than #21's real
+  `guild_members`/`guild_roles` lookup — fixed alongside landing #24 by
+  having `channels.rs` reuse `guilds::actor_role_permissions` directly
+  instead of its own duplicate. Two real gaps remain, not worked around
+  with a Hub-only endpoint: there is no endpoint that lists a player's own
+  pending guild invites — `POST /guilds/{id}/invites` returns an invite id,
+  but nothing resolves "invites addressed to me" the way
+  `GET /friends/requests` does for friend requests, so an invited player
+  has no way to discover or accept an invite through the Hub UI today; the
+  invite id has to be shared out of band. And no endpoint ever sets
+  `join_policy` to `"open"` (`CreateGuildRequest`/`UpdateGuildRequest`
+  don't take it), so every guild is `invite_only` in practice — the Hub's
+  "Join" button is wired for the day that changes but is currently dead
+  code by construction, not by a Hub-side restriction.
 
 ## Decisions and tickets
 

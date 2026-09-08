@@ -35,9 +35,9 @@ use sqlx::Row;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::channels::{actor_permissions, fetch_channel, guild_owner, require_member};
+use crate::channels::{fetch_channel, guild_owner, require_member};
 use crate::error::AppError;
-use crate::guilds::has_guild_permission;
+use crate::guilds::{actor_role_permissions as actor_permissions, has_guild_permission};
 use crate::handlers::authenticate;
 use crate::state::AppState;
 use avalon_protocol::guilds::GuildPermission;

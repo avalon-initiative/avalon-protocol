@@ -1,0 +1,58 @@
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--av-space-3);
+  padding: var(--av-space-2) 0;
+
+  &:hover .deleteButton {
+    opacity: 1;
+  }
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--av-space-2);
+}
+
+.author {
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+}
+
+.time {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+}
+
+.body {
+  font-size: var(--av-text-base);
+  color: var(--av-color-text);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.deleteButton {
+  border: none;
+  background: transparent;
+  color: var(--av-color-text-muted);
+  cursor: pointer;
+  font-size: var(--av-text-xs);
+  padding: var(--av-space-1) var(--av-space-2);
+  border-radius: var(--av-radius-sm);
+  opacity: 0;
+  flex-shrink: 0;
+
+  &:hover {
+    color: var(--av-color-danger);
+    background: var(--av-color-danger-soft);
+  }
+}

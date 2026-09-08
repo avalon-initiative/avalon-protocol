@@ -161,3 +161,111 @@ export interface PresenceResponse {
   playing: string | null
   updated_at: string
 }
+
+// Guild/roster/channel/message wire types (issue #24), matching
+// crates/server/src/guilds.rs, crates/server/src/channels.rs, and
+// crates/server/src/guild_messages.rs field-for-field.
+
+export interface GuildResponse {
+  id: string
+  name: string
+  tag: string
+  description: string
+  owner: string
+  created_at: string
+  member_count: number
+  games: string[]
+  // "invite_only" | "open" — no endpoint changes this after creation today
+  // (CreateGuildRequest doesn't take it, neither does UpdateGuildRequest),
+  // so every guild is "invite_only" in practice. See guilds.ts's own note.
+  join_policy: string
+}
+
+export interface CreateGuildRequest {
+  name: string
+  tag: string
+  description?: string
+}
+
+export interface UpdateGuildRequest {
+  name?: string
+  tag?: string
+  description?: string
+}
+
+export interface RoleResponse {
+  name_index: number
+  name: string
+  permissions: string[]
+}
+
+export interface CreateRoleRequest {
+  name: string
+  permissions?: string[]
+}
+
+export interface UpdateRoleRequest {
+  name?: string
+  permissions?: string[]
+}
+
+export interface TransferOwnershipRequest {
+  to: string
+}
+
+export interface GuildMemberResponse {
+  guild_id: string
+  identity_id: string
+  role_index: number
+  joined_at: string
+}
+
+export interface UpdateGuildMemberRequest {
+  role_index: number
+}
+
+export interface CreateGuildInviteRequest {
+  to: string
+}
+
+export interface GuildInviteResponse {
+  id: string
+  guild_id: string
+  to: string
+  from: string
+  created_at: string
+}
+
+export interface MyGuildMembershipResponse {
+  guild_id: string
+  role_index: number
+  joined_at: string
+}
+
+export interface ChannelResponse {
+  id: string
+  guild_id: string
+  name: string
+  archived: boolean
+  created_at: string
+}
+
+export interface CreateChannelRequest {
+  name: string
+}
+
+export interface UpdateChannelRequest {
+  name: string
+}
+
+export interface MessageResponse {
+  id: string
+  channel_id: string
+  author: string
+  body: string
+  sent_at: string
+}
+
+export interface SendMessageRequest {
+  body: string
+}

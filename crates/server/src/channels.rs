@@ -11,26 +11,14 @@
 //! module).
 //!
 //! **Membership.** Reading or managing channels requires the caller to
-//! currently be a member of the guild. Issue #21 (guild membership) is
-//! being built concurrently in a separate branch and is not yet on `main`
-//! — there is no real `guild_members` table in this worktree. The
-//! membership check below ([`is_guild_member`]) queries
-//! `guild_members (guild_id, identity_id, role_index, joined_at)`, the
-//! exact schema #21 is expected to produce (matching `GuildMember` in
-//! `crates/protocol/src/guilds.rs`), without creating that table in this
-//! module's own migration (`crates/server/db/migrations/0010_guild_channels`
-//! only owns `guild_channels`/`guild_messages`). Since this repo uses
-//! runtime-checked `sqlx::query` rather than `sqlx::query!`, this compiles
-//! today and will only actually run once both issues are merged together.
+//! currently be a member of the guild — [`is_guild_member`] queries the
+//! real `guild_members` table #21 built.
 //!
 //! `manage_channels` gates create/rename/archive, via
-//! `crate::guilds::has_guild_permission` — reused rather than duplicated,
-//! made `pub(crate)` for exactly this. Its `actor_permissions` argument is
-//! always empty until #21 lands real role assignment, same stub/rationale
-//! `guilds::actor_role_permissions` documents; duplicated locally as
-//! [`actor_permissions`] rather than widening that private function's
-//! visibility, to avoid touching `guilds.rs` any further while #21 is
-//! concurrently editing it.
+//! `crate::guilds::has_guild_permission` (made `pub(crate)` for exactly
+//! this) and `crate::guilds::actor_role_permissions` (imported here as
+//! `actor_permissions`, re-exported rather than duplicated, now that #21's
+//! real `guild_members`/`guild_roles` lookup exists on `main`).
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::guilds::GuildPermission;
@@ -44,7 +32,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::guilds::has_guild_permission;
+use crate::guilds::{actor_role_permissions as actor_permissions, has_guild_permission};
 use crate::handlers::authenticate;
 use crate::outbox;
 use crate::state::AppState;
@@ -57,17 +45,6 @@ fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
 
 fn channel_ref(channel_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("guild_channel", &channel_id.to_string(), "self", verb)
-}
-
-/// Every permission `actor` holds in `guild_id` today. Always empty — see
-/// module doc comment. Exists as the seam #21 will populate, mirroring
-/// `guilds::actor_role_permissions`.
-pub(crate) async fn actor_permissions(
-    _state: &AppState,
-    _guild_id: Uuid,
-    _actor: Uuid,
-) -> Result<Vec<String>, AppError> {
-    Ok(Vec::new())
 }
 
 pub(crate) async fn guild_owner(state: &AppState, guild_id: Uuid) -> Result<Uuid, AppError> {

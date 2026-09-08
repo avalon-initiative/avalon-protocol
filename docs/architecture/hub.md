@@ -112,8 +112,8 @@ is visibly marked.
   `packages/ui/src/styles/tokens.css` (+ `global.css`), imported once in
   `apps/hub/src/main.ts`; component styles reference tokens only. **A
   future Hub feature adds a child route plus a nav entry in
-  `HubShell.vue`** — this is what #24 (guild view + chat), #35
-  (achievements), and #105 (DMs) should build against.
+  `HubShell.vue`** — this is what #35 (achievements) and #105 (DMs) should
+  build against; #24 (guild view + chat) is now built this way.
 - `Home.vue` — the landing page after login: welcome header, Quick Actions
   (add a friend, set up this device, edit profile), Friends Online, and the
   six most recent entries from `GET /me/history` with a "View all" link to
@@ -167,6 +167,30 @@ is visibly marked.
   `formatActivityTimestamp`. An empty list (a fresh identity, only
   `identity.created` pending in the outbox) renders a sensible message
   rather than a blank page.
+- `Guilds.vue` / `Guild.vue` / `GuildChannel.vue` (#24) — `/guilds` (my
+  guilds via `GET /me/guilds` + a button-first create form),
+  `/guilds/:id` (overview, roster grouped by role, roles, channels,
+  management), `/guilds/:id/channels/:cid` (chat), all nested under
+  `HubShell` like every other page. Roster presence is merged client-side
+  in `apps/hub/src/api/guilds.ts::listMembersWithPresence` — `GET
+  /guilds/{id}/members` doesn't embed presence server-side either, the
+  same gap and the same fix as `Friends.vue`. No poll-vs-push split here:
+  everything guild-related (roster, roles, channels, membership) polls
+  every 5 minutes, matching #20/#21/#22's own design note that milestone 1
+  doesn't need a WebSocket for guild data; chat messages poll faster
+  (`useGuildChat.ts`, 15s) since a channel is closer to a live
+  conversation. Chat is newest-at-bottom with load-older-on-scroll via
+  #22's `before`/`limit` cursor; the composer enforces the server's
+  4000-character body cap (`MESSAGE_BODY_MAX_CHARS`) with a live counter.
+  Every management action is gated client-side on the caller's own
+  resolved permission list (owner is always authorized, structurally,
+  matching `crates/server/src/guilds.rs::has_guild_permission`) but the
+  server re-checks independently — a 403 on a still-reachable action shows
+  a plain error rather than crashing. See
+  [guilds](./guilds.md)'s "Today in the repo" for the two real gaps this
+  surfaced (the `manage_channels` permission stub, and no endpoint to list
+  a player's own pending guild invites) rather than working around them
+  with a Hub-only endpoint.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).
@@ -174,7 +198,9 @@ is visibly marked.
   `AvalonForm`, `AvalonAuthCard`, `AvalonPresenceBadge`, `AvalonFriendRow`,
   `AvalonFriendRequestRow`, `AvalonAvatar`, `AvalonCard`, `AvalonIcon` (a
   small inline-SVG set, no icon library), `AvalonSidebarNav`,
-  `AvalonBottomNav`, `AvalonUserChip` — all presentational (props in,
+  `AvalonBottomNav`, `AvalonUserChip`, `AvalonGuildCard`,
+  `AvalonGuildMemberRow`, `AvalonRoleBadge`, `AvalonChannelList`,
+  `AvalonChatMessage`, `AvalonChatComposer` (#24) — all presentational (props in,
   events out; the nav components take `{ label, to, icon, active, disabled }[]`
   and emit which entry was picked, never emitting for a disabled one) in
   the `components/` / `styles/` / `stories/` split, plus `styles/tokens.css`
@@ -189,7 +215,16 @@ is visibly marked.
   `POST /friends/requests/:id/accept`, `DELETE /friends/requests/:id`,
   `DELETE /friends/:id`, `GET /presence` — a real WebAuthn + Ed25519 flow
   for identity, not the plain-credential shape earlier drafts of this doc
-  set implied.
+  set implied. Since #24: `GET|POST /guilds`, `GET|PATCH /guilds/:id`,
+  `GET|POST /guilds/:id/roles`, `PATCH /guilds/:id/roles/:idx`,
+  `POST /guilds/:id/transfer-ownership`, `POST /guilds/:id/games/:game_id`,
+  `POST /guilds/:id/invites`, `POST /guilds/:id/invites/:invite_id/accept`
+  + `/decline`, `POST /guilds/:id/join` + `/leave`,
+  `GET /guilds/:id/members`, `PATCH|DELETE /guilds/:id/members/:identity_id`,
+  `GET /me/guilds`, `GET|POST /guilds/:id/channels`,
+  `PATCH /guilds/:id/channels/:cid`, `POST /guilds/:id/channels/:cid/archive`,
+  `GET|POST /guilds/:id/channels/:cid/messages`,
+  `DELETE /guilds/:id/channels/:cid/messages/:mid`.
 
 ## Decisions and tickets
 
