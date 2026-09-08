@@ -100,9 +100,32 @@ protocol and the domain model in `crates/protocol`; they never pull in
   game_credential_key_id })` and `authenticate(player_token)` wired to a real
   `avalon-server` (`GET /me`). `Session::require(capability)` is the per-method
   check; `achievements()` and `issue_achievement()` check it, then return
-  `NotImplemented`. `granted` is always empty until grants exist.
+  `NotImplemented`. `granted` is always empty until grants exist —
+  `Session::grant_for_testing(capability)` (`#[doc(hidden)]`) is a temporary
+  escape hatch so integration tests can exercise capability-gated methods
+  against a real server before the grant system (#26–#28) exists; delete it
+  once `authenticate()` can populate `granted` for real.
+- `crates/sdk/src/social.rs` (#17) — `Session::friends()` (`friends.read`),
+  `presence()` and `presence_of(&[IdentityId])` (`presence.read`), wired to
+  `GET /friends` and `GET /presence?ids=…` (#15/#16). `friends()` embeds each
+  friend's `Presence` only when `presence.read` is also granted, via one
+  batched `presence_of` call. `Friend.display_name` is always `None` today —
+  no endpoint resolves another identity's profile yet. `Session::update_presence(status)`
+  wraps `PUT /me/presence` (a player publishing their own status); it
+  deliberately isn't the game-authority `AvalonClient::publish_presence`
+  this issue originally described, since that needs a game-credential/binding
+  system (#26/#28/#83) that doesn't exist — see the module doc comment for
+  the full reasoning. `presence_of` applies no visibility filtering (#87).
+  Delivery is still poll-only from the game's side too; a push transport is
+  tracked separately in
+  [#119](https://github.com/LunarVagabond/avalon-protocol/issues/119).
 - `crates/sdk/tests/authenticate.rs` — live test (`make test-live`) covering a
   successful authenticate, an invalid token, and a capability being rejected.
+- `crates/sdk/tests/social.rs` — live tests (`make test-live`) covering
+  `friends()` returning a friendship created through the HTTP API,
+  `presence.read` gating whether presence is embedded in `friends()`, and
+  `update_presence`/`presence`/`presence_of` round-tripping through a real
+  server.
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — `AvalonClient.cs`, `Session.cs` skeleton; no
