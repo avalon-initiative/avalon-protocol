@@ -1,0 +1,42 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.name {
+  flex: 1;
+  font-size: 0.9375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.direction {
+  font-size: 0.8125rem;
+  color: #666;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.accept {
+  border: none;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  background: #5b4dff;
+  color: white;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+
+.remove {
+  border: none;
+  background: transparent;
+  color: #d92d20;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}

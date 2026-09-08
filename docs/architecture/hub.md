@@ -87,21 +87,43 @@ is visibly marked.
 ## Today in the repo
 
 - `apps/hub/` — Vue 3 + Vite + TypeScript, routed with `vue-router`. Identity
-  creation (`CreateIdentity.vue`), login (`Login.vue`), and a minimal
-  profile view (`Profile.vue`) are real, wired against a live `avalon-server`
-  — see [identity](./identity.md)'s "Today in the repo" for the crypto/API
-  layer underneath them (#55). All server traffic goes through
-  `apps/hub/src/api/`; nothing calls `fetch` directly outside it.
+  creation (`CreateIdentity.vue`), login (`Login.vue`), a minimal profile
+  view (`Profile.vue`), and a friends view (`Friends.vue`, #18) are real,
+  wired against a live `avalon-server` — see [identity](./identity.md)'s
+  "Today in the repo" for the crypto/API layer underneath registration/login
+  (#55). All server traffic goes through `apps/hub/src/api/`; nothing calls
+  `fetch` directly outside it.
+- `Friends.vue` (#18) polls `GET /friends` + `GET /friends/requests` +
+  `GET /presence` every 60s (no server-configured interval is knowable
+  client-side; a push subscription is #119, not built) and merges
+  friendship + presence client-side in `apps/hub/src/api/friends.ts` —
+  `GET /friends` does not embed presence server-side (see
+  [social-graph](./social-graph.md)/[presence](./presence.md)), the same
+  merge the Rust SDK's `Session::friends()` does (#17), ported to
+  TypeScript since the Hub doesn't consume the Rust SDK directly. Two scope
+  cuts, documented not silent: "Add friend" takes an identity id only (no
+  endpoint resolves a display name to an id yet), and there is no "Playing
+  &lt;game&gt;" label (no game registry exists, `Presence.playing` is
+  always `null` in practice today).
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).
 - `packages/ui/` — `@avalon/ui`: `AvalonButton`, `AvalonTextField`,
-  `AvalonForm`, `AvalonAuthCard` in the `components/` / `styles/` / `stories/`
-  split. No `<style>` blocks in `.vue` files; styling lives in `.module.scss`.
+  `AvalonForm`, `AvalonAuthCard`, `AvalonPresenceBadge`, `AvalonFriendRow`,
+  `AvalonFriendRequestRow` in the `components/` / `styles/` / `stories/`
+  split. No `<style>` blocks in `.vue` files; styling lives in
+  `.module.scss`. Has no test runner or working Storybook config of its own
+  yet (pre-existing gaps, noted in #55's PR) — the three friends components
+  are instead tested from `apps/hub/src/ui-components.test.ts`, which
+  already has a working vitest setup and consumes them the same way the app
+  does.
 - The server surface the Hub calls today: `POST /identities/register/start`
-  + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me` — a real
-  WebAuthn + Ed25519 flow, not the plain-credential shape earlier drafts of
-  this doc set implied.
+  + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me`,
+  `GET /friends`, `GET|POST /friends/requests`,
+  `POST /friends/requests/:id/accept`, `DELETE /friends/requests/:id`,
+  `DELETE /friends/:id`, `GET /presence` — a real WebAuthn + Ed25519 flow
+  for identity, not the plain-credential shape earlier drafts of this doc
+  set implied.
 - `npm install` at the repo root has been run and verified in this
   environment.
 

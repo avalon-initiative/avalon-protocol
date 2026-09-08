@@ -59,6 +59,7 @@ async function onLogout() {
       <AvalonTextField v-model="displayName" label="Display name" />
       <AvalonTextField v-model="avatarUrl" label="Avatar URL" placeholder="https://…" />
     </AvalonForm>
+    <RouterLink to="/friends">Friends</RouterLink>
     <AvalonButton label="Log out" variant="secondary" @click="onLogout" />
   </AvalonAuthCard>
 </template>
