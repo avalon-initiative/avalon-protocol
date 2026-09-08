@@ -190,7 +190,10 @@ provider the player uses.
 - `crates/server/src/devices.rs` (#135) — `POST /me/devices/grants`,
   `GET /me/devices/grants[?status=]`, `GET /me/devices/grants/:id`,
   `POST /me/devices/grants/:id/approve`, `GET /me/devices`,
-  `POST /me/devices/:id/revoke`.
+  `PATCH /me/devices/:id` (rename, #145), `POST /me/devices/:id/revoke`.
+  The first device's `identity_signing_keys` row is labeled at
+  registration too (`register_finish`'s optional `device_label`, #145) —
+  previously only devices added through a grant carried a label.
 - `crates/cli/src/main.rs` — `avalon create-identity` drives a real WebAuthn
   registration via a virtual authenticator (`passkey-authenticator`'s
   `testable` feature) and prints the loss-of-everything warning #99 calls
@@ -211,9 +214,13 @@ provider the player uses.
   the section above, storage unchanged. `apps/hub/src/api/identity.ts` ties
   it together with the `/identities/register/*` and `/sessions/*` API calls
   into `createIdentity()`/`login()`/`recoverSigningKey()`.
-  `CreateIdentity.vue` shows the mnemonic once, right after the identity id;
-  `Profile.vue` has the recovery form, shown only when the current device
-  has no signing key stored for the logged-in identity.
+  `CreateIdentity.vue` shows the mnemonic once, right after the identity id,
+  and asks for an optional device label (#145) passed through to
+  `register_finish`. `Profile.vue` has the recovery form and the #135
+  grant-request form, shown only when the current device has no signing key
+  stored for the logged-in identity; once it does, "Your devices" lists
+  every registered device with rename and revoke, and explains how to add
+  another one (#145).
 
 ## Decisions and tickets
 

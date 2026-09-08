@@ -23,7 +23,10 @@ export interface CreateIdentityResult {
   signingKeyMnemonic: string
 }
 
-export async function createIdentity(displayName: string): Promise<CreateIdentityResult> {
+export async function createIdentity(
+  displayName: string,
+  deviceLabel: string | null,
+): Promise<CreateIdentityResult> {
   const identityId = newIdentityId()
 
   const { ticket_id, challenge } = await api.registerStart({
@@ -42,6 +45,7 @@ export async function createIdentity(displayName: string): Promise<CreateIdentit
     webauthn_credential: webauthnCredential,
     event_signing_public_key: bytesToBase64(publicKey),
     event_signature: bytesToBase64(signature),
+    device_label: deviceLabel,
   })
 
   return { identityId: identity_id, signingKeyMnemonic: mnemonic }

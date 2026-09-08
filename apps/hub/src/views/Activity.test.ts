@@ -39,7 +39,23 @@ describe('Activity', () => {
     ])
 
     const wrapper = mount(Activity)
-    await vi.waitFor(() => expect(wrapper.text()).toContain('identity.created'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('You created your identity.'))
+  })
+
+  it('falls back to the raw kind for an event this build does not recognize', async () => {
+    useSessionStore().login('a-token')
+    mockFetchOnce([
+      {
+        event_id: 'evt-2',
+        kind: 'some.future.kind',
+        subject: 'identity:id-1:self:test',
+        payload: {},
+        timestamp: '2026-09-08T00:00:00Z',
+      },
+    ])
+
+    const wrapper = mount(Activity)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('some.future.kind'))
   })
 
   it('renders sensibly for a fresh identity with no history yet', async () => {

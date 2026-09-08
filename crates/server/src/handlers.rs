@@ -203,6 +203,12 @@ pub struct RegisterFinishRequest {
     /// Base64-encoded Ed25519 signature over
     /// `identity_created_signing_bytes(identity_id, display_name)`.
     pub event_signature: String,
+    /// A player-chosen label for the device completing this ceremony (e.g.
+    /// "Work laptop") — purely descriptive, never part of what's signed.
+    /// Issue #145: previously the first device's `identity_signing_keys`
+    /// row was always unlabeled, unlike every device added later through
+    /// #135's grant flow (which does carry a label).
+    pub device_label: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -308,11 +314,14 @@ pub async fn register_finish(
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query("INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2)")
-        .bind(ceremony.identity_id)
-        .bind(&public_key_bytes)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3)",
+    )
+    .bind(ceremony.identity_id)
+    .bind(&public_key_bytes)
+    .bind(&body.device_label)
+    .execute(&mut *tx)
+    .await?;
 
     outbox::enqueue(&mut tx, &event).await?;
 
