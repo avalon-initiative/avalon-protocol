@@ -12,7 +12,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	migrate migrate-down db-reset \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
-	inspect-ledger inspect-ledger-full create-identity outbox-status \
+	inspect-ledger inspect-ledger-full create-identity login outbox-status \
 	check-all clean-all
 
 help:
@@ -52,6 +52,7 @@ help:
 	@echo "  make inspect-ledger        pretty-print the hash-chained ledger (avalon-cli)"
 	@echo "  make inspect-ledger-full   same, plus each entry's actual payload"
 	@echo "  make create-identity  register a new self-custodied (passkey) identity via avalon-cli"
+	@echo "  make login IDENTITY_ID=<uuid>  log in an identity create-identity saved locally, print a session token"
 	@echo "  make outbox-status    pending/oldest-pending count for the settlement outbox (issue #71)"
 	@echo ""
 	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test"
@@ -180,6 +181,9 @@ inspect-ledger-full:
 
 create-identity:
 	cargo run -p avalon-cli -- create-identity
+
+login:
+	cargo run -p avalon-cli -- login $(IDENTITY_ID)
 
 outbox-status:
 	cargo run -p avalon-cli -- outbox-status
