@@ -514,6 +514,58 @@ pub async fn me(
     Ok(Json(profile_row_to_response(identity_id, &row)?))
 }
 
+/// One event from the caller's own protocol history (issue #121) — "what
+/// does the network know about me." `subject` is included since not every
+/// event an identity issues is *about* itself the same way (e.g.
+/// `friend.requested` is issued by the requester but its subject is the
+/// recipient); `payload` is passed through as-is rather than reduced to a
+/// canned summary string, matching this repo's general preference for
+/// exposing real data over a lossy client-unfriendly-format-agnostic gloss.
+#[derive(Serialize)]
+pub struct HistoryEntryResponse {
+    pub event_id: Uuid,
+    pub kind: String,
+    pub subject: String,
+    pub payload: serde_json::Value,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
+}
+
+/// Only the caller's own events, never another identity's — enforced by
+/// construction, not by a filter a caller could omit: the issuer prefix is
+/// always built from the authenticated identity id here, never accepted as
+/// a request parameter. Reads the ledger directly (issuer-filtered, see
+/// `avalon_chain::PostgresSettlementProvider::list_entries_for_issuer_prefix`)
+/// rather than through the indexer — the indexer (`crates/indexer`) is still
+/// scaffolding, not a real projection store yet, so a ledger read is the
+/// only real read path that exists today. Revisit once #42/#43 land; see
+/// docs/architecture/query-and-indexing.md.
+pub async fn my_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<HistoryEntryResponse>>, AppError> {
+    let identity_id = authenticate(&state, &headers).await?;
+    let issuer_prefix = format!("identity:{identity_id}:self:");
+
+    let entries = state
+        .chain
+        .list_entries_for_issuer_prefix(&issuer_prefix)
+        .await?;
+
+    Ok(Json(
+        entries
+            .into_iter()
+            .map(|e| HistoryEntryResponse {
+                event_id: e.event_id,
+                kind: e.kind,
+                subject: e.subject,
+                payload: e.payload,
+                timestamp: e.event_timestamp,
+            })
+            .collect(),
+    ))
+}
+
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,

@@ -58,6 +58,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/start", post(handlers::session_start))
         .route("/sessions/finish", post(handlers::session_finish))
         .route("/me", get(handlers::me).patch(handlers::update_profile))
+        .route("/me/history", get(handlers::my_history))
         .route("/me/presence", put(presence::update_my_presence))
         .route("/presence", get(presence::get_presence))
         .route(

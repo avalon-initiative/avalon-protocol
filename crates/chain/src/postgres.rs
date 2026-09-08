@@ -218,6 +218,61 @@ impl PostgresSettlementProvider {
         }
         Ok(entries)
     }
+
+    /// Every entry issued by `issuer_prefix` (a `GlobalId` prefix, e.g.
+    /// `identity:<id>:self:` — every verb an identity signs itself under
+    /// shares that prefix, see `crates/server/src/friends.rs`'s
+    /// `identity_ref`), newest first — the read path behind issue #121's
+    /// "my activity" view.
+    ///
+    /// Deliberately a narrower, unverified read than [`Self::list_entries`]:
+    /// no hash/chain-link recomputation, since that's only meaningful
+    /// against the *full*, sequential ledger — a per-issuer slice is a
+    /// convenience projection for a player looking at their own history,
+    /// not a tamper-evidence check. `issuer_prefix` is caller-controlled
+    /// but always server-constructed from an authenticated identity id, not
+    /// arbitrary user input — see `handlers::my_history`.
+    pub async fn list_entries_for_issuer_prefix(
+        &self,
+        issuer_prefix: &str,
+    ) -> Result<Vec<IssuerHistoryEntry>, SettlementError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT event_id, kind, subject, payload, event_timestamp
+            FROM ledger_entries
+            WHERE issuer LIKE $1
+            ORDER BY seq DESC
+            "#,
+        )
+        .bind(format!("{issuer_prefix}%"))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            entries.push(IssuerHistoryEntry {
+                event_id: row.try_get("event_id").map_err(get)?,
+                kind: row.try_get("kind").map_err(get)?,
+                subject: row.try_get("subject").map_err(get)?,
+                payload: row.try_get("payload").map_err(get)?,
+                event_timestamp: row.try_get("event_timestamp").map_err(get)?,
+            });
+        }
+        Ok(entries)
+    }
+}
+
+/// One event from a single issuer's own history (issue #121) — a plain
+/// projection, not a verified ledger entry; see
+/// [`PostgresSettlementProvider::list_entries_for_issuer_prefix`].
+pub struct IssuerHistoryEntry {
+    pub event_id: Uuid,
+    pub kind: String,
+    pub subject: String,
+    pub payload: serde_json::Value,
+    pub event_timestamp: time::OffsetDateTime,
 }
 
 /// One ledger entry plus whether it's actually intact — computed by

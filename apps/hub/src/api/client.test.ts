@@ -3,6 +3,7 @@ import {
   createFriendRequest,
   declineOrWithdrawFriendRequest,
   getMe,
+  getMyHistory,
   getPresence,
   listFriends,
   registerStart,
@@ -63,6 +64,16 @@ describe('api client', () => {
 
     const [, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(options.headers.Authorization).toBeUndefined()
+  })
+
+  it('fetches the caller\'s own event history from GET /me/history', async () => {
+    mockFetchOnce(200, [{ event_id: 'evt-1', kind: 'identity.created' }])
+
+    await getMyHistory('the-token')
+
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me/history')
+    expect(options.headers.Authorization).toBe('Bearer the-token')
   })
 
   it('percent-encodes the handle so "#" survives as a path segment', async () => {
