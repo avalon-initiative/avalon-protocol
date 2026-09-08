@@ -167,16 +167,19 @@ the record — [`./revocation.md`](./revocation.md).
 ## Today in the repo
 
 - Types: `crates/protocol/src/events.rs` as shown above.
-- Exactly one emitter: `register_finish` in `crates/server/src/handlers.rs`
-  writes `identity.created` with `issuer = identity:<id>:self:created` — the
+- `crates/server/src/handlers.rs` writes two kinds. `register_finish`
+  emits `identity.created` with `issuer = identity:<id>:self:created` — the
   identity's own Ed25519 event-signing key signs it, verified independently
-  of the WebAuthn ceremony that authenticated the registration request — and
-  a payload containing only `identity_id`. No `username` field exists
-  anywhere anymore (#73, done). Enqueued into `protocol_outbox`
-  (`crates/server/src/outbox.rs`) in the same transaction as the identity/
-  profile/key rows, closing #71 for this path.
-- `profile.updated` does not exist yet — `update_profile` writes Postgres only
-  ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)).
+  of the WebAuthn ceremony that authenticated the registration request — with
+  a payload of `identity_id`, the initial `display_name`, and the handle
+  `discriminator` (no `username` field exists anywhere; #73). `update_profile`
+  emits `profile.updated` (#86) whenever `display_name` or `avatar_url`
+  actually changes, with a payload of only the changed fields (plus the
+  discriminator on a rename, since a rebuild has to reproduce the handle);
+  a no-op request emits nothing. Network-attributed, not identity-signed —
+  the same milestone-1 stand-in the social-graph events use. Both are
+  enqueued into `protocol_outbox` (`crates/server/src/outbox.rs`) in the
+  same transaction as the row they describe.
 - A second emitter: `crates/server/src/friends.rs` writes `friend.requested`,
   `friend.accepted`, and `friend.removed`, each enqueued into
   `protocol_outbox` in the same transaction as the `friendships`/

@@ -61,9 +61,13 @@ answer for the current code is: partly, and not yet provably.
 
 ## What breaks today
 
-- **Profile updates emit no event.** `update_profile` writes the `profiles`
-  table only, so a display name or avatar set after registration is
-  unrecoverable — [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86).
+- ~~Profile updates emit no event.~~ Fixed
+  ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)):
+  `update_profile` emits `profile.updated` through the outbox in the same
+  transaction as the `profiles` row, and `identity.created` carries the
+  initial display name and handle discriminator, so `profiles` is fully
+  reconstructable from history. The rebuild test that proves it is still
+  [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43).
 - ~~Identity creation is not atomic with its ledger entry.~~ Fixed
   ([#71](https://github.com/LunarVagabond/avalon-protocol/issues/71)):
   `register_finish` inserts the `identity.created` event into
@@ -98,7 +102,7 @@ answer for the current code is: partly, and not yet provably.
 ## Decisions and tickets
 
 - #75 durable history is canonical
-- #43 rebuild proof; #86 profile events
+- #43 rebuild proof (the `profiles` replay that #86's events now make possible)
 - #71 atomic commit — done for the identity path via the outbox pattern
 - #40 export / mirror format;
   [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) the event
