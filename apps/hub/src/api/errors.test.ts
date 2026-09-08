@@ -11,4 +11,16 @@ describe('messageForStatus', () => {
   ])('maps %i to a player-facing message, never raw server text', (status, expected) => {
     expect(messageForStatus(status)).toBe(expected)
   })
+
+  it('uses the server-provided message for a 400 that is not the ceremony-expiry case', () => {
+    expect(
+      messageForStatus(400, 'avatar_url must be an http(s) URL of 2048 characters or fewer'),
+    ).toBe('avatar_url must be an http(s) URL of 2048 characters or fewer')
+  })
+
+  it('falls back to the generic 400 message when no server message is given', () => {
+    expect(messageForStatus(400, undefined)).toBe(
+      'That request has expired or was already used — please try again.',
+    )
+  })
 })

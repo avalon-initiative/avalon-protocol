@@ -39,7 +39,22 @@ async function request<T>(
   })
 
   if (!response.ok) {
-    throw new AvalonApiError(response.status, messageForStatus(response.status))
+    // avalon-server's `{ "error": "..." }` body is already written to be
+    // safe to show a player (crates/server/src/error.rs's own convention —
+    // every variant except a raw database/ledger failure gets real,
+    // specific text) — read it when present so a 400 that isn't the
+    // ceremony-expiry case messageForStatus was originally written for
+    // (e.g. an invalid avatar_url) doesn't show a misleading fallback.
+    let serverMessage: string | undefined
+    try {
+      const body: unknown = await response.json()
+      if (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string') {
+        serverMessage = (body as { error: string }).error
+      }
+    } catch {
+      // Body wasn't JSON (or was empty) — fall back to the generic mapping.
+    }
+    throw new AvalonApiError(response.status, messageForStatus(response.status, serverMessage))
   }
 
   // Some endpoints (e.g. the friend-request DELETE/decline routes) are

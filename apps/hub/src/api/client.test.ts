@@ -10,6 +10,7 @@ import {
   registerStart,
   removeFriend,
   resolveHandle,
+  updateProfile,
 } from './client'
 import { AvalonApiError } from './errors'
 
@@ -181,6 +182,18 @@ describe('api client', () => {
     await expect(declineOrWithdrawFriendRequest('token', 'r1')).rejects.toMatchObject({
       status: 404,
       message: "That's no longer there — it may have already been handled.",
+    } satisfies Partial<AvalonApiError>)
+  })
+
+  it('surfaces the server\'s own message for an invalid avatar_url', async () => {
+    mockFetchOnce(400, {
+      error: 'avatar_url must be an http(s) URL of 2048 characters or fewer',
+    })
+    await expect(
+      updateProfile('token', { avatar_url: 'javascript:alert(1)' }),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'avatar_url must be an http(s) URL of 2048 characters or fewer',
     } satisfies Partial<AvalonApiError>)
   })
 })
