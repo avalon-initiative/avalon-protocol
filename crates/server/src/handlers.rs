@@ -73,6 +73,36 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
     format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
 }
 
+/// Generates a 4-digit discriminator making `(display_name, discriminator)`
+/// unique — the pair is what a friend handle (issue #128) actually is, e.g.
+/// `alice#4821`. Retries on collision rather than failing immediately: with
+/// ~10000 possible values per display name, a handful of retries only ever
+/// matters once a single name is genuinely crowded.
+async fn generate_unique_discriminator(
+    state: &AppState,
+    display_name: &str,
+) -> Result<String, AppError> {
+    use rand::Rng;
+    const MAX_ATTEMPTS: u32 = 20;
+    for _ in 0..MAX_ATTEMPTS {
+        // `thread_rng()` is `!Send` and must not live across an `.await` —
+        // dropping it within this statement (rather than binding it once
+        // outside the loop) keeps this function's future `Send`, which
+        // axum's `Handler` bound requires of every route it's awaited from.
+        let candidate = format!("{:04}", rand::thread_rng().gen_range(0..10000));
+        let taken =
+            sqlx::query("SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2")
+                .bind(display_name)
+                .bind(&candidate)
+                .fetch_optional(&state.pool)
+                .await?;
+        if taken.is_none() {
+            return Ok(candidate);
+        }
+    }
+    Err(AppError::HandleGenerationFailed)
+}
+
 /// Ceremony state persisted between `register/start` and `register/finish`
 /// — bundles webauthn-rs's own `PasskeyRegistration` state with the
 /// identity id/display name the client already committed to at `start`, so
@@ -248,11 +278,15 @@ pub async fn register_finish(
     }
     insert_identity?;
 
-    sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
-        .bind(ceremony.identity_id)
-        .bind(&ceremony.display_name)
-        .execute(&mut *tx)
-        .await?;
+    let discriminator = generate_unique_discriminator(&state, &ceremony.display_name).await?;
+    sqlx::query(
+        "INSERT INTO profiles (identity_id, display_name, discriminator) VALUES ($1, $2, $3)",
+    )
+    .bind(ceremony.identity_id)
+    .bind(&ceremony.display_name)
+    .bind(&discriminator)
+    .execute(&mut *tx)
+    .await?;
 
     sqlx::query(
         "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) VALUES ($1, $2, $3)",
@@ -437,6 +471,26 @@ pub struct ProfileResponse {
     pub identity_created_at: OffsetDateTime,
     pub display_name: String,
     pub avatar_url: Option<String>,
+    /// `display_name#discriminator` — the short handle issue #128 added for
+    /// adding friends without pasting a raw identity id. Derived, not
+    /// stored: always computed from the two columns so it can never drift
+    /// out of sync with a display-name change.
+    pub handle: String,
+}
+
+fn profile_row_to_response(
+    identity_id: Uuid,
+    row: &sqlx::postgres::PgRow,
+) -> Result<ProfileResponse, AppError> {
+    let display_name: String = row.try_get("display_name")?;
+    let discriminator: String = row.try_get("discriminator")?;
+    Ok(ProfileResponse {
+        identity_id,
+        identity_created_at: row.try_get("created_at")?,
+        handle: format!("{display_name}#{discriminator}"),
+        display_name,
+        avatar_url: row.try_get("avatar_url")?,
+    })
 }
 
 pub async fn me(
@@ -447,7 +501,7 @@ pub async fn me(
 
     let row = sqlx::query(
         r#"
-        SELECT p.display_name, p.avatar_url, i.created_at
+        SELECT p.display_name, p.discriminator, p.avatar_url, i.created_at
         FROM profiles p
         JOIN identities i ON i.id = p.identity_id
         WHERE p.identity_id = $1
@@ -457,18 +511,46 @@ pub async fn me(
     .fetch_one(&state.pool)
     .await?;
 
-    Ok(Json(ProfileResponse {
-        identity_id,
-        identity_created_at: row.try_get("created_at")?,
-        display_name: row.try_get("display_name")?,
-        avatar_url: row.try_get("avatar_url")?,
-    }))
+    Ok(Json(profile_row_to_response(identity_id, &row)?))
 }
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
+}
+
+/// A display-name change can collide with someone else's existing handle
+/// (same name, same discriminator) — the discriminator itself never changes
+/// on its own, but if the *new* name collides under it, a fresh one has to
+/// be picked so `(display_name, discriminator)` stays unique. No collision
+/// (the common case) keeps the identity's existing discriminator, so a
+/// player's handle doesn't churn just because they tweaked their name.
+async fn discriminator_for_rename(
+    state: &AppState,
+    identity_id: Uuid,
+    new_display_name: &str,
+) -> Result<String, AppError> {
+    let row = sqlx::query("SELECT discriminator FROM profiles WHERE identity_id = $1")
+        .bind(identity_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let current: String = row.try_get("discriminator")?;
+
+    let taken = sqlx::query(
+        "SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2 AND identity_id <> $3",
+    )
+    .bind(new_display_name)
+    .bind(&current)
+    .bind(identity_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if taken.is_none() {
+        Ok(current)
+    } else {
+        generate_unique_discriminator(state, new_display_name).await
+    }
 }
 
 pub async fn update_profile(
@@ -478,26 +560,28 @@ pub async fn update_profile(
 ) -> Result<Json<ProfileResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
+    let discriminator = match &body.display_name {
+        Some(new_name) => Some(discriminator_for_rename(&state, identity_id, new_name).await?),
+        None => None,
+    };
+
     let row = sqlx::query(
         r#"
         UPDATE profiles p
         SET display_name = COALESCE($2, p.display_name),
-            avatar_url = COALESCE($3, p.avatar_url)
+            avatar_url = COALESCE($3, p.avatar_url),
+            discriminator = COALESCE($4, p.discriminator)
         FROM identities i
         WHERE p.identity_id = $1 AND i.id = p.identity_id
-        RETURNING p.display_name, p.avatar_url, i.created_at
+        RETURNING p.display_name, p.discriminator, p.avatar_url, i.created_at
         "#,
     )
     .bind(identity_id)
     .bind(body.display_name)
     .bind(body.avatar_url)
+    .bind(discriminator)
     .fetch_one(&state.pool)
     .await?;
 
-    Ok(Json(ProfileResponse {
-        identity_id,
-        identity_created_at: row.try_get("created_at")?,
-        display_name: row.try_get("display_name")?,
-        avatar_url: row.try_get("avatar_url")?,
-    }))
+    Ok(Json(profile_row_to_response(identity_id, &row)?))
 }

@@ -107,6 +107,75 @@ async fn request_then_accept_creates_exactly_one_friendship() {
 
 #[tokio::test]
 #[ignore]
+async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_request() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (bob_id, alice_token) = {
+        let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+        let (bob_id, _bob_token) = seed_identity_session(&pool).await;
+        (bob_id, alice_token)
+    };
+
+    use sqlx::Row;
+    let bob_handle: String = sqlx::query(
+        "SELECT display_name || '#' || discriminator AS handle FROM profiles WHERE identity_id = $1",
+    )
+    .bind(bob_id)
+    .fetch_one(&pool)
+    .await
+    .expect("failed to read bob's seeded handle")
+    .try_get("handle")
+    .unwrap();
+
+    // Only '#' needs escaping here — display names/discriminators in this
+    // test are plain alphanumeric, so a manual replace is enough without
+    // pulling in a URL-encoding crate just for this one test.
+    let resolved = auth(
+        http.get(format!(
+            "{base}/friends/handle/{}",
+            bob_handle.replace('#', "%23")
+        )),
+        &alice_token,
+    )
+    .send()
+    .await
+    .expect("resolve handle request failed — is `make start` running?");
+    assert!(resolved.status().is_success(), "{:?}", resolved.status());
+    let resolved_body: serde_json::Value = resolved.json().await.unwrap();
+    assert_eq!(
+        resolved_body["identity_id"].as_str().unwrap(),
+        bob_id.to_string()
+    );
+
+    let create = auth(http.post(format!("{base}/friends/requests")), &alice_token)
+        .json(&serde_json::json!({ "to": resolved_body["identity_id"] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(create.status().is_success(), "{:?}", create.status());
+}
+
+#[tokio::test]
+#[ignore]
+async fn resolving_an_unknown_handle_returns_not_found() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_id, token) = seed_identity_session(&pool).await;
+
+    let resolved = auth(
+        http.get(format!("{base}/friends/handle/nobody-here%230000")),
+        &token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(resolved.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore]
 async fn declining_a_request_leaves_no_friendship() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();

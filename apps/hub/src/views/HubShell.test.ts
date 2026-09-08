@@ -53,6 +53,7 @@ describe('HubShell', () => {
       identity_created_at: 'now',
       display_name: 'Avalon Player',
       avatar_url: null,
+      handle: 'Avalon Player#1234',
     })
 
     const router = testRouter()
@@ -61,6 +62,7 @@ describe('HubShell', () => {
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player'))
     expect(wrapper.text()).toContain('id-1')
+    expect(wrapper.text()).toContain('Avalon Player#1234')
     expect(wrapper.text()).toContain('Log out')
   })
 
@@ -71,6 +73,7 @@ describe('HubShell', () => {
       identity_created_at: 'now',
       display_name: 'Avalon Player',
       avatar_url: null,
+      handle: 'Avalon Player#1234',
     })
 
     const router = testRouter()

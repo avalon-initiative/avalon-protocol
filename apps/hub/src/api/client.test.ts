@@ -7,6 +7,7 @@ import {
   listFriends,
   registerStart,
   removeFriend,
+  resolveHandle,
 } from './client'
 import { AvalonApiError } from './errors'
 
@@ -62,6 +63,15 @@ describe('api client', () => {
 
     const [, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(options.headers.Authorization).toBeUndefined()
+  })
+
+  it('percent-encodes the handle so "#" survives as a path segment', async () => {
+    mockFetchOnce(200, { identity_id: 'id-2' })
+
+    await resolveHandle('the-token', 'alice#4821')
+
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/friends/handle/alice%234821')
   })
 
   it('throws an AvalonApiError with a player-facing message on a non-2xx response', async () => {

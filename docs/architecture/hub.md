@@ -94,7 +94,7 @@ is visibly marked.
   directly outside it.
 - **The logged-in Hub is a persistent shell with tabs, not separate pages
   (issue #130).** `HubShell.vue` renders an always-visible identity header
-  (display name, identity id, log out) plus tab navigation
+  (display name, handle, identity id, log out) plus tab navigation
   (`AvalonTabs`, `packages/ui`), with `<RouterView />` swapping tab
   content in place. Tabs are real nested routes under a shared parent
   (`/profile`, `/friends` as children of `HubShell.vue` in
@@ -116,11 +116,15 @@ is visibly marked.
   `GET /friends` does not embed presence server-side (see
   [social-graph](./social-graph.md)/[presence](./presence.md)), the same
   merge the Rust SDK's `Session::friends()` does (#17), ported to
-  TypeScript since the Hub doesn't consume the Rust SDK directly. Two scope
-  cuts, documented not silent: "Add friend" takes an identity id only (no
-  endpoint resolves a display name to an id yet), and there is no "Playing
-  &lt;game&gt;" label (no game registry exists, `Presence.playing` is
-  always `null` in practice today).
+  TypeScript since the Hub doesn't consume the Rust SDK directly. "Add
+  friend" accepts either a raw identity id or a `display_name#1234` handle
+  (#128) — a handle (anything containing `#`) is resolved to an identity id
+  client-side via `GET /friends/handle/:handle` before the request is sent,
+  since `createFriendRequest` always targets an identity id on the wire; the
+  identity header in `HubShell.vue` shows the caller's own handle as the
+  shareable form. One remaining scope cut, documented not silent: there is
+  no "Playing &lt;game&gt;" label (no game registry exists, `Presence.playing`
+  is always `null` in practice today).
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).
