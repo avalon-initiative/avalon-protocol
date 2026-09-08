@@ -115,11 +115,16 @@ pub struct Session {
 }
 
 impl Session {
-    fn require(&self, capability: &str) -> Result<(), SdkError> {
-        if self.granted.iter().any(|c| c.0 == capability) {
+    /// Takes the enum, not a bare string (#98) — every capability-gated
+    /// method call site (`social.rs`, below) references a `Capability`
+    /// variant, never a string literal.
+    fn require(&self, capability: Capability) -> Result<(), SdkError> {
+        if self.granted.contains(&capability) {
             Ok(())
         } else {
-            Err(SdkError::CapabilityNotGranted(capability.to_string()))
+            Err(SdkError::CapabilityNotGranted(
+                capability.as_str().to_string(),
+            ))
         }
     }
 
@@ -134,9 +139,15 @@ impl Session {
     /// server doesn't enforce capability grants yet either (#28), so a
     /// `pub` method that self-grants capabilities would otherwise ship as
     /// a real, callable capability bypass in every game's build.
+    ///
+    /// Takes `impl Into<Capability>` rather than `Capability` directly so
+    /// existing test call sites can keep passing a raw string
+    /// (`.grant_for_testing("presence.read")`) — an unrecognized string
+    /// still round-trips through `Capability::Other` per #98, it just
+    /// isn't the primary way non-test code is meant to reach for this.
     #[cfg(feature = "test-util")]
-    pub fn grant_for_testing(mut self, capability: &str) -> Self {
-        self.granted.push(Capability::new(capability));
+    pub fn grant_for_testing(mut self, capability: impl Into<Capability>) -> Self {
+        self.granted.push(capability.into());
         self
     }
 
@@ -149,12 +160,12 @@ impl Session {
     }
 
     pub async fn achievements(&self) -> Result<Vec<AchievementAttestation>, SdkError> {
-        self.require("achievements.read")?;
+        self.require(Capability::AchievementsRead)?;
         Err(SdkError::NotImplemented)
     }
 
     pub async fn issue_achievement(&self, _achievement: &str) -> Result<(), SdkError> {
-        self.require("achievements.issue")?;
+        self.require(Capability::AchievementsIssue)?;
         Err(SdkError::NotImplemented)
     }
 }
