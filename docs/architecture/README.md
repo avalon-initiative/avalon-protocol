@@ -30,9 +30,9 @@ Each document below links the ones that govern it.
 | Games & issuers | [games-and-issuers.md](games-and-issuers.md) | Registration, issuer identity, key lifecycle, issuer status |
 | Guilds | [guilds.md](guilds.md) | Network-level primitives; a game is a client of a guild, never its owner |
 | Social graph | [social-graph.md](social-graph.md) | Friends persist across games; games never get the whole graph |
-| Communication | [communication.md](communication.md) | Direct messages, voice, notifications — realtime, never settlement |
 | Presence | [presence.md](presence.md) | The realtime vertical; ephemeral, never ledgered |
 | Communication | [communication.md](communication.md) | DMs, voice, notifications: realtime infrastructure, not a Discord replacement |
+| Synchronization | [synchronization.md](synchronization.md) | Offline/deferred SDK participation; an offline claim is never trusted like an online one |
 | Game events | [game-events.md](game-events.md) | Durable cross-game/special-event results as attestations — tournaments are one example |
 | Game registry | [game-registry.md](game-registry.md) | Derived facts with explicit definitions; never a score |
 | Protocol events | [protocol-events.md](protocol-events.md) | Durable event catalogue, versioning, history vs current state |
@@ -88,6 +88,8 @@ Still open, and deliberately so:
 | Issuer signing keys and key lifecycle | [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) |
 | Revocation mechanics | [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) |
 | Ledger entry / tree-head signing (the operator's key) | [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) |
+| Offline operation capability classification | [#109](https://github.com/LunarVagabond/avalon-protocol/issues/109) |
+| Offline trust model: client-recorded claims vs server-attested attestations | [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112) |
 
 ## What survives a game's death
 

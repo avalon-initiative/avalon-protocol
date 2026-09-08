@@ -53,9 +53,12 @@ consume exactly those.
 | verification | signature checks, key resolution at issuance time, history walks |
 | indexing topology | which projection served the read |
 | infrastructure changes | a backend swap never reaches game code |
+| offline/deferred participation | whether the call went out now or was journaled for later — see [synchronization](./synchronization.md) |
 
-See [nodes](./nodes.md) for what discovery selects among and
-[settlement](./settlement.md) for what "submission" hides.
+See [nodes](./nodes.md) for what discovery selects among,
+[settlement](./settlement.md) for what "submission" hides, and
+[synchronization](./synchronization.md) for what happens when there's no
+node to reach at all.
 
 ## Verification surfaces three results, not one
 
