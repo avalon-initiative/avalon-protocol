@@ -2,11 +2,14 @@
 
 **Status:** early. The Rust workspace (`protocol`, `chain`, `indexer`, `server`,
 `sdk`, `cli`), the web/mobile Hub apps, and the C# SDK skeleton all exist and
-build. Identity and auth work end to end against a live Postgres (register,
-login, authenticated profile read/update, the Rust SDK's `authenticate()`), and
-every identity creation lands in a hash-chained ledger you can inspect with
-`make inspect-ledger`. Social, guilds, achievements, permissions, the indexer,
-and the Hub UIs are still scaffolding. See [`docs/stakeholders/Proposal.md`](docs/stakeholders/Proposal.md)
+build. Identity and auth work end to end against a live Postgres: an identity
+is a self-custodied keypair, not a password — a WebAuthn passkey for login and
+a separate Ed25519 key that signs the events an identity authors, so a hosted
+node can't fabricate one (`make create-identity`, the Rust SDK's
+`authenticate()`). Every identity creation lands in a hash-chained ledger,
+atomically with the identity itself via an outbox, inspectable with
+`make inspect-ledger` / `make outbox-status`. Social, guilds, achievements,
+permissions, the indexer, and the Hub UIs are still scaffolding. See [`docs/stakeholders/Proposal.md`](docs/stakeholders/Proposal.md)
 for the full design, [`docs/architecture/`](docs/architecture/README.md) for the
 normative architecture and its invariants, and
 [`docs/WhyAvalon.md`](docs/WhyAvalon.md) for the case for why this needs to exist.

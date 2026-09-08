@@ -9,8 +9,9 @@
 //! only. Social/guilds/achievements/games come with their own epics.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use avalon_server::{migrate, state::AppState};
+use avalon_server::{auth, migrate, outbox, state::AppState};
 use sqlx::postgres::PgPoolOptions;
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -22,6 +23,10 @@ async fn main() {
     dotenvy::dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let addr = std::env::var("AVALON_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let webauthn_rp_id =
+        std::env::var("AVALON_WEBAUTHN_RP_ID").expect("AVALON_WEBAUTHN_RP_ID must be set");
+    let webauthn_origin =
+        std::env::var("AVALON_WEBAUTHN_ORIGIN").expect("AVALON_WEBAUTHN_ORIGIN must be set");
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -33,8 +38,21 @@ async fn main() {
         .await
         .expect("failed to run migrations");
 
+    let webauthn = Arc::new(
+        auth::build_webauthn(&webauthn_rp_id, &webauthn_origin)
+            .expect("failed to build Webauthn instance — check AVALON_WEBAUTHN_RP_ID/AVALON_WEBAUTHN_ORIGIN"),
+    );
     let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone());
-    let app = avalon_server::router(AppState { pool, chain });
+
+    // Drains the identity/etc. outbox into the ledger at its own pace —
+    // see crates/server/src/outbox.rs (issue #71).
+    tokio::spawn(outbox::run_worker(pool.clone(), chain.clone()));
+
+    let app = avalon_server::router(AppState {
+        pool,
+        chain,
+        webauthn,
+    });
 
     println!("avalon-server listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr)

@@ -220,9 +220,10 @@ settles are correct.
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) realtime
   presence is ephemeral
 - Open decisions: [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
-  log/validator/consensus design, [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)
-  keypair identity, [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
+  log/validator/consensus design, [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99)
+  identity recovery, [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
   issuer keys, [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81)
   revocation mechanics. Decided since: [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)/
   [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) —
-  Avalon runs its own chain, no launch currency.
+  Avalon runs its own chain, no launch currency; [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) —
+  identity is a self-custodied keypair.

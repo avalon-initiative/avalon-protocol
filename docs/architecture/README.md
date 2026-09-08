@@ -31,6 +31,7 @@ Each document below links the ones that govern it.
 | Guilds | [guilds.md](guilds.md) | Network-level primitives; a game is a client of a guild, never its owner |
 | Social graph | [social-graph.md](social-graph.md) | Friends persist across games; games never get the whole graph |
 | Presence | [presence.md](presence.md) | The realtime vertical; ephemeral, never ledgered |
+| Communication | [communication.md](communication.md) | DMs, voice, notifications: realtime infrastructure, not a Discord replacement |
 | Game events | [game-events.md](game-events.md) | Durable cross-game/special-event results as attestations — tournaments are one example |
 | Game registry | [game-registry.md](game-registry.md) | Derived facts with explicit definitions; never a score |
 | Protocol events | [protocol-events.md](protocol-events.md) | Durable event catalogue, versioning, history vs current state |
@@ -53,6 +54,7 @@ established it.
 | Area | Invariant | Record |
 |---|---|---|
 | Identity | Avalon identity is player-owned and game-independent. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
+| Identity | An identity is a self-custodied keypair — a WebAuthn passkey for login, a separate Ed25519 key that signs the events it authors. No password, no shared secret. | [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) |
 | Characters | Characters, and every game-defined attribute, belong to the game unless explicitly promoted. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
 | Guilds | Avalon guilds are network-level, game-independent social primitives. | [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74) |
 | Achievements | Achievements are issuer attestations, not shared rows. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
@@ -81,7 +83,7 @@ Still open, and deliberately so:
 | Question | Issue |
 |---|---|
 | Transparency log, validator set, and consensus design (hash structure, signed tree heads, mirror sync, BFT algorithm, validator admission) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
-| Player identity as a self-custodied keypair | [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) |
+| Identity recovery when every passkey is lost | [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) |
 | Issuer signing keys and key lifecycle | [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) |
 | Revocation mechanics | [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) |
 | Ledger entry / tree-head signing (the operator's key) | [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) |

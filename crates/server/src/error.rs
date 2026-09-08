@@ -5,12 +5,18 @@ use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("invalid credentials")]
-    InvalidCredentials,
-    #[error("username already taken")]
-    UsernameTaken,
     #[error("unauthorized")]
     Unauthorized,
+    #[error("identity id already taken")]
+    IdentityIdTaken,
+    #[error("webauthn ceremony not found or already used")]
+    CeremonyNotFound,
+    #[error("webauthn ceremony expired")]
+    CeremonyExpired,
+    #[error("webauthn verification failed")]
+    WebauthnFailed,
+    #[error("event signature verification failed")]
+    InvalidEventSignature,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -20,8 +26,10 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match &self {
-            AppError::InvalidCredentials | AppError::Unauthorized => StatusCode::UNAUTHORIZED,
-            AppError::UsernameTaken => StatusCode::CONFLICT,
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AppError::IdentityIdTaken => StatusCode::CONFLICT,
+            AppError::CeremonyNotFound | AppError::CeremonyExpired => StatusCode::BAD_REQUEST,
+            AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
