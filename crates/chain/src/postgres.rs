@@ -43,6 +43,60 @@ struct EntryContent<'a> {
     version: i32,
 }
 
+/// Serializes `value` with object keys sorted, recursively, so the result
+/// is independent of the `Value`'s in-memory map ordering.
+///
+/// This matters because that ordering is *not* stable across this entry's
+/// own lifecycle: a payload is built once in-process (order depends on
+/// whether `serde_json`'s `preserve_order` feature is active in whichever
+/// binary links this crate in — this crate doesn't request it itself, but
+/// picks it up transitively when built into `avalon-server`/`avalon-cli`,
+/// both of which pull it in via `webauthn-rs`/`passkey-types`), then
+/// travels through the outbox's `JSONB` column and the ledger's own
+/// `JSONB` column before `avalon inspect-ledger(-full)` ever reads it back
+/// to verify — and Postgres's `jsonb` type does not preserve original key
+/// order or formatting at all; it re-emits object keys in its own internal
+/// canonical order. Hashing `Value::to_string()` directly, as this used to,
+/// made the hash depend on which of those orderings happened to be current
+/// at the moment of hashing rather than on the payload's actual content,
+/// producing false "broken chain" reports for any multi-key payload
+/// despite nothing being tampered with. Sorting keys ourselves removes the
+/// dependency on any of those orderings agreeing with each other.
+fn canonical_json(value: &serde_json::Value) -> String {
+    fn write(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, key) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(key).expect("string always serializes"));
+                    out.push(':');
+                    write(&map[key], out);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write(item, out);
+                }
+                out.push(']');
+            }
+            leaf => out.push_str(&leaf.to_string()),
+        }
+    }
+    let mut out = String::new();
+    write(value, &mut out);
+    out
+}
+
 fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(prev_hash.as_bytes());
@@ -50,7 +104,7 @@ fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String {
     hasher.update(content.kind.as_bytes());
     hasher.update(content.issuer.as_bytes());
     hasher.update(content.subject.as_bytes());
-    hasher.update(content.payload.to_string().as_bytes());
+    hasher.update(canonical_json(content.payload).as_bytes());
     hasher.update(content.timestamp.unix_timestamp().to_le_bytes());
     hasher.update(content.version.to_le_bytes());
     hex::encode(hasher.finalize())
@@ -251,5 +305,68 @@ impl SettlementProvider for PostgresSettlementProvider {
         // batching is issue #38, still open. Not needed for
         // `avalon inspect-ledger`, which reads via `list_entries` instead.
         Err(SettlementError::BatchNotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn canonical_json_is_stable_across_key_order() {
+        let a = json!({ "from": "x", "to": "y", "actor": "x" });
+        let b = json!({ "actor": "x", "to": "y", "from": "x" });
+        let c = json!({ "to": "y", "from": "x", "actor": "x" });
+        assert_eq!(canonical_json(&a), canonical_json(&b));
+        assert_eq!(canonical_json(&b), canonical_json(&c));
+    }
+
+    #[test]
+    fn canonical_json_sorts_nested_objects_too() {
+        let a = json!({ "outer": { "z": 1, "a": 2 } });
+        let b = json!({ "outer": { "a": 2, "z": 1 } });
+        assert_eq!(canonical_json(&a), canonical_json(&b));
+    }
+
+    #[test]
+    fn canonical_json_still_distinguishes_different_content() {
+        let a = json!({ "from": "x", "to": "y" });
+        let b = json!({ "from": "x", "to": "z" });
+        assert_ne!(canonical_json(&a), canonical_json(&b));
+    }
+
+    #[test]
+    fn hash_entry_is_order_independent_for_the_full_entry() {
+        let event_id = Uuid::new_v4();
+        let timestamp = time::OffsetDateTime::now_utc();
+        let a = json!({ "from": "x", "to": "y", "actor": "x" });
+        let b = json!({ "actor": "x", "to": "y", "from": "x" });
+
+        let hash_a = hash_entry(
+            GENESIS_HASH,
+            &EntryContent {
+                event_id,
+                kind: "friend.requested",
+                issuer: "identity:x:self:friend_requested",
+                subject: "identity:y:self:friend_requested",
+                payload: &a,
+                timestamp,
+                version: 1,
+            },
+        );
+        let hash_b = hash_entry(
+            GENESIS_HASH,
+            &EntryContent {
+                event_id,
+                kind: "friend.requested",
+                issuer: "identity:x:self:friend_requested",
+                subject: "identity:y:self:friend_requested",
+                payload: &b,
+                timestamp,
+                version: 1,
+            },
+        );
+        assert_eq!(hash_a, hash_b);
     }
 }
