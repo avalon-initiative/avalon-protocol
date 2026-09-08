@@ -1,8 +1,10 @@
 pub mod auth;
 pub mod blocks;
+pub mod channels;
 pub mod devices;
 pub mod error;
 pub mod friends;
+pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
 pub mod migrate;
@@ -129,6 +131,23 @@ pub fn router(state: AppState) -> Router {
             patch(guilds::update_member_role).delete(guilds::remove_member),
         )
         .route("/me/guilds", get(guilds::list_my_guilds))
+        .route(
+            "/guilds/:id/channels",
+            get(channels::list_channels).post(channels::create_channel),
+        )
+        .route("/guilds/:id/channels/:cid", patch(channels::update_channel))
+        .route(
+            "/guilds/:id/channels/:cid/archive",
+            post(channels::archive_channel),
+        )
+        .route(
+            "/guilds/:id/channels/:cid/messages",
+            get(guild_messages::list_messages).post(guild_messages::send_message),
+        )
+        .route(
+            "/guilds/:id/channels/:cid/messages/:mid",
+            delete(guild_messages::delete_message),
+        )
         .with_state(state)
         .layer(cors_layer_from_env())
 }

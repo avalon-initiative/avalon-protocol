@@ -194,6 +194,27 @@ with Game A becomes historical.
   member holding an elevated (non-`member`) role additionally requires
   `manage_roles`, not just `manage_members` — an officer can remove a plain
   member but not another officer.
+- Guild chat channels and messages are real and served by `avalon-server`
+  (issue #22): `crates/server/src/channels.rs` (`GET`/`POST
+  /guilds/{id}/channels`, `PATCH .../channels/{cid}`, `POST
+  .../channels/{cid}/archive`) and `crates/server/src/guild_messages.rs`
+  (`GET`/`POST .../channels/{cid}/messages`, `DELETE
+  .../channels/{cid}/messages/{mid}`) — migration
+  `crates/server/db/migrations/0010_guild_channels`. Every guild is seeded
+  with a default `general` channel on creation. Channel *structure*
+  (create/rename/archive) is durable history — `guild.channel_created`,
+  `guild.channel_renamed`, `guild.channel_archived` go into the outbox in
+  the same transaction as the `guild_channels` row change, gated on
+  `manage_channels`. Individual chat *messages* are deliberately not:
+  `guild_messages` rows never touch the outbox or the ledger, same
+  "ephemeral, non-interoperable state" treatment already given to presence.
+  **Retention**: messages are kept indefinitely up to a configurable cap
+  per channel (`GUILD_CHANNEL_MESSAGE_CAP` env var, default 10,000), oldest
+  pruned once a channel exceeds it — no client should assume guild chat
+  history is permanent. Sending/reading requires current guild membership
+  (via #21's `guild_members` table, now merged alongside #22); moderators
+  (`manage_channels`) can hard-delete a message outright, since there's no
+  history to preserve.
 - Hub guild views (`apps/hub`, `apps/mobile-hub`, `packages/ui`) are scaffolding.
 
 ## Decisions and tickets
