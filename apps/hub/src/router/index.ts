@@ -31,6 +31,13 @@ const router = createRouter({
         { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue') },
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
+        { path: 'guilds', name: 'guilds', component: () => import('../views/Guilds.vue') },
+        { path: 'guilds/:id', name: 'guild', component: () => import('../views/Guild.vue') },
+        {
+          path: 'guilds/:id/channels/:cid',
+          name: 'guild-channel',
+          component: () => import('../views/GuildChannel.vue'),
+        },
       ],
     },
   ],

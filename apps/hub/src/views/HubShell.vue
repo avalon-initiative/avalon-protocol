@@ -3,8 +3,9 @@
 // a bottom nav on mobile, a header with the caller's user chip, and a
 // <RouterView /> for the page. Pages are nested child routes under this
 // layout (see router/index.ts). Nav entries for features that don't exist
-// yet (games, guilds, chat, discover) are rendered disabled with a "Soon"
-// tag rather than hidden, so the layout reflects the roadmap honestly.
+// yet (games, chat, discover) are rendered disabled with a "Soon" tag
+// rather than hidden, so the layout reflects the roadmap honestly. Guilds
+// (issue #24) is no longer one of them.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
@@ -63,7 +64,7 @@ onUnmounted(() => {
 const navItems = computed<AvalonNavItem[]>(() => [
   { label: 'Home', to: '/home', icon: 'home', active: route.path === '/home' },
   { label: 'Games', to: '/games', icon: 'games', active: false, disabled: true },
-  { label: 'Guilds', to: '/guilds', icon: 'guilds', active: false, disabled: true },
+  { label: 'Guilds', to: '/guilds', icon: 'guilds', active: route.path.startsWith('/guilds') },
   { label: 'Friends', to: '/friends', icon: 'friends', active: route.path === '/friends' },
   { label: 'Chat', to: '/chat', icon: 'chat', active: false, disabled: true },
   { label: 'Discover', to: '/discover', icon: 'discover', active: false, disabled: true },

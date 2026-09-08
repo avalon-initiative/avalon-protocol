@@ -1,0 +1,54 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+  padding: var(--av-space-4);
+  border-radius: var(--av-radius-lg);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-surface);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+    border-color: var(--av-color-border-strong);
+  }
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--av-space-2);
+  min-width: 0;
+}
+
+.name {
+  font-size: var(--av-text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-muted);
+  flex-shrink: 0;
+}
+
+.description {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.memberCount {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+}

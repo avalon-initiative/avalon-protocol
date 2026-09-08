@@ -1,0 +1,26 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--av-space-1) var(--av-space-2);
+  border-radius: var(--av-radius-pill);
+  font-size: var(--av-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.owner {
+  color: var(--av-color-warning);
+  background: rgba(245, 166, 35, 0.16);
+}
+
+.officer {
+  color: var(--av-color-accent-secondary);
+  background: var(--av-color-primary-soft);
+}
+
+.member {
+  color: var(--av-color-text-secondary);
+  background: var(--av-color-surface-hover);
+}

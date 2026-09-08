@@ -416,7 +416,7 @@ pub async fn update_guild(
 /// all; the owner's authority never flows through this (see
 /// [`has_guild_permission`]'s structural owner check), so a non-member
 /// owner-check still works even though this returns nothing for them.
-async fn actor_role_permissions(
+pub(crate) async fn actor_role_permissions(
     state: &AppState,
     guild_id: Uuid,
     actor: Uuid,

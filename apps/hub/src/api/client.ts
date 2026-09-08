@@ -4,12 +4,22 @@
 import { AvalonApiError, messageForStatus } from './errors'
 import type {
   ApproveDeviceGrantRequest,
+  ChannelResponse,
+  CreateChannelRequest,
   CreateFriendRequestRequest,
+  CreateGuildInviteRequest,
+  CreateGuildRequest,
+  CreateRoleRequest,
   DeviceGrantResponse,
   DeviceResponse,
   FriendRequestResponse,
   FriendshipResponse,
+  GuildInviteResponse,
+  GuildMemberResponse,
+  GuildResponse,
   HistoryEntryResponse,
+  MessageResponse,
+  MyGuildMembershipResponse,
   PresenceResponse,
   ProfileResponse,
   RegisterFinishRequest,
@@ -19,12 +29,19 @@ import type {
   RenameDeviceRequest,
   RequestDeviceGrantRequest,
   ResolveHandleResponse,
+  RoleResponse,
+  SendMessageRequest,
   SessionFinishRequest,
   SessionFinishResponse,
   SessionStartRequest,
   SessionStartResponse,
+  TransferOwnershipRequest,
+  UpdateChannelRequest,
+  UpdateGuildMemberRequest,
+  UpdateGuildRequest,
   UpdatePresenceRequest,
   UpdateProfileRequest,
+  UpdateRoleRequest,
 } from './types'
 
 const BASE_URL = import.meta.env.VITE_AVALON_SERVER_URL ?? 'http://127.0.0.1:8080'
@@ -198,6 +215,190 @@ export function renameDevice(
 
 export function revokeDevice(token: string, signingKeyId: string): Promise<void> {
   return request(`/me/devices/${signingKeyId}/revoke`, { method: 'POST', token })
+}
+
+// Guilds, roles, membership (issues #20/#21), matching
+// crates/server/src/guilds.rs field-for-field.
+
+export function createGuild(token: string, body: CreateGuildRequest): Promise<GuildResponse> {
+  return request('/guilds', { method: 'POST', body, token })
+}
+
+export function getGuild(token: string, guildId: string): Promise<GuildResponse> {
+  return request(`/guilds/${guildId}`, { token })
+}
+
+export function updateGuild(
+  token: string,
+  guildId: string,
+  body: UpdateGuildRequest,
+): Promise<GuildResponse> {
+  return request(`/guilds/${guildId}`, { method: 'PATCH', body, token })
+}
+
+export function listRoles(token: string, guildId: string): Promise<RoleResponse[]> {
+  return request(`/guilds/${guildId}/roles`, { token })
+}
+
+export function createRole(
+  token: string,
+  guildId: string,
+  body: CreateRoleRequest,
+): Promise<RoleResponse> {
+  return request(`/guilds/${guildId}/roles`, { method: 'POST', body, token })
+}
+
+export function updateRole(
+  token: string,
+  guildId: string,
+  nameIndex: number,
+  body: UpdateRoleRequest,
+): Promise<RoleResponse> {
+  return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'PATCH', body, token })
+}
+
+export function transferOwnership(
+  token: string,
+  guildId: string,
+  body: TransferOwnershipRequest,
+): Promise<GuildResponse> {
+  return request(`/guilds/${guildId}/transfer-ownership`, { method: 'POST', body, token })
+}
+
+export function associateGame(
+  token: string,
+  guildId: string,
+  gameId: string,
+): Promise<GuildResponse> {
+  return request(`/guilds/${guildId}/games/${gameId}`, { method: 'POST', token })
+}
+
+export function createGuildInvite(
+  token: string,
+  guildId: string,
+  body: CreateGuildInviteRequest,
+): Promise<GuildInviteResponse> {
+  return request(`/guilds/${guildId}/invites`, { method: 'POST', body, token })
+}
+
+export function acceptGuildInvite(
+  token: string,
+  guildId: string,
+  inviteId: string,
+): Promise<GuildMemberResponse> {
+  return request(`/guilds/${guildId}/invites/${inviteId}/accept`, { method: 'POST', token })
+}
+
+export function declineGuildInvite(
+  token: string,
+  guildId: string,
+  inviteId: string,
+): Promise<void> {
+  return request(`/guilds/${guildId}/invites/${inviteId}/decline`, { method: 'POST', token })
+}
+
+export function joinGuild(token: string, guildId: string): Promise<GuildMemberResponse> {
+  return request(`/guilds/${guildId}/join`, { method: 'POST', token })
+}
+
+export function leaveGuild(token: string, guildId: string): Promise<void> {
+  return request(`/guilds/${guildId}/leave`, { method: 'POST', token })
+}
+
+export function listMembers(token: string, guildId: string): Promise<GuildMemberResponse[]> {
+  return request(`/guilds/${guildId}/members`, { token })
+}
+
+export function updateMemberRole(
+  token: string,
+  guildId: string,
+  identityId: string,
+  body: UpdateGuildMemberRequest,
+): Promise<GuildMemberResponse> {
+  return request(`/guilds/${guildId}/members/${identityId}`, { method: 'PATCH', body, token })
+}
+
+export function removeMember(token: string, guildId: string, identityId: string): Promise<void> {
+  return request(`/guilds/${guildId}/members/${identityId}`, { method: 'DELETE', token })
+}
+
+export function listMyGuilds(token: string): Promise<MyGuildMembershipResponse[]> {
+  return request('/me/guilds', { token })
+}
+
+// Guild channels + messages (issue #22), matching
+// crates/server/src/channels.rs and crates/server/src/guild_messages.rs.
+
+export function listChannels(token: string, guildId: string): Promise<ChannelResponse[]> {
+  return request(`/guilds/${guildId}/channels`, { token })
+}
+
+export function createChannel(
+  token: string,
+  guildId: string,
+  body: CreateChannelRequest,
+): Promise<ChannelResponse> {
+  return request(`/guilds/${guildId}/channels`, { method: 'POST', body, token })
+}
+
+export function updateChannel(
+  token: string,
+  guildId: string,
+  channelId: string,
+  body: UpdateChannelRequest,
+): Promise<ChannelResponse> {
+  return request(`/guilds/${guildId}/channels/${channelId}`, { method: 'PATCH', body, token })
+}
+
+export function archiveChannel(
+  token: string,
+  guildId: string,
+  channelId: string,
+): Promise<ChannelResponse> {
+  return request(`/guilds/${guildId}/channels/${channelId}/archive`, { method: 'POST', token })
+}
+
+export function listMessages(
+  token: string,
+  guildId: string,
+  channelId: string,
+  options: { before?: string; limit?: number } = {},
+): Promise<MessageResponse[]> {
+  const params = new URLSearchParams()
+  if (options.before) params.set('before', options.before)
+  if (options.limit) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return request(`/guilds/${guildId}/channels/${channelId}/messages${query ? `?${query}` : ''}`, {
+    token,
+  })
+}
+
+export function sendMessage(
+  token: string,
+  guildId: string,
+  channelId: string,
+  body: SendMessageRequest,
+): Promise<MessageResponse> {
+  return request(`/guilds/${guildId}/channels/${channelId}/messages`, {
+    method: 'POST',
+    body,
+    token,
+  })
+}
+
+// Hard-deletes a message (moderation, not history — see
+// crates/server/src/guild_messages.rs's module doc comment). Requires
+// `manage_channels`, same as channel management.
+export function deleteMessage(
+  token: string,
+  guildId: string,
+  channelId: string,
+  messageId: string,
+): Promise<{ deleted: boolean }> {
+  return request(`/guilds/${guildId}/channels/${channelId}/messages/${messageId}`, {
+    method: 'DELETE',
+    token,
+  })
 }
 
 // BASE_URL is http(s)://…; the websocket endpoint needs ws(s)://… — same
