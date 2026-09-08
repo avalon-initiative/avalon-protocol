@@ -11,5 +11,5 @@ withDefaults(defineProps<AvalonButtonProps>(), {
 </script>
 
 <template>
-  <button :class="[styles.avalonButton, styles[variant]]">{{ label }}</button>
+  <button type="button" :class="[styles.avalonButton, styles[variant]]">{{ label }}</button>
 </template>
