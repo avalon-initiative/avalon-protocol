@@ -52,6 +52,7 @@ async fn main() {
         pool,
         chain,
         webauthn,
+        presence: avalon_server::presence::PresenceStore::from_env(),
     });
 
     println!("avalon-server listening on {addr}");

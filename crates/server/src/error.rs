@@ -29,6 +29,8 @@ pub enum AppError {
     FriendRequestNotFound,
     #[error("not friends")]
     NotFriends,
+    #[error("invalid presence query")]
+    InvalidPresenceQuery,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -43,7 +45,7 @@ impl IntoResponse for AppError {
             AppError::CeremonyNotFound | AppError::CeremonyExpired => StatusCode::BAD_REQUEST,
             AppError::WebauthnFailed | AppError::InvalidEventSignature => StatusCode::UNAUTHORIZED,
             AppError::IdentityNotFound | AppError::FriendRequestNotFound => StatusCode::NOT_FOUND,
-            AppError::SelfFriendRequest => StatusCode::BAD_REQUEST,
+            AppError::SelfFriendRequest | AppError::InvalidPresenceQuery => StatusCode::BAD_REQUEST,
             AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
