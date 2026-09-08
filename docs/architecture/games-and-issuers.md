@@ -134,7 +134,16 @@ Game A continues issuing under k2.
   capability — #27 owns the actual grant/consent logic.
 - `crates/protocol/src/achievements.rs` — `Issuer::Game(GameId)`; no status,
   no key set.
-- `crates/cli` — no `register-game` yet (#29, #48).
+- `crates/cli` — `avalon register-game --slug <slug> --name <name>
+  --developer <dev> [--capability <cap>]... [--server <url>]` (#29): generates
+  a fresh Ed25519 keypair locally, calls `POST /games` with the public key,
+  saves the private key to `_running/keys/game-<slug>.signing-key` (mirroring
+  `create-identity`'s local-key persistence) and prints it once with a
+  loss-of-key warning — the server only ever stores the public half. Also
+  exercises the challenge-response round trip
+  (`POST /games/{slug}/challenge` → `GET /games/whoami`) once as a sanity
+  check. A slug collision (409) prints a clear message instead of a raw HTTP
+  error.
 
 ## Decisions and tickets
 
