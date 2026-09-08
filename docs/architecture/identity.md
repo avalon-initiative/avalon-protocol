@@ -180,7 +180,11 @@ already synced across devices by whatever passkey provider the player uses.
 - `crates/cli/src/main.rs` — `avalon create-identity` drives a real WebAuthn
   registration via a virtual authenticator (`passkey-authenticator`'s
   `testable` feature) and prints the loss-of-everything warning #99 calls
-  for; `avalon outbox-status`.
+  for; it also persists that virtual passkey locally
+  (`_running/keys/<id>.passkey.json`) so `avalon login <identity_id>` can
+  reload it into a fresh virtual authenticator and drive a real login
+  ceremony later, printing a session token — a dev/test convenience, not a
+  pattern for real deployment. `avalon outbox-status`.
 - `crates/sdk/src/lib.rs` — `AvalonClient::authenticate()` exchanges a player
   token for a game-scoped `Session`, unchanged by any of this — a game never
   creates identities or logs a player in itself.

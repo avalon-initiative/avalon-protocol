@@ -121,6 +121,7 @@ dependencies = [
  "avalon-sdk",
  "avalon-server",
  "base64 0.22.1",
+ "coset",
  "dotenvy",
  "ed25519-dalek",
  "passkey-authenticator",

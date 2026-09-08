@@ -25,6 +25,11 @@ rand.workspace = true
 passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
+# Already pulled in transitively via passkey-types for the COSE key format
+# `Passkey::key` uses — pinned directly here too so `login`'s persisted-
+# passkey (de)serialization (see main.rs) has a stable `CborSerializable`
+# import to use rather than reaching into a transitive dependency.
+coset = "0.4"
 
 [[bin]]
 name = "avalon"
