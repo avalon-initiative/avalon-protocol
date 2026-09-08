@@ -268,3 +268,259 @@ async fn guild_endpoints_require_a_session_token() {
         .unwrap();
     assert_eq!(get.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+// --- Membership lifecycle (issue #21) --------------------------------------
+
+#[tokio::test]
+#[ignore]
+async fn creating_a_guild_makes_the_owner_a_member() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+
+    let members: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/members")),
+        &token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let members = members.as_array().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(
+        members[0]["identity_id"].as_str().unwrap(),
+        owner_id.to_string()
+    );
+    assert_eq!(members[0]["role_index"].as_i64().unwrap(), 0);
+}
+
+#[tokio::test]
+#[ignore]
+async fn invite_accept_join_and_leave_flow() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (invitee_id, invitee_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+
+    let invite = auth(
+        http.post(format!("{base}/guilds/{guild_id}/invites")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "to": invitee_id }))
+    .send()
+    .await
+    .unwrap();
+    assert!(invite.status().is_success(), "{:?}", invite.status());
+    let invite_body: serde_json::Value = invite.json().await.unwrap();
+    let invite_id = invite_body["id"].as_str().unwrap();
+
+    // Re-inviting while the first invite is still pending is idempotent —
+    // same invite id back, not a new row or an error.
+    let duplicate = auth(
+        http.post(format!("{base}/guilds/{guild_id}/invites")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "to": invitee_id }))
+    .send()
+    .await
+    .unwrap();
+    assert!(duplicate.status().is_success(), "{:?}", duplicate.status());
+    let duplicate_body: serde_json::Value = duplicate.json().await.unwrap();
+    assert_eq!(duplicate_body["id"].as_str().unwrap(), invite_id);
+
+    let accept = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/invites/{invite_id}/accept"
+        )),
+        &invitee_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(accept.status().is_success(), "{:?}", accept.status());
+
+    let members: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/members")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(members.as_array().unwrap().len(), 2);
+
+    let leave = auth(
+        http.post(format!("{base}/guilds/{guild_id}/leave")),
+        &invitee_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(leave.status().is_success(), "{:?}", leave.status());
+
+    let members_after: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/members")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(members_after.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+#[ignore]
+async fn joining_an_invite_only_guild_directly_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_other_id, other_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+    // Guilds default to invite-only (ticket design) — no endpoint here
+    // flips it to open, so this always exercises the closed path.
+    assert_eq!(body["join_policy"].as_str().unwrap(), "invite_only");
+
+    let join = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join")),
+        &other_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(join.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore]
+async fn the_owner_cannot_leave_or_be_removed() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+
+    let leave = auth(
+        http.post(format!("{base}/guilds/{guild_id}/leave")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(leave.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let remove = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/members/{owner_id}")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(remove.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (officer_a_id, officer_a_token) = seed_identity_session(&pool).await;
+    let (officer_b_id, officer_b_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+
+    for (identity_id, identity_token) in [
+        (officer_a_id, &officer_a_token),
+        (officer_b_id, &officer_b_token),
+    ] {
+        let invite = auth(
+            http.post(format!("{base}/guilds/{guild_id}/invites")),
+            &owner_token,
+        )
+        .json(&serde_json::json!({ "to": identity_id }))
+        .send()
+        .await
+        .unwrap();
+        let invite_body: serde_json::Value = invite.json().await.unwrap();
+        let invite_id = invite_body["id"].as_str().unwrap();
+        auth(
+            http.post(format!(
+                "{base}/guilds/{guild_id}/invites/{invite_id}/accept"
+            )),
+            identity_token,
+        )
+        .send()
+        .await
+        .unwrap();
+
+        // Index 1 is "officer" — see the starter-role ordering asserted in
+        // `creating_a_guild_makes_the_creator_the_owner`.
+        let promote = auth(
+            http.patch(format!("{base}/guilds/{guild_id}/members/{identity_id}")),
+            &owner_token,
+        )
+        .json(&serde_json::json!({ "role_index": 1 }))
+        .send()
+        .await
+        .unwrap();
+        assert!(promote.status().is_success(), "{:?}", promote.status());
+    }
+
+    // Officer A (manage_members, no manage_roles) tries to remove Officer B.
+    let remove = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/members/{officer_b_id}")),
+        &officer_a_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(remove.status(), reqwest::StatusCode::FORBIDDEN);
+}

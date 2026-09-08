@@ -69,6 +69,20 @@ pub enum AppError {
     MissingGuildPermission,
     #[error("target identity is already the guild owner")]
     AlreadyGuildOwner,
+    #[error("guild invite not found")]
+    GuildInviteNotFound,
+    #[error("identity is already a guild member")]
+    AlreadyGuildMember,
+    #[error("this guild is invite-only")]
+    GuildNotOpen,
+    #[error("not a guild member")]
+    NotGuildMember,
+    #[error("the guild owner must transfer ownership before leaving")]
+    OwnerMustTransferBeforeLeaving,
+    #[error("the guild owner cannot be removed")]
+    CannotRemoveOwner,
+    #[error("cannot assign the owner role through this endpoint")]
+    CannotAssignOwnerRole,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -105,6 +119,12 @@ impl IntoResponse for AppError {
             AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {
                 StatusCode::FORBIDDEN
             }
+            AppError::GuildInviteNotFound | AppError::NotGuildMember => StatusCode::NOT_FOUND,
+            AppError::AlreadyGuildMember => StatusCode::CONFLICT,
+            AppError::GuildNotOpen => StatusCode::FORBIDDEN,
+            AppError::OwnerMustTransferBeforeLeaving
+            | AppError::CannotRemoveOwner
+            | AppError::CannotAssignOwnerRole => StatusCode::FORBIDDEN,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
