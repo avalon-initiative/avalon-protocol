@@ -131,12 +131,12 @@ async function onRemoveFriend(identityId: string) {
       <div :class="styles.sideColumn">
         <AvalonCard title="Add a friend" subtitle="By handle (e.g. alice#4821) or identity id.">
           <AvalonButton
-            v-if="!showAddFriend"
+            v-show="!showAddFriend"
             label="Add a friend"
             variant="primary"
             @click="showAddFriend = true"
           />
-          <template v-else>
+          <div v-show="showAddFriend">
             <AvalonForm
               submit-label="Send request"
               :submitting="addingFriend"
@@ -146,7 +146,7 @@ async function onRemoveFriend(identityId: string) {
               <AvalonTextField v-model="addFriendId" label="Handle or identity id" placeholder="alice#4821" />
             </AvalonForm>
             <AvalonButton label="Cancel" variant="secondary" @click="cancelAddFriend" />
-          </template>
+          </div>
         </AvalonCard>
 
         <AvalonCard

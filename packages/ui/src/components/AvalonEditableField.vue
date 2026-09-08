@@ -1,9 +1,15 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files —
 // the edit-mode state machine lives in AvalonEditableField.state.ts.
-// Read-only display by default; nothing here is an open input until the
+// Read-only display by default; nothing here is interactive until the
 // player presses Edit. `mousedown.prevent` on Save/Cancel keeps the input
 // from blurring (and committing) before the button's click lands.
+//
+// Both rows use v-show, not v-if — the <input> stays mounted in the DOM at
+// all times, just hidden (display:none, so it's genuinely non-interactive
+// and out of the tab order) rather than created/destroyed on every click.
+// Same read-only-until-Edit behavior either way; less DOM churn on a field
+// a player might toggle repeatedly.
 import styles from '../styles/AvalonEditableField.module.scss'
 import type { AvalonEditableFieldProps } from './AvalonEditableField.types'
 import { useEditableField } from './AvalonEditableField.state'
@@ -24,14 +30,14 @@ const { editing, draft, input, begin, commit, cancel, onKeydown } = useEditableF
   <div :class="styles.field">
     <span :class="styles.label">{{ label }}</span>
 
-    <div v-if="!editing" :class="styles.readRow">
+    <div v-show="!editing" :class="styles.readRow">
       <span :class="[styles.value, value ? '' : styles.empty]">{{ value || emptyText }}</span>
       <button :class="styles.editButton" type="button" :disabled="saving" @click="begin">
         {{ saving ? 'Saving…' : 'Edit' }}
       </button>
     </div>
 
-    <div v-else :class="styles.editRow">
+    <div v-show="editing" :class="styles.editRow">
       <input
         ref="input"
         v-model="draft"

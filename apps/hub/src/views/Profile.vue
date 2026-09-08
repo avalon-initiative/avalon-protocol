@@ -301,7 +301,7 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
                 @click="onRequestDeviceGrant"
               />
               <AvalonButton
-                v-if="!showRecovery"
+                v-show="!showRecovery"
                 label="Recover with a phrase"
                 variant="secondary"
                 @click="showRecovery = true"
@@ -309,7 +309,7 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
             </div>
           </section>
 
-          <template v-if="showRecovery">
+          <div v-show="showRecovery">
             <h3 :class="styles.subheading">Recover your signing key</h3>
             <AvalonForm
               submit-label="Recover"
@@ -324,7 +324,7 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
               />
             </AvalonForm>
             <AvalonButton label="Cancel" variant="secondary" @click="showRecovery = false" />
-          </template>
+          </div>
         </AvalonCard>
       </div>
 

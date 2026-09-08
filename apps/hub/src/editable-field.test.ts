@@ -13,10 +13,13 @@ function mountField(props: Partial<InstanceType<typeof AvalonEditableField>['$pr
 }
 
 describe('AvalonEditableField', () => {
-  it('is read-only by default: shows the value and no input', () => {
+  it('is read-only by default: shows the value, input hidden not interactive', () => {
     const wrapper = mountField()
     expect(wrapper.text()).toContain('Nova')
-    expect(wrapper.find('input').exists()).toBe(false)
+    // The input stays mounted (v-show, not v-if — less DOM churn on a
+    // field toggled often) but must be genuinely hidden — `display:none`
+    // via v-show, which also takes it out of the tab order natively.
+    expect(wrapper.get('input').isVisible()).toBe(false)
     expect(wrapper.text()).toContain('Edit')
   })
 
@@ -38,7 +41,7 @@ describe('AvalonEditableField', () => {
     await wrapper.get('input').setValue('  Nova Prime ')
     await wrapper.get('input').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('save')).toEqual([['Nova Prime']])
-    expect(wrapper.find('input').exists()).toBe(false)
+    expect(wrapper.get('input').isVisible()).toBe(false)
   })
 
   it('Escape reverts without saving', async () => {
@@ -48,7 +51,7 @@ describe('AvalonEditableField', () => {
     await wrapper.get('input').trigger('keydown', { key: 'Escape' })
     expect(wrapper.emitted('save')).toBeUndefined()
     expect(wrapper.emitted('cancel')).toHaveLength(1)
-    expect(wrapper.find('input').exists()).toBe(false)
+    expect(wrapper.get('input').isVisible()).toBe(false)
     expect(wrapper.text()).toContain('Nova')
   })
 
@@ -71,7 +74,6 @@ describe('AvalonEditableField', () => {
     await wrapper.get('input').setValue('Nova III')
     const save = wrapper.findAll('button').find((b) => b.text() === 'Save')!
     await save.trigger('click')
-    await wrapper.find('input').exists() // may already be gone
     expect(wrapper.emitted('save')).toEqual([['Nova III']])
   })
 
