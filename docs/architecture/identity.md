@@ -171,7 +171,11 @@ provider the player uses.
   the Ed25519 event signature before writing anything, and enqueues
   `identity.created` into the outbox in the same transaction as the
   identity/profile/key rows (#71, done for this path). `update_profile` still
-  emits nothing (#86).
+  emits nothing (#86). `list_profiles` (`GET /identities/profiles?ids=…`,
+  issue #161) resolves *other* identities' public profile fields
+  (`display_name`, `discriminator`, `avatar_url`) in a batch — the gap every
+  roster surface (friends, guild members) previously had to leave as a raw
+  identity id.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never

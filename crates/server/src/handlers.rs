@@ -17,7 +17,7 @@
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -544,6 +544,80 @@ pub async fn me(
     .await?;
 
     Ok(Json(profile_row_to_response(identity_id, &row)?))
+}
+
+const PROFILE_LOOKUP_MAX_IDS: usize = 100;
+
+#[derive(Deserialize)]
+pub struct ProfilesQuery {
+    /// Comma-separated identity ids, e.g. `?ids=<uuid>,<uuid>` — same shape
+    /// `presence::PresenceQuery` already established for a batched read.
+    pub ids: String,
+}
+
+/// Another identity's *public* profile fields only — never anything a
+/// stranger couldn't already learn via `friends::resolve_handle`'s
+/// name-to-id lookup run in reverse. No bio, no email, nothing beyond what
+/// `ProfileResponse` already exposes for one's own profile minus the
+/// derived `handle` (a caller who wants that can build it client-side from
+/// `display_name`/`discriminator`, same as `profile_row_to_response` does).
+#[derive(Serialize)]
+pub struct PublicProfileResponse {
+    pub identity_id: Uuid,
+    pub display_name: String,
+    pub discriminator: String,
+    pub avatar_url: Option<String>,
+}
+
+/// `GET /identities/profiles?ids=…` — issue #161. Closes the gap every
+/// roster-shaped surface built so far (`friends::list_friends`,
+/// `guilds::list_members`, and their SDK/Hub consumers) has had to leave as
+/// a raw identity id: there was never an endpoint that resolved *another*
+/// identity's display name. Session-authenticated only, no further
+/// visibility gating — display name and avatar are already the
+/// least-sensitive public-face fields, same exposure level
+/// `friends::resolve_handle` already has. Unknown ids are silently omitted
+/// rather than erroring, so one bad id in a roster doesn't 500 the whole
+/// batch.
+pub async fn list_profiles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProfilesQuery>,
+) -> Result<Json<Vec<PublicProfileResponse>>, AppError> {
+    authenticate(&state, &headers).await?;
+
+    let ids: Vec<Uuid> = query
+        .ids
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<Uuid>().map_err(|_| AppError::InvalidProfileQuery))
+        .collect::<Result<_, _>>()?;
+
+    if ids.len() > PROFILE_LOOKUP_MAX_IDS {
+        return Err(AppError::InvalidProfileQuery);
+    }
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let rows = sqlx::query(
+        "SELECT identity_id, display_name, discriminator, avatar_url FROM profiles WHERE identity_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut profiles = Vec::with_capacity(rows.len());
+    for row in rows {
+        profiles.push(PublicProfileResponse {
+            identity_id: row.try_get("identity_id")?,
+            display_name: row.try_get("display_name")?,
+            discriminator: row.try_get("discriminator")?,
+            avatar_url: row.try_get("avatar_url")?,
+        });
+    }
+    Ok(Json(profiles))
 }
 
 /// One event from the caller's own protocol history (issue #121) — "what
