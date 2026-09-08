@@ -258,6 +258,11 @@ pub async fn register_finish(
     let passkey_json = serde_json::to_value(&passkey).expect("Passkey should serialize");
     let credential_id: &[u8] = passkey.cred_id().as_ref();
 
+    // Chosen before the event is built so the event can carry it: a rebuild
+    // of `profiles` from history (#43) has to land on the same handle, and
+    // the discriminator is server-chosen, not derivable from the name.
+    let discriminator = generate_unique_discriminator(&state, &ceremony.display_name).await?;
+
     // Self-attributed, not network-attributed: the identity signed its own
     // creation, so the ledger entry's issuer says so — a hosted node cannot
     // fabricate this the way it could when the server itself was the
@@ -277,7 +282,15 @@ pub async fn register_finish(
             "self",
             "created",
         ),
-        payload: serde_json::json!({ "identity_id": ceremony.identity_id }),
+        // The initial promised-durable profile state rides along (#86) —
+        // `display_name` is the identity's public face, not a login
+        // credential (no `username` exists anywhere), and without it and the
+        // discriminator `profiles` couldn't be rebuilt from history.
+        payload: serde_json::json!({
+            "identity_id": ceremony.identity_id,
+            "display_name": ceremony.display_name,
+            "discriminator": discriminator,
+        }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -295,7 +308,6 @@ pub async fn register_finish(
     }
     insert_identity?;
 
-    let discriminator = generate_unique_discriminator(&state, &ceremony.display_name).await?;
     sqlx::query(
         "INSERT INTO profiles (identity_id, display_name, discriminator) VALUES ($1, $2, $3)",
     )
@@ -656,6 +668,33 @@ async fn discriminator_for_rename(
     }
 }
 
+/// The payload `profile.updated` carries (#86): only the fields this request
+/// actually changed. `discriminator` rides along with a display-name change
+/// because a rebuild of `profiles` from history (#43) has to land on the
+/// same handle, and the discriminator is server-chosen, not derivable from
+/// the name. An explicitly cleared avatar is `null`; an untouched one is
+/// absent — the same three-state distinction `update_profile` itself makes.
+fn profile_updated_payload(
+    display_name: Option<&str>,
+    discriminator: Option<&str>,
+    avatar_url: Option<Option<&str>>,
+) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+    if let Some(name) = display_name {
+        payload.insert("display_name".into(), name.into());
+    }
+    if let Some(discriminator) = discriminator {
+        payload.insert("discriminator".into(), discriminator.into());
+    }
+    if let Some(avatar_url) = avatar_url {
+        payload.insert(
+            "avatar_url".into(),
+            avatar_url.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    serde_json::Value::Object(payload)
+}
+
 pub async fn update_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -680,6 +719,39 @@ pub async fn update_profile(
         None => None,
     };
 
+    // `display_name` and `avatar_url` are promised-durable (ADR #75, the
+    // table in docs/architecture/identity.md), so a change to either emits
+    // `profile.updated` in the same transaction as the row — through the
+    // outbox, exactly like `register_finish`. A request that changes nothing
+    // emits nothing. Network-attributed rather than signed by the identity's
+    // own key: the same milestone-1 stand-in `friends.rs` uses, since no
+    // general per-event signing ceremony exists yet.
+    let event = (body.display_name.is_some() || avatar_url_provided).then(|| ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "profile.updated".to_string(),
+        issuer: GlobalId::new(
+            "identity",
+            &identity_id.to_string(),
+            "self",
+            "profile_updated",
+        ),
+        subject: GlobalId::new(
+            "identity",
+            &identity_id.to_string(),
+            "self",
+            "profile_updated",
+        ),
+        payload: profile_updated_payload(
+            body.display_name.as_deref(),
+            discriminator.as_deref(),
+            avatar_url_provided.then_some(avatar_url.as_deref()),
+        ),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    });
+
+    let mut tx = state.pool.begin().await?;
+
     let row = sqlx::query(
         r#"
         UPDATE profiles p
@@ -696,8 +768,14 @@ pub async fn update_profile(
     .bind(avatar_url)
     .bind(discriminator)
     .bind(avatar_url_provided)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    if let Some(event) = &event {
+        outbox::enqueue(&mut tx, event).await?;
+    }
+
+    tx.commit().await?;
 
     Ok(Json(profile_row_to_response(identity_id, &row)?))
 }
@@ -765,6 +843,31 @@ mod tests {
             validate_avatar_url(&overlong),
             Err(AppError::InvalidAvatarUrl)
         ));
+    }
+
+    #[test]
+    fn profile_updated_payload_carries_only_the_changed_fields() {
+        let payload = profile_updated_payload(Some("nova"), Some("4821"), None);
+        assert_eq!(
+            payload,
+            serde_json::json!({ "display_name": "nova", "discriminator": "4821" })
+        );
+        assert!(payload.get("avatar_url").is_none());
+    }
+
+    #[test]
+    fn profile_updated_payload_distinguishes_a_cleared_avatar_from_an_untouched_one() {
+        let cleared = profile_updated_payload(None, None, Some(None));
+        assert_eq!(cleared, serde_json::json!({ "avatar_url": null }));
+
+        let set = profile_updated_payload(None, None, Some(Some("https://example.com/a.png")));
+        assert_eq!(
+            set,
+            serde_json::json!({ "avatar_url": "https://example.com/a.png" })
+        );
+
+        let untouched = profile_updated_payload(Some("nova"), Some("4821"), None);
+        assert!(untouched.get("avatar_url").is_none());
     }
 
     #[test]

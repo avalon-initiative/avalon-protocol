@@ -54,9 +54,10 @@ work as the projection change. For identity state:
 | State | Promised durable? | Canonical record | Notes |
 |---|---|---|---|
 | identity exists, `created_at` | yes | `identity.created` | self-signed, see below |
-| `display_name` | yes | `profile.updated` | no event today — #86 |
-| `avatar_url` | yes | `profile.updated` | no event today — #86 |
-| future bio / title / labels | classify when added | `profile.updated` | #86 sets the rule |
+| `display_name` | yes | `identity.created` (initial), `profile.updated` (changes) | emitted in the same transaction as the `profiles` row, via the outbox |
+| handle discriminator | yes | `identity.created` (initial), `profile.updated` (on rename) | server-chosen, so it's carried in the event — a rebuild must land on the same `name#1234` |
+| `avatar_url` | yes | `profile.updated` | `null` in the payload means explicitly cleared; absent means untouched |
+| future bio / title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
 | WebAuthn passkey(s) | operational state, not an event | — | `identity_keys` table; see below |
 | event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
 | credentials (password hash) | **no**, pruned entirely | — | #73, done |
