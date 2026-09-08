@@ -17,6 +17,37 @@ pub struct Guild {
     pub description: String,
     pub owner: IdentityId,
     pub created_at: OffsetDateTime,
+    /// Whether the guild accepts open joins (`POST /guilds/{id}/join`) or
+    /// requires an invite (issue #21). Defaults to `InviteOnly`.
+    pub join_policy: JoinPolicy,
+}
+
+/// Whether a guild can be joined directly or only entered via invite
+/// (issue #21). A guild setting, not a role permission — it governs who may
+/// even attempt to join, before any role-based authority applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinPolicy {
+    #[default]
+    InviteOnly,
+    Open,
+}
+
+impl JoinPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            JoinPolicy::InviteOnly => "invite_only",
+            JoinPolicy::Open => "open",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<JoinPolicy> {
+        Some(match s {
+            "invite_only" => JoinPolicy::InviteOnly,
+            "open" => JoinPolicy::Open,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

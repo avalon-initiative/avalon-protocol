@@ -112,6 +112,23 @@ pub fn router(state: AppState) -> Router {
             post(guilds::transfer_ownership),
         )
         .route("/guilds/:id/games/:game_id", post(guilds::associate_game))
+        .route("/guilds/:id/invites", post(guilds::create_invite))
+        .route(
+            "/guilds/:id/invites/:invite_id/accept",
+            post(guilds::accept_invite),
+        )
+        .route(
+            "/guilds/:id/invites/:invite_id/decline",
+            post(guilds::decline_invite),
+        )
+        .route("/guilds/:id/join", post(guilds::join_guild))
+        .route("/guilds/:id/leave", post(guilds::leave_guild))
+        .route("/guilds/:id/members", get(guilds::list_members))
+        .route(
+            "/guilds/:id/members/:identity_id",
+            patch(guilds::update_member_role).delete(guilds::remove_member),
+        )
+        .route("/me/guilds", get(guilds::list_my_guilds))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

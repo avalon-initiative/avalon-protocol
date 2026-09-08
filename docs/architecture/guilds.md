@@ -154,33 +154,46 @@ with Game A becomes historical.
 
 ## Today in the repo
 
-- `crates/protocol/src/guilds.rs` — `Guild`, `GuildRole`, `GuildMember`,
+- `crates/protocol/src/guilds.rs` — `Guild` (now carrying `join_policy`),
+  `JoinPolicy` (`InviteOnly` | `Open`, issue #21), `GuildRole`, `GuildMember`,
   `GuildGameAssociation`, `GuildChannel`, `GuildMessage`, plus
   `GuildPermission` (issue #20): the fixed milestone-1 permission set a
   role can carry — `manage_guild`, `manage_roles`, `manage_members`,
   `manage_channels`, not yet extensible.
-- Guild creation, rename/retag/redescribe, roles, and ownership transfer
-  are real and served by `avalon-server` (`crates/server/src/guilds.rs`,
-  issue #20): `POST /guilds`, `GET /guilds/{id}`, `PATCH /guilds/{id}`,
-  `GET /guilds/{id}/roles`, `POST /guilds/{id}/roles`,
-  `PATCH /guilds/{id}/roles/{idx}`, `POST /guilds/{id}/transfer-ownership`,
-  `POST /guilds/{id}/games/{game_id}`. Every route is session-authenticated
-  only, same as `friends.rs`. `guild.created`, `guild.updated`,
-  `guild.role_defined`, and `guild.owner_transferred` are written into the
-  outbox in the same transaction as the `guilds`/`guild_roles`/
-  `guild_game_associations` projection change
-  (`crates/server/db/migrations/0008_guilds`). A guild is created with a
-  fixed starter role set (`owner`, `officer`, `member`); `owner` always has
-  every permission structurally (the `guilds.owner` column), not through
-  its role row, so it can't be edited away.
-- Membership and per-member role assignment (who holds which role, joining,
-  leaving) are not built — that's issue #21. Until then, `member_count` on
-  `GET /guilds/{id}` is a stand-in reporting `1` (the owner), and only the
-  guild's owner can exercise any guild permission.
-- `guild.member_added`, `guild.member_removed`, and `guild.role_changed`
-  (a member's *assigned* role, as opposed to `guild.role_defined`'s role
-  *definition*) remain uncatalogued/unimplemented, owned by #21
-  ([#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)).
+- Guild creation, rename/retag/redescribe, roles, ownership transfer, and
+  membership lifecycle are real and served by `avalon-server`
+  (`crates/server/src/guilds.rs`, issues #20 and #21): `POST /guilds`,
+  `GET /guilds/{id}`, `PATCH /guilds/{id}`, `GET /guilds/{id}/roles`,
+  `POST /guilds/{id}/roles`, `PATCH /guilds/{id}/roles/{idx}`,
+  `POST /guilds/{id}/transfer-ownership`, `POST /guilds/{id}/games/{game_id}`,
+  `POST /guilds/{id}/invites`, `POST /guilds/{id}/invites/{invite_id}/accept`,
+  `POST /guilds/{id}/invites/{invite_id}/decline`, `POST /guilds/{id}/join`
+  (open guilds only), `POST /guilds/{id}/leave`,
+  `DELETE /guilds/{id}/members/{identity_id}`,
+  `PATCH /guilds/{id}/members/{identity_id}`, `GET /guilds/{id}/members`, and
+  `GET /me/guilds`. Every route is session-authenticated only, same as
+  `friends.rs`. `guild.created`, `guild.updated`, `guild.role_defined`,
+  `guild.owner_transferred`, `guild.member_added`, `guild.member_removed`,
+  and `guild.role_changed` are written into the outbox in the same
+  transaction as the `guilds`/`guild_roles`/`guild_game_associations`/
+  `guild_members` projection change (`crates/server/db/migrations/0008_guilds`,
+  `0009_guild_membership`). Invites, declines, and withdrawals are
+  deliberately not durable — resolving one is a plain `guild_invites`
+  projection update, no event, same pattern `friends.rs` uses for
+  declined/withdrawn friend requests; a pending invite is idempotent
+  (re-inviting while one is outstanding returns the existing invite rather
+  than erroring or duplicating it). A guild is created with a fixed starter
+  role set (`owner`, `officer`, `member`) and its owner's own
+  `guild_members` row at `role_index = 0`; `owner` always has every
+  permission structurally (the `guilds.owner` column), not through its role
+  row, so it can't be edited away or removed, and the owner must transfer
+  ownership before leaving. `actor_role_permissions` does a real
+  `guild_members` JOIN `guild_roles` lookup, so `manage_guild`/`manage_roles`
+  permission checks now work for non-owner members too; `member_count` on
+  `GET /guilds/{id}` is a real `COUNT(*)` over `guild_members`. Removing a
+  member holding an elevated (non-`member`) role additionally requires
+  `manage_roles`, not just `manage_members` — an officer can remove a plain
+  member but not another officer.
 - Hub guild views (`apps/hub`, `apps/mobile-hub`, `packages/ui`) are scaffolding.
 
 ## Decisions and tickets
@@ -195,7 +208,8 @@ with Game A becomes historical.
   done — creation, rename/retag/redescribe, role definitions, ownership
   transfer, game association),
   [#21](https://github.com/LunarVagabond/avalon-protocol/issues/21) (membership,
-  per-member role assignment, and the owner-departure-without-transfer guard),
+  done — invites, join/leave, removal, per-member role assignment, and the
+  owner-departure-without-transfer guard),
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22) (channels +
   messages), [#23](https://github.com/LunarVagabond/avalon-protocol/issues/23)
   (SDK), [#24](https://github.com/LunarVagabond/avalon-protocol/issues/24) (Hub).

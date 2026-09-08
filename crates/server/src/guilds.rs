@@ -16,22 +16,25 @@
 //! `guilds`/`guild_roles`/`guild_game_associations` tables are projections,
 //! rebuildable from that history — nothing here treats them as canonical.
 //!
-//! **Membership and per-member role assignment are issue #21's concern, not
-//! this module's.** There is deliberately no `guild_members` table yet, so
-//! [`has_guild_permission`] can only ever resolve a non-owner caller to "no
-//! permissions" today — it takes an explicit `actor_permissions` slice so
-//! it composes cleanly once #21 adds a real membership/role lookup, but
-//! until then only the guild's owner can manage anything. That's a
-//! deliberate milestone-1 narrowing, not an oversight: the ticket's "owner
-//! or `manage_guild`" phrasing anticipates #21, it doesn't require this
-//! ticket to build it early.
+//! **Membership lifecycle (issue #21).** `guild_members`/`guild_invites`
+//! are projections, same durability posture as everything else in this
+//! module: `guild.member_added`, `guild.member_removed`, and
+//! `guild.role_changed` are the durable history, written into the outbox in
+//! the same transaction as the row change. Invites, declines, and
+//! withdrawals are deliberately NOT durable — resolving one is a plain
+//! projection update, no event, same pattern `friends.rs` uses for
+//! declined/withdrawn friend requests. [`actor_role_permissions`] now does
+//! a real `guild_members` JOIN `guild_roles` lookup, so
+//! [`has_guild_permission`] resolves real permissions for non-owner callers
+//! too, not just the owner. `GET /guilds/{id}`'s `member_count` is a real
+//! `COUNT(*)` over `guild_members`.
 //!
-//! For the same reason, `GET /guilds/{id}`'s `member_count` is reported as
-//! `1` (the owner) rather than backed by a real roster — there is no
-//! membership table to count yet.
+//! Whether a guild is invite-only or open (`join_policy`, on `guilds` and
+//! `avalon_protocol::guilds::Guild`) governs `POST /guilds/{id}/join`; it
+//! is not itself exposed for editing by any route in this module.
 
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::guilds::GuildPermission;
+use avalon_protocol::guilds::{GuildPermission, JoinPolicy};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -62,8 +65,8 @@ fn guild_ref(guild_id: Uuid, verb: &str) -> GlobalId {
 /// `guild_owner`. The owner always can, regardless of `actor_permissions` —
 /// ownership is structural (the `guilds.owner` column), not a role grant,
 /// so it can never be revoked by editing a role row. Anyone else needs
-/// `permission` present in their own role's permission list. See the
-/// module doc comment for why `actor_permissions` is always empty today.
+/// `permission` present in their own role's permission list, resolved by
+/// [`actor_role_permissions`].
 fn has_guild_permission(
     guild_owner: Uuid,
     actor: Uuid,
@@ -103,16 +106,18 @@ struct GuildRow {
     description: String,
     owner: Uuid,
     created_at: OffsetDateTime,
+    join_policy: JoinPolicy,
 }
 
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, name, tag, description, owner, created_at FROM guilds WHERE id = $1",
+        "SELECT id, name, tag, description, owner, created_at, join_policy FROM guilds WHERE id = $1",
     )
     .bind(guild_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::GuildNotFound)?;
+    let join_policy_raw: String = row.try_get("join_policy")?;
     Ok(GuildRow {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
@@ -120,6 +125,9 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
         description: row.try_get("description")?,
         owner: row.try_get("owner")?,
         created_at: row.try_get("created_at")?,
+        // Falls back to the column's own DEFAULT if it's ever somehow
+        // unparseable — never a hard failure on a read path.
+        join_policy: JoinPolicy::parse(&join_policy_raw).unwrap_or(JoinPolicy::InviteOnly),
     })
 }
 
@@ -132,9 +140,9 @@ pub struct GuildResponse {
     pub owner: Uuid,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    /// See module doc comment — a stand-in until #21 adds real membership.
     pub member_count: i64,
     pub games: Vec<Uuid>,
+    pub join_policy: String,
 }
 
 async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildResponse, AppError> {
@@ -147,6 +155,13 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         games.push(row.try_get("game_id")?);
     }
 
+    let member_count_row =
+        sqlx::query("SELECT COUNT(*) AS count FROM guild_members WHERE guild_id = $1")
+            .bind(guild.id)
+            .fetch_one(&state.pool)
+            .await?;
+    let member_count: i64 = member_count_row.try_get("count")?;
+
     Ok(GuildResponse {
         id: guild.id,
         name: guild.name,
@@ -154,8 +169,9 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         description: guild.description,
         owner: guild.owner,
         created_at: guild.created_at,
-        member_count: 1,
+        member_count,
         games,
+        join_policy: guild.join_policy.as_str().to_string(),
     })
 }
 
@@ -220,6 +236,21 @@ pub async fn create_guild(
         .await?;
     }
 
+    // The owner gets a `guild_members` row too (role_index 0) — see issue
+    // #21's design note: #20 couldn't do this because this table didn't
+    // exist yet. Folded into `guild.created`'s existing event rather than
+    // a separate `guild.member_added`; owner membership is implied by
+    // guild creation itself, not a distinct durable fact.
+    sqlx::query(
+        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(guild_id)
+    .bind(actor)
+    .bind(OWNER_ROLE_INDEX)
+    .bind(created_at)
+    .execute(&mut *tx)
+    .await?;
+
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "guild.created".to_string(),
@@ -249,6 +280,7 @@ pub async fn create_guild(
                 description: body.description,
                 owner: actor,
                 created_at,
+                join_policy: JoinPolicy::InviteOnly,
             },
         )
         .await?,
@@ -359,6 +391,7 @@ pub async fn update_guild(
                 description: new_description,
                 owner: guild.owner,
                 created_at: guild.created_at,
+                join_policy: guild.join_policy,
             },
         )
         .await?,
@@ -366,15 +399,31 @@ pub async fn update_guild(
 }
 
 /// Every permission the given identity holds in this guild today, via its
-/// assigned role. Always empty for a non-owner — see module doc comment;
-/// this exists as the seam #21 will populate once membership/role
-/// assignment is real.
+/// assigned role — a `guild_members` JOIN `guild_roles` lookup by
+/// `(guild_id, actor)`. Empty (not an error) if `actor` isn't a member at
+/// all; the owner's authority never flows through this (see
+/// [`has_guild_permission`]'s structural owner check), so a non-member
+/// owner-check still works even though this returns nothing for them.
 async fn actor_role_permissions(
-    _state: &AppState,
-    _guild_id: Uuid,
-    _actor: Uuid,
+    state: &AppState,
+    guild_id: Uuid,
+    actor: Uuid,
 ) -> Result<Vec<String>, AppError> {
-    Ok(Vec::new())
+    let row = sqlx::query(
+        r#"
+        SELECT gr.permissions FROM guild_members gm
+        JOIN guild_roles gr ON gr.guild_id = gm.guild_id AND gr.name_index = gm.role_index
+        WHERE gm.guild_id = $1 AND gm.identity_id = $2
+        "#,
+    )
+    .bind(guild_id)
+    .bind(actor)
+    .fetch_optional(&state.pool)
+    .await?;
+    match row {
+        Some(row) => Ok(row.try_get("permissions")?),
+        None => Ok(Vec::new()),
+    }
 }
 
 #[derive(Serialize)]
@@ -667,6 +716,7 @@ pub async fn transfer_ownership(
                 description: guild.description,
                 owner: body.to,
                 created_at: guild.created_at,
+                join_policy: guild.join_policy,
             },
         )
         .await?,
@@ -723,6 +773,591 @@ pub async fn associate_game(
     tx.commit().await?;
 
     Ok(Json(guild_response(&state, guild).await?))
+}
+
+// --- Membership lifecycle (issue #21) -------------------------------------
+
+/// True if `actor` may leave a guild owned by `guild_owner` without first
+/// transferring ownership away — false only for the owner themself.
+fn can_leave(actor: Uuid, guild_owner: Uuid) -> bool {
+    actor != guild_owner
+}
+
+/// True if `target` may be removed from a guild owned by `guild_owner` at
+/// all — never the owner, regardless of who's asking or what permissions
+/// they hold.
+fn can_be_removed(target: Uuid, guild_owner: Uuid) -> bool {
+    target != guild_owner
+}
+
+/// Whether `actor` (holding `actor_permissions`) may remove a member who
+/// holds `target_role_index`. Plain `manage_members` is enough to remove a
+/// plain member; removing anyone holding an elevated (non-member) role —
+/// an officer removing another officer, say — additionally requires
+/// `manage_roles`, so role authority alone can't be used to purge a peer at
+/// the same tier.
+fn can_remove_member(
+    guild_owner: Uuid,
+    actor: Uuid,
+    actor_permissions: &[String],
+    target_role_index: i32,
+) -> bool {
+    if !has_guild_permission(
+        guild_owner,
+        actor,
+        actor_permissions,
+        GuildPermission::ManageMembers,
+    ) {
+        return false;
+    }
+    if target_role_index == MEMBER_ROLE_INDEX {
+        return true;
+    }
+    actor == guild_owner
+        || has_guild_permission(
+            guild_owner,
+            actor,
+            actor_permissions,
+            GuildPermission::ManageRoles,
+        )
+}
+
+/// True if `join_policy` permits `POST /guilds/{id}/join` directly, without
+/// an invite.
+fn can_join_directly(join_policy: JoinPolicy) -> bool {
+    join_policy == JoinPolicy::Open
+}
+
+#[derive(Serialize)]
+pub struct GuildMemberResponse {
+    pub guild_id: Uuid,
+    pub identity_id: Uuid,
+    pub role_index: i32,
+    #[serde(with = "time::serde::rfc3339")]
+    pub joined_at: OffsetDateTime,
+}
+
+async fn member_role_index(
+    state: &AppState,
+    guild_id: Uuid,
+    identity_id: Uuid,
+) -> Result<i32, AppError> {
+    let row = sqlx::query(
+        "SELECT role_index FROM guild_members WHERE guild_id = $1 AND identity_id = $2",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotGuildMember)?;
+    Ok(row.try_get("role_index")?)
+}
+
+#[derive(Deserialize)]
+pub struct CreateGuildInviteRequest {
+    pub to: Uuid,
+}
+
+#[derive(Serialize)]
+pub struct GuildInviteResponse {
+    pub id: Uuid,
+    pub guild_id: Uuid,
+    pub to: Uuid,
+    pub from: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+pub async fn create_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+    Json(body): Json<CreateGuildInviteRequest>,
+) -> Result<Json<GuildInviteResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageMembers,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    let target_exists = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
+        .bind(body.to)
+        .fetch_optional(&state.pool)
+        .await?;
+    if target_exists.is_none() {
+        return Err(AppError::IdentityNotFound);
+    }
+
+    let already_member =
+        sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
+            .bind(guild_id)
+            .bind(body.to)
+            .fetch_optional(&state.pool)
+            .await?;
+    if already_member.is_some() {
+        return Err(AppError::AlreadyGuildMember);
+    }
+
+    // Not durable history — see module doc comment. No transaction/outbox
+    // entry, same as `friends.rs`'s request creation.
+    let invite_id = Uuid::new_v4();
+    let created_at = OffsetDateTime::now_utc();
+    let inserted = sqlx::query(
+        r#"INSERT INTO guild_invites (id, guild_id, "to", "from", created_at) VALUES ($1, $2, $3, $4, $5)"#,
+    )
+    .bind(invite_id)
+    .bind(guild_id)
+    .bind(body.to)
+    .bind(actor)
+    .bind(created_at)
+    .execute(&state.pool)
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &inserted {
+        if db_err.is_unique_violation() {
+            // A pending invite to this identity already exists — idempotent
+            // by design (ticket: "duplicate invite idempotent"), so return
+            // the existing row rather than erroring or duplicating it.
+            let existing = sqlx::query(
+                r#"SELECT id, guild_id, "to", "from", created_at FROM guild_invites
+                   WHERE guild_id = $1 AND "to" = $2 AND resolved_at IS NULL"#,
+            )
+            .bind(guild_id)
+            .bind(body.to)
+            .fetch_one(&state.pool)
+            .await?;
+            return Ok(Json(GuildInviteResponse {
+                id: existing.try_get("id")?,
+                guild_id: existing.try_get("guild_id")?,
+                to: existing.try_get("to")?,
+                from: existing.try_get("from")?,
+                created_at: existing.try_get("created_at")?,
+            }));
+        }
+    }
+    inserted?;
+
+    Ok(Json(GuildInviteResponse {
+        id: invite_id,
+        guild_id,
+        to: body.to,
+        from: actor,
+        created_at,
+    }))
+}
+
+struct PendingGuildInvite {
+    to: Uuid,
+}
+
+async fn fetch_pending_invite(
+    state: &AppState,
+    guild_id: Uuid,
+    invite_id: Uuid,
+) -> Result<PendingGuildInvite, AppError> {
+    let row = sqlx::query(
+        r#"SELECT "to" FROM guild_invites WHERE id = $1 AND guild_id = $2 AND resolved_at IS NULL"#,
+    )
+    .bind(invite_id)
+    .bind(guild_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::GuildInviteNotFound)?;
+    Ok(PendingGuildInvite {
+        to: row.try_get("to")?,
+    })
+}
+
+pub async fn accept_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, invite_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<GuildMemberResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let invite = fetch_pending_invite(&state, guild_id, invite_id).await?;
+    // Only the invited identity can accept — same "consent from the other
+    // side" reasoning as `friends.rs::accept_friend_request`.
+    if actor != invite.to {
+        return Err(AppError::GuildInviteNotFound);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    let resolved = sqlx::query(
+        "UPDATE guild_invites SET resolved_at = now(), outcome = 'accepted' WHERE id = $1",
+    )
+    .bind(invite_id)
+    .execute(&mut *tx)
+    .await?;
+    if resolved.rows_affected() == 0 {
+        // Resolved by a concurrent request between the fetch above and here.
+        return Err(AppError::GuildInviteNotFound);
+    }
+
+    let joined_at = OffsetDateTime::now_utc();
+    let inserted = sqlx::query(
+        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(guild_id)
+    .bind(actor)
+    .bind(MEMBER_ROLE_INDEX)
+    .bind(joined_at)
+    .execute(&mut *tx)
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &inserted {
+        if db_err.is_unique_violation() {
+            return Err(AppError::AlreadyGuildMember);
+        }
+    }
+    inserted?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.member_added".to_string(),
+        issuer: identity_ref(actor, "guild_member_added"),
+        subject: guild_ref(guild_id, "guild_member_added"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "identity_id": actor,
+            "role_index": MEMBER_ROLE_INDEX,
+            "via": "invite",
+            "actor": actor,
+        }),
+        timestamp: joined_at,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(GuildMemberResponse {
+        guild_id,
+        identity_id: actor,
+        role_index: MEMBER_ROLE_INDEX,
+        joined_at,
+    }))
+}
+
+pub async fn decline_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, invite_id)): Path<(Uuid, Uuid)>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let invite = fetch_pending_invite(&state, guild_id, invite_id).await?;
+    if actor != invite.to {
+        return Err(AppError::GuildInviteNotFound);
+    }
+
+    // Not durable history — see module doc comment. A single projection
+    // update, no outbox entry, no transaction needed.
+    sqlx::query("UPDATE guild_invites SET resolved_at = now(), outcome = 'declined' WHERE id = $1")
+        .bind(invite_id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn join_guild(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+) -> Result<Json<GuildMemberResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    if !can_join_directly(guild.join_policy) {
+        return Err(AppError::GuildNotOpen);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    let joined_at = OffsetDateTime::now_utc();
+    let inserted = sqlx::query(
+        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(guild_id)
+    .bind(actor)
+    .bind(MEMBER_ROLE_INDEX)
+    .bind(joined_at)
+    .execute(&mut *tx)
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &inserted {
+        if db_err.is_unique_violation() {
+            return Err(AppError::AlreadyGuildMember);
+        }
+    }
+    inserted?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.member_added".to_string(),
+        issuer: identity_ref(actor, "guild_member_added"),
+        subject: guild_ref(guild_id, "guild_member_added"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "identity_id": actor,
+            "role_index": MEMBER_ROLE_INDEX,
+            "via": "join",
+            "actor": actor,
+        }),
+        timestamp: joined_at,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(GuildMemberResponse {
+        guild_id,
+        identity_id: actor,
+        role_index: MEMBER_ROLE_INDEX,
+        joined_at,
+    }))
+}
+
+pub async fn leave_guild(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    if !can_leave(actor, guild.owner) {
+        return Err(AppError::OwnerMustTransferBeforeLeaving);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    let removed = sqlx::query("DELETE FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
+        .bind(guild_id)
+        .bind(actor)
+        .execute(&mut *tx)
+        .await?;
+    if removed.rows_affected() == 0 {
+        return Err(AppError::NotGuildMember);
+    }
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.member_removed".to_string(),
+        issuer: identity_ref(actor, "guild_member_removed"),
+        subject: guild_ref(guild_id, "guild_member_removed"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "identity_id": actor,
+            "reason": "left",
+            "actor": actor,
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+pub async fn remove_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, identity_id)): Path<(Uuid, Uuid)>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    if !can_be_removed(identity_id, guild.owner) {
+        return Err(AppError::CannotRemoveOwner);
+    }
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    let target_role_index = member_role_index(&state, guild_id, identity_id).await?;
+    if !can_remove_member(guild.owner, actor, &actor_permissions, target_role_index) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    let removed = sqlx::query("DELETE FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
+        .bind(guild_id)
+        .bind(identity_id)
+        .execute(&mut *tx)
+        .await?;
+    if removed.rows_affected() == 0 {
+        return Err(AppError::NotGuildMember);
+    }
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.member_removed".to_string(),
+        issuer: identity_ref(actor, "guild_member_removed"),
+        subject: guild_ref(guild_id, "guild_member_removed"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "identity_id": identity_id,
+            "reason": "removed",
+            "actor": actor,
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateGuildMemberRequest {
+    pub role_index: i32,
+}
+
+pub async fn update_member_role(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, identity_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<UpdateGuildMemberRequest>,
+) -> Result<Json<GuildMemberResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageRoles,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    // Owner-role assignment is transfer-ownership's job (#20's endpoint),
+    // not this one's — the owner's authority comes from `guilds.owner`, not
+    // a `guild_members.role_index` value.
+    if body.role_index == OWNER_ROLE_INDEX || identity_id == guild.owner {
+        return Err(AppError::CannotAssignOwnerRole);
+    }
+
+    // 404s if the target role doesn't exist for this guild.
+    fetch_role(&state, guild_id, body.role_index).await?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let updated = sqlx::query(
+        "UPDATE guild_members SET role_index = $3 WHERE guild_id = $1 AND identity_id = $2",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .bind(body.role_index)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotGuildMember);
+    }
+
+    let joined_at_row =
+        sqlx::query("SELECT joined_at FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
+            .bind(guild_id)
+            .bind(identity_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let joined_at: OffsetDateTime = joined_at_row.try_get("joined_at")?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.role_changed".to_string(),
+        issuer: identity_ref(actor, "guild_role_changed"),
+        subject: identity_ref(identity_id, "guild_role_changed"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "identity_id": identity_id,
+            "role_index": body.role_index,
+            "actor": actor,
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(GuildMemberResponse {
+        guild_id,
+        identity_id,
+        role_index: body.role_index,
+        joined_at,
+    }))
+}
+
+pub async fn list_members(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+) -> Result<Json<Vec<GuildMemberResponse>>, AppError> {
+    authenticate(&state, &headers).await?;
+    // 404s if the guild doesn't exist, same as GET /guilds/{id}. No
+    // presence yet (see ticket) — just identity_id + role + joined_at.
+    fetch_guild(&state, guild_id).await?;
+
+    let rows = sqlx::query(
+        "SELECT guild_id, identity_id, role_index, joined_at FROM guild_members WHERE guild_id = $1 ORDER BY joined_at",
+    )
+    .bind(guild_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut members = Vec::with_capacity(rows.len());
+    for row in rows {
+        members.push(GuildMemberResponse {
+            guild_id: row.try_get("guild_id")?,
+            identity_id: row.try_get("identity_id")?,
+            role_index: row.try_get("role_index")?,
+            joined_at: row.try_get("joined_at")?,
+        });
+    }
+    Ok(Json(members))
+}
+
+#[derive(Serialize)]
+pub struct MyGuildMembershipResponse {
+    pub guild_id: Uuid,
+    pub role_index: i32,
+    #[serde(with = "time::serde::rfc3339")]
+    pub joined_at: OffsetDateTime,
+}
+
+pub async fn list_my_guilds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<MyGuildMembershipResponse>>, AppError> {
+    let identity_id = authenticate(&state, &headers).await?;
+
+    let rows = sqlx::query(
+        "SELECT guild_id, role_index, joined_at FROM guild_members WHERE identity_id = $1 ORDER BY joined_at",
+    )
+    .bind(identity_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut memberships = Vec::with_capacity(rows.len());
+    for row in rows {
+        memberships.push(MyGuildMembershipResponse {
+            guild_id: row.try_get("guild_id")?,
+            role_index: row.try_get("role_index")?,
+            joined_at: row.try_get("joined_at")?,
+        });
+    }
+    Ok(Json(memberships))
 }
 
 #[cfg(test)]
@@ -818,5 +1453,72 @@ mod tests {
         let id = Uuid::new_v4();
         let global_id = guild_ref(id, "guild_created");
         assert_eq!(global_id.as_str(), format!("guild:{id}:self:guild_created"));
+    }
+
+    #[test]
+    fn owner_cannot_leave_without_transferring() {
+        let owner = Uuid::new_v4();
+        assert!(!can_leave(owner, owner));
+        let member = Uuid::new_v4();
+        assert!(can_leave(member, owner));
+    }
+
+    #[test]
+    fn owner_cannot_be_removed() {
+        let owner = Uuid::new_v4();
+        assert!(!can_be_removed(owner, owner));
+        let member = Uuid::new_v4();
+        assert!(can_be_removed(member, owner));
+    }
+
+    #[test]
+    fn officer_with_manage_members_can_remove_a_plain_member() {
+        let owner = Uuid::new_v4();
+        let officer = Uuid::new_v4();
+        assert!(can_remove_member(
+            owner,
+            officer,
+            &["manage_members".to_string()],
+            MEMBER_ROLE_INDEX,
+        ));
+    }
+
+    #[test]
+    fn officer_cannot_remove_another_officer_without_manage_roles() {
+        let owner = Uuid::new_v4();
+        let officer = Uuid::new_v4();
+        assert!(!can_remove_member(
+            owner,
+            officer,
+            &["manage_members".to_string()],
+            OFFICER_ROLE_INDEX,
+        ));
+        assert!(can_remove_member(
+            owner,
+            officer,
+            &["manage_members".to_string(), "manage_roles".to_string()],
+            OFFICER_ROLE_INDEX,
+        ));
+    }
+
+    #[test]
+    fn owner_can_remove_an_officer_without_holding_manage_roles_explicitly() {
+        let owner = Uuid::new_v4();
+        // `has_guild_permission`'s structural owner check makes this true
+        // even with an empty permission list.
+        assert!(can_remove_member(owner, owner, &[], OFFICER_ROLE_INDEX));
+    }
+
+    #[test]
+    fn removal_requires_manage_members_regardless_of_target_role() {
+        let owner = Uuid::new_v4();
+        let actor = Uuid::new_v4();
+        assert!(!can_remove_member(owner, actor, &[], MEMBER_ROLE_INDEX));
+    }
+
+    #[test]
+    fn join_is_allowed_only_for_open_guilds() {
+        assert!(!can_join_directly(JoinPolicy::InviteOnly));
+        assert!(can_join_directly(JoinPolicy::Open));
     }
 }
