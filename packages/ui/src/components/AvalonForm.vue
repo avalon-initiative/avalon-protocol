@@ -14,8 +14,11 @@ defineEmits<{ submit: [] }>()
   <form :class="styles.form" @submit.prevent="$emit('submit')">
     <slot />
     <p v-if="error" :class="styles.formError">{{ error }}</p>
-    <button :class="styles.submit" type="submit" :disabled="submitting">
-      {{ submitting ? 'Please wait…' : submitLabel }}
-    </button>
+    <div :class="styles.actions">
+      <button :class="styles.submit" type="submit" :disabled="submitting">
+        {{ submitting ? 'Please wait…' : submitLabel }}
+      </button>
+      <slot name="secondary-actions" />
+    </div>
   </form>
 </template>

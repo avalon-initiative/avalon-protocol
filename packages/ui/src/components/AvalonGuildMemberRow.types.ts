@@ -4,7 +4,10 @@ import type { AvalonRoleBadgeProps } from './AvalonRoleBadge.types'
 export interface AvalonGuildMemberRowProps {
   identityId: string
   // Always undefined today — no endpoint resolves another identity's
-  // display name yet, same gap AvalonFriendRow already documents.
+  // display name yet, same gap AvalonFriendRow already documents (tracked
+  // as #161, "Batch identity lookup: resolve display names for
+  // friends/guild rosters"). The component falls back to a shortened
+  // identity id when this is unset — see AvalonGuildMemberRow.vue.
   displayName?: string
   avatarUrl?: string | null
   status: PresenceStatus

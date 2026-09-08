@@ -322,8 +322,10 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
                 label="Recovery phrase"
                 placeholder="twelve words separated by spaces"
               />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="showRecovery = false" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="showRecovery = false" />
           </div>
         </AvalonCard>
       </div>

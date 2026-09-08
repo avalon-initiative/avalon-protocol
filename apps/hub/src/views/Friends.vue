@@ -144,8 +144,10 @@ async function onRemoveFriend(identityId: string) {
               @submit="onAddFriend"
             >
               <AvalonTextField v-model="addFriendId" label="Handle or identity id" placeholder="alice#4821" />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelAddFriend" />
+              </template>
             </AvalonForm>
-            <AvalonButton label="Cancel" variant="secondary" @click="cancelAddFriend" />
           </div>
         </AvalonCard>
 
