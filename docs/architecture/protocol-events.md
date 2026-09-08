@@ -175,6 +175,18 @@ the record — [`./revocation.md`](./revocation.md).
   profile/key rows, closing #71 for this path.
 - `profile.updated` does not exist yet — `update_profile` writes Postgres only
   ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)).
+- A second emitter: `crates/server/src/friends.rs` writes `friend.requested`,
+  `friend.accepted`, and `friend.removed`, each enqueued into
+  `protocol_outbox` in the same transaction as the `friendships`/
+  `friend_requests` row it accompanies (#15, closing #71's pattern for a
+  second path). `issuer`/`subject` are both `identity:<id>:self:<verb>`
+  `GlobalId`s naming the acting identity and the counterpart, respectively;
+  unlike `identity.created` these are not yet individually signed — no
+  general per-event Ed25519 signing ceremony exists yet, so this is the
+  "network as signer" milestone-1 stand-in the catalogue above describes,
+  attributed to the identity that authenticated the request rather than to
+  the node. Declining or withdrawing a request emits no event — see
+  [social-graph.md](./social-graph.md).
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`; the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
   `timestamp`, `version` (`crates/chain/src/postgres.rs`).

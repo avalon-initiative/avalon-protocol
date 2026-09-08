@@ -63,12 +63,30 @@ informed by the network fact. This is listed as open in
 
 ## Today in the repo
 
-- `crates/protocol/src/social.rs` — `Friendship` and `Presence` types only. No
-  friend-request state, no block type.
-- No server endpoints, storage, or events for friendships exist.
+- `crates/protocol/src/social.rs` — `Friendship`, `FriendRequest { from, to,
+  requested_at }`, and `Presence` types. No block type.
+- `crates/server/src/friends.rs` — session-authenticated endpoints:
+  `POST /friends/requests`, `POST /friends/requests/{id}/accept`,
+  `DELETE /friends/requests/{id}` (declines or withdraws, depending on which
+  side calls it), `DELETE /friends/{identity_id}`, `GET /friends`,
+  `GET /friends/requests`. There is no game-credential auth path in this repo
+  yet at all, so "a game cannot act on a player's behalf" holds by
+  construction — every route only ever accepts a player session token.
+  `friend.requested`, `friend.accepted`, and `friend.removed` are enqueued
+  through the outbox (`crates/server/src/outbox.rs`, #71) in the same
+  transaction as the `friendships`/`friend_requests` row. Events are
+  session-authenticated but not yet individually signed — no general
+  per-event signing ceremony exists yet, only `identity.created`'s one-off
+  Ed25519 signature (#73); see [protocol-events.md](./protocol-events.md).
+- `crates/server/db/migrations/0004_social_graph/` — `friendships` (`a < b`
+  enforced), `friend_requests` (at most one pending request per direction).
+- Reads are restricted to the caller's own session for now — the capability/
+  visibility composition in [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87)
+  (which this doc's "What a game sees" section describes) is not built yet, so
+  there is no game-facing read path at all.
 - `crates/sdk/src/lib.rs` — `Session::require(capability)` is the per-method
   capability check that `friends()` and presence reads will use; those methods
-  don't exist yet.
+  don't exist yet (#17).
 - **Decided: a friendship is promised-durable history**, not server-only state.
   It is inherently a social fact between two identities, not something any
   game owns or can lose custody of — the same reasoning [guilds](./guilds.md)
