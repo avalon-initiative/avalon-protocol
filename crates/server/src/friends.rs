@@ -331,9 +331,9 @@ pub async fn list_friend_requests(
 
 #[cfg(test)]
 mod tests {
-    //! No live Postgres in this sandbox (see CLAUDE.md) — these exercise the
-    //! pure logic only. The request→accept/decline/remove flow itself is
-    //! covered by `crates/server/tests/friends.rs`, gated `--ignored`.
+    //! No live Postgres reachable here — these exercise the pure logic only.
+    //! The request→accept/decline/remove flow itself is covered by
+    //! `crates/server/tests/friends.rs`, gated `--ignored`.
 
     use super::*;
 
