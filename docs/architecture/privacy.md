@@ -93,6 +93,13 @@ durable.
   username, which is removed under
   [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) and
   [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86).
+- `crates/server/src/authz.rs` (#28) implements the write-side half of the
+  "active binding → active `PermissionGrant`" chain this section describes —
+  `require_capability(caller, capability, state)` for a `Caller::Game`.
+  No read path (visibility scopes, #87) uses it yet, and no game-calling-the-API
+  endpoint exists yet either (see the module's own doc comment): it is
+  built, documented, and exhaustively unit-tested, ready for the first
+  ticket that needs either.
 
 ## Decisions and tickets
 

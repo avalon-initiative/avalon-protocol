@@ -19,6 +19,41 @@ Details per actor: [`./identity.md`](./identity.md),
 [`./game-bindings.md`](./game-bindings.md), [`./guilds.md`](./guilds.md),
 [`./nodes.md`](./nodes.md).
 
+## Authorization: one capability, one check
+
+Every endpoint a game calls on a player's behalf must check the specific
+capability it needs — never a blanket "does this game have access to this
+player" boolean. Two caller kinds exist: a **player**, acting on their own
+data (always allowed — this is specifically about *game* access to *player*
+data, not a player's access to themselves), and a **game acting for a
+player**, which needs both an active [binding](./game-bindings.md)
+(`#83`) and an active `PermissionGrant` (see [`./privacy.md`](./privacy.md))
+for exactly the capability the endpoint names.
+
+`crates/server/src/authz.rs`'s `Caller` (`Caller::Player(identity_id)` /
+`Caller::Game { game_id, identity_id }`) and `require_capability(caller,
+capability, state)` (#28) are this check, built as the one place it lives —
+not literal Axum middleware, a plain async fn called explicitly per handler,
+matching how `guilds.rs`'s `has_guild_permission` is already called rather
+than injected as a layer. `require_capability`'s `capability` argument is
+mandatory, not optional or defaultable, so a call site can never accidentally
+check nothing. A revoked grant is rejected on the very next request — no
+grace window, since every check reads `permission_grants` fresh (no cache
+yet; see the module's own doc comment for why). Authorization failure for
+`Caller::Game` is `AppError::Forbidden` (403), body identical regardless of
+*why* — no binding, a binding for the wrong game, no grant, or a revoked
+grant all read the same to the caller, matching this file's "never leak
+internal detail" posture below.
+
+**No endpoint calls this yet.** As of #28, every real endpoint is either
+player-session-only (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is
+a player action, a game never grants itself anything) or proves only the
+game's own identity with nothing player-specific to check
+(`games::game_whoami`). `Caller`/`require_capability` exist ready for the
+first ticket that adds a real game-calling-the-API endpoint (achievement
+issuance, etc.) — that ticket should fail review if it builds its own ad-hoc
+game-access check instead of calling this one.
+
 ## Node authority
 
 ```text
@@ -116,6 +151,10 @@ deployment blocker, not an optional hardening step.
   on read; no signatures yet (#39).
 - Player passkeys and event-signing keys exist (#73). No issuer keys yet
   (#80/#84), no TLS (#72), no visibility scopes (#87).
+- `crates/server/src/authz.rs` (#28) — `Caller` / `require_capability`, built
+  and exhaustively unit-tested (pure-logic matrix plus a live-Postgres
+  matrix gated `--ignored`), with no handler calling it yet — see this
+  file's own "Authorization" section above.
 
 ## Decisions and tickets
 
@@ -136,3 +175,7 @@ deployment blocker, not an optional hardening step.
 - [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) /
   [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) —
   long-term settlement backend, decided.
+- [#28](https://github.com/LunarVagabond/avalon-protocol/issues/28) —
+  permission enforcement (`Caller` / `require_capability`). Built; no caller
+  yet. Any future endpoint letting a game act on a player's behalf must use
+  this guard rather than its own check.

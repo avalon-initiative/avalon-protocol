@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod authz;
 pub mod blocks;
 pub mod channels;
 pub mod connections;
