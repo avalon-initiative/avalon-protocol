@@ -78,10 +78,26 @@ realtime connections is a separate axis from scaling history or queries
 
 - `crates/protocol/src/social.rs` — `PresenceStatus { Online, Away, Offline }` and
   `Presence { identity_id, status, playing: Option<GameId>, updated_at }`.
-- No presence endpoint, storage, or realtime transport exists. No server/region
-  or activity fields yet.
+- `crates/server/src/presence.rs` — an in-process `PresenceStore` (`Arc<RwLock<HashMap<...>>>`
+  keyed by identity), never a migrated table, never touching the outbox or
+  `avalon-chain`. `PUT /me/presence` lets a player publish their own
+  `status`; they can never set `playing`, since there is no game-credential
+  auth path to attribute that claim to a specific game yet. `GET
+  /presence?ids=…` reads back presence for the requested ids, session-gated
+  only — no friends/guild/private visibility filtering (deferred to #87,
+  same scope cut `crates/server/src/friends.rs` (#15) already established
+  for its own reads). An entry not refreshed within the TTL (120s by
+  default, `AVALON_PRESENCE_TTL_SECS` overrides it for testing) reads as
+  `Offline`, never a guess.
+- **Deferred, documented, not silently missing**: the game-side publish
+  path (`PUT /presence/:identity_id` under a `GameCredential`, gated on an
+  active [binding](./game-bindings.md) and a `presence.publish`
+  capability) — there is no game-credential auth concept, `GameBinding`,
+  or capability-grant system in this repo yet (#26/#28/#83). Player-set
+  visibility scopes and opting `playing` out of view are deferred for the
+  same reason, to #87.
 - `avalon-server` has no websocket or push path; how presence is delivered to
-  clients is undesigned.
+  clients beyond polling `GET /presence` is undesigned.
 
 ## Decisions and tickets
 

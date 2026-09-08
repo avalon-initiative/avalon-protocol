@@ -4,9 +4,10 @@ pub mod friends;
 pub mod handlers;
 pub mod migrate;
 pub mod outbox;
+pub mod presence;
 pub mod state;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use state::AppState;
 
@@ -20,6 +21,8 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/start", post(handlers::session_start))
         .route("/sessions/finish", post(handlers::session_finish))
         .route("/me", get(handlers::me).patch(handlers::update_profile))
+        .route("/me/presence", put(presence::update_my_presence))
+        .route("/presence", get(presence::get_presence))
         .route(
             "/friends/requests",
             get(friends::list_friend_requests).post(friends::create_friend_request),
