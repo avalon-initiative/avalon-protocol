@@ -54,12 +54,14 @@ None of them widens the others.
 ## Blocking and harassment
 
 Persistent identity makes harassment persistent too
-([Proposal §31](../stakeholders/Proposal.md#31-major-risks)). Blocking must work across games,
-not per game, and a block must at minimum hide the blocker's presence and refuse
-friend requests network-wide. What a block means *inside* a game (can they still
-be matched, can they see each other in a shared world) is the game's decision,
-informed by the network fact. This is listed as open in
-[Proposal §32](../stakeholders/Proposal.md#32-open-questions) and has no design yet.
+([Proposal §31](../stakeholders/Proposal.md#31-major-risks)). Blocking works across
+games, not per game (#97): a block hides the blocker's presence and refuses friend
+requests network-wide, in both directions, and — unlike friendship — is never
+durable protocol history, never a `crates/protocol` type, and never revealed to
+the blocked party through any endpoint (see [privacy.md](./privacy.md)). What a
+block means *inside* a game (can they still be matched, can they see each other
+in a shared world) is still the game's own decision, informed by the network
+fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-questions).
 
 ## Today in the repo
 
@@ -100,6 +102,14 @@ informed by the network fact. This is listed as open in
   `presence()`/`presence_of()`, `update_presence()`, and
   `subscribe_presence()` (#136), each gated behind
   `Session::require(capability)`.
+- `crates/server/src/blocks.rs` + `crates/server/db/migrations/0006_blocks/`
+  (#97) — `blocks (blocker, blocked, created_at)`, `POST /blocks`,
+  `DELETE /blocks/:identity_id`, `GET /blocks` (the caller's own list only).
+  Blocking a pending-friend-request partner auto-resolves that request.
+  Enforced in `friends::create_friend_request` (a blocked pair's rejection
+  is identical to a nonexistent-identity rejection) and
+  `presence::get_presence`/`presence_ws` (a blocked identity's presence
+  reads as `Offline`, indistinguishable from a genuinely missing entry).
 - **A friendship is promised-durable history**, not server-only state — the
   same reasoning [guilds](./guilds.md) apply, since it's a social fact
   between two identities, not something any game owns. `friend.requested`,

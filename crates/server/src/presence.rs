@@ -233,7 +233,7 @@ pub async fn get_presence(
     headers: HeaderMap,
     Query(query): Query<PresenceQuery>,
 ) -> Result<Json<Vec<PresenceResponse>>, AppError> {
-    let _caller = authenticate(&state, &headers).await?;
+    let caller = authenticate(&state, &headers).await?;
 
     let ids: Vec<Uuid> = query
         .ids
@@ -246,9 +246,25 @@ pub async fn get_presence(
         })
         .collect::<Result<_, _>>()?;
 
+    // Issue #97: a blocked identity's presence reads exactly like a
+    // missing/stale entry (Offline, `updated_at: now`) — never a
+    // distinguishable "hidden" state, matching this store's own existing
+    // "never a guess" precedent for a genuinely missing entry.
+    let blocked_partners = crate::blocks::block_partners(&state, caller).await?;
     let views = ids
         .into_iter()
-        .map(|id| state.presence.get(id).into())
+        .map(|id| {
+            if blocked_partners.contains(&id) {
+                PresenceResponse {
+                    identity_id: id,
+                    status: PresenceStatus::Offline,
+                    playing: None,
+                    updated_at: OffsetDateTime::now_utc(),
+                }
+            } else {
+                state.presence.get(id).into()
+            }
+        })
         .collect();
     Ok(Json(views))
 }
@@ -275,8 +291,8 @@ pub async fn presence_ws(
     Query(query): Query<PresenceWsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
-    authenticate_token(&state, &query.token).await?;
-    Ok(ws.on_upgrade(move |socket| handle_presence_socket(socket, state)))
+    let caller = authenticate_token(&state, &query.token).await?;
+    Ok(ws.on_upgrade(move |socket| handle_presence_socket(socket, state, caller)))
 }
 
 /// What a subscribed client can send. `Subscribe` is additive — sending it
@@ -289,7 +305,26 @@ enum ClientMessage {
     Subscribe { ids: Vec<Uuid> },
 }
 
-async fn handle_presence_socket(mut socket: WebSocket, state: AppState) {
+/// Forces a presence view for `id` to `Offline` — issue #97: a blocked
+/// identity must read exactly like a missing/stale entry, never a
+/// distinguishable "hidden" state.
+fn offline_view(id: Uuid) -> PresenceResponse {
+    PresenceResponse {
+        identity_id: id,
+        status: PresenceStatus::Offline,
+        playing: None,
+        updated_at: OffsetDateTime::now_utc(),
+    }
+}
+
+async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: Uuid) {
+    // Loaded once per connection, not per message — see
+    // `blocks::block_partners`'s own doc comment for the staleness
+    // tradeoff this accepts.
+    let blocked_partners = match crate::blocks::block_partners(&state, caller).await {
+        Ok(set) => set,
+        Err(_) => return,
+    };
     let mut subscribed: HashSet<Uuid> = HashSet::new();
     let mut updates = state.presence.subscribe();
 
@@ -307,7 +342,11 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState) {
                         // current status.
                         for id in ids {
                             if subscribed.insert(id) {
-                                let view: PresenceResponse = state.presence.get(id).into();
+                                let view: PresenceResponse = if blocked_partners.contains(&id) {
+                                    offline_view(id)
+                                } else {
+                                    state.presence.get(id).into()
+                                };
                                 let payload =
                                     serde_json::to_string(&view).expect("PresenceResponse always serializes");
                                 if socket.send(Message::Text(payload)).await.is_err() {
@@ -323,8 +362,13 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState) {
             update = updates.recv() => {
                 match update {
                     Ok(update) if subscribed.contains(&update.identity_id) => {
+                        let view = if blocked_partners.contains(&update.identity_id) {
+                            offline_view(update.identity_id)
+                        } else {
+                            update
+                        };
                         let payload =
-                            serde_json::to_string(&update).expect("PresenceResponse always serializes");
+                            serde_json::to_string(&view).expect("PresenceResponse always serializes");
                         if socket.send(Message::Text(payload)).await.is_err() {
                             return;
                         }
