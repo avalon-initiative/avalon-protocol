@@ -43,6 +43,16 @@ pub enum AppError {
     AlreadyBlocked,
     #[error("not blocked")]
     BlockNotFound,
+    #[error("signing key not found")]
+    SigningKeyNotFound,
+    #[error("device grant not found or already resolved")]
+    DeviceGrantNotFound,
+    #[error("device grant has expired")]
+    DeviceGrantExpired,
+    #[error("approving signing key is unknown or has been revoked")]
+    ApproverKeyInvalid,
+    #[error("grant approval signature verification failed")]
+    InvalidGrantSignature,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -66,6 +76,11 @@ impl IntoResponse for AppError {
             AppError::SelfBlock => StatusCode::BAD_REQUEST,
             AppError::AlreadyBlocked => StatusCode::CONFLICT,
             AppError::BlockNotFound => StatusCode::NOT_FOUND,
+            AppError::SigningKeyNotFound | AppError::DeviceGrantNotFound => StatusCode::NOT_FOUND,
+            AppError::DeviceGrantExpired => StatusCode::GONE,
+            AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
+                StatusCode::UNAUTHORIZED
+            }
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —

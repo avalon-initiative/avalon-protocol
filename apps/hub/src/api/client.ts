@@ -3,7 +3,10 @@
 // the typed functions below rather than touching fetch or the URL directly.
 import { AvalonApiError, messageForStatus } from './errors'
 import type {
+  ApproveDeviceGrantRequest,
   CreateFriendRequestRequest,
+  DeviceGrantResponse,
+  DeviceResponse,
   FriendRequestResponse,
   FriendshipResponse,
   HistoryEntryResponse,
@@ -13,6 +16,7 @@ import type {
   RegisterFinishResponse,
   RegisterStartRequest,
   RegisterStartResponse,
+  RequestDeviceGrantRequest,
   ResolveHandleResponse,
   SessionFinishRequest,
   SessionFinishResponse,
@@ -136,6 +140,43 @@ export function getPresence(token: string, ids: string[]): Promise<PresenceRespo
   }
   const params = new URLSearchParams({ ids: ids.join(',') })
   return request(`/presence?${params.toString()}`, { token })
+}
+
+// Device-registration / linked-device grant model (issue #135).
+
+export function requestDeviceGrant(
+  token: string,
+  body: RequestDeviceGrantRequest,
+): Promise<DeviceGrantResponse> {
+  return request('/me/devices/grants', { method: 'POST', body, token })
+}
+
+export function listDeviceGrants(
+  token: string,
+  status?: DeviceGrantResponse['status'],
+): Promise<DeviceGrantResponse[]> {
+  const path = status ? `/me/devices/grants?status=${status}` : '/me/devices/grants'
+  return request(path, { token })
+}
+
+export function getDeviceGrant(token: string, grantId: string): Promise<DeviceGrantResponse> {
+  return request(`/me/devices/grants/${grantId}`, { token })
+}
+
+export function approveDeviceGrant(
+  token: string,
+  grantId: string,
+  body: ApproveDeviceGrantRequest,
+): Promise<DeviceResponse> {
+  return request(`/me/devices/grants/${grantId}/approve`, { method: 'POST', body, token })
+}
+
+export function listDevices(token: string): Promise<DeviceResponse[]> {
+  return request('/me/devices', { token })
+}
+
+export function revokeDevice(token: string, signingKeyId: string): Promise<void> {
+  return request(`/me/devices/${signingKeyId}/revoke`, { method: 'POST', token })
 }
 
 // BASE_URL is http(s)://…; the websocket endpoint needs ws(s)://… — same

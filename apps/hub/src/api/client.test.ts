@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  approveDeviceGrant,
   createFriendRequest,
   declineOrWithdrawFriendRequest,
   getMe,
   getMyHistory,
   getPresence,
+  listDeviceGrants,
+  listDevices,
   listFriends,
   openPresenceSocket,
   registerStart,
   removeFriend,
+  requestDeviceGrant,
   resolveHandle,
+  revokeDevice,
   updateProfile,
 } from './client'
 import { AvalonApiError } from './errors'
@@ -195,6 +200,62 @@ describe('api client', () => {
       status: 400,
       message: 'avatar_url must be an http(s) URL of 2048 characters or fewer',
     } satisfies Partial<AvalonApiError>)
+  })
+})
+
+describe('device grants (issue #135)', () => {
+  it('requestDeviceGrant POSTs to /me/devices/grants', async () => {
+    mockFetchOnce(200, { id: 'grant-1', status: 'pending' })
+
+    await requestDeviceGrant('token', {
+      requested_signing_public_key: 'abc',
+      device_label: 'a device',
+    })
+
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me/devices/grants')
+    expect(options.method).toBe('POST')
+  })
+
+  it('listDeviceGrants includes the status filter only when given', async () => {
+    mockFetchOnce(200, [])
+
+    await listDeviceGrants('token', 'pending')
+    let [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me/devices/grants?status=pending')
+
+    await listDeviceGrants('token')
+    ;[url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[1]
+    expect(url).toContain('/me/devices/grants')
+    expect(url).not.toContain('?status=')
+  })
+
+  it('approveDeviceGrant POSTs to the grant-specific approve path', async () => {
+    mockFetchOnce(200, { id: 'key-1' })
+
+    await approveDeviceGrant('token', 'grant-1', {
+      approver_signing_key_id: 'key-1',
+      signature: 'sig',
+    })
+
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me/devices/grants/grant-1/approve')
+    expect(options.method).toBe('POST')
+  })
+
+  it('listDevices GETs /me/devices', async () => {
+    mockFetchOnce(200, [])
+    await listDevices('token')
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me/devices')
+  })
+
+  it('revokeDevice POSTs to the device-specific revoke path', async () => {
+    mockFetchOnceEmpty(200)
+    await revokeDevice('token', 'key-1')
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me/devices/key-1/revoke')
+    expect(options.method).toBe('POST')
   })
 })
 

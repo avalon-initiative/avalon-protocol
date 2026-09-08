@@ -101,6 +101,8 @@ milestone-1 stand-in until actor signatures exist.
 | Kind | Issuer → subject | Payload (canonical) | Drives | Signed by |
 |---|---|---|---|---|
 | `identity.created` | identity → identity | identity id | identities | identity's Ed25519 event-signing key (#73, done) |
+| `identity.signing_key_added` | identity → identity | new signing key id/public key, device label, approving key id | identity signing keys | the approving device's key (#135, done) |
+| `identity.signing_key_revoked` | identity → identity | revoked signing key id | identity signing keys | network (milestone-1 stand-in, #135, done) |
 | `profile.updated` | identity → identity | changed promised-durable fields | profiles | identity key |
 | `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
 | `game.binding_established` | identity → game | identity, game | bindings, registry players | identity key |
@@ -187,6 +189,12 @@ the record — [`./revocation.md`](./revocation.md).
   attributed to the identity that authenticated the request rather than to
   the node. Declining or withdrawing a request emits no event — see
   [social-graph.md](./social-graph.md).
+- A third emitter: `crates/server/src/devices.rs` (#135) writes
+  `identity.signing_key_added` when a device grant is approved (signed by
+  the approving device's Ed25519 key, verified the same way
+  `register_finish` verifies `identity.created`'s signature) and
+  `identity.signing_key_revoked` when a signing key is revoked
+  (network-attributed, same milestone-1 stand-in `friend.requested` uses).
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`; the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
   `timestamp`, `version` (`crates/chain/src/postgres.rs`).

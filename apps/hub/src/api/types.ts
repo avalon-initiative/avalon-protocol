@@ -107,6 +107,39 @@ export interface HistoryEntryResponse {
   timestamp: string
 }
 
+// Device-registration / linked-device grant model (issue #135), matching
+// crates/server/src/devices.rs field-for-field.
+
+export interface RequestDeviceGrantRequest {
+  requested_signing_public_key: string
+  device_label: string | null
+}
+
+export interface DeviceGrantResponse {
+  id: string
+  status: 'pending' | 'approved' | 'denied' | 'expired'
+  device_label: string | null
+  requested_signing_public_key: string
+  requested_at: string
+  expires_at: string
+}
+
+export interface ApproveDeviceGrantRequest {
+  approver_signing_key_id: string
+  signature: string
+}
+
+export interface DeviceResponse {
+  id: string
+  label: string | null
+  public_key: string
+  added_at: string
+  // Omitted by the server entirely when the device is still active — see
+  // ProfileResponse.avatar_url's own precedent for an optional field that
+  // isn't always present on the wire.
+  revoked_at?: string
+}
+
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'
 
 export interface PresenceResponse {

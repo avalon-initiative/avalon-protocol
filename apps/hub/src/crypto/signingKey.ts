@@ -108,12 +108,67 @@ export function loadSigningKey(identityId: string): Uint8Array | null {
   return stored ? fromBase64(stored) : null
 }
 
+/**
+ * Generates a fresh Ed25519 keypair for a device-grant request (#135) —
+ * deliberately *not* persisted here. The design this implements keeps a
+ * requesting device's secret key in memory only until its grant is
+ * approved; persisting it before that would mean a rejected/abandoned
+ * request left an orphaned, never-authorized key sitting in storage.
+ * Nothing about this keypair is derived from a mnemonic — it's a genuinely
+ * fresh, device-specific key, unlike #134's identity-wide recovery key.
+ */
+export function generateGrantRequestKeyPair(): SigningKeyPair {
+  return ed25519.keygen()
+}
+
+/**
+ * Persists a keypair produced by `generateGrantRequestKeyPair` for
+ * `identityId`, once (and only once) its device grant has actually been
+ * approved server-side — the moment this device becomes a real, usable
+ * signing identity rather than a pending request.
+ */
+export function storeSigningKey(identityId: string, secretKey: Uint8Array): void {
+  localStorage.setItem(storageKey(identityId), toBase64(secretKey))
+}
+
+/**
+ * The exact bytes a device grant approval's Ed25519 signature covers —
+ * must match `device_grant_approval_signing_bytes` in
+ * crates/server/src/devices.rs byte-for-byte. Binds the grant id and the
+ * requested public key so a signature can never be replayed against a
+ * different grant or a different requested key.
+ */
+export function deviceGrantApprovalSigningBytes(
+  grantId: string,
+  identityId: string,
+  requestedSigningPublicKey: Uint8Array,
+): Uint8Array {
+  return new TextEncoder().encode(
+    `avalon:device_grant.approved:v1:${grantId}:${identityId}:${toBase64(requestedSigningPublicKey)}`,
+  )
+}
+
 export function signWithKey(secretKey: Uint8Array, message: Uint8Array): Uint8Array {
   return ed25519.sign(message, secretKey)
 }
 
+/**
+ * Derives the public key for an already-known secret key — used to find
+ * which server-side `identity_signing_keys` row *is* this device (matching
+ * on public key, the only thing the server ever learns about a device's
+ * key) without this device having to remember its own server-assigned id
+ * separately.
+ */
+export function publicKeyFromSecretKey(secretKey: Uint8Array): Uint8Array {
+  return ed25519.getPublicKey(secretKey)
+}
+
 export function bytesToBase64(bytes: Uint8Array): string {
   return toBase64(bytes)
+}
+
+export function base64ToBytes(value: string): Uint8Array {
+  return fromBase64(value)
 }
 
 /**

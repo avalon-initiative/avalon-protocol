@@ -127,18 +127,26 @@ keyed by identity id, unencrypted:
   current device has none). The server only ever sees the resulting
   *public* key.
 
-This mnemonic recovery is the fallback path; the primary path — a
+This mnemonic recovery is the fallback path. The primary path — a
 device-registration/linked-device grant model, no phrase in the common
-case — is a separate, not-yet-built piece
-([#135](https://github.com/LunarVagabond/avalon-protocol/issues/135)). Both
-were decided together in
-[#122](https://github.com/LunarVagabond/avalon-protocol/issues/122), which
-is distinct from [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99):
+case — is [#135](https://github.com/LunarVagabond/avalon-protocol/issues/135):
+each device gets its own signing keypair (`identity_signing_keys`, already
+multiple rows per identity), and a grant only ever *authorizes* a new
+device's public key — it never transfers a private key. An already-trusted
+device (`crates/server/src/devices.rs`) approves a new one by signing the
+grant with its own key; the server verifies that signature against the
+approver's still-active key before registering the new one. Revocation
+(`POST /me/devices/:id/revoke`) is unilateral — any authenticated session
+for the identity can revoke any signing key, including its own, without
+the revoked device's cooperation. Both `#134` and `#135` were decided
+together in [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122),
+which is distinct from [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99):
 #99 covers a lost *passkey* (login credential), #122 covers the *signing
-key* (what authenticates a player's authored events) — recovering it never
-by itself authenticates a login. The WebAuthn passkey has no equivalent
-client-storage decision here: it never leaves the platform authenticator,
-already synced across devices by whatever passkey provider the player uses.
+key* (what authenticates a player's authored events) — recovering or
+granting one never by itself authenticates a login. The WebAuthn passkey
+has no equivalent client-storage decision here: it never leaves the
+platform authenticator, already synced across devices by whatever passkey
+provider the player uses.
 
 ## What identity is not
 
@@ -177,6 +185,12 @@ already synced across devices by whatever passkey provider the player uses.
   `webauthn_ceremonies` (ephemeral ceremony state), `sessions`. No
   `credentials` table anymore.
 - `crates/server/db/migrations/0003_outbox/` — `protocol_outbox`.
+- `crates/server/db/migrations/0007_device_grants/` — `identity_signing_keys.revoked_at`
+  and `device_grants` (#135); see the signing-key section above.
+- `crates/server/src/devices.rs` (#135) — `POST /me/devices/grants`,
+  `GET /me/devices/grants[?status=]`, `GET /me/devices/grants/:id`,
+  `POST /me/devices/grants/:id/approve`, `GET /me/devices`,
+  `POST /me/devices/:id/revoke`.
 - `crates/cli/src/main.rs` — `avalon create-identity` drives a real WebAuthn
   registration via a virtual authenticator (`passkey-authenticator`'s
   `testable` feature) and prints the loss-of-everything warning #99 calls
