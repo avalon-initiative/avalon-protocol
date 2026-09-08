@@ -3,7 +3,7 @@
 **Nothing about a player is exposed because the protocol can technically expose
 it.** Every read path names the visibility scope it checks. **Network analytics
 are aggregates**, never per-player data. A portable identity makes surveillance
-portable too ([Proposal §31](../Proposal.md#31-major-risks)); the answer is
+portable too ([Proposal §31](../stakeholders/Proposal.md#31-major-risks)); the answer is
 intentional scoping, not hoping nobody looks.
 
 ## Scopes
@@ -96,5 +96,5 @@ durable.
   aggregates only.
 - [#28](https://github.com/LunarVagabond/avalon-protocol/issues/28) — permission
   enforcement middleware (the write-side counterpart).
-- Open in [Proposal §32](../Proposal.md#32-open-questions): how much social
+- Open in [Proposal §32](../stakeholders/Proposal.md#32-open-questions): how much social
   information should be portable; cross-game blocking.

@@ -6,7 +6,7 @@ and later revoked leaves two facts in durable history — "Game A issued it" and
 the issuer level: suspending or revoking an issuer is an appended entry, not a
 deletion of everything it ever signed.
 
-Narrative context: [`../Proposal.md` §9](../Proposal.md#9-trust-and-attestations)
+Narrative context: [`../stakeholders/Proposal.md` §9](../stakeholders/Proposal.md#9-trust-and-attestations)
 and the durable-history rule in
 [ADR #75](https://github.com/LunarVagabond/avalon-protocol/issues/75).
 

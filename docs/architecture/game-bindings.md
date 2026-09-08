@@ -7,7 +7,7 @@ in the game's own database. **Game authority is scoped to the game's own
 binding**: Game A can create and manage its profile of a player and issue its
 own attestations; it cannot touch Game B's.
 
-Narrative: [`../Proposal.md` §19](../Proposal.md#19-identity-vs-game-data).
+Narrative: [`../stakeholders/Proposal.md` §19](../stakeholders/Proposal.md#19-identity-vs-game-data).
 
 ## The tree
 

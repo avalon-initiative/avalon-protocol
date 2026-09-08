@@ -8,8 +8,8 @@ so that when the time comes nothing has to be torn out.
 
 ## Portable assets (Phase 4)
 
-[`../Proposal.md#16-portable-assets`](../Proposal.md#16-portable-assets) and
-[`../Proposal.md#26-phase-4--portable-assets`](../Proposal.md#26-phase-4--portable-assets).
+[`../stakeholders/Proposal.md#16-portable-assets`](../stakeholders/Proposal.md#16-portable-assets) and
+[`../stakeholders/Proposal.md#26-phase-4--portable-assets`](../stakeholders/Proposal.md#26-phase-4--portable-assets).
 
 Ownership and functionality are separate. Provenance can be portable while
 behavior stays game-specific:
@@ -43,14 +43,14 @@ Boundaries that hold from day one:
 - **Games have scoped authority.** Game A can issue Game A assets. It cannot
   rewrite Game B's, and it cannot alter ownership history.
 - **Standardized asset schemas are an open question**, listed in
-  [`../Proposal.md#32-open-questions`](../Proposal.md#32-open-questions). A
+  [`../stakeholders/Proposal.md#32-open-questions`](../stakeholders/Proposal.md#32-open-questions). A
   schema reference on the asset, like the one attestations carry, is the likely
   shape; a universal item format is not.
 
 ## Economy (Phase 5)
 
-[`../Proposal.md#15-economy-and-currency`](../Proposal.md#15-economy-and-currency)
-and [`../Proposal.md#27-phase-5--economy`](../Proposal.md#27-phase-5--economy).
+[`../stakeholders/Proposal.md#15-economy-and-currency`](../stakeholders/Proposal.md#15-economy-and-currency)
+and [`../stakeholders/Proposal.md#27-phase-5--economy`](../stakeholders/Proposal.md#27-phase-5--economy).
 
 A universal cryptocurrency, currency, item market, or financial layer is not
 the foundation of Avalon, and Avalon must deliver value without one. The reasons
@@ -90,7 +90,7 @@ than defining it.
 - **No protocol-level currency assumptions.** Nothing in identity, guilds, or
   attestations references a balance, a wallet, or a price. The `wallet.read` /
   `wallet.write` capability names in
-  [`../Proposal.md#13-permission-model`](../Proposal.md#13-permission-model) are
+  [`../stakeholders/Proposal.md#13-permission-model`](../stakeholders/Proposal.md#13-permission-model) are
   reserved names, not a commitment to build them.
 
 ## Today in the repo

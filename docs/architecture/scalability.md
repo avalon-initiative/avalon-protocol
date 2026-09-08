@@ -23,10 +23,10 @@ week to rebuild an index is not scalable.
 | Dimension | The question | Where it lands |
 |---|---|---|
 | Durable event volume | how many protocol events per day, network-wide? | [`./settlement.md`](./settlement.md), #38 |
-| Batch size and commitment cadence | how many events per batch; how often is a commitment produced; what latency to "settled"? | #38, #40, #79 |
+| Batch size and commitment cadence | how many events per batch; how often is a commitment produced; what latency to "settled"? | #38, #40 |
 | Query volume | how many profile / friend / guild / registry reads per second? | [`./query-and-indexing.md`](./query-and-indexing.md) |
 | Realtime connections | how many players are connected at once; how does presence fan out to friends and guild rosters? | [`./presence.md`](./presence.md) |
-| Historical volume | how large is the log after 5 / 10 / 20 years? | #40, #79 |
+| Historical volume | how large is the log after 5 / 10 / 20 years? | #40 |
 | Rebuild time | how long to reconstruct every projection from genesis? | [`./disaster-recovery.md`](./disaster-recovery.md), #43 |
 | Node specialization | can settlement, indexing, realtime, and gateway scale separately? | [`./nodes.md`](./nodes.md) |
 | SDK routing | does discovery and failover stay cheap as node count grows? | [`./sdk.md`](./sdk.md), #91 |
@@ -67,9 +67,10 @@ Asked of every design, with the intended answer:
   served by indexers elsewhere; settlement is mirrored.
 - **A database is lost** — projections rebuild from the log (scenario J,
   [`./disaster-recovery.md`](./disaster-recovery.md)).
-- **The settlement backend stalls** — events queue in the buffer; projections
-  keep serving; commitments resume. What "stalls" means for an external chain
-  is one of #79's evaluation criteria.
+- **The settlement chain stalls** — events queue in the buffer; projections
+  keep serving; commitments resume once the chain does. What "stalls" means
+  for Avalon's own validator set is one of #40's design questions now, not an
+  external chain's.
 
 ## Scenario L — 1,000 games, 100M players
 
@@ -92,8 +93,10 @@ lever, which is what the three verticals and the node roles exist to provide.
 - [#38](https://github.com/LunarVagabond/avalon-protocol/issues/38) batching
 - [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) log
   structure and mirror sync (history size, verification cost)
-- [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) backend
-  choice — throughput, cost over decades, and stall behavior are criteria there
+- [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) /
+  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) backend
+  decided (Avalon's own chain); throughput, cost over decades, and stall
+  behavior are now #40's consensus-design criteria
 - [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43) rebuild
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) discovery
   and failover

@@ -5,7 +5,7 @@ to `avalon-server` through the same API, authentication, and capability model as
 any game or third-party client, has no backend of its own, and holds no
 privilege another authorized client couldn't have. Decided in
 [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77); narrative in
-[Proposal §6](../Proposal.md#6-avalon-hub).
+[Proposal §6](../stakeholders/Proposal.md#6-avalon-hub).
 
 ## The world outside the games
 
@@ -21,12 +21,12 @@ The Hub is where a player interacts with the network itself, with no game open:
 - permissions: which games have which capabilities, and revoking them
 - connected games (bindings)
 - recognition preferences (which issuers' claims to feature)
-- tournament history
+- game event history
 - later: asset ownership
 
 It is not a launcher, a store, a distribution platform, or a game authority. It
 does not own the games it lists. Steam + Roblox + universal launcher is the shape
-to avoid ([Proposal §28](../Proposal.md#28-difference-from-roblox)).
+to avoid ([Proposal §28](../stakeholders/Proposal.md#28-difference-from-roblox)).
 
 ## One client among several
 
@@ -34,7 +34,7 @@ Because the Hub uses only the public API, other clients are possible by
 construction: web, mobile, desktop, a Discord integration, a game's native UI, a
 third-party application. `apps/mobile-hub` is the first proof — the same UI in a
 Tauri shell for desktop and mobile, for guild chat and presence without a game
-running ([Proposal §22](../Proposal.md#22-companion-apps-presence-beyond-the-game)).
+running ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-game)).
 A player who never installs any Hub loses nothing at the protocol level.
 
 Rules that keep this true:

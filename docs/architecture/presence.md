@@ -62,7 +62,7 @@ nothing anyone needs to prove later.
 - friends lists with online/where
 - guild rosters with "members currently playing: 42 — Ashen Realms"
 - the Hub's activity view and the mobile-hub companion app
-  ([Proposal §22](../Proposal.md#22-companion-apps-presence-beyond-the-game))
+  ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-game))
 - cross-game "join me" flows and matchmaking integrations a game chooses to build
 - community tools
 

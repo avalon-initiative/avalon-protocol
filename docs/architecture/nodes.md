@@ -60,9 +60,10 @@ federation. Under federation, whether Game B can see a player's identity would
 depend on which servers Game B's server peers with; that recreates the walled
 gardens Avalon exists to remove. Under mirroring, a client does not pick "which
 server to trust": any mirror that misrepresents the log is detectable, because
-the log is self-verifying. Whether the log additionally anchors to, or becomes,
-a chain is [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79),
-and does not change this.
+the log is self-verifying. The log *is* Avalon's own chain, not an anchor into someone else's
+([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), closed;
+[ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)), and
+that does not change this.
 
 ## Discovery
 
@@ -100,7 +101,8 @@ unverifiable.
 ## Decisions and tickets
 
 - #70 mirrors of a public log, not federation
-- #79 long-term settlement backend; #40 log design and mirror sync
+- #79, #93 long-term settlement backend, decided (Avalon's own chain, no
+  launch currency); #40 log design, mirror sync, and validator/consensus design
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
   discovery and capability negotiation
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) TLS before

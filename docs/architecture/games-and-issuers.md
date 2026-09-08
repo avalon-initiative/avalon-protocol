@@ -6,7 +6,7 @@ verifiable as the issuer record behind them. **The node operator is never the
 issuer**: hosted infrastructure transports, indexes, and settles a game's
 claims; it cannot sign them.
 
-Narrative: [`../Proposal.md` §18](../Proposal.md#18-game-registration).
+Narrative: [`../stakeholders/Proposal.md` §18](../stakeholders/Proposal.md#18-game-registration).
 
 ## Registration
 
@@ -31,7 +31,7 @@ Achievement ids are namespaced under the game:
 
 ```text
 game:ashen-realms:achievement:dragon_slayer
-game:ashen-realms:tournament:avalon-championship-2027:winner
+game:ashen-realms:game_event:avalon-championship-2027:winner
 ```
 
 ## Issuer lifecycle

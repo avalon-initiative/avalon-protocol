@@ -8,7 +8,7 @@ job is to let those worlds recognize the same players and communities without
 surrendering control of anything inside them.
 
 This document is the map. Each topic has its own normative doc, listed in
-[`README.md`](./README.md). [`../Proposal.md`](../Proposal.md) is the narrative
+[`README.md`](./README.md). [`../stakeholders/Proposal.md`](../stakeholders/Proposal.md) is the narrative
 version and is not repeated here.
 
 ## What Avalon is
@@ -19,7 +19,7 @@ A shared, opt-in network that independent games can connect to for:
 - friends, presence, and guilds (with guild chat)
 - achievements as verifiable attestations, with provenance and revocation
 - game and issuer registration, key lifecycle, and a game registry
-- tournaments and cross-game event results
+- game events and cross-game results (tournaments, seasonal championships, ...)
 - eventually, portable assets and ownership history
 
 A game may be commercial, open source, proprietary, self-hosted, community run,
@@ -45,7 +45,7 @@ useful regardless.
 | Game state (belongs to the game) | Protocol history (belongs to Avalon) |
 |---|---|
 | HP, XP ticks, movement, physics, combat | achievement issued / revoked |
-| NPC state, quests, world state, position | tournament victory / participation |
+| NPC state, quests, world state, position | game event victory / participation |
 | ordinary chat, matchmaking | game and issuer registration, key rotation, suspension |
 | inventory changes with no interoperability meaning | guild creation, durable membership and role changes |
 | game-specific progression and economy | ownership changes, asset provenance, attestations |
@@ -168,15 +168,15 @@ Phases, as laid out in the Proposal:
 1. **Network** — identity, profiles, friends, guilds and chat, achievements and
    attestations, game and issuer registration, a basic registry and Hub, a
    developer API, one tiny demonstration integration.
-   [`../Proposal.md#23-the-first-product`](../Proposal.md#23-the-first-product)
+   [`../stakeholders/Proposal.md#23-the-first-product`](../stakeholders/Proposal.md#23-the-first-product)
 2. **SDK** — Rust first, then the languages actual integrations demand.
-   [`../Proposal.md#24-phase-2--developer-sdk`](../Proposal.md#24-phase-2--developer-sdk)
+   [`../stakeholders/Proposal.md#24-phase-2--developer-sdk`](../stakeholders/Proposal.md#24-phase-2--developer-sdk)
 3. **External games** — independent games integrating validates the protocol.
-   [`../Proposal.md#25-phase-3--external-games`](../Proposal.md#25-phase-3--external-games)
+   [`../stakeholders/Proposal.md#25-phase-3--external-games`](../stakeholders/Proposal.md#25-phase-3--external-games)
 4. **Portable assets** — provenance, ownership, transfers, recognition.
-   [`../Proposal.md#26-phase-4--portable-assets`](../Proposal.md#26-phase-4--portable-assets)
+   [`../stakeholders/Proposal.md#26-phase-4--portable-assets`](../stakeholders/Proposal.md#26-phase-4--portable-assets)
 5. **Economy** — only after the network demonstrates real utility.
-   [`../Proposal.md#27-phase-5--economy`](../Proposal.md#27-phase-5--economy)
+   [`../stakeholders/Proposal.md#27-phase-5--economy`](../stakeholders/Proposal.md#27-phase-5--economy)
 
 Implementation priority, in order: protocol semantics, authority boundaries,
 durable history, verifiable attestations, identity, guild/social primitives,
@@ -220,9 +220,9 @@ settles are correct.
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) realtime
   presence is ephemeral
 - Open decisions: [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
-  log design, [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)
-  keypair identity, [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)
-  long-term settlement backend,
-  [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) issuer keys,
-  [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) revocation
-  mechanics
+  log/validator/consensus design, [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)
+  keypair identity, [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
+  issuer keys, [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81)
+  revocation mechanics. Decided since: [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)/
+  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) —
+  Avalon runs its own chain, no launch currency.

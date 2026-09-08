@@ -11,7 +11,7 @@ every game action is a protocol event; ordinary gameplay never becomes one.**
 | Stays game-side (never an event) | May enter durable history |
 |---|---|
 | movement, combat, physics, AI | achievement issued / revoked |
-| HP, XP ticks, NPC state, player position | tournament result |
+| HP, XP ticks, NPC state, player position | game event result |
 | matchmaking, ordinary chat | guild created, membership / role changed |
 | game-specific inventory and economy | game registered, binding established |
 | typing indicators, connection state, presence | issuer registered, key rotated, suspended |
@@ -63,7 +63,7 @@ Protocol Event
           Commitment / Merkle Root      (#40)
                   |
                   v
-              Settlement                (SettlementProvider; #79 for the backend)
+              Settlement                (SettlementProvider; Avalon's own chain, #79/#93)
 ```
 
 An event fans out to the read model and to the settlement path. The projection
@@ -110,7 +110,7 @@ milestone-1 stand-in until actor signatures exist.
 | `issuer.key_revoked` | issuer → issuer | key id, reason (`rotated`, `compromised`, …) | issuer keys | issuer key |
 | `issuer.key_expired` | issuer → issuer | key id | issuer keys | issuer key or network |
 | `issuer.suspended` / `.reinstated` / `.revoked` / `.deprecated` | network or issuer → issuer | reason, effective at | issuer status | operator (audited) or issuer |
-| `friend.requested` / `.accepted` / `.removed` | identity → identity | the two identities, actor | friendships | acting identity's key — *only if friendships are classified promised-durable (#86)* |
+| `friend.requested` / `.accepted` / `.removed` | identity → identity | the two identities, actor | friendships | acting identity's key — decided promised-durable; see [social-graph.md](./social-graph.md) |
 | `guild.created` | identity → guild | name, tag, description, founder | guilds | founder key |
 | `guild.member_added` / `.member_removed` | guild → identity | role, actor | rosters, history | acting member's key |
 | `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
@@ -119,7 +119,7 @@ milestone-1 stand-in until actor signatures exist.
 | `achievement.issued` | game → identity | achievement id, attestation id, evidence ref | attestations | issuer key |
 | `achievement.revoked` | game → attestation | attestation ref, reason code, reason | attestation status | issuer key |
 | `attestation.superseded` | game → attestation | old ref, new ref | attestation status | issuer key |
-| `tournament.result_issued` | game → identity | `achievement.issued` with the tournament schema | attestations, registry | issuer key |
+| `game_event.result_issued` | game → identity | `achievement.issued` with the game-event schema | attestations, registry | issuer key |
 | `recognition.published` | game → issuer | recognized claim types / scopes | recognition graph | game key |
 
 Conventions: `issuer` and `subject` are `GlobalId`s
@@ -139,8 +139,9 @@ History may outlive every current maintainer. Therefore:
 - An unknown kind is preserved and skipped by an indexer that does not
   understand it; it is never dropped from the log.
 - Attestations additionally carry an issuer-declared schema reference so a
-  consumer can recognize "tournament result, schema v1" independently of the
-  issuer's naming.
+  consumer can recognize "game event result, schema v1" independently of the
+  issuer's naming or which kind of event (tournament, seasonal championship,
+  community campaign, ...) produced it.
 
 "We can change the schema later" is true of a projection table and false of the
 log.

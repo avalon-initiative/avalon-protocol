@@ -6,7 +6,7 @@ build. Identity and auth work end to end against a live Postgres (register,
 login, authenticated profile read/update, the Rust SDK's `authenticate()`), and
 every identity creation lands in a hash-chained ledger you can inspect with
 `make inspect-ledger`. Social, guilds, achievements, permissions, the indexer,
-and the Hub UIs are still scaffolding. See [`docs/Proposal.md`](docs/Proposal.md)
+and the Hub UIs are still scaffolding. See [`docs/stakeholders/Proposal.md`](docs/stakeholders/Proposal.md)
 for the full design, [`docs/architecture/`](docs/architecture/README.md) for the
 normative architecture and its invariants, and
 [`docs/WhyAvalon.md`](docs/WhyAvalon.md) for the case for why this needs to exist.
@@ -63,7 +63,8 @@ bindings/
   csharp/     flagship external SDK for game developers (Unity-targeted)
 
 docs/
-  Proposal.md    the living design document (narrative)
+  stakeholders/
+    Proposal.md  the living design document (narrative)
   WhyAvalon.md   the case for why this needs to exist
   architecture/  the normative architecture reference, one file per topic
   players/       docs for people playing games that use Avalon
@@ -82,7 +83,7 @@ decisions.
 
 | Design | Decisions | Process |
 |---|---|---|
-| [Proposal](docs/Proposal.md) · [Architecture](docs/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
+| [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
 
 ## Contributing
 

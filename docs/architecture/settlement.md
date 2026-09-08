@@ -4,8 +4,8 @@ Settlement is the durable-history vertical: the place protocol facts are
 committed so that anyone can verify them later. **Settlement is not the general
 purpose query database.** **One protocol event is never one settlement
 transaction.** **Milestone 1 is a hash-chained, append-only ledger; the
-long-term shape is a public transparency log, and what that log anchors to or
-becomes is still an open decision.**
+long-term backend is Avalon's own chain, with no native currency at launch —
+the consensus mechanism itself is still an open engineering question.**
 
 ## Durable history, not a database
 
@@ -69,56 +69,35 @@ needs them.
   durable fact is a signed, hash-chained, append-only entry; anyone can verify
   an entry and its position without permission; anyone can mirror the log and
   serve reads. **Federation is rejected** — visibility must not depend on which
-  server a game trusts. **Avalon does not run mining or validator consensus** to
-  referee write ordering; Avalon's writes are already unambiguous because each
-  actor signs its own.
+  server a game trusts. **Avalon does not run mining, or consensus staked on a
+  currency,** to referee write ordering; Avalon's writes are already
+  unambiguous because each actor signs its own. (This does not rule out
+  currency-free validator consensus — see the backend decision below.)
 - Milestone 1 stays Postgres-backed, with the constraint that the schema and
   signing scheme must make entries independently verifiable and the log
   exportable from day one rather than retrofitted.
+- **The long-term backend: Avalon operates its own chain**
+  ([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), closed;
+  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)). Not
+  anchored to and not built on top of an existing chain's checkpoints or
+  token. No native currency or token at launch — the chain settles protocol
+  facts, not value; a cross-game currency layer is an explicitly later,
+  optional phase ([`../stakeholders/Proposal.md` §15](../stakeholders/Proposal.md#15-economy-and-currency))
+  evaluated on its own, not a prerequisite for the chain existing. Consensus
+  among Avalon's own validators does not require proof-of-work or a
+  stake-weighted token — a permissioned set of registered, known node
+  operators reaching Byzantine-fault-tolerant agreement is sufficient, and
+  does not reopen #70's rejection of mining/consensus (there is still no
+  scarce resource to referee) or its rejection of federation (every validator
+  proposes into, and every mirror reads from, the same canonical chain).
 
 ## What is open
 
-**Log design** —
-[#40](https://github.com/LunarVagabond/avalon-protocol/issues/40): the
-hash-chaining / Merkle structure, signed-tree-head cadence, how mirrors sync and
-detect tampering, and what the milestone-1 schema needs to support this.
-Everything decided there is needed under every outcome of the backend decision.
-
-**Ledger signing key** —
-[#39](https://github.com/LunarVagabond/avalon-protocol/issues/39): how the log
-operator signs entries and tree heads. A separate key with a separate lifecycle
-from issuer keys ([`./games-and-issuers.md`](./games-and-issuers.md)) and player
-keys ([`./identity.md`](./identity.md)).
-
-**Long-term backend** —
-[#79](https://github.com/LunarVagabond/avalon-protocol/issues/79). An
-operator-run log is verifiable and mirrorable, but the operator still controls
-what gets appended. Three shapes could deliver operator-independent permanence,
-and none is chosen:
-
-1. **Anchored transparency log** — the log stays canonical; its signed tree
-   heads / Merkle roots are periodically published to an existing public chain.
-   Only checkpoints touch the chain.
-2. **Partnership with a specific chain** — the same batching model, committed to
-   one chain's ecosystem (a high-throughput L1, a BlockDAG such as Kaspa, an L2
-   or rollup, or a data-availability layer), possibly with deeper integration.
-3. **Custom Avalon chain** — Avalon's own block/DAG production, node software,
-   and consensus. Full control, full cost; would supersede #70's consensus
-   rejection (the federation rejection stands regardless).
-
-Candidates are evaluated against: checkpoint throughput and latency (not
-per-event volume), finality and how it composes with the log's own
-verifiability, cost per commitment over 5/10/20 years, decentralization actually
-delivered, storage and verification cost for a mirror or light client, batched
-commitment and historical-verification support, node/operator requirements and
-operational complexity, developer experience, ecosystem maturity and long-term
-viability, and what happens to Avalon if the chain stalls, forks, or dies.
-Kaspa/BlockDAG is a research reference for concurrent block production under
-high commitment volume. It is not an assumption.
-
-Invariants that hold whichever way #79 goes: batching, gameplay never touching
-settlement, `SettlementProvider` as the sole boundary, and a chain-agnostic
-`protocol` crate.
+**The consensus and validator design** — now scoped inside
+[#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) alongside
+the log's own hash/Merkle/signed-tree-head design: which BFT algorithm,
+validator admission and rotation, block/round cadence and finality. Needs its
+own research spike and written comparison before it closes.
 
 ## Today in the repo
 
@@ -145,7 +124,7 @@ settlement, `SettlementProvider` as the sole boundary, and a chain-agnostic
 
 - Epic [#36](https://github.com/LunarVagabond/avalon-protocol/issues/36)
   Settlement Ledger
-- #68, #70 decided; #40, #79, #39 open decisions
+- #68, #70, #79, #93 decided; #40, #39 open engineering decisions
 - #38 batching, #71 atomicity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider

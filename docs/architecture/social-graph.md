@@ -5,7 +5,7 @@ Entering a new game never means rebuilding a friends list. **A game never
 automatically receives a player's social graph**; every read of it is gated by a
 capability the player granted to that game and by the visibility the player set.
 
-Narrative: [Proposal §11](../Proposal.md#11-universal-friends). The social layer
+Narrative: [Proposal §11](../stakeholders/Proposal.md#11-universal-friends). The social layer
 as a whole (friends, guilds, presence, communication) is one of Avalon's main
 differentiators — what a player should not have to rebuild per game.
 
@@ -13,7 +13,7 @@ differentiators — what a player should not have to rebuild per game.
 
 | Thing | Persists across games? | Where it lives |
 |---|---|---|
-| Friendship (identity A ↔ identity B) | Yes | durable network relationship |
+| Friendship (identity A ↔ identity B) | **Yes — decided** | durable network relationship, owned by the network, not either player's current game |
 | Friend requests (pending state) | Yes, until resolved | server state; not promised-durable history |
 | Presence of a friend | Ephemeral | see [presence](./presence.md) |
 | Blocks / mutes | Yes | design open (below) |
@@ -54,12 +54,12 @@ None of them widens the others.
 ## Blocking and harassment
 
 Persistent identity makes harassment persistent too
-([Proposal §31](../Proposal.md#31-major-risks)). Blocking must work across games,
+([Proposal §31](../stakeholders/Proposal.md#31-major-risks)). Blocking must work across games,
 not per game, and a block must at minimum hide the blocker's presence and refuse
 friend requests network-wide. What a block means *inside* a game (can they still
 be matched, can they see each other in a shared world) is the game's decision,
 informed by the network fact. This is listed as open in
-[Proposal §32](../Proposal.md#32-open-questions) and has no design yet.
+[Proposal §32](../stakeholders/Proposal.md#32-open-questions) and has no design yet.
 
 ## Today in the repo
 
@@ -69,10 +69,15 @@ informed by the network fact. This is listed as open in
 - `crates/sdk/src/lib.rs` — `Session::require(capability)` is the per-method
   capability check that `friends()` and presence reads will use; those methods
   don't exist yet.
-- Whether a friendship is promised-durable history (emitting
-  `friend.requested` / `friend.accepted` / `friend.removed` events, the names
-  #15 uses) or server-only state is not yet written down; the
-  [durable history](./protocol-events.md) classification is where that lands.
+- **Decided: a friendship is promised-durable history**, not server-only state.
+  It is inherently a social fact between two identities, not something any
+  game owns or can lose custody of — the same reasoning [guilds](./guilds.md)
+  already apply. `friend.requested`, `friend.accepted`, and `friend.removed`
+  are protocol events (catalogued in [protocol-events.md](./protocol-events.md)),
+  emitted atomically with the projection row per [#71](https://github.com/LunarVagabond/avalon-protocol/issues/71),
+  and in scope for the rebuild proof in [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43).
+  A declined or withdrawn *request* is not itself durable history — only an
+  established or ended friendship is.
 
 ## Decisions and tickets
 

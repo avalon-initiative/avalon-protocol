@@ -1,12 +1,12 @@
 # SDK
 
 **Avalon exposes protocol capabilities, not infrastructure.** A game developer
-thinks in identity, guilds, achievements, presence, and tournament verification —
+thinks in identity, guilds, achievements, presence, and game event verification —
 never in Postgres instances, chain RPCs, indexer shards, or node addresses.
 **Every capability-gated method checks its own required grant**; the SDK never
 trusts the caller. Narrative:
-[Proposal §17](../Proposal.md#17-developer-experience) and
-[§24](../Proposal.md#24-phase-2--developer-sdk).
+[Proposal §17](../stakeholders/Proposal.md#17-developer-experience) and
+[§24](../stakeholders/Proposal.md#24-phase-2--developer-sdk).
 
 ## Target shape
 
@@ -37,7 +37,7 @@ let avalon = Avalon::connect("postgres://...").await?;
 
 and not "which Postgres, which Redis, which chain RPC, which indexer, which
 region, which node". A developer should be able to say "I want player identity,
-guilds, achievements, cross-game tournament verification, and presence" and
+guilds, achievements, cross-game game event verification, and presence" and
 consume exactly those.
 
 ## What the SDK abstracts
@@ -76,7 +76,7 @@ under an active [binding](./game-bindings.md). `achievements()` requires
 `friends()` will require `friends.read`; and so on. A method with no grant
 fails with `CapabilityNotGranted` rather than silently returning less. The
 starting capability list is in
-[Proposal §13](../Proposal.md#13-permission-model).
+[Proposal §13](../stakeholders/Proposal.md#13-permission-model).
 
 ## Languages
 

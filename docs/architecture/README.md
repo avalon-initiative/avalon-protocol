@@ -1,6 +1,6 @@
 # Avalon Protocol — Architecture
 
-This is the normative architecture reference for Avalon. [`../Proposal.md`](../Proposal.md)
+This is the normative architecture reference for Avalon. [`../stakeholders/Proposal.md`](../stakeholders/Proposal.md)
 is the narrative design document and [`../WhyAvalon.md`](../WhyAvalon.md) is the
 case for existence; this set states the invariants, the authority boundaries,
 and what the code is held to. When the two disagree, this set wins and the
@@ -31,10 +31,10 @@ Each document below links the ones that govern it.
 | Guilds | [guilds.md](guilds.md) | Network-level primitives; a game is a client of a guild, never its owner |
 | Social graph | [social-graph.md](social-graph.md) | Friends persist across games; games never get the whole graph |
 | Presence | [presence.md](presence.md) | The realtime vertical; ephemeral, never ledgered |
-| Tournaments | [tournaments.md](tournaments.md) | Cross-game results as attestations; gameplay stays game-side |
+| Game events | [game-events.md](game-events.md) | Durable cross-game/special-event results as attestations — tournaments are one example |
 | Game registry | [game-registry.md](game-registry.md) | Derived facts with explicit definitions; never a score |
 | Protocol events | [protocol-events.md](protocol-events.md) | Durable event catalogue, versioning, history vs current state |
-| Settlement | [settlement.md](settlement.md) | Batched commitments; milestone-1 ledger; the open long-term backend |
+| Settlement | [settlement.md](settlement.md) | Batched commitments; milestone-1 ledger; long term, Avalon's own chain |
 | Query & indexing | [query-and-indexing.md](query-and-indexing.md) | Postgres is a projection, rebuildable from history |
 | Nodes | [nodes.md](nodes.md) | Infrastructure providers, not authorities; roles, mirrors, discovery |
 | SDK | [sdk.md](sdk.md) | Exposes protocol capabilities, not infrastructure topology |
@@ -62,6 +62,7 @@ established it.
 | History | Revocation adds history; it does not erase history. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
 | Settlement | Settlement is not the general-purpose query database. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68), [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
 | Settlement | Settlement is a public, verifiable, mirrorable log — never federation. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
+| Settlement | Avalon operates its own chain, long term; no native currency or token at launch. | [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) |
 | Batching | One event is never one settlement transaction. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Gameplay | Real-time gameplay stays game-side. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Query | Query databases are projections. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
@@ -72,15 +73,14 @@ established it.
 | Hub | The Hub is a client of the network, not the network. | [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77) |
 | Registry | Network statistics inform decisions; they never determine trust. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
 | Privacy | Network visibility is intentionally scoped. | [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78), [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) |
-| Economy | Universal economic interoperability is not foundational. | [`../Proposal.md` §15](../Proposal.md#15-economy-and-currency) |
+| Economy | Universal economic interoperability is not foundational. | [`../stakeholders/Proposal.md` §15](../stakeholders/Proposal.md#15-economy-and-currency) |
 | Workspace | Six crates; new domains are modules of `protocol`, not new crates. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
 
 Still open, and deliberately so:
 
 | Question | Issue |
 |---|---|
-| Transparency log design: hash structure, signed tree heads, mirror sync | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
-| Long-term settlement backend: anchored log, partnered chain, or custom chain | [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) |
+| Transparency log, validator set, and consensus design (hash structure, signed tree heads, mirror sync, BFT algorithm, validator admission) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
 | Player identity as a self-custodied keypair | [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) |
 | Issuer signing keys and key lifecycle | [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) |
 | Revocation mechanics | [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) |
@@ -96,7 +96,7 @@ If Game A shuts down tomorrow:
 | Friends | Level, stats, skill trees |
 | Avalon guild membership and guild history | Quest progress |
 | Achievements and attestations Game A issued | World position |
-| Tournament results | NPC relationships |
+| Game event results | NPC relationships |
 | Ownership and asset provenance (later phase) | Housing |
 | Recognition history | Game-specific inventory |
 | Game A's registration and key history | Game-specific economy |
@@ -135,7 +135,7 @@ answers it.
 | D | Game C issues a trivial `Dragon Slayer`; Avalon preserves it, Game B rejects it | [trust-model.md](trust-model.md) |
 | E | Game A rotates its signing key; old claims stay verifiable | [games-and-issuers.md](games-and-issuers.md) |
 | F | Game A's key is compromised; new claims rejected, history intact | [games-and-issuers.md](games-and-issuers.md), [security-model.md](security-model.md) |
-| G | Game A issues a championship result Game B can verify | [tournaments.md](tournaments.md) |
+| G | Game A issues a game event result (a championship, say) that Game B can verify | [game-events.md](game-events.md) |
 | H | A guild exists outside any game, with members in three games at once | [guilds.md](guilds.md) |
 | I | Game A shuts down; what survives | the table above |
 | J | Every PostgreSQL database disappears; projections are rebuilt | [disaster-recovery.md](disaster-recovery.md) |

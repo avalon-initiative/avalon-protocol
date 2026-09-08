@@ -47,7 +47,7 @@ which is the milestone-1 gap #73's comment records.
 |---|---|---|---|
 | player key (#73) | the player | attacker can mutate that one identity's data | revoke/rotate via recovery path; history stays |
 | issuer key (#80) | the game | attacker can issue authentic-looking claims under that game | revoke key as of T; claims after T rejected, before T untouched |
-| log operator key (#39) | settlement operator | attacker can sign bogus log entries / tree heads | mirrors detect divergence; anchoring (#79) limits rewrite |
+| log operator key (#39) | settlement operator / validator | attacker can sign bogus log entries / tree heads | mirrors detect divergence; the validator set (#40) limits any one signer's rewrite power |
 
 Keys are never shared across domains. The design for each is a separate open
 decision; they may share primitives (established signature schemes, existing
@@ -82,8 +82,11 @@ deployment blocker, not an optional hardening step.
 - **Authenticity is not meaning.** No mechanism stops an issuer from signing a
   meaningless claim ([`./trust-model.md`](./trust-model.md)).
 - **A single log operator can still censor or delay appends.** Mirrors and
-  verifiability make this detectable; operator independence beyond that is the
-  open backend decision ([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)).
+  verifiability make this detectable; operator independence beyond that is why
+  Avalon runs its own multi-validator chain rather than a single-operator log
+  ([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), closed;
+  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)) — the
+  validator set itself is still being designed ([#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)).
 - **Statistics can be gamed.** Sybil identities can inflate registry numbers;
   documented, not solved ([`./game-registry.md`](./game-registry.md)).
 - **Persistent identity makes harassment persistent.** Blocking and
@@ -118,5 +121,6 @@ deployment blocker, not an optional hardening step.
   keys and lifecycle.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
   identity implementation.
-- [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) —
-  long-term settlement backend.
+- [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) /
+  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) —
+  long-term settlement backend, decided.

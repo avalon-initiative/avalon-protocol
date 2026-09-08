@@ -5,8 +5,8 @@ row.** The durable fact is "Game A asserts that Player X accomplished Y", signed
 by Game A's key, with a timestamp and a schema. Avalon records that claim and
 its provenance. **It never dictates what another game does with it.**
 
-Narrative: [`../Proposal.md` §8](../Proposal.md#8-achievements-and-history) and
-[§9](../Proposal.md#9-trust-and-attestations).
+Narrative: [`../stakeholders/Proposal.md` §8](../stakeholders/Proposal.md#8-achievements-and-history) and
+[§9](../stakeholders/Proposal.md#9-trust-and-attestations).
 
 ## Shape
 
@@ -76,9 +76,10 @@ achievement.defined  →  achievement.issued  →  (achievement.revoked | attest
 ```
 
 Every step is an appended protocol event. Revocation never removes the issuance
-— see [`./revocation.md`](./revocation.md). Tournament results are attestations
-with a tournament schema, not a separate mechanism — see
-[`./tournaments.md`](./tournaments.md).
+— see [`./revocation.md`](./revocation.md). Game event results (tournaments,
+seasonal championships, community campaigns, ...) are attestations with a
+game-event schema, not a separate mechanism — see
+[`./game-events.md`](./game-events.md).
 
 ## Today in the repo
 
@@ -111,5 +112,5 @@ with a tournament schema, not a separate mechanism — see
   attestation trust model.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
   catalogue (the `achievement.*` kinds).
-- [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) —
-  tournament result attestations.
+- [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — game
+  event result attestations.

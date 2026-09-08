@@ -8,7 +8,7 @@ chooses for them.
 
 This is the normative statement of
 [ADR #76](https://github.com/LunarVagabond/avalon-protocol/issues/76).
-Narrative: [`../Proposal.md` §9](../Proposal.md#9-trust-and-attestations).
+Narrative: [`../stakeholders/Proposal.md` §9](../stakeholders/Proposal.md#9-trust-and-attestations).
 
 ## The three questions
 
@@ -51,20 +51,20 @@ Game B — recognition policy
 
   issuer game:ashen-realms
       achievements            RECOGNIZED
-      tournament results      RECOGNIZED
+      game event results     RECOGNIZED
       asset provenance        RECOGNIZED
       currency claims         NOT RECOGNIZED
 
   issuer game:worldzero
       achievements            RECOGNIZED  (schema achievement.v1+, since 2027-01)
-      tournament results      RECOGNIZED  (tournament:avalon-championship-* only)
+      game event results     RECOGNIZED  (game_event:avalon-championship-* only)
 
   issuer game:random-mmo-47
       everything              NOT RECOGNIZED
 ```
 
 Scoping dimensions: issuer, claim type, achievement schema and version, time
-period, specific tournament, asset class, or any other dimension the consumer
+period, specific game event, asset class, or any other dimension the consumer
 cares about. Avalon may offer standard policy mechanisms later; it never
 imposes a network-wide trust list.
 
@@ -79,7 +79,7 @@ issuer, or something else. No default is imposed.
 
 The [game registry](./game-registry.md) publishes derived facts — observed
 players, attestations issued, games that publicly recognize an issuer. A
-consumer may write "accept tournament results from issuers with at least N
+consumer may write "accept game event results from issuers with at least N
 observed players and M recognizing games". That is the consumer's rule. Avalon
 never enforces "games above N are trusted", never publishes a composite game
 score, and never turns the recognition graph into a verdict. A ten-player game
@@ -89,7 +89,7 @@ trustworthy.
 ## Recognition relationships are facts
 
 A game may publish its policy: "Game A recognizes Game B's achievements and
-tournament results." Avalon records that as a fact, and the registry can show
+game event results." Avalon records that as a fact, and the registry can show
 it. A claim can be valid without being recognized by anyone, and recognized
 without being especially meaningful. Recognition is never the same thing as
 validity.

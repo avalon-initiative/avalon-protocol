@@ -7,8 +7,8 @@ establish their own scoped participation under it (see
 [`./game-bindings.md`](./game-bindings.md)); the identity itself stays the same
 across all of them.
 
-Narrative: [`../Proposal.md` §7](../Proposal.md#7-persistent-player-identity)
-and [§19](../Proposal.md#19-identity-vs-game-data).
+Narrative: [`../stakeholders/Proposal.md` §7](../stakeholders/Proposal.md#7-persistent-player-identity)
+and [§19](../stakeholders/Proposal.md#19-identity-vs-game-data).
 
 ## The model
 

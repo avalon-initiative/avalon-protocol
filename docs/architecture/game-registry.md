@@ -57,7 +57,7 @@ activity. Every published metric carries its definition and a class label.
 | recognizing games | games with a public recognition relationship to this issuer | durable-derived |
 | guilds with players here | distinct guilds with ≥1 member bound to this game | durable-derived |
 | guild members associated | distinct guild members bound to this game | durable-derived |
-| tournament participation | attestations with the tournament schema | durable-derived |
+| game event participation | attestations with the game-event schema | durable-derived |
 | key lifecycle / status / registration history | from issuer events | durable-derived |
 | players online now | from presence | **realtime** |
 | anything supplied by the game | e.g. genre, website | **self-reported** |
@@ -97,7 +97,7 @@ Game B recognizes Game A    achievements
 ```
 
 Over time this forms a graph — shared players, guilds spanning games,
-tournaments connecting games, issuers recognized by others. The graph is
+game events connecting games, issuers recognized by others. The graph is
 valuable network intelligence. It is not authority: "72 games recognize Game A"
 is an input to someone's decision, never a conclusion Avalon draws. Recognition
 is also not validity — a claim can be authentic and valid while recognized by

@@ -9,7 +9,7 @@ govern them through its game authority.
 
 This is decided, not aspirational — see
 [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74). The narrative
-version is [Proposal §10](../Proposal.md#10-guilds-and-social-identity).
+version is [Proposal §10](../stakeholders/Proposal.md#10-guilds-and-social-identity).
 
 ## Where guilds sit
 
@@ -92,7 +92,7 @@ A channel belongs to the guild. It is visible through the Hub, the mobile-hub
 companion app, a game that chooses to render it, a web client, and later a
 Discord bridge or other authorized client. Player A in Game A and Player B in
 Game B talk in the same channel. See
-[Proposal §12](../Proposal.md#12-communication).
+[Proposal §12](../stakeholders/Proposal.md#12-communication).
 
 Guild chat is not gameplay chat. Games keep their own local chat; Avalon carries
 the cross-game social channel.
@@ -140,7 +140,7 @@ Right:
 
 Metrics the [game registry](./game-registry.md) may derive: guild members
 associated with a game, guilds with members playing a game, cross-game guild
-activity, membership growth, active members, guild participation in tournaments,
+activity, membership growth, active members, guild participation in game events,
 guilds spanning multiple games.
 
 ## Scenario H — network guild
@@ -179,5 +179,5 @@ with Game A becomes historical.
   (SDK), [#24](https://github.com/LunarVagabond/avalon-protocol/issues/24) (Hub).
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
-- Open questions from [Proposal §32](../Proposal.md#32-open-questions): guild
+- Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild
   ownership, leadership transfer.
