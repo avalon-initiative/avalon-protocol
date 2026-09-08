@@ -1,5 +1,6 @@
 //! Reference Rust SDK. A game depends on this crate, never on `avalon-server`
-//! or `avalon-chain` directly — see `Proposal.md` §17 and `PROMPT.md` §18-19.
+//! or `avalon-chain` directly — see `docs/Proposal.md` §17 and
+//! `docs/architecture/sdk.md`.
 //!
 //! `authenticate()` is wired to a real `avalon-server` (GET /me). Everything
 //! capability-gated (achievements, guilds, ...) still stubs `NotImplemented`

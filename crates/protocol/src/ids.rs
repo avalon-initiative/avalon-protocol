@@ -1,9 +1,10 @@
 //! Globally unique identifiers.
 //!
 //! Human-readable names (a game's slug, an achievement's key) are never
-//! assumed to be globally unique on their own — see `Proposal.md` §20 /
-//! `PROMPT.md` §20. A `GlobalId` namespaces a human-readable key under the
-//! entity that issued it, e.g. `game:ashen-realms:achievement:dragon_slayer`.
+//! assumed to be globally unique on their own — see
+//! `docs/architecture/achievements-and-attestations.md` (claim namespacing).
+//! A `GlobalId` namespaces a human-readable key under the entity that issued
+//! it, e.g. `game:ashen-realms:achievement:dragon_slayer`.
 
 use std::fmt;
 

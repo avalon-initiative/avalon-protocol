@@ -7,6 +7,12 @@
 
 > **Games are experiences. Your identity, friends, guilds, achievements, and history belong to you.**
 
+This is the narrative design document. The normative architecture reference —
+invariants, authority boundaries, what the code is held to — lives in
+[`architecture/`](architecture/README.md). Decisions are recorded as GitHub
+issues: [decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record)
+and [still open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen).
+
 ---
 
 # Table of Contents
@@ -536,6 +542,8 @@ Mining-based consensus also solves the wrong problem. It exists to let mutually 
 
 What Avalon actually needs is simpler than either: anyone can verify an entry without asking permission, and anyone can mirror the log without being trusted first. That is a transparency log, not a blockchain in the currency sense.
 
+What that log eventually anchors to, or becomes — a log whose checkpoints are published to an existing public chain, a partnership with a specific chain, or a custom Avalon chain — is deliberately still open ([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)), as is the log's own technical design ([#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)). Two things hold under every outcome: one protocol event is never one chain transaction (events are batched behind a commitment), and real-time gameplay never touches settlement.
+
 ---
 
 # 15. Economy and Currency
@@ -719,16 +727,19 @@ It gives strong guarantees around the identity and permission types the protocol
 
 It produces a single reference binary that is easy to self-host.
 
-The reference implementation is a Cargo workspace, with at least these crates:
+The reference implementation is a Cargo workspace of six crates under `crates/`
+(confirmed as the intended shape in [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69)):
 
-* **`avalon-protocol`** — the protocol itself. Pure types and traits: identity, attestations, capabilities, wire schema. No I/O, no storage, no network calls.
-* **`avalon-chain`** — the trust and attestation ledger. Issues, verifies, and records attestations. It does not need to be a blockchain today. It needs to behave like one where it matters: tamper-evident, independently verifiable.
-* **`avalon-hub`** — the network-facing service. Identity, social graph, guilds, presence. The crate a self-hosted operator actually runs.
-* **`avalon-sdk`** — the client library game developers depend on.
+* **`avalon-protocol`** — the protocol itself. Pure types and traits: identity, game bindings, attestations, capabilities, guilds, events. No I/O, no storage, no network calls. New domains become modules here, not new crates.
+* **`avalon-chain`** — the settlement boundary (`SettlementProvider`) and its milestone-1 implementation: a hash-chained, append-only ledger. It does not need to be a blockchain today. It needs to behave like a verifiable log where it matters: tamper-evident, independently verifiable, mirrorable. See [architecture/settlement.md](architecture/settlement.md).
+* **`avalon-indexer`** — the query layer. Consumes durable protocol events and maintains read models that can be rebuilt from history at any time. Kept separate from `avalon-chain` on purpose: settlement is not querying.
+* **`avalon-server`** — the network-facing service: identity, auth, social graph, guilds, presence, game registration, achievement verification. The one backend every client (the Hub, the mobile Hub, games via the SDK) talks to, and the thing a self-hosted operator actually runs.
+* **`avalon-sdk`** — the client library game developers depend on. A game never depends on `avalon-server` or `avalon-chain` directly.
+* **`avalon-cli`** — local dev and operator tooling (the `avalon` binary): ledger inspection, game registration, diagnostics.
 
 Non-Rust SDKs and third-party network implementations only need `avalon-protocol`.
 
-They should never be forced to pull in a full chain or hub implementation just to speak the protocol.
+They should never be forced to pull in a full chain, indexer, or server implementation just to speak the protocol.
 
 ---
 
@@ -1036,24 +1047,32 @@ The architecture should explicitly acknowledge these risks rather than pretendin
 # 32. Open Questions
 
 Several decisions should remain unresolved until the protocol develops further.
+Anything with an issue number is being tracked as an open `decision`; the rest
+have no owner yet.
 
-* What exactly constitutes an Avalon identity?
+* What exactly constitutes an Avalon identity, and is it a self-custodied keypair? — [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)
 * How should identity recovery work?
 * Can identities be transferred?
 * What does account ownership mean?
-* How should trust relationships work?
+* How do issuer signing keys get registered, rotated, and revoked? — [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
+* How exactly is an attestation revoked, superseded, or reinstated? — [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81)
 * How should guild ownership work?
 * How should guild leadership transfer?
 * How should harassment and blocking work across games?
 * How much social information should be portable?
-* How should attestations be revoked?
-* Should the protocol support federation?
-* Which blockchain technologies, if any, should be supported?
+* What is the technical design of the transparency log? — [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
+* What does the log anchor to, or become, long term: an anchored log, a partnered chain, or a custom chain? — [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)
+* How does the log operator's own signing key work? — [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39)
 * Should assets have standardized schemas?
-* How should games establish trust?
 * How should developer authentication work?
 * How should network operators be trusted?
 * How should economic transactions work?
+
+Answered since this list was first written:
+
+* *Should the protocol support federation?* — No. Settlement is a public log anyone can verify and mirror; federation was rejected in [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70).
+* *How should trust relationships work?* — Authenticity, validity, and recognition are separate; consumers choose what they recognize. [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76).
+* *Should attestations be revocable without erasing history?* — Yes, always; revocation is appended history. [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75).
 
 These should be solved incrementally.
 

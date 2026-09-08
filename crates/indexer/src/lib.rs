@@ -3,12 +3,13 @@
 //! Fast reads (profiles, friend lists, guild rosters, achievement lists)
 //! should never require walking settlement data directly. This crate
 //! consumes durable `ProtocolEvent`s and maintains a read model that can be
-//! rebuilt from those events at any time — see `PROMPT.md` §21.
+//! rebuilt from those events at any time — see
+//! `docs/architecture/query-and-indexing.md`.
 //!
 //! Milestone 1: a conventional Postgres-backed read model, kept explicitly
 //! separate from `avalon-chain`'s settlement store so the two are never
-//! conflated (`Proposal.md` / `PROMPT.md` §6: "Settlement should not be
-//! confused with querying").
+//! conflated — settlement is not querying; see
+//! `docs/architecture/settlement.md` and issue #75.
 
 use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
