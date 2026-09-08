@@ -155,12 +155,31 @@ with Game A becomes historical.
 ## Today in the repo
 
 - `crates/protocol/src/guilds.rs` — `Guild`, `GuildRole`, `GuildMember`,
-  `GuildGameAssociation`, `GuildChannel`, `GuildMessage`. Pure types; the
-  association is documented as opt-in and non-owning.
-- No server endpoints, storage, events, or SDK methods exist yet. `avalon-server`
-  serves identity/auth only.
-- No guild events are catalogued yet; `guild.created`, `guild.member_added`,
-  `guild.member_removed`, `guild.role_changed` are the expected kinds
+  `GuildGameAssociation`, `GuildChannel`, `GuildMessage`, plus
+  `GuildPermission` (issue #20): the fixed milestone-1 permission set a
+  role can carry — `manage_guild`, `manage_roles`, `manage_members`,
+  `manage_channels`, not yet extensible.
+- Guild creation, rename/retag/redescribe, roles, and ownership transfer
+  are real and served by `avalon-server` (`crates/server/src/guilds.rs`,
+  issue #20): `POST /guilds`, `GET /guilds/{id}`, `PATCH /guilds/{id}`,
+  `GET /guilds/{id}/roles`, `POST /guilds/{id}/roles`,
+  `PATCH /guilds/{id}/roles/{idx}`, `POST /guilds/{id}/transfer-ownership`,
+  `POST /guilds/{id}/games/{game_id}`. Every route is session-authenticated
+  only, same as `friends.rs`. `guild.created`, `guild.updated`,
+  `guild.role_defined`, and `guild.owner_transferred` are written into the
+  outbox in the same transaction as the `guilds`/`guild_roles`/
+  `guild_game_associations` projection change
+  (`crates/server/db/migrations/0008_guilds`). A guild is created with a
+  fixed starter role set (`owner`, `officer`, `member`); `owner` always has
+  every permission structurally (the `guilds.owner` column), not through
+  its role row, so it can't be edited away.
+- Membership and per-member role assignment (who holds which role, joining,
+  leaving) are not built — that's issue #21. Until then, `member_count` on
+  `GET /guilds/{id}` is a stand-in reporting `1` (the owner), and only the
+  guild's owner can exercise any guild permission.
+- `guild.member_added`, `guild.member_removed`, and `guild.role_changed`
+  (a member's *assigned* role, as opposed to `guild.role_defined`'s role
+  *definition*) remain uncatalogued/unimplemented, owned by #21
   ([#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)).
 - Hub guild views (`apps/hub`, `apps/mobile-hub`, `packages/ui`) are scaffolding.
 
@@ -172,8 +191,11 @@ with Game A becomes historical.
   history is canonical; the roster is a projection.
 - [#19](https://github.com/LunarVagabond/avalon-protocol/issues/19) — Epic: Guilds
   & Guild Communication, with
-  [#20](https://github.com/LunarVagabond/avalon-protocol/issues/20) (CRUD + roles),
-  [#21](https://github.com/LunarVagabond/avalon-protocol/issues/21) (membership),
+  [#20](https://github.com/LunarVagabond/avalon-protocol/issues/20) (CRUD + roles,
+  done — creation, rename/retag/redescribe, role definitions, ownership
+  transfer, game association),
+  [#21](https://github.com/LunarVagabond/avalon-protocol/issues/21) (membership,
+  per-member role assignment, and the owner-departure-without-transfer guard),
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22) (channels +
   messages), [#23](https://github.com/LunarVagabond/avalon-protocol/issues/23)
   (SDK), [#24](https://github.com/LunarVagabond/avalon-protocol/issues/24) (Hub).

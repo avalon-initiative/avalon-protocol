@@ -53,6 +53,22 @@ pub enum AppError {
     ApproverKeyInvalid,
     #[error("grant approval signature verification failed")]
     InvalidGrantSignature,
+    #[error("guild not found")]
+    GuildNotFound,
+    #[error("guild name is already taken")]
+    GuildNameTaken,
+    #[error("guild tag is already taken")]
+    GuildTagTaken,
+    #[error("guild tag must be 2-5 characters")]
+    InvalidGuildTag,
+    #[error("guild role not found")]
+    GuildRoleNotFound,
+    #[error("cannot change the owner role's permissions")]
+    CannotModifyOwnerRole,
+    #[error("missing required guild permission")]
+    MissingGuildPermission,
+    #[error("target identity is already the guild owner")]
+    AlreadyGuildOwner,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -80,6 +96,14 @@ impl IntoResponse for AppError {
             AppError::DeviceGrantExpired => StatusCode::GONE,
             AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
                 StatusCode::UNAUTHORIZED
+            }
+            AppError::GuildNotFound | AppError::GuildRoleNotFound => StatusCode::NOT_FOUND,
+            AppError::GuildNameTaken | AppError::GuildTagTaken | AppError::AlreadyGuildOwner => {
+                StatusCode::CONFLICT
+            }
+            AppError::InvalidGuildTag => StatusCode::BAD_REQUEST,
+            AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {
+                StatusCode::FORBIDDEN
             }
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
