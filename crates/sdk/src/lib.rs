@@ -26,6 +26,8 @@ pub enum SdkError {
     Request(#[from] reqwest::Error),
     #[error("avalon-server returned {0}")]
     ServerError(reqwest::StatusCode),
+    #[error("presence websocket connection failed: {0}")]
+    WebSocket(String),
     #[error("not yet implemented")]
     NotImplemented,
 }

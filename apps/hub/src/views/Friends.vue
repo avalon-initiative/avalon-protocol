@@ -5,15 +5,18 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { AvalonFriendRequestRow, AvalonFriendRow, AvalonForm, AvalonTextField } from '@avalon/ui'
 import * as api from '../api/client'
+import type { PresenceSocket } from '../api/client'
 import { listFriendsWithPresence, splitFriendRequests } from '../api/friends'
 import type { Friend, FriendRequestView } from '../api/friends'
+import type { PresenceResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
-// There's no way for the client to know the server's configured
-// AVALON_PRESENCE_TTL_SECS, so this doesn't try to sync with it exactly —
-// just a reasonable liveness interval for milestone 1. A push-based
-// subscription (#119) is the real fix, not a blocker here.
-const POLL_INTERVAL_MS = 60_000
+// Presence itself is live now (issue #136's GET /ws/presence, opened
+// below) — this poll only exists to catch friend-*list* membership changes
+// (a request accepted/declined/withdrawn, a friend removed), which #136
+// doesn't push. Slower than the old presence-liveness-driven 60s interval
+// on purpose, now that presence doesn't depend on it.
+const POLL_INTERVAL_MS = 5 * 60_000
 
 const session = useSessionStore()
 
@@ -33,6 +36,16 @@ const incomingRequests = computed(() => requests.value.filter((r) => r.direction
 const outgoingRequests = computed(() => requests.value.filter((r) => r.direction === 'outgoing'))
 
 let pollHandle: ReturnType<typeof setInterval> | undefined
+let presenceSocket: PresenceSocket | undefined
+
+// Applies one pushed presence update to whichever friend row it's for.
+// A push for an id not currently in `friends.value` (e.g. arriving just
+// after that friend was removed) is simply a no-op — there's no row to
+// update, and nothing needs cleaning up on this side.
+function onPresenceUpdate(presence: PresenceResponse) {
+  const friend = friends.value.find((f) => f.identityId === presence.identity_id)
+  if (friend) friend.status = presence.status
+}
 
 async function refresh() {
   if (!session.token) return
@@ -43,6 +56,7 @@ async function refresh() {
     ])
     friends.value = friendList
     requests.value = splitFriendRequests(requestList, selfId.value)
+    presenceSocket?.subscribe(friendList.map((f) => f.identityId))
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -53,6 +67,7 @@ onMounted(async () => {
   try {
     const profile = await api.getMe(session.token)
     selfId.value = profile.identity_id
+    presenceSocket = api.openPresenceSocket(session.token, onPresenceUpdate)
     await refresh()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -64,6 +79,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (pollHandle) clearInterval(pollHandle)
+  presenceSocket?.close()
 })
 
 // Accepts either a raw identity id (already worked pre-#128) or a

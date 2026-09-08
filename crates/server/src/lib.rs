@@ -61,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/history", get(handlers::my_history))
         .route("/me/presence", put(presence::update_my_presence))
         .route("/presence", get(presence::get_presence))
+        .route("/ws/presence", get(presence::presence_ws))
         .route(
             "/friends/requests",
             get(friends::list_friend_requests).post(friends::create_friend_request),

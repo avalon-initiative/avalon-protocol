@@ -12,7 +12,7 @@ avalon-protocol = { path = "../protocol" }
 avalon-chain = { path = "../chain" }
 avalon-indexer = { path = "../indexer" }
 tokio.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 tower-http.workspace = true
 sqlx.workspace = true
 rand.workspace = true

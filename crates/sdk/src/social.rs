@@ -35,7 +35,9 @@ use std::collections::HashMap;
 
 use avalon_protocol::ids::IdentityId;
 use avalon_protocol::social::{Friendship, Presence, PresenceStatus};
+use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::{SdkError, Session};
 
@@ -81,6 +83,30 @@ fn merge_friend(
 #[derive(Serialize)]
 struct UpdatePresenceRequest {
     status: PresenceStatus,
+}
+
+/// What `presence::presence_ws` (`crates/server/src/presence.rs`, issue
+/// #136) accepts from a connected client. Only one variant exists today;
+/// kept as a tagged enum (`{"type":"subscribe","ids":[...]}`) rather than a
+/// bare struct so a second client-to-server message kind can be added later
+/// without a wire-format break.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PresenceSubscribeMessage {
+    Subscribe { ids: Vec<IdentityId> },
+}
+
+/// `server_url` is `http(s)://…`; the websocket endpoint needs `ws(s)://…`.
+/// A plain scheme swap, not a full URL library round-trip — kept as a free
+/// function, testable without any network call.
+fn websocket_url(server_url: &str, path: &str) -> String {
+    if let Some(rest) = server_url.strip_prefix("https://") {
+        format!("wss://{rest}{path}")
+    } else if let Some(rest) = server_url.strip_prefix("http://") {
+        format!("ws://{rest}{path}")
+    } else {
+        format!("{server_url}{path}")
+    }
 }
 
 impl Session {
@@ -180,6 +206,59 @@ impl Session {
             return Err(SdkError::ServerError(response.status()));
         }
         Ok(())
+    }
+
+    /// Subscribes to live presence updates for `ids` — issue #136, additive
+    /// to `presence_of`'s point-in-time reads, not a replacement for them.
+    /// Requires `presence.read`, same as every other presence method here.
+    ///
+    /// Connects to `GET /ws/presence` (auth via a `?token=` query parameter
+    /// — a websocket handshake can't carry a bearer header, see
+    /// `crates/server/src/handlers.rs::authenticate_token`'s own doc
+    /// comment), sends one `subscribe` message for `ids`, then spawns a
+    /// background task forwarding every [`Presence`] the server pushes into
+    /// the returned channel. Dropping the receiver drops the sender on the
+    /// task's next send attempt, which ends the task — no separate
+    /// `unsubscribe` call is needed.
+    pub async fn subscribe_presence(
+        &self,
+        ids: &[IdentityId],
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Presence>, SdkError> {
+        self.require("presence.read")?;
+
+        let url = websocket_url(
+            &self.server_url,
+            &format!("/ws/presence?token={}", self.token),
+        );
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .map_err(|e| SdkError::WebSocket(e.to_string()))?;
+        let (mut write, mut read) = ws_stream.split();
+
+        let subscribe =
+            serde_json::to_string(&PresenceSubscribeMessage::Subscribe { ids: ids.to_vec() })
+                .expect("PresenceSubscribeMessage always serializes");
+        write
+            .send(WsMessage::Text(subscribe))
+            .await
+            .map_err(|e| SdkError::WebSocket(e.to_string()))?;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(Ok(message)) = read.next().await {
+                let WsMessage::Text(text) = message else {
+                    continue;
+                };
+                let Ok(presence) = serde_json::from_str::<Presence>(&text) else {
+                    continue;
+                };
+                if tx.send(presence).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
     }
 }
 
@@ -305,5 +384,30 @@ mod tests {
             merge_friend(&friendship_2, self_id, &HashMap::new()).identity_id,
             other_id
         );
+    }
+
+    #[test]
+    fn websocket_url_swaps_http_scheme_for_ws() {
+        assert_eq!(
+            websocket_url("http://127.0.0.1:8080", "/ws/presence?token=abc"),
+            "ws://127.0.0.1:8080/ws/presence?token=abc"
+        );
+    }
+
+    #[test]
+    fn websocket_url_swaps_https_scheme_for_wss() {
+        assert_eq!(
+            websocket_url("https://avalon.example", "/ws/presence?token=abc"),
+            "wss://avalon.example/ws/presence?token=abc"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_presence_without_grant_is_rejected_before_any_connection() {
+        let session = test_session(vec![]);
+        let result = session
+            .subscribe_presence(&[IdentityId(Uuid::new_v4())])
+            .await;
+        assert!(matches!(result, Err(SdkError::CapabilityNotGranted(_))));
     }
 }

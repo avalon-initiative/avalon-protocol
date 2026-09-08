@@ -6,11 +6,52 @@ import {
   getMyHistory,
   getPresence,
   listFriends,
+  openPresenceSocket,
   registerStart,
   removeFriend,
   resolveHandle,
 } from './client'
 import { AvalonApiError } from './errors'
+
+// A minimal fake standing in for the browser's `WebSocket` — records what
+// was sent, and lets a test drive `open`/`message` events by hand rather
+// than depending on a real connection (there is no real server in this
+// test environment).
+class FakeWebSocket {
+  static readonly OPEN = 1
+  static instances: FakeWebSocket[] = []
+
+  readyState = 0
+  sent: string[] = []
+  url: string
+  private listeners: Record<string, ((event: unknown) => void)[]> = {}
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+
+  addEventListener(type: string, listener: (event: unknown) => void) {
+    ;(this.listeners[type] ??= []).push(listener)
+  }
+
+  send(data: string) {
+    this.sent.push(data)
+  }
+
+  close() {}
+
+  emitOpen() {
+    this.readyState = FakeWebSocket.OPEN
+    for (const listener of this.listeners.open ?? []) listener({})
+  }
+
+  emitMessage(data: unknown) {
+    for (const listener of this.listeners.message ?? []) {
+      listener({ data: JSON.stringify(data) })
+    }
+  }
+}
 
 function mockFetchOnce(status: number, body: unknown) {
   vi.stubGlobal(
@@ -40,6 +81,7 @@ function mockFetchOnceEmpty(status: number) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  FakeWebSocket.instances = []
 })
 
 describe('api client', () => {
@@ -140,5 +182,60 @@ describe('api client', () => {
       status: 404,
       message: "That's no longer there — it may have already been handled.",
     } satisfies Partial<AvalonApiError>)
+  })
+})
+
+describe('openPresenceSocket', () => {
+  it('connects to ws://…/ws/presence with the token as a query param', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+
+    openPresenceSocket('the-token', () => {})
+
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(FakeWebSocket.instances[0].url).toBe(
+      'ws://127.0.0.1:8080/ws/presence?token=the-token',
+    )
+  })
+
+  it('queues a subscribe call made before open, then flushes it once open', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+
+    const socket = openPresenceSocket('the-token', () => {})
+    socket.subscribe(['id-1'])
+    const fake = FakeWebSocket.instances[0]
+    expect(fake.sent).toHaveLength(0)
+
+    fake.emitOpen()
+
+    expect(fake.sent).toEqual([JSON.stringify({ type: 'subscribe', ids: ['id-1'] })])
+  })
+
+  it('sends immediately once already open', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+
+    const socket = openPresenceSocket('the-token', () => {})
+    FakeWebSocket.instances[0].emitOpen()
+    socket.subscribe(['id-2'])
+
+    expect(FakeWebSocket.instances[0].sent).toEqual([
+      JSON.stringify({ type: 'subscribe', ids: ['id-2'] }),
+    ])
+  })
+
+  it('forwards each incoming message to onUpdate', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    const received: unknown[] = []
+
+    openPresenceSocket('the-token', (presence) => received.push(presence))
+    FakeWebSocket.instances[0].emitMessage({
+      identity_id: 'id-1',
+      status: 'Online',
+      playing: null,
+      updated_at: 'now',
+    })
+
+    expect(received).toEqual([
+      { identity_id: 'id-1', status: 'Online', playing: null, updated_at: 'now' },
+    ])
   })
 })
