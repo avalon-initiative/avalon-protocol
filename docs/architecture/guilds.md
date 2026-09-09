@@ -216,6 +216,7 @@ with Game A becomes historical.
   `GET /guilds/{id}`, `PATCH /guilds/{id}`, `GET /guilds/{id}/roles`,
   `POST /guilds/{id}/roles`, `PATCH /guilds/{id}/roles/{idx}`,
   `POST /guilds/{id}/transfer-ownership`, `POST /guilds/{id}/games/{game_id}`,
+  `GET /guilds/{id}/game-breakdown` (issue #206, see below),
   `POST /guilds/{id}/invites`, `POST /guilds/{id}/invites/{invite_id}/accept`,
   `POST /guilds/{id}/invites/{invite_id}/decline`, `POST /guilds/{id}/join`
   (open guilds only), `POST /guilds/{id}/leave`,
@@ -394,6 +395,68 @@ with Game A becomes historical.
     button walking `next_cursor`. `AvalonGuildCard` (#24) grew an optional
     `recruiting` prop to render a "Recruiting" pill, rather than a new
     duplicate card component.
+- **Guild game affinity view (issue #206, implementing decision #160).**
+  `GET /guilds/{id}/game-breakdown` (`crates/server/src/guilds.rs::game_breakdown`)
+  returns, for a guild, how many current members hold an active
+  [`GameBinding`](./game-bindings.md) (#83) to each game they play —
+  computed on every read from `guild_members` JOIN `bindings`
+  (`ended_at IS NULL`) JOIN `games`, grouped by game. Same milestone-1
+  direct-query stand-in #154's discovery board already established
+  (`build_game_breakdown_query`, split out and unit-tested the same way
+  `build_discover_query` is), not #42's real indexer read model. No
+  protocol event and no durable table backs the breakdown itself — it's
+  derived/computed data, the same "hot state, not history" tier as
+  presence (#57) and the discovery board, never touching
+  `SettlementProvider`. No minimum-member threshold: every game with at
+  least one bound member appears, since this is a display of real counts,
+  not a system verdict (#160's rejection of #96-style cohort-size gating
+  here). There is no "add" action anywhere in this surface — the only way
+  a game appears is a member actually holding an active binding to it,
+  which supersedes #20's original manual `POST /guilds/{id}/games/{game_id}`
+  (`associate_game`) as the honest source of "what games is this guild
+  connected to"; that endpoint still exists unchanged (removing it is out
+  of this ticket's scope) but is no longer the intended way to express a
+  guild-game connection going forward.
+  - **Permission gate.** `can_view_game_breakdown` reuses the existing
+    `manage_guild` permission (or guild ownership, via
+    `has_guild_permission`'s structural owner check) rather than inventing
+    a new one, per #160's decided shape — a `manage_guild` holder can
+    always see the breakdown, regardless of the setting below. Anyone else
+    (including a non-member) is only let in when the guild has opted into
+    public exposure. A rejected caller gets `AppError::MissingGuildPermission`
+    (403), the same error every other guild authorization failure in this
+    module already returns.
+  - **Public-profile exposure toggle.** `guilds.game_breakdown_public`
+    (`crates/server/db/migrations/0023_guild_game_breakdown`) is a plain
+    boolean column, `false` by default — a real, `manage_guild`-editable
+    guild setting alongside `motd`/`banner`/`links`/`recruiting` from
+    #153, not a derived fact. Edited via the same `PATCH /guilds/{id}`
+    (`UpdateGuildRequest.game_breakdown_public`, three-state-free — just
+    omitted-means-untouched, like `recruiting`) and folded into
+    `guild.updated`'s existing payload, no new event kind. It controls
+    only whether `game_breakdown` lets a non-permitted caller (a
+    non-member, or the discovery board from #154) through — it never
+    gates the `manage_guild` role's own internal view, which is the
+    authority deciding whether to expose the breakdown, not something to
+    be gated from seeing it.
+  - **Response shape** (`GameBreakdownResponse`): `guild_id`,
+    `total_members` (the guild's current membership — the denominator for
+    "N of M members play X"; not the same as summing every entry's
+    `member_count`, since a member can hold zero, one, or several active
+    bindings), and `breakdown: GameBreakdownEntry[]` (`game_id`,
+    `game_slug`, `game_name`, `member_count`), ordered by `member_count`
+    descending. This is deliberately a clean, queryable shape for #207
+    (favorites pin, a separate ticket) to build on — #207 is not built by
+    this ticket.
+  - Hub: `Guild.vue`'s "Game affinity" card renders each entry via
+    `apps/hub/src/api/guilds.ts::formatGameBreakdownEntry` ("N of M
+    members play X", the exact phrasing this ticket's design calls for)
+    and shows the public-exposure toggle to a `manage_guild` holder. The
+    breakdown is fetched independently of the rest of the guild page
+    (`useGuildDetail.ts`'s `gameBreakdown`/`gameBreakdownError`) since a
+    403 here — not permitted, and the guild hasn't made it public — is an
+    expected, common outcome for a non-member, not a page-level error like
+    the rest of the guild fetch.
 - **Guild history section (#57).** `Guild.vue` has a "History" card, but it
   states plainly that history isn't available yet rather than fabricating
   a feed from the current roster/role snapshot — there is no
@@ -434,6 +497,12 @@ with Game A becomes historical.
   discovery board (browse + search recruiting guilds), done as a milestone-1
   `server`-side stand-in pending [#42](https://github.com/LunarVagabond/avalon-protocol/issues/42)'s
   real indexer read model.
+- [#160](https://github.com/LunarVagabond/avalon-protocol/issues/160) — decided:
+  guild-game association is derived from real member bindings, never
+  manager-declared; superseded #20's `associate_game`. Implemented by
+  [#206](https://github.com/LunarVagabond/avalon-protocol/issues/206) (game
+  affinity breakdown, done); [#207](https://github.com/LunarVagabond/avalon-protocol/issues/207)
+  (favorites pin) is a separate, not-yet-built ticket on top of it.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

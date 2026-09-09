@@ -9,6 +9,7 @@
 import * as api from './client'
 import type {
   DiscoverGuildsParams,
+  GameBreakdownEntry,
   GuildMemberResponse,
   GuildResponse,
   PresenceResponse,
@@ -343,4 +344,24 @@ export function buildDiscoverQueryString(params: DiscoverGuildsParams): string {
   }
   const query = search.toString()
   return query ? `?${query}` : ''
+}
+
+// --- Game affinity breakdown (issue #206, implementing decision #160) -----
+
+// Renders one GameBreakdownEntry against the guild's total membership as
+// "N of M members play <game>" — the exact phrasing the ticket's design
+// section illustrates ("14 of 22 members play Ashen Realms"). Pure and
+// unit-testable independent of any fetch. `totalMembers` is the response's
+// own `total_members`, not a sum of every entry's `member_count` — a
+// member can be bound to zero, one, or several games, so those two numbers
+// are never guaranteed equal.
+export function formatGameBreakdownEntry(entry: GameBreakdownEntry, totalMembers: number): string {
+  return `${entry.member_count} of ${totalMembers} members play ${entry.game_name}`
+}
+
+// True when the breakdown response itself has nothing to show — distinct
+// from a 403 (not permitted to view it at all), which the caller handles
+// separately as an error state, not an empty one.
+export function hasNoGameBreakdownData(breakdown: GameBreakdownEntry[]): boolean {
+  return breakdown.length === 0
 }

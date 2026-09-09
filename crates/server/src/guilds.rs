@@ -296,11 +296,16 @@ struct GuildRow {
     links: Vec<GuildLink>,
     /// Issue #153.
     recruiting: bool,
+    /// Issue #206 — whether the game affinity breakdown (see
+    /// [`game_breakdown`]) is shown on this guild's public profile /
+    /// discovery card. Always visible to a `manage_guild` holder
+    /// regardless of this flag; it only gates *public* exposure.
+    game_breakdown_public: bool,
 }
 
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, links, recruiting FROM guilds WHERE id = $1",
+        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, links, recruiting, game_breakdown_public FROM guilds WHERE id = $1",
     )
     .bind(guild_id)
     .fetch_optional(&state.pool)
@@ -326,6 +331,7 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
         banner: row.try_get("banner")?,
         links,
         recruiting: row.try_get("recruiting")?,
+        game_breakdown_public: row.try_get("game_breakdown_public")?,
     })
 }
 
@@ -349,6 +355,11 @@ pub struct GuildResponse {
     pub links: Vec<GuildLink>,
     /// Issue #153.
     pub recruiting: bool,
+    /// Issue #206. Whether the game affinity breakdown
+    /// (`GET /guilds/{id}/game-breakdown`) is shown on this guild's public
+    /// profile — a `manage_guild` holder can always fetch the breakdown
+    /// regardless of this flag; it only gates exposure to everyone else.
+    pub game_breakdown_public: bool,
 }
 
 async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildResponse, AppError> {
@@ -382,6 +393,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         banner: guild.banner,
         links: guild.links,
         recruiting: guild.recruiting,
+        game_breakdown_public: guild.game_breakdown_public,
     })
 }
 
@@ -509,6 +521,7 @@ pub async fn create_guild(
                 banner: None,
                 links: Vec::new(),
                 recruiting: false,
+                game_breakdown_public: false,
             },
         )
         .await?,
@@ -547,6 +560,10 @@ pub struct UpdateGuildRequest {
     pub links: Option<Vec<GuildLinkRequest>>,
     /// Issue #153. Omitted leaves it untouched.
     pub recruiting: Option<bool>,
+    /// Issue #206. Omitted leaves it untouched. Controls only whether the
+    /// game affinity breakdown is shown on this guild's *public* profile —
+    /// a `manage_guild` holder can always see it internally either way.
+    pub game_breakdown_public: Option<bool>,
 }
 
 pub async fn update_guild(
@@ -591,13 +608,16 @@ pub async fn update_guild(
         None => guild.links.clone(),
     };
     let new_recruiting = body.recruiting.unwrap_or(guild.recruiting);
+    let new_game_breakdown_public = body
+        .game_breakdown_public
+        .unwrap_or(guild.game_breakdown_public);
     let new_links_json =
         serde_json::to_value(&new_links).expect("GuildLink always serializes to JSON");
 
     let mut tx = state.pool.begin().await?;
 
     let updated = sqlx::query(
-        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, links = $7, recruiting = $8 WHERE id = $1",
+        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, links = $7, recruiting = $8, game_breakdown_public = $9 WHERE id = $1",
     )
     .bind(guild_id)
     .bind(&new_name)
@@ -607,6 +627,7 @@ pub async fn update_guild(
     .bind(&new_banner)
     .bind(&new_links_json)
     .bind(new_recruiting)
+    .bind(new_game_breakdown_public)
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &updated {
@@ -638,6 +659,7 @@ pub async fn update_guild(
             "banner": new_banner,
             "links": new_links,
             "recruiting": new_recruiting,
+            "game_breakdown_public": new_game_breakdown_public,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -662,6 +684,7 @@ pub async fn update_guild(
                 banner: new_banner,
                 links: new_links,
                 recruiting: new_recruiting,
+                game_breakdown_public: new_game_breakdown_public,
             },
         )
         .await?,
@@ -1057,6 +1080,7 @@ pub async fn transfer_ownership(
                 banner: guild.banner,
                 links: guild.links,
                 recruiting: guild.recruiting,
+                game_breakdown_public: guild.game_breakdown_public,
             },
         )
         .await?,
@@ -1943,6 +1967,145 @@ pub async fn discover_guilds(
     }))
 }
 
+// --- Game affinity breakdown (issue #206, implementing decision #160) -----
+
+/// One game's slice of a guild's game affinity breakdown: how many of the
+/// guild's current members hold an active [`GameBinding`](avalon_protocol::games::GameBinding)
+/// to it. Never includes a game with zero bound members — there's no
+/// "add" action here, only real binding data feeds this (see the module
+/// doc comment and `docs/architecture/guilds.md`).
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct GameBreakdownEntry {
+    pub game_id: Uuid,
+    pub game_slug: String,
+    pub game_name: String,
+    /// Distinct guild members with an active binding to this game.
+    pub member_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GameBreakdownResponse {
+    pub guild_id: Uuid,
+    /// Total current guild membership — the denominator for a
+    /// "N of M members play X" display. Not the same as summing
+    /// `breakdown[].member_count`, since a member can be bound to zero,
+    /// one, or several games.
+    pub total_members: i64,
+    /// No minimum-member threshold and no fixed cap — every game with at
+    /// least one bound member appears, ordered by member count descending
+    /// (ties broken alphabetically by name for a stable, readable order).
+    /// This is a display of real counts, not a system verdict, per #160.
+    pub breakdown: Vec<GameBreakdownEntry>,
+}
+
+/// True if `actor` (holding `actor_permissions` in a guild owned by
+/// `guild_owner`) may view the game affinity breakdown: either they hold
+/// `manage_guild` (or are the owner, via [`has_guild_permission`]'s
+/// structural check) — the authority deciding whether to expose the
+/// breakdown, who can always see it internally — or the guild has opted
+/// into showing it on its public profile (`game_breakdown_public`), in
+/// which case anyone (including a non-member) may view it. Pure and
+/// unit-testable independent of any query.
+fn can_view_game_breakdown(
+    guild_owner: Uuid,
+    actor: Uuid,
+    actor_permissions: &[String],
+    game_breakdown_public: bool,
+) -> bool {
+    game_breakdown_public
+        || has_guild_permission(
+            guild_owner,
+            actor,
+            actor_permissions,
+            GuildPermission::ManageGuild,
+        )
+}
+
+/// Builds the aggregation query behind [`game_breakdown`] — split out so
+/// the shape of the query can be unit-tested via [`sqlx::QueryBuilder::sql`]
+/// without a live Postgres connection, same pattern [`build_discover_query`]
+/// already established for #154.
+///
+/// Groups the guild's current members (`guild_members`) by their active
+/// `bindings` (`ended_at IS NULL`, issue #83), joined against `games` for
+/// display name/slug. A member with no active binding to any game
+/// contributes to no row; a member bound to several games contributes to
+/// each. No `HAVING` / minimum-count filter — every game with at least one
+/// bound member is included, per #160's "no minimum-member threshold"
+/// invariant.
+fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT b.game_id, g.slug AS game_slug, g.name AS game_name, \
+         COUNT(DISTINCT b.identity_id) AS member_count \
+         FROM guild_members gm \
+         JOIN bindings b ON b.identity_id = gm.identity_id AND b.ended_at IS NULL \
+         JOIN games g ON g.id = b.game_id \
+         WHERE gm.guild_id = ",
+    );
+    builder.push_bind(guild_id);
+    builder.push(
+        " GROUP BY b.game_id, g.slug, g.name \
+         ORDER BY member_count DESC, g.name ASC",
+    );
+    builder
+}
+
+/// `GET /guilds/{id}/game-breakdown` (issue #206, implementing decision
+/// #160). Milestone-1 stand-in: a direct query over `guild_members` JOIN
+/// `bindings` JOIN `games`, same precedent [`discover_guilds`] (#154)
+/// already set, not #42's real indexer read model. Derived/computed on
+/// every read — no protocol event, no durable table backs this (see the
+/// module doc comment).
+///
+/// Gated by [`can_view_game_breakdown`]: a `manage_guild` holder (or the
+/// owner) can always see it; anyone else only when the guild has set
+/// `game_breakdown_public`. A non-member with neither gets
+/// [`AppError::MissingGuildPermission`], same 403 the rest of this module
+/// already uses for "authenticated fine, just not authorized here".
+pub async fn game_breakdown(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+) -> Result<Json<GameBreakdownResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !can_view_game_breakdown(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        guild.game_breakdown_public,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    let total_members_row =
+        sqlx::query("SELECT COUNT(*) AS count FROM guild_members WHERE guild_id = $1")
+            .bind(guild_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let total_members: i64 = total_members_row.try_get("count")?;
+
+    let mut builder = build_game_breakdown_query(guild_id);
+    let rows = builder.build().fetch_all(&state.pool).await?;
+    let mut breakdown = Vec::with_capacity(rows.len());
+    for row in rows {
+        breakdown.push(GameBreakdownEntry {
+            game_id: row.try_get("game_id")?,
+            game_slug: row.try_get("game_slug")?,
+            game_name: row.try_get("game_name")?,
+            member_count: row.try_get("member_count")?,
+        });
+    }
+
+    Ok(Json(GameBreakdownResponse {
+        guild_id,
+        total_members,
+        breakdown,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     //! No live Postgres reachable here — pure-logic checks only. The
@@ -2532,5 +2695,70 @@ mod tests {
         let actor = Uuid::new_v4();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(!builder.sql().as_str().contains("WHERE id ="));
+    }
+
+    // --- Issue #206: game affinity breakdown -------------------------------
+
+    #[test]
+    fn breakdown_query_aggregates_over_active_bindings_only_no_minimum_threshold() {
+        let guild_id = Uuid::new_v4();
+        let builder = build_game_breakdown_query(guild_id);
+        let sql_owned = builder.sql();
+        let sql = sql_owned.as_str();
+        assert!(sql
+            .contains("JOIN bindings b ON b.identity_id = gm.identity_id AND b.ended_at IS NULL"));
+        assert!(sql.contains("JOIN games g ON g.id = b.game_id"));
+        assert!(sql.contains("COUNT(DISTINCT b.identity_id) AS member_count"));
+        assert!(sql.contains("WHERE gm.guild_id ="));
+        assert!(sql.contains("GROUP BY b.game_id, g.slug, g.name"));
+        // No #160 "minimum member count" gate — every game with at least
+        // one bound member appears, so there must be no HAVING clause.
+        assert!(!sql.contains("HAVING"));
+    }
+
+    #[test]
+    fn breakdown_query_orders_by_member_count_descending() {
+        let builder = build_game_breakdown_query(Uuid::new_v4());
+        assert!(builder
+            .sql()
+            .as_str()
+            .contains("ORDER BY member_count DESC, g.name ASC"));
+    }
+
+    #[test]
+    fn owner_can_always_view_breakdown_even_when_not_public() {
+        let owner = Uuid::new_v4();
+        assert!(can_view_game_breakdown(owner, owner, &[], false));
+    }
+
+    #[test]
+    fn manage_guild_holder_can_view_breakdown_even_when_not_public() {
+        let owner = Uuid::new_v4();
+        let officer = Uuid::new_v4();
+        assert!(can_view_game_breakdown(
+            owner,
+            officer,
+            &["manage_guild".to_string()],
+            false
+        ));
+    }
+
+    #[test]
+    fn plain_member_without_manage_guild_cannot_view_a_non_public_breakdown() {
+        let owner = Uuid::new_v4();
+        let member = Uuid::new_v4();
+        assert!(!can_view_game_breakdown(
+            owner,
+            member,
+            &["manage_members".to_string()],
+            false
+        ));
+    }
+
+    #[test]
+    fn a_non_member_can_view_the_breakdown_once_the_guild_makes_it_public() {
+        let owner = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        assert!(can_view_game_breakdown(owner, stranger, &[], true));
     }
 }

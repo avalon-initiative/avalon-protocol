@@ -1,0 +1,22 @@
+-- Guild game affinity view (issue #206, implementing decision #160):
+-- the show/hide toggle for the aggregated per-game member breakdown is a
+-- real, `manage_guild`-editable guild setting, so it's a plain boolean
+-- column alongside `motd`/`banner`/`links`/`recruiting` from #153's
+-- `0020_guild_metadata` migration — same "additive, DEFAULT so existing
+-- rows read back sensibly" posture as that migration.
+--
+-- The breakdown itself (member counts grouped by active `bindings`,
+-- #83) is never stored here or anywhere else — it's computed on read by
+-- `crates/server/src/guilds.rs::game_breakdown` from `guild_members` JOIN
+-- `bindings` JOIN `games`, same "hot state, not history" treatment #57's
+-- presence summary and #154's discovery board already get. This column
+-- only controls whether that computed view is exposed on the guild's
+-- public profile (to non-members and the discovery board) — the
+-- `manage_guild` role can always see the breakdown internally regardless
+-- of this flag, per #160's decided shape.
+--
+-- Defaults to `false`: a guild's game affinity is not public until a
+-- `manage_guild` holder opts in, same "recruiting defaults to false"
+-- precedent #153 already set for public-profile exposure toggles.
+ALTER TABLE guilds
+    ADD COLUMN game_breakdown_public BOOLEAN NOT NULL DEFAULT false;

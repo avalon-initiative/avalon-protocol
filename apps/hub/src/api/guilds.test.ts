@@ -5,10 +5,12 @@ import {
   canKickMember,
   filterGuildsByNameOrTag,
   filterMembersByIdentityId,
+  formatGameBreakdownEntry,
   formatPlayingSummary,
   groupMembersByRole,
   groupMembersPlayingByGame,
   hasGuildPermission,
+  hasNoGameBreakdownData,
   membershipStatusText,
   mergeGuildMember,
   permissionsForMember,
@@ -17,7 +19,7 @@ import {
   sortMembersByPresence,
 } from './guilds'
 import type { GuildMember } from './guilds'
-import type { GuildMemberResponse, GuildResponse, RoleResponse } from './types'
+import type { GameBreakdownEntry, GuildMemberResponse, GuildResponse, RoleResponse } from './types'
 
 const OWNER = 'owner-id'
 const OFFICER = 'officer-id'
@@ -408,5 +410,47 @@ describe('buildDiscoverQueryString', () => {
     expect(params.get('sort')).toBe('alphabetical')
     expect(params.get('limit')).toBe('10')
     expect(params.get('cursor')).toBe('guild-9')
+  })
+})
+
+describe('formatGameBreakdownEntry', () => {
+  it('renders "N of M members play <game>" verbatim', () => {
+    const entry: GameBreakdownEntry = {
+      game_id: 'game-1',
+      game_slug: 'ashen-realms',
+      game_name: 'Ashen Realms',
+      member_count: 14,
+    }
+    expect(formatGameBreakdownEntry(entry, 22)).toBe('14 of 22 members play Ashen Realms')
+  })
+
+  it('total_members is the denominator, not a sum of member_count entries', () => {
+    // A member can be bound to zero, one, or several games, so
+    // total_members (guild membership) and a single entry's member_count
+    // are independent numbers — this just pins that the function uses the
+    // total passed in, not anything derived from the entry itself.
+    const entry: GameBreakdownEntry = {
+      game_id: 'game-2',
+      game_slug: 'ocean-world',
+      game_name: 'Ocean World',
+      member_count: 3,
+    }
+    expect(formatGameBreakdownEntry(entry, 3)).toBe('3 of 3 members play Ocean World')
+  })
+})
+
+describe('hasNoGameBreakdownData', () => {
+  it('is true for an empty breakdown', () => {
+    expect(hasNoGameBreakdownData([])).toBe(true)
+  })
+
+  it('is false once at least one game has a bound member', () => {
+    const entry: GameBreakdownEntry = {
+      game_id: 'game-1',
+      game_slug: 'ashen-realms',
+      game_name: 'Ashen Realms',
+      member_count: 1,
+    }
+    expect(hasNoGameBreakdownData([entry])).toBe(false)
   })
 })
