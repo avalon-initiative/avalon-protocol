@@ -724,6 +724,24 @@ pub struct UpdateProfileRequest {
 /// `UPDATE profiles` write, never after.
 const MAX_AVATAR_URL_LEN: usize = 2048;
 
+/// Shared `http`/`https`-URL validation: non-empty, at most `max_len`
+/// characters, and parses as an `http`/`https` URL. Used by
+/// [`validate_avatar_url`] below and, since issue #153, by
+/// `crates/server/src/guilds.rs`'s guild `banner` validation — same rule,
+/// same reasoning ("a player/guild-supplied URL sitting in storage becomes
+/// a real problem the moment something renders it with `<img :src>` without
+/// re-checking this"), so the check lives in one place rather than being
+/// copied.
+pub(crate) fn is_http_url(url: &str, max_len: usize) -> bool {
+    if url.is_empty() || url.len() > max_len {
+        return false;
+    }
+    match Url::parse(url) {
+        Ok(parsed) => parsed.scheme() == "http" || parsed.scheme() == "https",
+        Err(_) => false,
+    }
+}
+
 /// An empty string is treated as "clear the avatar" (stored as `NULL`), not
 /// rejected — the Hub's `Profile.vue` always sends this field as a plain
 /// string, using empty to mean "no avatar" rather than omitting the field
@@ -735,11 +753,7 @@ fn validate_avatar_url(avatar_url: &str) -> Result<Option<String>, AppError> {
     if avatar_url.is_empty() {
         return Ok(None);
     }
-    if avatar_url.len() > MAX_AVATAR_URL_LEN {
-        return Err(AppError::InvalidAvatarUrl);
-    }
-    let parsed = Url::parse(avatar_url).map_err(|_| AppError::InvalidAvatarUrl)?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+    if !is_http_url(avatar_url, MAX_AVATAR_URL_LEN) {
         return Err(AppError::InvalidAvatarUrl);
     }
     Ok(Some(avatar_url.to_string()))

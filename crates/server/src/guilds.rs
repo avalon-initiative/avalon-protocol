@@ -35,7 +35,7 @@
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::guilds::{
-    GuildPermission, JoinPolicy, RoleBadge, RoleBadgeColor, RoleBadgeIcon,
+    GuildLink, GuildPermission, JoinPolicy, RoleBadge, RoleBadgeColor, RoleBadgeIcon,
 };
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
@@ -47,7 +47,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::handlers::authenticate;
+use crate::handlers::{authenticate, is_http_url};
 use crate::outbox;
 use crate::state::AppState;
 
@@ -59,6 +59,25 @@ const MEMBER_ROLE_INDEX: i32 = 2;
 /// field" treatment as `validate_tag`, just a longer bound since a role
 /// description is prose, not a 2-5 character tag.
 const MAX_ROLE_DESCRIPTION_LEN: usize = 200;
+
+/// Cap on `Guild.motd` (issue #153) — same order of magnitude as
+/// `MAX_BIO_LEN` in `handlers.rs`, since a MOTD is short prose too.
+const MAX_GUILD_MOTD_LEN: usize = 500;
+
+/// Cap on `Guild.banner`'s URL length (issue #153) — same bound
+/// `MAX_AVATAR_URL_LEN` uses.
+const MAX_GUILD_BANNER_URL_LEN: usize = 2048;
+
+/// Cap on the number of entries in `Guild.links` (issue #153) — keeps this
+/// from becoming an arbitrary free-form content field, per the ticket.
+const MAX_GUILD_LINKS: usize = 5;
+
+/// Cap on a single `GuildLink.label`'s length (issue #153).
+const MAX_GUILD_LINK_LABEL_LEN: usize = 60;
+
+/// Cap on a single `GuildLink.url`'s length (issue #153) — same bound
+/// `MAX_AVATAR_URL_LEN`/`MAX_GUILD_BANNER_URL_LEN` use.
+const MAX_GUILD_LINK_URL_LEN: usize = 2048;
 
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
@@ -148,6 +167,67 @@ fn validate_role_description(description: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Same empty-string-clears convention `handlers::validate_bio` uses. A
+/// non-empty value must be within [`MAX_GUILD_MOTD_LEN`] characters or the
+/// request is rejected — never silently truncated.
+fn validate_guild_motd(motd: &str) -> Result<Option<String>, AppError> {
+    if motd.is_empty() {
+        return Ok(None);
+    }
+    if motd.chars().count() > MAX_GUILD_MOTD_LEN {
+        return Err(AppError::InvalidGuildMotd);
+    }
+    Ok(Some(motd.to_string()))
+}
+
+/// Same empty-string-clears convention `handlers::validate_avatar_url`
+/// uses, reusing its `http`/`https`-URL validation
+/// ([`crate::handlers::is_http_url`]) rather than re-implementing it.
+fn validate_guild_banner(banner: &str) -> Result<Option<String>, AppError> {
+    if banner.is_empty() {
+        return Ok(None);
+    }
+    if !is_http_url(banner, MAX_GUILD_BANNER_URL_LEN) {
+        return Err(AppError::InvalidGuildBanner);
+    }
+    Ok(Some(banner.to_string()))
+}
+
+/// Wire shape for one entry of `UpdateGuildRequest.links` (issue #153).
+#[derive(Deserialize)]
+pub struct GuildLinkRequest {
+    pub label: String,
+    pub url: String,
+}
+
+/// Issue #153's invariants: at most [`MAX_GUILD_LINKS`] entries, each
+/// label 1-[`MAX_GUILD_LINK_LABEL_LEN`] characters, each url a valid
+/// `http`/`https` URL within [`MAX_GUILD_LINK_URL_LEN`] characters. Unlike
+/// `motd`/`banner`, a link entry has no "empty means clear" state of its
+/// own — an invalid entry is rejected outright, never silently dropped or
+/// truncated (the whole `links` list is either accepted or rejected as a
+/// unit).
+fn validate_guild_links(links: &[GuildLinkRequest]) -> Result<Vec<GuildLink>, AppError> {
+    if links.len() > MAX_GUILD_LINKS {
+        return Err(AppError::TooManyGuildLinks);
+    }
+    let mut parsed = Vec::with_capacity(links.len());
+    for link in links {
+        let label_len = link.label.chars().count();
+        if label_len == 0 || label_len > MAX_GUILD_LINK_LABEL_LEN {
+            return Err(AppError::InvalidGuildLink);
+        }
+        if !is_http_url(&link.url, MAX_GUILD_LINK_URL_LEN) {
+            return Err(AppError::InvalidGuildLink);
+        }
+        parsed.push(GuildLink {
+            label: link.label.clone(),
+            url: link.url.clone(),
+        });
+    }
+    Ok(parsed)
+}
+
 /// Wire shape for a badge in a create/update role request — plain strings
 /// rather than deserializing straight into `RoleBadgeIcon`/`RoleBadgeColor`,
 /// so an unrecognized id goes through the same explicit
@@ -190,17 +270,30 @@ struct GuildRow {
     owner: Uuid,
     created_at: OffsetDateTime,
     join_policy: JoinPolicy,
+    /// Issue #153.
+    motd: Option<String>,
+    /// Issue #153.
+    banner: Option<String>,
+    /// Issue #153.
+    links: Vec<GuildLink>,
+    /// Issue #153.
+    recruiting: bool,
 }
 
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, name, tag, description, owner, created_at, join_policy FROM guilds WHERE id = $1",
+        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, links, recruiting FROM guilds WHERE id = $1",
     )
     .bind(guild_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::GuildNotFound)?;
     let join_policy_raw: String = row.try_get("join_policy")?;
+    let links_raw: serde_json::Value = row.try_get("links")?;
+    // Falls back to an empty list if the stored JSON is ever somehow
+    // unparseable — never a hard failure on a read path, same posture as
+    // `join_policy`'s fallback just below.
+    let links: Vec<GuildLink> = serde_json::from_value(links_raw).unwrap_or_default();
     Ok(GuildRow {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
@@ -211,6 +304,10 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
         // Falls back to the column's own DEFAULT if it's ever somehow
         // unparseable — never a hard failure on a read path.
         join_policy: JoinPolicy::parse(&join_policy_raw).unwrap_or(JoinPolicy::InviteOnly),
+        motd: row.try_get("motd")?,
+        banner: row.try_get("banner")?,
+        links,
+        recruiting: row.try_get("recruiting")?,
     })
 }
 
@@ -226,6 +323,14 @@ pub struct GuildResponse {
     pub member_count: i64,
     pub games: Vec<Uuid>,
     pub join_policy: String,
+    /// Issue #153.
+    pub motd: Option<String>,
+    /// Issue #153.
+    pub banner: Option<String>,
+    /// Issue #153.
+    pub links: Vec<GuildLink>,
+    /// Issue #153.
+    pub recruiting: bool,
 }
 
 async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildResponse, AppError> {
@@ -255,6 +360,10 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         member_count,
         games,
         join_policy: guild.join_policy.as_str().to_string(),
+        motd: guild.motd,
+        banner: guild.banner,
+        links: guild.links,
+        recruiting: guild.recruiting,
     })
 }
 
@@ -378,6 +487,10 @@ pub async fn create_guild(
                 owner: actor,
                 created_at,
                 join_policy: JoinPolicy::InviteOnly,
+                motd: None,
+                banner: None,
+                links: Vec::new(),
+                recruiting: false,
             },
         )
         .await?,
@@ -402,6 +515,20 @@ pub struct UpdateGuildRequest {
     pub name: Option<String>,
     pub tag: Option<String>,
     pub description: Option<String>,
+    /// Issue #153. Three states, same as `UpdateProfileRequest::bio`:
+    /// omitted (untouched), `Some("")` (clear to `NULL`), `Some(nonempty)`
+    /// (validate against [`MAX_GUILD_MOTD_LEN`], then set).
+    pub motd: Option<String>,
+    /// Issue #153. Same three-state convention as `motd`, same
+    /// `http`/`https`-URL validation as a profile's `avatar_url`.
+    pub banner: Option<String>,
+    /// Issue #153. Two states, not three: omitted (untouched) or
+    /// `Some(list)`, which always fully replaces the stored list —
+    /// including `Some(vec![])` to clear it. Each entry is validated; an
+    /// invalid entry rejects the whole request rather than being dropped.
+    pub links: Option<Vec<GuildLinkRequest>>,
+    /// Issue #153. Omitted leaves it untouched.
+    pub recruiting: Option<bool>,
 }
 
 pub async fn update_guild(
@@ -433,17 +560,37 @@ pub async fn update_guild(
         .description
         .clone()
         .unwrap_or_else(|| guild.description.clone());
+    let new_motd = match &body.motd {
+        Some(raw) => validate_guild_motd(raw)?,
+        None => guild.motd.clone(),
+    };
+    let new_banner = match &body.banner {
+        Some(raw) => validate_guild_banner(raw)?,
+        None => guild.banner.clone(),
+    };
+    let new_links = match &body.links {
+        Some(links) => validate_guild_links(links)?,
+        None => guild.links.clone(),
+    };
+    let new_recruiting = body.recruiting.unwrap_or(guild.recruiting);
+    let new_links_json =
+        serde_json::to_value(&new_links).expect("GuildLink always serializes to JSON");
 
     let mut tx = state.pool.begin().await?;
 
-    let updated =
-        sqlx::query("UPDATE guilds SET name = $2, tag = $3, description = $4 WHERE id = $1")
-            .bind(guild_id)
-            .bind(&new_name)
-            .bind(&new_tag)
-            .bind(&new_description)
-            .execute(&mut *tx)
-            .await;
+    let updated = sqlx::query(
+        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, links = $7, recruiting = $8 WHERE id = $1",
+    )
+    .bind(guild_id)
+    .bind(&new_name)
+    .bind(&new_tag)
+    .bind(&new_description)
+    .bind(&new_motd)
+    .bind(&new_banner)
+    .bind(&new_links_json)
+    .bind(new_recruiting)
+    .execute(&mut *tx)
+    .await;
     if let Err(sqlx::Error::Database(db_err)) = &updated {
         if db_err.is_unique_violation() {
             let is_tag = db_err
@@ -469,6 +616,10 @@ pub async fn update_guild(
             "name": new_name,
             "tag": new_tag,
             "description": new_description,
+            "motd": new_motd,
+            "banner": new_banner,
+            "links": new_links,
+            "recruiting": new_recruiting,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -489,6 +640,10 @@ pub async fn update_guild(
                 owner: guild.owner,
                 created_at: guild.created_at,
                 join_policy: guild.join_policy,
+                motd: new_motd,
+                banner: new_banner,
+                links: new_links,
+                recruiting: new_recruiting,
             },
         )
         .await?,
@@ -880,6 +1035,10 @@ pub async fn transfer_ownership(
                 owner: body.to,
                 created_at: guild.created_at,
                 join_policy: guild.join_policy,
+                motd: guild.motd,
+                banner: guild.banner,
+                links: guild.links,
+                recruiting: guild.recruiting,
             },
         )
         .await?,
@@ -1767,5 +1926,156 @@ mod tests {
         for color in RoleBadgeColor::ALL {
             assert_eq!(RoleBadgeColor::parse(color.as_str()), Some(color));
         }
+    }
+
+    // --- Issue #153: guild motd/banner/links/recruiting ---
+
+    #[test]
+    fn empty_motd_clears_to_none() {
+        assert_eq!(validate_guild_motd("").unwrap(), None);
+    }
+
+    #[test]
+    fn motd_at_the_cap_is_accepted() {
+        let motd = "a".repeat(MAX_GUILD_MOTD_LEN);
+        assert_eq!(validate_guild_motd(&motd).unwrap(), Some(motd));
+    }
+
+    #[test]
+    fn motd_over_the_cap_is_rejected() {
+        let motd = "a".repeat(MAX_GUILD_MOTD_LEN + 1);
+        assert!(matches!(
+            validate_guild_motd(&motd),
+            Err(AppError::InvalidGuildMotd)
+        ));
+    }
+
+    #[test]
+    fn empty_banner_clears_to_none() {
+        assert_eq!(validate_guild_banner("").unwrap(), None);
+    }
+
+    #[test]
+    fn valid_https_banner_is_accepted() {
+        assert_eq!(
+            validate_guild_banner("https://example.com/banner.png").unwrap(),
+            Some("https://example.com/banner.png".to_string())
+        );
+    }
+
+    #[test]
+    fn non_http_scheme_banner_is_rejected() {
+        assert!(matches!(
+            validate_guild_banner("javascript:alert(1)"),
+            Err(AppError::InvalidGuildBanner)
+        ));
+    }
+
+    #[test]
+    fn overlong_banner_is_rejected() {
+        let overlong = format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_GUILD_BANNER_URL_LEN)
+        );
+        assert!(matches!(
+            validate_guild_banner(&overlong),
+            Err(AppError::InvalidGuildBanner)
+        ));
+    }
+
+    #[test]
+    fn valid_links_round_trip() {
+        let links = vec![
+            GuildLinkRequest {
+                label: "Discord".to_string(),
+                url: "https://discord.gg/example".to_string(),
+            },
+            GuildLinkRequest {
+                label: "Website".to_string(),
+                url: "https://example.com".to_string(),
+            },
+        ];
+        let parsed = validate_guild_links(&links).expect("valid links should parse");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].label, "Discord");
+        assert_eq!(parsed[0].url, "https://discord.gg/example");
+    }
+
+    #[test]
+    fn empty_links_list_is_accepted() {
+        assert_eq!(validate_guild_links(&[]).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn too_many_links_is_rejected() {
+        let links: Vec<GuildLinkRequest> = (0..MAX_GUILD_LINKS + 1)
+            .map(|i| GuildLinkRequest {
+                label: format!("Link {i}"),
+                url: "https://example.com".to_string(),
+            })
+            .collect();
+        assert!(matches!(
+            validate_guild_links(&links),
+            Err(AppError::TooManyGuildLinks)
+        ));
+    }
+
+    #[test]
+    fn link_count_at_the_cap_is_accepted() {
+        let links: Vec<GuildLinkRequest> = (0..MAX_GUILD_LINKS)
+            .map(|i| GuildLinkRequest {
+                label: format!("Link {i}"),
+                url: "https://example.com".to_string(),
+            })
+            .collect();
+        assert!(validate_guild_links(&links).is_ok());
+    }
+
+    #[test]
+    fn link_with_empty_label_is_rejected() {
+        let links = vec![GuildLinkRequest {
+            label: "".to_string(),
+            url: "https://example.com".to_string(),
+        }];
+        assert!(matches!(
+            validate_guild_links(&links),
+            Err(AppError::InvalidGuildLink)
+        ));
+    }
+
+    #[test]
+    fn link_with_overlong_label_is_rejected() {
+        let links = vec![GuildLinkRequest {
+            label: "a".repeat(MAX_GUILD_LINK_LABEL_LEN + 1),
+            url: "https://example.com".to_string(),
+        }];
+        assert!(matches!(
+            validate_guild_links(&links),
+            Err(AppError::InvalidGuildLink)
+        ));
+    }
+
+    #[test]
+    fn link_with_invalid_url_is_rejected() {
+        let links = vec![GuildLinkRequest {
+            label: "Discord".to_string(),
+            url: "not a url".to_string(),
+        }];
+        assert!(matches!(
+            validate_guild_links(&links),
+            Err(AppError::InvalidGuildLink)
+        ));
+    }
+
+    #[test]
+    fn link_with_non_http_scheme_url_is_rejected() {
+        let links = vec![GuildLinkRequest {
+            label: "Discord".to_string(),
+            url: "javascript:alert(1)".to_string(),
+        }];
+        assert!(matches!(
+            validate_guild_links(&links),
+            Err(AppError::InvalidGuildLink)
+        ));
     }
 }

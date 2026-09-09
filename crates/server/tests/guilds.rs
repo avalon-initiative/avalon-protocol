@@ -617,3 +617,137 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
     .unwrap();
     assert_eq!(remove.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// Issue #153: setting motd/banner/links/recruiting via `PATCH
+/// /guilds/{id}` round-trips through `GET /guilds/{id}`.
+#[tokio::test]
+#[ignore]
+async fn guild_metadata_round_trips_through_patch_and_get() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    assert!(create_guild.status().is_success());
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+    // Defaults before any metadata is set.
+    assert!(guild["motd"].is_null());
+    assert!(guild["banner"].is_null());
+    assert_eq!(guild["links"].as_array().unwrap().len(), 0);
+    assert!(!guild["recruiting"].as_bool().unwrap());
+
+    let patch = auth(http.patch(format!("{base}/guilds/{guild_id}")), &token)
+        .json(&serde_json::json!({
+            "motd": "Raid night every Friday!",
+            "banner": "https://example.com/banner.png",
+            "links": [
+                { "label": "Discord", "url": "https://discord.gg/example" },
+                { "label": "Website", "url": "https://example.com" },
+            ],
+            "recruiting": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(patch.status().is_success(), "{:?}", patch.status());
+    let patched: serde_json::Value = patch.json().await.unwrap();
+    assert_eq!(
+        patched["motd"].as_str().unwrap(),
+        "Raid night every Friday!"
+    );
+    assert_eq!(
+        patched["banner"].as_str().unwrap(),
+        "https://example.com/banner.png"
+    );
+    assert_eq!(patched["links"].as_array().unwrap().len(), 2);
+    assert!(patched["recruiting"].as_bool().unwrap());
+
+    let fetched: serde_json::Value = auth(http.get(format!("{base}/guilds/{guild_id}")), &token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        fetched["motd"].as_str().unwrap(),
+        "Raid night every Friday!"
+    );
+    assert_eq!(
+        fetched["banner"].as_str().unwrap(),
+        "https://example.com/banner.png"
+    );
+    assert_eq!(fetched["links"][0]["label"].as_str().unwrap(), "Discord");
+    assert_eq!(
+        fetched["links"][0]["url"].as_str().unwrap(),
+        "https://discord.gg/example"
+    );
+    assert!(fetched["recruiting"].as_bool().unwrap());
+
+    // Clearing motd/banner via empty string, and links via an empty list.
+    let clear = auth(http.patch(format!("{base}/guilds/{guild_id}")), &token)
+        .json(&serde_json::json!({
+            "motd": "",
+            "banner": "",
+            "links": [],
+            "recruiting": false,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(clear.status().is_success(), "{:?}", clear.status());
+    let cleared: serde_json::Value = clear.json().await.unwrap();
+    assert!(cleared["motd"].is_null());
+    assert!(cleared["banner"].is_null());
+    assert_eq!(cleared["links"].as_array().unwrap().len(), 0);
+    assert!(!cleared["recruiting"].as_bool().unwrap());
+}
+
+/// Issue #153: invalid metadata (overlong motd, non-http(s) banner, too
+/// many links) is rejected outright, not silently dropped or truncated.
+#[tokio::test]
+#[ignore]
+async fn invalid_guild_metadata_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let overlong_motd = auth(http.patch(format!("{base}/guilds/{guild_id}")), &token)
+        .json(&serde_json::json!({ "motd": "a".repeat(501) }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(overlong_motd.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let bad_banner = auth(http.patch(format!("{base}/guilds/{guild_id}")), &token)
+        .json(&serde_json::json!({ "banner": "javascript:alert(1)" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_banner.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let too_many_links: Vec<serde_json::Value> = (0..6)
+        .map(|i| serde_json::json!({ "label": format!("Link {i}"), "url": "https://example.com" }))
+        .collect();
+    let bad_links = auth(http.patch(format!("{base}/guilds/{guild_id}")), &token)
+        .json(&serde_json::json!({ "links": too_many_links }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_links.status(), reqwest::StatusCode::BAD_REQUEST);
+}

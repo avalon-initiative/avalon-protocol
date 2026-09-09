@@ -58,7 +58,7 @@
 use std::collections::HashMap;
 
 use avalon_protocol::guilds::{
-    Guild, GuildChannel, GuildMember, GuildMessage, GuildRole, JoinPolicy,
+    Guild, GuildChannel, GuildLink, GuildMember, GuildMessage, GuildRole, JoinPolicy,
 };
 use avalon_protocol::ids::{GuildId, IdentityId};
 use avalon_protocol::permissions::Capability;
@@ -116,6 +116,16 @@ struct GuildResponse {
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     join_policy: String,
+    /// Issue #153.
+    motd: Option<String>,
+    /// Issue #153.
+    banner: Option<String>,
+    /// Issue #153.
+    #[serde(default)]
+    links: Vec<GuildLink>,
+    /// Issue #153.
+    #[serde(default)]
+    recruiting: bool,
 }
 
 impl From<GuildResponse> for Guild {
@@ -132,6 +142,10 @@ impl From<GuildResponse> for Guild {
             // already takes on this exact field — never a hard failure on
             // a read path.
             join_policy: JoinPolicy::parse(&response.join_policy).unwrap_or_default(),
+            motd: response.motd,
+            banner: response.banner,
+            links: response.links,
+            recruiting: response.recruiting,
         }
     }
 }
