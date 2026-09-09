@@ -57,10 +57,10 @@ Protocol Event
       +----> Event Buffer
                   |
                   v
-              Batching                  (#38)
+              Batching                  (EventBatch; #38)
                   |
                   v
-          Commitment / Merkle Root      (#40)
+          Commitment / Merkle Root      (batch_root today; Merkle root is #40)
                   |
                   v
               Settlement                (SettlementProvider; Avalon's own chain, #79/#93)
@@ -69,6 +69,10 @@ Protocol Event
 An event fans out to the read model and to the settlement path. The projection
 is the optimized copy; the settled history is the record. Never one event = one
 settlement transaction — see [`./settlement.md`](./settlement.md).
+
+A batch is not itself a protocol event and never gets a `kind` — it is the
+settlement layer's unit of commitment over a group of events (`EventBatch`),
+not a durable fact anyone issues, indexes, or replays on its own.
 
 ## Design properties
 
@@ -240,9 +244,14 @@ the record — [`./revocation.md`](./revocation.md).
   "game → achievement id" shape above. Network-attributed rather than
   game-signed for the same reason `game.registered` is: no general per-event
   signing ceremony exists yet beyond `identity.created`.
-- The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`; the
+- The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`
+  plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`); the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
-  `timestamp`, `version` (`crates/chain/src/postgres.rs`).
+  `timestamp`, `version` (`crates/chain/src/postgres.rs`). Every event lands
+  in `protocol_outbox` (#71) and is committed as part of whatever
+  `EventBatch` the settlement worker's current drain tick assembles
+  (`crates/server/src/outbox.rs`) — batches close on a worker tick, not on
+  size or a timer; a single-event batch is legal.
 - No typed kinds, no payload structs, no catalogue in code.
 
 ## Decisions and tickets
@@ -250,6 +259,8 @@ the record — [`./revocation.md`](./revocation.md).
 - #75 durable history is canonical
 - #82 event kind catalogue and versioning policy
 - [#38](https://github.com/LunarVagabond/avalon-protocol/issues/38) batching
+  (buffer → `EventBatch` → `Commitment`, real as of `batch_id`/
+  `ledger_batches`)
 - [#71](https://github.com/LunarVagabond/avalon-protocol/issues/71) events must
   commit atomically with the projection change
 - #86 profile events; #73 identity signs its own events
