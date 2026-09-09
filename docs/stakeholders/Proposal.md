@@ -1063,7 +1063,7 @@ have no owner yet.
 * What is the technical design of the transparency log? — [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
 * What does the log anchor to, or become, long term: an anchored log, a partnered chain, or a custom chain? — [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79)
 * How does the log operator's own signing key work? — [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39)
-* Should assets have standardized schemas?
+* Should assets, and game data more broadly, have standardized schemas? — [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181)
 * How should developer authentication work?
 * How should network operators be trusted?
 * How should economic transactions work?
