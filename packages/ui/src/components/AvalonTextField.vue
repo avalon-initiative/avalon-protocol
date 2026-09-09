@@ -20,6 +20,7 @@ defineEmits<{ 'update:modelValue': [value: string] }>()
       :type="type"
       :placeholder="placeholder"
       :disabled="disabled"
+      :maxlength="maxlength"
       :value="modelValue"
       @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />

@@ -182,7 +182,7 @@ function openGuild(guildId: string) {
               @submit="onCreateGuild"
             >
               <AvalonTextField v-model="createName" label="Name" placeholder="Ashen Vanguard" />
-              <AvalonTextField v-model="createTag" label="Tag (2-5 characters)" placeholder="ASHV" />
+              <AvalonTextField v-model="createTag" label="Tag (2-5 characters)" placeholder="ASHV" :maxlength="5" />
               <AvalonTextField
                 v-model="createDescription"
                 label="Description (optional)"

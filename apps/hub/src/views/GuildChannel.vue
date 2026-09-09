@@ -22,6 +22,7 @@ const {
   guild,
   channel,
   messages,
+  authorNames,
   canDelete,
   loading,
   loadingOlder,
@@ -81,6 +82,7 @@ function backToGuild() {
           v-for="message in messages"
           :key="message.id"
           :author-id="message.author"
+          :author-display-name="authorNames[message.author]"
           :body="message.body"
           :sent-at-label="new Date(message.sent_at).toLocaleString()"
           :can-delete="canDelete"

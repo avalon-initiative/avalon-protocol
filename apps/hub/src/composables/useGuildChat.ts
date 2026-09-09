@@ -25,6 +25,11 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   const guild = ref<GuildResponse | null>(null)
   const channel = ref<ChannelResponse | null>(null)
   const messages = ref<MessageResponse[]>([]) // oldest-first, for newest-at-bottom rendering
+  // identity id -> "display_name#discriminator", resolved via
+  // GET /identities/profiles (issue #161) for whichever authors show up
+  // in the currently-loaded messages. Never removed once resolved — an
+  // author's name doesn't need to change mid-session for a chat view.
+  const authorNames = ref<Record<string, string>>({})
   const selfId = ref('')
   const selfPermissions = ref<string[]>([])
   const loading = ref(true)
@@ -67,6 +72,24 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     selfPermissions.value = permissionsForMember(selfId.value, plainMembers, roles)
   }
 
+  async function resolveAuthorNames(newMessages: MessageResponse[]) {
+    if (!session.token) return
+    const unknown = [...new Set(newMessages.map((m) => m.author))].filter(
+      (id) => !(id in authorNames.value),
+    )
+    if (unknown.length === 0) return
+    try {
+      const profiles = await api.getProfiles(session.token, unknown)
+      const resolved: Record<string, string> = {}
+      for (const profile of profiles) {
+        resolved[profile.identity_id] = `${profile.display_name}#${profile.discriminator}`
+      }
+      authorNames.value = { ...authorNames.value, ...resolved }
+    } catch {
+      // Best-effort — messages still render with the raw author id.
+    }
+  }
+
   async function loadLatestMessages() {
     if (!session.token) return
     const page = await api.listMessages(session.token, guildId.value, channelId.value, {
@@ -74,6 +97,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     })
     messages.value = toOldestFirst(page)
     hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
+    await resolveAuthorNames(messages.value)
   }
 
   async function pollNewMessages() {
@@ -86,6 +110,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       const fresh = toOldestFirst(page).filter((m) => !known.has(m.id))
       if (fresh.length > 0) {
         messages.value = [...messages.value, ...fresh]
+        await resolveAuthorNames(fresh)
       }
     } catch {
       // Best-effort poll — the next tick retries.
@@ -104,7 +129,9 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
         limit: MESSAGE_PAGE_SIZE,
       })
       hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
-      messages.value = [...toOldestFirst(page), ...messages.value]
+      const older = toOldestFirst(page)
+      messages.value = [...older, ...messages.value]
+      await resolveAuthorNames(older)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {
@@ -119,6 +146,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     try {
       const message = await api.sendMessage(session.token, guildId.value, channelId.value, { body })
       messages.value = [...messages.value, message]
+      await resolveAuthorNames([message])
     } catch (e) {
       sendError.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {
@@ -168,6 +196,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     guild,
     channel,
     messages,
+    authorNames,
     selfId,
     canDelete,
     loading,
