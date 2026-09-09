@@ -1,0 +1,206 @@
+.field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+  font-family: inherit;
+}
+
+.label {
+  font-size: var(--av-text-sm);
+  font-weight: 500;
+  color: var(--av-color-text-secondary);
+}
+
+.control {
+  display: flex;
+  gap: var(--av-space-2);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--av-radius-md);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: var(--av-color-text);
+  padding: 0.625rem var(--av-space-3);
+  font-size: var(--av-text-base);
+  font-family: inherit;
+  transition: border-color 120ms ease;
+
+  &:hover:not(:disabled) {
+    border-color: var(--av-color-border-strong);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  &:focus {
+    outline: none;
+    border-color: var(--av-color-primary);
+    box-shadow: 0 0 0 3px var(--av-color-primary-soft);
+  }
+}
+
+.inputError {
+  border-color: var(--av-color-danger);
+}
+
+.error {
+  color: var(--av-color-danger);
+  font-size: var(--av-text-sm);
+}
+
+.pickerButton {
+  border-radius: var(--av-radius-md);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  padding: 0 var(--av-space-3);
+  cursor: pointer;
+  font-size: var(--av-text-base);
+
+  &:hover:not(:disabled) {
+    border-color: var(--av-color-border-strong);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: var(--av-space-2);
+  width: 18rem;
+  background: var(--av-color-surface);
+  border: 1px solid var(--av-color-border);
+  border-radius: var(--av-radius-lg);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 20%);
+  padding: var(--av-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+
+  &:focus {
+    outline: none;
+  }
+}
+
+.popoverHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.navButton {
+  background: none;
+  border: none;
+  font-size: var(--av-text-lg);
+  line-height: 1;
+  color: var(--av-color-text-secondary);
+  cursor: pointer;
+  padding: var(--av-space-1) var(--av-space-2);
+
+  &:hover {
+    color: var(--av-color-text);
+  }
+}
+
+.monthLabel {
+  font-weight: 600;
+  color: var(--av-color-text);
+  font-size: var(--av-text-sm);
+}
+
+.weekdayRow,
+.weekRow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.weekday {
+  text-align: center;
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+  padding: var(--av-space-1) 0;
+}
+
+.dayCell {
+  text-align: center;
+  padding: var(--av-space-1) 0;
+  border: none;
+  background: none;
+  border-radius: var(--av-radius-sm);
+  color: var(--av-color-text);
+  font-size: var(--av-text-sm);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+  }
+}
+
+.dayOutside {
+  color: var(--av-color-text-muted);
+}
+
+.daySelected {
+  background: var(--av-color-primary);
+  color: var(--av-color-on-primary, #fff);
+
+  &:hover {
+    background: var(--av-color-primary);
+  }
+}
+
+.timeRow {
+  display: flex;
+  gap: var(--av-space-2);
+  border-top: 1px solid var(--av-color-border);
+  padding-top: var(--av-space-2);
+}
+
+.timeField {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.timeLabel {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-secondary);
+}
+
+.timeSelect {
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: var(--av-color-text);
+  padding: var(--av-space-1) var(--av-space-2);
+  font-size: var(--av-text-sm);
+  font-family: inherit;
+}
+
+.doneButton {
+  align-self: flex-end;
+  border-radius: var(--av-radius-md);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-primary);
+  color: var(--av-color-on-primary, #fff);
+  padding: var(--av-space-2) var(--av-space-3);
+  font-size: var(--av-text-sm);
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.9;
+  }
+}

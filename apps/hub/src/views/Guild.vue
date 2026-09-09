@@ -15,6 +15,7 @@ import {
   AvalonChannelList,
   AvalonChatComposer,
   AvalonChatMessage,
+  AvalonDateTimeField,
   AvalonEditableField,
   AvalonEventCard,
   AvalonFilterBar,
@@ -1172,11 +1173,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
                 label="Description"
                 placeholder="Optional details"
               />
-              <AvalonTextField
-                v-model="newEventStartsAt"
-                label="Starts at"
-                placeholder="2026-09-15T20:00"
-              />
+              <AvalonDateTimeField v-model="newEventStartsAt" label="Starts at" />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
               </template>
