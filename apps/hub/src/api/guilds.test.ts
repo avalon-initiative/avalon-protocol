@@ -1,25 +1,38 @@
 import { describe, expect, it } from 'vitest'
 import {
+  addFavoriteGameId,
   buildDiscoverQueryString,
   canChangeMemberRole,
   canKickMember,
+  canPinMoreFavorites,
   filterGuildsByNameOrTag,
   filterMembersByIdentityId,
+  formatFavoriteGameEntry,
   formatGameBreakdownEntry,
   formatPlayingSummary,
   groupMembersByRole,
   groupMembersPlayingByGame,
   hasGuildPermission,
   hasNoGameBreakdownData,
+  MAX_FAVORITE_GAMES,
   membershipStatusText,
   mergeGuildMember,
   permissionsForMember,
+  pinnableBreakdownEntries,
+  removeFavoriteGameId,
+  reorderFavoriteGameIds,
   roleVariantForIndex,
   sortMembers,
   sortMembersByPresence,
 } from './guilds'
 import type { GuildMember } from './guilds'
-import type { GameBreakdownEntry, GuildMemberResponse, GuildResponse, RoleResponse } from './types'
+import type {
+  FavoriteGameEntry,
+  GameBreakdownEntry,
+  GuildMemberResponse,
+  GuildResponse,
+  RoleResponse,
+} from './types'
 
 const OWNER = 'owner-id'
 const OFFICER = 'officer-id'
@@ -452,5 +465,91 @@ describe('hasNoGameBreakdownData', () => {
       member_count: 1,
     }
     expect(hasNoGameBreakdownData([entry])).toBe(false)
+  })
+})
+
+// --- Issue #207: favorite games pin list -----------------------------------
+
+function favorite(gameId: string, name: string, position: number, stale = false): FavoriteGameEntry {
+  return { game_id: gameId, game_slug: gameId, game_name: name, position, stale }
+}
+
+function breakdownEntry(gameId: string, name: string): GameBreakdownEntry {
+  return { game_id: gameId, game_slug: gameId, game_name: name, member_count: 1 }
+}
+
+describe('pinnableBreakdownEntries', () => {
+  it('excludes games already pinned', () => {
+    const breakdown = [breakdownEntry('g1', 'Ashen Realms'), breakdownEntry('g2', 'Ocean World')]
+    const favorites = [favorite('g1', 'Ashen Realms', 0)]
+    expect(pinnableBreakdownEntries(breakdown, favorites)).toEqual([breakdownEntry('g2', 'Ocean World')])
+  })
+
+  it('returns every breakdown entry when nothing is pinned yet', () => {
+    const breakdown = [breakdownEntry('g1', 'Ashen Realms')]
+    expect(pinnableBreakdownEntries(breakdown, [])).toEqual(breakdown)
+  })
+})
+
+describe('canPinMoreFavorites', () => {
+  it('allows pinning below the cap', () => {
+    const favorites = [favorite('g1', 'A', 0), favorite('g2', 'B', 1)]
+    expect(canPinMoreFavorites(favorites)).toBe(true)
+  })
+
+  it('rejects pinning at the cap', () => {
+    const favorites = Array.from({ length: MAX_FAVORITE_GAMES }, (_, i) => favorite(`g${i}`, `Game ${i}`, i))
+    expect(favorites.length).toBe(5)
+    expect(canPinMoreFavorites(favorites)).toBe(false)
+  })
+})
+
+describe('addFavoriteGameId', () => {
+  it('appends the new id to the existing ordered ids', () => {
+    const favorites = [favorite('g1', 'A', 0), favorite('g2', 'B', 1)]
+    expect(addFavoriteGameId(favorites, 'g3')).toEqual(['g1', 'g2', 'g3'])
+  })
+})
+
+describe('removeFavoriteGameId', () => {
+  it('drops the given id, preserving the order of the rest', () => {
+    const favorites = [favorite('g1', 'A', 0), favorite('g2', 'B', 1), favorite('g3', 'C', 2)]
+    expect(removeFavoriteGameId(favorites, 'g2')).toEqual(['g1', 'g3'])
+  })
+})
+
+describe('reorderFavoriteGameIds', () => {
+  const favorites = [favorite('g1', 'A', 0), favorite('g2', 'B', 1), favorite('g3', 'C', 2)]
+
+  it('moves an entry up by swapping with its predecessor', () => {
+    expect(reorderFavoriteGameIds(favorites, 'g2', 'up')).toEqual(['g2', 'g1', 'g3'])
+  })
+
+  it('moves an entry down by swapping with its successor', () => {
+    expect(reorderFavoriteGameIds(favorites, 'g2', 'down')).toEqual(['g1', 'g3', 'g2'])
+  })
+
+  it('is a no-op moving the first entry up', () => {
+    expect(reorderFavoriteGameIds(favorites, 'g1', 'up')).toEqual(['g1', 'g2', 'g3'])
+  })
+
+  it('is a no-op moving the last entry down', () => {
+    expect(reorderFavoriteGameIds(favorites, 'g3', 'down')).toEqual(['g1', 'g2', 'g3'])
+  })
+
+  it('is a no-op for an id not in the list', () => {
+    expect(reorderFavoriteGameIds(favorites, 'missing', 'up')).toEqual(['g1', 'g2', 'g3'])
+  })
+})
+
+describe('formatFavoriteGameEntry', () => {
+  it('renders the plain game name when not stale', () => {
+    expect(formatFavoriteGameEntry(favorite('g1', 'Ashen Realms', 0))).toBe('Ashen Realms')
+  })
+
+  it('flags staleness inline rather than hiding it', () => {
+    expect(formatFavoriteGameEntry(favorite('g1', 'Ashen Realms', 0, true))).toBe(
+      'Ashen Realms (no longer actively played)',
+    )
   })
 })

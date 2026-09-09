@@ -9,6 +9,7 @@
 import * as api from './client'
 import type {
   DiscoverGuildsParams,
+  FavoriteGameEntry,
   GameBreakdownEntry,
   GuildMemberResponse,
   GuildResponse,
@@ -364,4 +365,69 @@ export function formatGameBreakdownEntry(entry: GameBreakdownEntry, totalMembers
 // separately as an error state, not an empty one.
 export function hasNoGameBreakdownData(breakdown: GameBreakdownEntry[]): boolean {
   return breakdown.length === 0
+}
+
+// --- Favorite games pin list (issue #207, implementing decision #160) -----
+// Mirrors crates/server/src/guilds.rs::MAX_GUILD_FAVORITE_GAMES exactly —
+// the server is the real authority (a stale client constant here can only
+// ever under- or over-disable the "Pin" button a request would then be
+// rejected for anyway), kept in sync by hand same as every other numeric
+// cap the hub duplicates from the server (see e.g. MAX_GUILD_LINKS not
+// being wired here yet).
+export const MAX_FAVORITE_GAMES = 5
+
+// A game affinity breakdown entry is eligible to be pinned only while it
+// isn't already pinned — the server independently re-derives "has real
+// affinity" from the very breakdown this list is built from, so this
+// helper's only job is de-duplication, not re-validating the affinity
+// itself.
+export function pinnableBreakdownEntries(
+  breakdown: GameBreakdownEntry[],
+  favorites: FavoriteGameEntry[],
+): GameBreakdownEntry[] {
+  const pinnedIds = new Set(favorites.map((f) => f.game_id))
+  return breakdown.filter((entry) => !pinnedIds.has(entry.game_id))
+}
+
+export function canPinMoreFavorites(favorites: FavoriteGameEntry[]): boolean {
+  return favorites.length < MAX_FAVORITE_GAMES
+}
+
+// Every mutation below returns the *next full ordered id list* to PUT —
+// same "resend the whole list" convention crates/server/src/guilds.rs's
+// `SetFavoriteGamesRequest` (and #153's `links` before it) already
+// establishes; this module never does a partial/per-entry patch.
+export function addFavoriteGameId(favorites: FavoriteGameEntry[], gameId: string): string[] {
+  return [...favorites.map((f) => f.game_id), gameId]
+}
+
+export function removeFavoriteGameId(favorites: FavoriteGameEntry[], gameId: string): string[] {
+  return favorites.filter((f) => f.game_id !== gameId).map((f) => f.game_id)
+}
+
+// Swaps `gameId` with its neighbor one position earlier/later. A no-op
+// (returns the unchanged order) if `gameId` isn't found or is already at
+// that end of the list — callers disable the button in that case, but this
+// stays safe to call regardless.
+export function reorderFavoriteGameIds(
+  favorites: FavoriteGameEntry[],
+  gameId: string,
+  direction: 'up' | 'down',
+): string[] {
+  const ids = favorites.map((f) => f.game_id)
+  const index = ids.indexOf(gameId)
+  if (index === -1) return ids
+  const swapWith = direction === 'up' ? index - 1 : index + 1
+  if (swapWith < 0 || swapWith >= ids.length) return ids
+  const next = [...ids]
+  const temp = next[index]
+  next[index] = next[swapWith]
+  next[swapWith] = temp
+  return next
+}
+
+// Renders one FavoriteGameEntry for display — flags staleness inline
+// rather than hiding it, per #207's "surface, don't silently churn" design.
+export function formatFavoriteGameEntry(entry: FavoriteGameEntry): string {
+  return entry.stale ? `${entry.game_name} (no longer actively played)` : entry.game_name
 }

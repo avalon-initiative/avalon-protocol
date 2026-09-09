@@ -18,9 +18,12 @@ import {
 } from '@avalon/ui'
 import * as api from '../api/client'
 import {
+  addFavoriteGameId,
   canChangeMemberRole,
   canKickMember,
+  canPinMoreFavorites,
   filterMembersByIdentityId,
+  formatFavoriteGameEntry,
   formatGameBreakdownEntry,
   formatPlayingSummary,
   groupMembersByRole,
@@ -28,6 +31,9 @@ import {
   hasGuildPermission,
   hasNoGameBreakdownData,
   membershipStatusText,
+  pinnableBreakdownEntries,
+  removeFavoriteGameId,
+  reorderFavoriteGameIds,
   roleVariantForIndex,
   sortMembers,
   sortMembersByPresence,
@@ -105,6 +111,48 @@ async function onToggleGameBreakdownPublic(next: boolean) {
   } finally {
     savingGameBreakdownPublic.value = false
   }
+}
+
+// --- Favorite games: curated top-5 pin list (issue #207, implementing -----
+// decision #160). Always part of the public profile (`guild.favorite_games`
+// — unlike the breakdown above, no public-exposure toggle of its own), so
+// it's readable here whether or not the caller can manage the guild.
+// Pinning is only ever offered from `gameBreakdown.value.breakdown` — the
+// same real-affinity data #206 already gates behind manage_guild — so a
+// manager can never even attempt to pin a game without real affinity.
+const favorites = computed(() => guild.value?.favorite_games ?? [])
+const pinnableGames = computed(() =>
+  gameBreakdown.value ? pinnableBreakdownEntries(gameBreakdown.value.breakdown, favorites.value) : [],
+)
+const canPinMore = computed(() => canPinMoreFavorites(favorites.value))
+
+const savingFavorites = ref(false)
+const favoritesError = ref('')
+
+async function applyFavoriteGameIds(gameIds: string[]) {
+  if (!session.token) return
+  favoritesError.value = ''
+  savingFavorites.value = true
+  try {
+    await api.setFavoriteGames(session.token, guildId.value, gameIds)
+    await refresh()
+  } catch (e) {
+    favoritesError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingFavorites.value = false
+  }
+}
+
+function onPinFavorite(gameId: string) {
+  return applyFavoriteGameIds(addFavoriteGameId(favorites.value, gameId))
+}
+
+function onUnpinFavorite(gameId: string) {
+  return applyFavoriteGameIds(removeFavoriteGameId(favorites.value, gameId))
+}
+
+function onReorderFavorite(gameId: string, direction: 'up' | 'down') {
+  return applyFavoriteGameIds(reorderFavoriteGameIds(favorites.value, gameId, direction))
 }
 
 // Roster search/filter/sort — milestone-1 polish, plain pure functions
@@ -651,6 +699,62 @@ function onSelectChannel(channelId: string) {
             <p v-if="gameBreakdownEmpty" :class="styles.empty">
               No guild member has an active game binding yet.
             </p>
+          </template>
+        </AvalonCard>
+
+        <!--
+          Issue #207 (implementing decision #160): a manage_guild-curated
+          top-5 subset of the affinity breakdown above, always shown on the
+          public profile (guild.favorite_games) — visible to anyone once
+          there's something to show, with pin/unpin/reorder controls added
+          for a manage_guild holder. A pin can only ever be added from
+          `pinnableGames` (games `gameBreakdown` already shows real
+          affinity for), so there's no path to pinning an unaffiliated game
+          from this UI.
+        -->
+        <AvalonCard v-if="canManageGuild || favorites.length > 0" title="Favorite games">
+          <p v-if="favorites.length === 0" :class="styles.empty">No favorite games pinned yet.</p>
+          <div v-for="(entry, index) in favorites" :key="entry.game_id" :class="styles.empty">
+            {{ formatFavoriteGameEntry(entry) }}
+            <template v-if="canManageGuild">
+              <AvalonButton
+                v-if="index > 0"
+                label="Move up"
+                variant="secondary"
+                :disabled="savingFavorites"
+                @click="onReorderFavorite(entry.game_id, 'up')"
+              />
+              <AvalonButton
+                v-if="index < favorites.length - 1"
+                label="Move down"
+                variant="secondary"
+                :disabled="savingFavorites"
+                @click="onReorderFavorite(entry.game_id, 'down')"
+              />
+              <AvalonButton
+                label="Unpin"
+                variant="danger"
+                :disabled="savingFavorites"
+                @click="onUnpinFavorite(entry.game_id)"
+              />
+            </template>
+          </div>
+
+          <template v-if="canManageGuild">
+            <p v-if="!canPinMore" :class="styles.empty">Up to 5 games may be pinned at once.</p>
+            <p v-else-if="pinnableGames.length === 0" :class="styles.empty">
+              No unpinned game currently has affinity to pin.
+            </p>
+            <div v-for="entry in pinnableGames" :key="entry.game_id" :class="styles.empty">
+              {{ entry.game_name }}
+              <AvalonButton
+                label="Pin"
+                variant="secondary"
+                :disabled="savingFavorites"
+                @click="onPinFavorite(entry.game_id)"
+              />
+            </div>
+            <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
           </template>
         </AvalonCard>
 

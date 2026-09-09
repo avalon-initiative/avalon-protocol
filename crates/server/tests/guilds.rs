@@ -1294,3 +1294,208 @@ async fn game_breakdown_public_toggle_gates_exposure_to_non_members() {
         "Ashen Realms"
     );
 }
+
+// --- Issue #207: favorite games pin list ------------------------------
+
+/// #207's core round-trip: a `manage_guild` holder (the owner here) pins,
+/// reorders, and unpins games, always drawing from real #206 affinity data.
+/// Also covers the cap and the zero-bound-members rejection at the HTTP
+/// layer (unit tests in `crates/server/src/guilds.rs` cover the same
+/// invariants against the pure validator directly).
+#[tokio::test]
+#[ignore]
+async fn pin_reorder_and_unpin_round_trip() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let guild: serde_json::Value = create.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let ashen = seed_game(&pool, "Ashen Realms").await;
+    let ocean = seed_game(&pool, "Ocean World").await;
+    let unbound = seed_game(&pool, "Unbound Game").await;
+
+    // The owner is bound to both Ashen Realms and Ocean World — both have
+    // real affinity — but never binds to `unbound`.
+    seed_binding(&pool, owner_id, ashen).await;
+    seed_binding(&pool, owner_id, ocean).await;
+
+    let put_favorites = |game_ids: Vec<Uuid>| {
+        let http = http.clone();
+        let base = base.clone();
+        let guild_id = guild_id.to_string();
+        let token = owner_token.clone();
+        async move {
+            auth(
+                http.put(format!("{base}/guilds/{guild_id}/favorite-games")),
+                &token,
+            )
+            .json(&serde_json::json!({ "game_ids": game_ids }))
+            .send()
+            .await
+            .unwrap()
+        }
+    };
+
+    // Pinning a game with zero bound members is rejected outright.
+    let rejected = put_favorites(vec![unbound]).await;
+    assert_eq!(rejected.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Pinning both real-affinity games in order succeeds.
+    let pinned = put_favorites(vec![ashen, ocean]).await;
+    assert!(pinned.status().is_success(), "{:?}", pinned.status());
+    let body: serde_json::Value = pinned.json().await.unwrap();
+    let names: Vec<&str> = body["favorites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["game_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Ashen Realms", "Ocean World"]);
+    assert!(!body["favorites"][0]["stale"].as_bool().unwrap());
+
+    // Reordering (Ocean World first) round-trips through both the PUT
+    // response and a subsequent GET.
+    let reordered = put_favorites(vec![ocean, ashen]).await;
+    assert!(reordered.status().is_success(), "{:?}", reordered.status());
+    let body: serde_json::Value = reordered.json().await.unwrap();
+    let names: Vec<&str> = body["favorites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["game_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Ocean World", "Ashen Realms"]);
+
+    let get = auth(
+        http.get(format!("{base}/guilds/{guild_id}/favorite-games")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(get.status().is_success(), "{:?}", get.status());
+    let get_body: serde_json::Value = get.json().await.unwrap();
+    let names: Vec<&str> = get_body["favorites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["game_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Ocean World", "Ashen Realms"]);
+
+    // The guild's public profile carries the same ordered favorites.
+    let profile = http
+        .get(format!("{base}/guilds/{guild_id}"))
+        .bearer_auth(&owner_token)
+        .send()
+        .await
+        .unwrap();
+    let profile_body: serde_json::Value = profile.json().await.unwrap();
+    let names: Vec<&str> = profile_body["favorite_games"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["game_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Ocean World", "Ashen Realms"]);
+
+    // Unpinning: an empty list clears everything.
+    let cleared = put_favorites(vec![]).await;
+    assert!(cleared.status().is_success(), "{:?}", cleared.status());
+    let body: serde_json::Value = cleared.json().await.unwrap();
+    assert!(body["favorites"].as_array().unwrap().is_empty());
+}
+
+/// A 6th pin is rejected server-side even if the caller has real affinity
+/// for all six games.
+#[tokio::test]
+#[ignore]
+async fn a_sixth_pin_is_rejected_over_http() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let guild: serde_json::Value = create.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let mut game_ids = Vec::new();
+    for i in 0..6 {
+        let game_id = seed_game(&pool, &format!("Game {i}")).await;
+        seed_binding(&pool, owner_id, game_id).await;
+        game_ids.push(game_id);
+    }
+
+    let resp = auth(
+        http.put(format!("{base}/guilds/{guild_id}/favorite-games")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "game_ids": game_ids }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+/// #207's staleness invariant: when a pinned game's last bound member
+/// unbinds, the pin is NOT auto-removed, but the read response flags it
+/// `stale: true` so a `manage_guild` holder can choose to unpin it.
+#[tokio::test]
+#[ignore]
+async fn a_stale_pin_is_flagged_but_not_auto_removed() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let guild: serde_json::Value = create.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let ashen = seed_game(&pool, "Ashen Realms").await;
+    let binding_id = seed_binding(&pool, owner_id, ashen).await;
+
+    let pin = auth(
+        http.put(format!("{base}/guilds/{guild_id}/favorite-games")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "game_ids": [ashen] }))
+    .send()
+    .await
+    .unwrap();
+    assert!(pin.status().is_success(), "{:?}", pin.status());
+
+    // The owner's last (only) binding to Ashen Realms ends — the pin must
+    // survive this untouched, just flagged stale.
+    end_binding(&pool, binding_id).await;
+
+    let get = auth(
+        http.get(format!("{base}/guilds/{guild_id}/favorite-games")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(get.status().is_success(), "{:?}", get.status());
+    let body: serde_json::Value = get.json().await.unwrap();
+    let favorites = body["favorites"].as_array().unwrap();
+    assert_eq!(favorites.len(), 1, "the stale pin must not be auto-removed");
+    assert!(favorites[0]["stale"].as_bool().unwrap());
+}

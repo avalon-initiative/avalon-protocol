@@ -155,6 +155,12 @@ pub enum AppError {
         "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
     )]
     InvalidDiscoverQuery,
+    #[error("a guild may pin at most 5 favorite games")]
+    TooManyFavoriteGames,
+    #[error("favorite_games contains the same game more than once")]
+    DuplicateFavoriteGame,
+    #[error("a game can only be pinned as a favorite while it has at least one actively-bound guild member")]
+    FavoriteGameNotBound,
     #[error("a game may only create or change its own achievement definitions")]
     AchievementDefinitionForbidden,
     #[error("database error")]
@@ -259,6 +265,15 @@ impl IntoResponse for AppError {
             AppError::AchievementDefinitionNotFound => StatusCode::NOT_FOUND,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidDiscoverQuery => StatusCode::BAD_REQUEST,
+            AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
+                StatusCode::BAD_REQUEST
+            }
+            // The affinity this would-be pin claims doesn't currently exist
+            // (zero actively-bound members) — a well-formed request the
+            // caller isn't allowed to make, same "authenticated fine, just
+            // not allowed to claim this" shape as `PresencePlayingMismatch`
+            // above, not a 404 (the game itself may well exist).
+            AppError::FavoriteGameNotBound => StatusCode::FORBIDDEN,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
