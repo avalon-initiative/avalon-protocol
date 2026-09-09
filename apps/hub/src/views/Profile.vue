@@ -661,7 +661,11 @@ async function onCancelGuardianRequest(requestId: string) {
           </div>
         </AvalonCard>
 
-        <AvalonCard v-if="!hasSigningKey" title="Set up this device">
+        <AvalonCard
+          v-if="!hasSigningKey"
+          title="Set up this device's signing key"
+          subtitle="Separate from passkeys: this is the key this identity signs friend requests, guild actions, and other events with, not the key you log in with."
+        >
           <section v-if="pendingRequest">
             <p :class="page.empty">
               Waiting for another device to approve this one
@@ -843,7 +847,11 @@ async function onCancelGuardianRequest(requestId: string) {
           </ul>
         </AvalonCard>
 
-        <AvalonCard v-if="hasSigningKey && pendingGrants.length > 0" title="Devices waiting for your approval">
+        <AvalonCard
+          v-if="hasSigningKey && pendingGrants.length > 0"
+          title="Signing devices waiting for your approval"
+          subtitle="Separate from passkeys above — these hold the key this identity uses to author friend requests, guild actions, and other events, not to log in."
+        >
           <p v-if="approveError" :class="page.error">{{ approveError }}</p>
           <ul :class="styles.list">
             <li v-for="grant in pendingGrants" :key="grant.id" :class="styles.listRow">
@@ -863,8 +871,8 @@ async function onCancelGuardianRequest(requestId: string) {
 
         <AvalonCard
           v-if="hasSigningKey && myDevices.length > 0"
-          title="Your devices"
-          subtitle="To add another device, log into this identity there — with no signing key yet, it'll offer to request access, and the request will show up here for you to approve."
+          title="Signing devices"
+          subtitle="Separate from passkeys above: these hold the key this identity signs friend requests, guild actions, and other events with, not the key you log in with. To add another device, log into this identity there — with no signing key yet, it'll offer to request access, and the request will show up here for you to approve."
         >
           <p v-if="revokeError" :class="page.error">{{ revokeError }}</p>
           <p v-if="renameError" :class="page.error">{{ renameError }}</p>

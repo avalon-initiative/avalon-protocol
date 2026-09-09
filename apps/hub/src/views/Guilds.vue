@@ -134,6 +134,7 @@ function openGuild(guildId: string) {
               label="Search by name, tag, or description"
               placeholder="Ashen Vanguard"
               :query="discover.query.value"
+              no-margin
               @update:query="discover.query.value = $event"
             />
             <AvalonTextField v-model="discover.tag.value" label="Tag" placeholder="ASHV" />

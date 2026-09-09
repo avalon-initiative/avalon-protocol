@@ -5,6 +5,10 @@
   margin-bottom: var(--av-space-3);
 }
 
+.noMargin {
+  margin-bottom: 0;
+}
+
 .field {
   display: flex;
   flex-direction: column;
