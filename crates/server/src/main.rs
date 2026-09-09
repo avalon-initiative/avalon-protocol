@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use avalon_server::{auth, migrate, outbox, state::AppState};
+use avalon_server::{auth, migrate, outbox, retention, state::AppState};
 use sqlx::postgres::PgPoolOptions;
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -59,6 +59,25 @@ async fn main() {
         });
     println!("avalon-server: ledger network_id = {}", chain.network_id());
     let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
+
+    // Node-tiered durable history retention (issue #208, implementing
+    // #180's decision) — always printed, so an operator always sees which
+    // tier and pruning state this process is running as, the same
+    // transparency the network_id line above gives. See
+    // `avalon_chain::retention`'s module doc comment for the full design
+    // and its milestone-1 availability caveat.
+    let retention_config =
+        avalon_chain::retention::RetentionConfig::from_env().unwrap_or_else(|e| {
+            eprintln!("refusing to start: {e}");
+            std::process::exit(1);
+        });
+    println!(
+        "avalon-server: retention tier = {}",
+        retention_config.describe()
+    );
+    if retention_config.should_prune() {
+        tokio::spawn(retention::run_worker(chain.clone(), retention_config));
+    }
 
     // Drains the identity/etc. outbox into the ledger at its own pace —
     // see crates/server/src/outbox.rs (issue #71).

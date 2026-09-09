@@ -89,6 +89,15 @@ answer for the current code is: partly, and not yet provably.
   make "obtain the log" in step 1 possible.
 - **No rebuild test exists** (#43), and no `Indexer` implementation exists to
   run one against.
+- **Step 1 ("obtain the log") is not full-replay-only for the commitment
+  layer any more.** #208 gives a settlement-state checkpoint — the latest
+  `SignedTreeHead` (`PostgresSettlementProvider::checkpoint`, see
+  [`settlement.md`](./settlement.md)) — that lets a node trust a signed
+  `(tree_size, root_hash)` instead of rehashing every entry from genesis
+  for the commitment structure specifically. This does not yet extend to
+  step 3/4 (replaying into indexer projections): no projection-level
+  snapshot format exists, so rebuilding the actual read model is still
+  full-replay-from-genesis, tracked under #43.
 
 ## Today in the repo
 

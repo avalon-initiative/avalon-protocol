@@ -33,7 +33,8 @@ later without a rewrite.
 
 Not every Settlement node is expected to store and serve *all* durable
 history ([#180](https://github.com/LunarVagabond/avalon-protocol/issues/180),
-decided). The commitment (the hash-chained/committed log itself) stays
+decided; [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208),
+implemented). The commitment (the hash-chained/committed log itself) stays
 small and permanent on every Settlement node regardless of tier — retention
 tiering applies only to the raw signed event *bodies* backing each
 commitment:
@@ -48,9 +49,67 @@ only when the network as a whole still guarantees availability elsewhere
 (at least one archive-tier node, or a minimum archive-replication factor) —
 never discard something nothing else retains, and never affect the
 commitment's own verifiability either way. Exact window defaults and the
-minimum archive-replication factor are implementation-ticket-level numbers
-(tracked in [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)),
-not decided here.
+minimum archive-replication factor are implementation-ticket-level numbers,
+set per-deployment rather than fixed by the protocol.
+
+**Implemented, `crates/chain/src/retention.rs`.** A node declares its tier
+via environment configuration, the same pattern `AVALON_NETWORK_ID`/
+`AVALON_SETTLEMENT_SIGNING_KEY` already use:
+
+- `AVALON_RETENTION_TIER` — `full` (default) or `hot`.
+- `AVALON_RETENTION_HOT_WINDOW_DAYS` — required when `hot`; the window is a
+  count of days of `ledger_entries.committed_at` history, not "last N
+  entries" — an operator reasoning about "keep 6 months" maps directly to
+  this without needing to know the current event rate.
+- `AVALON_RETENTION_PRUNING_ENABLED` — a second, independent, off-by-default
+  opt-in. Declaring `hot` alone changes nothing by itself; pruning only
+  actually runs once this is also explicitly set `true`. `avalon-server`
+  prints its resolved tier and pruning state at startup, next to its
+  `network_id` line; `avalon prune-ledger [--dry-run]` is the manual/cron
+  entry point, and `avalon-server` also runs an in-process hourly worker
+  (`crates/server/src/retention.rs`) whenever pruning is enabled.
+
+Pruning only ever `NULL`s out `ledger_entries.payload` (nullable as of the
+`0026_ledger_payload_retention` migration) — `seq`, `entry_hash`,
+`prev_hash`, `kind`, `issuer`, `subject`, `event_timestamp`, `version`, and
+`batch_id` are never touched, which is exactly what keeps a pruned row's
+place in both the hash chain and the Merkle tree (which is built entirely
+from `entry_hash`, never `payload` — issue #210) fully intact. `avalon
+inspect-ledger` reports, per entry and in its summary line, whether it's
+looking at a full node or a node with some entries' payloads pruned —
+derived from the data itself (`payload_pruned_at`), not from the reading
+process's own config, so it stays accurate against any database it's
+pointed at.
+
+**Milestone-1 honesty**: per "Today in the repo" below, there is currently
+exactly one Settlement node/database. #180's availability invariant — never
+prune what nothing else retains — has no real archive-tier mirror to be
+checked against yet. `AVALON_RETENTION_PRUNING_ENABLED=true` today means
+real, permanent data loss for anything outside the configured window, not
+"safely available elsewhere" — `.env.example` and `crates/chain/src/retention.rs`'s
+module doc comment both say this plainly rather than letting the mechanism
+imply a safety guarantee the network doesn't yet provide. The mechanism
+itself (config, pruning query, what never gets touched) is built to be
+correct once an archive-tier mirror actually exists; only the network-wide
+guarantee it should ultimately be gated on is still missing.
+
+**Settlement-state checkpoint.** #180 also asked for a periodic
+durable-state checkpoint so a hot-tier node, or any new node, can bootstrap
+from "latest trusted snapshot + subsequent history" instead of full replay
+from genesis. For the commitment layer, this already exists and needed no
+new storage: the latest `SignedTreeHead` (`signed_tree_heads`, issue #210)
+*is* that checkpoint — `(tree_size, root_hash)` at a known, signed log
+height, produced automatically every batch commit, exposed as
+`PostgresSettlementProvider::checkpoint()` (an explicitly-named alias over
+`latest_signed_tree_head`) and over HTTP via `GET /ledger/sth/latest`
+(issue #211). A bootstrapping node trusts this signed head as the root for
+everything at or before its `tree_size`, then only needs to hold or replay
+`ledger_entries` newer than its own configured window. **Not covered**: an
+indexer/projection *read-model* snapshot — `crates/indexer` has real
+projections now (issue #42), but no rebuild-speed work or snapshot format
+for them exists yet, so that half of #180's ask remains an open follow-up
+(issue #43, `docs/architecture/disaster-recovery.md`), not silently
+resolved here.
 
 ## Node authority
 
@@ -118,10 +177,23 @@ unverifiable.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) in one
   process. No indexer implementation, no realtime service, no mirror.
+  **This is also why the retention-tier mechanism above cannot yet
+  deliver #180's actual availability guarantee** — there is only one
+  database for a hot-tier node's pruning to be gated against, not a
+  second archive-tier node — see this section's own honesty note.
 - No discovery: `AvalonConfig { server_url, .. }` in `crates/sdk/src/lib.rs`
   takes a URL.
 - No node-to-node protocol, no export format for the log, no capability
   advertisement endpoint.
+- No distinct "archive" node *type*/binary exists, and #208 deliberately
+  didn't invent one: retention tier is operational configuration on the
+  one existing Settlement role (`AVALON_RETENTION_TIER=full`), not a fifth
+  capability alongside Settlement/Indexer/Realtime/Gateway in the table
+  above. An "archive operator" today is simply an operator running
+  `avalon-server` with `AVALON_RETENTION_TIER=full` (the default) and
+  `AVALON_RETENTION_PRUNING_ENABLED` left unset — nothing about the
+  capability table changes; only the retention-tier config differs between
+  a full and a hot deployment of the same Settlement role.
 
 ## Decisions and tickets
 
@@ -129,6 +201,11 @@ unverifiable.
 - #79 long-term settlement backend; #186 decided no blockchain/validator
   consensus (transparency log on Postgres instead, superseding part of #93);
   #40 log design and mirror sync (validator/consensus design dropped)
+- #180 (decided) / [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)
+  (implemented) — node-tiered durable history retention: retention-tier
+  config, payload pruning, the settlement-state checkpoint. The
+  indexer-projection-snapshot half of #180's ask stays open, tracked under
+  #43.
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
   discovery and capability negotiation
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) TLS before

@@ -427,3 +427,182 @@ async fn connect_fails_fast_on_network_id_mismatch() {
         "a mismatched network_id must never produce a usable provider"
     );
 }
+
+// --- Node-tiered retention / payload pruning (issue #208) ---
+
+/// Backdates `batch`'s entries' `committed_at` directly via SQL, the same
+/// tamper/seed style the tests above use for state the provider itself has
+/// no write path for — `commit` always stamps `now()`, so a pruning test
+/// needs a way to simulate "this batch is old" without waiting.
+async fn backdate_batch(pool: &PgPool, batch_id: Uuid, committed_at: OffsetDateTime) {
+    sqlx::query("UPDATE ledger_entries SET committed_at = $1 WHERE batch_id = $2")
+        .bind(committed_at)
+        .bind(batch_id)
+        .execute(pool)
+        .await
+        .expect("failed to backdate ledger_entries for pruning test");
+}
+
+#[tokio::test]
+#[ignore]
+async fn prune_payloads_older_than_only_nulls_payload_of_entries_before_cutoff() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let old_batch = sample_batch(2);
+    chain
+        .commit(&old_batch)
+        .await
+        .expect("commit should succeed");
+    backdate_batch(
+        &pool,
+        old_batch.id,
+        OffsetDateTime::now_utc() - time::Duration::days(400),
+    )
+    .await;
+
+    let new_batch = sample_batch(2);
+    chain
+        .commit(&new_batch)
+        .await
+        .expect("commit should succeed");
+
+    let cutoff = OffsetDateTime::now_utc() - time::Duration::days(30);
+    let report = chain
+        .prune_payloads_older_than(cutoff)
+        .await
+        .expect("pruning should not error");
+    assert_eq!(
+        report.pruned_count, 2,
+        "only the old batch's 2 entries should be pruned"
+    );
+
+    let entries = chain.list_entries().await.expect("list_entries failed");
+    let old_entries: Vec<_> = entries
+        .iter()
+        .filter(|e| e.batch_id == old_batch.id)
+        .collect();
+    let new_entries: Vec<_> = entries
+        .iter()
+        .filter(|e| e.batch_id == new_batch.id)
+        .collect();
+
+    assert!(
+        old_entries
+            .iter()
+            .all(|e| e.payload.is_none() && e.payload_pruned),
+        "old batch's entries should have had their payload pruned"
+    );
+    assert!(
+        new_entries
+            .iter()
+            .all(|e| e.payload.is_some() && !e.payload_pruned),
+        "new batch's entries must be untouched by pruning"
+    );
+
+    // The hash-chain link and Merkle-relevant columns must survive pruning
+    // intact — a pruned entry with a still-intact link reports
+    // `chain_intact: true` (content just isn't independently re-checkable
+    // any more), never a false "broken chain".
+    assert!(
+        old_entries.iter().all(|e| e.chain_intact),
+        "pruning must never make an entry's link/structure report as broken"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn prune_payloads_older_than_is_idempotent() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let batch = sample_batch(3);
+    chain.commit(&batch).await.expect("commit should succeed");
+    backdate_batch(
+        &pool,
+        batch.id,
+        OffsetDateTime::now_utc() - time::Duration::days(400),
+    )
+    .await;
+
+    let cutoff = OffsetDateTime::now_utc() - time::Duration::days(30);
+    let first = chain
+        .prune_payloads_older_than(cutoff)
+        .await
+        .expect("first prune should not error");
+    assert_eq!(first.pruned_count, 3);
+
+    let second = chain
+        .prune_payloads_older_than(cutoff)
+        .await
+        .expect("second prune should not error");
+    assert_eq!(
+        second.pruned_count, 0,
+        "already-pruned rows must not be re-counted on a second pass"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn verify_still_succeeds_via_the_merkle_check_after_a_batchs_payloads_are_pruned() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let batch = sample_batch(3);
+    let commitment = chain.commit(&batch).await.expect("commit should succeed");
+    backdate_batch(
+        &pool,
+        batch.id,
+        OffsetDateTime::now_utc() - time::Duration::days(400),
+    )
+    .await;
+
+    let cutoff = OffsetDateTime::now_utc() - time::Duration::days(30);
+    chain
+        .prune_payloads_older_than(cutoff)
+        .await
+        .expect("pruning should not error");
+
+    // This is the ticket's central invariant: pruning payload never makes
+    // a settled fact unverifiable. The hash-chain replay check inside
+    // `verify` can no longer run (it needs the now-pruned payload), but
+    // the independent Merkle check — built entirely from `entry_hash`,
+    // never `payload` — still can, and `verify` must still report `true`.
+    let verified = chain
+        .verify(&commitment)
+        .await
+        .expect("verify should not error even once payloads are pruned");
+    assert!(
+        verified,
+        "a batch must remain verifiable via the Merkle check after its payloads are pruned"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn prunable_entry_count_matches_what_pruning_actually_prunes() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let batch = sample_batch(4);
+    chain.commit(&batch).await.expect("commit should succeed");
+    backdate_batch(
+        &pool,
+        batch.id,
+        OffsetDateTime::now_utc() - time::Duration::days(400),
+    )
+    .await;
+
+    let cutoff = OffsetDateTime::now_utc() - time::Duration::days(30);
+    let dry_run_count = chain
+        .prunable_entry_count(cutoff)
+        .await
+        .expect("dry-run count should not error");
+    assert_eq!(dry_run_count, 4);
+
+    let report = chain
+        .prune_payloads_older_than(cutoff)
+        .await
+        .expect("pruning should not error");
+    assert_eq!(report.pruned_count, dry_run_count);
+}

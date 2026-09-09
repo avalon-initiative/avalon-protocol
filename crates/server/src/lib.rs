@@ -16,6 +16,7 @@ pub mod migrate;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
+pub mod retention;
 pub mod settlement;
 pub mod state;
 

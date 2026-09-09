@@ -43,6 +43,14 @@
 //! across batch boundaries (the chain never resets per batch), and
 //! `ledger_batches` holds one row per batch (`first_seq`, `last_seq`,
 //! `batch_root`, `committed_at`).
+//!
+//! Node-tiered retention (issue #208, `crate::retention`): `ledger_entries.payload`
+//! is nullable and may be pruned (`prune_payloads_older_than`) on a
+//! hot-tier node with pruning explicitly enabled — every other column,
+//! including `entry_hash`/`prev_hash`/`seq`, is untouched, so a pruned
+//! row's position in both tamper-evidence structures above survives
+//! intact. `list_entries` and `verify` both treat a missing payload as
+//! "not independently re-verifiable from here," never as "tampered."
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
@@ -50,6 +58,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::retention::PruneReport;
 use crate::sth::SignedTreeHead;
 use crate::{merkle, sth, SettlementError, SettlementProvider};
 
@@ -330,7 +339,7 @@ impl PostgresSettlementProvider {
     pub async fn list_entries(&self) -> Result<Vec<LedgerEntryView>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id
+            SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
             FROM ledger_entries
             ORDER BY seq ASC
             "#,
@@ -347,7 +356,9 @@ impl PostgresSettlementProvider {
             let kind: String = row.try_get("kind").map_err(get)?;
             let issuer: String = row.try_get("issuer").map_err(get)?;
             let subject: String = row.try_get("subject").map_err(get)?;
-            let payload: serde_json::Value = row.try_get("payload").map_err(get)?;
+            let payload: Option<serde_json::Value> = row.try_get("payload").map_err(get)?;
+            let payload_pruned_at: Option<time::OffsetDateTime> =
+                row.try_get("payload_pruned_at").map_err(get)?;
             let event_timestamp: time::OffsetDateTime =
                 row.try_get("event_timestamp").map_err(get)?;
             let version: i32 = row.try_get("version").map_err(get)?;
@@ -355,21 +366,33 @@ impl PostgresSettlementProvider {
             let entry_hash: String = row.try_get("entry_hash").map_err(get)?;
             let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
 
-            let recomputed = hash_entry(
-                &self.network_id,
-                &prev_hash,
-                &EntryContent {
-                    event_id,
-                    kind: &kind,
-                    issuer: &issuer,
-                    subject: &subject,
-                    payload: &payload,
-                    timestamp: event_timestamp,
-                    version,
-                },
-            );
-            let content_intact = recomputed == entry_hash;
             let link_intact = prev_hash == expected_prev;
+            // Content can only be independently re-verified when the
+            // payload is still present — a pruned row (issue #208) has had
+            // its payload deliberately discarded, so recomputing its
+            // content hash is impossible by design, not a sign of
+            // tampering. `chain_intact` therefore only asserts what's
+            // actually checkable: the link always, and content whenever
+            // the payload survives to check it against.
+            let content_intact = match &payload {
+                Some(payload) => {
+                    let recomputed = hash_entry(
+                        &self.network_id,
+                        &prev_hash,
+                        &EntryContent {
+                            event_id,
+                            kind: &kind,
+                            issuer: &issuer,
+                            subject: &subject,
+                            payload,
+                            timestamp: event_timestamp,
+                            version,
+                        },
+                    );
+                    recomputed == entry_hash
+                }
+                None => true,
+            };
             expected_prev = entry_hash.clone();
 
             entries.push(LedgerEntryView {
@@ -379,6 +402,7 @@ impl PostgresSettlementProvider {
                 issuer,
                 subject,
                 payload,
+                payload_pruned: payload_pruned_at.is_some(),
                 version,
                 event_timestamp,
                 prev_hash,
@@ -453,6 +477,35 @@ impl PostgresSettlementProvider {
             });
         }
         Ok(heads)
+    }
+
+    /// Issue #208's settlement-state checkpoint: a thin, purely-naming
+    /// wrapper over [`Self::latest_signed_tree_head`]. #180 asked for "a
+    /// periodic durable-state checkpoint (an indexer/projection snapshot
+    /// at a known log height) so a hot-tier node — or any new node — can
+    /// bootstrap from 'latest trusted snapshot + subsequent history within
+    /// its configured window' instead of full replay from genesis."
+    ///
+    /// Scoped narrowly to the settlement/Merkle-tree state on purpose (see
+    /// `docs/architecture/nodes.md`'s retention-tier section and this
+    /// ticket's own scope guardrail): the latest `SignedTreeHead` already
+    /// *is* exactly that checkpoint for the commitment layer —
+    /// `(tree_size, root_hash)` at a known, signed log height, produced
+    /// automatically every batch commit (issue #210), no new storage
+    /// needed. A node bootstrapping "latest checkpoint + subsequent
+    /// history within its window" trusts this `SignedTreeHead` (verified
+    /// against `AVALON_SETTLEMENT_VERIFY_KEY`) as the root for everything
+    /// at or before `tree_size`, then only needs to hold/replay
+    /// `ledger_entries` newer than its configured retention window itself.
+    ///
+    /// **Not covered**: an indexer/projection *read-model* snapshot (the
+    /// other half of #180's ask) — `crates/indexer` has real projections
+    /// now (issue #42), but no rebuild-speed work or snapshot format for
+    /// them exists yet (issue #43 remains full-replay-from-genesis). That
+    /// stays an explicit follow-up, not silently invented here — see
+    /// `docs/architecture/disaster-recovery.md`.
+    pub async fn checkpoint(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
+        self.latest_signed_tree_head().await
     }
 
     /// The most recent Signed Tree Head (highest `tree_size`) — issue #211's
@@ -565,6 +618,70 @@ impl PostgresSettlementProvider {
         .transpose()
     }
 
+    /// Issue #208 — how many entries currently still have a payload and
+    /// were committed strictly before `cutoff`: exactly what
+    /// [`Self::prune_payloads_older_than`] would act on if called right
+    /// now. A dry-run count, used by `avalon prune-ledger` to report what
+    /// a pruning pass *would* do before (and independent of) actually
+    /// doing it.
+    pub async fn prunable_entry_count(
+        &self,
+        cutoff: time::OffsetDateTime,
+    ) -> Result<i64, SettlementError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS count FROM ledger_entries \
+             WHERE committed_at < $1 AND payload_pruned_at IS NULL",
+        )
+        .bind(cutoff)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.try_get("count")
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    }
+
+    /// Issue #208's actual pruning operation: discards (`NULL`s out) the
+    /// `payload` of every entry committed strictly before `cutoff` that
+    /// hasn't already been pruned, and stamps `payload_pruned_at`.
+    ///
+    /// **Only ever touches `payload`/`payload_pruned_at`.** Every column
+    /// the hash chain and Merkle tree depend on — `seq`, `entry_hash`,
+    /// `prev_hash`, `kind`, `issuer`, `subject`, `event_timestamp`,
+    /// `version`, `batch_id` — is untouched, by construction: this is a
+    /// single-column `UPDATE`, not a `DELETE`, so there is no code path
+    /// here that could remove a row or a commitment-relevant column even
+    /// by accident. See `crate::retention`'s module doc comment for why
+    /// this is what makes payload pruning safe against the settlement
+    /// commitment specifically (as opposed to safe against network-wide
+    /// data loss, which milestone 1 cannot yet guarantee — that's a
+    /// caller-level gate, not this function's job; see
+    /// [`crate::retention::RetentionConfig::should_prune`]).
+    ///
+    /// Callers are expected to have already checked
+    /// [`crate::retention::RetentionConfig::should_prune`] — this method
+    /// itself does not re-check any config; it does exactly what it's
+    /// asked, unconditionally, so it stays simple and directly testable.
+    /// The gating (tier, opt-in flag) lives one layer up, in
+    /// `avalon-server`'s retention worker and `avalon prune-ledger`.
+    pub async fn prune_payloads_older_than(
+        &self,
+        cutoff: time::OffsetDateTime,
+    ) -> Result<PruneReport, SettlementError> {
+        let result = sqlx::query(
+            "UPDATE ledger_entries SET payload = NULL, payload_pruned_at = now() \
+             WHERE committed_at < $1 AND payload_pruned_at IS NULL",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        Ok(PruneReport {
+            cutoff,
+            pruned_count: result.rows_affected() as i64,
+        })
+    }
+
     /// Every entry issued by `issuer_prefix` (a `GlobalId` prefix, e.g.
     /// `identity:<id>:self:` — every verb an identity signs itself under
     /// shares that prefix, see `crates/server/src/friends.rs`'s
@@ -617,7 +734,11 @@ pub struct IssuerHistoryEntry {
     pub event_id: Uuid,
     pub kind: String,
     pub subject: String,
-    pub payload: serde_json::Value,
+    /// `None` if this row's payload has been pruned (issue #208) — a
+    /// hot-tier node's "my activity" view degrades to showing that an
+    /// event of this `kind` happened, without its content, rather than
+    /// erroring or fabricating one.
+    pub payload: Option<serde_json::Value>,
     pub event_timestamp: time::OffsetDateTime,
 }
 
@@ -632,12 +753,27 @@ pub struct LedgerEntryView {
     pub kind: String,
     pub issuer: String,
     pub subject: String,
-    pub payload: serde_json::Value,
+    /// `None` once this row's payload has been pruned (issue #208, a
+    /// hot-tier node with pruning enabled) — the entry itself, its hash,
+    /// and its position in the chain/Merkle tree all survive regardless;
+    /// only the content is gone. See [`Self::payload_pruned`].
+    pub payload: Option<serde_json::Value>,
+    /// Whether this row's payload has been pruned. Redundant with
+    /// `payload.is_none()` today, but kept as its own field — a payload
+    /// legitimately being absent for some other reason in the future
+    /// shouldn't silently be read as "pruned" by every caller of this
+    /// struct.
+    pub payload_pruned: bool,
     pub version: i32,
     pub event_timestamp: time::OffsetDateTime,
     pub prev_hash: String,
     pub entry_hash: String,
     pub batch_id: Uuid,
+    /// Everything *checkable* about this entry checks out: the hash-chain
+    /// link always, and content re-verification whenever the payload is
+    /// still present. A pruned entry with an intact link still reports
+    /// `true` here — the absence of its payload is not itself evidence of
+    /// tampering (see `list_entries`'s doc comment).
     pub chain_intact: bool,
 }
 
@@ -858,31 +994,50 @@ impl SettlementProvider for PostgresSettlementProvider {
                 row.try_get::<String, _>("kind").map_err(get)?,
                 row.try_get::<String, _>("issuer").map_err(get)?,
                 row.try_get::<String, _>("subject").map_err(get)?,
-                row.try_get::<serde_json::Value, _>("payload")
+                row.try_get::<Option<serde_json::Value>, _>("payload")
                     .map_err(get)?,
                 row.try_get::<time::OffsetDateTime, _>("event_timestamp")
                     .map_err(get)?,
                 row.try_get::<i32, _>("version").map_err(get)?,
             ));
         }
-        let contents: Vec<EntryContent<'_>> = owned
-            .iter()
-            .map(
-                |(event_id, kind, issuer, subject, payload, timestamp, version)| EntryContent {
-                    event_id: *event_id,
-                    kind,
-                    issuer,
-                    subject,
-                    payload,
-                    timestamp: *timestamp,
-                    version: *version,
-                },
-            )
-            .collect();
 
-        let recomputed_chain_tip =
-            recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
-        let chain_intact = recomputed_chain_tip == stored_chain_tip;
+        // Issue #208: a hot-tier node may have pruned one or more of this
+        // batch's entries' payloads. The sequential hash-chain replay below
+        // needs every entry's actual content, so it's only meaningful when
+        // every entry in the batch still has its payload — if any is
+        // missing, this check is skipped rather than failed, since a
+        // missing payload is an expected, intentional local-retention
+        // outcome (issue #208), not evidence of tampering. This never
+        // weakens the batch's overall verifiability: the Merkle check
+        // below is built entirely from `entry_hash` values (never
+        // `payload`, see `crate::merkle`/#210) and stays fully intact and
+        // required either way — see `crate::retention`'s module doc
+        // comment for why this split is safe.
+        let all_payloads_present = owned.iter().all(|(.., payload, _, _)| payload.is_some());
+        let chain_intact = if all_payloads_present {
+            let contents: Vec<EntryContent<'_>> = owned
+                .iter()
+                .map(
+                    |(event_id, kind, issuer, subject, payload, timestamp, version)| EntryContent {
+                        event_id: *event_id,
+                        kind,
+                        issuer,
+                        subject,
+                        payload: payload
+                            .as_ref()
+                            .expect("checked all_payloads_present above"),
+                        timestamp: *timestamp,
+                        version: *version,
+                    },
+                )
+                .collect();
+            let recomputed_chain_tip =
+                recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
+            recomputed_chain_tip == stored_chain_tip
+        } else {
+            true
+        };
 
         let Some(batch_row) =
             sqlx::query("SELECT last_seq FROM ledger_batches WHERE batch_id = $1")

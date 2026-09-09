@@ -321,6 +321,37 @@ implemented, see "Today in the repo" below.
   cross this document's "settlement is not the general-purpose query
   database" boundary. Revisit once the indexer (#42/#43) is real — see
   [query-and-indexing.md](./query-and-indexing.md).
+- **Node-tiered durable history retention, implemented (#208, closing
+  #180's decision).** Settlement commitment and durable event storage are
+  separate retention problems: everything above this bullet — the hash
+  chain, the Merkle tree, Signed Tree Heads — is untouched by retention
+  tier. What tiers is `ledger_entries.payload` specifically, now nullable
+  (`0026_ledger_payload_retention`). `crates/chain/src/retention.rs` is the
+  config (`AVALON_RETENTION_TIER`, `AVALON_RETENTION_HOT_WINDOW_DAYS`,
+  `AVALON_RETENTION_PRUNING_ENABLED`) and cutoff logic;
+  `PostgresSettlementProvider::prune_payloads_older_than` is the one-column
+  `UPDATE` that actually prunes, driven by `crates/server/src/retention.rs`'s
+  hourly worker when enabled, or manually via `avalon prune-ledger
+  [--dry-run]`. `verify` and `list_entries` both treat a pruned entry's
+  missing payload as "not independently re-checkable from here," never as
+  tamper evidence — `verify`'s Merkle check (built entirely from
+  `entry_hash`, never `payload`) still runs and still must pass for a
+  batch to verify, even once every one of its entries' payloads is pruned;
+  only the redundant hash-chain content-replay check (which does need
+  payload) is skipped for a batch with any pruned entry. See
+  [`nodes.md`](./nodes.md)'s "Settlement retention tiers" section for the
+  full tier/config design and its milestone-1 single-database honesty
+  note, and this section's next bullet for the checkpoint half of #180.
+- **Settlement-state checkpoint (#180/#208).** The latest `SignedTreeHead`
+  already is the checkpoint #180 asked for — `(tree_size, root_hash)` at a
+  known, signed height, produced every batch commit with no new storage
+  needed. `PostgresSettlementProvider::checkpoint()` is a purely-named
+  alias over the existing `latest_signed_tree_head`, making that intent
+  explicit at the call site. The indexer/projection read-model snapshot
+  half of #180's ask is **not** built — `crates/indexer` has real
+  projections (issue #42) but no rebuild-speed or snapshot-format work yet
+  (issue #43), so that stays an open follow-up rather than something
+  invented to close out this ticket.
 
 ## Decisions and tickets
 
@@ -337,3 +368,6 @@ implemented, see "Today in the repo" below.
 - #178/#179 (RocksDB-backed provider) reverted (#185), won't-fix per #186
 - #80, #84 — issuer key lifecycle, a separate key domain from the
   settlement operator key #39 decided
+- #180 decided (node-tiered durable history retention: pruning, snapshots,
+  archive-node role) — implemented by
+  [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)

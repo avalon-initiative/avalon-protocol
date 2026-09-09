@@ -19,6 +19,10 @@ serde_json.workspace = true
 uuid.workspace = true
 base64.workspace = true
 hex.workspace = true
+# `avalon prune-ledger` (issue #208) computes its cutoff with
+# `time::OffsetDateTime` — always available, same as ed25519-dalek below,
+# not gated behind `dev-tools`.
+time.workspace = true
 # Required (not dev-tools-gated): `avalon inspect-ledger`'s STH signature
 # verification (issue #210) needs `VerifyingKey` in every build, including
 # `--no-default-features` — inspect-ledger is explicitly "always available,
