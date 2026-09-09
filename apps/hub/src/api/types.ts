@@ -67,11 +67,33 @@ export interface ProfileResponse {
   // `display_name#discriminator` (issue #128) — the short handle players
   // share with each other instead of a raw identity id.
   handle: string
+  // Issue #205's opt-in global search toggle — true means this identity
+  // currently matches GET /identities/search. Off by default for every
+  // identity; drives the "you are currently publicly searchable" indicator
+  // on Profile.vue.
+  discoverable: boolean
 }
 
 export interface UpdateProfileRequest {
   display_name?: string
   avatar_url?: string
+  // Issue #205. Omitted leaves the existing preference untouched.
+  discoverable?: boolean
+}
+
+// GET /identities/search?q=&limit= (issue #205) — the opt-in counterpart to
+// GET /people/discover, matching crates/server/src/discovery.rs's
+// SearchIdentitiesResponse. Only ever returns identities with
+// discoverable = true.
+export interface SearchResultIdentity {
+  identity_id: string
+  display_name: string
+  discriminator: string
+  avatar_url: string | null
+}
+
+export interface SearchIdentitiesResponse {
+  results: SearchResultIdentity[]
 }
 
 // Friends/presence wire types (issue #18), matching

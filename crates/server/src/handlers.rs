@@ -515,6 +515,13 @@ pub struct ProfileResponse {
     pub bio: Option<String>,
     pub favorite_genres: Vec<Genre>,
     pub pronouns: Option<String>,
+    /// Issue #205's opt-in global search toggle — `true` means this
+    /// identity currently matches `GET /identities/search`. Surfaced here
+    /// (rather than requiring a separate read) so the Hub's "you are
+    /// currently publicly searchable" indicator never drifts out of sync
+    /// with the actual `discovery_preferences` row — same reasoning
+    /// `handle` is derived rather than separately fetched.
+    pub discoverable: bool,
 }
 
 fn profile_row_to_response(
@@ -540,8 +547,25 @@ fn profile_row_to_response(
             .filter_map(|g| Genre::parse(g))
             .collect(),
         pronouns: row.try_get("pronouns")?,
+        discoverable: row.try_get("discoverable")?,
     })
 }
+
+/// `profiles` LEFT JOINed against `discovery_preferences` — a row there
+/// only exists once an identity has toggled `discoverable` at least once
+/// (see `discovery::set_discoverable`), so the join has to be outer, and
+/// the missing-row case has to `COALESCE` down to `false`: absence means
+/// "not discoverable", never NULL/unknown. Shared by [`me`] and
+/// [`update_profile`] so the two reads can never drift.
+const PROFILE_SELECT: &str = r#"
+    SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
+           p.favorite_genres, p.pronouns, i.created_at,
+           COALESCE(dp.discoverable, false) AS discoverable
+    FROM profiles p
+    JOIN identities i ON i.id = p.identity_id
+    LEFT JOIN discovery_preferences dp ON dp.identity_id = p.identity_id
+    WHERE p.identity_id = $1
+    "#;
 
 pub async fn me(
     State(state): State<AppState>,
@@ -549,18 +573,10 @@ pub async fn me(
 ) -> Result<Json<ProfileResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    let row = sqlx::query(
-        r#"
-        SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
-               p.favorite_genres, p.pronouns, i.created_at
-        FROM profiles p
-        JOIN identities i ON i.id = p.identity_id
-        WHERE p.identity_id = $1
-        "#,
-    )
-    .bind(identity_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let row = sqlx::query(PROFILE_SELECT)
+        .bind(identity_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     Ok(Json(profile_row_to_response(identity_id, &row)?))
 }
@@ -712,6 +728,17 @@ pub struct UpdateProfileRequest {
     pub favorite_genres: Option<Vec<String>>,
     /// Three states, same as `bio`.
     pub pronouns: Option<String>,
+    /// Issue #205's opt-in global search toggle. Two states, not three
+    /// (there's no "clear" state for a plain boolean): `None` leaves the
+    /// existing preference untouched, `Some(bool)` sets it. Off by
+    /// default for every identity (no row in `discovery_preferences` at
+    /// all reads as `false`) — this field is the only way it ever
+    /// becomes `true`. Not part of `profile.updated`/durable history, and
+    /// not written through the same transaction as the rest of this
+    /// request's changes — see `discovery::set_discoverable`'s doc
+    /// comment for why, matching `presence_preferences.hide_playing`'s
+    /// identical precedent.
+    pub discoverable: Option<bool>,
 }
 
 /// Nothing renders `avatar_url` as an actual image anywhere in the Hub
@@ -931,6 +958,23 @@ pub async fn update_profile(
         None => Vec::new(),
     };
 
+    // `discoverable` (#205) is deliberately handled outside the
+    // transaction below, the same way `presence::update_my_presence`
+    // handles `hide_playing`: it's a player preference, not durable
+    // protocol history, so it has no `profile.updated` payload and needs
+    // no atomicity with the rest of this request's changes. Applied only
+    // now, after every fallible validation above has already succeeded —
+    // never before them. `discriminator_for_rename`/`validate_*` can each
+    // still fail and abort this handler with an `AppError`; running this
+    // write any earlier would let an otherwise-failed PATCH /me (a bad
+    // avatar_url, an invalid genre, ...) leave `discoverable` flipped
+    // anyway, which is exactly the kind of partial-write a default-off,
+    // no-exceptions preference must never have. Still applied before the
+    // `PROFILE_SELECT` read further down, so that read already reflects it.
+    if let Some(discoverable) = body.discoverable {
+        crate::discovery::set_discoverable(&state, identity_id, discoverable).await?;
+    }
+
     // `display_name`, `avatar_url`, `bio`, `favorite_genres`, and `pronouns`
     // are all promised-durable (ADR #75, the table in
     // docs/architecture/identity.md; #155 widened the set), so a change to
@@ -984,18 +1028,10 @@ pub async fn update_profile(
         outbox::enqueue(&mut tx, event).await?;
     }
 
-    let row = sqlx::query(
-        r#"
-        SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
-               p.favorite_genres, p.pronouns, i.created_at
-        FROM profiles p
-        JOIN identities i ON i.id = p.identity_id
-        WHERE p.identity_id = $1
-        "#,
-    )
-    .bind(identity_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let row = sqlx::query(PROFILE_SELECT)
+        .bind(identity_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 

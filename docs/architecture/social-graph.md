@@ -121,6 +121,31 @@ fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-q
   precedent: a direct query, not the real indexer read model. Read-only —
   acting on a suggestion still goes through `POST /friends/requests`
   unchanged; this endpoint never creates or modifies a friendship.
+- `crates/server/src/discovery.rs` (#205) — `GET /identities/search?q=&limit=`,
+  the opt-in half of #129's decided shape. Session-authenticated, matches
+  only identities with `discovery_preferences.discoverable = true` (a
+  player-controlled preference, off by default for every identity, no
+  exceptions — same "one row per identity, created lazily on first
+  toggle, absence means the default" shape
+  `presence_preferences.hide_playing` (#16) already established, see
+  `crates/server/db/migrations/0026_discovery_preferences`). Toggled via
+  `PATCH /me`'s `discoverable` field
+  (`crates/server/src/handlers.rs::update_profile`), same "extend
+  `PATCH /me`" precedent #153/#155 set for other small profile-adjacent
+  fields — not a dedicated endpoint. Fuzzy, case-insensitive `ILIKE`
+  substring match against both the bare display name and the full
+  `display_name#discriminator` handle; a non-opted-in identity never
+  appears, full stop, even to a caller who already knows its exact
+  handle — that's the separate, untouched `friends::resolve_handle`
+  exact-match path. Excludes the caller and any blocked relationship in
+  either direction via `blocks::block_partners`, same reuse `discover_people`
+  (#204) already established. Turning the toggle off removes an identity
+  from every subsequent search call immediately — the preference read is
+  a plain `WHERE discoverable = true` against `&state.pool` on every
+  call, not a cached/snapshotted value, so there is no grace period.
+  `GET /me` also returns the caller's own current `discoverable` value, so
+  the Hub's "you are currently publicly searchable" indicator can never
+  drift out of sync with the stored preference.
 - Reads are restricted to the caller's own session for now — the capability/
   visibility composition in [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87)
   (which this doc's "What a game sees" section describes) is not built yet, so
@@ -162,6 +187,6 @@ fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-q
 - [#204](https://github.com/LunarVagabond/avalon-protocol/issues/204) — scoped
   player discovery: friends-of-friends and mutual-guild surfacing (done).
 - [#205](https://github.com/LunarVagabond/avalon-protocol/issues/205) — opt-in
-  global name/handle search toggle (not yet built).
+  global name/handle search toggle (done).
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) — ADR:
   presence is ephemeral.

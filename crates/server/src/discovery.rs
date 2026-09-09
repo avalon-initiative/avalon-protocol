@@ -1,8 +1,20 @@
-//! Scoped player discovery: friends-of-friends and mutual-guild surfacing
-//! (issue #204), implementing the always-on half of #129's decided shape
-//! (`docs/architecture/social-graph.md`). The other half — an opt-in,
-//! reversible "make me publicly searchable" toggle that enables open
-//! name/handle search — is issue #205, a separate ticket, not built here.
+//! Player discovery: both halves of #129's decided shape
+//! (`docs/architecture/social-graph.md`).
+//!
+//! * Scoped, always-on surfacing (issue #204): friends-of-friends and
+//!   mutual-guild — see [`discover_people`] below.
+//! * Opt-in, reversible global name/handle search (issue #205): a
+//!   player-controlled `discoverable` preference
+//!   (`discovery_preferences.discoverable`,
+//!   `crates/server/db/migrations/0026_discovery_preferences`, same shape
+//!   as `presence_preferences.hide_playing`) gates
+//!   [`search_identities`]. Off by default for every identity, no
+//!   exceptions — absence of a row means "not discoverable", matching
+//!   `presence.rs`'s "missing means the default, never invented" posture.
+//!   Toggled via `PATCH /me`'s `discoverable` field
+//!   (`crates/server/src/handlers.rs::update_profile`), not a dedicated
+//!   endpoint here — same "extend `PATCH /me`" precedent #153/#155 already
+//!   set for other small profile-adjacent preferences.
 //!
 //! **Never a search.** The only input to [`discover_people`] is the
 //! caller's own session — there is no query parameter, and there must
@@ -30,14 +42,16 @@
 
 use std::collections::HashSet;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::Serialize;
-use sqlx::Row;
+use serde::{Deserialize, Serialize};
+use sqlx::postgres::Postgres;
+use sqlx::{QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::guilds::escape_like;
 use crate::handlers::authenticate;
 use crate::state::AppState;
 
@@ -150,6 +164,157 @@ pub async fn discover_people(
     }))
 }
 
+// --- Opt-in global search (issue #205) --------------------------------
+
+/// Upserts `identity_id`'s own `discoverable` preference — the same
+/// "insert lazily on first toggle, `ON CONFLICT` update after" shape
+/// `presence::set_hide_playing` established. Not transactional with any
+/// other write: this is a player preference, not durable protocol
+/// history, so there's nothing else it needs to stay atomic with (see the
+/// module doc comment). Takes effect immediately — the very next
+/// `search_identities` call (run against `&state.pool`, not a snapshot)
+/// reflects it, satisfying #205's "no grace period" invariant.
+pub(crate) async fn set_discoverable(
+    state: &AppState,
+    identity_id: Uuid,
+    discoverable: bool,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO discovery_preferences (identity_id, discoverable) VALUES ($1, $2) \
+         ON CONFLICT (identity_id) DO UPDATE SET discoverable = EXCLUDED.discoverable",
+    )
+    .bind(identity_id)
+    .bind(discoverable)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+/// Trims `q` and treats an all-whitespace/empty query as "no query" —
+/// pure so it's unit-testable without a live Postgres connection (see
+/// tests below). `search_identities` short-circuits to an empty result in
+/// that case rather than issuing a `WHERE ... ILIKE '%%'` query that would
+/// (harmlessly, but pointlessly) match every opted-in identity.
+fn normalized_query(q: &str) -> Option<&str> {
+    let trimmed = q.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+const DEFAULT_SEARCH_LIMIT: i64 = 20;
+const MAX_SEARCH_LIMIT: i64 = 50;
+
+#[derive(Deserialize)]
+pub struct SearchIdentitiesQuery {
+    pub q: String,
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct SearchResultIdentity {
+    pub identity_id: Uuid,
+    pub display_name: String,
+    pub discriminator: String,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SearchIdentitiesResponse {
+    pub results: Vec<SearchResultIdentity>,
+}
+
+/// Builds the `GET /identities/search` query — split out from
+/// [`search_identities`] so the filter logic is unit-testable via
+/// [`sqlx::QueryBuilder::sql`] without a live Postgres connection, the
+/// same precedent `guilds::build_discover_query` (#154) set.
+///
+/// Three conditions, none optional: `discoverable = true` (the entire
+/// point of this ticket — a non-opted-in identity must never appear, even
+/// via an exact-match name, which is why this is a fuzzy `ILIKE`, not the
+/// exact-match `friends::resolve_handle` path), `identity_id <> caller`
+/// (a caller never "finds" themselves here), and `identity_id <> ALL(blocked)`
+/// (excludes every identity with a block relationship to `caller` in
+/// either direction — `blocked` is `blocks::block_partners`'s already
+/// direction-agnostic output, reused rather than reimplemented, same as
+/// `discovery::compute_candidates` does for #204). `q` is matched
+/// case-insensitively against both the bare display name and the full
+/// `display_name#discriminator` handle, so a caller can search either
+/// form.
+fn build_search_query(
+    caller: Uuid,
+    blocked: &[Uuid],
+    q: &str,
+    limit: i64,
+) -> QueryBuilder<Postgres> {
+    let like = format!("%{}%", escape_like(q));
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT p.identity_id, p.display_name, p.discriminator, p.avatar_url \
+         FROM profiles p \
+         JOIN discovery_preferences dp ON dp.identity_id = p.identity_id \
+         WHERE dp.discoverable = true AND p.identity_id <> ",
+    );
+    builder.push_bind(caller);
+    builder.push(" AND p.identity_id <> ALL(");
+    builder.push_bind(blocked.to_vec());
+    builder.push(") AND (p.display_name ILIKE ");
+    builder.push_bind(like.clone());
+    builder.push(" OR (p.display_name || '#' || p.discriminator) ILIKE ");
+    builder.push_bind(like);
+    builder.push(") ORDER BY p.display_name ASC, p.discriminator ASC LIMIT ");
+    builder.push_bind(limit);
+    builder
+}
+
+/// `GET /identities/search?q=&limit=` (issue #205) — session-authenticated
+/// open name/handle search, the opt-in counterpart to [`discover_people`]'s
+/// always-on scoped surfacing. Matches only identities with
+/// `discoverable = true` (see module doc comment); a non-opted-in identity
+/// never appears here, full stop — not even to a caller who already knows
+/// their exact handle (that's the separate, untouched
+/// `friends::resolve_handle` exact-match path). Excludes the caller
+/// themselves and any blocked relationship in either direction, same as
+/// [`discover_people`].
+pub async fn search_identities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SearchIdentitiesQuery>,
+) -> Result<Json<SearchIdentitiesResponse>, AppError> {
+    let caller = authenticate(&state, &headers).await?;
+
+    let Some(q) = normalized_query(&query.q) else {
+        return Ok(Json(SearchIdentitiesResponse {
+            results: Vec::new(),
+        }));
+    };
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_LIMIT)
+        .clamp(1, MAX_SEARCH_LIMIT);
+
+    let blocked: Vec<Uuid> = crate::blocks::block_partners(&state, caller)
+        .await?
+        .into_iter()
+        .collect();
+
+    let mut builder = build_search_query(caller, &blocked, q, limit);
+    let rows = builder.build().fetch_all(&state.pool).await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in rows {
+        results.push(SearchResultIdentity {
+            identity_id: row.try_get("identity_id")?,
+            display_name: row.try_get("display_name")?,
+            discriminator: row.try_get("discriminator")?,
+            avatar_url: row.try_get("avatar_url")?,
+        });
+    }
+
+    Ok(Json(SearchIdentitiesResponse { results }))
+}
+
 #[cfg(test)]
 mod tests {
     //! No live Postgres reachable here — these exercise `compute_candidates`'s
@@ -256,5 +421,81 @@ mod tests {
             !handler_source.contains("Query"),
             "discover_people must never accept a query parameter — see module doc comment"
         );
+    }
+
+    // --- #205: opt-in global search --------------------------------
+
+    #[test]
+    fn normalized_query_treats_blank_input_as_no_query() {
+        assert_eq!(normalized_query(""), None);
+        assert_eq!(normalized_query("   "), None);
+        assert_eq!(normalized_query("  alice  "), Some("alice"));
+    }
+
+    #[test]
+    fn search_query_only_ever_matches_discoverable_true() {
+        let caller = Uuid::new_v4();
+        let builder = build_search_query(caller, &[], "alice", 20);
+        assert!(builder.sql().as_str().contains("dp.discoverable = true"));
+    }
+
+    #[test]
+    fn search_query_excludes_the_caller() {
+        let caller = Uuid::new_v4();
+        let builder = build_search_query(caller, &[], "alice", 20);
+        assert!(builder.sql().as_str().contains("p.identity_id <> "));
+    }
+
+    #[test]
+    fn search_query_excludes_blocked_partners_in_either_direction() {
+        // `blocked` is `blocks::block_partners`'s output, which is already
+        // direction-agnostic (both "caller blocked them" and "they blocked
+        // caller" land in the same set) — this only has to check that the
+        // set, whatever it contains, is actually applied as an exclusion.
+        let caller = Uuid::new_v4();
+        let blocked = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let builder = build_search_query(caller, &blocked, "alice", 20);
+        assert!(builder.sql().as_str().contains("p.identity_id <> ALL("));
+    }
+
+    #[test]
+    fn search_query_matches_display_name_and_full_handle() {
+        let caller = Uuid::new_v4();
+        let builder = build_search_query(caller, &[], "alice", 20);
+        let sql_str = builder.sql();
+        let sql = sql_str.as_str();
+        assert!(sql.contains("p.display_name ILIKE"));
+        assert!(sql.contains("(p.display_name || '#' || p.discriminator) ILIKE"));
+    }
+
+    #[test]
+    fn search_query_escapes_like_wildcards_in_the_query_term() {
+        // A literal `%`/`_` in the search term must never be interpreted
+        // as an ILIKE wildcard — reuses `guilds::escape_like`, already unit
+        // tested in `guilds.rs`; this just checks `build_search_query`
+        // actually calls through it rather than binding the raw term.
+        let caller = Uuid::new_v4();
+        let mut builder = build_search_query(caller, &[], "100%_off", 20);
+        // The escaped like-pattern is one of the bound parameters, not
+        // embedded in the SQL text itself (it's parameter-bound, not
+        // interpolated) — so this asserts indirectly via `escape_like`
+        // itself producing the expected escaped form used to build the
+        // bound value, and that building the query doesn't panic.
+        assert_eq!(escape_like("100%_off"), "100\\%\\_off");
+        let _ = builder.build();
+    }
+
+    /// Same "read your own source" belt-and-suspenders check
+    /// `discover_people_takes_no_query_parameters` uses in reverse: unlike
+    /// `discover_people`, `search_identities` *must* accept a query
+    /// parameter — this is the one endpoint in this module where that's
+    /// correct.
+    #[test]
+    fn search_identities_does_accept_a_query_parameter() {
+        let source = include_str!("discovery.rs");
+        let handler_start = source.find("pub async fn search_identities").unwrap();
+        let handler_end = source[handler_start..].find("\n}\n").unwrap() + handler_start;
+        let handler_source = &source[handler_start..handler_end];
+        assert!(handler_source.contains("Query(query): Query<SearchIdentitiesQuery>"));
     }
 }

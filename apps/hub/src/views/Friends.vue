@@ -16,6 +16,7 @@ import {
 import * as api from '../api/client'
 import { listSuggestions } from '../api/discovery'
 import type { Suggestion } from '../api/discovery'
+import type { SearchResultIdentity } from '../api/types'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useSessionStore } from '../stores/session'
 import styles from './page.module.scss'
@@ -61,6 +62,46 @@ async function onAddSuggestion(identityId: string) {
 }
 
 onMounted(loadSuggestions)
+
+// Player search (issue #205) — the opt-in global counterpart to "people
+// you may know" above. Only ever returns identities that have turned on
+// their own `discoverable` preference (Profile.vue); a blank query issues
+// no request at all (see api.searchIdentities). Reuses AvalonSuggestionRow
+// the same way suggestions does, including the same "flip to Requested
+// rather than disappear" posture for a result someone's just sent a
+// request to.
+const searchQuery = ref('')
+const searchResults = ref<SearchResultIdentity[]>([])
+const searching = ref(false)
+const searchError = ref('')
+const requestedSearchIds = ref<Set<string>>(new Set())
+const hasSearched = ref(false)
+
+async function onSearch() {
+  if (!session.token) return
+  searchError.value = ''
+  searching.value = true
+  hasSearched.value = true
+  try {
+    const response = await api.searchIdentities(session.token, searchQuery.value)
+    searchResults.value = response.results
+  } catch (e) {
+    searchError.value = e instanceof Error ? e.message : 'Something went wrong.'
+    searchResults.value = []
+  } finally {
+    searching.value = false
+  }
+}
+
+async function onAddFromSearch(identityId: string) {
+  if (!session.token) return
+  try {
+    await api.createFriendRequest(session.token, { to: identityId })
+    requestedSearchIds.value = new Set(requestedSearchIds.value).add(identityId)
+  } catch (e) {
+    searchError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
 
 // Button-first: the add-friend input only appears once the player says
 // they want to add someone — no open entry sits on the page by default.
@@ -204,6 +245,32 @@ async function onRemoveFriend(identityId: string) {
             :identity-id="request.otherIdentityId"
             direction="outgoing"
             @remove="onRemoveRequest(request.id)"
+          />
+        </AvalonCard>
+
+        <AvalonCard
+          title="Search for players"
+          subtitle="Finds only players who've turned on public search for their own profile."
+        >
+          <AvalonForm
+            submit-label="Search"
+            :submitting="searching"
+            :error="searchError"
+            @submit="onSearch"
+          >
+            <AvalonTextField v-model="searchQuery" label="Name or handle" placeholder="alice" />
+          </AvalonForm>
+          <p v-if="hasSearched && !searching && searchResults.length === 0" :class="styles.empty">
+            No publicly searchable players match that.
+          </p>
+          <AvalonSuggestionRow
+            v-for="result in searchResults"
+            :key="result.identity_id"
+            :identity-id="result.identity_id"
+            :display-name="result.display_name"
+            :avatar-url="result.avatar_url"
+            :requested="requestedSearchIds.has(result.identity_id)"
+            @add="onAddFromSearch(result.identity_id)"
           />
         </AvalonCard>
 
