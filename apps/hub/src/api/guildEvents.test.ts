@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   EVENT_DESCRIPTION_MAX_CHARS,
   EVENT_TITLE_MAX_CHARS,
+  localDateKey,
   rsvpStatusLabel,
   sortByStartsAt,
   splitUpcoming,
@@ -133,5 +134,21 @@ describe('rsvpStatusLabel', () => {
     expect(rsvpStatusLabel('going')).toBe('Going')
     expect(rsvpStatusLabel('maybe')).toBe('Maybe')
     expect(rsvpStatusLabel('not_going')).toBe("Can't go")
+  })
+})
+
+describe('localDateKey', () => {
+  // Deliberately round-trips through a locally-constructed Date rather
+  // than asserting a hardcoded "YYYY-MM-DD" — a fixed UTC string's local
+  // calendar day depends on whichever timezone the test runner is in,
+  // exactly the class of bug this function exists to get right.
+  it('recovers the same local calendar day a Date was built from', () => {
+    const local = new Date(2026, 8, 15, 22, 30) // Sep 15 2026, 10:30pm local
+    expect(localDateKey(local.toISOString())).toBe('2026-09-15')
+  })
+
+  it('pads single-digit months and days', () => {
+    const local = new Date(2026, 0, 5, 9, 0) // Jan 5 2026 local
+    expect(localDateKey(local.toISOString())).toBe('2026-01-05')
   })
 })

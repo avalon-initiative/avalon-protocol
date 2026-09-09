@@ -25,3 +25,6 @@ export const LongName: Story = {
   },
 }
 export const Recruiting: Story = { args: { recruiting: true } }
+export const WithIcon: Story = {
+  args: { iconUrl: 'https://placehold.co/48x48' },
+}

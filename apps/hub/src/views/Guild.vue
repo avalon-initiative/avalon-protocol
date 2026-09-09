@@ -11,21 +11,24 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AvalonButton,
+  AvalonCalendarMonth,
   AvalonCard,
   AvalonChannelList,
   AvalonChatComposer,
   AvalonChatMessage,
+  AvalonDateTimeField,
   AvalonEditableField,
   AvalonEventCard,
   AvalonFilterBar,
   AvalonForm,
   AvalonGuildMemberRow,
+  AvalonModal,
   AvalonRsvpControl,
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
-import { sortByStartsAt, validateEventForm } from '../api/guildEvents'
+import { localDateKey, sortByStartsAt, validateEventForm } from '../api/guildEvents'
 import {
   addFavoriteGameId,
   canChangeMemberRole,
@@ -103,12 +106,13 @@ const isMember = computed(() => members.value.some((m) => m.identityId === selfI
 // (`/guilds/:id/channels/:cid`), so selecting one is reflected into the URL
 // via router.replace (no push — switching channels shouldn't pile up
 // browser history entries) rather than kept purely in memory.
-type TabKey = 'overview' | 'members' | 'channels' | 'events' | 'roles' | 'settings'
+type TabKey = 'overview' | 'members' | 'channels' | 'events' | 'calendar' | 'roles' | 'settings'
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'members', label: 'Members' },
   { key: 'channels', label: 'Channels' },
   { key: 'events', label: 'Events' },
+  { key: 'calendar', label: 'Calendar' },
   { key: 'roles', label: 'Roles' },
   { key: 'settings', label: 'Settings' },
 ]
@@ -312,12 +316,15 @@ const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMe
 // rather than fabricating activity.
 const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 
-// --- Rename / retag / redescribe / MOTD / banner --------------------------
+// --- Rename / retag / redescribe / MOTD / banner / icon --------------------
 
 const savingField = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
 
-async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | 'banner', value: string) {
+async function saveGuildField(
+  field: 'name' | 'tag' | 'description' | 'motd' | 'banner' | 'icon',
+  value: string,
+) {
   if (!session.token) return
   fieldErrors.value[field] = ''
   savingField.value = field
@@ -328,6 +335,44 @@ async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | '
     fieldErrors.value[field] = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     savingField.value = null
+  }
+}
+
+// Name/tag/description edited together in one modal rather than three
+// separate inline fields — a single "Edit" action, one combined
+// updateGuild call, closer to how the header actually reads as one unit.
+const showEditGuildInfo = ref(false)
+const editGuildName = ref('')
+const editGuildTag = ref('')
+const editGuildDescription = ref('')
+const savingGuildInfo = ref(false)
+const editGuildInfoError = ref('')
+
+function openEditGuildInfo() {
+  if (!guild.value) return
+  editGuildName.value = guild.value.name
+  editGuildTag.value = guild.value.tag
+  editGuildDescription.value = guild.value.description
+  editGuildInfoError.value = ''
+  showEditGuildInfo.value = true
+}
+
+async function onSaveGuildInfo() {
+  if (!session.token) return
+  editGuildInfoError.value = ''
+  savingGuildInfo.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, {
+      name: editGuildName.value.trim(),
+      tag: editGuildTag.value.trim(),
+      description: editGuildDescription.value.trim(),
+    })
+    await refresh()
+    showEditGuildInfo.value = false
+  } catch (e) {
+    editGuildInfoError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingGuildInfo.value = false
   }
 }
 
@@ -657,10 +702,31 @@ async function onArchiveChannel(channelId: string) {
 
 const sortedEvents = computed(() => sortByStartsAt(events.value))
 
+// --- Calendar tab: a navigable month view of the same events list above,
+// grouped by local calendar day (localDateKey — see its own doc comment
+// on why "local," not the raw UTC starts_at). No separate fetch: the
+// guild's full event list is already loaded for the Events tab.
+const today = new Date()
+const calendarYear = ref(today.getFullYear())
+const calendarMonth = ref(today.getMonth() + 1)
+const calendarSelectedDate = ref<string | null>(null)
+
+const calendarEventDates = computed(() => events.value.map((e) => localDateKey(e.starts_at)))
+
+const calendarSelectedEvents = computed(() => {
+  if (!calendarSelectedDate.value) return []
+  return sortedEvents.value.filter((e) => localDateKey(e.starts_at) === calendarSelectedDate.value)
+})
+
+function onSelectCalendarDate(date: string) {
+  calendarSelectedDate.value = calendarSelectedDate.value === date ? null : date
+}
+
 const showCreateEvent = ref(false)
 const newEventTitle = ref('')
 const newEventDescription = ref('')
 const newEventStartsAt = ref('')
+const newEventEndsAt = ref('')
 const creatingEvent = ref(false)
 const createEventError = ref('')
 
@@ -669,6 +735,7 @@ function cancelCreateEvent() {
   newEventTitle.value = ''
   newEventDescription.value = ''
   newEventStartsAt.value = ''
+  newEventEndsAt.value = ''
   createEventError.value = ''
 }
 
@@ -676,10 +743,12 @@ async function onCreateEvent() {
   if (!session.token) return
   createEventError.value = ''
   const startsAtIso = newEventStartsAt.value ? new Date(newEventStartsAt.value).toISOString() : ''
+  const endsAtIso = newEventEndsAt.value ? new Date(newEventEndsAt.value).toISOString() : ''
   const validation = validateEventForm({
     title: newEventTitle.value,
     description: newEventDescription.value,
     startsAt: startsAtIso,
+    endsAt: endsAtIso || undefined,
   })
   if (!validation.valid) {
     createEventError.value = validation.titleError ?? validation.timeRangeError ?? 'Invalid event.'
@@ -691,6 +760,7 @@ async function onCreateEvent() {
       title: newEventTitle.value.trim(),
       description: newEventDescription.value.trim() || undefined,
       starts_at: startsAtIso,
+      ends_at: endsAtIso || undefined,
     })
     cancelCreateEvent()
     await refresh()
@@ -717,40 +787,42 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
 
 <template>
   <div v-if="!loading && guild" :class="styles.page">
-    <header :class="styles.pageHeader">
-      <template v-if="canManageGuild">
-        <AvalonEditableField
-          label="Name"
-          :value="guild.name"
-          :saving="savingField === 'name'"
-          :error="fieldErrors.name"
-          @save="saveGuildField('name', $event)"
-        />
-        <AvalonEditableField
-          label="Tag"
-          :value="guild.tag"
-          :saving="savingField === 'tag'"
-          :error="fieldErrors.tag"
-          @save="saveGuildField('tag', $event)"
-        />
-        <AvalonEditableField
-          label="Description"
-          :value="guild.description"
-          empty-text="No description"
-          :saving="savingField === 'description'"
-          :error="fieldErrors.description"
-          @save="saveGuildField('description', $event)"
-        />
-      </template>
-      <template v-else>
-        <h1 :class="styles.title">{{ guild.name }} [{{ guild.tag }}]</h1>
+    <img v-if="guild.banner" :src="guild.banner" alt="" :class="local.banner" />
+
+    <header :class="[styles.pageHeader, local.headerRow]">
+      <div :class="local.titleBlock">
+        <div :class="local.titleRow">
+          <img v-if="guild.icon" :src="guild.icon" :alt="`${guild.name} icon`" :class="local.headerIcon" />
+          <h1 :class="styles.title">{{ guild.name }}</h1>
+          <span :class="local.tagBadge">{{ guild.tag }}</span>
+        </div>
         <p v-if="guild.description" :class="styles.subtitle">{{ guild.description }}</p>
-      </template>
-      <p :class="styles.subtitle">
-        {{ guild.member_count }} member{{ guild.member_count === 1 ? '' : 's' }} ·
-        {{ guild.join_policy === 'open' ? 'Open to join' : 'Invite only' }}
-      </p>
+        <p :class="styles.subtitle">
+          {{ guild.member_count }} member{{ guild.member_count === 1 ? '' : 's' }} ·
+          {{ guild.join_policy === 'open' ? 'Open to join' : 'Invite only' }}
+        </p>
+      </div>
     </header>
+
+    <AvalonModal
+      title="Edit guild info"
+      :open="showEditGuildInfo"
+      @close="showEditGuildInfo = false"
+    >
+      <AvalonForm
+        submit-label="Save"
+        :submitting="savingGuildInfo"
+        :error="editGuildInfoError"
+        @submit="onSaveGuildInfo"
+      >
+        <AvalonTextField v-model="editGuildName" label="Name" />
+        <AvalonTextField v-model="editGuildTag" label="Tag (2-5 characters)" :maxlength="5" />
+        <AvalonTextField v-model="editGuildDescription" label="Description" />
+        <template #secondary-actions>
+          <AvalonButton label="Cancel" variant="secondary" @click="showEditGuildInfo = false" />
+        </template>
+      </AvalonForm>
+    </AvalonModal>
 
     <p v-if="error" :class="styles.error">{{ error }}</p>
     <p v-if="actionError" :class="styles.error">{{ actionError }}</p>
@@ -772,9 +844,8 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
          all read-only here; editing lives in Settings. -->
     <div v-if="activeTab === 'overview'" :class="styles.grid">
       <div :class="styles.mainColumn">
-        <AvalonCard v-if="guild.motd || guild.banner || guildLinks.length > 0" title="About">
+        <AvalonCard v-if="guild.motd || guildLinks.length > 0" title="About">
           <p v-if="guild.motd" :class="styles.subtitle">{{ guild.motd }}</p>
-          <p v-if="guild.banner" :class="styles.empty">Banner: {{ guild.banner }}</p>
           <p v-for="link in guildLinks" :key="link.url" :class="styles.empty">
             <a :href="link.url" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>
           </p>
@@ -1172,16 +1243,52 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
                 label="Description"
                 placeholder="Optional details"
               />
-              <AvalonTextField
-                v-model="newEventStartsAt"
-                label="Starts at"
-                placeholder="2026-09-15T20:00"
-              />
+              <AvalonDateTimeField v-model="newEventStartsAt" label="Starts at" />
+              <AvalonDateTimeField v-model="newEventEndsAt" label="Ends at (optional)" />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
               </template>
             </AvalonForm>
           </div>
+        </AvalonCard>
+      </div>
+    </div>
+
+    <!-- Calendar: same event list as the Events tab above, grouped onto a
+         navigable month grid with a dot under any day that has an event —
+         click a day to see what's on it below the calendar. -->
+    <div v-else-if="activeTab === 'calendar'" :class="styles.grid">
+      <div :class="styles.mainColumn">
+        <AvalonCard title="Calendar">
+          <AvalonCalendarMonth
+            :year="calendarYear"
+            :month="calendarMonth"
+            :event-dates="calendarEventDates"
+            :selected-date="calendarSelectedDate"
+            @update:year="calendarYear = $event"
+            @update:month="calendarMonth = $event"
+            @select-date="onSelectCalendarDate"
+          />
+
+          <template v-if="calendarSelectedDate">
+            <p :class="styles.empty">{{ calendarSelectedDate }}</p>
+            <p v-if="calendarSelectedEvents.length === 0" :class="styles.empty">
+              No events on this day.
+            </p>
+            <AvalonEventCard
+              v-for="event in calendarSelectedEvents"
+              :key="event.id"
+              :title="event.title"
+              :description="event.description ?? undefined"
+              :starts-at="event.starts_at"
+              :ends-at="event.ends_at ?? undefined"
+              :rsvp-counts="event.rsvp_counts"
+            >
+              <template #actions>
+                <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+              </template>
+            </AvalonEventCard>
+          </template>
         </AvalonCard>
       </div>
     </div>
@@ -1230,6 +1337,12 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     <div v-else-if="activeTab === 'settings'" :class="styles.grid">
       <template v-if="canManageGuild">
         <div :class="styles.mainColumn">
+          <AvalonCard title="Guild info" subtitle="Name, tag, and description.">
+            <p :class="styles.empty">{{ guild.name }} [{{ guild.tag }}]</p>
+            <p :class="styles.empty">{{ guild.description || 'No description' }}</p>
+            <AvalonButton label="Edit" variant="secondary" @click="openEditGuildInfo" />
+          </AvalonCard>
+
           <AvalonCard title="Recruiting">
             <p :class="styles.empty">
               Recruiting guilds are discoverable on the "Discover" board:
@@ -1243,7 +1356,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
           </AvalonCard>
 
-          <AvalonCard title="Message of the day and banner">
+          <AvalonCard title="Message of the day, banner & icon">
             <AvalonEditableField
               label="MOTD"
               :value="guild.motd ?? ''"
@@ -1260,6 +1373,15 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               :saving="savingField === 'banner'"
               :error="fieldErrors.banner"
               @save="saveGuildField('banner', $event)"
+            />
+            <AvalonEditableField
+              label="Icon URL"
+              :value="guild.icon ?? ''"
+              empty-text="No icon set"
+              placeholder="https://…"
+              :saving="savingField === 'icon'"
+              :error="fieldErrors.icon"
+              @save="saveGuildField('icon', $event)"
             />
           </AvalonCard>
 

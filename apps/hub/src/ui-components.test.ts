@@ -8,12 +8,14 @@ import { describe, expect, it } from 'vitest'
 import {
   AvalonAvatar,
   AvalonBottomNav,
+  AvalonCalendarMonth,
   AvalonCapabilityConsentRow,
   AvalonCard,
   AvalonChannelList,
   AvalonChatComposer,
   AvalonChatMessage,
   AvalonConnectionCard,
+  AvalonDateTimeField,
   AvalonEventCard,
   AvalonFilterBar,
   AvalonForm,
@@ -21,6 +23,7 @@ import {
   AvalonFriendRow,
   AvalonGuildCard,
   AvalonGuildMemberRow,
+  AvalonModal,
   AvalonPresenceBadge,
   AvalonRoleBadge,
   AvalonRsvpControl,
@@ -262,6 +265,18 @@ describe('AvalonGuildCard', () => {
 
     const omitted = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
     expect(omitted.text()).not.toContain('Recruiting')
+  })
+
+  it('renders an icon badge only when iconUrl is provided', () => {
+    const withIcon = mount(AvalonGuildCard, {
+      props: { name: 'A', tag: 'AA', memberCount: 1, iconUrl: 'https://example.com/icon.png' },
+    })
+    const img = withIcon.find('img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('https://example.com/icon.png')
+
+    const withoutIcon = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
+    expect(withoutIcon.find('img').exists()).toBe(false)
   })
 })
 
@@ -600,5 +615,38 @@ describe('AvalonWarningBanner', () => {
     const wrapper = mount(AvalonWarningBanner, { props: baseProps })
     expect(wrapper.attributes('role')).toBe('alert')
     expect(wrapper.find('button').exists()).toBe(false)
+  })
+})
+
+describe('AvalonCalendarMonth', () => {
+  const baseProps = { year: 2026, month: 9, eventDates: ['2026-09-05', '2026-09-15'] }
+
+  it('renders the month/year label', () => {
+    const wrapper = mount(AvalonCalendarMonth, { props: baseProps })
+    expect(wrapper.text()).toContain('September 2026')
+  })
+
+  it('emits update:year/update:month when navigating to the next month', async () => {
+    const wrapper = mount(AvalonCalendarMonth, { props: baseProps })
+    await wrapper.find('button[aria-label="Next month"]').trigger('click')
+    expect(wrapper.emitted('update:month')?.[0]).toEqual([10])
+  })
+
+  it('wraps to the next year when navigating past December', async () => {
+    const wrapper = mount(AvalonCalendarMonth, { props: { ...baseProps, month: 12 } })
+    await wrapper.find('button[aria-label="Next month"]').trigger('click')
+    expect(wrapper.emitted('update:month')?.[0]).toEqual([1])
+    expect(wrapper.emitted('update:year')?.[0]).toEqual([2027])
+  })
+
+  it("emits select-date with the clicked day's iso date", async () => {
+    const wrapper = mount(AvalonCalendarMonth, { props: baseProps })
+    // Multiple day cells can render the same number (in-month day 5 vs. an
+    // adjacent month's filler day 5) — restrict to an in-month cell.
+    const dayButtons = wrapper
+      .findAll('button')
+      .filter((b) => b.text().replace(/\D/g, '') === '5' && !b.classes().some((c) => c.includes('dayOutside')))
+    await dayButtons[0].trigger('click')
+    expect(wrapper.emitted('select-date')?.[0]).toEqual(['2026-09-05'])
   })
 })

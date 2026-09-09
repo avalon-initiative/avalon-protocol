@@ -120,6 +120,8 @@ struct GuildResponse {
     motd: Option<String>,
     /// Issue #153.
     banner: Option<String>,
+    /// Issue #246.
+    icon: Option<String>,
     /// Issue #153.
     #[serde(default)]
     links: Vec<GuildLink>,
@@ -144,6 +146,7 @@ impl From<GuildResponse> for Guild {
             join_policy: JoinPolicy::parse(&response.join_policy).unwrap_or_default(),
             motd: response.motd,
             banner: response.banner,
+            icon: response.icon,
             links: response.links,
             recruiting: response.recruiting,
         }

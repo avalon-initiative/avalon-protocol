@@ -1,0 +1,66 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--av-space-4);
+  z-index: 100;
+}
+
+.panel {
+  background: var(--av-color-surface);
+  border-radius: var(--av-radius-lg);
+  border: 1px solid var(--av-color-border);
+  width: 100%;
+  max-width: 32rem;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--av-space-4);
+  border-bottom: 1px solid var(--av-color-border);
+}
+
+.title {
+  font-size: var(--av-text-lg);
+  font-weight: 600;
+  color: var(--av-color-text);
+  margin: 0;
+}
+
+.closeButton {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--av-color-text-secondary);
+  cursor: pointer;
+  padding: var(--av-space-1);
+
+  &:hover {
+    color: var(--av-color-text);
+  }
+}
+
+.body {
+  padding: var(--av-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-3);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--av-space-2);
+  padding: var(--av-space-4);
+  border-top: 1px solid var(--av-color-border);
+}

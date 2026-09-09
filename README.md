@@ -116,7 +116,7 @@ governance problem, not one client-side pinning can fix).
 
 | Label | `network_id` | STH verify key (Ed25519, hex) |
 |---|---|---|
-| `avalon-dev-local` *(placeholder — no real deployment yet, see notes below)* | `avalon-dev-local` | `8001ace8ee66f4664828fa329aa39963b6ebd32cfb00105e6e1c828832656f09` |
+| `avalon-dev-local` *(placeholder — no real deployment yet, see notes below)* | `avalon-dev-local` | `bbcb11ead3d7c68d58ddf0f923df6e7e8347a4341e93eb7b07c3c7a2622accd7` |
 
 This repo has no publicly deployed Avalon network yet, so the entry above is
 a template: a real, freely-generated Ed25519 key with no server behind it,

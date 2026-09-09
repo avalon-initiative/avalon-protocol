@@ -381,6 +381,26 @@ with Game A becomes historical.
   this widens what's public — name/tag/description/member_count were
   already "readable by any authenticated identity" per #20; this is more of
   the same kind of field.
+- **Guild icon (issue #246).** `Guild.icon` is a second, independent image
+  field alongside `banner` — a small badge/identity mark (recruitment
+  card, member-list-style avatar, an external integrator's own badge UI)
+  rather than `banner`'s wide cover-image role; stretching or cropping one
+  into the other's shape doesn't hold up as a substitute, hence a real
+  second column (`crates/server/db/migrations/0031_guild_icon`) rather than
+  deriving an icon from the banner. Same validation and update convention
+  as `banner`: `http`/`https`-only, length-capped
+  (`validate_guild_icon`/`MAX_GUILD_ICON_URL_LEN` in
+  `crates/server/src/guilds.rs`), three-state `PATCH /guilds/{id}` update
+  (omitted untouched, `""` clears, non-empty validates and sets). No
+  protocol event of its own — same "operational state, not durable
+  history" posture `motd`/`banner`/`links` already have. Hub surfaces it in
+  the guild page header as a small badge, on the Settings tab's profile
+  card alongside MOTD/banner, and on `AvalonGuildCard` (`packages/ui`) as
+  an optional `iconUrl` badge — currently wired for the "My guilds" list
+  (`GuildResponse`-backed) but not yet the Discover tab, since
+  `DiscoverGuildSummary` doesn't carry `banner` either today; extending
+  both together is left for whenever discovery cards grow richer metadata,
+  not invented here as a one-off for `icon` alone.
 - **Guild discovery board (issue #154).** `GET /guilds/discover?q=&recruiting=&tag=&game=&sort=&limit=&cursor=`
   (`crates/server/src/guilds.rs::discover_guilds`) is a paged, filterable,
   session-authenticated browse over the same already-public guild metadata
@@ -698,6 +718,8 @@ with Game A becomes historical.
   (favorites pin, done — a curated top-5 subset of #206's breakdown, gated
   the same way and validated against the same live data, never a way to
   manufacture an association #206 wouldn't itself show).
+- [#246](https://github.com/LunarVagabond/avalon-protocol/issues/246) — guild
+  icon, done: a small badge image, independent of #153's `banner`.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

@@ -62,6 +62,50 @@
   overflow-y: auto;
 }
 
+/* Header: banner cover image, name + tag inline, single Edit action
+   opening AvalonModal (replaces three separate inline-editable fields). */
+.banner {
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  border-radius: var(--av-radius-lg);
+  margin-bottom: var(--av-space-4);
+}
+
+.headerRow {
+  display: block;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+}
+
+.tagBadge {
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+  color: var(--av-color-text-secondary);
+  background: var(--av-color-surface-hover);
+  border-radius: var(--av-radius-pill);
+  padding: 0.125rem var(--av-space-2);
+}
+
+/* Issue #246: a small badge image shown next to the title, same visual role
+   a Discord-style guild icon plays — only rendered when guild.icon is set. */
+.headerIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--av-radius-md);
+  object-fit: cover;
+}
+
 /* Settings tab (issue #153's motd/banner/links, wired up by #241) */
 .linkRow {
   display: flex;
