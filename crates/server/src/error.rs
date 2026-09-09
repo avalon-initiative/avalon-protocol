@@ -233,6 +233,12 @@ pub enum AppError {
     InvalidJoinRequestMessage,
     #[error("guild join request not found")]
     GuildJoinRequestNotFound,
+    #[error("proto_source must be non-empty")]
+    InvalidGameSchema,
+    #[error("published schema version not found")]
+    GameSchemaNotFound,
+    #[error("a game may only publish schemas attributed to its own id")]
+    GameSchemaForbidden,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -365,6 +371,13 @@ impl IntoResponse for AppError {
             AppError::InvalidJoinRequestMessage => StatusCode::BAD_REQUEST,
             AppError::GuildJoinRequestNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidDiscoverQuery => StatusCode::BAD_REQUEST,
+            AppError::InvalidGameSchema => StatusCode::BAD_REQUEST,
+            AppError::GameSchemaNotFound => StatusCode::NOT_FOUND,
+            // Same shape as `AchievementDefinitionForbidden`: authenticated
+            // fine as *some* game, but that game isn't the one named by
+            // the `{slug}` path segment — never allowed to publish a
+            // schema attributed to another game's id.
+            AppError::GameSchemaForbidden => StatusCode::FORBIDDEN,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
                 StatusCode::BAD_REQUEST
             }

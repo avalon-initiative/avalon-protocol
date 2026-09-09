@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::projections::{attestations, friendships, guild_rosters, profiles};
+use crate::projections::{attestations, friendships, game_schemas, guild_rosters, profiles};
 use crate::{IndexError, Indexer};
 
 #[derive(Clone)]
@@ -75,6 +75,11 @@ impl PostgresIndexer {
             "achievement.issued" | "achievement.revoked" => {
                 if let Some(write) = attestations::decode(event) {
                     attestations::apply(tx, &write).await?;
+                }
+            }
+            "game_schema.published" => {
+                if let Some(write) = game_schemas::decode(event) {
+                    game_schemas::apply(tx, &write).await?;
                 }
             }
             other => {

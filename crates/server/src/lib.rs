@@ -8,6 +8,7 @@ pub mod devices;
 pub mod discovery;
 pub mod error;
 pub mod friends;
+pub mod game_schemas;
 pub mod games;
 pub mod guild_events;
 pub mod guild_messages;
@@ -178,6 +179,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/games/{slug}/achievements/{key}",
             patch(achievements::update_achievement_definition),
+        )
+        .route(
+            "/games/{slug}/schemas",
+            get(game_schemas::list_schema_versions).post(game_schemas::publish_schema_version),
+        )
+        .route(
+            "/games/{slug}/schemas/{version}",
+            get(game_schemas::get_schema_version),
         )
         .route(
             "/games/{slug}/connect",

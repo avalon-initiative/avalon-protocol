@@ -12,6 +12,7 @@
 
 pub mod achievements;
 pub mod events;
+pub mod game_schemas;
 pub mod games;
 pub mod guilds;
 pub mod identity;
