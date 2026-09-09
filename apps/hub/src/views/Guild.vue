@@ -21,6 +21,7 @@ import {
   AvalonFilterBar,
   AvalonForm,
   AvalonGuildMemberRow,
+  AvalonModal,
   AvalonRsvpControl,
   AvalonTextField,
 } from '@avalon/ui'
@@ -329,6 +330,44 @@ async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | '
     fieldErrors.value[field] = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     savingField.value = null
+  }
+}
+
+// Name/tag/description edited together in one modal rather than three
+// separate inline fields — a single "Edit" action, one combined
+// updateGuild call, closer to how the header actually reads as one unit.
+const showEditGuildInfo = ref(false)
+const editGuildName = ref('')
+const editGuildTag = ref('')
+const editGuildDescription = ref('')
+const savingGuildInfo = ref(false)
+const editGuildInfoError = ref('')
+
+function openEditGuildInfo() {
+  if (!guild.value) return
+  editGuildName.value = guild.value.name
+  editGuildTag.value = guild.value.tag
+  editGuildDescription.value = guild.value.description
+  editGuildInfoError.value = ''
+  showEditGuildInfo.value = true
+}
+
+async function onSaveGuildInfo() {
+  if (!session.token) return
+  editGuildInfoError.value = ''
+  savingGuildInfo.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, {
+      name: editGuildName.value.trim(),
+      tag: editGuildTag.value.trim(),
+      description: editGuildDescription.value.trim(),
+    })
+    await refresh()
+    showEditGuildInfo.value = false
+  } catch (e) {
+    editGuildInfoError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingGuildInfo.value = false
   }
 }
 
@@ -718,40 +757,42 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
 
 <template>
   <div v-if="!loading && guild" :class="styles.page">
-    <header :class="styles.pageHeader">
-      <template v-if="canManageGuild">
-        <AvalonEditableField
-          label="Name"
-          :value="guild.name"
-          :saving="savingField === 'name'"
-          :error="fieldErrors.name"
-          @save="saveGuildField('name', $event)"
-        />
-        <AvalonEditableField
-          label="Tag"
-          :value="guild.tag"
-          :saving="savingField === 'tag'"
-          :error="fieldErrors.tag"
-          @save="saveGuildField('tag', $event)"
-        />
-        <AvalonEditableField
-          label="Description"
-          :value="guild.description"
-          empty-text="No description"
-          :saving="savingField === 'description'"
-          :error="fieldErrors.description"
-          @save="saveGuildField('description', $event)"
-        />
-      </template>
-      <template v-else>
-        <h1 :class="styles.title">{{ guild.name }} [{{ guild.tag }}]</h1>
+    <img v-if="guild.banner" :src="guild.banner" alt="" :class="local.banner" />
+
+    <header :class="[styles.pageHeader, local.headerRow]">
+      <div :class="local.titleBlock">
+        <div :class="local.titleRow">
+          <h1 :class="styles.title">{{ guild.name }}</h1>
+          <span :class="local.tagBadge">{{ guild.tag }}</span>
+          <AvalonButton v-if="canManageGuild" label="Edit" variant="secondary" @click="openEditGuildInfo" />
+        </div>
         <p v-if="guild.description" :class="styles.subtitle">{{ guild.description }}</p>
-      </template>
-      <p :class="styles.subtitle">
-        {{ guild.member_count }} member{{ guild.member_count === 1 ? '' : 's' }} ·
-        {{ guild.join_policy === 'open' ? 'Open to join' : 'Invite only' }}
-      </p>
+        <p :class="styles.subtitle">
+          {{ guild.member_count }} member{{ guild.member_count === 1 ? '' : 's' }} ·
+          {{ guild.join_policy === 'open' ? 'Open to join' : 'Invite only' }}
+        </p>
+      </div>
     </header>
+
+    <AvalonModal
+      title="Edit guild info"
+      :open="showEditGuildInfo"
+      @close="showEditGuildInfo = false"
+    >
+      <AvalonForm
+        submit-label="Save"
+        :submitting="savingGuildInfo"
+        :error="editGuildInfoError"
+        @submit="onSaveGuildInfo"
+      >
+        <AvalonTextField v-model="editGuildName" label="Name" />
+        <AvalonTextField v-model="editGuildTag" label="Tag (2-5 characters)" :maxlength="5" />
+        <AvalonTextField v-model="editGuildDescription" label="Description" />
+        <template #secondary-actions>
+          <AvalonButton label="Cancel" variant="secondary" @click="showEditGuildInfo = false" />
+        </template>
+      </AvalonForm>
+    </AvalonModal>
 
     <p v-if="error" :class="styles.error">{{ error }}</p>
     <p v-if="actionError" :class="styles.error">{{ actionError }}</p>
@@ -773,9 +814,8 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
          all read-only here; editing lives in Settings. -->
     <div v-if="activeTab === 'overview'" :class="styles.grid">
       <div :class="styles.mainColumn">
-        <AvalonCard v-if="guild.motd || guild.banner || guildLinks.length > 0" title="About">
+        <AvalonCard v-if="guild.motd || guildLinks.length > 0" title="About">
           <p v-if="guild.motd" :class="styles.subtitle">{{ guild.motd }}</p>
-          <p v-if="guild.banner" :class="styles.empty">Banner: {{ guild.banner }}</p>
           <p v-for="link in guildLinks" :key="link.url" :class="styles.empty">
             <a :href="link.url" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>
           </p>
