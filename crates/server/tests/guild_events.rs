@@ -496,3 +496,40 @@ async fn a_non_member_cannot_view_the_rsvp_roster() {
     .unwrap();
     assert_eq!(roster.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// An event id from a DIFFERENT guild than the one in the URL must 404,
+/// not resolve — otherwise a member of guild B could read guild A's RSVP
+/// roster just by pasting A's event id under B's guild_id in the path.
+#[tokio::test]
+#[ignore]
+async fn requesting_another_guilds_event_id_under_a_different_guild_is_not_found() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_a_id, owner_a_token) = seed_identity_session(&pool).await;
+    let (owner_b_id, owner_b_token) = seed_identity_session(&pool).await;
+    let guild_a_id = create_guild_with_owner(&pool, &http, &base, owner_a_id, &owner_a_token).await;
+    let guild_b_id = create_guild_with_owner(&pool, &http, &base, owner_b_id, &owner_b_token).await;
+
+    let create = auth(
+        http.post(format!("{base}/guilds/{guild_a_id}/events")),
+        &owner_a_token,
+    )
+    .json(&event_body("Guild A's event"))
+    .send()
+    .await
+    .unwrap();
+    let event: serde_json::Value = create.json().await.unwrap();
+    let event_id = event["id"].as_str().unwrap();
+
+    let cross_guild = auth(
+        http.get(format!(
+            "{base}/guilds/{guild_b_id}/events/{event_id}/rsvps"
+        )),
+        &owner_b_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(cross_guild.status(), reqwest::StatusCode::NOT_FOUND);
+}
