@@ -32,11 +32,20 @@ Settlement               (SettlementProvider::commit)
 ```
 
 Achievement → transaction, per event, does not scale and is never the design.
-Events accumulate in a buffer, are batched, a commitment is computed over the
-batch, and the commitment is what gets settled. How large a batch is and how
-often commitments are produced are tuning questions for
-[`./scalability.md`](./scalability.md) and
-[#38](https://github.com/LunarVagabond/avalon-protocol/issues/38).
+Events accumulate in a buffer (the outbox, #71), are batched, a commitment is
+computed over the batch, and the commitment is what gets settled. This is real
+today, not aspirational: `ledger_entries.batch_id` groups every entry under
+the `EventBatch` it was committed with, `ledger_batches` is the one row per
+batch that `get_commitment` looks up, and `verify` recomputes a batch's root
+from its entries rather than trusting a single stored value. How large a
+batch is and how often commitments are produced stay tuning questions —
+today a batch closes whenever the settlement worker's drain tick runs
+(`crates/server/src/outbox.rs`), not on a size threshold or timer, and a
+single-event batch is legal — see [`./scalability.md`](./scalability.md) and
+[#38](https://github.com/LunarVagabond/avalon-protocol/issues/38). The batch
+root itself is a placeholder deterministic value (the batch's chain tip) —
+whether it becomes a real Merkle root is
+[#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)'s call.
 
 ## The boundary
 
@@ -129,21 +138,38 @@ candidates for both before it closes.
 `crates/chain/src/postgres.rs` — `PostgresSettlementProvider`, real and in use:
 
 - One row per event in `ledger_entries`
-  (`crates/server/db/migrations/0002_ledger/up.sql`): `seq`, `event_id`,
-  `kind`, `issuer`, `subject`, `payload`, `event_timestamp`, `version`,
-  `prev_hash`, `entry_hash`, `committed_at`.
+  (`crates/server/db/migrations/0002_ledger/up.sql`, plus `batch_id` from
+  `0013_ledger_batches/up.sql`): `seq`, `event_id`, `kind`, `issuer`,
+  `subject`, `payload`, `event_timestamp`, `version`, `prev_hash`,
+  `entry_hash`, `batch_id`, `committed_at`. One row per batch in
+  `ledger_batches`: `batch_id`, `first_seq`, `last_seq`, `batch_root`,
+  `committed_at`.
 - `entry_hash = SHA-256(prev_hash ‖ event content)`; the first entry's
-  `prev_hash` is the all-zero `GENESIS_HASH`. `commit` runs inside one
-  transaction and returns the last entry hash as the `Commitment.proof`.
-- `verify` checks that a claimed hash exists; `list_entries` rehashes every row
-  and checks each link, which is what `avalon inspect-ledger`
-  (`crates/cli/src/main.rs`, `make inspect-ledger`) prints — `avalon
-  inspect-ledger-full` / `make inspect-ledger-full` is the same view plus
-  each entry's actual JSON payload.
-- Not yet: signatures (#39), a `batch_id` column or real batching (#38 —
-  `get_commitment` returns `BatchNotFound`), Merkle roots or signed tree heads
-  (#40), an export/mirror format, an outbox so app rows and ledger rows commit
-  together ([#71](https://github.com/LunarVagabond/avalon-protocol/issues/71)).
+  `prev_hash` is the all-zero `GENESIS_HASH`, and entries stay hash-chained
+  across batch boundaries — `commit` never resets the chain per batch.
+  `commit` inserts every entry in `batch.events` plus the batch's own
+  `ledger_batches` row in one transaction (the row-to-batch foreign key is
+  deferred to transaction end, since the batch row is inserted after its
+  entries) and returns the batch's root (its last entry's hash — a
+  placeholder deterministic root, not yet a Merkle root) as the
+  `Commitment.proof`.
+- `get_commitment` reads `ledger_batches` by `batch_id`. `verify` recomputes
+  a batch's root by replaying the hash chain across its own entries' stored
+  content (not by trusting the stored `entry_hash`/`batch_root` values), so
+  tampering with any entry in the batch is caught, not just a missing row.
+  `list_entries` still independently rehashes every row and checks each
+  link across the whole ledger, which is what `avalon inspect-ledger`
+  (`crates/cli/src/main.rs`, `make inspect-ledger`) prints, now with batch
+  boundary headers and each batch's root — `avalon inspect-ledger-full` /
+  `make inspect-ledger-full` is the same view plus each entry's actual JSON
+  payload.
+- The settlement worker (`crates/server/src/outbox.rs`, #71) drains pending
+  `protocol_outbox` rows into one `EventBatch` per drain tick and commits it
+  with a single `SettlementProvider::commit` call — a batch closes when the
+  worker runs, not on a size threshold or timer, and a single-event batch is
+  legal. No handler calls `commit` directly.
+- Not yet: signatures (#39), Merkle roots or signed tree heads (#40), an
+  export/mirror format.
 - The ledger shares `avalon-server`'s `PgPool` and migrations; milestone 1 has
   one database. Split when `chain` gets its own deployment, not before.
 - `list_entries_for_issuer_prefix` — a narrower, unverified issuer-filtered

@@ -625,6 +625,11 @@ async fn outbox_status() {
 /// chain intact." Same query either way (`list_entries` always fetches the
 /// payload, since it needs it to re-verify each entry's hash) — this only
 /// changes what gets printed.
+///
+/// Prints a batch boundary header (issue #38) whenever the entry stream
+/// crosses into a new `batch_id`, showing that batch's seq range and root —
+/// entries within a batch stay hash-chained exactly as before, this only
+/// adds where the batch lines are drawn.
 async fn inspect_ledger(full: bool) {
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
@@ -635,13 +640,32 @@ async fn inspect_ledger(full: bool) {
 
     let chain = PostgresSettlementProvider::new(pool);
     let entries = chain.list_entries().await.expect("failed to read ledger");
+    let batches = chain.list_batches().await.expect("failed to read batches");
 
     if entries.is_empty() {
         println!("(ledger is empty)");
         return;
     }
 
+    let batch_by_id: std::collections::HashMap<Uuid, &avalon_chain::LedgerBatchView> =
+        batches.iter().map(|b| (b.batch_id, b)).collect();
+
+    let mut current_batch: Option<Uuid> = None;
     for entry in &entries {
+        if current_batch != Some(entry.batch_id) {
+            current_batch = Some(entry.batch_id);
+            match batch_by_id.get(&entry.batch_id) {
+                Some(batch) => println!(
+                    "═══ Batch {} — seq {}-{} — root: {} ═══",
+                    batch.batch_id,
+                    batch.first_seq,
+                    batch.last_seq,
+                    short_hash(&batch.batch_root)
+                ),
+                None => println!("═══ Batch {} (no ledger_batches row) ═══", entry.batch_id),
+            }
+        }
+
         let verified = if entry.chain_intact {
             "✓"
         } else {
@@ -673,8 +697,9 @@ async fn inspect_ledger(full: bool) {
     let broken = entries.iter().filter(|e| !e.chain_intact).count();
     println!();
     println!(
-        "{} entries, {}",
+        "{} entries across {} batch(es), {}",
         entries.len(),
+        batches.len(),
         if broken == 0 {
             "chain intact ✓".to_string()
         } else {

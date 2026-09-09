@@ -14,10 +14,19 @@
 //!
 //! Uses runtime-checked `sqlx::query` (not the `query!` macro `avalon-server`
 //! uses elsewhere) on purpose: this table's shape is still actively evolving
-//! (batch_id, signatures, Merkle fields all still open per #38/#39/#40), and
-//! the macro's compile-time schema check would mean every one of those
-//! changes breaks the build until a live, migrated database is available —
-//! a real cost for a table that isn't stable yet.
+//! (signatures and Merkle fields are still open per #39/#40), and the
+//! macro's compile-time schema check would mean every one of those changes
+//! breaks the build until a live, migrated database is available — a real
+//! cost for a table that isn't stable yet.
+//!
+//! Batching (issue #38): one protocol event is never one settlement action.
+//! `commit` groups every event in an `EventBatch` under one `batch_id`,
+//! inserted in a single transaction; `ledger_entries` stay hash-chained
+//! across batch boundaries (the chain never resets per batch), and
+//! `ledger_batches` holds one row per batch (`first_seq`, `last_seq`,
+//! `batch_root`, `committed_at`). `batch_root` is a placeholder deterministic
+//! root — the batch's chain tip, i.e. its last entry's `entry_hash` — not a
+//! Merkle root; that's issue #40's call.
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
@@ -125,6 +134,28 @@ fn hash_event(prev_hash: &str, event: &ProtocolEvent) -> String {
     )
 }
 
+/// Recomputes a batch's root the same way [`PostgresSettlementProvider::commit`]
+/// produced it in the first place: replay the hash chain across the batch's
+/// own entries, in order, starting from the hash the batch extended (its
+/// first entry's stored `prev_hash` — the ledger's tip immediately before
+/// this batch was committed, not verified here since that's a cross-batch
+/// concern, not this batch's own integrity).
+///
+/// This is a pure, DB-free function on purpose (issue #38's acceptance
+/// criteria that `verify` "recomputes and compares the batch root, not just
+/// row existence") — it recomputes from each entry's actual stored content,
+/// the same way `list_entries` re-verifies individual entries, so tampering
+/// with any entry's content in the batch (not just deleting a row) changes
+/// the result. `PostgresSettlementProvider::verify` is the only caller; kept
+/// free-standing so it's directly unit-testable without Postgres.
+fn recompute_batch_root(entering_prev_hash: &str, entries: &[EntryContent<'_>]) -> String {
+    let mut prev = entering_prev_hash.to_string();
+    for content in entries {
+        prev = hash_entry(&prev, content);
+    }
+    prev
+}
+
 #[derive(Clone)]
 pub struct PostgresSettlementProvider {
     pool: PgPool,
@@ -162,7 +193,7 @@ impl PostgresSettlementProvider {
     pub async fn list_entries(&self) -> Result<Vec<LedgerEntryView>, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash
+            SELECT seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id
             FROM ledger_entries
             ORDER BY seq ASC
             "#,
@@ -185,6 +216,7 @@ impl PostgresSettlementProvider {
             let version: i32 = row.try_get("version").map_err(get)?;
             let prev_hash: String = row.try_get("prev_hash").map_err(get)?;
             let entry_hash: String = row.try_get("entry_hash").map_err(get)?;
+            let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
 
             let recomputed = hash_entry(
                 &prev_hash,
@@ -213,10 +245,42 @@ impl PostgresSettlementProvider {
                 event_timestamp,
                 prev_hash,
                 entry_hash,
+                batch_id,
                 chain_intact: content_intact && link_intact,
             });
         }
         Ok(entries)
+    }
+
+    /// Every committed batch, oldest first — `avalon inspect-ledger` uses
+    /// this alongside [`Self::list_entries`] to print batch boundaries and
+    /// each batch's root. Like `list_entries`, deliberately not part of the
+    /// `SettlementProvider` trait: it's a debug/inspection affordance over
+    /// the whole ledger, not a per-batch protocol operation.
+    pub async fn list_batches(&self) -> Result<Vec<LedgerBatchView>, SettlementError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT batch_id, first_seq, last_seq, batch_root, committed_at
+            FROM ledger_batches
+            ORDER BY first_seq ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let mut batches = Vec::with_capacity(rows.len());
+        for row in rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            batches.push(LedgerBatchView {
+                batch_id: row.try_get("batch_id").map_err(get)?,
+                first_seq: row.try_get("first_seq").map_err(get)?,
+                last_seq: row.try_get("last_seq").map_err(get)?,
+                batch_root: row.try_get("batch_root").map_err(get)?,
+                committed_at: row.try_get("committed_at").map_err(get)?,
+            });
+        }
+        Ok(batches)
     }
 
     /// Every entry issued by `issuer_prefix` (a `GlobalId` prefix, e.g.
@@ -291,12 +355,33 @@ pub struct LedgerEntryView {
     pub event_timestamp: time::OffsetDateTime,
     pub prev_hash: String,
     pub entry_hash: String,
+    pub batch_id: Uuid,
     pub chain_intact: bool,
+}
+
+/// One committed batch — the unit of settlement (issue #38): entries are
+/// hash-chained individually, but a batch is what `get_commitment` looks up
+/// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is a
+/// placeholder deterministic root (the batch's chain tip — its last entry's
+/// `entry_hash`); a Merkle root over the batch is #40's call, not this
+/// ticket's.
+pub struct LedgerBatchView {
+    pub batch_id: Uuid,
+    pub first_seq: i64,
+    pub last_seq: i64,
+    pub batch_root: String,
+    pub committed_at: time::OffsetDateTime,
 }
 
 #[async_trait]
 impl SettlementProvider for PostgresSettlementProvider {
     async fn commit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+        if batch.events.is_empty() {
+            return Err(SettlementError::Storage(
+                "cannot commit an empty batch".to_string(),
+            ));
+        }
+
         let mut tx = self
             .pool
             .begin()
@@ -305,14 +390,23 @@ impl SettlementProvider for PostgresSettlementProvider {
 
         let mut prev_hash = self.tip_hash().await?;
         let mut last_hash = prev_hash.clone();
+        let mut first_seq: Option<i64> = None;
+        let mut last_seq: i64 = 0;
 
+        // Entries stay hash-chained across batch boundaries (issue #38's
+        // invariant) — `prev_hash` continues from the ledger's global tip,
+        // not reset per batch. `batch_id` is what groups these rows as one
+        // settlement unit; `ledger_entries_batch_id_fkey` is deferred to the
+        // end of this transaction, so it's fine that `ledger_batches` doesn't
+        // have this row yet.
         for event in &batch.events {
             let entry_hash = hash_event(&prev_hash, event);
-            sqlx::query(
+            let row = sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
-                    (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING seq
                 "#,
             )
             .bind(event.id)
@@ -324,13 +418,44 @@ impl SettlementProvider for PostgresSettlementProvider {
             .bind(event.version as i32)
             .bind(&prev_hash)
             .bind(&entry_hash)
-            .execute(&mut *tx)
+            .bind(batch.id)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+            let seq: i64 = row
+                .try_get("seq")
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+            first_seq.get_or_insert(seq);
+            last_seq = seq;
 
             last_hash = entry_hash.clone();
             prev_hash = entry_hash;
         }
+        let first_seq = first_seq.expect("checked batch.events is non-empty above");
+
+        // batch_root is a placeholder deterministic root (the batch's chain
+        // tip, i.e. its last entry's hash) — recomputable from the stored
+        // entries alone, same as `verify` does. Whether this becomes a real
+        // Merkle root is issue #40's call.
+        let batch_row = sqlx::query(
+            r#"
+            INSERT INTO ledger_batches (batch_id, first_seq, last_seq, batch_root)
+            VALUES ($1, $2, $3, $4)
+            RETURNING committed_at
+            "#,
+        )
+        .bind(batch.id)
+        .bind(first_seq)
+        .bind(last_seq)
+        .bind(&last_hash)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let committed_at: time::OffsetDateTime = batch_row
+            .try_get("committed_at")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         tx.commit()
             .await
@@ -339,27 +464,86 @@ impl SettlementProvider for PostgresSettlementProvider {
         Ok(Commitment {
             batch_id: batch.id,
             proof: last_hash.into_bytes(),
-            committed_at: time::OffsetDateTime::now_utc(),
+            committed_at,
         })
     }
 
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
-        let claimed_hash = String::from_utf8_lossy(&commitment.proof).to_string();
-        let row = sqlx::query("SELECT entry_hash FROM ledger_entries WHERE entry_hash = $1")
-            .bind(claimed_hash)
-            .fetch_optional(&self.pool)
-            .await
+        let rows = sqlx::query(
+            r#"
+            SELECT event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash
+            FROM ledger_entries
+            WHERE batch_id = $1
+            ORDER BY seq ASC
+            "#,
+        )
+        .bind(commitment.batch_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let Some(first_row) = rows.first() else {
+            return Ok(false);
+        };
+        let entering_prev_hash: String = first_row
+            .try_get("prev_hash")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
-        Ok(row.is_some())
+
+        let mut owned = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            owned.push((
+                row.try_get::<Uuid, _>("event_id").map_err(get)?,
+                row.try_get::<String, _>("kind").map_err(get)?,
+                row.try_get::<String, _>("issuer").map_err(get)?,
+                row.try_get::<String, _>("subject").map_err(get)?,
+                row.try_get::<serde_json::Value, _>("payload")
+                    .map_err(get)?,
+                row.try_get::<time::OffsetDateTime, _>("event_timestamp")
+                    .map_err(get)?,
+                row.try_get::<i32, _>("version").map_err(get)?,
+            ));
+        }
+        let contents: Vec<EntryContent<'_>> = owned
+            .iter()
+            .map(
+                |(event_id, kind, issuer, subject, payload, timestamp, version)| EntryContent {
+                    event_id: *event_id,
+                    kind,
+                    issuer,
+                    subject,
+                    payload,
+                    timestamp: *timestamp,
+                    version: *version,
+                },
+            )
+            .collect();
+
+        let recomputed_root = recompute_batch_root(&entering_prev_hash, &contents);
+        let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
+        Ok(recomputed_root == claimed_root)
     }
 
-    async fn get_commitment(&self, _batch_id: Uuid) -> Result<Commitment, SettlementError> {
-        // Batch-to-commitment lookup needs a batch_id column on ledger_entries
-        // (currently each event is committed individually, one row per
-        // event, not grouped by the batch it arrived in) — real event
-        // batching is issue #38, still open. Not needed for
-        // `avalon inspect-ledger`, which reads via `list_entries` instead.
-        Err(SettlementError::BatchNotFound)
+    async fn get_commitment(&self, batch_id: Uuid) -> Result<Commitment, SettlementError> {
+        let row =
+            sqlx::query("SELECT batch_root, committed_at FROM ledger_batches WHERE batch_id = $1")
+                .bind(batch_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Err(SettlementError::BatchNotFound);
+        };
+        let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+        let batch_root: String = row.try_get("batch_root").map_err(get)?;
+        let committed_at: time::OffsetDateTime = row.try_get("committed_at").map_err(get)?;
+
+        Ok(Commitment {
+            batch_id,
+            proof: batch_root.into_bytes(),
+            committed_at,
+        })
     }
 }
 
@@ -423,5 +607,72 @@ mod tests {
             },
         );
         assert_eq!(hash_a, hash_b);
+    }
+
+    fn sample_entry(event_id: Uuid, payload: &serde_json::Value) -> EntryContent<'_> {
+        EntryContent {
+            event_id,
+            kind: "guild.created",
+            issuer: "identity:x:self:guild_created",
+            subject: "guild:y:self:guild_created",
+            payload,
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn recompute_batch_root_matches_sequential_hash_entry_calls() {
+        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
+        let entries: Vec<EntryContent<'_>> = ids
+            .iter()
+            .zip(&payloads)
+            .map(|(id, payload)| sample_entry(*id, payload))
+            .collect();
+
+        let expected = {
+            let mut prev = GENESIS_HASH.to_string();
+            for entry in &entries {
+                prev = hash_entry(&prev, entry);
+            }
+            prev
+        };
+
+        assert_eq!(recompute_batch_root(GENESIS_HASH, &entries), expected);
+    }
+
+    #[test]
+    fn recompute_batch_root_detects_tampering_with_any_entry_in_the_batch() {
+        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let original_payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
+        let entries: Vec<EntryContent<'_>> = ids
+            .iter()
+            .zip(&original_payloads)
+            .map(|(id, payload)| sample_entry(*id, payload))
+            .collect();
+        let root = recompute_batch_root(GENESIS_HASH, &entries);
+
+        // Tamper with the *first* entry's payload — not the last — to prove
+        // this isn't just re-hashing the tip; it must actually replay the
+        // whole chain to notice.
+        let mut tampered_payloads = original_payloads.clone();
+        tampered_payloads[0] = json!({"a": 999});
+        let tampered_entries: Vec<EntryContent<'_>> = ids
+            .iter()
+            .zip(&tampered_payloads)
+            .map(|(id, payload)| sample_entry(*id, payload))
+            .collect();
+        let tampered_root = recompute_batch_root(GENESIS_HASH, &tampered_entries);
+
+        assert_ne!(root, tampered_root);
+    }
+
+    #[test]
+    fn recompute_batch_root_of_a_single_event_batch_is_legal() {
+        let payload = json!({"solo": true});
+        let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
+        let root = recompute_batch_root(GENESIS_HASH, &entries);
+        assert_eq!(root, hash_entry(GENESIS_HASH, &entries[0]));
     }
 }
