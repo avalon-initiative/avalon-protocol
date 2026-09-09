@@ -22,6 +22,7 @@ export { default as AvalonChatComposer } from './components/AvalonChatComposer.v
 export { default as AvalonFilterBar } from './components/AvalonFilterBar.vue'
 export { default as AvalonCapabilityConsentRow } from './components/AvalonCapabilityConsentRow.vue'
 export { default as AvalonConnectionCard } from './components/AvalonConnectionCard.vue'
+export { default as AvalonWarningBanner } from './components/AvalonWarningBanner.vue'
 export type { AvalonIconName } from './components/AvalonIcon.types'
 export type { AvalonNavItem } from './components/AvalonNav.types'
 export type { PresenceStatus } from './components/AvalonPresenceBadge.types'

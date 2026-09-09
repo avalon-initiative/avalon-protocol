@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
+import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
 import { createIdentity, login } from '../api/identity'
 import { useSessionStore } from '../stores/session'
 import AuthLayout from './AuthLayout.vue'
@@ -85,6 +85,16 @@ async function continueToHome() {
         If your browser or password manager saved a passkey just now, it should also remember this id
         as the login username — but save it somewhere yourself too, just in case.
       </p>
+
+      <!-- #199: registration only ever creates one passkey, so this identity
+           is always in the single-passkey state at this point — shown
+           unconditionally here, unlike the resurfaced version in Profile.vue
+           which checks the live passkey count. -->
+      <AvalonWarningBanner
+        tone="danger"
+        title="You only have one passkey right now"
+        message="Until you register a second one, losing this device — or losing access to this passkey any other way — means permanently losing this identity and everything durable it carries: friends, guild history, and achievements. You can add another passkey from another device any time on your profile's Passkeys card."
+      />
 
       <h2 :class="styles.sectionTitle">Save your recovery phrase</h2>
       <p :class="styles.hint">

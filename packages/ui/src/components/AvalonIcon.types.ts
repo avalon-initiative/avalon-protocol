@@ -12,6 +12,7 @@ export type AvalonIconName =
   | 'device'
   | 'activity'
   | 'logo'
+  | 'alert'
 
 export interface AvalonIconProps {
   name: AvalonIconName

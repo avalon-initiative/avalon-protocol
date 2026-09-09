@@ -25,6 +25,7 @@ import {
   AvalonSidebarNav,
   AvalonSuggestionRow,
   AvalonUserChip,
+  AvalonWarningBanner,
 } from '@avalon/ui'
 
 describe('AvalonPresenceBadge', () => {
@@ -506,5 +507,31 @@ describe('AvalonConnectionCard', () => {
     const buttons = wrapper.findAll('button')
     await buttons[buttons.length - 1].trigger('click')
     expect(wrapper.emitted('disconnect')).toHaveLength(1)
+  })
+})
+
+describe('AvalonWarningBanner', () => {
+  const baseProps = { title: 'You have only one passkey', message: 'Register a second one.' }
+
+  it('renders the title and message', () => {
+    const wrapper = mount(AvalonWarningBanner, { props: baseProps })
+    expect(wrapper.text()).toContain('You have only one passkey')
+    expect(wrapper.text()).toContain('Register a second one.')
+  })
+
+  it('defaults to the warning tone', () => {
+    const wrapper = mount(AvalonWarningBanner, { props: baseProps })
+    expect(wrapper.classes().join(' ')).toMatch(/warning/)
+  })
+
+  it('applies the danger tone when set', () => {
+    const wrapper = mount(AvalonWarningBanner, { props: { ...baseProps, tone: 'danger' } })
+    expect(wrapper.classes().join(' ')).toMatch(/danger/)
+  })
+
+  it('renders as an alert role, with no dismiss control', () => {
+    const wrapper = mount(AvalonWarningBanner, { props: baseProps })
+    expect(wrapper.attributes('role')).toBe('alert')
+    expect(wrapper.find('button').exists()).toBe(false)
   })
 })

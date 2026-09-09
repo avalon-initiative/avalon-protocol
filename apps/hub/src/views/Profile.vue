@@ -3,7 +3,7 @@
 // list, and log out. Everything is a styled read-only display until the
 // player presses Edit (AvalonEditableField) or a button that starts an
 // action — no open inputs sit on the page by default.
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '../api/client'
 import { AvalonApiError } from '../api/errors'
@@ -18,6 +18,7 @@ import { addPasskey, listPasskeys, renamePasskey, revokePasskey } from '../api/p
 import type { DeviceGrantResponse, DeviceResponse, PasskeyResponse } from '../api/types'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
+import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
 import {
   AvalonAvatar,
   AvalonButton,
@@ -25,6 +26,7 @@ import {
   AvalonEditableField,
   AvalonForm,
   AvalonTextField,
+  AvalonWarningBanner,
 } from '@avalon/ui'
 import page from './page.module.scss'
 import styles from './Profile.module.scss'
@@ -257,10 +259,33 @@ const renamePasskeyError = ref('')
 const revokingPasskeyId = ref('')
 const revokePasskeyError = ref('')
 
+// #199: resurfaces for as long as the identity has exactly one registered
+// passkey — checked from the live `GET /me/passkeys` count on every
+// refresh, not a one-time dismissible notice. Disappears the moment a
+// second passkey is registered, without a page reload. `passkeys.value`
+// can only ever be a real array here — `refreshPasskeys` below refuses to
+// assign anything else — so this never mistakes an unexpected/malformed
+// response for "confirmed zero passkeys, no warning needed"; the
+// `!Array.isArray` branch is defense in depth against exactly that
+// silent-hide failure mode, not a path that should ever actually trigger.
+const showSinglePasskeyWarning = computed(() => {
+  if (!Array.isArray(passkeys.value)) return true
+  return shouldShowSinglePasskeyWarning(passkeys.value.length)
+})
+
 async function refreshPasskeys() {
   if (!session.token) return
   try {
-    passkeys.value = await listPasskeys(session.token)
+    const result = await listPasskeys(session.token)
+    if (!Array.isArray(result)) {
+      // A 200 with an unexpected body shape is still a failure worth
+      // surfacing — throwing here routes it through the same catch below,
+      // which leaves the previous known-good `passkeys.value` in place
+      // (never silently replaced with something that isn't a real list)
+      // and reports the error instead of pretending nothing happened.
+      throw new Error('Unexpected response fetching passkeys.')
+    }
+    passkeys.value = result
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -429,6 +454,12 @@ async function onRevokePasskey(passkey: PasskeyResponse) {
           title="Passkeys"
           subtitle="Any registered passkey can sign you in — none is more privileged than another. Register a second one from another device so losing one doesn't lock you out."
         >
+          <AvalonWarningBanner
+            v-if="showSinglePasskeyWarning"
+            tone="danger"
+            title="You have only one passkey"
+            message="If you lose this device, or it stops working, you'll permanently lose this identity and everything durable it carries — friends, guild history, and achievements. Register a second passkey from another device now, before that happens."
+          />
           <p v-if="addPasskeyError" :class="page.error">{{ addPasskeyError }}</p>
           <p v-if="renamePasskeyError" :class="page.error">{{ renamePasskeyError }}</p>
           <p v-if="revokePasskeyError" :class="page.error">{{ revokePasskeyError }}</p>

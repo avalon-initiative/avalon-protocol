@@ -293,7 +293,15 @@ provider the player uses.
   signing-key state, since a passkey and a signing key are unrelated
   credentials (see the section above). Revoking the last remaining passkey
   surfaces the server's 409 as a plain `window.confirm` prompt before
-  retrying with `?confirm=true`.
+  retrying with `?confirm=true`. `CreateIdentity.vue` also shows a
+  non-dismissible total-loss warning (`@avalon/ui`'s `AvalonWarningBanner`,
+  #199) right after the first passkey is created — losing that device with
+  no second one registered means permanently losing the identity and
+  everything durable it carries. The same warning resurfaces on the
+  Passkeys card in `Profile.vue` for as long as `GET /me/passkeys` reports
+  exactly one passkey (`apps/hub/src/utils/singlePasskeyWarning.ts`'s
+  `shouldShowSinglePasskeyWarning`), not a one-time dismiss — it disappears
+  the moment a second passkey is registered.
 
 ## Decisions and tickets
 
@@ -315,6 +323,11 @@ provider the player uses.
   Done: `crates/server/src/passkeys.rs`, `apps/hub/src/api/passkeys.ts`.
   Guardian social recovery (the next layer #99 calls for) is not this
   ticket's scope.
+- [#199](https://github.com/LunarVagabond/avalon-protocol/issues/199) —
+  onboarding/settings total-loss warning for a single-passkey identity, part
+  of [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198).
+  Done: `apps/hub/src/views/CreateIdentity.vue`, `apps/hub/src/views/Profile.vue`,
+  `packages/ui`'s `AvalonWarningBanner`.
 - [#55](https://github.com/LunarVagabond/avalon-protocol/issues/55) — Hub
   identity creation/login UI: the real WebAuthn + Ed25519 flow, in-browser.
 - [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122) —
