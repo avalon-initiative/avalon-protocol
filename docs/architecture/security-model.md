@@ -85,7 +85,7 @@ so that gap remains until #86 lands.
 | player passkey (#73) | the player | attacker can log in as that identity | revoke/replace via a second registered passkey (#99, not built) — total loss if it was the only one |
 | player event-signing key (#73) | the player | attacker can author events for that identity going forward | rotate from an authenticated session (not built); historical events signed by the old key stay valid, same principle as issuer keys below |
 | issuer key (#80) | the game | attacker can issue authentic-looking claims under that game | revoke key as of T; claims after T rejected, before T untouched |
-| log operator key (#39) | settlement operator / validator | attacker can sign bogus log entries / tree heads | mirrors detect divergence; the validator set (#40) limits any one signer's rewrite power |
+| log operator key (#39) | settlement operator | attacker can sign bogus log entries / tree heads | mirrors/witnesses detect divergence via gossiped signed tree heads — no validator set (#186) |
 
 Keys are never shared across domains. The design for each is a separate open
 decision; they may share primitives (established signature schemes, existing
@@ -121,11 +121,15 @@ deployment blocker, not an optional hardening step.
 - **Authenticity is not meaning.** No mechanism stops an issuer from signing a
   meaningless claim ([`./trust-model.md`](./trust-model.md)).
 - **A single log operator can still censor or delay appends.** Mirrors and
-  verifiability make this detectable; operator independence beyond that is why
-  Avalon runs its own multi-validator chain rather than a single-operator log
-  ([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), closed;
-  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)) — the
-  validator set itself is still being designed ([#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)).
+  verifiability make divergence detectable after the fact, but nothing forces
+  liveness from one operator today. Deliberately not solved by a validator
+  set — there is no contested resource for validators to referee, so a
+  multi-validator chain would add real operational complexity for a
+  guarantee (censorship-resistance, not tamper-evidence) it doesn't actually
+  buy here ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
+  If Avalon ever runs more than one independent settlement operator, the
+  real mitigation is witnessed, gossiped signed tree heads catching a
+  divergent/dishonest operator — not consensus.
 - **Statistics can be gamed.** Sybil identities can inflate registry numbers;
   documented, not solved ([`./game-registry.md`](./game-registry.md)).
 - **Persistent identity makes harassment persistent.** Blocking and

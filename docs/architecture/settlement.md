@@ -3,9 +3,9 @@
 Settlement is the durable-history vertical: the place protocol facts are
 committed so that anyone can verify them later. **Settlement is not the general
 purpose query database.** **One protocol event is never one settlement
-transaction.** **Milestone 1 is a hash-chained, append-only ledger; the
-long-term backend is Avalon's own chain, with no native currency at launch —
-the consensus mechanism itself is still an open engineering question.**
+transaction.** **Settlement is a transparency log, not a blockchain — a
+hash-chained, append-only, publicly verifiable store with no validator or
+consensus layer, because nothing written to it is ever contested (ADR #186).**
 
 ## Durable history, not a database
 
@@ -80,58 +80,46 @@ needs them.
   serve reads. **Federation is rejected** — visibility must not depend on which
   server a game trusts. **Avalon does not run mining, or consensus staked on a
   currency,** to referee write ordering; Avalon's writes are already
-  unambiguous because each actor signs its own. (This does not rule out
-  currency-free validator consensus — see the backend decision below.)
-- Milestone 1 stays Postgres-backed, with the constraint that the schema and
-  signing scheme must make entries independently verifiable and the log
-  exportable from day one rather than retrofitted.
-- **The long-term backend: Avalon operates its own chain**
-  ([#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), closed;
-  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)). Not
-  anchored to and not built on top of an existing chain's checkpoints or
-  token. No native currency or token at launch — the chain settles protocol
-  facts, not value; a cross-game currency layer is an explicitly later,
-  optional phase ([`../stakeholders/Proposal.md` §15](../stakeholders/Proposal.md#15-economy-and-currency))
-  evaluated on its own, not a prerequisite for the chain existing. Consensus
-  among Avalon's own validators does not require proof-of-work or a
-  stake-weighted token — a permissioned set of registered, known node
-  operators reaching Byzantine-fault-tolerant agreement is sufficient, and
-  does not reopen #70's rejection of mining/consensus (there is still no
-  scarce resource to referee) or its rejection of federation (every validator
-  proposes into, and every mirror reads from, the same canonical chain).
-
-## What is decided (continued): block storage is not Postgres
-
-Real chains don't use a shared relational database for the blocks/entries
-themselves — confirmed against how the two closest reference systems
-actually work: Bitcoin Core stores raw blocks in flat files (`blk*.dat`) with
-LevelDB only for rebuildable indexes (block metadata, the UTXO set); Kaspa's
-Rust node (`rusty-kaspa`) uses RocksDB for blocks, DAG structure, and UTXO
-state. Both are embedded, per-node key-value stores or flat files — each
-full node holds its own complete local copy, synced peer-to-peer, never a
-shared central SQL server every participant reaches into. **Avalon's ledger
-data follows the same shape**: each validator/mirror holds its own local
-copy in an embedded store, not a connection string into one shared Postgres.
-Kaspa is the specific reference given its block-rate requirements are the
-closer analog to a high-throughput commitment log's needs.
-
-This does not change Postgres's role anywhere else — the indexer's
-projections and ephemeral state (sessions, presence, ceremony state) stay
-exactly where they are. This decision is scoped to settlement data
-specifically, sharpening the boundary this document already draws
-("settlement is not the general-purpose query database").
+  unambiguous because each actor signs its own — which is also why no
+  validator consensus is needed either, currency-free or not (ADR #186).
+- Postgres is the settlement backend, permanently, not a milestone-1
+  stand-in for something more "real"
+  ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
+  Real production transparency logs (Certificate Transparency, Sigsum,
+  Google's Trillian) run on ordinary SQL backends, because verification
+  happens by fetching Merkle proofs over the network, not by every party
+  independently holding a full replicated copy the way a blockchain full
+  node does. The schema and signing scheme still need to make entries
+  independently verifiable and the log exportable, but that's a property of
+  the data model, not a reason to leave Postgres.
+- **No blockchain, no validator/BFT consensus**
+  ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186),
+  superseding part of [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)).
+  Consensus of any kind exists to adjudicate contention over a single,
+  shared, mutable, scarce resource — the double-spend problem. Nothing
+  settlement records is contested: `identity.created`, `achievement.issued`,
+  `friend.requested`, `guild.created`, `game.registered` are each a fact
+  asserted by exactly one authoritative signer about something only that
+  signer has authority over. No native currency or token at launch, and no
+  validator set to run one — a cross-game currency layer remains an
+  explicitly later, optional, *separately decided* phase
+  ([`../stakeholders/Proposal.md` §15](../stakeholders/Proposal.md#15-economy-and-currency)):
+  only if that's ever actually proposed does consensus become a real
+  question again, scoped to that feature specifically. #79/#93's rejection
+  of anchoring to or building on an existing chain's token stands regardless
+  — there was never a chain to anchor to in the first place under this
+  decision.
 
 ## What is open
 
-**The consensus and validator design, and the storage engine choice** — both
-scoped inside [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
-alongside the log's own hash/Merkle/signed-tree-head design: which BFT
-algorithm, validator admission and rotation, block/round cadence and
-finality; and which embedded engine (RocksDB, `sled`, `redb`, or a
-comparable alternative) actually backs the per-node storage above — the
-*shape* (embedded, per-node, not Postgres) is decided, the specific engine
-is not. Needs its own research spike and written comparison of real
-candidates for both before it closes.
+Signatures (#39, #80, #84) and Merkle/signed-tree-head structure (folded
+into whatever #40 becomes, now that its validator/consensus scope is
+dropped per ADR #186) are the remaining real design work — both properties
+of the log's data model, independent of storage engine or consensus. If
+Avalon ever runs more than one independent settlement operator, detecting
+one of them secretly serving two different histories (equivocation) via
+witnessed, gossiped checkpoints would be the relevant design question then
+— not filed as its own ticket now, since there's only one operator today.
 
 ## Today in the repo
 
@@ -202,25 +190,15 @@ candidates for both before it closes.
   cross this document's "settlement is not the general-purpose query
   database" boundary. Revisit once the indexer (#42/#43) is real — see
   [query-and-indexing.md](./query-and-indexing.md).
-- **A second `SettlementProvider` implementation now exists**:
-  `crates/chain/src/rocksdb_backend.rs`'s `RocksDbSettlementProvider`, per
-  ADR #177 (RocksDB is the decided embedded engine) and #40 (each
-  node/mirror holds its own local copy, not a shared Postgres). Behind an
-  off-by-default `rocksdb-backend` Cargo feature — **not wired into
-  `avalon-server` anywhere**; nothing about this changes what's actually
-  running today. Both backends share one hash-chain implementation
-  (`crates/chain/src/hashing.rs`) so they're provably the same ledger, not
-  two similar ones — see issue #178 for the cross-backend test proving
-  identical hashes for identical input. The migration path (making this the
-  default, syncing the indexer from it instead of from the outbox directly,
-  the validator/consensus layer) remains open under #40.
 
 ## Decisions and tickets
 
 - Epic [#36](https://github.com/LunarVagabond/avalon-protocol/issues/36)
   Settlement Ledger
-- #68, #70, #79, #93 decided; #40, #39 open engineering decisions
-- #38 batching, #71 atomicity,
+- #68, #70, #79, #186 decided (#93 partially superseded by #186); #40, #39
+  open engineering decisions
+- #38 batching, #71 atomicity, #173 genesis/network identity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider
 - #75 durable history is canonical; #82 event catalogue
+- #178/#179 (RocksDB-backed provider) reverted (#185), won't-fix per #186

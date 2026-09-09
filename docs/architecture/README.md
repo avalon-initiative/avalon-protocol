@@ -36,7 +36,7 @@ Each document below links the ones that govern it.
 | Game events | [game-events.md](game-events.md) | Durable cross-game/special-event results as attestations — tournaments are one example |
 | Game registry | [game-registry.md](game-registry.md) | Derived facts with explicit definitions; never a score |
 | Protocol events | [protocol-events.md](protocol-events.md) | Durable event catalogue, versioning, history vs current state |
-| Settlement | [settlement.md](settlement.md) | Batched commitments; milestone-1 ledger; long term, Avalon's own chain |
+| Settlement | [settlement.md](settlement.md) | Batched commitments; transparency log on Postgres, no blockchain/validator consensus |
 | Query & indexing | [query-and-indexing.md](query-and-indexing.md) | Postgres is a projection, rebuildable from history |
 | Nodes | [nodes.md](nodes.md) | Infrastructure providers, not authorities; roles, mirrors, discovery |
 | SDK | [sdk.md](sdk.md) | Exposes protocol capabilities, not infrastructure topology |
@@ -66,8 +66,8 @@ established it.
 | History | Revocation adds history; it does not erase history. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
 | Settlement | Settlement is not the general-purpose query database. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68), [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
 | Settlement | Settlement is a public, verifiable, mirrorable log — never federation. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
-| Settlement | Avalon operates its own chain, long term; no native currency or token at launch. | [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79), [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) |
-| Settlement | Block/entry storage is an embedded per-node store (Kaspa/Bitcoin-shaped), not a shared Postgres — Postgres stays the query/index layer only. | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
+| Settlement | No blockchain, no validator/BFT consensus; a transparency log on Postgres. No native currency or token at launch. | [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186), [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) |
+| Settlement | Settlement storage is Postgres, permanently — not a per-node embedded store, since there's no validator/full-node model requiring one. | [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) |
 | Batching | One event is never one settlement transaction. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Gameplay | Real-time gameplay stays game-side. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Query | Query databases are projections. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
@@ -86,7 +86,7 @@ Still open, and deliberately so:
 
 | Question | Issue |
 |---|---|
-| Transparency log, validator set, consensus, and storage-engine design (hash structure, signed tree heads, mirror sync, BFT algorithm, validator admission, RocksDB/sled/redb choice) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
+| Transparency log design (hash structure, signed tree heads, mirror sync) — no validator/consensus/storage-engine design needed, decided closed per [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
 | Identity recovery when every passkey is lost | [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) |
 | Issuer signing keys and key lifecycle | [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) |
 | Revocation mechanics | [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) |

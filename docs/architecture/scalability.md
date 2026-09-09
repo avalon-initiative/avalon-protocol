@@ -67,10 +67,9 @@ Asked of every design, with the intended answer:
   served by indexers elsewhere; settlement is mirrored.
 - **A database is lost** — projections rebuild from the log (scenario J,
   [`./disaster-recovery.md`](./disaster-recovery.md)).
-- **The settlement chain stalls** — events queue in the buffer; projections
-  keep serving; commitments resume once the chain does. What "stalls" means
-  for Avalon's own validator set is one of #40's design questions now, not an
-  external chain's.
+- **The settlement log stalls** — events queue in the buffer; projections
+  keep serving; commitments resume once the settlement operator does. No
+  validator set to stall in the first place ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
 
 ## Scenario L — 1,000 games, 100M players
 

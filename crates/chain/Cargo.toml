@@ -17,23 +17,7 @@ thiserror.workspace = true
 sqlx.workspace = true
 sha2 = "0.10"
 hex.workspace = true
-# Only pulled in by the `rocksdb-backend` feature (issue #178) — building
-# RocksDB's C++ core is real build time nobody consuming the default
-# Postgres-backed provider should pay for unknowingly.
-rocksdb = { workspace = true, optional = true }
-# `tokio::task::spawn_blocking` is how the (synchronous) rocksdb-backend
-# calls stay off the async runtime's own threads — only needed by that
-# feature, `sqlx`'s own `runtime-tokio` feature covers everything else in
-# this crate.
-tokio = { workspace = true, optional = true }
-
-[features]
-# Off by default: nothing in this repo wires this backend up yet
-# (avalon-server still uses PostgresSettlementProvider). Enable explicitly
-# with `--features rocksdb-backend` to build/test it.
-rocksdb-backend = ["dep:rocksdb", "dep:tokio"]
 
 [dev-dependencies]
 dotenvy.workspace = true
 tokio.workspace = true
-tempfile.workspace = true
