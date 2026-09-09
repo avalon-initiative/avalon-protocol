@@ -50,6 +50,7 @@ import type {
   SessionFinishResponse,
   SessionStartRequest,
   SessionStartResponse,
+  SignedTreeHeadResponse,
   TransferOwnershipRequest,
   UpdateChannelRequest,
   UpdateGuildMemberRequest,
@@ -555,6 +556,16 @@ export function disconnectGame(token: string, slug: string): Promise<void> {
 
 export function listMyConnections(token: string): Promise<MyConnectionsResponse> {
   return request('/me/connections', { token })
+}
+
+// GET /ledger/sth/latest (issues #210/#211) — the current Signed Tree Head,
+// a public unauthenticated read (no `token`, matching
+// crates/server/src/settlement.rs's own module doc comment). This Hub's
+// first settlement/ledger API client — issue #232 adds it so the Hub can
+// verify the connected server's STH against a pinned trust-anchor key
+// (see apps/hub/src/network/) instead of trusting AVALON_NETWORK_ID alone.
+export function getLatestSth(): Promise<SignedTreeHeadResponse> {
+  return request('/ledger/sth/latest')
 }
 
 // BASE_URL is http(s)://…; the websocket endpoint needs ws(s)://… — same

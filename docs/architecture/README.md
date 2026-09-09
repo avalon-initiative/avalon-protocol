@@ -37,6 +37,7 @@ Each document below links the ones that govern it.
 | Game registry | [game-registry.md](game-registry.md) | Derived facts with explicit definitions; never a score |
 | Protocol events | [protocol-events.md](protocol-events.md) | Durable event catalogue, versioning, history vs current state |
 | Settlement | [settlement.md](settlement.md) | Batched commitments; transparency log on Postgres, no blockchain/validator consensus |
+| Network trust anchors | [network-trust-anchors.md](network-trust-anchors.md) | Pinning `network_id` to the settlement operator's real key; `network_id` alone proves nothing |
 | Query & indexing | [query-and-indexing.md](query-and-indexing.md) | Postgres is a projection, rebuildable from history |
 | Nodes | [nodes.md](nodes.md) | Infrastructure providers, not authorities; roles, mirrors, discovery |
 | Self-hosting | [self-hosting.md](self-hosting.md) | Running your own instance is supported, but it forks the network — mirroring the public log is not the same thing as a private `network_id` |
@@ -69,6 +70,7 @@ established it.
 | Settlement | Settlement is a public, verifiable, mirrorable log — never federation. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
 | Settlement | No blockchain, no validator/BFT consensus; a transparency log on Postgres. No native currency or token at launch. | [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186), [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) |
 | Settlement | Settlement storage is Postgres, permanently — not a per-node embedded store, since there's no validator/full-node model requiring one. | [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) |
+| Trust anchors | `network_id` alone is never sufficient to trust a server; a client verifies STHs against the pinned key for the `network_id` claimed. | [#232](https://github.com/LunarVagabond/avalon-protocol/issues/232), [network-trust-anchors.md](network-trust-anchors.md) |
 | Batching | One event is never one settlement transaction. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Gameplay | Real-time gameplay stays game-side. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
 | Query | Query databases are projections. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |

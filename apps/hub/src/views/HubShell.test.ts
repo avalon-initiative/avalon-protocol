@@ -48,6 +48,14 @@ beforeEach(() => {
     '/friends': [],
     '/friends/requests': [],
     '/presence': [],
+    '/ledger/sth/latest': {
+      tree_size: 1,
+      root_hash: 'ab'.repeat(32),
+      network_id: 'avalon-test-fixture',
+      signing_key_id: 'settlement-operator-1',
+      signature: 'cd'.repeat(64),
+      created_at: '2026-09-09T00:00:00Z',
+    },
   })
 })
 

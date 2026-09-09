@@ -11,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
 import type { AvalonNavItem, PresenceStatus } from '@avalon/ui'
 import { getMe, updateMyPresence } from '../api/client'
+import NetworkStatus from '../components/NetworkStatus.vue'
 import { useSessionStore } from '../stores/session'
 import styles from './HubShell.module.scss'
 
@@ -91,7 +92,7 @@ function onSelectNav(to: string) {
       <AvalonSidebarNav :items="navItems" @select="onSelectNav" />
       <div :class="styles.sidebarFooter">
         <AvalonPresenceBadge :status="myStatus" />
-        <span :class="styles.connected">Connected to Avalon</span>
+        <NetworkStatus />
       </div>
     </aside>
 

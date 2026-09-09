@@ -1,0 +1,125 @@
+.networkStatus {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--av-color-text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.label {
+  font-size: var(--av-text-xs);
+}
+
+.pending .dot {
+  background: var(--av-color-text-muted);
+}
+
+.ok .dot {
+  background: var(--av-color-success);
+  box-shadow: 0 0 0 3px var(--av-color-success-soft);
+}
+
+.ok .label {
+  color: var(--av-color-text);
+}
+
+.warn .dot {
+  background: var(--av-color-warning);
+}
+
+.warn .label {
+  color: var(--av-color-warning);
+}
+
+.danger .dot {
+  background: var(--av-color-danger);
+}
+
+.danger .label {
+  color: var(--av-color-danger);
+  font-weight: 600;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+  padding: var(--av-space-2);
+  border-radius: var(--av-radius-md);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-surface);
+  font-size: var(--av-text-xs);
+}
+
+.detail {
+  color: var(--av-color-text-secondary);
+}
+
+.detailDanger {
+  color: var(--av-color-danger);
+}
+
+.knownHeading {
+  color: var(--av-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--av-text-xs);
+}
+
+.knownList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.knownItem {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-1);
+}
+
+.knownLabel {
+  font-weight: 600;
+}
+
+.knownId {
+  color: var(--av-color-text-muted);
+}
+
+.knownPlaceholder {
+  color: var(--av-color-warning);
+  border: 1px solid var(--av-color-warning);
+  border-radius: var(--av-radius-pill);
+  padding: 0 var(--av-space-1);
+}
+
+.refresh {
+  align-self: flex-start;
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-surface);
+  color: var(--av-color-text-secondary);
+  border-radius: var(--av-radius-pill);
+  padding: 0.125rem var(--av-space-2);
+  font-size: var(--av-text-xs);
+  cursor: pointer;
+}
