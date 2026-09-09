@@ -2,7 +2,8 @@
 // apps/hub/src/api/guilds.ts and guildChat.ts since it's about calendar
 // sorting/formatting/RSVP-state, not roster/role merging or message
 // composition — following the same split guildChat.ts already documents.
-import type { EventResponse, RsvpStatusValue } from './types'
+import type { AvalonRsvpRosterGroup } from '@avalon/ui'
+import type { EventResponse, RsvpRosterEntry, RsvpStatusValue } from './types'
 
 // Matches crates/server/src/guild_events.rs::EVENT_TITLE_MAX_CHARS exactly
 // — surfaced here so a create/edit form can validate client-side before
@@ -111,4 +112,26 @@ export function rsvpStatusLabel(status: RsvpStatusValue): string {
     case 'not_going':
       return "Can't go"
   }
+}
+
+// Per-member RSVP roster (issue #248). Groups raw guild_event_rsvps rows
+// (GET .../events/{eid}/rsvps) into going/maybe/not_going buckets of
+// resolved display names, in RSVP_STATUS_ORDER — pure and independently
+// testable, same split useGuildChat's resolveAuthorNames/authorNames map
+// keeps between fetch and render. An identity id with no resolved name yet
+// falls back to the raw id rather than being dropped, matching how chat
+// authors degrade when a profile lookup hasn't landed.
+export function groupRsvpRoster(
+  entries: RsvpRosterEntry[],
+  namesById: Record<string, string>,
+): AvalonRsvpRosterGroup[] {
+  const buckets: Record<RsvpStatusValue, string[]> = { going: [], maybe: [], not_going: [] }
+  for (const entry of entries) {
+    buckets[entry.status].push(namesById[entry.identity_id] ?? entry.identity_id)
+  }
+  return RSVP_STATUS_ORDER.map((status) => ({
+    status,
+    label: rsvpStatusLabel(status),
+    names: buckets[status],
+  }))
 }

@@ -195,4 +195,54 @@ describe('Guild', () => {
     expect(headerIcon.exists()).toBe(true)
     expect(headerIcon.attributes('src')).toBe('https://example.com/icon.png')
   })
+
+  // Per-member RSVP roster (issue #248): clicking an event card on the
+  // Events tab opens the shared roster panel, which fetches the raw
+  // guild_event_rsvps rows and resolves display names via the batched
+  // profiles endpoint.
+  it('opens the RSVP roster panel with resolved names when an event card is clicked', async () => {
+    useSessionStore().login('a-token')
+    const event = {
+      id: 'ev1',
+      guild_id: 'g1',
+      channel_id: null,
+      title: 'Raid night',
+      description: null,
+      starts_at: '2026-09-15T20:00:00Z',
+      ends_at: null,
+      created_by: 'id-owner',
+      created_at: '2026-09-01T00:00:00Z',
+      rsvp_counts: { going: 1, maybe: 0, not_going: 0 },
+    }
+    mockFetchByPath({
+      ...baseRoutes(),
+      '/guilds/g1/events': [event],
+      '/guilds/g1/events/ev1/rsvps': [
+        { identity_id: 'id-owner', status: 'going', responded_at: '2026-09-02T00:00:00Z' },
+      ],
+      '/identities/profiles': [
+        { identity_id: 'id-owner', display_name: 'Nova', discriminator: '4821' },
+      ],
+    })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const eventsTab = wrapper.findAll('button').find((b) => b.text() === 'Events')!
+    await eventsTab.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Raid night'))
+
+    const card = wrapper.find('[class*="eventCardClickable"]')
+    expect(card.exists()).toBe(true)
+    await card.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.find('[role="dialog"]').exists()).toBe(true))
+
+    expect(wrapper.text()).toContain('Going (1)')
+    expect(wrapper.text()).toContain('Nova#4821')
+  })
 })

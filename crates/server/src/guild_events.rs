@@ -470,6 +470,49 @@ pub async fn upsert_rsvp(
     }))
 }
 
+#[derive(Serialize)]
+pub struct RsvpRosterEntry {
+    pub identity_id: Uuid,
+    pub status: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub responded_at: OffsetDateTime,
+}
+
+/// `GET /guilds/{id}/events/{eid}/rsvps` — any current guild member.
+/// Returns every `guild_event_rsvps` row for the event (`identity_id`,
+/// `status`, `responded_at`), unaggregated — the per-member roster behind
+/// `rsvp_counts`. Same membership gate as `list_events`/`rsvp_counts`'s
+/// query, no `manage_*` permission required: RSVP status is ordinary
+/// guild-internal social info, same posture the member roster already
+/// takes (see module doc comment).
+pub async fn list_rsvps(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, event_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<RsvpRosterEntry>>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    require_member(&state, guild_id, actor).await?;
+    fetch_event(&state, guild_id, event_id).await?;
+
+    let rows = sqlx::query(
+        "SELECT identity_id, status, responded_at FROM guild_event_rsvps \
+         WHERE event_id = $1 ORDER BY responded_at",
+    )
+    .bind(event_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut roster = Vec::with_capacity(rows.len());
+    for row in rows {
+        roster.push(RsvpRosterEntry {
+            identity_id: row.try_get("identity_id")?,
+            status: row.try_get("status")?,
+            responded_at: row.try_get("responded_at")?,
+        });
+    }
+    Ok(Json(roster))
+}
+
 #[cfg(test)]
 mod tests {
     //! No live Postgres reachable here — pure-logic checks only. The

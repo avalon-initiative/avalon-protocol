@@ -25,6 +25,7 @@ import {
   AvalonIcon,
   AvalonModal,
   AvalonRsvpControl,
+  AvalonRsvpRosterPanel,
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
@@ -55,6 +56,7 @@ import {
 } from '../api/guilds'
 import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
+import { useRsvpRoster } from '../composables/useRsvpRoster'
 import { useSessionStore } from '../stores/session'
 import local from './Guild.module.scss'
 import styles from './page.module.scss'
@@ -881,6 +883,21 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
 }
+
+// Per-member RSVP roster panel (issue #248), shared between the Events tab
+// and the Calendar tab's selected-day list below — one instance, opened by
+// clicking either tab's event card. Destructured to top-level refs, same
+// convention useGuildChat's call site uses, so the template gets plain
+// auto-unwrapped bindings instead of `rsvpRoster.foo.value` everywhere.
+const {
+  open: rsvpRosterOpen,
+  loading: rsvpRosterLoading,
+  error: rsvpRosterError,
+  eventTitle: rsvpRosterEventTitle,
+  groups: rsvpRosterGroups,
+  openFor: openRsvpRoster,
+  close: closeRsvpRoster,
+} = useRsvpRoster(guildId)
 </script>
 
 <template>
@@ -1308,19 +1325,26 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     <div v-else-if="activeTab === 'events'" :class="styles.mainColumn">
         <AvalonCard title="Events">
           <p v-if="sortedEvents.length === 0" :class="styles.empty">No upcoming events yet.</p>
-          <AvalonEventCard
+          <div
             v-for="event in sortedEvents"
             :key="event.id"
-            :title="event.title"
-            :description="event.description ?? undefined"
-            :starts-at="event.starts_at"
-            :ends-at="event.ends_at ?? undefined"
-            :rsvp-counts="event.rsvp_counts"
+            :class="local.eventCardClickable"
+            @click="openRsvpRoster(event.id, event.title)"
           >
-            <template #actions>
-              <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
-            </template>
-          </AvalonEventCard>
+            <AvalonEventCard
+              :title="event.title"
+              :description="event.description ?? undefined"
+              :starts-at="event.starts_at"
+              :ends-at="event.ends_at ?? undefined"
+              :rsvp-counts="event.rsvp_counts"
+            >
+              <template #actions>
+                <div @click.stop>
+                  <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+                </div>
+              </template>
+            </AvalonEventCard>
+          </div>
           <AvalonButton
             v-if="canManageChannels && !showCreateEvent"
             label="+ New event"
@@ -1372,19 +1396,26 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             <p v-if="calendarSelectedEvents.length === 0" :class="styles.empty">
               No events on this day.
             </p>
-            <AvalonEventCard
+            <div
               v-for="event in calendarSelectedEvents"
               :key="event.id"
-              :title="event.title"
-              :description="event.description ?? undefined"
-              :starts-at="event.starts_at"
-              :ends-at="event.ends_at ?? undefined"
-              :rsvp-counts="event.rsvp_counts"
+              :class="local.eventCardClickable"
+              @click="openRsvpRoster(event.id, event.title)"
             >
-              <template #actions>
-                <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
-              </template>
-            </AvalonEventCard>
+              <AvalonEventCard
+                :title="event.title"
+                :description="event.description ?? undefined"
+                :starts-at="event.starts_at"
+                :ends-at="event.ends_at ?? undefined"
+                :rsvp-counts="event.rsvp_counts"
+              >
+                <template #actions>
+                  <div @click.stop>
+                    <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+                  </div>
+                </template>
+              </AvalonEventCard>
+            </div>
           </template>
         </AvalonCard>
     </div>
@@ -1613,5 +1644,17 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
       </template>
       <p v-else :class="styles.empty">Only this guild's managers can view its settings.</p>
     </div>
+
+    <!-- Per-member RSVP roster (issue #248): shared between the Events tab
+         and the Calendar tab's selected-day list above, one panel instance
+         opened by clicking either tab's event card. -->
+    <AvalonRsvpRosterPanel
+      :open="rsvpRosterOpen"
+      :event-title="rsvpRosterEventTitle"
+      :loading="rsvpRosterLoading"
+      :error="rsvpRosterError"
+      :groups="rsvpRosterGroups"
+      @close="closeRsvpRoster"
+    />
   </div>
 </template>

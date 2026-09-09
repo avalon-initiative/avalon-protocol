@@ -27,6 +27,7 @@ import {
   AvalonPresenceBadge,
   AvalonRoleBadge,
   AvalonRsvpControl,
+  AvalonRsvpRosterPanel,
   AvalonSidebarNav,
   AvalonSuggestionRow,
   AvalonUserChip,
@@ -421,6 +422,69 @@ describe('AvalonRsvpControl', () => {
     for (const button of wrapper.findAll('button')) {
       expect(button.attributes('disabled')).toBeDefined()
     }
+  })
+})
+
+describe('AvalonRsvpRosterPanel', () => {
+  const baseGroups = [
+    { status: 'going' as const, label: 'Going', names: ['Rowan#1234', 'Ash#9999'] },
+    { status: 'maybe' as const, label: 'Maybe', names: ['Sable#0007'] },
+    { status: 'not_going' as const, label: "Can't go", names: [] },
+  ]
+
+  it('renders nothing when closed', () => {
+    const wrapper = mount(AvalonRsvpRosterPanel, {
+      props: { open: false, eventTitle: 'Raid night', groups: baseGroups },
+    })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it('renders the event title and each group label with its names', () => {
+    const wrapper = mount(AvalonRsvpRosterPanel, {
+      props: { open: true, eventTitle: 'Raid night', groups: baseGroups },
+    })
+    expect(wrapper.text()).toContain('Raid night')
+    expect(wrapper.text()).toContain('Going (2)')
+    expect(wrapper.text()).toContain('Rowan#1234')
+    expect(wrapper.text()).toContain('Ash#9999')
+    expect(wrapper.text()).toContain('Maybe (1)')
+    expect(wrapper.text()).toContain('Sable#0007')
+    expect(wrapper.text()).toContain("Can't go (0)")
+  })
+
+  it('shows a "Nobody yet" placeholder for an empty group', () => {
+    const wrapper = mount(AvalonRsvpRosterPanel, {
+      props: { open: true, eventTitle: 'Raid night', groups: baseGroups },
+    })
+    expect(wrapper.text()).toContain('Nobody yet')
+  })
+
+  it('shows a loading state instead of groups while loading', () => {
+    const wrapper = mount(AvalonRsvpRosterPanel, {
+      props: { open: true, eventTitle: 'Raid night', groups: [], loading: true },
+    })
+    expect(wrapper.text()).toContain('Loading responses')
+    expect(wrapper.text()).not.toContain('Going')
+  })
+
+  it('shows an error instead of groups when given one', () => {
+    const wrapper = mount(AvalonRsvpRosterPanel, {
+      props: {
+        open: true,
+        eventTitle: 'Raid night',
+        groups: [],
+        error: 'Something went wrong.',
+      },
+    })
+    expect(wrapper.text()).toContain('Something went wrong.')
+  })
+
+  it('emits close when the modal is closed', async () => {
+    const wrapper = mount(AvalonRsvpRosterPanel, {
+      props: { open: true, eventTitle: 'Raid night', groups: baseGroups },
+    })
+    await wrapper.find('button[aria-label="Close"]').trigger('click')
+    expect(wrapper.emitted('close')).toBeTruthy()
   })
 })
 

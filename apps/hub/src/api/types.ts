@@ -652,3 +652,12 @@ export interface ListEventsQuery {
   from?: string
   to?: string
 }
+
+// Per-member RSVP roster (issue #248) — GET /guilds/{id}/events/{eid}/rsvps.
+// Every `guild_event_rsvps` row for the event, unaggregated (the roster
+// behind `EventResponse.rsvp_counts`).
+export interface RsvpRosterEntry {
+  identity_id: string
+  status: RsvpStatusValue
+  responded_at: string
+}

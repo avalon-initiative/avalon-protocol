@@ -58,6 +58,7 @@ import type {
   RoleResponse,
   RsvpRequest,
   RsvpResponse,
+  RsvpRosterEntry,
   SearchIdentitiesResponse,
   SendMessageRequest,
   SessionFinishRequest,
@@ -737,6 +738,17 @@ export function rsvpToEvent(
   body: RsvpRequest,
 ): Promise<RsvpResponse> {
   return request(`/guilds/${guildId}/events/${eventId}/rsvp`, { method: 'PUT', body, token })
+}
+
+// Per-member RSVP roster (issue #248) — any current guild member, no
+// `manage_*` permission required. See
+// crates/server/src/guild_events.rs::list_rsvps.
+export function listEventRsvps(
+  token: string,
+  guildId: string,
+  eventId: string,
+): Promise<RsvpRosterEntry[]> {
+  return request(`/guilds/${guildId}/events/${eventId}/rsvps`, { token })
 }
 
 // Game registration read (#26) + the binding/grant consent flow (#27,

@@ -196,3 +196,11 @@
     box-shadow: 0 0 0 3px var(--av-color-primary-soft);
   }
 }
+
+/* Per-member RSVP roster (issue #248): the whole event card opens the
+   roster panel on click; the RSVP control inside it stops propagation
+   (see Guild.vue) so tapping "Going"/"Maybe"/"Can't go" doesn't also
+   open the panel. */
+.eventCardClickable {
+  cursor: pointer;
+}

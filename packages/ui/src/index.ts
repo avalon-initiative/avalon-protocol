@@ -28,6 +28,7 @@ export { default as AvalonConnectionCard } from './components/AvalonConnectionCa
 export { default as AvalonWarningBanner } from './components/AvalonWarningBanner.vue'
 export { default as AvalonEventCard } from './components/AvalonEventCard.vue'
 export { default as AvalonRsvpControl } from './components/AvalonRsvpControl.vue'
+export { default as AvalonRsvpRosterPanel } from './components/AvalonRsvpRosterPanel.vue'
 export type { AvalonIconName } from './components/AvalonIcon.types'
 export type { AvalonNavItem } from './components/AvalonNav.types'
 export type { PresenceStatus } from './components/AvalonPresenceBadge.types'
@@ -37,3 +38,8 @@ export type { AvalonFilterBarSortOption } from './components/AvalonFilterBar.typ
 export type { AvalonConnectionCardGrant } from './components/AvalonConnectionCard.types'
 export type { AvalonEventCardProps } from './components/AvalonEventCard.types'
 export type { AvalonRsvpStatus } from './components/AvalonRsvpControl.types'
+export type {
+  AvalonRsvpRosterGroup,
+  AvalonRsvpRosterPanelProps,
+  AvalonRsvpRosterStatus,
+} from './components/AvalonRsvpRosterPanel.types'
