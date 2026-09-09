@@ -173,6 +173,21 @@ fn recompute_batch_root(
     prev
 }
 
+/// Shared row-mapping for `signed_tree_heads` — used by both
+/// `latest_signed_tree_head` and `signed_tree_head_at` so there's exactly
+/// one place that knows the column layout.
+fn sth_from_row(row: sqlx::postgres::PgRow) -> Result<SignedTreeHead, SettlementError> {
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    Ok(SignedTreeHead {
+        tree_size: row.try_get("tree_size").map_err(get)?,
+        root_hash: row.try_get("root_hash").map_err(get)?,
+        network_id: row.try_get("network_id").map_err(get)?,
+        signing_key_id: row.try_get("signing_key_id").map_err(get)?,
+        signature: row.try_get("signature").map_err(get)?,
+        created_at: row.try_get("created_at").map_err(get)?,
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GenesisError {
     /// The ledger already has a genesis row, and it doesn't match what this
@@ -424,6 +439,82 @@ impl PostgresSettlementProvider {
             });
         }
         Ok(heads)
+    }
+
+    /// The most recent Signed Tree Head (highest `tree_size`) — issue #211's
+    /// `GET /ledger/sth/latest`. `None` only before the very first batch has
+    /// ever been committed.
+    pub async fn latest_signed_tree_head(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
+        let row = sqlx::query(
+            r#"
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            FROM signed_tree_heads
+            ORDER BY tree_size DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.map(sth_from_row).transpose()
+    }
+
+    /// The Signed Tree Head at exactly `tree_size` — issue #211's
+    /// `GET /ledger/sth/{tree_size}`, needed to chain consistency proofs
+    /// (a mirror verifying an STH history holds one of these per batch it
+    /// has observed). `None` if no batch ever closed at exactly that size —
+    /// callers must not fabricate one; `tree_size` is a PRIMARY KEY, so
+    /// intermediate ledger sizes between batches simply have no STH, which
+    /// is a real "not found," not a storage error.
+    pub async fn signed_tree_head_at(
+        &self,
+        tree_size: i64,
+    ) -> Result<Option<SignedTreeHead>, SettlementError> {
+        let row = sqlx::query(
+            r#"
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            FROM signed_tree_heads
+            WHERE tree_size = $1
+            "#,
+        )
+        .bind(tree_size)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.map(sth_from_row).transpose()
+    }
+
+    /// Every `entry_hash`, oldest first, for `seq` in `1..=tree_size` — the
+    /// exact leaf set [`crate::merkle`]'s proof functions need, shared by
+    /// both `commit`'s own root computation and issue #211's inclusion/
+    /// consistency proof endpoints so there's exactly one query building
+    /// this leaf list from storage.
+    pub async fn entry_hashes_up_to(&self, tree_size: i64) -> Result<Vec<String>, SettlementError> {
+        let rows =
+            sqlx::query("SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC")
+                .bind(tree_size)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<String, _>("entry_hash")
+                    .map_err(|e| SettlementError::Storage(e.to_string()))
+            })
+            .collect()
+    }
+
+    /// The current highest `seq` in `ledger_entries` — issue #211 uses this
+    /// to give a clear "doesn't exist yet" error for a `tree_size`/`seq`
+    /// request beyond what's actually committed, rather than a confusing
+    /// empty-proof or panic.
+    pub async fn max_seq(&self) -> Result<i64, SettlementError> {
+        let row = sqlx::query("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM ledger_entries")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.try_get("max_seq")
+            .map_err(|e| SettlementError::Storage(e.to_string()))
     }
 
     /// Every entry issued by `issuer_prefix` (a `GlobalId` prefix, e.g.

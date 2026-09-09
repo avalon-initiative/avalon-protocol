@@ -10,8 +10,11 @@
 //! real as of issue #210: [`merkle`] is the RFC 6962 Merkle Tree Hash over
 //! the ledger's `entry_hash` values, layered on top of (not replacing)
 //! `postgres`'s existing sequential hash chain, and [`sth`] is the
-//! STH-only Ed25519 signing scheme #39 settled on. Mirror-facing proof/sync
-//! endpoints that consume this are issue #211, not yet built.
+//! STH-only Ed25519 signing scheme #39 settled on. [`merkle`] also carries
+//! issue #211's RFC 6962 inclusion/consistency proof generation and
+//! verification (`inclusion_proof`/`consistency_proof` plus their
+//! `verify_*` counterparts) — the mirror-facing proof/sync endpoints that
+//! consume them live in `avalon-server`'s `settlement` module.
 //!
 //! Nothing outside this crate should depend on *how* commitments are
 //! produced — only on this trait — so that evolving the implementation

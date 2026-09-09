@@ -16,6 +16,7 @@ pub mod migrate;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
+pub mod settlement;
 pub mod state;
 
 use axum::http::{HeaderValue, Method};
@@ -206,6 +207,16 @@ pub fn router(state: AppState) -> Router {
             "/guilds/{id}/channels/{cid}/messages/{mid}",
             delete(guild_messages::delete_message),
         )
+        // Issue #211: public, unauthenticated mirror-facing transparency-log
+        // reads — see `crate::settlement`'s module docs for why these carry
+        // no auth requirement, unlike everything else in this router.
+        .route("/ledger/sth/latest", get(settlement::latest_sth))
+        .route("/ledger/sth/:tree_size", get(settlement::sth_at_tree_size))
+        .route(
+            "/ledger/proof/consistency",
+            get(settlement::consistency_proof),
+        )
+        .route("/ledger/proof/inclusion", get(settlement::inclusion_proof))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

@@ -161,6 +161,14 @@ pub enum AppError {
     DuplicateFavoriteGame,
     #[error("a game can only be pinned as a favorite while it has at least one actively-bound guild member")]
     FavoriteGameNotBound,
+    #[error("no signed tree head exists at that tree_size")]
+    SignedTreeHeadNotFound,
+    #[error("invalid proof query: seq/tree_size and first/second must be non-negative with the first bound not exceeding the second")]
+    InvalidProofQuery,
+    #[error("requested tree_size exceeds what has been committed to the ledger so far")]
+    LedgerRangeNotCommitted,
+    #[error("generated proof failed its own verification — refusing to return it")]
+    ProofVerificationFailed,
     #[error("a game may only create or change its own achievement definitions")]
     AchievementDefinitionForbidden,
     #[error("database error")]
@@ -274,6 +282,18 @@ impl IntoResponse for AppError {
             // not allowed to claim this" shape as `PresencePlayingMismatch`
             // above, not a 404 (the game itself may well exist).
             AppError::FavoriteGameNotBound => StatusCode::FORBIDDEN,
+            AppError::SignedTreeHeadNotFound => StatusCode::NOT_FOUND,
+            AppError::InvalidProofQuery => StatusCode::BAD_REQUEST,
+            // "Doesn't exist *yet*," not "never will" — a request for a
+            // seq/tree_size beyond what's actually committed so far. 404,
+            // matching every other not-found in this file, and explicitly
+            // never a fabricated/empty proof (issue #211's own invariant).
+            AppError::LedgerRangeNotCommitted => StatusCode::NOT_FOUND,
+            // Should never actually happen — every proof this server
+            // returns is self-verified before the response is built (see
+            // `crate::settlement`). If it ever does, that's an internal bug
+            // in proof generation, not a client-input problem.
+            AppError::ProofVerificationFailed => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -285,6 +305,7 @@ impl IntoResponse for AppError {
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 "internal server error".to_string()
             }
+            AppError::ProofVerificationFailed => "internal server error".to_string(),
             other => other.to_string(),
         };
         (status, Json(json!({ "error": message }))).into_response()

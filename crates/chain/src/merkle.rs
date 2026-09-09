@@ -93,6 +93,265 @@ pub fn mth_of_hex_hashes(hashes: &[String]) -> Result<[u8; 32], String> {
     Ok(mth(&leaves))
 }
 
+fn decode_hex_leaves(hashes: &[String]) -> Result<Vec<Vec<u8>>, String> {
+    let mut leaves = Vec::with_capacity(hashes.len());
+    for hash in hashes {
+        leaves.push(hex::decode(hash).map_err(|e| format!("invalid hex hash `{hash}`: {e}"))?);
+    }
+    Ok(leaves)
+}
+
+// ---------------------------------------------------------------------
+// RFC 6962 §2.1.1 — Merkle audit paths (inclusion proofs)
+// ---------------------------------------------------------------------
+//
+// PATH(m, {d(0)}) = {}
+// PATH(m, D[n]) = PATH(m, D[0:k]) : MTH(D[k:n])      for m < k
+// PATH(m, D[n]) = PATH(m - k, D[k:n]) : MTH(D[0:k])  for m >= k
+//
+// where k is the largest power of two strictly less than n (as in `mth`),
+// and PATH(m, D[n]) is the audit path for leaf m in a tree of n leaves.
+// Reproduced here verbatim from RFC 6962 text (issue #211) — this is not
+// an approximation; it's the literal recursive definition, sharing `mth`'s
+// `split_point`/`node_hash` so the tree structure a proof is generated
+// against can never drift from the structure `mth` itself computes.
+
+/// RFC 6962 `PATH(leaf_index, D[0:leaves.len()])` — the Merkle audit path
+/// (list of sibling hashes, leaf-to-root order) proving `leaves[leaf_index]`
+/// is included in the tree over the given `leaves`. `leaves` holds each
+/// leaf's *input data*, not a pre-hashed value (same convention as [`mth`]).
+///
+/// Combined with [`verify_inclusion_proof`] and the root this tree
+/// produces (`mth(leaves)`), this is everything a remote verifier needs —
+/// it never has to see `leaves` itself.
+pub fn inclusion_proof<T: AsRef<[u8]>>(
+    leaf_index: usize,
+    leaves: &[T],
+) -> Result<Vec<[u8; 32]>, String> {
+    let n = leaves.len();
+    if leaf_index >= n {
+        return Err(format!(
+            "leaf_index {leaf_index} out of range for tree size {n}"
+        ));
+    }
+    Ok(path(leaf_index, leaves))
+}
+
+fn path<T: AsRef<[u8]>>(m: usize, d: &[T]) -> Vec<[u8; 32]> {
+    let n = d.len();
+    if n <= 1 {
+        return Vec::new();
+    }
+    let k = split_point(n);
+    if m < k {
+        let mut proof = path(m, &d[..k]);
+        proof.push(mth(&d[k..]));
+        proof
+    } else {
+        let mut proof = path(m - k, &d[k..]);
+        proof.push(mth(&d[..k]));
+        proof
+    }
+}
+
+/// [`inclusion_proof`] over hex-encoded `entry_hash` values, matching
+/// [`mth_of_hex_hashes`]'s decoding convention — what `server`'s
+/// `GET /ledger/proof/inclusion` actually calls.
+pub fn inclusion_proof_of_hex_hashes(
+    leaf_index: usize,
+    hashes: &[String],
+) -> Result<Vec<[u8; 32]>, String> {
+    let leaves = decode_hex_leaves(hashes)?;
+    inclusion_proof(leaf_index, &leaves)
+}
+
+/// Reconstructs a Merkle root from a leaf hash, its index, the claimed tree
+/// size, and an audit path — the direct inverse of [`path`]. `None` means
+/// the proof is malformed (wrong length for the claimed shape); the caller
+/// still must compare the returned hash against the expected root.
+fn verify_path(m: usize, n: usize, leaf: [u8; 32], proof: &[[u8; 32]]) -> Option<[u8; 32]> {
+    if n <= 1 {
+        return if proof.is_empty() { Some(leaf) } else { None };
+    }
+    let k = split_point(n);
+    let (last, rest) = proof.split_last()?;
+    if m < k {
+        let left = verify_path(m, k, leaf, rest)?;
+        Some(node_hash(&left, last))
+    } else {
+        let right = verify_path(m - k, n - k, leaf, rest)?;
+        Some(node_hash(last, &right))
+    }
+}
+
+/// RFC 6962 inclusion-proof verification: does `proof` actually prove that
+/// the leaf whose *input data* is `leaf_data` sits at `leaf_index` in a tree
+/// of `tree_size` leaves whose root is `root`? This is what a mirror (or
+/// this server itself, before ever returning a proof — see the
+/// [`crate::postgres`] invariant that a wrong proof must never leave the
+/// process) runs, needing nothing but the leaf data, the claimed
+/// coordinates, the proof, and the root — never the rest of the tree.
+pub fn verify_inclusion_proof(
+    leaf_data: &[u8],
+    leaf_index: usize,
+    tree_size: usize,
+    proof: &[[u8; 32]],
+    root: &[u8; 32],
+) -> bool {
+    if leaf_index >= tree_size {
+        return false;
+    }
+    match verify_path(leaf_index, tree_size, leaf_hash(leaf_data), proof) {
+        Some(reconstructed) => &reconstructed == root,
+        None => false,
+    }
+}
+
+// ---------------------------------------------------------------------
+// RFC 6962 §2.1.2 — Merkle consistency proofs
+// ---------------------------------------------------------------------
+//
+// PROOF(m, D[n]) = SUBPROOF(m, D[n], true)
+//
+// SUBPROOF(m, D[m], true)  = {}
+// SUBPROOF(m, D[m], false) = {MTH(D[m])}
+//
+// For m < n, let k be the largest power of two strictly less than n:
+// SUBPROOF(m, D[n], b) = SUBPROOF(m, D[0:k], b) : MTH(D[k:n])   if m <= k
+// SUBPROOF(m, D[n], b) = SUBPROOF(m-k, D[k:n], false) : MTH(D[0:k])  if m > k
+//
+// Also verbatim from RFC 6962 text — `subproof` below is that formula with
+// no approximation, sharing `split_point`/`node_hash`/`mth` with the rest
+// of this module for the same reason `path` above does.
+
+/// RFC 6962 `PROOF(first, D[0:second])` — the consistency proof that the
+/// tree at `second` leaves is a strict append-only extension of the tree at
+/// `first` leaves. `leaves` is the *larger* (`second`-sized) tree's full
+/// leaf-input list; `first` must be in `1..=leaves.len()`. Per RFC 6962,
+/// `first == 0` is trivially consistent with anything and always has an
+/// empty proof — callers should special-case it rather than calling this
+/// (this function still accepts it, returning `Ok(vec![])`, for callers
+/// that don't want to special-case it themselves).
+pub fn consistency_proof<T: AsRef<[u8]>>(
+    first: usize,
+    leaves: &[T],
+) -> Result<Vec<[u8; 32]>, String> {
+    let n = leaves.len();
+    if first == 0 {
+        return Ok(Vec::new());
+    }
+    if first > n {
+        return Err(format!("first {first} exceeds tree size {n}"));
+    }
+    if first == n {
+        return Ok(Vec::new());
+    }
+    Ok(subproof(first, leaves, true))
+}
+
+fn subproof<T: AsRef<[u8]>>(m: usize, d: &[T], b: bool) -> Vec<[u8; 32]> {
+    let n = d.len();
+    if m == n {
+        if b {
+            Vec::new()
+        } else {
+            vec![mth(d)]
+        }
+    } else {
+        let k = split_point(n);
+        if m <= k {
+            let mut proof = subproof(m, &d[..k], b);
+            proof.push(mth(&d[k..]));
+            proof
+        } else {
+            let mut proof = subproof(m - k, &d[k..], false);
+            proof.push(mth(&d[..k]));
+            proof
+        }
+    }
+}
+
+/// [`consistency_proof`] over hex-encoded `entry_hash` values — what
+/// `server`'s `GET /ledger/proof/consistency` actually calls.
+pub fn consistency_proof_of_hex_hashes(
+    first: usize,
+    hashes: &[String],
+) -> Result<Vec<[u8; 32]>, String> {
+    let leaves = decode_hex_leaves(hashes)?;
+    consistency_proof(first, &leaves)
+}
+
+/// Direct inverse of [`subproof`]: reconstructs `(MTH(D[0:m]), MTH(D[0:n]))`
+/// from a consistency proof, given the already-trusted `old_root` to seed
+/// the base case that RFC 6962 leaves implicit (the subtree that exactly
+/// equals the first tree needs no proof element of its own — the verifier
+/// already knows its hash *is* `old_root`, that's the whole point of the
+/// proof).
+fn verify_subproof(
+    m: usize,
+    n: usize,
+    proof: &[[u8; 32]],
+    b: bool,
+    old_root: &[u8; 32],
+) -> Option<([u8; 32], [u8; 32])> {
+    if m == n {
+        if b {
+            if !proof.is_empty() {
+                return None;
+            }
+            Some((*old_root, *old_root))
+        } else {
+            match proof {
+                [only] => Some((*only, *only)),
+                _ => None,
+            }
+        }
+    } else if m < n {
+        let k = split_point(n);
+        let (last, rest) = proof.split_last()?;
+        if m <= k {
+            let (old_l, new_l) = verify_subproof(m, k, rest, b, old_root)?;
+            Some((old_l, node_hash(&new_l, last)))
+        } else {
+            let (old_r, new_r) = verify_subproof(m - k, n - k, rest, false, old_root)?;
+            Some((node_hash(last, &old_r), node_hash(last, &new_r)))
+        }
+    } else {
+        None
+    }
+}
+
+/// RFC 6962 consistency-proof verification: does `proof` actually prove the
+/// tree at `second` leaves (root `new_root`) is a strict append-only
+/// extension of the tree at `first` leaves (root `old_root`)? Needs nothing
+/// but the two claimed sizes, the two claimed roots, and the proof.
+pub fn verify_consistency_proof(
+    first: usize,
+    second: usize,
+    proof: &[[u8; 32]],
+    old_root: &[u8; 32],
+    new_root: &[u8; 32],
+) -> bool {
+    if first > second {
+        return false;
+    }
+    if first == 0 {
+        // RFC 6962: trivially consistent; a log MAY return an empty proof,
+        // so don't require one, but a non-empty proof is not itself an
+        // error to tolerate silently — there's simply nothing to check
+        // against `old_root` (the empty tree has exactly one root value,
+        // `empty_root()`, which this function doesn't have an opinion on).
+        return true;
+    }
+    if first == second {
+        return proof.is_empty() && old_root == new_root;
+    }
+    match verify_subproof(first, second, proof, true, old_root) {
+        Some((old_h, new_h)) => &old_h == old_root && &new_h == new_root,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +489,284 @@ mod tests {
             &Sha256::digest(&data[16..]).into(),
         );
         assert_ne!(as_leaf, as_node);
+    }
+
+    // -------------------------------------------------------------
+    // Inclusion / consistency proofs (issue #211)
+    // -------------------------------------------------------------
+    //
+    // Correctness strategy, per the ticket's own bar ("don't just check the
+    // proof looks reasonable"):
+    //
+    //  1. Every generated proof is round-tripped through `verify_path`/
+    //     `verify_subproof` (via the public `verify_inclusion_proof`/
+    //     `verify_consistency_proof`) and checked against `expected_roots`
+    //     — the same RFC 6962 reference root hashes above, independently
+    //     sourced from `transparency-dev/merkle`'s own test constants, not
+    //     merely `mth`'s own output. A proof-generation bug that happened
+    //     to agree with `mth` but not with the real tree structure would
+    //     still be caught here, since the roots it must reconstruct come
+    //     from an external source.
+    //  2. A from-scratch, deliberately naive second implementation
+    //     (`naive_inclusion_proof` below) rebuilds the whole tree
+    //     layer-by-layer and walks it directly, rather than sharing any
+    //     code with `path`'s split-point recursion. Exhaustive comparison
+    //     against the optimized implementation across every valid
+    //     (tree_size, index) pair up to 12 leaves catches a bug in the RFC
+    //     recursion that happens to still verify against itself. (The
+    //     consistency-proof side of this is covered by (1) and (3) instead
+    //     — `verify_subproof` is the direct structural inverse of
+    //     `subproof`, so round-tripping through externally-sourced roots
+    //     plus exhaustive tampering checks is the stronger signal there.)
+    //  3. Negative tests: tampering with any single proof node must fail
+    //     verification; requesting a proof for an out-of-range
+    //     index/tree_size must return an error, never a fabricated proof.
+
+    /// Deliberately naive: builds every level of the tree bottom-up as
+    /// plain `Vec<[u8;32]>`s (not `mth`'s recursive split), following RFC
+    /// 6962's *implicit* "left-balanced" node structure — the same
+    /// construction real implementations like Certificate Transparency's
+    /// use internally. `layers[0]` is leaf hashes, `layers[i+1]` is built
+    /// by pairing up `layers[i]`, carrying an unpaired last node straight
+    /// up unchanged (RFC 6962's tree is not padded to a power of two).
+    fn naive_layers(leaves: &[Vec<u8>]) -> Vec<Vec<[u8; 32]>> {
+        let mut layers = vec![leaves.iter().map(|l| leaf_hash(l)).collect::<Vec<_>>()];
+        while layers.last().unwrap().len() > 1 {
+            let prev = layers.last().unwrap();
+            let mut next = Vec::with_capacity(prev.len().div_ceil(2));
+            let mut i = 0;
+            while i + 1 < prev.len() {
+                next.push(node_hash(&prev[i], &prev[i + 1]));
+                i += 2;
+            }
+            if i < prev.len() {
+                next.push(prev[i]);
+            }
+            layers.push(next);
+        }
+        layers
+    }
+
+    /// Naive audit path: at each level, find the sibling of the current
+    /// node and record it if a sibling actually exists at that position
+    /// (an unpaired carried-up node has no sibling to prove against at that
+    /// level — RFC 6962's `path` simply never descends into it, since
+    /// `split_point` always sends `m` toward the side that still has real
+    /// structure). This mirrors `path`'s split-point behavior emergently,
+    /// from the tree's shape, rather than from the same formula.
+    fn naive_inclusion_proof(leaf_index: usize, leaves: &[Vec<u8>]) -> Vec<[u8; 32]> {
+        let layers = naive_layers(leaves);
+        let mut proof = Vec::new();
+        let mut n = leaves.len();
+        let mut idx = leaf_index;
+        for layer in layers.iter().take(layers.len().saturating_sub(1)) {
+            let sibling = idx ^ 1;
+            if sibling < n {
+                proof.push(layer[sibling]);
+            }
+            idx /= 2;
+            n = n.div_ceil(2);
+        }
+        proof
+    }
+
+    #[test]
+    fn naive_inclusion_proof_matches_optimized_implementation_exhaustively() {
+        for size in 1..=12usize {
+            let leaves: Vec<Vec<u8>> = (0..size).map(|i| vec![i as u8, 0xAB]).collect();
+            for index in 0..size {
+                let got = inclusion_proof(index, &leaves).unwrap();
+                let want = naive_inclusion_proof(index, &leaves);
+                assert_eq!(
+                    got, want,
+                    "inclusion proof mismatch at size={size} index={index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inclusion_proofs_verify_against_externally_sourced_reference_roots() {
+        let leaves = leaf_inputs();
+        let roots = expected_roots();
+        for size in 1..=leaves.len() {
+            let root: [u8; 32] = roots[size].clone().try_into().unwrap();
+            for index in 0..size {
+                let proof = inclusion_proof(index, &leaves[..size]).unwrap();
+                assert!(
+                    verify_inclusion_proof(&leaves[index], index, size, &proof, &root),
+                    "inclusion proof for size={size} index={index} failed to verify against the reference root"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inclusion_proof_rejects_out_of_range_index() {
+        let leaves = leaf_inputs();
+        assert!(inclusion_proof(7, &leaves[..7]).is_err());
+        assert!(inclusion_proof(100, &leaves).is_err());
+    }
+
+    #[test]
+    fn inclusion_proof_verification_rejects_tampering() {
+        let leaves = leaf_inputs();
+        let roots = expected_roots();
+        let size = 7;
+        let root: [u8; 32] = roots[size].clone().try_into().unwrap();
+        let index = 3;
+        let proof = inclusion_proof(index, &leaves[..size]).unwrap();
+
+        // Wrong leaf data.
+        assert!(!verify_inclusion_proof(
+            b"wrong data",
+            index,
+            size,
+            &proof,
+            &root
+        ));
+        // Wrong index.
+        assert!(!verify_inclusion_proof(
+            &leaves[index],
+            index + 1,
+            size,
+            &proof,
+            &root
+        ));
+        // Wrong tree size: this stale (size-7) proof's last element is
+        // `MTH(D[4:7])`, not the `MTH(D[4:8])` a genuine size-8 proof for
+        // this leaf would carry, so it must not validate against the real
+        // size-8 root either — comparing against `root` (still size 7's)
+        // wouldn't actually exercise this, since a size-8 recursion happens
+        // to share this leaf's entire left-subtree structure with size 7.
+        let root8: [u8; 32] = roots[size + 1].clone().try_into().unwrap();
+        assert!(!verify_inclusion_proof(
+            &leaves[index],
+            index,
+            size + 1,
+            &proof,
+            &root8
+        ));
+        // Tampered proof node.
+        for i in 0..proof.len() {
+            let mut tampered = proof.clone();
+            tampered[i] = [0xFFu8; 32];
+            assert!(
+                !verify_inclusion_proof(&leaves[index], index, size, &tampered, &root),
+                "tampering with proof node {i} should fail verification"
+            );
+        }
+        // Wrong root.
+        assert!(!verify_inclusion_proof(
+            &leaves[index],
+            index,
+            size,
+            &proof,
+            &[0u8; 32]
+        ));
+    }
+
+    #[test]
+    fn inclusion_proof_of_hex_hashes_matches_raw_bytes_version() {
+        let leaves = leaf_inputs();
+        let hex_hashes: Vec<String> = leaves.iter().map(hex::encode).collect();
+        for size in 1..=leaves.len() {
+            for index in 0..size {
+                let via_bytes = inclusion_proof(index, &leaves[..size]).unwrap();
+                let via_hex = inclusion_proof_of_hex_hashes(index, &hex_hashes[..size]).unwrap();
+                assert_eq!(via_bytes, via_hex);
+            }
+        }
+    }
+
+    #[test]
+    fn consistency_proofs_verify_against_externally_sourced_reference_roots() {
+        let leaves = leaf_inputs();
+        let roots = expected_roots();
+        for first in 1..=leaves.len() {
+            for second in first..=leaves.len() {
+                let old_root: [u8; 32] = roots[first].clone().try_into().unwrap();
+                let new_root: [u8; 32] = roots[second].clone().try_into().unwrap();
+                let proof = consistency_proof(first, &leaves[..second]).unwrap();
+                assert!(
+                    verify_consistency_proof(first, second, &proof, &old_root, &new_root),
+                    "consistency proof from {first} to {second} failed to verify against reference roots"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn consistency_proof_trivial_cases() {
+        let leaves = leaf_inputs();
+        // first == 0: trivially consistent, empty proof.
+        let proof = consistency_proof(0, &leaves).unwrap();
+        assert!(proof.is_empty());
+        let root: [u8; 32] = expected_roots()[leaves.len()].clone().try_into().unwrap();
+        assert!(verify_consistency_proof(
+            0,
+            leaves.len(),
+            &proof,
+            &[0u8; 32], // old root is meaningless when first == 0
+            &root
+        ));
+
+        // first == second: also trivially empty, and the two roots must
+        // actually match.
+        let proof = consistency_proof(5, &leaves[..5]).unwrap();
+        assert!(proof.is_empty());
+        let root5: [u8; 32] = expected_roots()[5].clone().try_into().unwrap();
+        assert!(verify_consistency_proof(5, 5, &proof, &root5, &root5));
+        assert!(!verify_consistency_proof(5, 5, &proof, &root5, &root));
+    }
+
+    #[test]
+    fn consistency_proof_rejects_first_greater_than_tree_size() {
+        let leaves = leaf_inputs();
+        assert!(consistency_proof(6, &leaves[..5]).is_err());
+    }
+
+    #[test]
+    fn consistency_proof_verification_rejects_tampering() {
+        let leaves = leaf_inputs();
+        let roots = expected_roots();
+        let (first, second) = (3, 8);
+        let old_root: [u8; 32] = roots[first].clone().try_into().unwrap();
+        let new_root: [u8; 32] = roots[second].clone().try_into().unwrap();
+        let proof = consistency_proof(first, &leaves[..second]).unwrap();
+        assert!(!proof.is_empty());
+
+        for i in 0..proof.len() {
+            let mut tampered = proof.clone();
+            tampered[i] = [0xFFu8; 32];
+            assert!(
+                !verify_consistency_proof(first, second, &tampered, &old_root, &new_root),
+                "tampering with consistency proof node {i} should fail verification"
+            );
+        }
+        // Wrong old root, wrong new root, swapped sizes.
+        assert!(!verify_consistency_proof(
+            first, second, &proof, &[0u8; 32], &new_root
+        ));
+        assert!(!verify_consistency_proof(
+            first, second, &proof, &old_root, &[0u8; 32]
+        ));
+        assert!(!verify_consistency_proof(
+            second, first, &proof, &new_root, &old_root
+        ));
+    }
+
+    #[test]
+    fn consistency_proof_of_hex_hashes_matches_raw_bytes_version() {
+        let leaves = leaf_inputs();
+        let hex_hashes: Vec<String> = leaves.iter().map(hex::encode).collect();
+        for first in 1..=leaves.len() {
+            for second in first..=leaves.len() {
+                let via_bytes = consistency_proof(first, &leaves[..second]).unwrap();
+                let via_hex =
+                    consistency_proof_of_hex_hashes(first, &hex_hashes[..second]).unwrap();
+                assert_eq!(via_bytes, via_hex);
+            }
+        }
     }
 }
