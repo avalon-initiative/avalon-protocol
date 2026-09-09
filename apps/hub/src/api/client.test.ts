@@ -7,6 +7,7 @@ import {
   getMyHistory,
   getPresence,
   getProfiles,
+  getServerUrl,
   listDeviceGrants,
   listDevices,
   listFriends,
@@ -17,6 +18,7 @@ import {
   resolveHandle,
   revokeDevice,
   searchIdentities,
+  setServerUrl,
   updateProfile,
 } from './client'
 import { AvalonApiError } from './errors'
@@ -90,6 +92,29 @@ function mockFetchOnceEmpty(status: number) {
 afterEach(() => {
   vi.unstubAllGlobals()
   FakeWebSocket.instances = []
+  localStorage.clear()
+})
+
+// Issue #232's network selector: setServerUrl/getServerUrl are the only
+// reader/writer of the persisted "which server is the Hub pointed at"
+// choice — the switcher UI never touches localStorage directly.
+describe('getServerUrl/setServerUrl (issue #232)', () => {
+  it('falls back to the build-time default when nothing has been chosen', () => {
+    expect(getServerUrl()).toBe('http://127.0.0.1:8080')
+  })
+
+  it('persists a chosen server URL across calls', () => {
+    setServerUrl('https://avalon-test.example')
+    expect(getServerUrl()).toBe('https://avalon-test.example')
+  })
+
+  it('survives a simulated reload (a fresh read of localStorage)', () => {
+    setServerUrl('https://avalon-test.example')
+    // getServerUrl always reads localStorage live rather than caching, so
+    // this is the same value a freshly-loaded module would see after a
+    // real page reload.
+    expect(getServerUrl()).toBe('https://avalon-test.example')
+  })
 })
 
 describe('api client', () => {

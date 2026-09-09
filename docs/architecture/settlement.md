@@ -293,7 +293,10 @@ implemented, see "Today in the repo" below.
   commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
   `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —
   written once, on `avalon-server`'s first boot against an empty database,
-  and never updated after. Every boot after that verifies the running
+  and never updated after. `network_id` alone carries no cryptographic
+  weight — see [`network-trust-anchors.md`](./network-trust-anchors.md) for
+  how a client pins it to the settlement operator's actual key. Every boot
+  after that verifies the running
   process's configured `network_id` against the stored one
   (`PostgresSettlementProvider::connect`); a mismatch is fatal — the process
   exits before binding a listener, not a warning. `network_id` is also
@@ -371,3 +374,7 @@ implemented, see "Today in the repo" below.
 - #180 decided (node-tiered durable history retention: pruning, snapshots,
   archive-node role) — implemented by
   [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)
+- [#232](https://github.com/LunarVagabond/avalon-protocol/issues/232) —
+  publish and pin trusted network identities (the settlement operator's key
+  pinned to `network_id`, enforced client-side) — see
+  [`network-trust-anchors.md`](./network-trust-anchors.md)

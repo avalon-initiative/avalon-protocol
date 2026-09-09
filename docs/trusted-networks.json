@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "notes": "Avalon's published trust-anchor list — see docs/architecture/network-trust-anchors.md for the full model and its explicit limits. Each entry pins a network_id to the settlement operator's STH verify public key (the public half of that operator's AVALON_SETTLEMENT_SIGNING_KEY, see crates/chain/src/sth.rs). network_id alone is never sufficient to trust a server; a server's Signed Tree Heads (GET /ledger/sth/latest) must verify against the entry's verify_key for the network_id it claims. Changing this file goes through normal repo review like any other change — that review process, not this file's format, is the actual governance control.",
+  "networks": [
+    {
+      "label": "avalon-dev-local",
+      "network_id": "avalon-dev-local",
+      "verify_key": "8001ace8ee66f4664828fa329aa39963b6ebd32cfb00105e6e1c828832656f09",
+      "signing_key_id": "settlement-operator-1",
+      "server_url": "http://127.0.0.1:8080",
+      "placeholder": true,
+      "notes": "Milestone-1 template entry, not a real deployed network. This repo has no publicly deployed Avalon network yet (see .env.example's AVALON_NETWORK_ID default of avalon-dev-local) — verify_key here is a freely-generated Ed25519 public key with no corresponding real server, checked in only so the trust-anchor mechanism (file format, README rendering, Hub verification) is exercised end-to-end rather than left as an unfilled stub. An operator standing up a real avalon-dev-<name> or avalon-mainnet-N deployment replaces verify_key with the actual hex from that deployment's AVALON_SETTLEMENT_VERIFY_KEY (see .env.example) via a normal reviewed PR, at which point 'placeholder' is dropped. server_url is the default local dev server address — a real deployment's entry would carry its own public URL here."
+    }
+  ]
+}

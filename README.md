@@ -96,6 +96,40 @@ Architecture decisions are tracked as closed GitHub issues labeled
 and [still-open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen)
 decisions.
 
+## Trusted networks
+
+![trust anchors](https://img.shields.io/badge/trust--anchors-1%20network%20pinned-blue)
+
+`network_id` (e.g. `avalon-dev-local`, `avalon-mainnet-1`) is a plain string
+with zero cryptographic authority on its own — anyone can stand up a server
+and claim the same one. The table below is Avalon's actual root of trust: it
+pins each known network's `network_id` to the settlement operator's real
+Ed25519 public key, so a client can verify a server's Signed Tree Heads
+(`GET /ledger/sth/latest`) instead of trusting the name alone. This table is
+rendered from [`docs/trusted-networks.json`](docs/trusted-networks.json), the
+single canonical copy — not a hand-maintained duplicate, and a Hub test fails
+if the two ever drift. See
+[`docs/architecture/network-trust-anchors.md`](docs/architecture/network-trust-anchors.md)
+for the full model, how the Hub enforces it, and what this deliberately does
+not solve (a compromised maintainer publishing a bad key here is a
+governance problem, not one client-side pinning can fix).
+
+| Label | `network_id` | STH verify key (Ed25519, hex) |
+|---|---|---|
+| `avalon-dev-local` *(placeholder — no real deployment yet, see notes below)* | `avalon-dev-local` | `8001ace8ee66f4664828fa329aa39963b6ebd32cfb00105e6e1c828832656f09` |
+
+This repo has no publicly deployed Avalon network yet, so the entry above is
+a template: a real, freely-generated Ed25519 key with no server behind it,
+checked in so the pinning mechanism is exercised end to end rather than left
+as an unfilled stub. Adding a real network is a normal reviewed PR against
+`docs/trusted-networks.json`: append its `network_id` and the actual hex from
+that deployment's `AVALON_SETTLEMENT_VERIFY_KEY` (see `.env.example`).
+
+Avalon Hub bundles this same list at build time and always shows which
+pinned network the current session is connected to, flagging a mismatch or
+an unpinned network rather than trusting it silently — see
+`apps/hub/src/network/`.
+
 ## Learn more
 
 | Design | Decisions | Process |

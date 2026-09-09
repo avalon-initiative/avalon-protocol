@@ -477,3 +477,20 @@ export interface GameBindingResponse {
 // binding simply stops appearing), so the response is a bare array, not a
 // wrapper object.
 export type MyConnectionsResponse = GameBindingResponse[]
+
+// Settlement / transparency-log reads (issues #210/#211/#232), matching
+// `crates/server/src/settlement.rs::SignedTreeHeadResponse` field-for-field.
+// `tree_size` and `created_at`'s unix-seconds form both feed
+// `apps/hub/src/network/sthMessage.ts`'s byte-for-byte reconstruction of
+// `crates/chain/src/sth.rs::signing_message` — see that module.
+export interface SignedTreeHeadResponse {
+  tree_size: number
+  // Lowercase hex-encoded RFC 6962 Merkle Tree Hash.
+  root_hash: string
+  network_id: string
+  signing_key_id: string
+  // Lowercase hex-encoded Ed25519 signature (64 bytes).
+  signature: string
+  // RFC 3339 (`time::serde::rfc3339` on the server side).
+  created_at: string
+}
