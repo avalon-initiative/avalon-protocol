@@ -263,7 +263,7 @@ pub fn router(state: AppState) -> Router {
         // reads — see `crate::settlement`'s module docs for why these carry
         // no auth requirement, unlike everything else in this router.
         .route("/ledger/sth/latest", get(settlement::latest_sth))
-        .route("/ledger/sth/:tree_size", get(settlement::sth_at_tree_size))
+        .route("/ledger/sth/{tree_size}", get(settlement::sth_at_tree_size))
         .route(
             "/ledger/proof/consistency",
             get(settlement::consistency_proof),
