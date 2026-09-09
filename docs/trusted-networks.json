@@ -7,8 +7,9 @@
       "network_id": "avalon-dev-local",
       "verify_key": "8001ace8ee66f4664828fa329aa39963b6ebd32cfb00105e6e1c828832656f09",
       "signing_key_id": "settlement-operator-1",
+      "server_url": "http://127.0.0.1:8080",
       "placeholder": true,
-      "notes": "Milestone-1 template entry, not a real deployed network. This repo has no publicly deployed Avalon network yet (see .env.example's AVALON_NETWORK_ID default of avalon-dev-local) — verify_key here is a freely-generated Ed25519 public key with no corresponding real server, checked in only so the trust-anchor mechanism (file format, README rendering, Hub verification) is exercised end-to-end rather than left as an unfilled stub. An operator standing up a real avalon-dev-<name> or avalon-mainnet-N deployment replaces verify_key with the actual hex from that deployment's AVALON_SETTLEMENT_VERIFY_KEY (see .env.example) via a normal reviewed PR, at which point 'placeholder' is dropped."
+      "notes": "Milestone-1 template entry, not a real deployed network. This repo has no publicly deployed Avalon network yet (see .env.example's AVALON_NETWORK_ID default of avalon-dev-local) — verify_key here is a freely-generated Ed25519 public key with no corresponding real server, checked in only so the trust-anchor mechanism (file format, README rendering, Hub verification) is exercised end-to-end rather than left as an unfilled stub. An operator standing up a real avalon-dev-<name> or avalon-mainnet-N deployment replaces verify_key with the actual hex from that deployment's AVALON_SETTLEMENT_VERIFY_KEY (see .env.example) via a normal reviewed PR, at which point 'placeholder' is dropped. server_url is the default local dev server address — a real deployment's entry would carry its own public URL here."
     }
   ]
 }

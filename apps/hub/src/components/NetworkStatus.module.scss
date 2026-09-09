@@ -123,3 +123,61 @@
   font-size: var(--av-text-xs);
   cursor: pointer;
 }
+
+.switchHeading {
+  color: var(--av-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--av-text-xs);
+  margin-top: var(--av-space-2);
+}
+
+.switchList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.switchItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--av-space-1);
+}
+
+.switchButton {
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-surface);
+  color: var(--av-color-text-secondary);
+  border-radius: var(--av-radius-pill);
+  padding: 0.125rem var(--av-space-2);
+  font-size: var(--av-text-xs);
+  cursor: pointer;
+}
+
+.currentBadge {
+  color: var(--av-color-success);
+  font-size: var(--av-text-xs);
+  font-weight: 600;
+}
+
+.customForm {
+  display: flex;
+  gap: var(--av-space-1);
+  align-items: center;
+}
+
+.customInput {
+  flex: 1;
+  font-size: var(--av-text-xs);
+  padding: 0.125rem var(--av-space-1);
+  border: 1px solid var(--av-color-border);
+  border-radius: var(--av-radius-sm);
+  background: var(--av-color-surface);
+  color: var(--av-color-text);
+}
+
+.customWarning {
+  color: var(--av-color-warning);
+}

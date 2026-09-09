@@ -60,7 +60,54 @@ import type {
   UpdateRoleRequest,
 } from './types'
 
-const BASE_URL = import.meta.env.VITE_AVALON_SERVER_URL ?? 'http://127.0.0.1:8080'
+// Issue #232's network selector needs to switch which server the Hub talks
+// to at runtime, not just at build time — `localStorage` (checked first)
+// lets a viewer's choice persist across reloads; `VITE_AVALON_SERVER_URL`
+// stays the build-time default for a Hub that's never had one explicitly
+// picked. `setServerUrl`/`getServerUrl` are the only writer/reader of this
+// storage key so there's exactly one place that owns "what network am I
+// currently pointed at" — the selector UI never touches `localStorage`
+// directly.
+const SERVER_URL_STORAGE_KEY = 'avalon.serverUrl'
+
+function readStoredServerUrl(): string | null {
+  try {
+    return localStorage.getItem(SERVER_URL_STORAGE_KEY)
+  } catch {
+    // Private browsing / storage disabled — fall back to the build-time
+    // default rather than throwing on every request.
+    return null
+  }
+}
+
+function currentBaseUrl(): string {
+  return (
+    readStoredServerUrl() ?? import.meta.env.VITE_AVALON_SERVER_URL ?? 'http://127.0.0.1:8080'
+  )
+}
+
+/** The server URL the Hub is currently configured to talk to. */
+export function getServerUrl(): string {
+  return currentBaseUrl()
+}
+
+/**
+ * Switches which server the Hub talks to, persisted across reloads. Does
+ * NOT itself reload the page or reset any in-memory session state — a
+ * caller (the network selector) is expected to reload immediately after,
+ * since an existing session's bearer token/state was established against
+ * the *previous* server and has no meaning against a different one.
+ */
+export function setServerUrl(url: string) {
+  try {
+    localStorage.setItem(SERVER_URL_STORAGE_KEY, url)
+  } catch {
+    // Same private-browsing/storage-disabled case as readStoredServerUrl —
+    // nothing to persist to, but don't throw and break the switch flow.
+  }
+}
+
+const BASE_URL = currentBaseUrl()
 
 async function request<T>(
   path: string,

@@ -54,7 +54,7 @@ the real `network_id` and that deployment's actual
 - `src/network/trustAnchors.ts` — the bundled trust-anchor list (generated
   at build/dev/test time from `docs/trusted-networks.json`, see that file's
   header comment in `vite.config.ts` — never hand-copied).
-- `src/api/settlement.ts` — `getLatestSth()`, `GET /ledger/sth/latest`
+- `src/api/client.ts` — `getLatestSth()`, `GET /ledger/sth/latest`
   against whatever `VITE_AVALON_SERVER_URL` the Hub is built against
   (`src/api/client.ts`).
 - `src/network/verifyNetwork.ts` — matches the fetched STH's `network_id`
@@ -81,6 +81,19 @@ the real `network_id` and that deployment's actual
   The same component lists every network the Hub build knows about (the
   bundled list), so which pinned entry the active connection corresponds to
   is explicit — not just a URL nobody can cross-check.
+- **Switching is explicit, never silent.** `src/api/client.ts`'s
+  `getServerUrl()`/`setServerUrl()` are the only reader/writer of which
+  server the Hub talks to at runtime (persisted in `localStorage`, falling
+  back to the build-time `VITE_AVALON_SERVER_URL` default). `NetworkStatus.vue`
+  lists every bundled trust-anchor entry with a `server_url` and a visible
+  "Switch" action, plus an explicitly-labeled "custom network" option for a
+  URL outside the pinned list — picking either persists the choice and
+  reloads (an existing session's bearer token has no meaning against a
+  different server, so a clean reload is the honest behavior rather than
+  trying to carry state across the switch). A custom/unpinned network is
+  never silently treated as verified: the same `useNetworkTrust` check runs
+  against it and correctly reports **unknown network** unless its STH
+  happens to verify against an already-pinned entry's key.
 
 ## What this does NOT solve
 
@@ -112,7 +125,7 @@ is about *trusting* one once found — related, not the same problem.
 - `apps/hub/src/composables/useNetworkTrust.ts`,
   `apps/hub/src/components/NetworkStatus.vue` — the always-visible Hub-side
   UI, wired into `HubShell.vue`'s sidebar.
-- `apps/hub/src/api/settlement.ts` — the Hub's first settlement/ledger API
+- `apps/hub/src/api/client.ts` — the Hub's first settlement/ledger API
   client (`GET /ledger/sth/latest`); none existed before this.
 - README's ["Trusted networks"](../../README.md#trusted-networks) section.
 - Not built: an SDK-side equivalent (tracked under #91 per above), a

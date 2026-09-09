@@ -6,10 +6,30 @@
 // tiny local ref for the details toggle.
 import { ref } from 'vue'
 import { useNetworkTrust } from '../composables/useNetworkTrust'
+import { getServerUrl, setServerUrl } from '../api/client'
 import styles from './NetworkStatus.module.scss'
 
 const { state, knownNetworks, refresh } = useNetworkTrust()
 const expanded = ref(false)
+const customUrl = ref('')
+const showCustomForm = ref(false)
+
+// Switching networks means every bearer token/session state currently held
+// was established against the *old* server — there's no meaningful way to
+// carry it over, so a full reload is the honest, simple choice (the
+// existing session store already treats a missing/invalid token as
+// logged-out, so this degrades to "please sign in again" rather than
+// anything silently broken).
+function switchTo(url: string) {
+  setServerUrl(url)
+  window.location.reload()
+}
+
+function connectToCustomUrl() {
+  const trimmed = customUrl.value.trim()
+  if (!trimmed) return
+  switchTo(trimmed)
+}
 
 function statusLabel(): string {
   switch (state.value.kind) {
@@ -80,6 +100,54 @@ function statusTone(): 'ok' | 'warn' | 'danger' | 'pending' {
       </ul>
 
       <button type="button" :class="styles.refresh" @click="refresh">Re-check now</button>
+
+      <!-- Issue #232's actual network selector — picking an entry (or a
+           custom URL) is an explicit, visible switch, never silent, and the
+           active network is always what the status line above reports
+           after the reload this triggers. -->
+      <p :class="styles.switchHeading">Switch network:</p>
+      <ul :class="styles.switchList">
+        <li v-for="network in knownNetworks" :key="network.network_id" :class="styles.switchItem">
+          <span>{{ network.label }}</span>
+          <span v-if="network.server_url === getServerUrl()" :class="styles.currentBadge"
+            >Current</span
+          >
+          <button
+            v-else-if="network.server_url"
+            type="button"
+            :class="styles.switchButton"
+            @click="switchTo(network.server_url)"
+          >
+            Switch
+          </button>
+          <span v-else :class="styles.knownId">No known server URL yet</span>
+        </li>
+      </ul>
+
+      <button
+        v-if="!showCustomForm"
+        type="button"
+        :class="styles.switchButton"
+        @click="showCustomForm = true"
+      >
+        Connect to a custom network…
+      </button>
+      <div v-else :class="styles.customForm">
+        <input
+          v-model="customUrl"
+          type="text"
+          placeholder="https://…"
+          :class="styles.customInput"
+          @keyup.enter="connectToCustomUrl"
+        />
+        <button type="button" :class="styles.switchButton" @click="connectToCustomUrl">
+          Connect
+        </button>
+      </div>
+      <p v-if="showCustomForm" :class="[styles.detail, styles.customWarning]">
+        A custom network is never treated as verified unless its Signed Tree Head happens to match
+        an entry already pinned in this Hub build's trust-anchor list.
+      </p>
     </div>
   </div>
 </template>
