@@ -312,6 +312,19 @@ export interface GuildResponse {
   // order — always part of the public profile (unlike the full
   // breakdown, which stays behind game_breakdown_public).
   favorite_games: FavoriteGameEntry[]
+  // Issue #153, all four below. motd/banner are null when unset;
+  // recruiting gates the "recruiting only" discovery filter (#154) and
+  // whether this guild shows up under a recruiting=false lookup for
+  // strangers at all (see build_discover_query's membership gating).
+  motd: string | null
+  banner: string | null
+  links: GuildLink[]
+  recruiting: boolean
+}
+
+export interface GuildLink {
+  label: string
+  url: string
 }
 
 export interface CreateGuildRequest {
@@ -326,6 +339,15 @@ export interface UpdateGuildRequest {
   description?: string
   // Issue #206. Omitted leaves it untouched.
   game_breakdown_public?: boolean
+  // Issue #153, all four below. motd/banner: omit to leave untouched,
+  // "" to clear, non-empty to set (three-state, same convention as
+  // UpdateProfileRequest.bio). links: omit to leave untouched, any array
+  // (including []) to fully replace the stored list. recruiting: omit to
+  // leave untouched.
+  motd?: string
+  banner?: string
+  links?: GuildLink[]
+  recruiting?: boolean
 }
 
 // GET /guilds/{id}/game-breakdown (issue #206, implementing decision #160):

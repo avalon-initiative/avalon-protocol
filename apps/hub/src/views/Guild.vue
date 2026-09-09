@@ -196,7 +196,7 @@ const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 const savingField = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
 
-async function saveGuildField(field: 'name' | 'tag' | 'description', value: string) {
+async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | 'banner', value: string) {
   if (!session.token) return
   fieldErrors.value[field] = ''
   savingField.value = field
@@ -208,6 +208,58 @@ async function saveGuildField(field: 'name' | 'tag' | 'description', value: stri
   } finally {
     savingField.value = null
   }
+}
+
+// --- Recruiting toggle + links (issue #153) -------------------------------
+
+const savingRecruiting = ref(false)
+const recruitingError = ref('')
+
+async function onToggleRecruiting(next: boolean) {
+  if (!session.token) return
+  recruitingError.value = ''
+  savingRecruiting.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { recruiting: next })
+    await refresh()
+  } catch (e) {
+    recruitingError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingRecruiting.value = false
+  }
+}
+
+const newLinkLabel = ref('')
+const newLinkUrl = ref('')
+const savingLinks = ref(false)
+const linksError = ref('')
+
+async function saveLinks(links: { label: string; url: string }[]) {
+  if (!session.token) return
+  linksError.value = ''
+  savingLinks.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { links })
+    await refresh()
+  } catch (e) {
+    linksError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingLinks.value = false
+  }
+}
+
+async function onAddLink() {
+  if (!guild.value || !newLinkLabel.value.trim() || !newLinkUrl.value.trim()) return
+  await saveLinks([...guild.value.links, { label: newLinkLabel.value.trim(), url: newLinkUrl.value.trim() }])
+  if (!linksError.value) {
+    newLinkLabel.value = ''
+    newLinkUrl.value = ''
+  }
+}
+
+async function onRemoveLink(index: number) {
+  if (!guild.value) return
+  await saveLinks(guild.value.links.filter((_, i) => i !== index))
 }
 
 // --- Roles ------------------------------------------------------------
@@ -881,6 +933,67 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             </div>
             <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
           </template>
+        </AvalonCard>
+
+        <AvalonCard
+          v-if="canManageGuild"
+          title="Recruiting & profile"
+          subtitle="Controls what strangers see when browsing Discover (issue #154) and what members see on the guild page."
+        >
+          <p :class="styles.empty">
+            Recruiting: {{ guild.recruiting ? 'yes — visible under Discover' : 'no — hidden from Discover' }}
+          </p>
+          <AvalonButton
+            :label="savingRecruiting ? 'Saving…' : guild.recruiting ? 'Stop recruiting' : 'Start recruiting'"
+            variant="secondary"
+            :disabled="savingRecruiting"
+            @click="onToggleRecruiting(!guild.recruiting)"
+          />
+          <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
+
+          <AvalonEditableField
+            label="Message of the day"
+            :value="guild.motd ?? ''"
+            empty-text="No message set"
+            :saving="savingField === 'motd'"
+            :error="fieldErrors.motd"
+            @save="saveGuildField('motd', $event)"
+          />
+          <AvalonEditableField
+            label="Banner URL"
+            :value="guild.banner ?? ''"
+            empty-text="No banner set"
+            :saving="savingField === 'banner'"
+            :error="fieldErrors.banner"
+            @save="saveGuildField('banner', $event)"
+          />
+
+          <p :class="styles.empty">Links</p>
+          <ul :class="styles.list">
+            <li v-for="(link, index) in guild.links" :key="`${link.label}-${index}`" :class="styles.listRow">
+              <span :class="styles.listText">
+                <span :class="styles.listLabel">{{ link.label }}</span>
+                <span :class="styles.listDetail">{{ link.url }}</span>
+              </span>
+              <AvalonButton
+                label="Remove"
+                variant="danger"
+                :disabled="savingLinks"
+                @click="onRemoveLink(index)"
+              />
+            </li>
+          </ul>
+          <p v-if="linksError" :class="styles.error">{{ linksError }}</p>
+          <div :class="styles.actions">
+            <AvalonTextField v-model="newLinkLabel" label="Label" placeholder="Discord" />
+            <AvalonTextField v-model="newLinkUrl" label="URL" placeholder="https://discord.gg/…" />
+            <AvalonButton
+              :label="savingLinks ? 'Saving…' : 'Add link'"
+              variant="secondary"
+              :disabled="savingLinks || !newLinkLabel.trim() || !newLinkUrl.trim()"
+              @click="onAddLink"
+            />
+          </div>
         </AvalonCard>
 
         <AvalonCard v-if="canManageGuild" title="Associated games">
