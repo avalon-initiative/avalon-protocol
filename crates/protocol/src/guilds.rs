@@ -226,9 +226,20 @@ impl Default for RoleBadge {
     }
 }
 
-/// Guild-level permissions a role can carry. Deliberately a small, fixed
-/// set for milestone 1 (issue #20) rather than an open/extensible bitset —
-/// custom role *names* are allowed, custom permissions are not, yet.
+/// Guild-level permissions a role can carry. A small, fixed vocabulary for
+/// milestone 1 (issue #20) rather than an open/extensible bitset — custom
+/// role *names* are allowed, custom permissions are not, yet — but no
+/// longer a *closed* set: issue #250 (decided by #243) adds a per-resource
+/// override layer on top (see [`GuildPermissionOverride`]) without
+/// changing this enum's own closed-vocabulary posture.
+///
+/// `EventManage` was added by #250 and no longer piggybacks on
+/// `ManageChannels` the way #169's guild-events work originally had it —
+/// see `crates/server/src/guild_events.rs`. `ChannelPost` was added by the
+/// same ticket to prove the override layer out end-to-end via
+/// announcement-only channels (`GuildChannel`/`guild_channels.announcement_only`
+/// below): a channel in that mode requires `ChannelPost` to post, resolved
+/// per-channel through the override layer rather than a guild-wide grant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuildPermission {
@@ -236,14 +247,18 @@ pub enum GuildPermission {
     ManageRoles,
     ManageMembers,
     ManageChannels,
+    EventManage,
+    ChannelPost,
 }
 
 impl GuildPermission {
-    pub const ALL: [GuildPermission; 4] = [
+    pub const ALL: [GuildPermission; 6] = [
         GuildPermission::ManageGuild,
         GuildPermission::ManageRoles,
         GuildPermission::ManageMembers,
         GuildPermission::ManageChannels,
+        GuildPermission::EventManage,
+        GuildPermission::ChannelPost,
     ];
 
     /// [`Self::ALL`], pre-rendered as strings — for seeding the starter
@@ -253,6 +268,8 @@ impl GuildPermission {
         "manage_roles",
         "manage_members",
         "manage_channels",
+        "event_manage",
+        "channel_post",
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -261,6 +278,8 @@ impl GuildPermission {
             GuildPermission::ManageRoles => "manage_roles",
             GuildPermission::ManageMembers => "manage_members",
             GuildPermission::ManageChannels => "manage_channels",
+            GuildPermission::EventManage => "event_manage",
+            GuildPermission::ChannelPost => "channel_post",
         }
     }
 
@@ -270,9 +289,66 @@ impl GuildPermission {
             "manage_roles" => GuildPermission::ManageRoles,
             "manage_members" => GuildPermission::ManageMembers,
             "manage_channels" => GuildPermission::ManageChannels,
+            "event_manage" => GuildPermission::EventManage,
+            "channel_post" => GuildPermission::ChannelPost,
             _ => return None,
         })
     }
+}
+
+/// A guild resource a [`GuildPermissionOverride`] can be scoped to (issue
+/// #250) — currently a channel or an event, the two resource-shaped
+/// things channel/event endpoints in `crates/server/src/guilds.rs` gate on.
+/// Fixed, closed set — same posture as [`JoinPolicy`]/[`RoleBadgeIcon`]
+/// elsewhere in this module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuildResourceKind {
+    Channel,
+    Event,
+}
+
+impl GuildResourceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GuildResourceKind::Channel => "channel",
+            GuildResourceKind::Event => "event",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<GuildResourceKind> {
+        Some(match s {
+            "channel" => GuildResourceKind::Channel,
+            "event" => GuildResourceKind::Event,
+            _ => return None,
+        })
+    }
+}
+
+/// A per-resource override on top of a role's flat [`GuildPermission`]
+/// base list (issue #250, shape decided by #243): grants or denies one
+/// permission to one role, scoped to a single channel or event. Base role
+/// permissions (`GuildRole`'s stored `permissions` list) stay the source
+/// of truth when no override row exists for a resource; when one does, an
+/// explicit deny always wins over a base grant and an explicit grant
+/// always wins over a base absence. Owner bypass
+/// (`crates/server/src/guilds.rs::has_guild_permission`'s structural
+/// owner check) is untouched by overrides — see
+/// `has_resource_permission`/`resolve_resource_permission` in that module
+/// for the resolution logic this type feeds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuildPermissionOverride {
+    pub id: uuid::Uuid,
+    pub guild_id: GuildId,
+    pub role_index: i32,
+    pub resource_kind: GuildResourceKind,
+    pub resource_id: uuid::Uuid,
+    pub permission: GuildPermission,
+    /// `true` grants, `false` explicitly denies — there is no third
+    /// "inert" row state; the absence of any row for a given
+    /// (role, resource, permission) triple is what "no override" means.
+    pub allow: bool,
+    pub created_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +372,15 @@ pub struct GuildChannel {
     pub id: uuid::Uuid,
     pub guild_id: GuildId,
     pub name: String,
+    /// Issue #250's channel-organization proof point for the per-resource
+    /// override layer: when `true`, posting requires the `ChannelPost`
+    /// [`GuildPermission`], resolved per-channel through the override
+    /// layer rather than a role's guild-wide base list (a role earns post
+    /// access in an announcement-only channel only via an explicit
+    /// `ChannelPost` override on that channel, or by owning the guild).
+    /// `false` (the default) keeps today's behavior: any current guild
+    /// member may post.
+    pub announcement_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

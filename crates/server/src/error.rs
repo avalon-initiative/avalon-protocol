@@ -141,6 +141,12 @@ pub enum AppError {
     InvalidEventTimeRange,
     #[error("rsvp status must be one of going, maybe, not_going")]
     InvalidRsvpStatus,
+    #[error("resource_kind must be \"channel\" or \"event\"")]
+    InvalidResourceKind,
+    #[error("unrecognized guild permission")]
+    InvalidPermission,
+    #[error("permission override not found")]
+    PermissionOverrideNotFound,
     #[error("game slug must be lowercase and match [a-z0-9-], 2-64 characters")]
     InvalidGameSlug,
     #[error("game slug is already taken")]
@@ -311,7 +317,10 @@ impl IntoResponse for AppError {
             AppError::InvalidEventTitle
             | AppError::InvalidEventDescription
             | AppError::InvalidEventTimeRange
-            | AppError::InvalidRsvpStatus => StatusCode::BAD_REQUEST,
+            | AppError::InvalidRsvpStatus
+            | AppError::InvalidResourceKind
+            | AppError::InvalidPermission => StatusCode::BAD_REQUEST,
+            AppError::PermissionOverrideNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidGameSlug | AppError::InvalidGameKey => StatusCode::BAD_REQUEST,
             AppError::GameSlugTaken => StatusCode::CONFLICT,
             AppError::GameNotFound => StatusCode::NOT_FOUND,

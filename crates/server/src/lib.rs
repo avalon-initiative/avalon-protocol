@@ -204,6 +204,14 @@ pub fn router(state: AppState) -> Router {
             patch(guilds::update_role).delete(guilds::delete_role),
         )
         .route(
+            "/guilds/{id}/permission-overrides",
+            get(guilds::list_permission_overrides).put(guilds::set_permission_override),
+        )
+        .route(
+            "/guilds/{id}/permission-overrides/{override_id}",
+            delete(guilds::delete_permission_override),
+        )
+        .route(
             "/guilds/{id}/transfer-ownership",
             post(guilds::transfer_ownership),
         )

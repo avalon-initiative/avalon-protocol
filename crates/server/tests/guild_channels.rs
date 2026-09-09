@@ -420,3 +420,218 @@ async fn a_message_body_over_the_length_cap_is_rejected() {
     .unwrap();
     assert_eq!(send.status(), reqwest::StatusCode::BAD_REQUEST);
 }
+
+// --- Per-resource permission overrides (issue #250) ---------------------
+
+/// Sets/upserts a permission override as `token` (must hold `manage_roles`)
+/// and asserts success.
+#[allow(clippy::too_many_arguments)]
+async fn set_override(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    guild_id: &str,
+    role_index: i32,
+    resource_kind: &str,
+    resource_id: &str,
+    permission: &str,
+    allow: bool,
+) {
+    let resp = auth(
+        http.put(format!("{base}/guilds/{guild_id}/permission-overrides")),
+        token,
+    )
+    .json(&serde_json::json!({
+        "role_index": role_index,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "permission": permission,
+        "allow": allow,
+    }))
+    .send()
+    .await
+    .unwrap();
+    assert!(resp.status().is_success(), "{:?}", resp.status());
+}
+
+/// Toggles a channel's `announcement_only` flag as `token` and asserts
+/// success.
+async fn set_announcement_only(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    guild_id: &str,
+    channel_id: &str,
+    announcement_only: bool,
+) {
+    let resp = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        token,
+    )
+    .json(&serde_json::json!({
+        "name": "general",
+        "announcement_only": announcement_only,
+    }))
+    .send()
+    .await
+    .unwrap();
+    assert!(resp.status().is_success(), "{:?}", resp.status());
+}
+
+#[tokio::test]
+#[ignore]
+async fn announcement_only_channel_blocks_a_plain_member_base_only() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) =
+        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    set_announcement_only(&http, &base, &owner_token, &guild_id, &channel_id, true).await;
+
+    // Base-only: the `member` role has no `channel_post` permission and
+    // no override exists yet — posting is rejected.
+    let send = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
+        )),
+        &member_token,
+    )
+    .json(&serde_json::json!({ "body": "hi" }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(send.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore]
+async fn announcement_only_channel_grant_override_allows_a_plain_member_to_post() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) =
+        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    set_announcement_only(&http, &base, &owner_token, &guild_id, &channel_id, true).await;
+    // Explicit grant beats the `member` role's base absence of
+    // `channel_post` — but only on this specific channel.
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        2, // member role
+        "channel",
+        &channel_id,
+        "channel_post",
+        true,
+    )
+    .await;
+
+    let send = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
+        )),
+        &member_token,
+    )
+    .json(&serde_json::json!({ "body": "now I can post" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(send.status().is_success(), "{:?}", send.status());
+}
+
+#[tokio::test]
+#[ignore]
+async fn deny_override_blocks_an_officer_from_managing_one_specific_channel() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (officer_id, officer_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) =
+        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    // Officer (role index 1) holds `manage_channels` guild-wide by
+    // default (see `guilds::starter_roles`).
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), officer_id, 1).await;
+
+    // A rename by the officer succeeds before any override exists.
+    let rename = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &officer_token,
+    )
+    .json(&serde_json::json!({ "name": "renamed-by-officer" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(rename.status().is_success(), "{:?}", rename.status());
+
+    // An explicit deny override on this one channel beats the officer's
+    // base `manage_channels` grant.
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        1, // officer role
+        "channel",
+        &channel_id,
+        "manage_channels",
+        false,
+    )
+    .await;
+
+    let rename_again = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &officer_token,
+    )
+    .json(&serde_json::json!({ "name": "should-fail" }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(rename_again.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore]
+async fn owner_bypasses_a_deny_override_on_a_channel() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) =
+        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+
+    // A deny override against the owner's own role index (0) still can't
+    // block the owner — ownership is structural (`guilds.owner`), not a
+    // role grant.
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        0,
+        "channel",
+        &channel_id,
+        "manage_channels",
+        false,
+    )
+    .await;
+
+    let rename = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "owner-still-wins" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(rename.status().is_success(), "{:?}", rename.status());
+}

@@ -30,6 +30,7 @@ import {
 } from '@avalon/ui'
 import * as api from '../api/client'
 import type { RoleResponse } from '../api/types'
+import ChannelPermissionOverrides from '../components/ChannelPermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, validateEventForm } from '../api/guildEvents'
 import {
@@ -61,7 +62,20 @@ import { useSessionStore } from '../stores/session'
 import local from './Guild.module.scss'
 import styles from './page.module.scss'
 
-const PERMISSION_OPTIONS = ['manage_guild', 'manage_roles', 'manage_members', 'manage_channels']
+// Issue #250 added `event_manage` (split out of `manage_channels`) and
+// `channel_post` (the announcement-only-channels proof point) to the base
+// GuildPermission vocabulary — both editable here as ordinary base
+// permissions, same as the original four. Per-resource overrides on top
+// of these are a separate surface (ChannelPermissionOverrides.vue on the
+// Channels tab), not this guild-wide matrix.
+const PERMISSION_OPTIONS = [
+  'manage_guild',
+  'manage_roles',
+  'manage_members',
+  'manage_channels',
+  'event_manage',
+  'channel_post',
+]
 
 const route = useRoute()
 const router = useRouter()
@@ -1336,6 +1350,21 @@ const {
               @send="onSendMessage"
             />
           </AvalonCard>
+
+          <!-- Per-resource permission overrides (issue #250): announcement-only
+               toggle plus per-role channel_post/manage_channels overrides for
+               the active channel. Visible to anyone who can manage channels
+               and/or roles — server re-checks each action independently. -->
+          <ChannelPermissionOverrides
+            v-if="activeChannel && (canManageChannels || canManageRoles)"
+            :token="session.token ?? ''"
+            :guild-id="guildId"
+            :channel="activeChannel"
+            :roles="roles"
+            :can-manage-roles="canManageRoles"
+            :can-manage-channels="canManageChannels"
+            @updated="refresh"
+          />
         </template>
       </div>
     </div>

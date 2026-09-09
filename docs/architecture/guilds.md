@@ -181,10 +181,72 @@ with Game A becomes historical.
 
 - `crates/protocol/src/guilds.rs` — `Guild` (now carrying `join_policy`),
   `JoinPolicy` (`InviteOnly` | `Open`, issue #21), `GuildRole`, `GuildMember`,
-  `GuildGameAssociation`, `GuildChannel`, `GuildMessage`, plus
-  `GuildPermission` (issue #20): the fixed milestone-1 permission set a
-  role can carry — `manage_guild`, `manage_roles`, `manage_members`,
-  `manage_channels`, not yet extensible.
+  `GuildGameAssociation`, `GuildChannel` (now carrying `announcement_only`,
+  issue #250), `GuildMessage`, plus `GuildPermission` (issue #20): the
+  fixed milestone-1 vocabulary a role's base permission list draws from —
+  `manage_guild`, `manage_roles`, `manage_members`, `manage_channels`,
+  `event_manage`, `channel_post`. Still a small, closed vocabulary (no
+  custom permission names), but no longer a *flat, guild-wide-only* one:
+  issue #250 (shape decided by #243) adds a per-resource override layer on
+  top, described below.
+- **Per-resource permission overrides (issue #250, decided by #243).** A
+  role's `permissions` list (its base grants, unchanged from #20) still
+  applies guild-wide by default. On top of that, `GuildPermissionOverride`
+  (`crates/protocol/src/guilds.rs`) rows — stored in
+  `guild_permission_overrides`
+  (`crates/server/db/migrations/0033_guild_permission_overrides`) — let a
+  `manage_roles` holder grant or deny one `GuildPermission` to one role,
+  scoped to a single channel or event (`GuildResourceKind::Channel` /
+  `Event`). Resolution (`crates/server/src/guilds.rs::resolve_resource_permission`,
+  driven by `has_resource_permission`): the guild owner's structural
+  bypass is untouched by any override; for anyone else, an override for
+  the exact (role, resource, permission) triple — when one exists —
+  decides the outcome outright (an explicit deny beats a base grant, an
+  explicit grant beats a base absence); with no override, the role's flat
+  base list is the answer, exactly as before #250. An override pointing
+  at a since-deleted channel/event is inert, not an error — every
+  endpoint that consults overrides already fetches (and 404s on) the
+  resource first, so a dangling override is simply never reached.
+  `GET`/`PUT /guilds/{id}/permission-overrides` and
+  `DELETE /guilds/{id}/permission-overrides/{override_id}` (all
+  `manage_roles`-gated) are the CRUD surface; Hub's Channels tab
+  (`ChannelPermissionOverrides.vue`) uses them to expose per-role
+  overrides for the active channel, alongside its announcement-only
+  toggle. `manage_guild`/`manage_roles`/`manage_members` stay guild-wide
+  only — they have no per-instance resource to scope to — so every
+  endpoint gated on one of those three keeps using the original flat
+  `has_guild_permission` check; only channel/event endpoints with an
+  obvious resource moved to the resource-aware check
+  (`crate::channels::require_manage_channel_resource`,
+  `crate::guild_events::require_manage_event_resource`), and creation
+  endpoints (no resource id yet at that point) still use a flat,
+  guild-wide check.
+- **`event_manage` (issue #250).** Previously, guild-event
+  create/update/delete piggybacked on `manage_channels` (#169's
+  workaround, since #20's `GuildPermission` set wasn't meant to be
+  extended casually). #250 gives events their own permission instead:
+  `create_event` checks it guild-wide (no event exists yet to scope a
+  resource-aware check to); `update_event`/`delete_event` check it
+  resource-aware against the specific event, so a role can be granted (or
+  denied) management of one event via an override, on top of or instead
+  of holding `event_manage` guild-wide. The migration backfills
+  `event_manage` onto every existing role that already held
+  `manage_channels`, so authority over events doesn't silently regress
+  for guilds created before this ticket.
+- **Announcement-only channels (issue #250) — the ticket's
+  channel-organization proof point.** `GuildChannel.announcement_only`
+  (`guild_channels.announcement_only`, default `false`) is a per-channel
+  flag: when set, `POST .../channels/{cid}/messages` additionally
+  requires the `channel_post` permission for that specific channel
+  (resolved through the override layer above), instead of today's "any
+  current guild member may post." A regular channel keeps that original
+  behavior unchanged — this is strictly additive per-channel, not a
+  change to the guild-wide permission model. No role holds `channel_post`
+  in its base list by default; a guild opts a role into posting in a
+  specific announcement-only channel by granting it a `channel_post`
+  override on that channel (or, if it ever wants a role to post
+  everywhere, by adding `channel_post` to that role's base list on the
+  Roles tab instead).
 - **Role descriptions and badges (issue #152).** A guild role now carries a
   `description` (free text, capped at 200 characters) and a `badge` — a
   small, fixed visual identity, not a free-form upload: an icon id from a
@@ -630,10 +692,13 @@ with Game A becomes historical.
   is a real hard delete (nothing here claims to be reconstructable
   history) and cascades to its RSVPs via the `guild_event_rsvps` table's
   `ON DELETE CASCADE` foreign key. Creating, rescheduling, and deleting an
-  event reuse the existing `manage_channels` permission from #20's fixed
-  milestone-1 `GuildPermission` set rather than adding a new
-  "manage_events" permission — that set is still not-yet-extensible for
-  milestone 1. RSVPing is self-service and idempotent: `PUT .../rsvp`
+  event are gated on `event_manage`, its own `GuildPermission` (issue
+  #250) — originally this reused `manage_channels` rather than adding a
+  new permission, since #20's set wasn't meant to be extended casually;
+  #250 gave it a real permission once the per-resource override layer
+  (see "Per-resource permission overrides" above) made a dedicated one
+  worth having, with the migration preserving existing roles' authority
+  over events in the switch. RSVPing is self-service and idempotent: `PUT .../rsvp`
   always upserts the caller's own `(event_id, identity_id)` row (the
   table's primary key), replacing any prior status rather than
   accumulating rows; a member can never target another member's RSVP.

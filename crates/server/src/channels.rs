@@ -14,14 +14,27 @@
 //! currently be a member of the guild — [`is_guild_member`] queries the
 //! real `guild_members` table #21 built.
 //!
-//! `manage_channels` gates create/rename/archive, via
-//! `crate::guilds::has_guild_permission` (made `pub(crate)` for exactly
-//! this) and `crate::guilds::actor_role_permissions` (imported here as
-//! `actor_permissions`, re-exported rather than duplicated, now that #21's
-//! real `guild_members`/`guild_roles` lookup exists on `main`).
+//! `manage_channels` gates create/rename/archive. Creation has no channel
+//! yet to scope a check to, so it uses the flat guild-wide check
+//! (`crate::guilds::has_guild_permission`, made `pub(crate)` for exactly
+//! this, with `crate::guilds::actor_role_permissions` imported here as
+//! `actor_permissions`). Rename/archive already have a concrete channel,
+//! so they go through the resource-aware sibling
+//! (`crate::guilds::has_resource_permission`, issue #250) instead — a role
+//! can be granted or denied `manage_channels` on one specific channel via
+//! a per-resource override, on top of (or instead of) holding it
+//! guild-wide.
+//!
+//! **Announcement-only channels (issue #250).** `GuildChannel.announcement_only`
+//! (`guild_channels.announcement_only`) is this ticket's end-to-end proof
+//! point for the override layer: when set, `crate::guild_messages::send_message`
+//! requires the `ChannelPost` permission — resolved per-channel through
+//! the same override layer, not a guild-wide grant — instead of today's
+//! "any current member may post." Toggled via `PATCH .../channels/{cid}`,
+//! gated the same as a rename (`manage_channels`, resource-aware).
 
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::guilds::GuildPermission;
+use avalon_protocol::guilds::{GuildPermission, GuildResourceKind};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -32,7 +45,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::guilds::{actor_role_permissions as actor_permissions, has_guild_permission};
+use crate::guilds::{
+    actor_role_permissions as actor_permissions, has_guild_permission, has_resource_permission,
+};
 use crate::handlers::authenticate;
 use crate::outbox;
 use crate::state::AppState;
@@ -98,6 +113,33 @@ async fn require_manage_channels(
     }
 }
 
+/// Resource-aware `manage_channels` check against one specific channel
+/// (issue #250) — used once a channel already exists to scope a
+/// per-resource override to (rename, archive, announcement-only toggle).
+pub(crate) async fn require_manage_channel_resource(
+    state: &AppState,
+    guild_id: Uuid,
+    channel_id: Uuid,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    let owner = guild_owner(state, guild_id).await?;
+    let allowed = has_resource_permission(
+        state,
+        guild_id,
+        owner,
+        actor,
+        GuildResourceKind::Channel,
+        channel_id,
+        GuildPermission::ManageChannels,
+    )
+    .await?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::MissingGuildPermission)
+    }
+}
+
 fn validate_channel_name(name: &str) -> Result<(), AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.chars().count() > CHANNEL_NAME_MAX_CHARS {
@@ -112,6 +154,7 @@ pub(crate) struct ChannelRow {
     pub name: String,
     pub archived_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
+    pub announcement_only: bool,
 }
 
 /// Fetches a channel, 404ing if it doesn't exist or doesn't belong to
@@ -123,7 +166,7 @@ pub(crate) async fn fetch_channel(
     channel_id: Uuid,
 ) -> Result<ChannelRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, guild_id, name, archived_at, created_at FROM guild_channels \
+        "SELECT id, guild_id, name, archived_at, created_at, announcement_only FROM guild_channels \
          WHERE id = $1 AND guild_id = $2",
     )
     .bind(channel_id)
@@ -137,6 +180,7 @@ pub(crate) async fn fetch_channel(
         name: row.try_get("name")?,
         archived_at: row.try_get("archived_at")?,
         created_at: row.try_get("created_at")?,
+        announcement_only: row.try_get("announcement_only")?,
     })
 }
 
@@ -148,6 +192,7 @@ pub struct ChannelResponse {
     pub archived: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    pub announcement_only: bool,
 }
 
 impl From<ChannelRow> for ChannelResponse {
@@ -158,6 +203,7 @@ impl From<ChannelRow> for ChannelResponse {
             name: row.name,
             archived: row.archived_at.is_some(),
             created_at: row.created_at,
+            announcement_only: row.announcement_only,
         }
     }
 }
@@ -174,7 +220,7 @@ pub async fn list_channels(
     require_member(&state, guild_id, actor).await?;
 
     let rows = sqlx::query(
-        "SELECT id, guild_id, name, archived_at, created_at FROM guild_channels \
+        "SELECT id, guild_id, name, archived_at, created_at, announcement_only FROM guild_channels \
          WHERE guild_id = $1 ORDER BY created_at",
     )
     .bind(guild_id)
@@ -189,6 +235,7 @@ pub async fn list_channels(
             name: row.try_get("name")?,
             archived_at: row.try_get("archived_at")?,
             created_at: row.try_get("created_at")?,
+            announcement_only: row.try_get("announcement_only")?,
         }));
     }
     Ok(Json(channels))
@@ -249,16 +296,22 @@ pub async fn create_channel(
         name,
         archived: false,
         created_at,
+        announcement_only: false,
     }))
 }
 
 #[derive(Deserialize)]
 pub struct UpdateChannelRequest {
     pub name: String,
+    /// Issue #250. `None` leaves the existing value untouched, same
+    /// partial-update convention `UpdateRoleRequest` uses.
+    #[serde(default)]
+    pub announcement_only: Option<bool>,
 }
 
-/// `PATCH /guilds/{id}/channels/{cid}` — rename. Requires
-/// `manage_channels`. Renaming an archived channel is allowed (it's still
+/// `PATCH /guilds/{id}/channels/{cid}` — rename and/or toggle
+/// announcement-only. Requires `manage_channels` (resource-aware, issue
+/// #250). Renaming/retoggling an archived channel is allowed (it's still
 /// the same durable channel, just not accepting new posts).
 pub async fn update_channel(
     State(state): State<AppState>,
@@ -269,17 +322,21 @@ pub async fn update_channel(
     let actor = authenticate(&state, &headers).await?;
     validate_channel_name(&body.name)?;
     let channel = fetch_channel(&state, guild_id, channel_id).await?;
-    require_manage_channels(&state, guild_id, actor).await?;
+    require_manage_channel_resource(&state, guild_id, channel_id, actor).await?;
 
     let new_name = body.name.trim().to_string();
+    let announcement_only = body.announcement_only.unwrap_or(channel.announcement_only);
     let mut tx = state.pool.begin().await?;
 
-    sqlx::query("UPDATE guild_channels SET name = $3 WHERE id = $1 AND guild_id = $2")
-        .bind(channel_id)
-        .bind(guild_id)
-        .bind(&new_name)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE guild_channels SET name = $3, announcement_only = $4 WHERE id = $1 AND guild_id = $2",
+    )
+    .bind(channel_id)
+    .bind(guild_id)
+    .bind(&new_name)
+    .bind(announcement_only)
+    .execute(&mut *tx)
+    .await?;
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
@@ -290,6 +347,7 @@ pub async fn update_channel(
             "guild_id": guild_id,
             "channel_id": channel_id,
             "name": new_name,
+            "announcement_only": announcement_only,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -305,13 +363,15 @@ pub async fn update_channel(
         name: new_name,
         archived: channel.archived_at.is_some(),
         created_at: channel.created_at,
+        announcement_only,
     }))
 }
 
-/// `POST /guilds/{id}/channels/{cid}/archive` — requires `manage_channels`.
-/// A soft flag (`archived_at`), not a delete: history and past messages
-/// stay reachable, the channel simply stops accepting new posts (enforced
-/// in `crate::guild_messages::send_message`).
+/// `POST /guilds/{id}/channels/{cid}/archive` — requires `manage_channels`
+/// (resource-aware, issue #250). A soft flag (`archived_at`), not a
+/// delete: history and past messages stay reachable, the channel simply
+/// stops accepting new posts (enforced in
+/// `crate::guild_messages::send_message`).
 pub async fn archive_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -319,7 +379,7 @@ pub async fn archive_channel(
 ) -> Result<Json<ChannelResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     let channel = fetch_channel(&state, guild_id, channel_id).await?;
-    require_manage_channels(&state, guild_id, actor).await?;
+    require_manage_channel_resource(&state, guild_id, channel_id, actor).await?;
 
     let archived_at = OffsetDateTime::now_utc();
     let mut tx = state.pool.begin().await?;
@@ -354,6 +414,7 @@ pub async fn archive_channel(
         name: channel.name,
         archived: true,
         created_at: channel.created_at,
+        announcement_only: channel.announcement_only,
     }))
 }
 

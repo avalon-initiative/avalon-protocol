@@ -32,6 +32,7 @@ import type {
   GuildInviteResponse,
   GuildJoinRequestResponse,
   GuildMemberResponse,
+  GuildResourceKind,
   GuildResponse,
   HistoryEntryResponse,
   ListEventsQuery,
@@ -39,6 +40,7 @@ import type {
   MyConnectionsResponse,
   MyGuildMembershipResponse,
   PasskeyResponse,
+  PermissionOverrideResponse,
   PresenceResponse,
   ProfileResponse,
   PublicProfileResponse,
@@ -65,6 +67,7 @@ import type {
   SessionStartRequest,
   SessionStartResponse,
   SetGuardiansRequest,
+  SetPermissionOverrideRequest,
   SignedTreeHeadResponse,
   TransferOwnershipRequest,
   UpdateChannelRequest,
@@ -480,6 +483,38 @@ export function updateRole(
 
 export function deleteRole(token: string, guildId: string, nameIndex: number): Promise<void> {
   return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'DELETE', token })
+}
+
+// Per-resource permission overrides (issue #250), matching
+// crates/server/src/guilds.rs's `/guilds/{id}/permission-overrides` routes.
+
+export function listPermissionOverrides(
+  token: string,
+  guildId: string,
+  resourceKind: GuildResourceKind,
+  resourceId: string,
+): Promise<PermissionOverrideResponse[]> {
+  const query = new URLSearchParams({ resource_kind: resourceKind, resource_id: resourceId })
+  return request(`/guilds/${guildId}/permission-overrides?${query.toString()}`, { token })
+}
+
+export function setPermissionOverride(
+  token: string,
+  guildId: string,
+  body: SetPermissionOverrideRequest,
+): Promise<PermissionOverrideResponse> {
+  return request(`/guilds/${guildId}/permission-overrides`, { method: 'PUT', body, token })
+}
+
+export function deletePermissionOverride(
+  token: string,
+  guildId: string,
+  overrideId: string,
+): Promise<void> {
+  return request(`/guilds/${guildId}/permission-overrides/${overrideId}`, {
+    method: 'DELETE',
+    token,
+  })
 }
 
 export function transferOwnership(
