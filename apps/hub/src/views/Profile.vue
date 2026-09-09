@@ -6,6 +6,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '../api/client'
+import { AvalonApiError } from '../api/errors'
 import { recoverSigningKey } from '../api/identity'
 import {
   approveDeviceGrant,
@@ -13,7 +14,8 @@ import {
   finalizeApprovedGrant,
   findMySigningKeyId,
 } from '../api/deviceGrants'
-import type { DeviceGrantResponse, DeviceResponse } from '../api/types'
+import { addPasskey, listPasskeys, renamePasskey, revokePasskey } from '../api/passkeys'
+import type { DeviceGrantResponse, DeviceResponse, PasskeyResponse } from '../api/types'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import {
@@ -63,6 +65,7 @@ onMounted(async () => {
     if (hasSigningKey.value) {
       await refreshDevicesAndPendingGrants()
     }
+    await refreshPasskeys()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -240,6 +243,97 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
     renamingId.value = ''
   }
 }
+
+// Multi-passkey registration (#200) — WebAuthn login credentials, kept
+// deliberately separate from the signing-key device list above (see
+// crates/server/src/passkeys.rs's module doc comment for why). Every
+// identity has at least one passkey from account creation, so this list
+// loads regardless of hasSigningKey/pendingRequest state.
+const passkeys = ref<PasskeyResponse[]>([])
+const addingPasskey = ref(false)
+const addPasskeyError = ref('')
+const renamingPasskeyId = ref('')
+const renamePasskeyError = ref('')
+const revokingPasskeyId = ref('')
+const revokePasskeyError = ref('')
+
+async function refreshPasskeys() {
+  if (!session.token) return
+  try {
+    passkeys.value = await listPasskeys(session.token)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+
+async function onAddPasskey() {
+  if (!session.token) return
+  addPasskeyError.value = ''
+  addingPasskey.value = true
+  try {
+    await addPasskey(session.token, null)
+    await refreshPasskeys()
+  } catch (e) {
+    addPasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    addingPasskey.value = false
+  }
+}
+
+async function onRenamePasskey(passkey: PasskeyResponse, label: string) {
+  if (!session.token) return
+  renamePasskeyError.value = ''
+  renamingPasskeyId.value = passkey.id
+  try {
+    await renamePasskey(session.token, passkey.id, label)
+    await refreshPasskeys()
+  } catch (e) {
+    renamePasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    renamingPasskeyId.value = ''
+  }
+}
+
+// Revoking the identity's last remaining passkey requires explicit
+// confirmation (crates/server/src/passkeys.rs's own invariant, surfaced
+// here as a 409 with AppError::LastPasskeyRequiresConfirmation) — a plain
+// browser confirm() is enough for this milestone's UI, matching how little
+// other chrome (no modal component in @avalon/ui yet) the rest of this page
+// uses for destructive actions.
+async function onRevokePasskey(passkey: PasskeyResponse) {
+  if (!session.token) return
+  revokePasskeyError.value = ''
+  revokingPasskeyId.value = passkey.id
+  try {
+    await revokePasskey(session.token, passkey.id, false)
+    await refreshPasskeys()
+  } catch (e) {
+    if (e instanceof AvalonApiError && e.status === 409) {
+      // A 409 here always means the one thing it can mean for this
+      // endpoint (crates/server/src/passkeys.rs's
+      // LastPasskeyRequiresConfirmation) — messageForStatus's generic 409
+      // text is about a different case (identity id collisions at account
+      // creation) and isn't useful here, so this prompt is worded directly
+      // rather than built from `e.message`.
+      const confirmed = window.confirm(
+        "This is your last remaining passkey — revoking it may lock you out of this identity if you have no other way to sign in. Revoke it anyway?",
+      )
+      if (confirmed) {
+        try {
+          await revokePasskey(session.token, passkey.id, true)
+          await refreshPasskeys()
+        } catch (retryError) {
+          revokePasskeyError.value =
+            retryError instanceof Error ? retryError.message : 'Something went wrong.'
+        }
+      }
+    } else {
+      revokePasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
+    }
+  } finally {
+    revokingPasskeyId.value = ''
+  }
+}
 </script>
 
 <template>
@@ -331,6 +425,43 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
       </div>
 
       <div :class="page.sideColumn">
+        <AvalonCard
+          title="Passkeys"
+          subtitle="Any registered passkey can sign you in — none is more privileged than another. Register a second one from another device so losing one doesn't lock you out."
+        >
+          <p v-if="addPasskeyError" :class="page.error">{{ addPasskeyError }}</p>
+          <p v-if="renamePasskeyError" :class="page.error">{{ renamePasskeyError }}</p>
+          <p v-if="revokePasskeyError" :class="page.error">{{ revokePasskeyError }}</p>
+          <ul :class="styles.list">
+            <li v-for="passkey in passkeys" :key="passkey.id" :class="styles.device">
+              <AvalonEditableField
+                label="Passkey name"
+                :value="passkey.label ?? ''"
+                empty-text="Unlabeled passkey"
+                :saving="renamingPasskeyId === passkey.id"
+                @save="onRenamePasskey(passkey, $event)"
+              />
+              <div :class="styles.deviceActions">
+                <span :class="styles.listDetail">Added {{ passkey.added_at }}</span>
+                <AvalonButton
+                  :label="revokingPasskeyId === passkey.id ? 'Revoking…' : 'Revoke'"
+                  variant="danger"
+                  :disabled="revokingPasskeyId === passkey.id"
+                  @click="onRevokePasskey(passkey)"
+                />
+              </div>
+            </li>
+          </ul>
+          <div :class="styles.actions">
+            <AvalonButton
+              :label="addingPasskey ? 'Waiting for your passkey…' : 'Add another passkey'"
+              variant="primary"
+              :disabled="addingPasskey"
+              @click="onAddPasskey"
+            />
+          </div>
+        </AvalonCard>
+
         <AvalonCard v-if="hasSigningKey && pendingGrants.length > 0" title="Devices waiting for your approval">
           <p v-if="approveError" :class="page.error">{{ approveError }}</p>
           <ul :class="styles.list">

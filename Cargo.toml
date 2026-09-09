@@ -40,3 +40,8 @@ url = { version = "2", features = ["serde"] }
 passkey-types = "0.5"
 passkey-client = "0.5"
 passkey-authenticator = { version = "0.5", features = ["testable"] }
+# passkey-client's default `Client<S, U, P, F>` TLD-verifier type parameter
+# (`public_suffix::PublicSuffixList`) isn't re-exported from passkey-client
+# itself — naming the full virtual-client type in an integration test (see
+# crates/server/tests/passkeys.rs) needs this as a direct dependency too.
+public-suffix = "0.1"

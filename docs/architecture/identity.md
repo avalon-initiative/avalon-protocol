@@ -86,9 +86,14 @@ once):
 - **A WebAuthn passkey** (`identity_keys` table) proves interactive presence —
   "the holder of this device authorized this request, right now." This is the
   entire login mechanism: register a passkey once, then a normal WebAuthn
-  ceremony each time after. Multiple passkeys per identity are already
-  supported by the schema (issue #99's cheapest recovery mitigation), though
-  the endpoint to add a second one isn't built yet.
+  ceremony each time after. Multiple passkeys per identity are supported by
+  the schema, and an authenticated identity can register additional ones
+  after the fact (issue #200, issue #99's cheapest recovery mitigation): any
+  registered passkey authenticates the identity, none is privileged over
+  another, and each is independently nameable and revocable — mirroring the
+  #135/#145 signing-key device list's UX, but against `identity_keys`, a
+  different table with a different security property (see #200's own note
+  below).
 - **A raw Ed25519 key** (`identity_signing_keys` table) proves authorship of a
   specific durable event. It signs `identity.created` at registration —
   `issuer` on that event is `identity:<id>:self:created`, not
@@ -112,8 +117,12 @@ Recovery after every passkey is lost
 ([#99](https://github.com/LunarVagabond/avalon-protocol/issues/99), decided,
 tracked as [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an epic under #2): a layered answer, since the options
 aren't mutually exclusive. Multi-device/multi-passkey registration (add a
-second passkey at onboarding or any time after) ships as the cheap,
-near-term mitigation for the common single-device-loss case. Social recovery
+second passkey at onboarding or any time after,
+[#200](https://github.com/LunarVagabond/avalon-protocol/issues/200), done)
+is the cheap, near-term mitigation for the common single-device-loss case —
+it does nothing for someone who only ever registers one passkey and then
+loses it, which is exactly why it's a mitigation, not the full answer.
+Social recovery
 via an M-of-N set of trusted guardians — plausibly drawn from a player's own
 Avalon friends, gated by a mandatory public time-delay so the real owner can
 veto a malicious attempt — is the real answer being designed next; it
@@ -222,6 +231,27 @@ provider the player uses.
 - `crates/server/db/migrations/0003_outbox/` — `protocol_outbox`.
 - `crates/server/db/migrations/0007_device_grants/` — `identity_signing_keys.revoked_at`
   and `device_grants` (#135); see the signing-key section above.
+- `crates/server/db/migrations/0022_additional_passkeys/` — widens
+  `webauthn_ceremonies.kind`'s check constraint to allow `'add_passkey'`
+  alongside the existing `'registration'`/`'authentication'` (#200); no
+  other schema change needed, since `identity_keys` already supported
+  multiple rows per identity, `label` included, from migration 0001.
+- `crates/server/src/passkeys.rs` (#200) — `POST /me/passkeys/register/start`,
+  `POST /me/passkeys/register/finish`, `GET /me/passkeys`,
+  `PATCH /me/passkeys/:id` (rename), `POST /me/passkeys/:id/revoke[?confirm=true]`.
+  Session-gated, not identity-creation-gated: `register_start` excludes the
+  caller's already-registered credential ids from the ceremony so the same
+  physical key can't silently re-register itself, and both `register_start`/
+  `register_finish` re-derive the identity from the session on every call
+  rather than trusting the ceremony's own stored identity id. Revoking a
+  passkey is a hard delete (no `revoked_at` column here, unlike
+  `identity_signing_keys`) — nothing else references an `identity_keys` row
+  by id, and no protocol event is emitted either way, since passkeys are
+  operational state, not promised-durable (see the durability table above).
+  Revoking the identity's last remaining passkey without `?confirm=true`
+  returns 409; the count check and the delete happen inside one transaction
+  with a `SELECT ... FOR UPDATE` so a concurrent revoke from another session
+  can't race two unconfirmed revokes past the guard at once.
 - `crates/server/src/devices.rs` (#135) — `POST /me/devices/grants`,
   `GET /me/devices/grants[?status=]`, `GET /me/devices/grants/:id`,
   `POST /me/devices/grants/:id/approve`, `GET /me/devices`,
@@ -251,11 +281,19 @@ provider the player uses.
   into `createIdentity()`/`login()`/`recoverSigningKey()`.
   `CreateIdentity.vue` shows the mnemonic once, right after the identity id,
   and asks for an optional device label (#145) passed through to
-  `register_finish`. `Profile.vue` has the recovery form and the #135
-  grant-request form, shown only when the current device has no signing key
-  stored for the logged-in identity; once it does, "Your devices" lists
-  every registered device with rename and revoke, and explains how to add
-  another one (#145).
+  `register_finish`. `apps/hub/src/api/passkeys.ts` (#200) orchestrates the
+  authenticated add-a-passkey ceremony the same way `identity.ts`'s
+  `createIdentity()` orchestrates the unauthenticated one. `Profile.vue` has
+  the recovery form and the #135 grant-request form, shown only when the
+  current device has no signing key stored for the logged-in identity; once
+  it does, "Your devices" lists every registered device with rename and
+  revoke, and explains how to add another one (#145). Separately, a
+  "Passkeys" card (#200) always lists every registered passkey with rename
+  and revoke, plus an "Add another passkey" button — visible regardless of
+  signing-key state, since a passkey and a signing key are unrelated
+  credentials (see the section above). Revoking the last remaining passkey
+  surfaces the server's 409 as a plain `window.confirm` prompt before
+  retrying with `?confirm=true`.
 
 ## Decisions and tickets
 
@@ -272,6 +310,11 @@ provider the player uses.
   identity recovery when every passkey is lost (multi-device now, guardian
   social recovery next, custodial fallback opt-in-only, never a default).
   Tracked as [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an epic under #2.
+- [#200](https://github.com/LunarVagabond/avalon-protocol/issues/200) —
+  multi-device/multi-passkey registration, #99's cheap near-term mitigation.
+  Done: `crates/server/src/passkeys.rs`, `apps/hub/src/api/passkeys.ts`.
+  Guardian social recovery (the next layer #99 calls for) is not this
+  ticket's scope.
 - [#55](https://github.com/LunarVagabond/avalon-protocol/issues/55) — Hub
   identity creation/login UI: the real WebAuthn + Ed25519 flow, in-browser.
 - [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122) —

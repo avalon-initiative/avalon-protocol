@@ -18,6 +18,14 @@ export class AvalonApiError extends Error {
 // that fits all of them, so the server's own message is the right default
 // there rather than a fallback that only made sense for one of those cases.
 export function messageForStatus(status: number, serverMessage?: string): string {
+  // 409 predates a server message that's ever needed distinguishing (it
+  // used to mean exactly one thing: an identity id collision), so it keeps
+  // this fixed string rather than switching to `serverMessage` the way 400
+  // does below. Issue #200's "revoke the last remaining passkey" 409 is a
+  // distinct case with its own client-side handling
+  // (`api/passkeys.ts::revokePasskey`'s caller checks `status === 409`
+  // directly rather than reading this generic message) — see that module
+  // for why it doesn't route through here.
   if (status === 409) return 'That identity id is already taken.'
   if (status === 401) return 'Authentication failed.'
   if (status === 400) {

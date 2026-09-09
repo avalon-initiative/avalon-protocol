@@ -147,6 +147,37 @@ export interface RenameDeviceRequest {
   label: string
 }
 
+// Multi-passkey registration (issue #200), matching
+// crates/server/src/passkeys.rs field-for-field. Distinct from the
+// DeviceGrantResponse/DeviceResponse pair above: those manage
+// `identity_signing_keys` (event-authorship keys, #135), these manage
+// `identity_keys` (WebAuthn login credentials) — same "device with a label
+// and a revoke button" shape in the UI, different underlying table and
+// security property, per docs/architecture/identity.md.
+
+export interface AddPasskeyStartResponse {
+  ticket_id: string
+  // Same camelCase-nested-in-snake_case shape as RegisterStartResponse
+  // above — this is webauthn-rs's own CreationChallengeResponse.
+  challenge: { publicKey: PublicKeyCredentialCreationOptionsJSON }
+}
+
+export interface AddPasskeyFinishRequest {
+  ticket_id: string
+  webauthn_credential: RegistrationResponseJSON
+  label: string | null
+}
+
+export interface PasskeyResponse {
+  id: string
+  label: string | null
+  added_at: string
+}
+
+export interface RenamePasskeyRequest {
+  label: string
+}
+
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'
 
 export interface UpdatePresenceRequest {

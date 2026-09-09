@@ -3,6 +3,8 @@
 // the typed functions below rather than touching fetch or the URL directly.
 import { AvalonApiError, messageForStatus } from './errors'
 import type {
+  AddPasskeyFinishRequest,
+  AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
   ChannelResponse,
   ConnectGameRequest,
@@ -26,6 +28,7 @@ import type {
   MessageResponse,
   MyConnectionsResponse,
   MyGuildMembershipResponse,
+  PasskeyResponse,
   PresenceResponse,
   ProfileResponse,
   PublicProfileResponse,
@@ -34,6 +37,7 @@ import type {
   RegisterStartRequest,
   RegisterStartResponse,
   RenameDeviceRequest,
+  RenamePasskeyRequest,
   RequestDeviceGrantRequest,
   ResolveHandleResponse,
   RoleResponse,
@@ -232,6 +236,47 @@ export function renameDevice(
 
 export function revokeDevice(token: string, signingKeyId: string): Promise<void> {
   return request(`/me/devices/${signingKeyId}/revoke`, { method: 'POST', token })
+}
+
+// Multi-passkey registration (issue #200): WebAuthn login credentials,
+// distinct from the signing-key device list above.
+
+export function startAddPasskey(token: string): Promise<AddPasskeyStartResponse> {
+  return request('/me/passkeys/register/start', { method: 'POST', token })
+}
+
+export function finishAddPasskey(
+  token: string,
+  body: AddPasskeyFinishRequest,
+): Promise<PasskeyResponse> {
+  return request('/me/passkeys/register/finish', { method: 'POST', body, token })
+}
+
+export function listPasskeys(token: string): Promise<PasskeyResponse[]> {
+  return request('/me/passkeys', { token })
+}
+
+export function renamePasskey(
+  token: string,
+  passkeyId: string,
+  body: RenamePasskeyRequest,
+): Promise<PasskeyResponse> {
+  return request(`/me/passkeys/${passkeyId}`, { method: 'PATCH', body, token })
+}
+
+// `confirm` must be passed as `true` to revoke the identity's last
+// remaining passkey (crates/server/src/passkeys.rs's explicit-confirmation
+// invariant) — omitted otherwise, matching every other optional-query-param
+// convention in this file (see getPresence's `ids`).
+export function revokePasskey(
+  token: string,
+  passkeyId: string,
+  confirm?: boolean,
+): Promise<void> {
+  const path = confirm
+    ? `/me/passkeys/${passkeyId}/revoke?confirm=true`
+    : `/me/passkeys/${passkeyId}/revoke`
+  return request(path, { method: 'POST', token })
 }
 
 // Guilds, roles, membership (issues #20/#21), matching

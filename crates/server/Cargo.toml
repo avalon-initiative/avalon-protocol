@@ -33,6 +33,7 @@ tokio = { workspace = true, features = ["test-util"] }
 passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
+public-suffix.workspace = true
 reqwest.workspace = true
 avalon-sdk = { path = "../sdk" }
 
