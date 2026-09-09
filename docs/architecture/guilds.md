@@ -479,11 +479,14 @@ with Game A becomes historical.
   history" posture `motd`/`banner`/`links` already have. Hub surfaces it in
   the guild page header as a small badge, on the Settings tab's profile
   card alongside MOTD/banner, and on `AvalonGuildCard` (`packages/ui`) as
-  an optional `iconUrl` badge — currently wired for the "My guilds" list
-  (`GuildResponse`-backed) but not yet the Discover tab, since
-  `DiscoverGuildSummary` doesn't carry `banner` either today; extending
-  both together is left for whenever discovery cards grow richer metadata,
-  not invented here as a one-off for `icon` alone.
+  optional `iconUrl`/`bannerUrl` props — wired for both the "My guilds"
+  list (`GuildResponse`-backed) and the Discover tab (issue #258:
+  `DiscoverGuildSummary` now carries `banner`/`icon` too, and
+  `build_discover_query`'s `SELECT` includes `g.banner`/`g.icon`). No new
+  visibility exposure — both were already public via `GET /guilds/{id}`;
+  this only widens the browse listing to include them, same as the rest of
+  the discovery board's "browsable surface over already-public data"
+  posture.
 - **Guild discovery board (issue #154).** `GET /guilds/discover?q=&recruiting=&tag=&game=&sort=&limit=&cursor=`
   (`crates/server/src/guilds.rs::discover_guilds`) is a paged, filterable,
   session-authenticated browse over the same already-public guild metadata
@@ -871,6 +874,9 @@ with Game A becomes historical.
   manufacture an association #206 wouldn't itself show).
 - [#246](https://github.com/LunarVagabond/avalon-protocol/issues/246) — guild
   icon, done: a small badge image, independent of #153's `banner`.
+- [#258](https://github.com/LunarVagabond/avalon-protocol/issues/258) — Discover
+  cards surface `banner`/`icon`, done: closes the gap #246 left open between
+  the "My guilds" list and the Discover tab.
 - [#248](https://github.com/LunarVagabond/avalon-protocol/issues/248) —
   per-member RSVP roster, done: who's going/maybe/can't-go per event, not
   just aggregate counts.

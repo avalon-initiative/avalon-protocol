@@ -12,6 +12,7 @@ defineEmits<{ select: [] }>()
 
 <template>
   <button :class="styles.card" type="button" @click="$emit('select')">
+    <img v-if="bannerUrl" :src="bannerUrl" alt="" :class="styles.banner" />
     <div :class="styles.heading">
       <img v-if="iconUrl" :src="iconUrl" :alt="`${name} icon`" :class="styles.icon" />
       <span :class="styles.name">{{ name }}</span>

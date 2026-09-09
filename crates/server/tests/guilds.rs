@@ -1191,6 +1191,65 @@ async fn a_member_still_sees_their_own_non_recruiting_guild_in_default_browse() 
     assert!(ids.contains(&closed_id));
 }
 
+/// Issue #258: Discover cards carry `banner`/`icon`, round-tripping the
+/// values set via `PATCH /guilds/{id}` (#153/#246), and reporting `null`
+/// for a guild that never set them — same shape `GET /guilds/{id}` already
+/// returns, just also reachable from the browse listing.
+#[tokio::test]
+#[ignore]
+async fn discover_card_includes_banner_and_icon() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let with_media = create_guild(&http, &base, &owner_token, "Media Guild").await;
+    let with_media_id = with_media["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, with_media_id, true).await;
+    let patch = auth(http.patch(format!("{base}/guilds/{with_media_id}")), &owner_token)
+        .json(&serde_json::json!({
+            "banner": "https://example.com/banner.png",
+            "icon": "https://example.com/icon.png",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(patch.status().is_success());
+
+    let without_media = create_guild(&http, &base, &owner_token, "Plain Guild").await;
+    let without_media_id = without_media["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, without_media_id, true).await;
+
+    let browse: serde_json::Value = auth(http.get(format!("{base}/guilds/discover")), &owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let guilds = browse["guilds"].as_array().unwrap();
+
+    let with_media_card = guilds
+        .iter()
+        .find(|g| g["id"].as_str().unwrap() == with_media_id)
+        .expect("media guild missing from discover results");
+    assert_eq!(
+        with_media_card["banner"].as_str().unwrap(),
+        "https://example.com/banner.png"
+    );
+    assert_eq!(
+        with_media_card["icon"].as_str().unwrap(),
+        "https://example.com/icon.png"
+    );
+
+    let without_media_card = guilds
+        .iter()
+        .find(|g| g["id"].as_str().unwrap() == without_media_id)
+        .expect("plain guild missing from discover results");
+    assert!(without_media_card["banner"].is_null());
+    assert!(without_media_card["icon"].is_null());
+}
+
 /// Free-text `q=` matches name/tag substrings case-insensitively.
 #[tokio::test]
 #[ignore]
