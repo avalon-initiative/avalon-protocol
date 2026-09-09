@@ -347,7 +347,7 @@ async fn a_member_without_manage_channels_cannot_create_events() {
         &pool,
         Uuid::parse_str(&guild_id).unwrap(),
         member_id,
-        2, // plain member role index, no manage_channels
+        2, // plain member role index, no event_manage (issue #250)
     )
     .await;
 
@@ -360,6 +360,230 @@ async fn a_member_without_manage_channels_cannot_create_events() {
     .await
     .unwrap();
     assert_eq!(create.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+// --- Per-resource permission overrides (issue #250) ---------------------
+
+#[allow(clippy::too_many_arguments)]
+async fn set_override(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    guild_id: &str,
+    role_index: i32,
+    resource_kind: &str,
+    resource_id: &str,
+    permission: &str,
+    allow: bool,
+) {
+    let resp = auth(
+        http.put(format!("{base}/guilds/{guild_id}/permission-overrides")),
+        token,
+    )
+    .json(&serde_json::json!({
+        "role_index": role_index,
+        "resource_kind": resource_kind,
+        "resource_id": resource_id,
+        "permission": permission,
+        "allow": allow,
+    }))
+    .send()
+    .await
+    .unwrap();
+    assert!(resp.status().is_success(), "{:?}", resp.status());
+}
+
+async fn create_event(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    guild_id: &str,
+    title: &str,
+) -> String {
+    let create = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        token,
+    )
+    .json(&event_body(title))
+    .send()
+    .await
+    .unwrap();
+    assert!(create.status().is_success(), "{:?}", create.status());
+    let event: serde_json::Value = create.json().await.unwrap();
+    event["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+#[ignore]
+async fn grant_override_lets_a_plain_member_manage_one_specific_event() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    let event_id = create_event(&http, &base, &owner_token, &guild_id, "Raid Night").await;
+
+    // Base-only: the plain member has no `event_manage` — an edit is
+    // rejected before any override exists.
+    let edit_before = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/events/{event_id}")),
+        &member_token,
+    )
+    .json(&event_body("Raid Night (rescheduled)"))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(edit_before.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // An explicit grant on this one event beats the member role's base
+    // absence of `event_manage`.
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        2, // member role
+        "event",
+        &event_id,
+        "event_manage",
+        true,
+    )
+    .await;
+
+    let edit_after = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/events/{event_id}")),
+        &member_token,
+    )
+    .json(&event_body("Raid Night (rescheduled)"))
+    .send()
+    .await
+    .unwrap();
+    assert!(edit_after.status().is_success(), "{:?}", edit_after.status());
+}
+
+#[tokio::test]
+#[ignore]
+async fn deny_override_blocks_an_officer_from_deleting_one_specific_event() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (officer_id, officer_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+    // Officer (role index 1) holds `event_manage` guild-wide by default
+    // since #250's migration backfills it alongside `manage_channels`.
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), officer_id, 1).await;
+
+    let event_id = create_event(&http, &base, &owner_token, &guild_id, "Tournament Prep").await;
+
+    // An explicit deny override on this one event beats the officer's
+    // base `event_manage` grant.
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        1, // officer role
+        "event",
+        &event_id,
+        "event_manage",
+        false,
+    )
+    .await;
+
+    let delete = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/events/{event_id}")),
+        &officer_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(delete.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore]
+async fn owner_bypasses_a_deny_override_on_an_event() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+
+    let event_id = create_event(&http, &base, &owner_token, &guild_id, "Owner Event").await;
+
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        0,
+        "event",
+        &event_id,
+        "event_manage",
+        false,
+    )
+    .await;
+
+    let delete = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/events/{event_id}")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(delete.status().is_success(), "{:?}", delete.status());
+}
+
+#[tokio::test]
+#[ignore]
+async fn override_on_a_deleted_event_is_inert_not_an_error() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    let event_id = create_event(&http, &base, &owner_token, &guild_id, "Short-Lived Event").await;
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        2,
+        "event",
+        &event_id,
+        "event_manage",
+        true,
+    )
+    .await;
+
+    let delete = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/events/{event_id}")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(delete.status().is_success(), "{:?}", delete.status());
+
+    // The event (and, per the ticket's invariant, its now-orphaned
+    // override row) is gone — a caller trying to act on it again gets a
+    // plain 404, never a server error from a dangling override lookup.
+    let edit_after_delete = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/events/{event_id}")),
+        &member_token,
+    )
+    .json(&event_body("edit a ghost"))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(edit_after_delete.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -22,10 +22,19 @@
 //! **Membership.** Reading or posting requires current guild membership,
 //! via `crate::channels::require_member` — see that module's doc comment
 //! for the `guild_members` table this depends on and issue #21's status.
-//! Moderation (hard-deleting a message) instead requires `manage_channels`
-//! (`crate::channels`'s permission helper), same as channel management —
-//! messages aren't history, so there's nothing to preserve when one is
-//! deleted.
+//! Moderation (hard-deleting a message) instead requires `manage_channels`,
+//! resource-aware against the channel it's posted in
+//! (`crate::channels::require_manage_channel_resource`, issue #250), same
+//! as channel management — messages aren't history, so there's nothing to
+//! preserve when one is deleted.
+//!
+//! **Announcement-only channels (issue #250).** When a channel's
+//! `announcement_only` flag is set, posting additionally requires the
+//! `ChannelPost` permission for that specific channel
+//! (`crate::guilds::has_resource_permission`) — membership alone is no
+//! longer sufficient. A regular channel (the default) keeps today's
+//! "any current member may post" behavior unchanged; this is strictly
+//! additive per-channel, not a change to the guild-wide permission model.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -35,12 +44,12 @@ use sqlx::Row;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::channels::{fetch_channel, guild_owner, require_member};
+use crate::channels::{fetch_channel, guild_owner, require_manage_channel_resource, require_member};
 use crate::error::AppError;
-use crate::guilds::{actor_role_permissions as actor_permissions, has_guild_permission};
+use crate::guilds::has_resource_permission;
 use crate::handlers::authenticate;
 use crate::state::AppState;
-use avalon_protocol::guilds::GuildPermission;
+use avalon_protocol::guilds::{GuildPermission, GuildResourceKind};
 
 const MESSAGE_BODY_MAX_CHARS: usize = 4000;
 const DEFAULT_MESSAGE_PAGE_SIZE: i64 = 50;
@@ -159,6 +168,22 @@ pub async fn send_message(
     if channel.archived_at.is_some() {
         return Err(AppError::ChannelArchived);
     }
+    if channel.announcement_only {
+        let owner = guild_owner(&state, guild_id).await?;
+        let allowed = has_resource_permission(
+            &state,
+            guild_id,
+            owner,
+            actor,
+            GuildResourceKind::Channel,
+            channel_id,
+            GuildPermission::ChannelPost,
+        )
+        .await?;
+        if !allowed {
+            return Err(AppError::MissingGuildPermission);
+        }
+    }
 
     let message_id = Uuid::new_v4();
     let sent_at = OffsetDateTime::now_utc();
@@ -214,12 +239,7 @@ pub async fn delete_message(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     fetch_channel(&state, guild_id, channel_id).await?;
-
-    let owner = guild_owner(&state, guild_id).await?;
-    let permissions = actor_permissions(&state, guild_id, actor).await?;
-    if !has_guild_permission(owner, actor, &permissions, GuildPermission::ManageChannels) {
-        return Err(AppError::MissingGuildPermission);
-    }
+    require_manage_channel_resource(&state, guild_id, channel_id, actor).await?;
 
     let deleted = sqlx::query("DELETE FROM guild_messages WHERE id = $1 AND channel_id = $2")
         .bind(message_id)

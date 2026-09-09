@@ -47,7 +47,8 @@
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::guilds::{
-    GuildLink, GuildPermission, JoinPolicy, RoleBadge, RoleBadgeColor, RoleBadgeIcon,
+    GuildLink, GuildPermission, GuildResourceKind, JoinPolicy, RoleBadge, RoleBadgeColor,
+    RoleBadgeIcon,
 };
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, Query, State};
@@ -141,6 +142,134 @@ pub(crate) fn has_guild_permission(
     actor_permissions.iter().any(|p| p == permission.as_str())
 }
 
+/// Pure resolution of a resource-scoped permission check (issue #250,
+/// shape decided by #243): owner always passes, same as
+/// [`has_guild_permission`]. Otherwise, when an override exists for this
+/// exact (role, resource, permission) triple it decides the outcome
+/// outright — `Some(true)` grants even if the base list lacks the
+/// permission, `Some(false)` denies even if the base list has it. With no
+/// override (`None`), falls back to the role's flat base
+/// `actor_permissions` list, same as [`has_guild_permission`]. Factored
+/// out as a pure function (no DB access) so every combination of
+/// owner/override/base state is unit-testable without a live Postgres —
+/// see the tests below.
+pub(crate) fn resolve_resource_permission(
+    is_owner: bool,
+    base_permissions: &[String],
+    override_allow: Option<bool>,
+    permission: GuildPermission,
+) -> bool {
+    if is_owner {
+        return true;
+    }
+    match override_allow {
+        Some(allow) => allow,
+        None => base_permissions.iter().any(|p| p == permission.as_str()),
+    }
+}
+
+/// `actor`'s current `(role_index, base permissions)` in `guild_id`, or
+/// `None` if they aren't currently a member. Sibling of
+/// [`actor_role_permissions`] that also returns the role index overrides
+/// are keyed on — [`has_resource_permission`] needs both.
+pub(crate) async fn actor_role(
+    state: &AppState,
+    guild_id: Uuid,
+    actor: Uuid,
+) -> Result<Option<(i32, Vec<String>)>, AppError> {
+    let row = sqlx::query(
+        r#"
+        SELECT gr.name_index, gr.permissions FROM guild_members gm
+        JOIN guild_roles gr ON gr.guild_id = gm.guild_id AND gr.name_index = gm.role_index
+        WHERE gm.guild_id = $1 AND gm.identity_id = $2
+        "#,
+    )
+    .bind(guild_id)
+    .bind(actor)
+    .fetch_optional(&state.pool)
+    .await?;
+    match row {
+        Some(row) => Ok(Some((
+            row.try_get("name_index")?,
+            row.try_get("permissions")?,
+        ))),
+        None => Ok(None),
+    }
+}
+
+/// The override row's `allow` value for an exact (role, resource,
+/// permission) triple, or `None` if no override exists there — the
+/// "inert" case from the ticket's invariants also covers a since-deleted
+/// resource, since every caller of [`has_resource_permission`] already
+/// fetches (and 404s on) the resource before ever reaching this.
+async fn fetch_override(
+    state: &AppState,
+    guild_id: Uuid,
+    role_index: i32,
+    resource_kind: GuildResourceKind,
+    resource_id: Uuid,
+    permission: GuildPermission,
+) -> Result<Option<bool>, AppError> {
+    let row = sqlx::query(
+        "SELECT allow FROM guild_permission_overrides \
+         WHERE guild_id = $1 AND role_index = $2 AND resource_kind = $3 \
+         AND resource_id = $4 AND permission = $5",
+    )
+    .bind(guild_id)
+    .bind(role_index)
+    .bind(resource_kind.as_str())
+    .bind(resource_id)
+    .bind(permission.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
+    match row {
+        Some(row) => Ok(Some(row.try_get("allow")?)),
+        None => Ok(None),
+    }
+}
+
+/// Resource-aware sibling of [`has_guild_permission`] (issue #250): same
+/// owner bypass, but for a non-owner actor it consults
+/// `guild_permission_overrides` for this exact resource before falling
+/// back to the role's flat base permission list (via
+/// [`resolve_resource_permission`]). An actor with no current guild
+/// membership (no role) is never granted anything, same "no role, no
+/// permission" posture the flat check has via an empty `actor_permissions`
+/// slice. `pub(crate)` for the same cross-module reuse
+/// [`has_guild_permission`] already has (`channels.rs`, `guild_events.rs`,
+/// `guild_messages.rs`).
+pub(crate) async fn has_resource_permission(
+    state: &AppState,
+    guild_id: Uuid,
+    guild_owner: Uuid,
+    actor: Uuid,
+    resource_kind: GuildResourceKind,
+    resource_id: Uuid,
+    permission: GuildPermission,
+) -> Result<bool, AppError> {
+    if actor == guild_owner {
+        return Ok(true);
+    }
+    let Some((role_index, base_permissions)) = actor_role(state, guild_id, actor).await? else {
+        return Ok(false);
+    };
+    let override_allow = fetch_override(
+        state,
+        guild_id,
+        role_index,
+        resource_kind,
+        resource_id,
+        permission,
+    )
+    .await?;
+    Ok(resolve_resource_permission(
+        false,
+        &base_permissions,
+        override_allow,
+        permission,
+    ))
+}
+
 /// `(name_index, name, permissions, description, badge)` per starter role
 /// — description/badge defaults added for issue #152, same "sensible
 /// defaults for the starter roles" the ticket's design section calls for.
@@ -165,7 +294,12 @@ fn starter_roles() -> [(
         (
             OFFICER_ROLE_INDEX,
             "officer",
-            &["manage_members", "manage_channels"],
+            // `event_manage` added alongside `manage_channels` by #250 —
+            // before the split, officers could manage events purely
+            // because event endpoints piggybacked on `manage_channels`;
+            // this keeps that same authority explicit now that
+            // `event_manage` is its own permission.
+            &["manage_members", "manage_channels", "event_manage"],
             "Manages members and channels.",
             RoleBadge {
                 icon: RoleBadgeIcon::Shield,
@@ -1160,6 +1294,188 @@ pub async fn delete_role(
 
     tx.commit().await?;
 
+    Ok(())
+}
+
+// --- Per-resource permission overrides (issue #250) --------------------
+//
+// Not durable/outbox history — same "hot, editable configuration, not an
+// append-only fact" posture `guild_roles.permissions` itself already has
+// (role permission edits don't get their own history either, only
+// `guild.role_defined` snapshots). Every route below requires
+// `manage_roles` guild-wide: setting a per-resource override is role
+// management, the same authority tier as editing a role's base
+// permission list.
+
+#[derive(Serialize)]
+pub struct PermissionOverrideResponse {
+    pub id: Uuid,
+    pub role_index: i32,
+    pub resource_kind: String,
+    pub resource_id: Uuid,
+    pub permission: String,
+    pub allow: bool,
+}
+
+async fn require_manage_roles(state: &AppState, guild: &GuildRow, actor: Uuid) -> Result<(), AppError> {
+    let actor_permissions = actor_role_permissions(state, guild.id, actor).await?;
+    if has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageRoles,
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::MissingGuildPermission)
+    }
+}
+
+/// 404s if the resource doesn't exist (or doesn't belong to this guild) —
+/// overrides may only be written against a live channel/event, per the
+/// ticket's "inert, not an error" invariant applying to *reads* of a
+/// since-deleted resource, not to writing a fresh override against one
+/// that never existed.
+async fn require_live_resource(
+    state: &AppState,
+    guild_id: Uuid,
+    resource_kind: GuildResourceKind,
+    resource_id: Uuid,
+) -> Result<(), AppError> {
+    match resource_kind {
+        GuildResourceKind::Channel => {
+            crate::channels::fetch_channel(state, guild_id, resource_id).await?;
+        }
+        GuildResourceKind::Event => {
+            crate::guild_events::fetch_event_for_override_check(state, guild_id, resource_id)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct SetPermissionOverrideRequest {
+    pub role_index: i32,
+    pub resource_kind: String,
+    pub resource_id: Uuid,
+    pub permission: String,
+    pub allow: bool,
+}
+
+/// `PUT /guilds/{id}/permission-overrides` — set (upsert) a grant/deny
+/// override for one role on one resource. Requires `manage_roles`.
+pub async fn set_permission_override(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+    Json(body): Json<SetPermissionOverrideRequest>,
+) -> Result<Json<PermissionOverrideResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+    require_manage_roles(&state, &guild, actor).await?;
+
+    // 404s if the role doesn't exist in this guild.
+    fetch_role(&state, guild_id, body.role_index).await?;
+    let resource_kind =
+        GuildResourceKind::parse(&body.resource_kind).ok_or(AppError::InvalidResourceKind)?;
+    let permission = GuildPermission::parse(&body.permission).ok_or(AppError::InvalidPermission)?;
+    require_live_resource(&state, guild_id, resource_kind, body.resource_id).await?;
+
+    let row = sqlx::query(
+        "INSERT INTO guild_permission_overrides \
+         (guild_id, role_index, resource_kind, resource_id, permission, allow) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (guild_id, role_index, resource_kind, resource_id, permission) \
+         DO UPDATE SET allow = EXCLUDED.allow \
+         RETURNING id",
+    )
+    .bind(guild_id)
+    .bind(body.role_index)
+    .bind(resource_kind.as_str())
+    .bind(body.resource_id)
+    .bind(permission.as_str())
+    .bind(body.allow)
+    .fetch_one(&state.pool)
+    .await?;
+
+    Ok(Json(PermissionOverrideResponse {
+        id: row.try_get("id")?,
+        role_index: body.role_index,
+        resource_kind: resource_kind.as_str().to_string(),
+        resource_id: body.resource_id,
+        permission: permission.as_str().to_string(),
+        allow: body.allow,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ListPermissionOverridesQuery {
+    pub resource_kind: String,
+    pub resource_id: Uuid,
+}
+
+/// `GET /guilds/{id}/permission-overrides?resource_kind=&resource_id=` —
+/// every role's override rows for one resource. Requires `manage_roles`.
+pub async fn list_permission_overrides(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+    Query(query): Query<ListPermissionOverridesQuery>,
+) -> Result<Json<Vec<PermissionOverrideResponse>>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+    require_manage_roles(&state, &guild, actor).await?;
+
+    let resource_kind =
+        GuildResourceKind::parse(&query.resource_kind).ok_or(AppError::InvalidResourceKind)?;
+
+    let rows = sqlx::query(
+        "SELECT id, role_index, resource_kind, resource_id, permission, allow \
+         FROM guild_permission_overrides \
+         WHERE guild_id = $1 AND resource_kind = $2 AND resource_id = $3 \
+         ORDER BY role_index",
+    )
+    .bind(guild_id)
+    .bind(resource_kind.as_str())
+    .bind(query.resource_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut overrides = Vec::with_capacity(rows.len());
+    for row in rows {
+        overrides.push(PermissionOverrideResponse {
+            id: row.try_get("id")?,
+            role_index: row.try_get("role_index")?,
+            resource_kind: row.try_get("resource_kind")?,
+            resource_id: row.try_get("resource_id")?,
+            permission: row.try_get("permission")?,
+            allow: row.try_get("allow")?,
+        });
+    }
+    Ok(Json(overrides))
+}
+
+/// `DELETE /guilds/{id}/permission-overrides/{override_id}` — clears an
+/// override, reverting that (role, resource, permission) triple back to
+/// the role's base permission list. Requires `manage_roles`.
+pub async fn delete_permission_override(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, override_id)): Path<(Uuid, Uuid)>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+    require_manage_roles(&state, &guild, actor).await?;
+
+    let deleted = sqlx::query("DELETE FROM guild_permission_overrides WHERE id = $1 AND guild_id = $2")
+        .bind(override_id)
+        .bind(guild_id)
+        .execute(&state.pool)
+        .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::PermissionOverrideNotFound);
+    }
     Ok(())
 }
 
@@ -3542,6 +3858,90 @@ mod tests {
         assert!(matches!(
             validate_join_request_message(&too_long),
             Err(AppError::InvalidJoinRequestMessage)
+        ));
+    }
+
+    // --- resolve_resource_permission (issue #250) -----------------------
+    //
+    // Pure-function coverage of every state the ticket's Tests section
+    // calls out. `has_resource_permission`/`fetch_override` themselves
+    // need a live Postgres (covered by `crates/server/tests/guilds.rs`,
+    // gated `--ignored`) — this is the DB-free model of their exact
+    // grant/deny/absent resolution logic.
+
+    #[test]
+    fn resource_permission_base_only_no_override() {
+        // No override row (`None`) with the permission present in the
+        // base list: allowed.
+        assert!(resolve_resource_permission(
+            false,
+            &["channel_post".to_string()],
+            None,
+            GuildPermission::ChannelPost,
+        ));
+        // No override, not in the base list: denied.
+        assert!(!resolve_resource_permission(
+            false,
+            &[],
+            None,
+            GuildPermission::ChannelPost,
+        ));
+    }
+
+    #[test]
+    fn resource_permission_explicit_grant_beats_base_absence() {
+        // Base list lacks the permission entirely, but an override grants
+        // it for this resource — grant wins.
+        assert!(resolve_resource_permission(
+            false,
+            &[],
+            Some(true),
+            GuildPermission::ChannelPost,
+        ));
+    }
+
+    #[test]
+    fn resource_permission_explicit_deny_beats_base_grant() {
+        // Base list has the permission, but an override denies it for
+        // this resource — deny wins.
+        assert!(!resolve_resource_permission(
+            false,
+            &["channel_post".to_string()],
+            Some(false),
+            GuildPermission::ChannelPost,
+        ));
+    }
+
+    #[test]
+    fn resource_permission_on_a_deleted_resource_is_inert() {
+        // A since-deleted resource has no override row left to find —
+        // `fetch_override` would return `None`, same as "no override was
+        // ever set." Modeled here directly at the resolution layer: with
+        // `None`, the outcome is exactly the base-only case, never an
+        // error.
+        assert!(resolve_resource_permission(
+            false,
+            &["channel_post".to_string()],
+            None,
+            GuildPermission::ChannelPost,
+        ));
+        assert!(!resolve_resource_permission(
+            false,
+            &[],
+            None,
+            GuildPermission::ChannelPost,
+        ));
+    }
+
+    #[test]
+    fn resource_permission_owner_bypass_survives_a_deny_override() {
+        // The owner's structural bypass is untouched by any override,
+        // deny included.
+        assert!(resolve_resource_permission(
+            true,
+            &[],
+            Some(false),
+            GuildPermission::ChannelPost,
         ));
     }
 }

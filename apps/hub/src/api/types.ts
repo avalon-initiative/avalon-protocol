@@ -509,6 +509,10 @@ export interface ChannelResponse {
   name: string
   archived: boolean
   created_at: string
+  // Issue #250: when true, posting requires the `channel_post` permission
+  // (resolved per-channel via the override layer below) instead of plain
+  // membership.
+  announcement_only: boolean
 }
 
 export interface CreateChannelRequest {
@@ -517,6 +521,30 @@ export interface CreateChannelRequest {
 
 export interface UpdateChannelRequest {
   name: string
+  // Issue #250. Omitted leaves the existing value untouched.
+  announcement_only?: boolean
+}
+
+// Per-resource guild permission overrides (issue #250), matching
+// crates/server/src/guilds.rs::PermissionOverrideResponse /
+// SetPermissionOverrideRequest field-for-field.
+export type GuildResourceKind = 'channel' | 'event'
+
+export interface PermissionOverrideResponse {
+  id: string
+  role_index: number
+  resource_kind: GuildResourceKind
+  resource_id: string
+  permission: string
+  allow: boolean
+}
+
+export interface SetPermissionOverrideRequest {
+  role_index: number
+  resource_kind: GuildResourceKind
+  resource_id: string
+  permission: string
+  allow: boolean
 }
 
 export interface MessageResponse {

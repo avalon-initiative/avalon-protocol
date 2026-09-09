@@ -202,6 +202,10 @@ struct ChannelResponse {
     #[serde(with = "time::serde::rfc3339")]
     #[allow(dead_code)]
     created_at: OffsetDateTime,
+    // Issue #250. Defaults to `false` for servers predating the field
+    // (`#[serde(default)]`) rather than failing to deserialize.
+    #[serde(default)]
+    announcement_only: bool,
 }
 
 impl From<ChannelResponse> for GuildChannel {
@@ -210,6 +214,7 @@ impl From<ChannelResponse> for GuildChannel {
             id: response.id,
             guild_id: GuildId(response.guild_id),
             name: response.name,
+            announcement_only: response.announcement_only,
         }
     }
 }

@@ -26,16 +26,20 @@
 //! caller to currently be a member of the guild — `crate::channels::
 //! require_member` (issue #21's real `guild_members` table).
 //!
-//! **Authorization.** `manage_channels` gates create/update/delete,
-//! reusing the fixed milestone-1 `GuildPermission` set from issue #20
-//! rather than inventing a new "manage_events" permission — that set is
-//! explicitly not-yet-extensible for milestone 1 (see
-//! `crates/protocol/src/guilds.rs::GuildPermission`), and event scheduling
-//! is the same kind of "structural guild content" moderation channel
-//! management already covers. RSVPing is self-service: any current member
-//! may set or change their own RSVP, never anyone else's.
+//! **Authorization.** `event_manage` gates create/update/delete (issue
+//! #250 — its own `GuildPermission` variant, no longer piggybacked on
+//! `manage_channels` the way #169 originally had it, now that #250's
+//! per-resource override layer makes a dedicated permission worth having).
+//! `create_event` has no resource yet to scope to, so it checks the flat
+//! guild-wide `event_manage` grant; `update_event`/`delete_event` already
+//! have a concrete event to scope to, so they go through
+//! `crate::guilds::has_resource_permission` instead — a role can be
+//! granted (or denied) `event_manage` on one specific event via a
+//! per-resource override, on top of (or instead of) holding it guild-wide.
+//! RSVPing is self-service: any current member may set or change their
+//! own RSVP, never anyone else's.
 
-use avalon_protocol::guilds::{GuildPermission, RsvpStatus};
+use avalon_protocol::guilds::{GuildPermission, GuildResourceKind, RsvpStatus};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -46,13 +50,17 @@ use uuid::Uuid;
 
 use crate::channels::{guild_owner, require_member};
 use crate::error::AppError;
-use crate::guilds::{actor_role_permissions as actor_permissions, has_guild_permission};
+use crate::guilds::{
+    actor_role_permissions as actor_permissions, has_guild_permission, has_resource_permission,
+};
 use crate::handlers::authenticate;
 use crate::state::AppState;
 
 const EVENT_TITLE_MAX_CHARS: usize = 200;
 const EVENT_DESCRIPTION_MAX_CHARS: usize = 4000;
 
+/// Guild-wide `event_manage` check, used only where there's no event yet
+/// to scope a resource-aware check to (creation). See module doc comment.
 async fn require_manage_events(
     state: &AppState,
     guild_id: Uuid,
@@ -60,7 +68,34 @@ async fn require_manage_events(
 ) -> Result<(), AppError> {
     let owner = guild_owner(state, guild_id).await?;
     let permissions = actor_permissions(state, guild_id, actor).await?;
-    if has_guild_permission(owner, actor, &permissions, GuildPermission::ManageChannels) {
+    if has_guild_permission(owner, actor, &permissions, GuildPermission::EventManage) {
+        Ok(())
+    } else {
+        Err(AppError::MissingGuildPermission)
+    }
+}
+
+/// Resource-aware `event_manage` check against one specific event — used
+/// by `update_event`/`delete_event`, which already have an `event_id` to
+/// scope a per-resource override to (issue #250).
+async fn require_manage_event_resource(
+    state: &AppState,
+    guild_id: Uuid,
+    event_id: Uuid,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    let owner = guild_owner(state, guild_id).await?;
+    let allowed = has_resource_permission(
+        state,
+        guild_id,
+        owner,
+        actor,
+        GuildResourceKind::Event,
+        event_id,
+        GuildPermission::EventManage,
+    )
+    .await?;
+    if allowed {
         Ok(())
     } else {
         Err(AppError::MissingGuildPermission)
@@ -107,6 +142,20 @@ pub(crate) struct EventRow {
     pub ends_at: Option<OffsetDateTime>,
     pub created_by: Uuid,
     pub created_at: OffsetDateTime,
+}
+
+/// `pub(crate)` re-export of [`fetch_event`]'s existence check, for
+/// `crate::guilds::require_live_resource` (issue #250) — a permission
+/// override can only be written against a live event, same "resource
+/// must currently exist" rule channel overrides get via
+/// `crate::channels::fetch_channel`.
+pub(crate) async fn fetch_event_for_override_check(
+    state: &AppState,
+    guild_id: Uuid,
+    event_id: Uuid,
+) -> Result<(), AppError> {
+    fetch_event(state, guild_id, event_id).await?;
+    Ok(())
 }
 
 async fn fetch_event(
@@ -268,7 +317,7 @@ pub struct CreateEventRequest {
     pub ends_at: Option<OffsetDateTime>,
 }
 
-/// `POST /guilds/{id}/events` — requires `manage_channels`. No outbox
+/// `POST /guilds/{id}/events` — requires `event_manage`. No outbox
 /// write — see module doc comment.
 pub async fn create_event(
     State(state): State<AppState>,
@@ -338,7 +387,7 @@ pub struct UpdateEventRequest {
 }
 
 /// `PATCH /guilds/{id}/events/{eid}` — reschedule/edit. Requires
-/// `manage_channels`. Full replace of the mutable fields, same "resend the
+/// `event_manage` (resource-aware, issue #250). Full replace of the mutable fields, same "resend the
 /// whole thing" convention other guild PATCH endpoints use.
 pub async fn update_event(
     State(state): State<AppState>,
@@ -351,7 +400,7 @@ pub async fn update_event(
     validate_description(&body.description)?;
     validate_time_range(body.starts_at, body.ends_at)?;
     let existing = fetch_event(&state, guild_id, event_id).await?;
-    require_manage_events(&state, guild_id, actor).await?;
+    require_manage_event_resource(&state, guild_id, event_id, actor).await?;
 
     if let Some(channel_id) = body.channel_id {
         crate::channels::fetch_channel(&state, guild_id, channel_id).await?;
@@ -390,11 +439,11 @@ pub async fn update_event(
     .map(Json)
 }
 
-/// `DELETE /guilds/{id}/events/{eid}` — requires `manage_channels`. A real
-/// hard delete: events aren't history (see module doc comment). Removes
-/// its RSVPs too, via the `ON DELETE CASCADE` FK on `guild_event_rsvps`
-/// (migration 0028) — nothing app-level to do here beyond deleting the
-/// event row itself.
+/// `DELETE /guilds/{id}/events/{eid}` — requires `event_manage` (resource-
+/// aware, issue #250). A real hard delete: events aren't history (see
+/// module doc comment). Removes its RSVPs too, via the `ON DELETE CASCADE`
+/// FK on `guild_event_rsvps` (migration 0028) — nothing app-level to do
+/// here beyond deleting the event row itself.
 pub async fn delete_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -402,7 +451,7 @@ pub async fn delete_event(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     fetch_event(&state, guild_id, event_id).await?;
-    require_manage_events(&state, guild_id, actor).await?;
+    require_manage_event_resource(&state, guild_id, event_id, actor).await?;
 
     let deleted = sqlx::query("DELETE FROM guild_events WHERE id = $1 AND guild_id = $2")
         .bind(event_id)
