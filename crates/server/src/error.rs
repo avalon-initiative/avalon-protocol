@@ -57,6 +57,10 @@ pub enum AppError {
     BlockNotFound,
     #[error("signing key not found")]
     SigningKeyNotFound,
+    #[error("passkey not found")]
+    PasskeyNotFound,
+    #[error("revoking your last remaining passkey requires ?confirm=true — this may lock you out if you have no other way to sign in")]
+    LastPasskeyRequiresConfirmation,
     #[error("device grant not found or already resolved")]
     DeviceGrantNotFound,
     #[error("device grant has expired")]
@@ -191,7 +195,10 @@ impl IntoResponse for AppError {
             AppError::SelfBlock => StatusCode::BAD_REQUEST,
             AppError::AlreadyBlocked => StatusCode::CONFLICT,
             AppError::BlockNotFound => StatusCode::NOT_FOUND,
-            AppError::SigningKeyNotFound | AppError::DeviceGrantNotFound => StatusCode::NOT_FOUND,
+            AppError::SigningKeyNotFound
+            | AppError::DeviceGrantNotFound
+            | AppError::PasskeyNotFound => StatusCode::NOT_FOUND,
+            AppError::LastPasskeyRequiresConfirmation => StatusCode::CONFLICT,
             AppError::DeviceGrantExpired => StatusCode::GONE,
             AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
                 StatusCode::UNAUTHORIZED

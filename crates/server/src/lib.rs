@@ -13,6 +13,7 @@ pub mod guilds;
 pub mod handlers;
 pub mod migrate;
 pub mod outbox;
+pub mod passkeys;
 pub mod presence;
 pub mod state;
 
@@ -108,6 +109,17 @@ pub fn router(state: AppState) -> Router {
         .route("/me/devices", get(devices::list_devices))
         .route("/me/devices/:id", patch(devices::rename_device))
         .route("/me/devices/:id/revoke", post(devices::revoke_device))
+        .route(
+            "/me/passkeys/register/start",
+            post(passkeys::register_start),
+        )
+        .route(
+            "/me/passkeys/register/finish",
+            post(passkeys::register_finish),
+        )
+        .route("/me/passkeys", get(passkeys::list_passkeys))
+        .route("/me/passkeys/:id", patch(passkeys::rename_passkey))
+        .route("/me/passkeys/:id/revoke", post(passkeys::revoke_passkey))
         .route("/games", post(games::register_game))
         .route("/games/:slug", get(games::get_game))
         .route("/games/:slug/challenge", post(games::create_game_challenge))
