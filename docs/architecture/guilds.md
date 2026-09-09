@@ -336,15 +336,18 @@ with Game A becomes historical.
     `guilds_recruiting_idx`); `game=` filters to guilds with a matching row
     in `guild_game_associations` (#20's `associate_game` — no new
     game-association logic invented here).
-  - **`recruiting` visibility rule**: passing `recruiting=true` or
-    `recruiting=false` is an exact filter, full stop. Omitting it falls
-    back to "recruiting guilds, plus any guild the caller already belongs
-    to" — a non-recruiting guild never appears in a *stranger's* browse
-    results, but a member still sees their own guild's card in their
-    default browse, same as `GET /guilds/{id}`/`GET /me/guilds` already let
-    them look it up directly. Exact id/tag lookup (`GET /guilds/{id}`) is
-    completely untouched by any of this — a non-recruiting guild is always
-    reachable that way, unchanged from #20.
+  - **`recruiting` visibility rule**: a non-recruiting guild must never
+    appear in a *stranger's* browse/search results, in any filter
+    combination — only exact id/tag lookup (`GET /guilds/{id}`, unchanged
+    from #20) reaches it. `recruiting=true` is a plain exact filter (no
+    membership gate needed — recruiting guilds are already public-by-design
+    per #20). Omitting it falls back to "recruiting guilds, plus any guild
+    the caller already belongs to." `recruiting=false` explicitly is
+    **still membership-gated**, not a raw exact filter — it returns only
+    the caller's own non-recruiting guilds; without that gate a stranger
+    could pass `recruiting=false` to bulk-enumerate every non-recruiting
+    guild's public metadata, which is exactly what this endpoint must not
+    allow.
   - **Sort**: `newest` (default, `created_at DESC`), `alphabetical`
     (`name ASC`), `most_members` (a `COUNT(*)` over `guild_members`,
     `DESC`) — no "trending"/engagement ranking in milestone 1, deliberately

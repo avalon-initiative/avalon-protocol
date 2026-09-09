@@ -1784,15 +1784,25 @@ pub struct DiscoverGuildsResponse {
 /// `guilds` projection, not yet #42's real indexer read model (see module
 /// doc comment and `docs/architecture/guilds.md`).
 ///
-/// Visibility rule for `recruiting`: if the caller passes `recruiting=true`
-/// or `recruiting=false` explicitly, that's an exact filter, full stop. If
-/// the parameter is omitted, the default is "recruiting guilds, plus any
-/// guild the caller is already a member of regardless of its recruiting
-/// flag" — a non-recruiting guild never appears in a stranger's browse
-/// results, but a member always sees their own guilds' discovery card, same
-/// as `GET /guilds/{id}`/`GET /me/guilds` already let them look it up
-/// directly. Exact id/tag lookup (`GET /guilds/{id}`) is untouched by any
-/// of this — a non-recruiting guild is always reachable that way.
+/// Visibility rule for `recruiting`: a non-recruiting guild must never
+/// appear in a stranger's browse/search results, in any filter combination
+/// — only exact id/tag lookup (`GET /guilds/{id}`) reaches it, same as
+/// before this endpoint existed.
+///
+/// - `recruiting=true` is a plain exact filter: recruiting guilds are
+///   already public-by-design (#20), so no membership gate is needed.
+/// - `recruiting` omitted: "recruiting guilds, plus any guild the caller is
+///   already a member of regardless of its recruiting flag" — a member
+///   always sees their own guilds' discovery card, same as
+///   `GET /guilds/{id}`/`GET /me/guilds` already let them look it up
+///   directly.
+/// - `recruiting=false` explicitly: **still membership-gated**, not a raw
+///   exact filter — it only returns the caller's own non-recruiting
+///   guilds. Without this gate a stranger could pass `recruiting=false` to
+///   bulk-enumerate every non-recruiting guild's public metadata, which is
+///   exactly the "reachable only by exact id/tag" invariant this endpoint
+///   must not violate.
+///
 /// Builds the `guilds.discover` query — split out from [`discover_guilds`]
 /// so the filter/sort/pagination logic can be unit-tested (via
 /// [`sqlx::QueryBuilder::sql`]) without a live Postgres connection.
@@ -1820,9 +1830,15 @@ fn build_discover_query(
     }
 
     match query.recruiting {
-        Some(want_recruiting) => {
-            builder.push(" AND g.recruiting = ");
-            builder.push_bind(want_recruiting);
+        Some(true) => {
+            builder.push(" AND g.recruiting = true");
+        }
+        Some(false) => {
+            builder.push(
+                " AND g.recruiting = false AND g.id IN (SELECT guild_id FROM guild_members WHERE identity_id = ",
+            );
+            builder.push_bind(actor);
+            builder.push(")");
         }
         None => {
             builder.push(
@@ -2390,27 +2406,34 @@ mod tests {
     }
 
     #[test]
-    fn explicit_recruiting_true_filters_exactly_and_skips_membership_fallback() {
+    fn explicit_recruiting_true_filters_exactly_no_membership_gate_needed() {
+        // Recruiting guilds are already public-by-design (#20), so this is a
+        // plain exact filter with no membership subquery.
         let mut query = empty_discover_query();
         query.recruiting = Some(true);
         let actor = Uuid::new_v4();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
-        assert!(sql.contains("g.recruiting = $"));
-        assert!(!sql.contains("g.recruiting = true OR"));
+        assert!(sql.contains("g.recruiting = true"));
+        assert!(!sql.contains("g.id IN (SELECT guild_id FROM guild_members"));
     }
 
+    /// `recruiting=false` must NOT be a raw exact filter — that would let a
+    /// stranger bulk-enumerate every non-recruiting guild's public metadata,
+    /// violating #154's "non-recruiting guilds are reachable only by exact
+    /// id/tag" invariant. It has to stay membership-gated: only the caller's
+    /// own non-recruiting guilds come back.
     #[test]
-    fn explicit_recruiting_false_is_also_an_exact_filter() {
+    fn explicit_recruiting_false_stays_membership_gated_not_a_bulk_leak() {
         let mut query = empty_discover_query();
         query.recruiting = Some(false);
         let actor = Uuid::new_v4();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
-        assert!(sql.contains("g.recruiting = $"));
-        assert!(!sql.contains("g.recruiting = true OR"));
+        assert!(sql.contains("g.recruiting = false"));
+        assert!(sql.contains("g.id IN (SELECT guild_id FROM guild_members WHERE identity_id = "));
     }
 
     #[test]

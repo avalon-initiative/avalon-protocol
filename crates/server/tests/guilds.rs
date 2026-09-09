@@ -791,9 +791,11 @@ async fn set_recruiting(
 }
 
 /// Ticket #154 acceptance criteria: a recruiting guild is discoverable by a
-/// non-member; a non-recruiting guild is excluded from the general browse
-/// (`recruiting=` omitted) results for a caller who isn't a member of it,
-/// while exact `GET /guilds/{id}` lookup still finds it unchanged.
+/// non-member; a non-recruiting guild is excluded from browse results (both
+/// the default `recruiting=` omitted case and an explicit
+/// `recruiting=false`) for a caller who isn't a member of it, while exact
+/// `GET /guilds/{id}` lookup still finds it unchanged, and a member always
+/// sees their own non-recruiting guild under `recruiting=false`.
 #[tokio::test]
 #[ignore]
 async fn recruiting_filter_excludes_non_recruiting_guilds_from_general_browse() {
@@ -840,8 +842,9 @@ async fn recruiting_filter_excludes_non_recruiting_guilds_from_general_browse() 
     .unwrap();
     assert!(direct.status().is_success());
 
-    // `recruiting=false` is an explicit filter, so it surfaces the closed
-    // guild (and excludes the recruiting one).
+    // `recruiting=false` from a stranger must NOT bulk-leak the closed
+    // guild (or any other non-recruiting guild the stranger isn't in) —
+    // it stays membership-gated, so a non-member sees nothing here either.
     let closed_browse: serde_json::Value = auth(
         http.get(format!("{base}/guilds/discover?recruiting=false")),
         &stranger_token,
@@ -858,8 +861,29 @@ async fn recruiting_filter_excludes_non_recruiting_guilds_from_general_browse() 
         .iter()
         .map(|g| g["id"].as_str().unwrap())
         .collect();
-    assert!(closed_ids.contains(&closed_id));
+    assert!(!closed_ids.contains(&closed_id));
     assert!(!closed_ids.contains(&recruiting_id));
+
+    // The owner, who *is* a member of the closed guild, sees it under an
+    // explicit `recruiting=false` query.
+    let owner_closed_browse: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/discover?recruiting=false")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let owner_closed_ids: Vec<&str> = owner_closed_browse["guilds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert!(owner_closed_ids.contains(&closed_id));
+    assert!(!owner_closed_ids.contains(&recruiting_id));
 }
 
 /// A member of a non-recruiting guild still sees it in their own default
