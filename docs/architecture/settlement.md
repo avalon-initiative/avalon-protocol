@@ -135,11 +135,19 @@ Postgres as the backend:
 - **`ledger_batches.batch_root` becomes that real answer** to the question
   #38 explicitly left open ("whether the root is a simple chain-tip or a
   Merkle root over the batch is #40's call"): `batch_root` is now the
-  tree's Merkle Tree Hash (MTH) at `tree_size = last_seq`, replacing the
-  placeholder chain-tip value — not a per-batch sub-tree, the whole
-  ledger's tree as of that batch. Cadence needs no new decision: it's
-  already whatever #38/#71's settlement worker does (a batch, and now also
-  an STH, closes whenever the outbox drain tick runs).
+  tree's Merkle Tree Hash (MTH) over every entry committed so far,
+  replacing the placeholder chain-tip value — not a per-batch sub-tree, the
+  whole ledger's tree as of that batch. `tree_size` (the STH's field,
+  stored separately from `ledger_batches`) is always the real leaf
+  *count*, never `last_seq` — `seq` is `GENERATED ALWAYS AS IDENTITY`, and
+  Postgres identity/sequence advancement isn't transactional, so a batch
+  commit that fails partway through and rolls back permanently burns
+  whatever `seq` values it had already allocated. Conflating `last_seq`
+  with leaf count once a gap like that exists would silently mislabel
+  every `tree_size` from that point on; `commit` derives `tree_size` from
+  the actual number of rows fetched, not from `last_seq`. Cadence needs no
+  new decision: it's already whatever #38/#71's settlement worker does (a
+  batch, and now also an STH, closes whenever the outbox drain tick runs).
 - **Signed Tree Heads, not per-entry signatures.** #39 resolves to
   STH-only signing, matching real transparency-log precedent — Certificate
   Transparency logs never sign individual certificates, only the tree head;
@@ -175,7 +183,8 @@ Implementation tracked as
 [#210](https://github.com/LunarVagabond/avalon-protocol/issues/210)
 (real Merkle root + signed tree heads, replacing #38's placeholder) and
 [#211](https://github.com/LunarVagabond/avalon-protocol/issues/211)
-(mirror-facing proof/sync endpoints), both under epic #36.
+(mirror-facing proof/sync endpoints), both under epic #36 — both now
+implemented, see "Today in the repo" below.
 
 ## Today in the repo
 
@@ -238,10 +247,48 @@ Implementation tracked as
   with a single `SettlementProvider::commit` call — a batch closes when the
   worker runs, not on a size threshold or timer, and a single-event batch is
   legal. No handler calls `commit` directly.
-- Not yet implemented: mirror-facing proof/sync endpoints (inclusion and
-  consistency proofs, latest/historical STH lookup) — tracked as #211,
-  which consumes the Merkle tree and STHs this section now describes as
-  real.
+- **Mirror-facing proof/sync endpoints, implemented (#211).**
+  `crates/server/src/settlement.rs` exposes the read-side API surface #40's
+  mirror-sync design calls for, consuming the Merkle tree and STHs above.
+  All four are public reads — no session or game auth, matching the
+  decision that a transparency log must be independently verifiable by
+  anyone holding only `AVALON_SETTLEMENT_VERIFY_KEY`:
+  - `GET /ledger/sth/latest` — the current `SignedTreeHead`.
+  - `GET /ledger/sth/{tree_size}` — the historical STH at exactly this
+    `tree_size` (404 if no batch ever closed at that exact size — STHs
+    exist only per batch commit, not at every possible tree size).
+  - `GET /ledger/proof/consistency?first={a}&second={b}` — an RFC 6962
+    consistency proof (`crate::merkle::consistency_proof`/
+    `verify_consistency_proof`) that the tree at `second` leaves is a
+    strict append-only extension of the tree at `first` leaves, plus both
+    sizes' recomputed root hashes for convenience (a real verifier's trust
+    anchor should still be an independently-fetched STH, not this field
+    alone).
+  - `GET /ledger/proof/inclusion?seq={n}&tree_size={s}` — an RFC 6962
+    inclusion proof (`crate::merkle::inclusion_proof`/
+    `verify_inclusion_proof`) that the ledger entry at `seq` (a real
+    `ledger_entries.seq` row identifier — **not** a dense position; `seq`
+    can have gaps, see `crates/chain/src/postgres.rs`'s module doc comment,
+    so the Merkle leaf index is the entry's rank among committed entries,
+    resolved via `leaf_index_for_seq`, never `seq - 1`) is included in the
+    tree at `tree_size`, plus that entry's `entry_hash` (the proof's leaf
+    input — no entry payload content, same value `list_entries`/`inspect-ledger` already
+    expose) and the tree's root hash.
+  - Every proof is independently re-verified with the same standalone RFC
+    6962 verifier a remote mirror would use, against the exact root(s) the
+    response claims, before the response is ever built — the ticket's own
+    invariant that a wrong proof must never leave the process. A
+    `seq`/`tree_size` beyond what's actually been committed is a 404, never
+    a fabricated or empty proof.
+  - `crates/chain/src/merkle.rs` implements the proof algorithms
+    themselves — `inclusion_proof`/`consistency_proof` (RFC 6962 §2.1.1's
+    `PATH` and §2.1.2's `PROOF`/`SUBPROOF`, reproduced verbatim, sharing
+    `mth`'s split-point/node-hash logic rather than a separate
+    reimplementation) plus their verifiers, unit-tested by round-tripping
+    every proof through the reference MTH root vectors #210 already
+    sourced from `transparency-dev/merkle`, an independent brute-force
+    tree-walk cross-check for inclusion proofs, and exhaustive
+    single-node-tamper negative tests for both proof types.
 - **Genesis and network identity (#173).** A singleton `chain_genesis` table
   commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
   `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —
@@ -281,8 +328,8 @@ Implementation tracked as
   Settlement Ledger
 - #68, #70, #79, #186 decided (#93 partially superseded by #186); #40, #39
   decided (Merkle/STH structure, STH-only signing) — #210 (real Merkle root
-  + Signed Tree Heads) implemented; #211 (mirror-facing proof/sync
-  endpoints) still open
+  + Signed Tree Heads) and #211 (mirror-facing proof/sync endpoints) both
+  implemented
 - #38 batching, #71 atomicity, #173 genesis/network identity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider

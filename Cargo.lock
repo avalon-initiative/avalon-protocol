@@ -207,6 +207,7 @@ dependencies = [
  "base64 0.23.1",
  "dotenvy",
  "ed25519-dalek",
+ "hex",
  "passkey-authenticator",
  "passkey-client",
  "passkey-types",

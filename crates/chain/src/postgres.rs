@@ -9,11 +9,25 @@
 //!   `avalon inspect-ledger` walks end-to-end via `list_entries`.
 //! - A real RFC 6962 Merkle tree (`crate::merkle`) over the whole ledger's
 //!   `entry_hash` values, ordered by `seq`. `ledger_batches.batch_root` is
-//!   that tree's Merkle Tree Hash (MTH) at `tree_size = last_seq`, replacing
-//!   the placeholder chain-tip value #38 shipped. A Signed Tree Head
-//!   (`crate::sth`) is produced and stored (`signed_tree_heads`) alongside
-//!   every batch, in the same transaction — STH-only Ed25519 signing per
-//!   #39, no per-entry signatures.
+//!   that tree's Merkle Tree Hash (MTH). A Signed Tree Head (`crate::sth`)
+//!   is produced and stored (`signed_tree_heads`) alongside every batch, in
+//!   the same transaction — STH-only Ed25519 signing per #39, no per-entry
+//!   signatures.
+//!
+//! **`tree_size` is a leaf *count*, never `ledger_entries.seq`'s raw
+//! value.** `seq` is `GENERATED ALWAYS AS IDENTITY` (see
+//! `crates/server/db/migrations/0002_ledger`) — Postgres identity/sequence
+//! values are **not** transactional: a batch commit that fails partway
+//! through and rolls back still permanently burns whatever `seq` values it
+//! had already allocated, so `seq` can and eventually will have gaps once
+//! the outbox worker (`crates/server/src/outbox.rs`) retries a failed
+//! commit. Treating `last_seq` as if it always equals the true number of
+//! committed entries silently corrupts every `tree_size` recorded from that
+//! point on. `commit` therefore derives `tree_size` from the *actual number
+//! of rows fetched* when building the leaf list, never from `last_seq`
+//! directly, and any code translating a `seq` value to a Merkle leaf index
+//! (issue #211's proof endpoints) must rank/count rather than compute
+//! `seq - 1`.
 //!
 //! Uses the same `PgPool` as `avalon-server` rather than its own connection —
 //! milestone 1 has exactly one shared database (see
@@ -171,6 +185,21 @@ fn recompute_batch_root(
         prev = hash_entry(network_id, &prev, content);
     }
     prev
+}
+
+/// Shared row-mapping for `signed_tree_heads` — used by both
+/// `latest_signed_tree_head` and `signed_tree_head_at` so there's exactly
+/// one place that knows the column layout.
+fn sth_from_row(row: sqlx::postgres::PgRow) -> Result<SignedTreeHead, SettlementError> {
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    Ok(SignedTreeHead {
+        tree_size: row.try_get("tree_size").map_err(get)?,
+        root_hash: row.try_get("root_hash").map_err(get)?,
+        network_id: row.try_get("network_id").map_err(get)?,
+        signing_key_id: row.try_get("signing_key_id").map_err(get)?,
+        signature: row.try_get("signature").map_err(get)?,
+        created_at: row.try_get("created_at").map_err(get)?,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -426,6 +455,116 @@ impl PostgresSettlementProvider {
         Ok(heads)
     }
 
+    /// The most recent Signed Tree Head (highest `tree_size`) — issue #211's
+    /// `GET /ledger/sth/latest`. `None` only before the very first batch has
+    /// ever been committed.
+    pub async fn latest_signed_tree_head(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
+        let row = sqlx::query(
+            r#"
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            FROM signed_tree_heads
+            ORDER BY tree_size DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.map(sth_from_row).transpose()
+    }
+
+    /// The Signed Tree Head at exactly `tree_size` — issue #211's
+    /// `GET /ledger/sth/{tree_size}`, needed to chain consistency proofs
+    /// (a mirror verifying an STH history holds one of these per batch it
+    /// has observed). `None` if no batch ever closed at exactly that size —
+    /// callers must not fabricate one; `tree_size` is a PRIMARY KEY, so
+    /// intermediate ledger sizes between batches simply have no STH, which
+    /// is a real "not found," not a storage error.
+    pub async fn signed_tree_head_at(
+        &self,
+        tree_size: i64,
+    ) -> Result<Option<SignedTreeHead>, SettlementError> {
+        let row = sqlx::query(
+            r#"
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            FROM signed_tree_heads
+            WHERE tree_size = $1
+            "#,
+        )
+        .bind(tree_size)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.map(sth_from_row).transpose()
+    }
+
+    /// The first `tree_size` entries' `entry_hash`, oldest first — the
+    /// exact leaf set [`crate::merkle`]'s proof functions need, for issue
+    /// #211's inclusion/consistency proof endpoints. Deliberately
+    /// count-based (`ORDER BY seq ASC LIMIT`), never `WHERE seq <= tree_size`
+    /// — `seq` can have gaps (see module doc comment), so a raw seq-value
+    /// bound would return *fewer* than `tree_size` rows once one exists,
+    /// silently desynchronizing this leaf list from the `tree_size` a
+    /// caller already validated against a real, signed STH. `LIMIT`
+    /// guarantees exactly `tree_size` rows whenever that many exist,
+    /// regardless of what the underlying `seq` values happen to be.
+    pub async fn entry_hashes_up_to(&self, tree_size: i64) -> Result<Vec<String>, SettlementError> {
+        let rows = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq ASC LIMIT $1")
+            .bind(tree_size)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<String, _>("entry_hash")
+                    .map_err(|e| SettlementError::Storage(e.to_string()))
+            })
+            .collect()
+    }
+
+    /// How many entries have been committed so far — the true `tree_size`
+    /// upper bound. Issue #211 uses this to give a clear "doesn't exist yet"
+    /// error for a `tree_size`/`seq` request beyond what's actually been
+    /// committed, rather than a confusing empty-proof or panic. Deliberately
+    /// `COUNT(*)`, not `MAX(seq)` — those diverge once `seq` has a gap (see
+    /// module doc comment), and `tree_size` is always a leaf count.
+    pub async fn entry_count(&self) -> Result<i64, SettlementError> {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM ledger_entries")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.try_get("count")
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    }
+
+    /// The 0-indexed Merkle leaf position of the entry at `seq` — its rank
+    /// among all committed entries ordered by `seq`, **not** `seq - 1`.
+    /// `seq` is a real, stable row identifier (`GENERATED ALWAYS AS
+    /// IDENTITY`), but it is not a dense, gap-free position: a batch commit
+    /// that fails partway through and rolls back still permanently burns
+    /// whatever `seq` values it had already allocated (Postgres identity/
+    /// sequence advancement is not transactional), so treating `seq - 1` as
+    /// a leaf index silently desyncs from the real tree the moment any gap
+    /// exists. `None` if no entry has this exact `seq`.
+    pub async fn leaf_index_for_seq(&self, seq: i64) -> Result<Option<i64>, SettlementError> {
+        let row = sqlx::query(
+            r#"
+            SELECT (SELECT COUNT(*) FROM ledger_entries e2 WHERE e2.seq <= e1.seq) - 1 AS leaf_index
+            FROM ledger_entries e1
+            WHERE e1.seq = $1
+            "#,
+        )
+        .bind(seq)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.map(|row| {
+            row.try_get::<i64, _>("leaf_index")
+                .map_err(|e| SettlementError::Storage(e.to_string()))
+        })
+        .transpose()
+    }
+
     /// Every entry issued by `issuer_prefix` (a `GlobalId` prefix, e.g.
     /// `identity:<id>:self:` — every verb an identity signs itself under
     /// shares that prefix, see `crates/server/src/friends.rs`'s
@@ -506,8 +645,12 @@ pub struct LedgerEntryView {
 /// hash-chained individually, but a batch is what `get_commitment` looks up
 /// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is
 /// the real RFC 6962 Merkle Tree Hash of the whole ledger (not just this
-/// batch's own entries) at `tree_size = last_seq` (issue #210) — not a
-/// per-batch sub-tree, and not the placeholder chain-tip value #38 shipped.
+/// batch's own entries), covering every entry committed so far (issue
+/// #210) — not a per-batch sub-tree, and not the placeholder chain-tip
+/// value #38 shipped. Its corresponding `tree_size` (the leaf *count*, not
+/// `last_seq`) is recorded separately in `signed_tree_heads`, not on this
+/// row — `seq` can have gaps (see module doc comment), so `last_seq` here
+/// is a row-identity bookmark, never a leaf count.
 pub struct LedgerBatchView {
     pub batch_id: Uuid,
     pub first_seq: i64,
@@ -576,11 +719,13 @@ impl SettlementProvider for PostgresSettlementProvider {
         let first_seq = first_seq.expect("checked batch.events is non-empty above");
 
         // batch_root is now the real RFC 6962 Merkle Tree Hash of the whole
-        // ledger — not just this batch's own entries — at
-        // `tree_size = last_seq` (issue #210, replacing the placeholder
-        // chain-tip value #38 shipped). Read back every entry_hash up to
-        // and including this batch, in the same transaction so the read is
-        // consistent with what was just inserted above.
+        // ledger — not just this batch's own entries. `seq <= last_seq`
+        // here is safe as a "give me every row" filter specifically because
+        // `last_seq` was just set to the highest `seq` this (the only)
+        // writer has ever seen, in the same transaction — nothing in the
+        // table can exceed it, gap or no gap. Read back every entry_hash,
+        // in the same transaction so the read is consistent with what was
+        // just inserted above.
         let leaf_rows =
             sqlx::query("SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC")
                 .bind(last_seq)
@@ -592,6 +737,11 @@ impl SettlementProvider for PostgresSettlementProvider {
             .map(|row| row.try_get::<String, _>("entry_hash"))
             .collect::<Result<_, _>>()
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        // The *count* of real rows just fetched — never `last_seq` itself.
+        // `seq` can have gaps (module doc comment), so once one exists
+        // `last_seq` overstates how many leaves actually went into the
+        // tree below; `tree_size` must always match the true leaf count.
+        let tree_size = leaf_hashes.len() as i64;
         let tree_root =
             merkle::mth_of_hex_hashes(&leaf_hashes).map_err(SettlementError::Storage)?;
         let batch_root = hex::encode(tree_root);
@@ -624,7 +774,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         let tree_head = sth::sign_tree_head(
             &signing_key,
             &signing_key_id,
-            last_seq,
+            tree_size,
             &batch_root,
             &self.network_id,
             committed_at,

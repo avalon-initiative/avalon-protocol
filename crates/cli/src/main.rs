@@ -241,13 +241,28 @@ async fn inspect_ledger(full: bool) {
 /// half of STH verification, independent of the signature check
 /// (`avalon_chain::sth::verify_tree_head`). Pure and directly unit-testable
 /// without Postgres; `inspect_ledger` is its only real caller.
+/// `entries` must already be ordered by `seq` ascending (as
+/// `PostgresSettlementProvider::list_entries` returns them). Takes the
+/// first `sth.tree_size` entries by *position*, never by filtering on
+/// `e.seq <= sth.tree_size` — `seq` is `GENERATED ALWAYS AS IDENTITY`, and
+/// Postgres identity/sequence advancement is not transactional, so a batch
+/// commit that inserts rows and then rolls back (a retried outbox drain, a
+/// transient failure) permanently burns whatever `seq` values it already
+/// allocated. Once a gap like that exists, `tree_size` (a real leaf count —
+/// see `crates/chain/src/postgres.rs`'s module doc comment) is no longer
+/// equal to "the highest surviving `seq` value that's `<= tree_size`", so a
+/// seq-value filter silently drops the newest legitimately-committed
+/// entries and recomputes the wrong root — a false "tamper evidence" alarm
+/// against a perfectly healthy ledger, the exact failure mode `avalon
+/// inspect-ledger` exists to never produce.
 fn merkle_root_matches(
     entries: &[avalon_chain::LedgerEntryView],
     sth: &avalon_chain::sth::SignedTreeHead,
 ) -> bool {
+    let tree_size = sth.tree_size.max(0) as usize;
     let hashes: Vec<String> = entries
         .iter()
-        .filter(|e| e.seq <= sth.tree_size)
+        .take(tree_size)
         .map(|e| e.entry_hash.clone())
         .collect();
     avalon_chain::merkle::mth_of_hex_hashes(&hashes)
@@ -353,6 +368,50 @@ mod tests {
         assert!(
             !merkle_root_matches(&tampered, &sth),
             "a tampered entry_hash must change the recomputed root and fail the match"
+        );
+    }
+
+    /// Regression test: `seq` is `GENERATED ALWAYS AS IDENTITY`, so a batch
+    /// commit that rolls back after inserting rows permanently burns
+    /// whatever `seq` values it allocated — a real gap, not a hypothetical
+    /// one. `entries` here has three real rows at seq = 1, 2, 5 (3 and 4
+    /// burned). `merkle_root_matches` must recompute the root from the
+    /// first `tree_size` entries **by position**, not by filtering on
+    /// `seq <= tree_size` — the latter would drop the seq=5 entry entirely
+    /// for `tree_size = 3` (since 5 > 3), even though it's genuinely the
+    /// third real leaf, and falsely report tamper evidence against a
+    /// perfectly healthy ledger.
+    #[test]
+    fn merkle_root_matches_uses_position_not_seq_value_across_a_gap() {
+        let mut entries = sample_entries(&[
+            "aa".repeat(32).as_str(),
+            "bb".repeat(32).as_str(),
+            "cc".repeat(32).as_str(),
+        ]);
+        // sample_entries assigns dense seq = 1, 2, 3; rewrite the third
+        // entry's seq to simulate seq 3 and 4 having been burned by a
+        // rolled-back commit, leaving this real entry at seq = 5.
+        entries[2].seq = 5;
+
+        let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        // tree_size = 3: the true leaf count (three real rows), not 5 (the
+        // highest raw seq value) — matching what `commit()` now signs.
+        let sth = sign_tree_head(
+            &signing_key,
+            "test-key",
+            3,
+            &root,
+            "avalon-test",
+            time::OffsetDateTime::UNIX_EPOCH,
+        );
+
+        assert!(
+            merkle_root_matches(&entries, &sth),
+            "recompute must use the first tree_size entries by position, \
+             not filter on seq <= tree_size, or it silently drops the \
+             seq=5 entry and reports a false tamper-evidence mismatch"
         );
     }
 }
