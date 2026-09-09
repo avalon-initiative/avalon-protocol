@@ -245,6 +245,10 @@ pub fn router(state: AppState) -> Router {
             get(guilds::list_join_requests).post(guilds::create_join_request),
         )
         .route(
+            "/guilds/{id}/join-requests/mine",
+            get(guilds::my_join_request),
+        )
+        .route(
             "/guilds/{id}/join-requests/{request_id}/approve",
             post(guilds::approve_join_request),
         )

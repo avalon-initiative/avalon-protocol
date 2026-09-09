@@ -46,6 +46,11 @@ export function useGuildDetail(guildId: Ref<string>) {
   // expected, common outcome, not a page-level error.
   const joinRequests = ref<GuildJoinRequestResponse[]>([])
 
+  // Issue #256: the caller's own pending join request for this guild, if
+  // any — self-scoped, not manage_members-gated, so (unlike joinRequests
+  // above) this is fetched for every caller, not just managers.
+  const myJoinRequest = ref<GuildJoinRequestResponse | null>(null)
+
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
   async function refreshGameBreakdown() {
@@ -65,6 +70,15 @@ export function useGuildDetail(guildId: Ref<string>) {
       joinRequests.value = await api.listJoinRequests(session.token, guildId.value)
     } catch {
       joinRequests.value = []
+    }
+  }
+
+  async function refreshMyJoinRequest() {
+    if (!session.token) return
+    try {
+      myJoinRequest.value = await api.getMyJoinRequest(session.token, guildId.value)
+    } catch {
+      myJoinRequest.value = null
     }
   }
 
@@ -91,6 +105,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     // treats as fatal.
     await refreshGameBreakdown()
     await refreshJoinRequests()
+    await refreshMyJoinRequest()
   }
 
   async function load() {
@@ -140,6 +155,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     gameBreakdown,
     gameBreakdownError,
     joinRequests,
+    myJoinRequest,
     refresh,
   }
 }
