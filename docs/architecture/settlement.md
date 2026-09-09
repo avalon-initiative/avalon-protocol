@@ -139,7 +139,7 @@ candidates for both before it closes.
 
 - One row per event in `ledger_entries`
   (`crates/server/db/migrations/0002_ledger/up.sql`, plus `batch_id` from
-  `0013_ledger_batches/up.sql`): `seq`, `event_id`, `kind`, `issuer`,
+  `0014_ledger_batches/up.sql`): `seq`, `event_id`, `kind`, `issuer`,
   `subject`, `payload`, `event_timestamp`, `version`, `prev_hash`,
   `entry_hash`, `batch_id`, `committed_at`. One row per batch in
   `ledger_batches`: `batch_id`, `first_seq`, `last_seq`, `batch_root`,

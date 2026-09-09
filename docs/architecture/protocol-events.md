@@ -124,6 +124,8 @@ milestone-1 stand-in until actor signatures exist.
 | `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
 | `guild.game_associated` | guild → game | guild, game | associations | guild officer key |
 | `achievement.defined` | game → achievement id | name, description, schema | definitions | game key |
+| `achievement.definition_updated` | game → achievement id | name, description, schema, version | definitions | game key |
+| `achievement.definition_retired` | game → achievement id | achievement id | definitions | game key |
 | `achievement.issued` | game → identity | achievement id, attestation id, evidence ref | attestations | issuer key |
 | `achievement.revoked` | game → attestation | attestation ref, reason code, reason | attestation status | issuer key |
 | `attestation.superseded` | game → attestation | old ref, new ref | attestation status | issuer key |
@@ -230,8 +232,20 @@ the record — [`./revocation.md`](./revocation.md).
   stand-in as `game.registered` and the social-graph events — no general
   per-event signing ceremony exists yet, so claiming the catalogue's
   eventual "identity key" signer here would be false.
+- A sixth emitter: `crates/server/src/achievements.rs` (#31) writes
+  `achievement.defined` on `POST /games/{slug}/achievements`,
+  `achievement.definition_updated` on `PATCH /games/{slug}/achievements/{key}`
+  when name/description/schema actually change, and
+  `achievement.definition_retired` when that same endpoint retires a
+  definition — each enqueued into `protocol_outbox` in the same transaction
+  as the `achievement_definitions` row it accompanies. `issuer` is
+  `game:<slug>:self:<verb>` (`game_ref`); `subject` is the definition's own
+  `game:<slug>:achievement:<key>` `GlobalId`, matching the catalogue's
+  "game → achievement id" shape above. Network-attributed rather than
+  game-signed for the same reason `game.registered` is: no general per-event
+  signing ceremony exists yet beyond `identity.created`.
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`
-  plus `0013_ledger_batches/up.sql` (issue #38 — adds `batch_id`); the
+  plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`); the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
   `timestamp`, `version` (`crates/chain/src/postgres.rs`). Every event lands
   in `protocol_outbox` (#71) and is committed as part of whatever
