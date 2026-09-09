@@ -101,8 +101,9 @@ unverifiable.
 ## Decisions and tickets
 
 - #70 mirrors of a public log, not federation
-- #79, #93 long-term settlement backend, decided (Avalon's own chain, no
-  launch currency); #40 log design, mirror sync, and validator/consensus design
+- #79 long-term settlement backend; #186 decided no blockchain/validator
+  consensus (transparency log on Postgres instead, superseding part of #93);
+  #40 log design and mirror sync (validator/consensus design dropped)
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
   discovery and capability negotiation
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) TLS before
