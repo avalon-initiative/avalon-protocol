@@ -21,7 +21,9 @@ import {
   canChangeMemberRole,
   canKickMember,
   filterMembersByIdentityId,
+  formatPlayingSummary,
   groupMembersByRole,
+  groupMembersPlayingByGame,
   hasGuildPermission,
   membershipStatusText,
   roleVariantForIndex,
@@ -83,6 +85,15 @@ const roleGroups = computed(() => {
   return groups.map((group) => ({ ...group, members: sortMembersByPresence(group.members) }))
 })
 const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMember.value))
+
+// "Members currently playing" (#57): realtime presence grouped by game,
+// never a durable stat and never phrased as the guild belonging to a game
+// (#74 — "N members playing X", not "Game X's guild"). Computed from the
+// same roster/presence merge the roles view already loads, so it's always
+// null in practice today (no game publishes presence.playing yet — see
+// api/guilds.ts's own note) and renders the honest empty state below
+// rather than fabricating activity.
+const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 
 // --- Rename / retag / redescribe ------------------------------------------
 
@@ -491,9 +502,38 @@ function onSelectChannel(channelId: string) {
             </AvalonForm>
           </div>
         </AvalonCard>
+
+        <!--
+          Guild history (created / member joined / left / role changed) is
+          durable per docs/architecture/guilds.md, but #82's event catalogue
+          and indexer exposure for it isn't necessarily done, and no
+          endpoint like GET /guilds/:id/history exists today (see
+          docs/architecture/hub.md's endpoint list). Rather than fabricate a
+          history feed from the current roster/role snapshot, this section
+          says plainly that it isn't available yet.
+        -->
+        <AvalonCard title="History">
+          <p :class="styles.empty">
+            History isn't available yet — this guild's events (created, joined, left, role
+            changed) are recorded on the network, but no view of them is exposed here until the
+            event catalogue and its indexer projection land.
+          </p>
+        </AvalonCard>
       </div>
 
       <div :class="styles.sideColumn">
+        <AvalonCard title="Currently playing">
+          <p v-if="playingGroups.length === 0" :class="styles.empty">
+            No members currently reporting an in-game presence.
+          </p>
+          <template v-else>
+            <p v-for="group in playingGroups" :key="group.gameId" :class="styles.empty">
+              {{ formatPlayingSummary(group) }}
+            </p>
+          </template>
+          <p :class="styles.empty">Live presence, not a durable stat — updates as members' status changes.</p>
+        </AvalonCard>
+
         <AvalonCard title="Membership">
           <p :class="styles.empty">{{ membershipStatus }}</p>
           <AvalonButton

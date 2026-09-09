@@ -24,23 +24,36 @@ export interface GuildMember {
   displayName?: string
   roleIndex: number
   status: PresenceStatus
+  // Mirrors PresenceResponse.playing exactly: a game id, or null/absent.
+  // Always null in practice today (types.ts's own note — no real game
+  // publishes presence yet), carried through here so the "members
+  // currently playing" summary (#57) is correct once a game does, rather
+  // than needing a second wiring pass later. Optional (not just
+  // nullable) so existing fixtures/tests built before #57 don't all need
+  // updating — absent is treated identically to null everywhere it's read.
+  playing?: string | null
   joinedAt: string
 }
 
 // Pure merge logic, testable without any network call — mirrors
 // apps/hub/src/api/friends.ts's mergeFriend. A missing presence entry
-// defaults to Offline rather than guessing at "last seen" (#78, presence
-// honesty).
+// defaults to Offline/not-playing rather than guessing at "last seen"
+// (#78, presence honesty). Takes the presence-by-status map (not the full
+// PresenceResponse) for status, plus a parallel presence-by-playing map,
+// so existing callers/tests that only care about status keep working
+// unchanged.
 export function mergeGuildMember(
   member: GuildMemberResponse,
   presenceByStatus: Map<string, PresenceStatus>,
   displayNameById: Map<string, string> = new Map(),
+  presenceByPlaying: Map<string, string | null> = new Map(),
 ): GuildMember {
   return {
     identityId: member.identity_id,
     displayName: displayNameById.get(member.identity_id),
     roleIndex: member.role_index,
     status: presenceByStatus.get(member.identity_id) ?? 'Offline',
+    playing: presenceByPlaying.get(member.identity_id) ?? null,
     joinedAt: member.joined_at,
   }
 }
@@ -59,11 +72,14 @@ export async function listMembersWithPresence(token: string, guildId: string): P
   const presenceByStatus = new Map<string, PresenceStatus>(
     presences.map((p: PresenceResponse) => [p.identity_id, p.status]),
   )
+  const presenceByPlaying = new Map<string, string | null>(
+    presences.map((p: PresenceResponse) => [p.identity_id, p.playing]),
+  )
   const displayNameById = new Map<string, string>(
     profiles.map((p: PublicProfileResponse) => [p.identity_id, p.display_name]),
   )
 
-  return members.map((m) => mergeGuildMember(m, presenceByStatus, displayNameById))
+  return members.map((m) => mergeGuildMember(m, presenceByStatus, displayNameById, presenceByPlaying))
 }
 
 export interface RoleGroup {
@@ -228,6 +244,42 @@ export function canChangeMemberRole(
     return false
   }
   return hasGuildPermission(guild, actorIdentityId, actorPermissions, 'manage_roles')
+}
+
+// "Members currently playing", grouped by game id, counts descending
+// (#57). Pure, unit-testable independent of any fetch. Only members with a
+// non-null `playing` count toward any group — offline/idle/no-game members
+// are simply absent from the result, not a "null" bucket, since there's
+// nothing true to say about them per-game. This is realtime presence, not
+// a durable guild stat: a game is never "the guild's game" (#74) — a
+// member merely happens to be playing it right now. `playing` is always
+// null in every guild today (no game has a live presence-publish binding
+// yet, see api/types.ts's own note on PresenceResponse.playing), so this
+// resolves to an empty list in practice until that changes; the function
+// itself doesn't assume that and works the same either way.
+export interface PlayingGroup {
+  gameId: string
+  count: number
+}
+
+export function groupMembersPlayingByGame(members: GuildMember[]): PlayingGroup[] {
+  const counts = new Map<string, number>()
+  for (const member of members) {
+    if (!member.playing) continue
+    counts.set(member.playing, (counts.get(member.playing) ?? 0) + 1)
+  }
+  return Array.from(counts.entries())
+    .map(([gameId, count]) => ({ gameId, count }))
+    .sort((a, b) => b.count - a.count || a.gameId.localeCompare(b.gameId))
+}
+
+// Renders one PlayingGroup as "N members playing X" — the #74-safe
+// phrasing the ticket requires verbatim: a member is described as playing
+// a game, a guild is never described as belonging to one ("Game X's
+// guild" is exactly what this must never read as).
+export function formatPlayingSummary(group: PlayingGroup): string {
+  const noun = group.count === 1 ? 'member' : 'members'
+  return `${group.count} ${noun} playing ${group.gameId}`
 }
 
 // Maps a role_index to AvalonRoleBadge's fixed-tier visual variant. Roles
