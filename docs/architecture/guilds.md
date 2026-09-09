@@ -427,7 +427,7 @@ with Game A becomes historical.
     (403), the same error every other guild authorization failure in this
     module already returns.
   - **Public-profile exposure toggle.** `guilds.game_breakdown_public`
-    (`crates/server/db/migrations/0022_guild_game_breakdown`) is a plain
+    (`crates/server/db/migrations/0023_guild_game_breakdown`) is a plain
     boolean column, `false` by default — a real, `manage_guild`-editable
     guild setting alongside `motd`/`banner`/`links`/`recruiting` from
     #153, not a derived fact. Edited via the same `PATCH /guilds/{id}`
