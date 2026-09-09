@@ -344,7 +344,7 @@ future work). None of these affect the state machine or its invariants.
   The first device's `identity_signing_keys` row is labeled at
   registration too (`register_finish`'s optional `device_label`, #145) —
   previously only devices added through a grant carried a label.
-- `crates/server/db/migrations/0028_social_recovery/` — `recovery_guardian_settings`
+- `crates/server/db/migrations/0029_social_recovery/` — `recovery_guardian_settings`
   (per-identity threshold), `recovery_guardians` (the guardian set, a
   friend-only rule enforced at the handler layer against `friendships`, not
   a DB constraint), `recovery_requests` (one row per attempt, with a
