@@ -326,7 +326,7 @@ implemented, see "Today in the repo" below.
   separate retention problems: everything above this bullet — the hash
   chain, the Merkle tree, Signed Tree Heads — is untouched by retention
   tier. What tiers is `ledger_entries.payload` specifically, now nullable
-  (`0026_ledger_payload_retention`). `crates/chain/src/retention.rs` is the
+  (`0027_ledger_payload_retention`). `crates/chain/src/retention.rs` is the
   config (`AVALON_RETENTION_TIER`, `AVALON_RETENTION_HOT_WINDOW_DAYS`,
   `AVALON_RETENTION_PRUNING_ENABLED`) and cutoff logic;
   `PostgresSettlementProvider::prune_payloads_older_than` is the one-column

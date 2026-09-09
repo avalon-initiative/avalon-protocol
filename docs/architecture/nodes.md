@@ -70,7 +70,7 @@ via environment configuration, the same pattern `AVALON_NETWORK_ID`/
   (`crates/server/src/retention.rs`) whenever pruning is enabled.
 
 Pruning only ever `NULL`s out `ledger_entries.payload` (nullable as of the
-`0026_ledger_payload_retention` migration) — `seq`, `entry_hash`,
+`0027_ledger_payload_retention` migration) — `seq`, `entry_hash`,
 `prev_hash`, `kind`, `issuer`, `subject`, `event_timestamp`, `version`, and
 `batch_id` are never touched, which is exactly what keeps a pruned row's
 place in both the hash chain and the Merkle tree (which is built entirely
