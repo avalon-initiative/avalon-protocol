@@ -217,6 +217,7 @@ with Game A becomes historical.
   `POST /guilds/{id}/roles`, `PATCH /guilds/{id}/roles/{idx}`,
   `POST /guilds/{id}/transfer-ownership`, `POST /guilds/{id}/games/{game_id}`,
   `GET /guilds/{id}/game-breakdown` (issue #206, see below),
+  `GET`/`PUT /guilds/{id}/favorite-games` (issue #207, see below),
   `POST /guilds/{id}/invites`, `POST /guilds/{id}/invites/{invite_id}/accept`,
   `POST /guilds/{id}/invites/{invite_id}/decline`, `POST /guilds/{id}/join`
   (open guilds only), `POST /guilds/{id}/leave`,
@@ -446,8 +447,7 @@ with Game A becomes historical.
     bindings), and `breakdown: GameBreakdownEntry[]` (`game_id`,
     `game_slug`, `game_name`, `member_count`), ordered by `member_count`
     descending. This is deliberately a clean, queryable shape for #207
-    (favorites pin, a separate ticket) to build on — #207 is not built by
-    this ticket.
+    (favorites pin, see below) to build on.
   - Hub: `Guild.vue`'s "Game affinity" card renders each entry via
     `apps/hub/src/api/guilds.ts::formatGameBreakdownEntry` ("N of M
     members play X", the exact phrasing this ticket's design calls for)
@@ -457,6 +457,89 @@ with Game A becomes historical.
     403 here — not permitted, and the guild hasn't made it public — is an
     expected, common outcome for a non-member, not a page-level error like
     the rest of the guild fetch.
+- **Guild favorite games: curated top-5 pin list (issue #207, implementing
+  decision #160).** Layered directly on #206's affinity breakdown above: a
+  `manage_guild` holder may pin up to 5 games, in order, as the guild's
+  curated "favorites" for public display — but only games that already
+  show up in the breakdown (at least one currently-actively-bound member).
+  There is no way to pin a game the guild has no real, live connection to;
+  the same invariant #206/#160 already established for the breakdown
+  itself now also holds for this curated subset of it.
+  - **Storage.** `guild_favorite_games` (`(guild_id, game_id, position)`,
+    `crates/server/db/migrations/0025_guild_favorite_games`) — a small
+    table, not a capped JSONB/array column like #153's `guilds.links`,
+    because a pin's validity depends on live data in another table
+    (`bindings`, via `guild_members`), not just static per-entry
+    validation, and each pin needs its own stable position for reordering.
+    Postgres enforces "no duplicate pin per game" (composite primary key)
+    and "distinct positions per guild" (a unique index on
+    `(guild_id, position)`) structurally; the 5-entry cap and the
+    live-affinity check are application-level
+    (`crates/server/src/guilds.rs::MAX_GUILD_FAVORITE_GAMES`,
+    `validate_favorite_game_ids`), same "caps live in code, not the
+    schema" posture #153/#206 already document. No durable history table
+    beyond the outbox event on each write — like
+    `guild_game_breakdown_public` before it, this is current-state-only.
+  - **Validation reuses #206's own query.**
+    `guilds::guild_bound_game_ids` calls the exact same
+    `build_game_breakdown_query` #206's `game_breakdown` endpoint queries,
+    collecting the set of game ids with at least one actively-bound
+    member. A pin attempt for any other game id is rejected with
+    `AppError::FavoriteGameNotBound` (403) — checked against this live
+    query at write time, never a cached/stale value, so "pinnable" can
+    never drift from "what the breakdown itself would show".
+  - **Endpoints and permission gate.** `PUT /guilds/{id}/favorite-games`
+    (`SetFavoriteGamesRequest { game_ids: Vec<Uuid> }`) always sends the
+    full desired ordered list — same "resend the whole list, not a
+    per-entry patch" convention #153's `links` established — and is gated
+    by `has_guild_permission(..., GuildPermission::ManageGuild)`, the exact
+    same check `update_guild`/#206's breakdown-visibility toggle already
+    use, not a new one. Rejects more than
+    `MAX_GUILD_FAVORITE_GAMES` (5) entries
+    (`AppError::TooManyFavoriteGames`), a duplicate game id in the same
+    request (`AppError::DuplicateFavoriteGame`), or any id failing the
+    live-affinity check above. On success it replaces the stored rows
+    (delete + reinsert under one transaction) and records a
+    `guild.favorite_games_updated` outbox event, matching every other
+    guild mutation in this module. `GET /guilds/{id}/favorite-games`
+    returns the same shape read-only, gated only by session
+    authentication (no `manage_guild` requirement) — see below for why.
+  - **Staleness, not silent removal.** If a pinned game's last bound
+    member later unbinds, the pin is *not* auto-removed — per #207's
+    design, that would churn the guild's public display on a single
+    member's binding change. Instead, every read
+    (`guilds::fetch_favorite_games`) recomputes `stale: bool` per entry
+    against the same live `guild_bound_game_ids` set, so a `manage_guild`
+    holder sees exactly which pins no longer reflect a real binding and
+    can choose to unpin them; a non-manager viewing the public profile
+    still sees the pin (a guild's curated choice stays visible until the
+    guild itself changes it) with the same `stale` flag available to any
+    client that wants to render it differently.
+  - **Public display.** Unlike the full breakdown (gated behind
+    `game_breakdown_public`), the favorites list is always part of a
+    guild's public profile: `GuildResponse.favorite_games` (populated by
+    `guild_response`, no extra gate) is returned from
+    both `GET /guilds/{id}` and, therefore, anywhere that endpoint's
+    response already reaches (the guild's own profile page today; #154's
+    discovery board list endpoint is a separate summary shape and doesn't
+    embed favorites, to avoid an N+1 query per browsed guild — the
+    dedicated `GET /guilds/{id}/favorite-games` endpoint or the profile
+    fetch are the intended read paths). This is the guild's own
+    deliberate curation choice — the same "always public" treatment
+    `motd`/`banner`/`links` already get — distinct from the raw breakdown,
+    which a guild may have reasons to keep internal.
+  - Hub: `Guild.vue`'s "Favorite games" card (below "Game affinity") shows
+    the pinned list (with staleness rendered inline via
+    `apps/hub/src/api/guilds.ts::formatFavoriteGameEntry`) to anyone once
+    there's something to show, and adds pin/unpin/reorder controls for a
+    `manage_guild` holder. Pin candidates are drawn only from
+    `gameBreakdown.value.breakdown` (`pinnableBreakdownEntries`) — since
+    viewing the full breakdown is itself `manage_guild`-gated, there is no
+    UI path to even attempting a pin without real affinity. All four
+    mutations (`addFavoriteGameId`/`removeFavoriteGameId`/
+    `reorderFavoriteGameIds`) are pure functions returning the next full
+    ordered id list, sent via `api.setFavoriteGames` (`PUT`), then the
+    page `refresh()`s so `guild.value.favorite_games` picks up the result.
 - **Guild history section (#57).** `Guild.vue` has a "History" card, but it
   states plainly that history isn't available yet rather than fabricating
   a feed from the current roster/role snapshot — there is no
@@ -501,8 +584,11 @@ with Game A becomes historical.
   guild-game association is derived from real member bindings, never
   manager-declared; superseded #20's `associate_game`. Implemented by
   [#206](https://github.com/LunarVagabond/avalon-protocol/issues/206) (game
-  affinity breakdown, done); [#207](https://github.com/LunarVagabond/avalon-protocol/issues/207)
-  (favorites pin) is a separate, not-yet-built ticket on top of it.
+  affinity breakdown, done) and
+  [#207](https://github.com/LunarVagabond/avalon-protocol/issues/207)
+  (favorites pin, done — a curated top-5 subset of #206's breakdown, gated
+  the same way and validated against the same live data, never a way to
+  manufacture an association #206 wouldn't itself show).
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

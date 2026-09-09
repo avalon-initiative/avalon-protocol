@@ -18,6 +18,7 @@ import type {
   DeviceResponse,
   DiscoverGuildsResponse,
   DiscoverPeopleResponse,
+  FavoriteGamesResponse,
   FriendRequestResponse,
   FriendshipResponse,
   GameBindingResponse,
@@ -359,6 +360,28 @@ export function associateGame(
 // handled by the caller, not a bug.
 export function getGameBreakdown(token: string, guildId: string): Promise<GameBreakdownResponse> {
   return request(`/guilds/${guildId}/game-breakdown`, { token })
+}
+
+// GET/PUT /guilds/{id}/favorite-games (issue #207, implementing decision
+// #160): a manage_guild-curated top-5 pin list drawn only from games with
+// real affinity per getGameBreakdown above. GET is unrestricted (same
+// visibility as getGuild — favorites are always part of the public
+// profile, see GuildResponse.favorite_games); PUT is manage_guild-gated
+// server-side and always sends the full desired ordered list.
+export function getFavoriteGames(token: string, guildId: string): Promise<FavoriteGamesResponse> {
+  return request(`/guilds/${guildId}/favorite-games`, { token })
+}
+
+export function setFavoriteGames(
+  token: string,
+  guildId: string,
+  gameIds: string[],
+): Promise<FavoriteGamesResponse> {
+  return request(`/guilds/${guildId}/favorite-games`, {
+    method: 'PUT',
+    body: { game_ids: gameIds },
+    token,
+  })
 }
 
 export function createGuildInvite(

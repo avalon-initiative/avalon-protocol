@@ -236,6 +236,10 @@ export interface GuildResponse {
   // profile — a manage_guild holder can always fetch the breakdown
   // regardless of this flag; it only gates exposure to everyone else.
   game_breakdown_public: boolean
+  // Issue #207. The guild's curated top-5 favorite games, in display
+  // order — always part of the public profile (unlike the full
+  // breakdown, which stays behind game_breakdown_public).
+  favorite_games: FavoriteGameEntry[]
 }
 
 export interface CreateGuildRequest {
@@ -268,6 +272,33 @@ export interface GameBreakdownResponse {
   guild_id: string
   total_members: number
   breakdown: GameBreakdownEntry[]
+}
+
+// GET /guilds/{id}/favorite-games and PUT /guilds/{id}/favorite-games
+// (issue #207, implementing decision #160): a manage_guild-curated, capped
+// (5), ordered pin list drawn only from games that already appear in the
+// affinity breakdown above. `stale` is computed live against the same
+// binding data on every read — a stale pin is never auto-removed (see
+// crates/server/src/guilds.rs's module doc comment), just flagged so a
+// manage_guild holder can choose to unpin it.
+export interface FavoriteGameEntry {
+  game_id: string
+  game_slug: string
+  game_name: string
+  position: number
+  stale: boolean
+}
+
+export interface FavoriteGamesResponse {
+  guild_id: string
+  favorites: FavoriteGameEntry[]
+}
+
+export interface SetFavoriteGamesRequest {
+  // Full desired ordered list of pinned game ids — always a full replace,
+  // same convention UpdateGuildRequest's (currently unwired-in-hub) `links`
+  // field uses server-side.
+  game_ids: string[]
 }
 
 export interface RoleResponse {

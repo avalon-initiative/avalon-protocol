@@ -91,6 +91,12 @@ const MAX_GUILD_LINK_LABEL_LEN: usize = 60;
 /// `MAX_AVATAR_URL_LEN`/`MAX_GUILD_BANNER_URL_LEN` use.
 const MAX_GUILD_LINK_URL_LEN: usize = 2048;
 
+/// Cap on the number of entries in a guild's curated favorite-games pin
+/// list (issue #207) — same "top N, not a free-form list" shape
+/// [`MAX_GUILD_LINKS`] already uses, capped at a smaller number since this
+/// is meant to be a deliberately curated highlight, not a catalog.
+const MAX_GUILD_FAVORITE_GAMES: usize = 5;
+
 /// Default/maximum page size for `GET /guilds/discover` (issue #154) — same
 /// "small default, capped maximum" shape `guild_messages`'s
 /// `DEFAULT_MESSAGE_PAGE_SIZE`/`MAX_MESSAGE_PAGE_SIZE` already use.
@@ -360,6 +366,13 @@ pub struct GuildResponse {
     /// profile — a `manage_guild` holder can always fetch the breakdown
     /// regardless of this flag; it only gates exposure to everyone else.
     pub game_breakdown_public: bool,
+    /// Issue #207. The guild's curated top-5 favorite games, in display
+    /// order, each flagged `stale` if it no longer has an actively-bound
+    /// member. Unlike `game_breakdown_public`'s full breakdown, this
+    /// curated subset is always part of the guild's public profile — it's
+    /// the guild's own deliberate choice of what to show, same "always
+    /// public" treatment `links`/`motd` already get.
+    pub favorite_games: Vec<FavoriteGameEntry>,
 }
 
 async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildResponse, AppError> {
@@ -379,6 +392,8 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
             .await?;
     let member_count: i64 = member_count_row.try_get("count")?;
 
+    let favorite_games = fetch_favorite_games(state, guild.id).await?;
+
     Ok(GuildResponse {
         id: guild.id,
         name: guild.name,
@@ -394,6 +409,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         links: guild.links,
         recruiting: guild.recruiting,
         game_breakdown_public: guild.game_breakdown_public,
+        favorite_games,
     })
 }
 
@@ -2106,6 +2122,212 @@ pub async fn game_breakdown(
     }))
 }
 
+// --- Favorite games: curated top-5 pin list (issue #207, implementing -----
+// --- decision #160) --------------------------------------------------------
+
+/// Every game the guild currently has a real affinity for, per #206's
+/// aggregation (`build_game_breakdown_query`): at least one current member
+/// holds an active binding to it. This is the *only* source of truth a pin
+/// may be validated against — reused as-is (not a separate query) so
+/// "pinnable" can never drift from "what the breakdown itself would show".
+async fn guild_bound_game_ids(
+    state: &AppState,
+    guild_id: Uuid,
+) -> Result<std::collections::HashSet<Uuid>, AppError> {
+    let mut builder = build_game_breakdown_query(guild_id);
+    let rows = builder.build().fetch_all(&state.pool).await?;
+    let mut ids = std::collections::HashSet::with_capacity(rows.len());
+    for row in rows {
+        ids.insert(row.try_get::<Uuid, _>("game_id")?);
+    }
+    Ok(ids)
+}
+
+/// One entry in a guild's favorite-games pin list, as read back.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct FavoriteGameEntry {
+    pub game_id: Uuid,
+    pub game_slug: String,
+    pub game_name: String,
+    /// 0-indexed display order — the guild's curated ranking, not a
+    /// popularity/member-count sort.
+    pub position: i16,
+    /// True when this game no longer has any actively-bound guild member
+    /// (per [`guild_bound_game_ids`]) — its last bound member left/unbound
+    /// since the pin was added. Per #207's design, a stale pin is never
+    /// auto-removed (that would churn the guild's public display on a
+    /// single member's binding change); it's surfaced here so a
+    /// `manage_guild` holder can choose to unpin it.
+    pub stale: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FavoriteGamesResponse {
+    pub guild_id: Uuid,
+    pub favorites: Vec<FavoriteGameEntry>,
+}
+
+/// Shared by `GET /guilds/{id}/favorite-games` and [`guild_response`] (the
+/// list embedded in `GET /guilds/{id}`) so both read paths compute
+/// staleness identically, against the same live data.
+async fn fetch_favorite_games(
+    state: &AppState,
+    guild_id: Uuid,
+) -> Result<Vec<FavoriteGameEntry>, AppError> {
+    let rows = sqlx::query(
+        "SELECT gfg.game_id, gfg.position, g.slug AS game_slug, g.name AS game_name \
+         FROM guild_favorite_games gfg \
+         JOIN games g ON g.id = gfg.game_id \
+         WHERE gfg.guild_id = $1 \
+         ORDER BY gfg.position ASC",
+    )
+    .bind(guild_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let bound_ids = guild_bound_game_ids(state, guild_id).await?;
+
+    let mut favorites = Vec::with_capacity(rows.len());
+    for row in rows {
+        let game_id: Uuid = row.try_get("game_id")?;
+        favorites.push(FavoriteGameEntry {
+            game_id,
+            game_slug: row.try_get("game_slug")?,
+            game_name: row.try_get("game_name")?,
+            position: row.try_get("position")?,
+            stale: !bound_ids.contains(&game_id),
+        });
+    }
+    Ok(favorites)
+}
+
+/// `GET /guilds/{id}/favorite-games` (issue #207). Same "any authenticated
+/// identity may read a guild's public metadata" visibility as `GET
+/// /guilds/{id}` itself (see that handler's doc comment) — the favorites
+/// list is exactly the curated subset of affinity data a guild has chosen
+/// to put on public display, so it carries no additional gate beyond
+/// session authentication.
+pub async fn list_favorite_games(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+) -> Result<Json<FavoriteGamesResponse>, AppError> {
+    authenticate(&state, &headers).await?;
+    // 404s on a missing guild rather than returning an empty list.
+    fetch_guild(&state, guild_id).await?;
+    let favorites = fetch_favorite_games(&state, guild_id).await?;
+    Ok(Json(FavoriteGamesResponse {
+        guild_id,
+        favorites,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct SetFavoriteGamesRequest {
+    /// The full desired ordered list of pinned game ids — always a full
+    /// replace, never a per-entry patch, same "resend the whole list"
+    /// convention `UpdateGuildRequest::links` already established for #153.
+    /// Position in this array is the new display order.
+    pub game_ids: Vec<Uuid>,
+}
+
+/// [`MAX_GUILD_FAVORITE_GAMES`]-capped, order-preserving, no duplicates, and
+/// every entry must currently appear in `bound_ids` (#206's live affinity
+/// breakdown) — the one invariant this ticket exists to enforce: a pin can
+/// never manufacture an association with a game the guild has no real,
+/// currently-bound connection to.
+fn validate_favorite_game_ids(
+    game_ids: &[Uuid],
+    bound_ids: &std::collections::HashSet<Uuid>,
+) -> Result<(), AppError> {
+    if game_ids.len() > MAX_GUILD_FAVORITE_GAMES {
+        return Err(AppError::TooManyFavoriteGames);
+    }
+    let mut seen = std::collections::HashSet::with_capacity(game_ids.len());
+    for game_id in game_ids {
+        if !seen.insert(*game_id) {
+            return Err(AppError::DuplicateFavoriteGame);
+        }
+        if !bound_ids.contains(game_id) {
+            return Err(AppError::FavoriteGameNotBound);
+        }
+    }
+    Ok(())
+}
+
+/// `PUT /guilds/{id}/favorite-games` (issue #207). Gated by the same
+/// `manage_guild`/owner permission as #206's breakdown-visibility toggle
+/// (via [`has_guild_permission`]) — reuses that check rather than inventing
+/// a new one, per the ticket. Validates every id against the guild's real,
+/// current affinity (see [`validate_favorite_game_ids`]) before writing
+/// anything; on success, replaces the stored list atomically (delete +
+/// reinsert, same "small enough this doesn't need per-row diffing" call
+/// `update_guild`'s `links` replace already makes) and records a
+/// `guild.favorite_games_updated` outbox event, matching every other guild
+/// mutation in this module.
+pub async fn set_favorite_games(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+    Json(body): Json<SetFavoriteGamesRequest>,
+) -> Result<Json<FavoriteGamesResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageGuild,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    let bound_ids = guild_bound_game_ids(&state, guild_id).await?;
+    validate_favorite_game_ids(&body.game_ids, &bound_ids)?;
+
+    let mut tx = state.pool.begin().await?;
+
+    sqlx::query("DELETE FROM guild_favorite_games WHERE guild_id = $1")
+        .bind(guild_id)
+        .execute(&mut *tx)
+        .await?;
+    for (position, game_id) in body.game_ids.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO guild_favorite_games (guild_id, game_id, position) VALUES ($1, $2, $3)",
+        )
+        .bind(guild_id)
+        .bind(game_id)
+        .bind(position as i16)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.favorite_games_updated".to_string(),
+        issuer: identity_ref(actor, "guild_favorite_games_updated"),
+        subject: guild_ref(guild_id, "guild_favorite_games_updated"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "game_ids": body.game_ids,
+            "actor": actor,
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    let favorites = fetch_favorite_games(&state, guild_id).await?;
+    Ok(Json(FavoriteGamesResponse {
+        guild_id,
+        favorites,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     //! No live Postgres reachable here — pure-logic checks only. The
@@ -2760,5 +2982,56 @@ mod tests {
         let owner = Uuid::new_v4();
         let stranger = Uuid::new_v4();
         assert!(can_view_game_breakdown(owner, stranger, &[], true));
+    }
+
+    // --- Issue #207: favorite games pin list --------------------------------
+
+    #[test]
+    fn a_sixth_pin_is_rejected() {
+        let bound: std::collections::HashSet<Uuid> = (0..MAX_GUILD_FAVORITE_GAMES + 1)
+            .map(|_| Uuid::new_v4())
+            .collect();
+        let game_ids: Vec<Uuid> = bound.iter().copied().collect();
+        assert_eq!(game_ids.len(), MAX_GUILD_FAVORITE_GAMES + 1);
+        assert!(matches!(
+            validate_favorite_game_ids(&game_ids, &bound),
+            Err(AppError::TooManyFavoriteGames)
+        ));
+    }
+
+    #[test]
+    fn exactly_five_pins_is_allowed() {
+        let bound: std::collections::HashSet<Uuid> = (0..MAX_GUILD_FAVORITE_GAMES)
+            .map(|_| Uuid::new_v4())
+            .collect();
+        let game_ids: Vec<Uuid> = bound.iter().copied().collect();
+        assert_eq!(game_ids.len(), MAX_GUILD_FAVORITE_GAMES);
+        assert!(validate_favorite_game_ids(&game_ids, &bound).is_ok());
+    }
+
+    #[test]
+    fn pinning_a_game_with_zero_bound_members_is_rejected() {
+        let bound: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+        let unbound_game = Uuid::new_v4();
+        assert!(matches!(
+            validate_favorite_game_ids(&[unbound_game], &bound),
+            Err(AppError::FavoriteGameNotBound)
+        ));
+    }
+
+    #[test]
+    fn pinning_the_same_game_twice_is_rejected_as_duplicate() {
+        let game_id = Uuid::new_v4();
+        let bound: std::collections::HashSet<Uuid> = [game_id].into_iter().collect();
+        assert!(matches!(
+            validate_favorite_game_ids(&[game_id, game_id], &bound),
+            Err(AppError::DuplicateFavoriteGame)
+        ));
+    }
+
+    #[test]
+    fn empty_pin_list_is_valid() {
+        let bound: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+        assert!(validate_favorite_game_ids(&[], &bound).is_ok());
     }
 }

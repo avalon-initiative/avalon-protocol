@@ -162,6 +162,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/guilds/:id/games/:game_id", post(guilds::associate_game))
         .route("/guilds/:id/game-breakdown", get(guilds::game_breakdown))
+        .route(
+            "/guilds/:id/favorite-games",
+            get(guilds::list_favorite_games).put(guilds::set_favorite_games),
+        )
         .route("/guilds/:id/invites", post(guilds::create_invite))
         .route(
             "/guilds/:id/invites/:invite_id/accept",
