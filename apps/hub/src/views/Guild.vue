@@ -27,6 +27,7 @@ import {
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
+import type { RoleResponse } from '../api/types'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, validateEventForm } from '../api/guildEvents'
 import {
@@ -456,6 +457,29 @@ async function onAddRole() {
     addRoleError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     addingRole.value = false
+  }
+}
+
+// Permission matrix (Role × permission checkboxes) for fast bulk
+// assignment on existing roles, alongside the create-role form above.
+const togglingPermissionFor = ref<string | null>(null)
+const permissionMatrixError = ref('')
+
+async function onTogglePermission(role: RoleResponse, permission: string) {
+  if (!session.token) return
+  permissionMatrixError.value = ''
+  const key = `${role.name_index}:${permission}`
+  togglingPermissionFor.value = key
+  const next = role.permissions.includes(permission)
+    ? role.permissions.filter((p) => p !== permission)
+    : [...role.permissions, permission]
+  try {
+    await api.updateRole(session.token, guildId.value, role.name_index, { permissions: next })
+    await refresh()
+  } catch (e) {
+    permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    togglingPermissionFor.value = null
   }
 }
 
@@ -1203,8 +1227,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
       renders with no pre-selected status today — a real gap, not
       silently worked around.
     -->
-    <div v-else-if="activeTab === 'events'" :class="styles.grid">
-      <div :class="styles.mainColumn">
+    <div v-else-if="activeTab === 'events'" :class="styles.mainColumn">
         <AvalonCard title="Events">
           <p v-if="sortedEvents.length === 0" :class="styles.empty">No upcoming events yet.</p>
           <AvalonEventCard
@@ -1247,14 +1270,14 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             </AvalonForm>
           </div>
         </AvalonCard>
-      </div>
     </div>
 
     <!-- Calendar: same event list as the Events tab above, grouped onto a
          navigable month grid with a dot under any day that has an event —
-         click a day to see what's on it below the calendar. -->
-    <div v-else-if="activeTab === 'calendar'" :class="styles.grid">
-      <div :class="styles.mainColumn">
+         click a day to see what's on it below the calendar. Full width,
+         not the two-column grid the other tabs use — a month grid reads
+         better wide, and there's nothing to put in a side column here. -->
+    <div v-else-if="activeTab === 'calendar'" :class="styles.mainColumn">
         <AvalonCard title="Calendar">
           <AvalonCalendarMonth
             :year="calendarYear"
@@ -1286,17 +1309,40 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             </AvalonEventCard>
           </template>
         </AvalonCard>
-      </div>
     </div>
 
     <!-- Roles: read-only list for any member, add-role form canManageRoles-gated
          (unchanged permission behavior from before #241, just relocated). -->
-    <div v-else-if="activeTab === 'roles'" :class="styles.grid">
-      <div :class="styles.mainColumn">
-        <AvalonCard v-if="canManageRoles" title="Roles">
-          <p v-for="role in roles" :key="role.name_index" :class="styles.empty">
-            {{ role.name }} — {{ role.permissions.join(', ') || 'no permissions' }}
-          </p>
+    <div v-else-if="activeTab === 'roles'" :class="styles.mainColumn">
+        <AvalonCard
+          v-if="canManageRoles"
+          title="Roles"
+          subtitle="Check a box to grant that permission to a role, uncheck to revoke."
+        >
+          <p v-if="permissionMatrixError" :class="styles.error">{{ permissionMatrixError }}</p>
+          <div :class="local.permissionMatrixScroll">
+            <table :class="local.permissionMatrix">
+              <thead>
+                <tr>
+                  <th>Role</th>
+                  <th v-for="permission in PERMISSION_OPTIONS" :key="permission">{{ permission }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="role in roles" :key="role.name_index">
+                  <td>{{ role.name }}</td>
+                  <td v-for="permission in PERMISSION_OPTIONS" :key="permission">
+                    <input
+                      type="checkbox"
+                      :checked="role.permissions.includes(permission)"
+                      :disabled="togglingPermissionFor === `${role.name_index}:${permission}`"
+                      @change="onTogglePermission(role, permission)"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <AvalonButton
             v-show="!showAddRole"
             label="Define a role"
@@ -1324,7 +1370,6 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
           </div>
         </AvalonCard>
         <p v-else :class="styles.empty">You don't have permission to manage this guild's roles.</p>
-      </div>
     </div>
 
     <!-- Settings: recruiting toggle, MOTD/banner/links editing, transfer

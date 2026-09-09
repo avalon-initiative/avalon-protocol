@@ -110,3 +110,37 @@
   align-items: flex-end;
   gap: var(--av-space-2);
 }
+
+/* Roles tab: Role × permission checkbox matrix for fast bulk assignment. */
+.permissionMatrixScroll {
+  overflow-x: auto;
+}
+
+.permissionMatrix {
+  border-collapse: collapse;
+  width: 100%;
+
+  th,
+  td {
+    padding: var(--av-space-2) var(--av-space-3);
+    text-align: center;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--av-color-border);
+  }
+
+  th:first-child,
+  td:first-child {
+    text-align: left;
+  }
+
+  th {
+    font-size: var(--av-text-xs);
+    font-weight: 600;
+    color: var(--av-color-text-secondary);
+  }
+
+  td:first-child {
+    font-weight: 600;
+    color: var(--av-color-text);
+  }
+}
