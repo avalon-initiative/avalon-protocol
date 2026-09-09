@@ -426,9 +426,11 @@ mod live_tests {
                 .expect("failed to build a throwaway Webauthn instance for this test"),
         );
         let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone());
+        let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
         AppState {
             pool,
             chain,
+            indexer,
             webauthn,
             presence: PresenceStore::from_env(),
         }

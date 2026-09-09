@@ -43,6 +43,7 @@ async fn main() {
             .expect("failed to build Webauthn instance — check AVALON_WEBAUTHN_RP_ID/AVALON_WEBAUTHN_ORIGIN"),
     );
     let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone());
+    let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
 
     // Drains the identity/etc. outbox into the ledger at its own pace —
     // see crates/server/src/outbox.rs (issue #71).
@@ -51,6 +52,7 @@ async fn main() {
     let app = avalon_server::router(AppState {
         pool,
         chain,
+        indexer,
         webauthn,
         presence: avalon_server::presence::PresenceStore::from_env(),
     });
