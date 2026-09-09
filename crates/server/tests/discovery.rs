@@ -408,3 +408,46 @@ async fn search_requires_a_session_token() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+/// `discoverable` must never flip as a side effect of a `PATCH /me` that
+/// ultimately fails on an unrelated field — a default-off, no-exceptions
+/// preference must have no partial-write path. `avatar_url` is deliberately
+/// invalid here so the request is guaranteed to fail validation; if
+/// `set_discoverable` ran before that validation, `discoverable` would end
+/// up `true` anyway despite the caller seeing an error response.
+#[tokio::test]
+#[ignore]
+async fn discoverable_does_not_flip_when_the_rest_of_the_patch_fails() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+
+    let (identity_id, token) = seed_identity_session(&pool).await;
+
+    let response = auth(http.patch(format!("{base}/me")), &token)
+        .json(&serde_json::json!({
+            "discoverable": true,
+            "avatar_url": "not-a-valid-url",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        !response.status().is_success(),
+        "expected the invalid avatar_url to fail this request: {:?}",
+        response.status()
+    );
+
+    let discoverable: bool =
+        sqlx::query("SELECT discoverable FROM discovery_preferences WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+            .map(|row| row.try_get("discoverable").unwrap())
+            .unwrap_or(false);
+    assert!(
+        !discoverable,
+        "discoverable must stay false when the rest of the PATCH /me request failed"
+    );
+}

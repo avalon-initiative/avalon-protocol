@@ -923,17 +923,6 @@ pub async fn update_profile(
 ) -> Result<Json<ProfileResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    // `discoverable` (#205) is deliberately handled outside the
-    // transaction below, the same way `presence::update_my_presence`
-    // handles `hide_playing`: it's a player preference, not durable
-    // protocol history, so it has no `profile.updated` payload and needs
-    // no atomicity with the rest of this request's changes. Applied first
-    // so the `PROFILE_SELECT` read further down (inside the transaction)
-    // already reflects it.
-    if let Some(discoverable) = body.discoverable {
-        crate::discovery::set_discoverable(&state, identity_id, discoverable).await?;
-    }
-
     let discriminator = match &body.display_name {
         Some(new_name) => Some(discriminator_for_rename(&state, identity_id, new_name).await?),
         None => None,
@@ -968,6 +957,23 @@ pub async fn update_profile(
         Some(raw) => validate_favorite_genres(raw)?,
         None => Vec::new(),
     };
+
+    // `discoverable` (#205) is deliberately handled outside the
+    // transaction below, the same way `presence::update_my_presence`
+    // handles `hide_playing`: it's a player preference, not durable
+    // protocol history, so it has no `profile.updated` payload and needs
+    // no atomicity with the rest of this request's changes. Applied only
+    // now, after every fallible validation above has already succeeded —
+    // never before them. `discriminator_for_rename`/`validate_*` can each
+    // still fail and abort this handler with an `AppError`; running this
+    // write any earlier would let an otherwise-failed PATCH /me (a bad
+    // avatar_url, an invalid genre, ...) leave `discoverable` flipped
+    // anyway, which is exactly the kind of partial-write a default-off,
+    // no-exceptions preference must never have. Still applied before the
+    // `PROFILE_SELECT` read further down, so that read already reflects it.
+    if let Some(discoverable) = body.discoverable {
+        crate::discovery::set_discoverable(&state, identity_id, discoverable).await?;
+    }
 
     // `display_name`, `avatar_url`, `bio`, `favorite_genres`, and `pronouns`
     // are all promised-durable (ADR #75, the table in
