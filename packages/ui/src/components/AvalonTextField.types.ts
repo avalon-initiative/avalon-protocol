@@ -5,4 +5,5 @@ export interface AvalonTextFieldProps {
   placeholder?: string
   error?: string
   disabled?: boolean
+  maxlength?: number
 }

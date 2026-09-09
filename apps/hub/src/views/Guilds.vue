@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonForm, AvalonGuildCard, AvalonTextField } from '@avalon/ui'
 import * as api from '../api/client'
-import { filterGuildsByNameOrTag } from '../api/guilds'
+import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useSessionStore } from '../stores/session'
@@ -71,6 +71,32 @@ async function onCreateGuild() {
 function openGuild(guildId: string) {
   router.push({ name: 'guild', params: { id: guildId } })
 }
+
+// Issue #242: "Apply to join" on a Discover card. `myGuildIds` comes from
+// the "My guilds" tab's own fetch (`guilds` above) — no separate membership
+// lookup. `appliedGuildIds` tracks guilds the caller has successfully
+// applied to this session, so the button flips to a confirmation instead of
+// re-submitting (harmless either way — the server treats a duplicate apply
+// as idempotent — but this reads better than a button that looks like it
+// does nothing on a second click).
+const myGuildIds = computed(() => guilds.value.map((g) => g.id))
+const appliedGuildIds = ref(new Set<string>())
+const applyingTo = ref<string | null>(null)
+const applyError = ref('')
+
+async function onApplyToJoin(guildId: string) {
+  if (!session.token) return
+  applyError.value = ''
+  applyingTo.value = guildId
+  try {
+    await api.createJoinRequest(session.token, guildId, {})
+    appliedGuildIds.value = new Set(appliedGuildIds.value).add(guildId)
+  } catch (e) {
+    applyError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    applyingTo.value = null
+  }
+}
 </script>
 
 <template>
@@ -134,6 +160,7 @@ function openGuild(guildId: string) {
               label="Search by name, tag, or description"
               placeholder="Ashen Vanguard"
               :query="discover.query.value"
+              no-margin
               @update:query="discover.query.value = $event"
             />
             <AvalonTextField v-model="discover.tag.value" label="Tag" placeholder="ASHV" />
@@ -146,16 +173,30 @@ function openGuild(guildId: string) {
           <p v-else-if="!discover.loading.value && discover.guilds.value.length === 0" :class="styles.empty">
             No guilds match your search.
           </p>
-          <AvalonGuildCard
-            v-for="guild in discover.guilds.value"
-            :key="guild.id"
-            :name="guild.name"
-            :tag="guild.tag"
-            :description="guild.description"
-            :member-count="guild.member_count"
-            :recruiting="guild.recruiting"
-            @select="openGuild(guild.id)"
-          />
+          <p v-if="applyError" :class="styles.error">{{ applyError }}</p>
+          <div v-for="guild in discover.guilds.value" :key="guild.id" :class="local.discoverCard">
+            <AvalonGuildCard
+              :name="guild.name"
+              :tag="guild.tag"
+              :description="guild.description"
+              :member-count="guild.member_count"
+              :recruiting="guild.recruiting"
+              @select="openGuild(guild.id)"
+            />
+            <AvalonButton
+              v-if="appliedGuildIds.has(guild.id)"
+              label="Applied"
+              variant="secondary"
+              disabled
+            />
+            <AvalonButton
+              v-else-if="canApplyToJoinGuild(guild, myGuildIds)"
+              :label="applyingTo === guild.id ? 'Applying…' : 'Apply to join'"
+              variant="secondary"
+              :disabled="applyingTo === guild.id"
+              @click="onApplyToJoin(guild.id)"
+            />
+          </div>
           <AvalonButton
             v-if="discover.nextCursor.value"
             label="Load more"
@@ -181,7 +222,7 @@ function openGuild(guildId: string) {
               @submit="onCreateGuild"
             >
               <AvalonTextField v-model="createName" label="Name" placeholder="Ashen Vanguard" />
-              <AvalonTextField v-model="createTag" label="Tag (2-5 characters)" placeholder="ASHV" />
+              <AvalonTextField v-model="createTag" label="Tag (2-5 characters)" placeholder="ASHV" :maxlength="5" />
               <AvalonTextField
                 v-model="createDescription"
                 label="Description (optional)"

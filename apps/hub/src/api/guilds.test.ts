@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addFavoriteGameId,
   buildDiscoverQueryString,
+  canApplyToJoinGuild,
   canChangeMemberRole,
   canKickMember,
   canPinMoreFavorites,
@@ -551,5 +552,19 @@ describe('formatFavoriteGameEntry', () => {
     expect(formatFavoriteGameEntry(favorite('g1', 'Ashen Realms', 0, true))).toBe(
       'Ashen Realms (no longer actively played)',
     )
+  })
+})
+
+describe('canApplyToJoinGuild', () => {
+  it('is true for a recruiting guild the caller is not a member of', () => {
+    expect(canApplyToJoinGuild({ id: 'g1', recruiting: true }, ['g2'])).toBe(true)
+  })
+
+  it('is false for a non-recruiting guild', () => {
+    expect(canApplyToJoinGuild({ id: 'g1', recruiting: false }, [])).toBe(false)
+  })
+
+  it('is false when the caller already belongs to the guild', () => {
+    expect(canApplyToJoinGuild({ id: 'g1', recruiting: true }, ['g1', 'g2'])).toBe(false)
   })
 })

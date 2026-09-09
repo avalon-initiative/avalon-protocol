@@ -17,4 +17,10 @@ export interface AvalonFilterBarProps {
   // Omit entirely to render just the search input with no sort control.
   sortOptions?: AvalonFilterBarSortOption[]
   sortValue?: string
+  // Drops the standalone bottom margin — set this when composing the bar
+  // as one flex item alongside other fields (e.g. Guilds.vue's discover
+  // filter row), where that margin throws off `align-items: flex-end`
+  // between siblings. Leave unset for the default standalone-above-a-list
+  // placement (e.g. Guild.vue's member search).
+  noMargin?: boolean
 }

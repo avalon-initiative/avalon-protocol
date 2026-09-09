@@ -66,6 +66,7 @@ const {
   error,
   gameBreakdown,
   gameBreakdownError,
+  joinRequests,
   refresh,
 } = useGuildDetail(guildId)
 
@@ -196,7 +197,7 @@ const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 const savingField = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
 
-async function saveGuildField(field: 'name' | 'tag' | 'description', value: string) {
+async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | 'banner', value: string) {
   if (!session.token) return
   fieldErrors.value[field] = ''
   savingField.value = field
@@ -208,6 +209,58 @@ async function saveGuildField(field: 'name' | 'tag' | 'description', value: stri
   } finally {
     savingField.value = null
   }
+}
+
+// --- Recruiting toggle + links (issue #153) -------------------------------
+
+const savingRecruiting = ref(false)
+const recruitingError = ref('')
+
+async function onToggleRecruiting(next: boolean) {
+  if (!session.token) return
+  recruitingError.value = ''
+  savingRecruiting.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { recruiting: next })
+    await refresh()
+  } catch (e) {
+    recruitingError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingRecruiting.value = false
+  }
+}
+
+const newLinkLabel = ref('')
+const newLinkUrl = ref('')
+const savingLinks = ref(false)
+const linksError = ref('')
+
+async function saveLinks(links: { label: string; url: string }[]) {
+  if (!session.token) return
+  linksError.value = ''
+  savingLinks.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { links })
+    await refresh()
+  } catch (e) {
+    linksError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingLinks.value = false
+  }
+}
+
+async function onAddLink() {
+  if (!guild.value || !newLinkLabel.value.trim() || !newLinkUrl.value.trim()) return
+  await saveLinks([...guild.value.links, { label: newLinkLabel.value.trim(), url: newLinkUrl.value.trim() }])
+  if (!linksError.value) {
+    newLinkLabel.value = ''
+    newLinkUrl.value = ''
+  }
+}
+
+async function onRemoveLink(index: number) {
+  if (!guild.value) return
+  await saveLinks(guild.value.links.filter((_, i) => i !== index))
 }
 
 // --- Roles ------------------------------------------------------------
@@ -286,6 +339,42 @@ async function onKick(identityId: string) {
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+
+// --- Join requests (issue #242) ------------------------------------------
+// `joinRequests` (pending-only, per useGuildDetail's default listJoinRequests
+// call) is manage_members-gated server-side — empty here for anyone who
+// isn't a manager, same non-fatal-403 posture gameBreakdown already has.
+
+const decidingRequestId = ref<string | null>(null)
+const joinRequestsError = ref('')
+
+async function onApproveJoinRequest(requestId: string) {
+  if (!session.token) return
+  joinRequestsError.value = ''
+  decidingRequestId.value = requestId
+  try {
+    await api.approveJoinRequest(session.token, guildId.value, requestId)
+    await refresh()
+  } catch (e) {
+    joinRequestsError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    decidingRequestId.value = null
+  }
+}
+
+async function onRejectJoinRequest(requestId: string) {
+  if (!session.token) return
+  joinRequestsError.value = ''
+  decidingRequestId.value = requestId
+  try {
+    await api.rejectJoinRequest(session.token, guildId.value, requestId)
+    await refresh()
+  } catch (e) {
+    joinRequestsError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    decidingRequestId.value = null
   }
 }
 
@@ -784,6 +873,34 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
         </AvalonCard>
 
         <!--
+          Issue #242: applicant-initiated join requests, the counterpart to
+          "Invite a player" above. manage_members-gated same as that card
+          (the server independently enforces this — joinRequests is simply
+          empty for anyone else). Pending only, matching
+          crates/server/src/guilds.rs::list_join_requests' own default.
+        -->
+        <AvalonCard v-if="canManageMembers" title="Applications">
+          <p v-if="joinRequests.length === 0" :class="styles.empty">No pending applications.</p>
+          <div v-for="request in joinRequests" :key="request.id" :class="styles.empty">
+            {{ request.applicant }}
+            <template v-if="request.message">— "{{ request.message }}"</template>
+            <AvalonButton
+              label="Approve"
+              variant="primary"
+              :disabled="decidingRequestId === request.id"
+              @click="onApproveJoinRequest(request.id)"
+            />
+            <AvalonButton
+              label="Reject"
+              variant="danger"
+              :disabled="decidingRequestId === request.id"
+              @click="onRejectJoinRequest(request.id)"
+            />
+          </div>
+          <p v-if="joinRequestsError" :class="styles.error">{{ joinRequestsError }}</p>
+        </AvalonCard>
+
+        <!--
           Issue #206 (implementing decision #160): a read-only, derived
           breakdown of which games guildmates actually play, aggregated
           from real GameBinding (#83) data — never a manually-declared
@@ -793,7 +910,11 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
           `gameBreakdown` successfully loads, which the server itself
           gates on `guild.game_breakdown_public`.
         -->
-        <AvalonCard v-if="canManageGuild || gameBreakdown" title="Game affinity">
+        <AvalonCard
+          v-if="canManageGuild || gameBreakdown"
+          title="Game affinity"
+          subtitle="Auto-derived from members' active game bindings — not something anyone sets by hand. Managers can choose whether it's visible on this guild's public profile and discovery card; it's always visible to members."
+        >
           <p v-if="canManageGuild" :class="styles.empty">
             Shown on this guild's public profile and discovery card:
             {{ guild.game_breakdown_public ? 'yes' : 'no' }}
@@ -877,6 +998,67 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             </div>
             <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
           </template>
+        </AvalonCard>
+
+        <AvalonCard
+          v-if="canManageGuild"
+          title="Recruiting & profile"
+          subtitle="Controls what strangers see when browsing Discover (issue #154) and what members see on the guild page."
+        >
+          <p :class="styles.empty">
+            Recruiting: {{ guild.recruiting ? 'yes — visible under Discover' : 'no — hidden from Discover' }}
+          </p>
+          <AvalonButton
+            :label="savingRecruiting ? 'Saving…' : guild.recruiting ? 'Stop recruiting' : 'Start recruiting'"
+            variant="secondary"
+            :disabled="savingRecruiting"
+            @click="onToggleRecruiting(!guild.recruiting)"
+          />
+          <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
+
+          <AvalonEditableField
+            label="Message of the day"
+            :value="guild.motd ?? ''"
+            empty-text="No message set"
+            :saving="savingField === 'motd'"
+            :error="fieldErrors.motd"
+            @save="saveGuildField('motd', $event)"
+          />
+          <AvalonEditableField
+            label="Banner URL"
+            :value="guild.banner ?? ''"
+            empty-text="No banner set"
+            :saving="savingField === 'banner'"
+            :error="fieldErrors.banner"
+            @save="saveGuildField('banner', $event)"
+          />
+
+          <p :class="styles.empty">Links</p>
+          <ul :class="styles.list">
+            <li v-for="(link, index) in guild.links" :key="`${link.label}-${index}`" :class="styles.listRow">
+              <span :class="styles.listText">
+                <span :class="styles.listLabel">{{ link.label }}</span>
+                <span :class="styles.listDetail">{{ link.url }}</span>
+              </span>
+              <AvalonButton
+                label="Remove"
+                variant="danger"
+                :disabled="savingLinks"
+                @click="onRemoveLink(index)"
+              />
+            </li>
+          </ul>
+          <p v-if="linksError" :class="styles.error">{{ linksError }}</p>
+          <div :class="styles.actions">
+            <AvalonTextField v-model="newLinkLabel" label="Label" placeholder="Discord" />
+            <AvalonTextField v-model="newLinkUrl" label="URL" placeholder="https://discord.gg/…" />
+            <AvalonButton
+              :label="savingLinks ? 'Saving…' : 'Add link'"
+              variant="secondary"
+              :disabled="savingLinks || !newLinkLabel.trim() || !newLinkUrl.trim()"
+              @click="onAddLink"
+            />
+          </div>
         </AvalonCard>
 
         <AvalonCard v-if="canManageGuild" title="Associated games">

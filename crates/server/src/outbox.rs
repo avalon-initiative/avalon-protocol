@@ -110,16 +110,23 @@ async fn drain_once(pool: &PgPool, chain: &PostgresSettlementProvider) -> Result
 
     // Failure: leave every row in this tick's batch pending, retried whole
     // (as a new batch) next tick — `commit` is one transaction, so nothing
-    // was partially settled.
-    if let Ok(commitment) = chain.commit(&batch).await {
-        for id in pending_ids {
-            sqlx::query(
-                "UPDATE protocol_outbox SET committed_at = now(), batch_id = $2 WHERE id = $1",
-            )
-            .bind(id)
-            .bind(commitment.batch_id)
-            .execute(pool)
-            .await?;
+    // was partially settled. Still logged, though — a `commit` that fails
+    // every tick (e.g. a missing signing key) must not fail silently
+    // forever; the pending rows alone don't say why they're stuck.
+    match chain.commit(&batch).await {
+        Ok(commitment) => {
+            for id in pending_ids {
+                sqlx::query(
+                    "UPDATE protocol_outbox SET committed_at = now(), batch_id = $2 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(commitment.batch_id)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Err(err) => {
+            eprintln!("outbox worker: chain.commit failed, batch left pending: {err}");
         }
     }
 

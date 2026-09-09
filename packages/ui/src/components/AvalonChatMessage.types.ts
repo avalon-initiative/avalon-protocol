@@ -1,7 +1,8 @@
 export interface AvalonChatMessageProps {
   authorId: string
-  // Always undefined today — no endpoint resolves another identity's
-  // display name yet, same gap AvalonFriendRow already documents.
+  // Resolved via GET /identities/profiles (issue #161) by the caller,
+  // e.g. useGuildChat. Falls back to authorId when unresolved (a fresh
+  // author this session hasn't looked up yet, or the lookup failed).
   authorDisplayName?: string
   body: string
   // A pre-formatted, caller-supplied time string (e.g. "3:04 PM") — this

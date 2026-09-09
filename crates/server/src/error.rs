@@ -211,6 +211,12 @@ pub enum AppError {
     NotAGuardian,
     #[error("this guardian has already approved this recovery request")]
     AlreadyApproved,
+    #[error("this guild is not currently recruiting")]
+    GuildNotRecruiting,
+    #[error("join request message must be 300 characters or fewer")]
+    InvalidJoinRequestMessage,
+    #[error("guild join request not found")]
+    GuildJoinRequestNotFound,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -331,6 +337,9 @@ impl IntoResponse for AppError {
             AppError::RecoveryAlreadyResolved => StatusCode::CONFLICT,
             AppError::NotAGuardian => StatusCode::FORBIDDEN,
             AppError::AlreadyApproved => StatusCode::CONFLICT,
+            AppError::GuildNotRecruiting => StatusCode::FORBIDDEN,
+            AppError::InvalidJoinRequestMessage => StatusCode::BAD_REQUEST,
+            AppError::GuildJoinRequestNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidDiscoverQuery => StatusCode::BAD_REQUEST,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
                 StatusCode::BAD_REQUEST

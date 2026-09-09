@@ -588,6 +588,33 @@ with Game A becomes historical.
   `/guilds/:id` lists upcoming events with title/time/RSVP counts and a
   going/maybe/not-going control, using two new `packages/ui` components
   (`AvalonEventCard`, `AvalonRsvpControl`).
+- **Guild join requests (issue #242).** `guild_join_requests`
+  (`crates/server/db/migrations/0030_guild_join_requests`) is the
+  applicant-initiated counterpart to `guild_invites` — a stranger applying
+  to a `recruiting` guild from #154's Discover board instead of waiting on
+  a manager to invite them. Same projection posture as `guild_invites`: a
+  pending/approved/rejected/withdrawn transition is not itself durable
+  history, only the resulting membership-add on approval is (through the
+  same `add_member` helper `accept_invite`/`join_guild` already use, so
+  approval can't drift from what an accepted invite or a direct open-guild
+  join produce). `POST /guilds/{id}/join-requests` rejects applying to a
+  non-recruiting guild (`GuildNotRecruiting`) and to a guild the caller
+  already belongs to; a second apply while one is already pending is
+  idempotent, returning the existing pending row rather than erroring or
+  duplicating it (`guild_join_requests_pending_idx`, a partial unique index
+  on `(guild_id, applicant) WHERE status = 'pending'`, same shape
+  `guild_invites_pending_idx` uses). `GET /guilds/{id}/join-requests`
+  (pending-only by default, `?status=all` for the full history),
+  `POST .../join-requests/{id}/approve`, and `POST .../join-requests/{id}/reject`
+  are all `manage_members`-gated via the existing `has_guild_permission`
+  helper; `DELETE /guilds/{id}/join-requests/{id}` lets only the applicant
+  withdraw their own pending request, same "consent from the other side"
+  shape `decline_invite` has from the opposite party. Hub: an "Apply to
+  join" action on Discover guild cards (`apps/hub/src/views/Guilds.vue`,
+  shown only for recruiting guilds the caller isn't already a member of),
+  and an "Applications" section on the guild page
+  (`apps/hub/src/views/Guild.vue`, `manage_members`-gated) for managers to
+  review pending requests.
 
 ## Decisions and tickets
 

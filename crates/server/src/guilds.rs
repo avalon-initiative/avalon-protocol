@@ -103,6 +103,11 @@ const MAX_GUILD_FAVORITE_GAMES: usize = 5;
 const DEFAULT_DISCOVER_PAGE_SIZE: i64 = 20;
 const MAX_DISCOVER_PAGE_SIZE: i64 = 100;
 
+/// Cap on `GuildJoinRequest.message` (issue #242) — a short free-text note
+/// from the applicant, not an essay; same order of magnitude as
+/// `MAX_ROLE_DESCRIPTION_LEN`.
+const MAX_JOIN_REQUEST_MESSAGE_LEN: usize = 300;
+
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
@@ -1354,6 +1359,56 @@ async fn fetch_pending_invite(
     })
 }
 
+/// Inserts `identity_id` into `guild_members` at `role_index` and enqueues
+/// the durable `guild.member_added` event, in the given transaction. The
+/// one membership-add code path, shared by [`accept_invite`],
+/// [`join_guild`], and [`approve_join_request`] (issue #242) so approving a
+/// join request can't drift from what invites/direct-join already do.
+async fn add_member(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    guild_id: Uuid,
+    identity_id: Uuid,
+    role_index: i32,
+    actor: Uuid,
+    via: &str,
+) -> Result<OffsetDateTime, AppError> {
+    let joined_at = OffsetDateTime::now_utc();
+    let inserted = sqlx::query(
+        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .bind(role_index)
+    .bind(joined_at)
+    .execute(&mut **tx)
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &inserted {
+        if db_err.is_unique_violation() {
+            return Err(AppError::AlreadyGuildMember);
+        }
+    }
+    inserted?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.member_added".to_string(),
+        issuer: identity_ref(actor, "guild_member_added"),
+        subject: guild_ref(guild_id, "guild_member_added"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "identity_id": identity_id,
+            "role_index": role_index,
+            "via": via,
+            "actor": actor,
+        }),
+        timestamp: joined_at,
+        version: 1,
+    };
+    outbox::enqueue(tx, &event).await?;
+
+    Ok(joined_at)
+}
+
 pub async fn accept_invite(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1380,39 +1435,8 @@ pub async fn accept_invite(
         return Err(AppError::GuildInviteNotFound);
     }
 
-    let joined_at = OffsetDateTime::now_utc();
-    let inserted = sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(guild_id)
-    .bind(actor)
-    .bind(MEMBER_ROLE_INDEX)
-    .bind(joined_at)
-    .execute(&mut *tx)
-    .await;
-    if let Err(sqlx::Error::Database(db_err)) = &inserted {
-        if db_err.is_unique_violation() {
-            return Err(AppError::AlreadyGuildMember);
-        }
-    }
-    inserted?;
-
-    let event = ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: "guild.member_added".to_string(),
-        issuer: identity_ref(actor, "guild_member_added"),
-        subject: guild_ref(guild_id, "guild_member_added"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "identity_id": actor,
-            "role_index": MEMBER_ROLE_INDEX,
-            "via": "invite",
-            "actor": actor,
-        }),
-        timestamp: joined_at,
-        version: 1,
-    };
-    outbox::enqueue(&mut tx, &event).await?;
+    let joined_at =
+        add_member(&mut tx, guild_id, actor, MEMBER_ROLE_INDEX, actor, "invite").await?;
 
     tx.commit().await?;
 
@@ -1459,39 +1483,7 @@ pub async fn join_guild(
 
     let mut tx = state.pool.begin().await?;
 
-    let joined_at = OffsetDateTime::now_utc();
-    let inserted = sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(guild_id)
-    .bind(actor)
-    .bind(MEMBER_ROLE_INDEX)
-    .bind(joined_at)
-    .execute(&mut *tx)
-    .await;
-    if let Err(sqlx::Error::Database(db_err)) = &inserted {
-        if db_err.is_unique_violation() {
-            return Err(AppError::AlreadyGuildMember);
-        }
-    }
-    inserted?;
-
-    let event = ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: "guild.member_added".to_string(),
-        issuer: identity_ref(actor, "guild_member_added"),
-        subject: guild_ref(guild_id, "guild_member_added"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "identity_id": actor,
-            "role_index": MEMBER_ROLE_INDEX,
-            "via": "join",
-            "actor": actor,
-        }),
-        timestamp: joined_at,
-        version: 1,
-    };
-    outbox::enqueue(&mut tx, &event).await?;
+    let joined_at = add_member(&mut tx, guild_id, actor, MEMBER_ROLE_INDEX, actor, "join").await?;
 
     tx.commit().await?;
 
@@ -1593,6 +1585,339 @@ pub async fn remove_member(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+
+    Ok(())
+}
+
+// --- Join requests (issue #242) --------------------------------------------
+//
+// Symmetric to `guild_invites` above but initiated by the applicant instead
+// of a manager: a stranger browsing the Discover board (#154) applies to a
+// `recruiting` guild instead of waiting to be invited. `guild_join_requests`
+// is a projection, same durability posture as `guild_invites` — a
+// pending/approved/rejected/withdrawn transition is not itself durable
+// history; only the resulting membership-add (via [`add_member`], on
+// approval) is.
+
+fn validate_join_request_message(message: &str) -> Result<(), AppError> {
+    if message.chars().count() > MAX_JOIN_REQUEST_MESSAGE_LEN {
+        return Err(AppError::InvalidJoinRequestMessage);
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct CreateJoinRequestRequest {
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct GuildJoinRequestResponse {
+    pub id: Uuid,
+    pub guild_id: Uuid,
+    pub applicant: Uuid,
+    pub message: Option<String>,
+    pub status: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub decided_at: Option<OffsetDateTime>,
+    pub decided_by: Option<Uuid>,
+}
+
+fn join_request_response(
+    row: &sqlx::postgres::PgRow,
+) -> Result<GuildJoinRequestResponse, AppError> {
+    Ok(GuildJoinRequestResponse {
+        id: row.try_get("id")?,
+        guild_id: row.try_get("guild_id")?,
+        applicant: row.try_get("applicant")?,
+        message: row.try_get("message")?,
+        status: row.try_get("status")?,
+        created_at: row.try_get("created_at")?,
+        decided_at: row.try_get("decided_at")?,
+        decided_by: row.try_get("decided_by")?,
+    })
+}
+
+/// `POST /guilds/{id}/join-requests` — any authenticated identity not
+/// already a member may apply to a `recruiting` guild. Applying to a
+/// non-recruiting guild is rejected, same gating #154's own discovery board
+/// applies to strangers browsing it. A second apply while one is already
+/// pending is idempotent (returns the existing pending row) rather than an
+/// error or a duplicate, same posture [`create_invite`] takes for a
+/// duplicate invite.
+pub async fn create_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+    Json(body): Json<CreateJoinRequestRequest>,
+) -> Result<Json<GuildJoinRequestResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    if !guild.recruiting {
+        return Err(AppError::GuildNotRecruiting);
+    }
+
+    if let Some(message) = &body.message {
+        validate_join_request_message(message)?;
+    }
+
+    let already_member =
+        sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
+            .bind(guild_id)
+            .bind(actor)
+            .fetch_optional(&state.pool)
+            .await?;
+    if already_member.is_some() {
+        return Err(AppError::AlreadyGuildMember);
+    }
+
+    let request_id = Uuid::new_v4();
+    let created_at = OffsetDateTime::now_utc();
+    let inserted = sqlx::query(
+        "INSERT INTO guild_join_requests (id, guild_id, applicant, message, status, created_at) \
+         VALUES ($1, $2, $3, $4, 'pending', $5)",
+    )
+    .bind(request_id)
+    .bind(guild_id)
+    .bind(actor)
+    .bind(&body.message)
+    .bind(created_at)
+    .execute(&state.pool)
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &inserted {
+        if db_err.is_unique_violation() {
+            // A pending request from this applicant already exists —
+            // idempotent by design (ticket: "duplicate apply idempotent"),
+            // so return the existing row rather than erroring or
+            // duplicating it.
+            let existing = sqlx::query(
+                "SELECT id, guild_id, applicant, message, status, created_at, decided_at, decided_by \
+                 FROM guild_join_requests WHERE guild_id = $1 AND applicant = $2 AND status = 'pending'",
+            )
+            .bind(guild_id)
+            .bind(actor)
+            .fetch_one(&state.pool)
+            .await?;
+            return Ok(Json(join_request_response(&existing)?));
+        }
+    }
+    inserted?;
+
+    Ok(Json(GuildJoinRequestResponse {
+        id: request_id,
+        guild_id,
+        applicant: actor,
+        message: body.message,
+        status: "pending".to_string(),
+        created_at,
+        decided_at: None,
+        decided_by: None,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ListJoinRequestsQuery {
+    /// Defaults to `pending`-only; pass `all` to include every status.
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// `GET /guilds/{id}/join-requests` — `manage_members`-gated. Lists
+/// pending requests by default (`?status=all` for every status).
+pub async fn list_join_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+    Query(query): Query<ListJoinRequestsQuery>,
+) -> Result<Json<Vec<GuildJoinRequestResponse>>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageMembers,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    let show_all = query.status.as_deref() == Some("all");
+    let rows = if show_all {
+        sqlx::query(
+            "SELECT id, guild_id, applicant, message, status, created_at, decided_at, decided_by \
+             FROM guild_join_requests WHERE guild_id = $1 ORDER BY created_at DESC",
+        )
+        .bind(guild_id)
+        .fetch_all(&state.pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, guild_id, applicant, message, status, created_at, decided_at, decided_by \
+             FROM guild_join_requests WHERE guild_id = $1 AND status = 'pending' ORDER BY created_at ASC",
+        )
+        .bind(guild_id)
+        .fetch_all(&state.pool)
+        .await?
+    };
+
+    rows.iter()
+        .map(join_request_response)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Json)
+}
+
+struct PendingJoinRequest {
+    applicant: Uuid,
+}
+
+async fn fetch_pending_join_request(
+    state: &AppState,
+    guild_id: Uuid,
+    request_id: Uuid,
+) -> Result<PendingJoinRequest, AppError> {
+    let row = sqlx::query(
+        "SELECT applicant FROM guild_join_requests WHERE id = $1 AND guild_id = $2 AND status = 'pending'",
+    )
+    .bind(request_id)
+    .bind(guild_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::GuildJoinRequestNotFound)?;
+    Ok(PendingJoinRequest {
+        applicant: row.try_get("applicant")?,
+    })
+}
+
+/// `POST /guilds/{id}/join-requests/{request_id}/approve` —
+/// `manage_members`-gated. Adds the applicant as a member (base role)
+/// through [`add_member`] — the same membership-add path [`accept_invite`]
+/// and [`join_guild`] already use, not a second one — and marks the
+/// request approved.
+pub async fn approve_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, request_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<GuildMemberResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageMembers,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    let request = fetch_pending_join_request(&state, guild_id, request_id).await?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let resolved = sqlx::query(
+        "UPDATE guild_join_requests SET status = 'approved', decided_at = now(), decided_by = $2 \
+         WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(request_id)
+    .bind(actor)
+    .execute(&mut *tx)
+    .await?;
+    if resolved.rows_affected() == 0 {
+        // Resolved by a concurrent request between the fetch above and here.
+        return Err(AppError::GuildJoinRequestNotFound);
+    }
+
+    let joined_at = add_member(
+        &mut tx,
+        guild_id,
+        request.applicant,
+        MEMBER_ROLE_INDEX,
+        actor,
+        "join_request",
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(Json(GuildMemberResponse {
+        guild_id,
+        identity_id: request.applicant,
+        role_index: MEMBER_ROLE_INDEX,
+        joined_at,
+    }))
+}
+
+/// `POST /guilds/{id}/join-requests/{request_id}/reject` —
+/// `manage_members`-gated. Not durable history — see this section's module
+/// doc comment.
+pub async fn reject_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, request_id)): Path<(Uuid, Uuid)>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageMembers,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    fetch_pending_join_request(&state, guild_id, request_id).await?;
+
+    let resolved = sqlx::query(
+        "UPDATE guild_join_requests SET status = 'rejected', decided_at = now(), decided_by = $2 \
+         WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(request_id)
+    .bind(actor)
+    .execute(&state.pool)
+    .await?;
+    if resolved.rows_affected() == 0 {
+        return Err(AppError::GuildJoinRequestNotFound);
+    }
+
+    Ok(())
+}
+
+/// `DELETE /guilds/{id}/join-requests/{request_id}` — the applicant
+/// withdrawing their own pending request only; unlike approve/reject this
+/// is not `manage_members`-gated, same "consent from the other side" shape
+/// as `decline_invite`, just from the opposite party.
+pub async fn withdraw_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, request_id)): Path<(Uuid, Uuid)>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let request = fetch_pending_join_request(&state, guild_id, request_id).await?;
+    if actor != request.applicant {
+        return Err(AppError::GuildJoinRequestNotFound);
+    }
+
+    let resolved = sqlx::query(
+        "UPDATE guild_join_requests SET status = 'withdrawn', decided_at = now(), decided_by = $2 \
+         WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(request_id)
+    .bind(actor)
+    .execute(&state.pool)
+    .await?;
+    if resolved.rows_affected() == 0 {
+        return Err(AppError::GuildJoinRequestNotFound);
+    }
 
     Ok(())
 }
@@ -3035,5 +3360,19 @@ mod tests {
     fn empty_pin_list_is_valid() {
         let bound: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
         assert!(validate_favorite_game_ids(&[], &bound).is_ok());
+    }
+
+    #[test]
+    fn join_request_message_within_the_cap_is_valid() {
+        assert!(validate_join_request_message("would love to join!").is_ok());
+    }
+
+    #[test]
+    fn join_request_message_over_the_cap_is_rejected() {
+        let too_long = "x".repeat(MAX_JOIN_REQUEST_MESSAGE_LEN + 1);
+        assert!(matches!(
+            validate_join_request_message(&too_long),
+            Err(AppError::InvalidJoinRequestMessage)
+        ));
     }
 }

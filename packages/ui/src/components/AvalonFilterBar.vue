@@ -9,13 +9,14 @@ import type { AvalonFilterBarProps } from './AvalonFilterBar.types'
 withDefaults(defineProps<AvalonFilterBarProps>(), {
   placeholder: 'Search…',
   label: 'Search',
+  noMargin: false,
 })
 
 defineEmits<{ 'update:query': [value: string]; 'update:sortValue': [value: string] }>()
 </script>
 
 <template>
-  <div :class="styles.bar">
+  <div :class="[styles.bar, noMargin && styles.noMargin]">
     <label :class="styles.field">
       <span :class="styles.label">{{ label }}</span>
       <input
