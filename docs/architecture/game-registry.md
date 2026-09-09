@@ -18,6 +18,7 @@ Avalon Game Registry
   ├── Status                     (active / suspended / revoked / deprecated)
   ├── Capabilities               (what Avalon features the game supports/requests)
   ├── Public metadata            (name, developer, website — self-reported)
+  ├── Published schema versions  (Game Space schema publication, #255)
   ├── Durable activity metrics   (derived from events)
   ├── Recognition relationships  (who recognizes whom, for what)
   └── Aggregate network analytics
@@ -67,6 +68,20 @@ Realtime numbers are never stored as durable metrics
 fields are shown as self-reported. Guild metrics use the association phrasing
 from [guilds](./guilds.md): "N Avalon guilds have members who play Game A",
 never "Game A has N guilds".
+
+## Schema discovery (#255)
+
+Not a metric — a game's published [Game Space](./game-space.md) schema
+versions are self-authored facts (game id, version, `.proto` source,
+published-at, `superseded_by` lineage), surfaced the same way everything
+else in this document is: an indexer projection derived from durable
+events, never a second source of truth. `game_schema.published` is decoded
+and applied by `crates/indexer/src/projections/game_schemas.rs`, the same
+decode/apply shape every other projection in that crate uses; `list_for_game`
+returns a game's published versions oldest-first, empty for a game that has
+never published. This is the "reuse the existing registry-projection
+pattern" discovery surface #181 left open, rather than a dedicated
+schema-discovery service.
 
 ## Statistics inform trust; they do not determine it
 
@@ -129,8 +144,16 @@ the [visibility](./privacy.md) rules that apply to those identities.
 - `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
   registered_at }`, `GameRegistration`, `GameCredential`. No status, keys,
   capabilities-supported, or metrics.
-- `crates/indexer/src/lib.rs` — the `Indexer` trait only; no projections.
-- No registry endpoint, no recognition-relationship event, no Hub view.
+- `crates/indexer/src/lib.rs` — the `Indexer` trait, dispatched by
+  `crates/indexer/src/postgres.rs::PostgresIndexer`, to one projection
+  module per read model under `crates/indexer/src/projections/`. Schema
+  discovery (`game_schemas.rs`, #255) is the first Game-Registry-facing
+  projection; profiles/friendships/guild rosters/attestations are the
+  others, none of them registry-shaped yet.
+- No dedicated registry endpoint, no recognition-relationship event, no Hub
+  view — schema discovery (#255) is queryable today only via
+  `avalon_indexer::projections::game_schemas::list_for_game`, not yet
+  exposed over HTTP as part of a registry read surface.
 
 ## Decisions and tickets
 
@@ -146,3 +169,9 @@ the [visibility](./privacy.md) rules that apply to those identities.
   identity, keys, and status shown in the registry.
 - [#41](https://github.com/LunarVagabond/avalon-protocol/issues/41) — Epic:
   Query/Index Layer.
+- [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) — Game
+  Schema Publication; the schema-discovery projection described above.
+- [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) —
+  Decision: game-defined schema model, representation, and versioning
+  strategy; left discovery surface to implementation, resolved by #255 as
+  the registry read model, not a dedicated endpoint.

@@ -7,10 +7,13 @@ of it is actually exposed.** Neither one gives Avalon an opinion about what a
 game make its data *structurally describable, versioned, discoverable, and
 attributable to itself* without Avalon standardizing what that data means.
 
-**Nothing in this document is built. There is no `Schema` type, no mapping
-type, and no Game Space concept anywhere in `protocol` today.** This is the
-architecture for a gap identified by audit, not a description of shipped
-code — see [Today in the repo](#today-in-the-repo).
+**Schema publication is now built; mapping and data exposure are not.**
+#181 decided the representation and #255 built the first implementation
+slice — a game can publish a versioned, immutable `.proto` description of
+its own data model and have that publication discoverable through the Game
+Registry. Mapping (a documented relationship between two schema versions)
+and data exposure (actual instances) remain unbuilt — see
+[Today in the repo](#today-in-the-repo).
 
 ## Game Space is not a new participation record
 
@@ -139,8 +142,36 @@ JSON (or whatever wire format is eventually chosen) is the transport. The
 schema reference is what makes the payload interpretable — the same relationship
 `AchievementDefinition.schema` already has to an attestation's payload
 ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)).
-**No representation, validation mechanism, or serialization format is decided
-by this document** — see [Decisions and tickets](#decisions-and-tickets).
+**Data exposure/mapping validation mechanism is still not decided by this
+document** — only schema representation, storage, and versioning (below)
+are — see [Decisions and tickets](#decisions-and-tickets).
+
+## Representation and versioning (decided by #181, built by #255)
+
+A published game schema is protobuf IDL (`.proto`) — mature
+field-numbering/evolution rules, broad developer familiarity — stored as
+opaque source text. Avalon never parses or compiles it; it only stores,
+versions, and serves it back verbatim. This keeps the actual network
+surface JSON-only (per [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)'s
+protocol-event-payload policy): protobuf's canonical JSON mapping is the
+bridge a future validation ticket would use, not a reason to make Avalon's
+API gRPC or binary-protobuf-on-the-wire.
+
+Version identity is a monotonic `version: u32` per game — the same
+precedent `AchievementDefinition.version` already established — plus an
+`superseded_by: Option<GlobalId>` pointer set on a version once a later one
+supersedes it, so lineage is traceable without ever rewriting a published
+version's `.proto` text. A version, once published, is immutable: evolving
+a schema means publishing a new version, never editing one in place. See
+`avalon_protocol::game_schemas::GameSchemaVersion`
+(`crates/protocol/src/game_schemas.rs`) and
+`crates/server/src/game_schemas.rs` (`POST`/`GET
+/games/{slug}/schemas[/{version}]`).
+
+Still not decided or built: server-side validation of exposed data against
+a published schema, and mapping between schema versions — both explicitly
+deferred to their own follow-up tickets under Epic
+[#182](https://github.com/LunarVagabond/avalon-protocol/issues/182).
 
 ## Historical interpretation
 
@@ -185,10 +216,13 @@ required; a schema/mapping reference on an event or attestation is enough.
 
 ## Registry discoverability, not settlement bulk
 
-If schema publication is ever built, publication *metadata* (schema id,
-version, owner, deprecation status) is the kind of durable-derived fact the
-[Game Registry](./game-registry.md) already exists to surface — the same
-place capabilities, keys, and activity metrics live today. Full schema
+Publication *metadata* (schema id, version, owner, lineage) is the kind of
+durable-derived fact the [Game Registry](./game-registry.md) already exists
+to surface — the same place capabilities, keys, and activity metrics live
+today. #255 built exactly this: `crates/indexer/src/projections/game_schemas.rs`
+projects `game_schema.published` events into the registry's read model,
+reusing the same decode/apply projection shape every other read model in
+that crate already uses, rather than a separate discovery path. Full schema
 bodies and every data instance are not settlement-layer material by default;
 the registry/indexer is the query surface, and the settlement layer commits
 selectively (a schema's hash or id, not its full body) only where a durable
@@ -204,33 +238,47 @@ guarantee is actually needed, following the same discipline
 - Does not imply that using Avalon makes a character portable — portability of
   any kind stays opt-in and per-entity, per
   [`./future-layers.md`](./future-layers.md).
-- Does not pick a schema representation, validation library, or serialization
-  format. That remains open — see below.
+- Does not validate exposed data against a published schema, or parse/compile
+  `.proto` IDL — schema text is stored and served back opaque. Both remain
+  open, deferred to follow-up tickets under #182 (see
+  [Representation and versioning](#representation-and-versioning-decided-by-181-built-by-255)).
 - Does not extend `GameBinding` or the achievement `schema` field to carry
   general game data; both stay exactly as narrowly scoped as they are today.
 
 ## Today in the repo
 
-- No `Schema`, `GameSpace`, `Mapping`, or `Entity` type exists anywhere in
-  `crates/protocol/src/`. The only schema-shaped field in the whole crate is
-  `AchievementDefinition.schema: Option<GlobalId>` +
-  `version: u32` ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)),
-  scoped to achievement/attestation shape, not general game data.
+- `avalon_protocol::game_schemas::GameSchemaVersion`
+  (`crates/protocol/src/game_schemas.rs`) is the one domain type: game id,
+  raw `.proto` source, monotonic `version: u32`, `published_at`, and an
+  optional `superseded_by: Option<GlobalId>` lineage pointer — the
+  `AchievementDefinition.schema`/`version` precedent
+  ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)),
+  generalized from a bare reference field to the schema description itself.
+  No `GameSpace`, `Mapping`, or `Entity` type exists yet — data exposure and
+  mapping remain unbuilt.
 - `GlobalId::new(namespace, owner, kind, key)`
-  (`crates/protocol/src/ids.rs`) is the namespacing mechanism a schema id
-  would reuse, unchanged.
-- The [Game Registry](./game-registry.md) design and its open tickets
-  (epic [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94))
-  do not yet cover schema discovery — they cover network facts/metrics only.
+  (`crates/protocol/src/ids.rs`) namespaces a version as
+  `game:<slug>:schema:<version>`, minted by
+  `crates/server/src/game_schemas.rs::schema_ref`.
+- `crates/server/src/game_schemas.rs` — `POST /games/{slug}/schemas`
+  (publish the next version, game-credential-authenticated the same way
+  `achievements.rs` authenticates achievement-definition writes — proving
+  the game owns the slug, not a player-granted capability), `GET
+  /games/{slug}/schemas` (list, public), `GET
+  /games/{slug}/schemas/{version}` (one version, public). `game_schemas`
+  (`crates/server/db/migrations/0034_game_schemas`) is the request-serving
+  projection; `proto_source` is never updated once inserted.
+- The [Game Registry](./game-registry.md)'s read model now covers schema
+  discovery: `crates/indexer/src/projections/game_schemas.rs` projects
+  `game_schema.published` into `indexer_game_schemas`, queried by
+  `list_for_game`.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) is a
   versioning policy for `ProtocolEvent.kind`/payload, i.e. Avalon's own
-  events — not a mechanism for versioning a game's data model. This document
-  proposes the same discipline apply to schemas, not that #82 be widened to
-  cover them.
-- No open ticket implements any part of this document.
-  [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) is the
-  decision that has to close before any implementation ticket under
-  [#182](https://github.com/LunarVagabond/avalon-protocol/issues/182) starts.
+  events — not a mechanism for versioning a game's data model. Schema
+  versioning follows the same discipline without #82 itself being widened
+  to cover it.
+- Mapping between schema versions and server-side validation of exposed
+  data against a schema are still unbuilt — see #182's remaining tickets.
 
 ## Decisions and tickets
 
@@ -239,8 +287,13 @@ guarantee is actually needed, following the same discipline
   document generalizes from assets to game data broadly.
 - [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) —
   Decision: game-defined schema model, representation, and versioning
-  strategy. Tracks the question above; nothing in this document is built
-  until this closes.
+  strategy. Decided 2026-09-09: protobuf IDL as the description format,
+  stored opaque; version identity/lineage and discovery surface left to
+  implementation.
+- [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) —
+  Game Schema Publication: the first implementation ticket under #182,
+  building publication, immutability/lineage, and registry discovery per
+  #181's decision.
 - [#182](https://github.com/LunarVagabond/avalon-protocol/issues/182) — Epic:
   Game Space & Schema Publication, gated on #181.
 - [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) — ADR:
@@ -249,8 +302,9 @@ guarantee is actually needed, following the same discipline
 - [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — game
   bindings; Game Space is explicitly not an extension of this.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic:
-  Game Registry & Network Intelligence; schema discovery would live in its
-  read surface, not a new service.
+  Game Registry & Network Intelligence; schema discovery lives in its read
+  surface (`crates/indexer/src/projections/game_schemas.rs`), not a new
+  service.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — protocol
   event kind/versioning policy; the pattern a schema versioning policy would
   follow, not extend.
