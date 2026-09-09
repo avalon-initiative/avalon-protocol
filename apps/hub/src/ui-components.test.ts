@@ -215,6 +215,21 @@ describe('AvalonGuildCard', () => {
     await wrapper.trigger('click')
     expect(wrapper.emitted('select')).toHaveLength(1)
   })
+
+  it('shows a Recruiting badge only when recruiting is true', () => {
+    const recruiting = mount(AvalonGuildCard, {
+      props: { name: 'A', tag: 'AA', memberCount: 1, recruiting: true },
+    })
+    expect(recruiting.text()).toContain('Recruiting')
+
+    const notRecruiting = mount(AvalonGuildCard, {
+      props: { name: 'A', tag: 'AA', memberCount: 1, recruiting: false },
+    })
+    expect(notRecruiting.text()).not.toContain('Recruiting')
+
+    const omitted = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
+    expect(omitted.text()).not.toContain('Recruiting')
+  })
 })
 
 describe('AvalonGuildMemberRow', () => {

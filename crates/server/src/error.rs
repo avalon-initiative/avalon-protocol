@@ -147,6 +147,10 @@ pub enum AppError {
     AchievementKeyTaken,
     #[error("achievement definition not found")]
     AchievementDefinitionNotFound,
+    #[error(
+        "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
+    )]
+    InvalidDiscoverQuery,
     #[error("a game may only create or change its own achievement definitions")]
     AchievementDefinitionForbidden,
     #[error("database error")]
@@ -247,6 +251,7 @@ impl IntoResponse for AppError {
             AppError::AchievementKeyTaken => StatusCode::CONFLICT,
             AppError::AchievementDefinitionNotFound => StatusCode::NOT_FOUND,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
+            AppError::InvalidDiscoverQuery => StatusCode::BAD_REQUEST,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

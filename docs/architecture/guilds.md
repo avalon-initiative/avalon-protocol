@@ -306,6 +306,70 @@ with Game A becomes historical.
   in every real guild right now — the grouping/formatting logic itself is
   real and tested, and needs no further wiring once a game actually
   publishes `playing`.
+- **Guild MOTD and metadata (issue #153).** `Guild` (`crates/protocol/src/guilds.rs`)
+  carries `motd` (capped prose, `None` means unset), `banner` (an `http`/
+  `https` URL, same validation as a profile's `avatar_url`), `links` (an
+  ordered, capped list of `{ label, url }` pairs, stored as one JSONB
+  column — full replace on update, not a per-entry patch), and `recruiting`
+  (a plain boolean, defaulting to `false`). All four are owner/
+  `manage_guild`-editable via `PATCH /guilds/{id}`
+  (`crates/server/db/migrations/0020_guild_metadata`) and returned by
+  `GET /guilds/{id}` alongside the fields #20 already made public. None of
+  this widens what's public — name/tag/description/member_count were
+  already "readable by any authenticated identity" per #20; this is more of
+  the same kind of field.
+- **Guild discovery board (issue #154).** `GET /guilds/discover?q=&recruiting=&tag=&game=&sort=&limit=&cursor=`
+  (`crates/server/src/guilds.rs::discover_guilds`) is a paged, filterable,
+  session-authenticated browse over the same already-public guild metadata
+  — no membership requirement, and no new visibility tier: it's a
+  browsable surface over data #20/#153 already made public, not a
+  privacy boundary of its own. **Milestone-1 stand-in**, explicitly: this
+  is a direct query against the `guilds`/`guild_members`/
+  `guild_game_associations` projections in `server`, not #42's real indexer
+  read model — the same pragmatic call #44 documents for reads generally.
+  When #42's guild read models land, this endpoint's implementation should
+  move into `crates/indexer`, unchanged at the HTTP surface.
+  - **Filters**: `q=` does a case-insensitive substring match across
+    `name`/`tag`/`description`; `tag=` is an exact case-insensitive match
+    (indexed via `crates/server/db/migrations/0021_guild_discovery_index`'s
+    `guilds_tag_lower_idx`, alongside #153's existing partial
+    `guilds_recruiting_idx`); `game=` filters to guilds with a matching row
+    in `guild_game_associations` (#20's `associate_game` — no new
+    game-association logic invented here).
+  - **`recruiting` visibility rule**: a non-recruiting guild must never
+    appear in a *stranger's* browse/search results, in any filter
+    combination — only exact id/tag lookup (`GET /guilds/{id}`, unchanged
+    from #20) reaches it. `recruiting=true` is a plain exact filter (no
+    membership gate needed — recruiting guilds are already public-by-design
+    per #20). Omitting it falls back to "recruiting guilds, plus any guild
+    the caller already belongs to." `recruiting=false` explicitly is
+    **still membership-gated**, not a raw exact filter — it returns only
+    the caller's own non-recruiting guilds; without that gate a stranger
+    could pass `recruiting=false` to bulk-enumerate every non-recruiting
+    guild's public metadata, which is exactly what this endpoint must not
+    allow.
+  - **Sort**: `newest` (default, `created_at DESC`), `alphabetical`
+    (`name ASC`), `most_members` (a `COUNT(*)` over `guild_members`,
+    `DESC`) — no "trending"/engagement ranking in milestone 1, deliberately
+    (that's the kind of derived stat #96's minimum-cohort-size thinking
+    would need to apply to first).
+  - **Pagination**: cursor-based. `cursor=` is the last guild id from the
+    previous page (not an opaque blob) — the server re-resolves that row's
+    own sort key via a subquery keyed on the id and does a keyset
+    `(sort_key, id) < (...)` comparison, the same pattern
+    `guild_messages::list_messages`'s `before=` (#22) already established,
+    just under the field name this ticket's own endpoint spec uses. This is
+    the first cursor-paginated endpoint to use `cursor=` as the field name
+    specifically; #22's message pagination coordinated on `before=` instead
+    — both are the same underlying "id of the last-seen row" shape, so a
+    future pagination helper can treat them identically regardless of
+    field name.
+  - Hub: a "Discover" tab on `/guilds` (`apps/hub/src/views/Guilds.vue`,
+    `apps/hub/src/composables/useDiscoverGuilds.ts`) — search box,
+    recruiting-only toggle (on by default), tag filter, and a "Load more"
+    button walking `next_cursor`. `AvalonGuildCard` (#24) grew an optional
+    `recruiting` prop to render a "Recruiting" pill, rather than a new
+    duplicate card component.
 - **Guild history section (#57).** `Guild.vue` has a "History" card, but it
   states plainly that history isn't available yet rather than fabricating
   a feed from the current roster/role snapshot — there is no
@@ -340,6 +404,12 @@ with Game A becomes historical.
   `AvalonChatMessage`/`AvalonChatComposer`; not duplicated under new names).
 - [#152](https://github.com/LunarVagabond/avalon-protocol/issues/152) — role
   descriptions and badges, done.
+- [#153](https://github.com/LunarVagabond/avalon-protocol/issues/153) — guild
+  MOTD/banner/links/recruiting metadata, done.
+- [#154](https://github.com/LunarVagabond/avalon-protocol/issues/154) — guild
+  discovery board (browse + search recruiting guilds), done as a milestone-1
+  `server`-side stand-in pending [#42](https://github.com/LunarVagabond/avalon-protocol/issues/42)'s
+  real indexer read model.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

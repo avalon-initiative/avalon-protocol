@@ -132,6 +132,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/connections", get(connections::list_my_connections))
         .route("/me/grants", get(connections::my_grants))
         .route("/guilds", post(guilds::create_guild))
+        .route("/guilds/discover", get(guilds::discover_guilds))
         .route(
             "/guilds/:id",
             get(guilds::get_guild).patch(guilds::update_guild),

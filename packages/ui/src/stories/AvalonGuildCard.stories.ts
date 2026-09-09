@@ -24,3 +24,4 @@ export const LongName: Story = {
     tag: 'OEVW',
   },
 }
+export const Recruiting: Story = { args: { recruiting: true } }

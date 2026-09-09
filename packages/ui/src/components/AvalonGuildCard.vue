@@ -15,6 +15,7 @@ defineEmits<{ select: [] }>()
     <div :class="styles.heading">
       <span :class="styles.name">{{ name }}</span>
       <span :class="styles.tag">[{{ tag }}]</span>
+      <span v-if="recruiting" :class="styles.recruitingBadge">Recruiting</span>
     </div>
     <p v-if="description" :class="styles.description">{{ description }}</p>
     <span :class="styles.memberCount">{{ memberCount }} member{{ memberCount === 1 ? '' : 's' }}</span>

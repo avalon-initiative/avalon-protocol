@@ -8,6 +8,7 @@
 // closely.
 import * as api from './client'
 import type {
+  DiscoverGuildsParams,
   GuildMemberResponse,
   GuildResponse,
   PresenceResponse,
@@ -307,4 +308,39 @@ export function permissionsForMember(
     return []
   }
   return roles.find((r) => r.name_index === self.roleIndex)?.permissions ?? []
+}
+
+// Builds the `?q=&recruiting=&...` query string for GET /guilds/discover
+// (issue #154) from a params object — pure and unit-testable independent
+// of any fetch, same "logic stays out of client.ts" split every other
+// function in this module follows. Omits a key entirely rather than
+// sending an empty/undefined value, matching
+// crates/server/src/guilds.rs::DiscoverGuildsQuery's "omitted means use the
+// default" semantics (an empty string is not the same request as an
+// omitted `q=`).
+export function buildDiscoverQueryString(params: DiscoverGuildsParams): string {
+  const search = new URLSearchParams()
+  if (params.q && params.q.trim()) {
+    search.set('q', params.q.trim())
+  }
+  if (params.recruiting !== undefined) {
+    search.set('recruiting', String(params.recruiting))
+  }
+  if (params.tag && params.tag.trim()) {
+    search.set('tag', params.tag.trim())
+  }
+  if (params.game) {
+    search.set('game', params.game)
+  }
+  if (params.sort) {
+    search.set('sort', params.sort)
+  }
+  if (params.limit !== undefined) {
+    search.set('limit', String(params.limit))
+  }
+  if (params.cursor) {
+    search.set('cursor', params.cursor)
+  }
+  const query = search.toString()
+  return query ? `?${query}` : ''
 }
