@@ -27,6 +27,11 @@ async fn main() {
         std::env::var("AVALON_WEBAUTHN_RP_ID").expect("AVALON_WEBAUTHN_RP_ID must be set");
     let webauthn_origin =
         std::env::var("AVALON_WEBAUTHN_ORIGIN").expect("AVALON_WEBAUTHN_ORIGIN must be set");
+    // Issue #173: which network this process believes it's part of — e.g.
+    // `avalon-mainnet-1` or `avalon-dev-<name>`. Never defaulted; a missing
+    // value is a misconfiguration, not "assume dev."
+    let network_id = std::env::var("AVALON_NETWORK_ID")
+        .expect("AVALON_NETWORK_ID must be set — see .env.example");
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -42,7 +47,17 @@ async fn main() {
         auth::build_webauthn(&webauthn_rp_id, &webauthn_origin)
             .expect("failed to build Webauthn instance — check AVALON_WEBAUTHN_RP_ID/AVALON_WEBAUTHN_ORIGIN"),
     );
-    let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone());
+    // Creates this ledger's genesis on a fresh database, or refuses to start
+    // at all if it's already rooted in a different network_id (issue #173) —
+    // deliberately fatal, before anything binds a listener or serves a
+    // single request.
+    let chain = avalon_chain::PostgresSettlementProvider::connect(pool.clone(), &network_id)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("refusing to start: {e}");
+            std::process::exit(1);
+        });
+    println!("avalon-server: ledger network_id = {}", chain.network_id());
     let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
 
     // Drains the identity/etc. outbox into the ledger at its own pace —
