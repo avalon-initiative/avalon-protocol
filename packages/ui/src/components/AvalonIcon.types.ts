@@ -15,6 +15,7 @@ export type AvalonIconName =
   | 'alert'
   | 'pencil'
   | 'check'
+  | 'close'
 
 export interface AvalonIconProps {
   name: AvalonIconName

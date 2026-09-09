@@ -245,4 +245,39 @@ describe('Guild', () => {
     expect(wrapper.text()).toContain('Going (1)')
     expect(wrapper.text()).toContain('Nova#4821')
   })
+
+  // The owner role's permissions are structural (guild.owner, not this
+  // row) — attempting to uncheck one in the matrix must be rejected
+  // without even reaching the server, and the checkbox (which the browser
+  // already flipped natively before this handler ran) must snap back to
+  // checked rather than being left showing a state that was never applied.
+  it("rejects unchecking an owner permission and reverts the checkbox", async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const rolesTab = wrapper.findAll('button').find((b) => b.text() === 'Roles')!
+    await rolesTab.trigger('click')
+    await flushPromises()
+
+    const unlockButton = wrapper.find('[aria-label="Unlock role to edit"]')
+    expect(unlockButton.exists()).toBe(true)
+    await unlockButton.trigger('click')
+    await flushPromises()
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    ;(checkbox.element as HTMLInputElement).checked = false
+    await checkbox.trigger('change')
+    await flushPromises()
+
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.text()).toContain("always has every permission")
+  })
 })

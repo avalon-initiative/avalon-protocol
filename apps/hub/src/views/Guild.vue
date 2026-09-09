@@ -488,18 +488,38 @@ async function onAddRole() {
 const togglingPermissionFor = ref<string | null>(null)
 const permissionMatrixError = ref('')
 
-async function onTogglePermission(role: RoleResponse, permission: string) {
+async function onTogglePermission(role: RoleResponse, permission: string, event: Event) {
+  const checkbox = event.target as HTMLInputElement
+  const wasChecked = role.permissions.includes(permission)
+
+  // The owner's permission list is structural, not editable (server-side:
+  // update_role rejects any `permissions` change on name_index 0 — the
+  // owner's authority comes from guilds.owner, not this row, so it always
+  // holds every permission). Reject client-side too, with a clear reason,
+  // rather than round-tripping to the server just to find out.
+  if (role.name_index === 0) {
+    checkbox.checked = wasChecked
+    permissionMatrixError.value = "The owner role always has every permission and can't be changed."
+    return
+  }
+
   if (!session.token) return
   permissionMatrixError.value = ''
   const key = `${role.name_index}:${permission}`
   togglingPermissionFor.value = key
-  const next = role.permissions.includes(permission)
+  const next = wasChecked
     ? role.permissions.filter((p) => p !== permission)
     : [...role.permissions, permission]
   try {
     await api.updateRole(session.token, guildId.value, role.name_index, { permissions: next })
     await refresh()
   } catch (e) {
+    // Clicking a checkbox flips its DOM state immediately (native browser
+    // behavior, before this handler even runs) — on failure `role.permissions`
+    // is unchanged, so Vue's next render sees the same `:checked` value as
+    // before and skips re-patching the DOM property, leaving the box stuck
+    // showing the failed, not-actually-applied state. Reset it explicitly.
+    checkbox.checked = wasChecked
     permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     togglingPermissionFor.value = null
@@ -520,6 +540,14 @@ function unlockRole(role: RoleResponse) {
 
 function lockRole() {
   unlockedRoleIndex.value = null
+}
+
+// Discards any unsaved name draft and re-locks the row. Permission
+// checkbox changes have no "draft" to discard — each toggle already
+// saved immediately on click — so this only ever affects the name field.
+function cancelRoleEdit() {
+  unlockedRoleIndex.value = null
+  roleNameDraft.value = ''
 }
 
 async function onRenameRole(role: RoleResponse) {
@@ -1454,6 +1482,15 @@ const {
                       >
                         <AvalonIcon :name="unlockedRoleIndex === role.name_index ? 'check' : 'pencil'" :size="14" />
                       </button>
+                      <button
+                        v-if="unlockedRoleIndex === role.name_index"
+                        type="button"
+                        :class="local.roleLockButton"
+                        aria-label="Cancel editing"
+                        @click="cancelRoleEdit"
+                      >
+                        <AvalonIcon name="close" :size="14" />
+                      </button>
                       <input
                         v-if="unlockedRoleIndex === role.name_index"
                         v-model="roleNameDraft"
@@ -1474,7 +1511,7 @@ const {
                         unlockedRoleIndex !== role.name_index ||
                         togglingPermissionFor === `${role.name_index}:${permission}`
                       "
-                      @change="onTogglePermission(role, permission)"
+                      @change="onTogglePermission(role, permission, $event)"
                     />
                   </td>
                   <td>

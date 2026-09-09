@@ -89,5 +89,8 @@ withDefaults(defineProps<AvalonIconProps>(), {
     <template v-else-if="name === 'check'">
       <path d="M4.5 12.5 9.5 17.5 19.5 6.5" />
     </template>
+    <template v-else-if="name === 'close'">
+      <path d="M5.5 5.5 18.5 18.5M18.5 5.5 5.5 18.5" />
+    </template>
   </svg>
 </template>
