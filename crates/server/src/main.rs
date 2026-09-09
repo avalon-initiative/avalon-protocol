@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use avalon_server::{auth, migrate, outbox, retention, state::AppState};
+use avalon_server::{auth, guild_messages, migrate, outbox, retention, state::AppState};
 use sqlx::postgres::PgPoolOptions;
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -60,6 +60,14 @@ async fn main() {
     println!("avalon-server: ledger network_id = {}", chain.network_id());
     let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
 
+    let state = AppState {
+        pool: pool.clone(),
+        chain: chain.clone(),
+        indexer,
+        webauthn,
+        presence: avalon_server::presence::PresenceStore::from_env(),
+    };
+
     // Node-tiered durable history retention (issue #208, implementing
     // #180's decision) — always printed, so an operator always sees which
     // tier and pruning state this process is running as, the same
@@ -83,13 +91,11 @@ async fn main() {
     // see crates/server/src/outbox.rs (issue #71).
     tokio::spawn(outbox::run_worker(pool.clone(), chain.clone()));
 
-    let app = avalon_server::router(AppState {
-        pool,
-        chain,
-        indexer,
-        webauthn,
-        presence: avalon_server::presence::PresenceStore::from_env(),
-    });
+    // Hard-deletes guild message archive rows past their retention window —
+    // see crates/server/src/guild_messages.rs (issue #253).
+    tokio::spawn(guild_messages::run_archive_expiry_worker(state.clone()));
+
+    let app = avalon_server::router(state);
 
     println!("avalon-server listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr)

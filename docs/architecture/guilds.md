@@ -323,12 +323,33 @@ with Game A becomes historical.
   `guild_messages` rows never touch the outbox or the ledger, same
   "ephemeral, non-interoperable state" treatment already given to presence.
   **Retention**: messages are kept indefinitely up to a configurable cap
-  per channel (`GUILD_CHANNEL_MESSAGE_CAP` env var, default 10,000), oldest
-  pruned once a channel exceeds it — no client should assume guild chat
-  history is permanent. Sending/reading requires current guild membership
-  (via #21's `guild_members` table, now merged alongside #22); moderators
-  (`manage_channels`) can hard-delete a message outright, since there's no
-  history to preserve.
+  per channel (`GUILD_CHANNEL_MESSAGE_CAP` env var, default 10,000); once a
+  channel exceeds it, the oldest messages move into a `guild_messages_archive`
+  table instead of being deleted outright (issue #253, implementing #193's
+  decision). The archive is itself held only for a long, separately
+  configurable window (`GUILD_MESSAGE_ARCHIVE_RETENTION_DAYS`, default 730
+  days / ~2 years), after which a background worker hard-deletes whatever
+  falls past it — that expiry is a genuine, final delete, nothing
+  recoverable afterward. This does **not** change the #74/#75 classification:
+  the archive is still operational/server-policy state, not durable protocol
+  history — no `guild.message_*` ledger event exists or is planned, and
+  neither tier ever touches the outbox or `SettlementProvider`. No client
+  should assume guild chat history is permanent, in the live table or the
+  archive. `GET .../channels/{cid}/messages/archive` reads the archive
+  (`crates/server/src/guild_messages.rs`'s `list_archive`), same
+  newest-first, cursor-paginated shape as the live endpoint. Sending/reading
+  requires current guild membership (via #21's `guild_members` table, now
+  merged alongside #22); the archive read endpoint uses the same
+  *current*-membership check as the live channel, not membership as of when
+  each archived message was originally sent — `guild_members` is a live
+  projection with no point-in-time history of its own, and reconstructing
+  one would mean building real historical-membership machinery for a tier
+  that is explicitly not protocol history. Moderators (`manage_channels`)
+  can hard-delete a message outright, since there's no history to preserve;
+  `delete_message` checks both `guild_messages` and `guild_messages_archive`
+  for the target id, so a moderator's takedown for cause isn't defeated just
+  because cap-based pruning already archived the row first — moderation
+  intent wins regardless of which tier currently holds it.
 - The Rust SDK's guild surface (issue #23) is real:
   `crates/sdk/src/guilds.rs`'s `Session::guilds()` (`guilds.read`) lists the
   caller's own memberships, `Session::guild(id).roster()` (`guilds.read`)
@@ -837,6 +858,14 @@ with Game A becomes historical.
 - [#248](https://github.com/LunarVagabond/avalon-protocol/issues/248) —
   per-member RSVP roster, done: who's going/maybe/can't-go per event, not
   just aggregate counts.
+- [#193](https://github.com/LunarVagabond/avalon-protocol/issues/193) — decided:
+  guild chat message retention keeps the existing count cap, but cap-pruned
+  messages move to a long-window archive tier instead of being hard-deleted.
+  Implemented by [#253](https://github.com/LunarVagabond/avalon-protocol/issues/253)
+  (archive tier, done): `guild_messages_archive` table, archive read access
+  scoped to current membership (not membership as of send time), and
+  moderation `delete_message` reaching an already-archived row so a
+  takedown can't be defeated by pruning timing.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

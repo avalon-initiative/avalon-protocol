@@ -275,6 +275,10 @@ pub fn router(state: AppState) -> Router {
             delete(guild_messages::delete_message),
         )
         .route(
+            "/guilds/{id}/channels/{cid}/messages/archive",
+            get(guild_messages::list_archive),
+        )
+        .route(
             "/guilds/{id}/events",
             get(guild_events::list_events).post(guild_events::create_event),
         )
