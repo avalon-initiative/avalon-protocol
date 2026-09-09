@@ -1021,3 +1021,276 @@ async fn pagination_does_not_skip_or_duplicate_rows_across_pages() {
         );
     }
 }
+
+// -- Issue #206 (implementing decision #160): game affinity breakdown --
+
+/// Seeds a `games` row directly (bypassing the game registration ceremony,
+/// same "seed via SQL, endpoint behavior doesn't depend on how the row got
+/// there" reasoning `seed_identity_session` above already documents) and
+/// returns its id.
+async fn seed_game(pool: &PgPool, name: &str) -> Uuid {
+    let game_id = Uuid::new_v4();
+    let slug = format!(
+        "{}-{}",
+        name.to_lowercase().replace(' ', "-"),
+        Uuid::new_v4().simple()
+    );
+    sqlx::query(
+        "INSERT INTO games (id, slug, name, developer, registered_at, status) \
+         VALUES ($1, $2, $3, 'test developer', now(), 'active')",
+    )
+    .bind(game_id)
+    .bind(&slug[..slug.len().min(64)])
+    .bind(name)
+    .execute(pool)
+    .await
+    .expect("failed to seed game");
+    game_id
+}
+
+/// Seeds an active `bindings` row directly — see `seed_game`'s own note.
+async fn seed_binding(pool: &PgPool, identity_id: Uuid, game_id: Uuid) -> Uuid {
+    let binding_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO bindings (id, identity_id, game_id, established_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(binding_id)
+    .bind(identity_id)
+    .bind(game_id)
+    .execute(pool)
+    .await
+    .expect("failed to seed binding");
+    binding_id
+}
+
+async fn end_binding(pool: &PgPool, binding_id: Uuid) {
+    sqlx::query("UPDATE bindings SET ended_at = now() WHERE id = $1")
+        .bind(binding_id)
+        .execute(pool)
+        .await
+        .expect("failed to end binding");
+}
+
+/// Invites `to_identity_id` into `guild_id` and accepts on their behalf,
+/// landing them as a plain member (role index 2, no permissions) — the
+/// same flow `invite_accept_join_and_leave_flow` above exercises, reused
+/// here just to get a second real guild member without hand-writing a
+/// `guild_members` row.
+async fn invite_and_accept(
+    http: &reqwest::Client,
+    base: &str,
+    owner_token: &str,
+    to_token: &str,
+    guild_id: &str,
+    to_identity_id: Uuid,
+) {
+    let invite = auth(
+        http.post(format!("{base}/guilds/{guild_id}/invites")),
+        owner_token,
+    )
+    .json(&serde_json::json!({ "to": to_identity_id }))
+    .send()
+    .await
+    .unwrap();
+    assert!(invite.status().is_success(), "{:?}", invite.status());
+    let invite_body: serde_json::Value = invite.json().await.unwrap();
+    let invite_id = invite_body["id"].as_str().unwrap();
+
+    let accept = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/invites/{invite_id}/accept"
+        )),
+        to_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(accept.status().is_success(), "{:?}", accept.status());
+}
+
+/// #206's core acceptance criteria: the breakdown is computed from real
+/// `GameBinding` (#83) data only, updates as bindings change, and is never
+/// something a manager can add for a game with zero bound members (there's
+/// no add action at all — this test never calls one).
+#[tokio::test]
+#[ignore]
+async fn game_breakdown_reflects_active_bindings_and_updates_as_they_change() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let guild: serde_json::Value = create.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    invite_and_accept(
+        &http,
+        &base,
+        &owner_token,
+        &member_token,
+        guild_id,
+        member_id,
+    )
+    .await;
+
+    let ashen = seed_game(&pool, "Ashen Realms").await;
+    let ocean = seed_game(&pool, "Ocean World").await;
+
+    // Owner and member both play Ashen Realms; only the member plays Ocean
+    // World. No game association is ever declared — the breakdown must
+    // fall entirely out of these bindings.
+    let owner_ashen_binding = seed_binding(&pool, owner_id, ashen).await;
+    seed_binding(&pool, member_id, ashen).await;
+    seed_binding(&pool, member_id, ocean).await;
+
+    let fetch_breakdown = || {
+        let http = http.clone();
+        let base = base.clone();
+        let guild_id = guild_id.to_string();
+        let token = owner_token.clone();
+        async move {
+            auth(
+                http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+                &token,
+            )
+            .send()
+            .await
+            .unwrap()
+        }
+    };
+
+    let resp = fetch_breakdown().await;
+    assert!(resp.status().is_success(), "{:?}", resp.status());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["total_members"].as_i64().unwrap(), 2);
+    let by_game: std::collections::HashMap<String, i64> = body["breakdown"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["game_name"].as_str().unwrap().to_string(),
+                e["member_count"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(by_game.get("Ashen Realms"), Some(&2));
+    assert_eq!(by_game.get("Ocean World"), Some(&1));
+
+    // Ending the owner's Ashen Realms binding drops that count to 1 — the
+    // breakdown is live-computed, not a stale/cached association.
+    end_binding(&pool, owner_ashen_binding).await;
+
+    let resp = fetch_breakdown().await;
+    assert!(resp.status().is_success(), "{:?}", resp.status());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let by_game: std::collections::HashMap<String, i64> = body["breakdown"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["game_name"].as_str().unwrap().to_string(),
+                e["member_count"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(by_game.get("Ashen Realms"), Some(&1));
+    assert_eq!(by_game.get("Ocean World"), Some(&1));
+
+    // A plain member (no manage_guild) cannot fetch the breakdown while
+    // the guild hasn't opted into public exposure.
+    let member_view = auth(
+        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(member_view.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// #206/#160's show/hide toggle: a non-member gets 403 while
+/// `game_breakdown_public` is false, and can fetch the same breakdown once
+/// a `manage_guild` holder flips it on via `PATCH /guilds/{id}` — the
+/// owner's own view is unaffected by the toggle either way, since they can
+/// always see it internally.
+#[tokio::test]
+#[ignore]
+async fn game_breakdown_public_toggle_gates_exposure_to_non_members() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_stranger_id, stranger_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let guild: serde_json::Value = create.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+    assert!(!guild["game_breakdown_public"].as_bool().unwrap());
+
+    let ashen = seed_game(&pool, "Ashen Realms").await;
+    seed_binding(&pool, owner_id, ashen).await;
+
+    // Not public yet: a non-member (and non-manager) is rejected.
+    let before = auth(
+        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        &stranger_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(before.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // The owner can always see it regardless of the toggle.
+    let owner_view = auth(
+        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(
+        owner_view.status().is_success(),
+        "{:?}",
+        owner_view.status()
+    );
+
+    let patch = auth(
+        http.patch(format!("{base}/guilds/{guild_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "game_breakdown_public": true }))
+    .send()
+    .await
+    .unwrap();
+    assert!(patch.status().is_success(), "{:?}", patch.status());
+    let patched: serde_json::Value = patch.json().await.unwrap();
+    assert!(patched["game_breakdown_public"].as_bool().unwrap());
+
+    // Now public: the same stranger can fetch it.
+    let after = auth(
+        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        &stranger_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(after.status().is_success(), "{:?}", after.status());
+    let body: serde_json::Value = after.json().await.unwrap();
+    assert_eq!(
+        body["breakdown"][0]["game_name"].as_str().unwrap(),
+        "Ashen Realms"
+    );
+}

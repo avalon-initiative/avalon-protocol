@@ -20,6 +20,7 @@ import type {
   FriendRequestResponse,
   FriendshipResponse,
   GameBindingResponse,
+  GameBreakdownResponse,
   GameResponse,
   GuildInviteResponse,
   GuildMemberResponse,
@@ -341,6 +342,15 @@ export function associateGame(
   gameId: string,
 ): Promise<GuildResponse> {
   return request(`/guilds/${guildId}/games/${gameId}`, { method: 'POST', token })
+}
+
+// GET /guilds/{id}/game-breakdown (issue #206) — gated server-side to a
+// manage_guild holder (always) or anyone when the guild has set
+// `game_breakdown_public` (see api/guilds.ts's own note and
+// crates/server/src/guilds.rs::game_breakdown). A 403 here is expected and
+// handled by the caller, not a bug.
+export function getGameBreakdown(token: string, guildId: string): Promise<GameBreakdownResponse> {
+  return request(`/guilds/${guildId}/game-breakdown`, { token })
 }
 
 export function createGuildInvite(

@@ -219,6 +219,11 @@ export interface GuildResponse {
   // (CreateGuildRequest doesn't take it, neither does UpdateGuildRequest),
   // so every guild is "invite_only" in practice. See guilds.ts's own note.
   join_policy: string
+  // Issue #206. Whether the game affinity breakdown
+  // (GET /guilds/{id}/game-breakdown) is shown on this guild's public
+  // profile — a manage_guild holder can always fetch the breakdown
+  // regardless of this flag; it only gates exposure to everyone else.
+  game_breakdown_public: boolean
 }
 
 export interface CreateGuildRequest {
@@ -231,6 +236,26 @@ export interface UpdateGuildRequest {
   name?: string
   tag?: string
   description?: string
+  // Issue #206. Omitted leaves it untouched.
+  game_breakdown_public?: boolean
+}
+
+// GET /guilds/{id}/game-breakdown (issue #206, implementing decision #160):
+// aggregated count of guild members holding an active GameBinding (#83) per
+// game, computed on read — never a manager-declared association (superseded
+// #20 behavior, see docs/architecture/guilds.md). No minimum-member
+// threshold: every game with at least one bound member appears.
+export interface GameBreakdownEntry {
+  game_id: string
+  game_slug: string
+  game_name: string
+  member_count: number
+}
+
+export interface GameBreakdownResponse {
+  guild_id: string
+  total_members: number
+  breakdown: GameBreakdownEntry[]
 }
 
 export interface RoleResponse {

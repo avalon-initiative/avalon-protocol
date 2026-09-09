@@ -21,10 +21,12 @@ import {
   canChangeMemberRole,
   canKickMember,
   filterMembersByIdentityId,
+  formatGameBreakdownEntry,
   formatPlayingSummary,
   groupMembersByRole,
   groupMembersPlayingByGame,
   hasGuildPermission,
+  hasNoGameBreakdownData,
   membershipStatusText,
   roleVariantForIndex,
   sortMembers,
@@ -42,8 +44,20 @@ const router = useRouter()
 const session = useSessionStore()
 
 const guildId = computed(() => route.params.id as string)
-const { guild, roles, members, channels, selfId, selfPermissions, isOwner, loading, error, refresh } =
-  useGuildDetail(guildId)
+const {
+  guild,
+  roles,
+  members,
+  channels,
+  selfId,
+  selfPermissions,
+  isOwner,
+  loading,
+  error,
+  gameBreakdown,
+  gameBreakdownError,
+  refresh,
+} = useGuildDetail(guildId)
 
 const actionError = ref('')
 
@@ -62,6 +76,36 @@ const canManageChannels = computed(
     guild.value !== null && hasGuildPermission(guild.value, selfId.value, selfPermissions.value, 'manage_channels'),
 )
 const isMember = computed(() => members.value.some((m) => m.identityId === selfId.value))
+
+// --- Game affinity breakdown (issue #206, implementing decision #160) -----
+// Aggregated from real GameBinding (#83) data only — never a manager-added
+// association (that's #20's superseded associate_game flow below). A
+// manage_guild holder always sees it, gated server-side; anyone else only
+// once the guild opts into public exposure via the toggle just below.
+const gameBreakdownLines = computed(() => {
+  if (!gameBreakdown.value) return []
+  return gameBreakdown.value.breakdown.map((entry) => formatGameBreakdownEntry(entry, gameBreakdown.value!.total_members))
+})
+const gameBreakdownEmpty = computed(
+  () => gameBreakdown.value !== null && hasNoGameBreakdownData(gameBreakdown.value.breakdown),
+)
+
+const savingGameBreakdownPublic = ref(false)
+const gameBreakdownPublicError = ref('')
+
+async function onToggleGameBreakdownPublic(next: boolean) {
+  if (!session.token) return
+  gameBreakdownPublicError.value = ''
+  savingGameBreakdownPublic.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { game_breakdown_public: next })
+    await refresh()
+  } catch (e) {
+    gameBreakdownPublicError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingGameBreakdownPublic.value = false
+  }
+}
 
 // Roster search/filter/sort — milestone-1 polish, plain pure functions
 // from api/guilds.ts (mirroring groupMembersByRole's own pattern). Search
@@ -568,6 +612,46 @@ function onSelectChannel(channelId: string) {
               </template>
             </AvalonForm>
           </div>
+        </AvalonCard>
+
+        <!--
+          Issue #206 (implementing decision #160): a read-only, derived
+          breakdown of which games guildmates actually play, aggregated
+          from real GameBinding (#83) data — never a manually-declared
+          association. Shown whenever there's something to show: a
+          manage_guild holder sees it (and the public-exposure toggle)
+          regardless of the toggle's own state; anyone else only once
+          `gameBreakdown` successfully loads, which the server itself
+          gates on `guild.game_breakdown_public`.
+        -->
+        <AvalonCard v-if="canManageGuild || gameBreakdown" title="Game affinity">
+          <p v-if="canManageGuild" :class="styles.empty">
+            Shown on this guild's public profile and discovery card:
+            {{ guild.game_breakdown_public ? 'yes' : 'no' }}
+          </p>
+          <AvalonButton
+            v-if="canManageGuild"
+            :label="
+              savingGameBreakdownPublic
+                ? 'Saving…'
+                : guild.game_breakdown_public
+                  ? 'Hide from public profile'
+                  : 'Show on public profile'
+            "
+            variant="secondary"
+            @click="onToggleGameBreakdownPublic(!guild.game_breakdown_public)"
+          />
+          <p v-if="gameBreakdownPublicError" :class="styles.error">{{ gameBreakdownPublicError }}</p>
+
+          <p v-if="gameBreakdownError && !canManageGuild" :class="styles.empty">
+            This guild hasn't shared its game affinity breakdown publicly.
+          </p>
+          <template v-else>
+            <p v-for="line in gameBreakdownLines" :key="line" :class="styles.empty">{{ line }}</p>
+            <p v-if="gameBreakdownEmpty" :class="styles.empty">
+              No guild member has an active game binding yet.
+            </p>
+          </template>
         </AvalonCard>
 
         <AvalonCard v-if="canManageGuild" title="Associated games">
