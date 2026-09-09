@@ -171,6 +171,92 @@ async fn clearing_the_avatar_is_recorded_as_an_explicit_null() {
 
 #[tokio::test]
 #[ignore]
+async fn a_self_description_update_round_trips_through_get_me() {
+    // Issue #155: `bio`/`favorite_genres`/`pronouns` are promised-durable
+    // and player-optional, same as `display_name`/`avatar_url` — a `PATCH
+    // /me` setting them must be reflected back by a subsequent `GET /me`.
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_identity_id, token) = seed_identity_session(&pool).await;
+
+    let update = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "bio": "just here for the guild raids",
+            "favorite_genres": ["rpg", "puzzle"],
+            "pronouns": "they/them",
+        }))
+        .send()
+        .await
+        .expect("update request failed — is `make start` running?");
+    assert!(update.status().is_success(), "{:?}", update.status());
+
+    let me: serde_json::Value = http
+        .get(format!("{base}/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(me["bio"], "just here for the guild raids");
+    assert_eq!(me["favorite_genres"], serde_json::json!(["rpg", "puzzle"]));
+    assert_eq!(me["pronouns"], "they/them");
+
+    // Clearing (empty string / empty list) round-trips to `None`/empty too.
+    let clear = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "bio": "",
+            "favorite_genres": [],
+            "pronouns": "",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(clear.status().is_success(), "{:?}", clear.status());
+
+    let me_after_clear: serde_json::Value = http
+        .get(format!("{base}/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(me_after_clear["bio"].is_null());
+    assert_eq!(me_after_clear["favorite_genres"], serde_json::json!([]));
+    assert!(me_after_clear["pronouns"].is_null());
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_unknown_genre_is_rejected_not_silently_dropped() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_identity_id, token) = seed_identity_session(&pool).await;
+
+    let update = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "favorite_genres": ["not_a_real_genre"] }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(update.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore]
 async fn a_request_that_changes_nothing_emits_nothing() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
