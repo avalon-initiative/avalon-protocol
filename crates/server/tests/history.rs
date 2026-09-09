@@ -120,6 +120,25 @@ async fn my_history_returns_only_the_callers_own_events() {
         .await
         .unwrap();
     assert_eq!(bob_history.as_array().unwrap().len(), 1);
+
+    // These rows carry junk (non-hex) entry_hash/prev_hash values by
+    // design — see seed_ledger_entry's doc comment. Left in place, the
+    // most recent one becomes `PostgresSettlementProvider::tip_hash`'s
+    // answer forever, since it just reads the latest `ledger_entries` row
+    // unconditionally — which permanently breaks every real
+    // `SettlementProvider::commit` after this test runs, since it can
+    // never parse that value as hex. Must not outlive the test.
+    cleanup_seeded_ledger_entries(&pool, &[alice_id, bob_id]).await;
+}
+
+async fn cleanup_seeded_ledger_entries(pool: &PgPool, identity_ids: &[Uuid]) {
+    for id in identity_ids {
+        sqlx::query("DELETE FROM ledger_entries WHERE issuer LIKE $1")
+            .bind(format!("identity:{id}:%"))
+            .execute(pool)
+            .await
+            .expect("failed to clean up seeded ledger entries");
+    }
 }
 
 #[tokio::test]
