@@ -182,9 +182,14 @@ provider the player uses.
   now including `bio`/`favorite_genres`/`pronouns` (#155). `list_profiles`
   (`GET /identities/profiles?ids=…`, issue #161) resolves *other*
   identities' public profile fields (`display_name`, `discriminator`,
-  `avatar_url`, `bio`, `favorite_genres`, `pronouns`) in a batch — the gap
-  every roster surface (friends, guild members) previously had to leave as a
-  raw identity id.
+  `avatar_url`) in a batch — the gap every roster surface (friends, guild
+  members) previously had to leave as a raw identity id. Deliberately does
+  NOT include `bio`/`favorite_genres`/`pronouns`: this endpoint has no
+  further visibility gating beyond session auth (any identity can
+  batch-resolve arbitrary ids), so it stays at the same minimal exposure
+  level it had before #155 rather than silently widening what any stranger
+  can bulk-collect. Exposing those fields there, if ever wanted, is a
+  scoping decision for its own ticket.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never

@@ -576,22 +576,21 @@ pub struct ProfilesQuery {
 
 /// Another identity's *public* profile fields only — never anything a
 /// stranger couldn't already learn via `friends::resolve_handle`'s
-/// name-to-id lookup run in reverse. No email, nothing beyond what
-/// `ProfileResponse` already exposes for one's own profile minus the
-/// derived `handle` (a caller who wants that can build it client-side from
-/// `display_name`/`discriminator`, same as `profile_row_to_response` does).
-/// `bio`/`favorite_genres`/`pronouns` (#155) are included at the same
-/// exposure level as `display_name`/`avatar_url` — self-disclosed public
-/// profile data, not a capability-gated surface.
+/// name-to-id lookup run in reverse. No bio, no email, nothing beyond what
+/// `display_name`/`avatar_url` already are: the least-sensitive public-face
+/// fields. This endpoint has no further visibility gating (any session can
+/// batch-resolve arbitrary identity ids), so `bio`/`favorite_genres`/
+/// `pronouns` (#155) are deliberately withheld here even though they're
+/// unauthenticated-readable on one's own `GET /me` — batch stranger lookup
+/// is a materially wider exposure than a single self-disclosed profile
+/// view, and widening it is a scoping decision for its own ticket, not a
+/// side effect of adding the columns.
 #[derive(Serialize)]
 pub struct PublicProfileResponse {
     pub identity_id: Uuid,
     pub display_name: String,
     pub discriminator: String,
     pub avatar_url: Option<String>,
-    pub bio: Option<String>,
-    pub favorite_genres: Vec<Genre>,
-    pub pronouns: Option<String>,
 }
 
 /// `GET /identities/profiles?ids=…` — issue #161. Closes the gap every
@@ -627,7 +626,7 @@ pub async fn list_profiles(
     }
 
     let rows = sqlx::query(
-        "SELECT identity_id, display_name, discriminator, avatar_url, bio, favorite_genres, pronouns \
+        "SELECT identity_id, display_name, discriminator, avatar_url \
          FROM profiles WHERE identity_id = ANY($1)",
     )
     .bind(&ids)
@@ -636,18 +635,11 @@ pub async fn list_profiles(
 
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
-        let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
         profiles.push(PublicProfileResponse {
             identity_id: row.try_get("identity_id")?,
             display_name: row.try_get("display_name")?,
             discriminator: row.try_get("discriminator")?,
             avatar_url: row.try_get("avatar_url")?,
-            bio: row.try_get("bio")?,
-            favorite_genres: favorite_genres
-                .iter()
-                .filter_map(|g| Genre::parse(g))
-                .collect(),
-            pronouns: row.try_get("pronouns")?,
         });
     }
     Ok(Json(profiles))
