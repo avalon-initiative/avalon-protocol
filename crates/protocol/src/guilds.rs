@@ -28,6 +28,11 @@ pub struct Guild {
     /// Banner image URL (issue #153) — same `http`/`https`-only, length-capped
     /// validation as a profile's `avatar_url`. `None` means unset.
     pub banner: Option<String>,
+    /// Small badge/icon image URL (issue #246) — a compact identity mark,
+    /// distinct from [`Guild::banner`]'s wide cover-image role. Same
+    /// `http`/`https`-only, length-capped validation as `banner`. `None`
+    /// means unset.
+    pub icon: Option<String>,
     /// Small, capped list of external links (Discord, website, ...) the
     /// guild wants to point at (issue #153). Ordered; a caller that wants a
     /// different order resends the whole list, same "full replace, not a

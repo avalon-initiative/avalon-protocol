@@ -317,12 +317,15 @@ const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMe
 // rather than fabricating activity.
 const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 
-// --- Rename / retag / redescribe / MOTD / banner --------------------------
+// --- Rename / retag / redescribe / MOTD / banner / icon --------------------
 
 const savingField = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
 
-async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | 'banner', value: string) {
+async function saveGuildField(
+  field: 'name' | 'tag' | 'description' | 'motd' | 'banner' | 'icon',
+  value: string,
+) {
   if (!session.token) return
   fieldErrors.value[field] = ''
   savingField.value = field
@@ -813,6 +816,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     <header :class="[styles.pageHeader, local.headerRow]">
       <div :class="local.titleBlock">
         <div :class="local.titleRow">
+          <img v-if="guild.icon" :src="guild.icon" :alt="`${guild.name} icon`" :class="local.headerIcon" />
           <h1 :class="styles.title">{{ guild.name }}</h1>
           <span :class="local.tagBadge">{{ guild.tag }}</span>
         </div>
@@ -1311,6 +1315,45 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
         </AvalonCard>
     </div>
 
+    <!-- Calendar: same event list as the Events tab above, grouped onto a
+         navigable month grid with a dot under any day that has an event —
+         click a day to see what's on it below the calendar. -->
+    <div v-else-if="activeTab === 'calendar'" :class="styles.grid">
+      <div :class="styles.mainColumn">
+        <AvalonCard title="Calendar">
+          <AvalonCalendarMonth
+            :year="calendarYear"
+            :month="calendarMonth"
+            :event-dates="calendarEventDates"
+            :selected-date="calendarSelectedDate"
+            @update:year="calendarYear = $event"
+            @update:month="calendarMonth = $event"
+            @select-date="onSelectCalendarDate"
+          />
+
+          <template v-if="calendarSelectedDate">
+            <p :class="styles.empty">{{ calendarSelectedDate }}</p>
+            <p v-if="calendarSelectedEvents.length === 0" :class="styles.empty">
+              No events on this day.
+            </p>
+            <AvalonEventCard
+              v-for="event in calendarSelectedEvents"
+              :key="event.id"
+              :title="event.title"
+              :description="event.description ?? undefined"
+              :starts-at="event.starts_at"
+              :ends-at="event.ends_at ?? undefined"
+              :rsvp-counts="event.rsvp_counts"
+            >
+              <template #actions>
+                <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+              </template>
+            </AvalonEventCard>
+          </template>
+        </AvalonCard>
+      </div>
+    </div>
+
     <!-- Roles: read-only list for any member, add-role form canManageRoles-gated
          (unchanged permission behavior from before #241, just relocated). -->
     <div v-else-if="activeTab === 'roles'" :class="styles.mainColumn">
@@ -1397,7 +1440,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
           </AvalonCard>
 
-          <AvalonCard title="Message of the day and banner">
+          <AvalonCard title="Message of the day, banner & icon">
             <AvalonEditableField
               label="MOTD"
               :value="guild.motd ?? ''"
@@ -1414,6 +1457,15 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               :saving="savingField === 'banner'"
               :error="fieldErrors.banner"
               @save="saveGuildField('banner', $event)"
+            />
+            <AvalonEditableField
+              label="Icon URL"
+              :value="guild.icon ?? ''"
+              empty-text="No icon set"
+              placeholder="https://…"
+              :saving="savingField === 'icon'"
+              :error="fieldErrors.icon"
+              @save="saveGuildField('icon', $event)"
             />
           </AvalonCard>
 
