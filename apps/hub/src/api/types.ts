@@ -438,6 +438,22 @@ export interface GuildInviteResponse {
   created_at: string
 }
 
+// Issue #242's applicant-initiated counterpart to GuildInviteResponse.
+export interface CreateJoinRequestRequest {
+  message?: string
+}
+
+export interface GuildJoinRequestResponse {
+  id: string
+  guild_id: string
+  applicant: string
+  message: string | null
+  status: 'pending' | 'approved' | 'rejected' | 'withdrawn'
+  created_at: string
+  decided_at: string | null
+  decided_by: string | null
+}
+
 // Issue #154's discovery board — a distinct, narrower shape than
 // GuildResponse (no `owner`/`games`/`join_policy`, matching
 // crates/server/src/guilds.rs::DiscoverGuildSummary field-for-field), since

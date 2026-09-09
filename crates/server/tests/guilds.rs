@@ -1499,3 +1499,396 @@ async fn a_stale_pin_is_flagged_but_not_auto_removed() {
     assert_eq!(favorites.len(), 1, "the stale pin must not be auto-removed");
     assert!(favorites[0]["stale"].as_bool().unwrap());
 }
+
+// -- Issue #242: guild join requests -----------------------------------
+
+async fn member_count(http: &reqwest::Client, base: &str, token: &str, guild_id: &str) -> usize {
+    let members: serde_json::Value =
+        auth(http.get(format!("{base}/guilds/{guild_id}/members")), token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    members.as_array().unwrap().len()
+}
+
+/// Applying to a `recruiting` guild succeeds and shows up for a manager's
+/// `GET /guilds/{id}/join-requests` (pending by default).
+#[tokio::test]
+#[ignore]
+async fn applying_to_a_recruiting_guild_succeeds_and_is_listed_pending() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({ "message": "would love to join" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(apply.status().is_success(), "{:?}", apply.status());
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    assert_eq!(apply_body["status"].as_str().unwrap(), "pending");
+
+    let pending: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let pending = pending.as_array().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0]["id"].as_str().unwrap(),
+        apply_body["id"].as_str().unwrap()
+    );
+}
+
+/// A non-recruiting guild rejects an apply outright — the ticket's own
+/// gating, mirroring #154's discovery visibility rule.
+#[tokio::test]
+#[ignore]
+async fn applying_to_a_non_recruiting_guild_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Closed Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    assert!(!guild["recruiting"].as_bool().unwrap());
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(apply.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// A second apply while the first is still pending is idempotent — same
+/// request id back, not a new row or an error, same posture as
+/// `invite_accept_join_and_leave_flow`'s duplicate-invite check.
+#[tokio::test]
+#[ignore]
+async fn duplicate_apply_while_pending_is_idempotent() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let first = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    assert!(first.status().is_success(), "{:?}", first.status());
+    let first_body: serde_json::Value = first.json().await.unwrap();
+
+    let second = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    assert!(second.status().is_success(), "{:?}", second.status());
+    let second_body: serde_json::Value = second.json().await.unwrap();
+    assert_eq!(
+        second_body["id"].as_str().unwrap(),
+        first_body["id"].as_str().unwrap()
+    );
+}
+
+/// Approving a pending request adds the applicant as a member through the
+/// same path an accepted invite uses, and marks the request approved.
+#[tokio::test]
+#[ignore]
+async fn approving_a_join_request_adds_membership() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    let request_id = apply_body["id"].as_str().unwrap();
+
+    assert_eq!(member_count(&http, &base, &owner_token, guild_id).await, 1);
+
+    let approve = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}/approve"
+        )),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(approve.status().is_success(), "{:?}", approve.status());
+    let approve_body: serde_json::Value = approve.json().await.unwrap();
+    assert_eq!(
+        approve_body["identity_id"].as_str().unwrap(),
+        applicant_id.to_string()
+    );
+
+    assert_eq!(member_count(&http, &base, &owner_token, guild_id).await, 2);
+
+    let all: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests?status=all")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let all = all.as_array().unwrap();
+    assert_eq!(all[0]["status"].as_str().unwrap(), "approved");
+}
+
+/// Rejecting a pending request leaves membership unchanged.
+#[tokio::test]
+#[ignore]
+async fn rejecting_a_join_request_leaves_membership_unchanged() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    let request_id = apply_body["id"].as_str().unwrap();
+
+    let reject = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}/reject"
+        )),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(reject.status().is_success(), "{:?}", reject.status());
+
+    assert_eq!(member_count(&http, &base, &owner_token, guild_id).await, 1);
+}
+
+/// The applicant withdrawing their own pending request leaves membership
+/// unchanged, and a manager can no longer approve the withdrawn request.
+#[tokio::test]
+#[ignore]
+async fn withdrawing_a_join_request_leaves_membership_unchanged() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    let request_id = apply_body["id"].as_str().unwrap();
+
+    let withdraw = auth(
+        http.delete(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}"
+        )),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(withdraw.status().is_success(), "{:?}", withdraw.status());
+
+    assert_eq!(member_count(&http, &base, &owner_token, guild_id).await, 1);
+
+    let approve = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}/approve"
+        )),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(approve.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+/// A non-manager cannot approve or reject someone else's join request.
+#[tokio::test]
+#[ignore]
+async fn non_manager_cannot_approve_or_reject_a_join_request() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+    let (_bystander_id, bystander_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    let request_id = apply_body["id"].as_str().unwrap();
+
+    let approve = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}/approve"
+        )),
+        &bystander_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(approve.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let reject = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}/reject"
+        )),
+        &bystander_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(reject.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// Only the applicant themself can withdraw their own pending request —
+/// not another identity, including the guild owner.
+#[tokio::test]
+#[ignore]
+async fn only_the_applicant_can_withdraw_their_own_join_request() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+    let (_bystander_id, bystander_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    let request_id = apply_body["id"].as_str().unwrap();
+
+    let withdraw_by_bystander = auth(
+        http.delete(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}"
+        )),
+        &bystander_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(
+        withdraw_by_bystander.status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+
+    let withdraw_by_owner = auth(
+        http.delete(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}"
+        )),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(withdraw_by_owner.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // The request is still pending and can be withdrawn by the actual
+    // applicant.
+    let withdraw = auth(
+        http.delete(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}"
+        )),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(withdraw.status().is_success(), "{:?}", withdraw.status());
+}

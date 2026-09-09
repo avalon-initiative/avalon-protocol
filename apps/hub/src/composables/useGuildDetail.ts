@@ -12,6 +12,7 @@ import type {
   ChannelResponse,
   EventResponse,
   GameBreakdownResponse,
+  GuildJoinRequestResponse,
   GuildResponse,
   RoleResponse,
 } from '../api/types'
@@ -39,6 +40,12 @@ export function useGuildDetail(guildId: Ref<string>) {
   const gameBreakdown = ref<GameBreakdownResponse | null>(null)
   const gameBreakdownError = ref('')
 
+  // Issue #242: pending join requests, `manage_members`-gated server-side.
+  // Same "fetched separately, a 403 just means nothing to show" posture as
+  // gameBreakdown above — most callers aren't managers, so this is an
+  // expected, common outcome, not a page-level error.
+  const joinRequests = ref<GuildJoinRequestResponse[]>([])
+
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
   async function refreshGameBreakdown() {
@@ -49,6 +56,15 @@ export function useGuildDetail(guildId: Ref<string>) {
     } catch (e) {
       gameBreakdown.value = null
       gameBreakdownError.value = e instanceof Error ? e.message : 'Something went wrong.'
+    }
+  }
+
+  async function refreshJoinRequests() {
+    if (!session.token) return
+    try {
+      joinRequests.value = await api.listJoinRequests(session.token, guildId.value)
+    } catch {
+      joinRequests.value = []
     }
   }
 
@@ -74,6 +90,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     // must never surface as the page-level `error` the template already
     // treats as fatal.
     await refreshGameBreakdown()
+    await refreshJoinRequests()
   }
 
   async function load() {
@@ -122,6 +139,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     error,
     gameBreakdown,
     gameBreakdownError,
+    joinRequests,
     refresh,
   }
 }

@@ -66,6 +66,7 @@ const {
   error,
   gameBreakdown,
   gameBreakdownError,
+  joinRequests,
   refresh,
 } = useGuildDetail(guildId)
 
@@ -338,6 +339,42 @@ async function onKick(identityId: string) {
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+
+// --- Join requests (issue #242) ------------------------------------------
+// `joinRequests` (pending-only, per useGuildDetail's default listJoinRequests
+// call) is manage_members-gated server-side — empty here for anyone who
+// isn't a manager, same non-fatal-403 posture gameBreakdown already has.
+
+const decidingRequestId = ref<string | null>(null)
+const joinRequestsError = ref('')
+
+async function onApproveJoinRequest(requestId: string) {
+  if (!session.token) return
+  joinRequestsError.value = ''
+  decidingRequestId.value = requestId
+  try {
+    await api.approveJoinRequest(session.token, guildId.value, requestId)
+    await refresh()
+  } catch (e) {
+    joinRequestsError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    decidingRequestId.value = null
+  }
+}
+
+async function onRejectJoinRequest(requestId: string) {
+  if (!session.token) return
+  joinRequestsError.value = ''
+  decidingRequestId.value = requestId
+  try {
+    await api.rejectJoinRequest(session.token, guildId.value, requestId)
+    await refresh()
+  } catch (e) {
+    joinRequestsError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    decidingRequestId.value = null
   }
 }
 
@@ -833,6 +870,34 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               </template>
             </AvalonForm>
           </div>
+        </AvalonCard>
+
+        <!--
+          Issue #242: applicant-initiated join requests, the counterpart to
+          "Invite a player" above. manage_members-gated same as that card
+          (the server independently enforces this — joinRequests is simply
+          empty for anyone else). Pending only, matching
+          crates/server/src/guilds.rs::list_join_requests' own default.
+        -->
+        <AvalonCard v-if="canManageMembers" title="Applications">
+          <p v-if="joinRequests.length === 0" :class="styles.empty">No pending applications.</p>
+          <div v-for="request in joinRequests" :key="request.id" :class="styles.empty">
+            {{ request.applicant }}
+            <template v-if="request.message">— "{{ request.message }}"</template>
+            <AvalonButton
+              label="Approve"
+              variant="primary"
+              :disabled="decidingRequestId === request.id"
+              @click="onApproveJoinRequest(request.id)"
+            />
+            <AvalonButton
+              label="Reject"
+              variant="danger"
+              :disabled="decidingRequestId === request.id"
+              @click="onRejectJoinRequest(request.id)"
+            />
+          </div>
+          <p v-if="joinRequestsError" :class="styles.error">{{ joinRequestsError }}</p>
         </AvalonCard>
 
         <!--

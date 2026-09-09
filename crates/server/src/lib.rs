@@ -220,6 +220,22 @@ pub fn router(state: AppState) -> Router {
             post(guilds::decline_invite),
         )
         .route("/guilds/{id}/join", post(guilds::join_guild))
+        .route(
+            "/guilds/{id}/join-requests",
+            get(guilds::list_join_requests).post(guilds::create_join_request),
+        )
+        .route(
+            "/guilds/{id}/join-requests/{request_id}/approve",
+            post(guilds::approve_join_request),
+        )
+        .route(
+            "/guilds/{id}/join-requests/{request_id}/reject",
+            post(guilds::reject_join_request),
+        )
+        .route(
+            "/guilds/{id}/join-requests/{request_id}",
+            delete(guilds::withdraw_join_request),
+        )
         .route("/guilds/{id}/leave", post(guilds::leave_guild))
         .route("/guilds/{id}/members", get(guilds::list_members))
         .route(

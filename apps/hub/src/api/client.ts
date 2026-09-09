@@ -15,6 +15,7 @@ import type {
   CreateFriendRequestRequest,
   CreateGuildInviteRequest,
   CreateGuildRequest,
+  CreateJoinRequestRequest,
   CreateRoleRequest,
   DeviceGrantResponse,
   DeviceResponse,
@@ -30,6 +31,7 @@ import type {
   GuardianRequestSummary,
   GuardianSettingsResponse,
   GuildInviteResponse,
+  GuildJoinRequestResponse,
   GuildMemberResponse,
   GuildResponse,
   HistoryEntryResponse,
@@ -553,6 +555,37 @@ export function joinGuild(token: string, guildId: string): Promise<GuildMemberRe
 
 export function leaveGuild(token: string, guildId: string): Promise<void> {
   return request(`/guilds/${guildId}/leave`, { method: 'POST', token })
+}
+
+// Guild join requests (issue #242) — the applicant-initiated counterpart to
+// createGuildInvite above.
+
+export function createJoinRequest(
+  token: string,
+  guildId: string,
+  body: CreateJoinRequestRequest,
+): Promise<GuildJoinRequestResponse> {
+  return request(`/guilds/${guildId}/join-requests`, { method: 'POST', body, token })
+}
+
+export function listJoinRequests(token: string, guildId: string): Promise<GuildJoinRequestResponse[]> {
+  return request(`/guilds/${guildId}/join-requests`, { token })
+}
+
+export function approveJoinRequest(
+  token: string,
+  guildId: string,
+  requestId: string,
+): Promise<GuildMemberResponse> {
+  return request(`/guilds/${guildId}/join-requests/${requestId}/approve`, { method: 'POST', token })
+}
+
+export function rejectJoinRequest(token: string, guildId: string, requestId: string): Promise<void> {
+  return request(`/guilds/${guildId}/join-requests/${requestId}/reject`, { method: 'POST', token })
+}
+
+export function withdrawJoinRequest(token: string, guildId: string, requestId: string): Promise<void> {
+  return request(`/guilds/${guildId}/join-requests/${requestId}`, { method: 'DELETE', token })
 }
 
 export function listMembers(token: string, guildId: string): Promise<GuildMemberResponse[]> {

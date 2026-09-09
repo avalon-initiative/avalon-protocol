@@ -41,3 +41,15 @@
 .tagFilter {
   max-width: 160px;
 }
+
+/* Issue #242: wraps a Discover card + its "Apply to join" action so the
+   button sits below the card rather than inside it (AvalonGuildCard is
+   itself a single clickable <button>, so its own action can't nest another
+   one). */
+.discoverCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--av-space-2);
+  margin-bottom: var(--av-space-3);
+}

@@ -9,6 +9,7 @@
 import * as api from './client'
 import type {
   DiscoverGuildsParams,
+  DiscoverGuildSummary,
   FavoriteGameEntry,
   GameBreakdownEntry,
   GuildMemberResponse,
@@ -430,4 +431,16 @@ export function reorderFavoriteGameIds(
 // rather than hiding it, per #207's "surface, don't silently churn" design.
 export function formatFavoriteGameEntry(entry: FavoriteGameEntry): string {
   return entry.stale ? `${entry.game_name} (no longer actively played)` : entry.game_name
+}
+
+// Issue #242: whether the Discover board should offer "Apply to join" for
+// this guild — only when it's recruiting and the caller isn't already a
+// member. `memberGuildIds` comes from useMyGuilds' own roster (the same
+// source Guilds.vue's "My guilds" tab already fetches), not a second
+// membership check. Pure, unit-testable independent of any fetch.
+export function canApplyToJoinGuild(
+  guild: Pick<DiscoverGuildSummary, 'id' | 'recruiting'>,
+  memberGuildIds: string[],
+): boolean {
+  return guild.recruiting && !memberGuildIds.includes(guild.id)
 }
