@@ -10,16 +10,25 @@ import type { AvalonEventCardProps } from './AvalonEventCard.types'
 
 const props = defineProps<AvalonEventCardProps>()
 
+// Stored/transmitted as UTC (ISO 8601), always displayed converted to the
+// viewer's own local timezone — timeZoneName spells that out explicitly
+// (e.g. "EDT") rather than leaving members in different timezones to
+// guess whether a time is already theirs or needs converting.
+// dateStyle/timeStyle can't be combined with timeZoneName (throws), so
+// this spells out the equivalent individual fields instead.
+const DISPLAY_OPTIONS: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short',
+}
+
 const timeRange = computed(() => {
-  const starts = new Date(props.startsAt).toLocaleString(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  })
+  const starts = new Date(props.startsAt).toLocaleString(undefined, DISPLAY_OPTIONS)
   if (!props.endsAt) return starts
-  const ends = new Date(props.endsAt).toLocaleString(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  })
+  const ends = new Date(props.endsAt).toLocaleString(undefined, DISPLAY_OPTIONS)
   return `${starts} – ${ends}`
 })
 

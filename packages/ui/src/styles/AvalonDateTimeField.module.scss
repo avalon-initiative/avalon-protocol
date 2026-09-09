@@ -54,6 +54,11 @@
   font-size: var(--av-text-sm);
 }
 
+.tzHint {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+}
+
 .pickerButton {
   border-radius: var(--av-radius-md);
   border: 1px solid var(--av-color-border);
@@ -78,7 +83,7 @@
   left: 0;
   z-index: 50;
   margin-top: var(--av-space-2);
-  width: 18rem;
+  width: 26rem;
   background: var(--av-color-surface);
   border: 1px solid var(--av-color-border);
   border-radius: var(--av-radius-lg);
@@ -93,30 +98,34 @@
   }
 }
 
+.popoverLayout {
+  display: flex;
+  gap: var(--av-space-3);
+}
+
+.calendarColumn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+}
+
 .popoverHeader {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  gap: var(--av-space-2);
 }
 
-.navButton {
-  background: none;
-  border: none;
-  font-size: var(--av-text-lg);
-  line-height: 1;
-  color: var(--av-color-text-secondary);
-  cursor: pointer;
-  padding: var(--av-space-1) var(--av-space-2);
-
-  &:hover {
-    color: var(--av-color-text);
-  }
-}
-
-.monthLabel {
-  font-weight: 600;
+.rollSelect {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
   color: var(--av-color-text);
+  padding: var(--av-space-1) var(--av-space-2);
   font-size: var(--av-text-sm);
+  font-family: inherit;
 }
 
 .weekdayRow,
@@ -161,33 +170,78 @@
   }
 }
 
-.timeRow {
-  display: flex;
-  gap: var(--av-space-2);
-  border-top: 1px solid var(--av-color-border);
-  padding-top: var(--av-space-2);
-}
-
-.timeField {
-  flex: 1;
+.timeColumn {
+  flex: 0 0 7rem;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: var(--av-space-2);
+  border-left: 1px solid var(--av-color-border);
+  padding-left: var(--av-space-3);
+}
+
+.timeColumnLabel {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-secondary);
+  font-weight: 500;
+}
+
+.timeEntry {
+  display: flex;
+  align-items: center;
   gap: var(--av-space-1);
 }
 
-.timeLabel {
-  font-size: var(--av-text-xs);
-  color: var(--av-color-text-secondary);
-}
-
-.timeSelect {
+.timeInput {
+  width: 2.5rem;
+  text-align: center;
   border-radius: var(--av-radius-sm);
   border: 1px solid var(--av-color-border);
   background: var(--av-color-bg);
   color: var(--av-color-text);
+  padding: var(--av-space-1);
+  font-size: var(--av-text-base);
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: var(--av-color-primary);
+    box-shadow: 0 0 0 3px var(--av-color-primary-soft);
+  }
+}
+
+.timeColon {
+  font-weight: 600;
+  color: var(--av-color-text);
+}
+
+.periodToggle {
+  display: flex;
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  overflow: hidden;
+}
+
+.periodButton {
+  border: none;
+  background: var(--av-color-bg);
+  color: var(--av-color-text-secondary);
   padding: var(--av-space-1) var(--av-space-2);
   font-size: var(--av-text-sm);
-  font-family: inherit;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+  }
+}
+
+.periodActive {
+  background: var(--av-color-primary);
+  color: var(--av-color-on-primary, #fff);
+
+  &:hover {
+    background: var(--av-color-primary);
+  }
 }
 
 .doneButton {

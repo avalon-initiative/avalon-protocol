@@ -1,36 +1,40 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files —
 // all calendar-grid/date math lives in AvalonDateTimeField.state.ts, this
-// file is glue over that composable. A fully custom popover calendar +
-// hour/minute selects, not a native <input type="datetime-local"> —
+// file is glue over that composable. A fully custom popover calendar
+// (month/year as selects, no prev/next-arrow-only nav) with 12-hour
+// HH:MM entry + AM/PM beside it — not a native <input type="datetime-local">,
 // browser-native date/time widgets vary too much across browsers.
 import styles from '../styles/AvalonDateTimeField.module.scss'
 import type { AvalonDateTimeFieldProps } from './AvalonDateTimeField.types'
-import { useDateTimeField } from './AvalonDateTimeField.state'
+import { MONTH_NAMES, WEEKDAY_LABELS, useDateTimeField } from './AvalonDateTimeField.state'
 
 const props = defineProps<AvalonDateTimeFieldProps>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const {
   open,
+  viewYear,
+  viewMonth,
+  years,
   grid,
-  monthLabel,
   parsed,
   popover,
   trigger,
+  hour12Text,
+  minuteText,
+  period,
   toggleOpen,
   close,
   onFocusOut,
-  prevMonth,
-  nextMonth,
+  setViewYear,
+  setViewMonth,
   selectDay,
-  setHour,
-  setMinute,
+  setHour12Text,
+  setMinuteText,
+  setPeriod,
   onTextInput,
 } = useDateTimeField(() => props.modelValue, emit)
-
-const hourOptions = Array.from({ length: 24 }, (_, i) => i)
-const minuteOptions = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
 </script>
 
 <template>
@@ -57,55 +61,93 @@ const minuteOptions = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
       </button>
     </div>
     <span v-if="error" :class="styles.error">{{ error }}</span>
+    <span :class="styles.tzHint">Times are shown and entered in your device's local timezone.</span>
 
     <div v-if="open" ref="popover" tabindex="-1" :class="styles.popover">
-      <div :class="styles.popoverHeader">
-        <button type="button" :class="styles.navButton" aria-label="Previous month" @click="prevMonth">
-          &lsaquo;
-        </button>
-        <span :class="styles.monthLabel">{{ monthLabel }}</span>
-        <button type="button" :class="styles.navButton" aria-label="Next month" @click="nextMonth">
-          &rsaquo;
-        </button>
-      </div>
+      <div :class="styles.popoverLayout">
+        <div :class="styles.calendarColumn">
+          <div :class="styles.popoverHeader">
+            <select
+              :class="styles.rollSelect"
+              :value="viewMonth"
+              aria-label="Month"
+              @change="setViewMonth(Number(($event.target as HTMLSelectElement).value))"
+            >
+              <option v-for="(name, i) in MONTH_NAMES" :key="name" :value="i + 1">{{ name }}</option>
+            </select>
+            <select
+              :class="styles.rollSelect"
+              :value="viewYear"
+              aria-label="Year"
+              @change="setViewYear(Number(($event.target as HTMLSelectElement).value))"
+            >
+              <option v-for="y in years" :key="y" :value="y">{{ y }}</option>
+            </select>
+          </div>
 
-      <div :class="styles.weekdayRow">
-        <span v-for="label in ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']" :key="label" :class="styles.weekday">
-          {{ label }}
-        </span>
-      </div>
+          <div :class="styles.weekdayRow">
+            <span v-for="label in WEEKDAY_LABELS" :key="label" :class="styles.weekday">{{ label }}</span>
+          </div>
 
-      <div v-for="(week, wi) in grid" :key="wi" :class="styles.weekRow">
-        <button
-          v-for="cell in week"
-          :key="cell.iso"
-          type="button"
-          :class="[
-            styles.dayCell,
-            !cell.inMonth && styles.dayOutside,
-            parsed && cell.iso === `${parsed.year}-${String(parsed.month).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}` && cell.inMonth
-              ? styles.daySelected
-              : '',
-          ]"
-          @click="selectDay(cell)"
-        >
-          {{ cell.day }}
-        </button>
-      </div>
+          <div v-for="(week, wi) in grid" :key="wi" :class="styles.weekRow">
+            <button
+              v-for="cell in week"
+              :key="cell.iso"
+              type="button"
+              :class="[
+                styles.dayCell,
+                !cell.inMonth && styles.dayOutside,
+                parsed && cell.inMonth && cell.iso === `${parsed.year}-${String(parsed.month).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}`
+                  ? styles.daySelected
+                  : '',
+              ]"
+              @click="selectDay(cell)"
+            >
+              {{ cell.day }}
+            </button>
+          </div>
+        </div>
 
-      <div :class="styles.timeRow">
-        <label :class="styles.timeField">
-          <span :class="styles.timeLabel">Hour</span>
-          <select :class="styles.timeSelect" :value="parsed?.hour ?? 0" @change="setHour(Number(($event.target as HTMLSelectElement).value))">
-            <option v-for="h in hourOptions" :key="h" :value="h">{{ String(h).padStart(2, '0') }}</option>
-          </select>
-        </label>
-        <label :class="styles.timeField">
-          <span :class="styles.timeLabel">Minute</span>
-          <select :class="styles.timeSelect" :value="parsed?.minute ?? 0" @change="setMinute(Number(($event.target as HTMLSelectElement).value))">
-            <option v-for="m in minuteOptions" :key="m" :value="m">{{ String(m).padStart(2, '0') }}</option>
-          </select>
-        </label>
+        <div :class="styles.timeColumn">
+          <span :class="styles.timeColumnLabel">Time</span>
+          <div :class="styles.timeEntry">
+            <input
+              :class="styles.timeInput"
+              type="text"
+              inputmode="numeric"
+              maxlength="2"
+              aria-label="Hour"
+              :value="hour12Text"
+              @input="setHour12Text(($event.target as HTMLInputElement).value)"
+            />
+            <span :class="styles.timeColon">:</span>
+            <input
+              :class="styles.timeInput"
+              type="text"
+              inputmode="numeric"
+              maxlength="2"
+              aria-label="Minute"
+              :value="minuteText"
+              @input="setMinuteText(($event.target as HTMLInputElement).value)"
+            />
+          </div>
+          <div :class="styles.periodToggle">
+            <button
+              type="button"
+              :class="[styles.periodButton, period === 'AM' && styles.periodActive]"
+              @click="setPeriod('AM')"
+            >
+              AM
+            </button>
+            <button
+              type="button"
+              :class="[styles.periodButton, period === 'PM' && styles.periodActive]"
+              @click="setPeriod('PM')"
+            >
+              PM
+            </button>
+          </div>
+        </div>
       </div>
 
       <button type="button" :class="styles.doneButton" @click="close">Done</button>

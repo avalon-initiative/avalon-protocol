@@ -764,7 +764,6 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
         <div :class="local.titleRow">
           <h1 :class="styles.title">{{ guild.name }}</h1>
           <span :class="local.tagBadge">{{ guild.tag }}</span>
-          <AvalonButton v-if="canManageGuild" label="Edit" variant="secondary" @click="openEditGuildInfo" />
         </div>
         <p v-if="guild.description" :class="styles.subtitle">{{ guild.description }}</p>
         <p :class="styles.subtitle">
@@ -1267,6 +1266,12 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     <div v-else-if="activeTab === 'settings'" :class="styles.grid">
       <template v-if="canManageGuild">
         <div :class="styles.mainColumn">
+          <AvalonCard title="Guild info" subtitle="Name, tag, and description.">
+            <p :class="styles.empty">{{ guild.name }} [{{ guild.tag }}]</p>
+            <p :class="styles.empty">{{ guild.description || 'No description' }}</p>
+            <AvalonButton label="Edit" variant="secondary" @click="openEditGuildInfo" />
+          </AvalonCard>
+
           <AvalonCard title="Recruiting">
             <p :class="styles.empty">
               Recruiting guilds are discoverable on the "Discover" board:

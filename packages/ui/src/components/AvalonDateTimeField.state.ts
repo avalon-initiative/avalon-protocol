@@ -3,10 +3,12 @@
 // AvalonEditableField.state.ts already established). Deliberately not a
 // native <input type="datetime-local"> — browser-native date/time pickers
 // vary wildly in usability across browsers, so this is a fully custom
-// popover calendar + hour/minute selects instead, while keeping the same
-// "YYYY-MM-DDTHH:mm" (local time, no seconds/offset) value shape every
-// caller already expects.
-import { computed, nextTick, ref } from 'vue'
+// popover calendar (month/year as selects) + 12-hour HH:MM entry + AM/PM,
+// while keeping the same "YYYY-MM-DDTHH:mm" (local time, 24h, no
+// seconds/offset) value shape every caller already expects — the 12-hour
+// display is purely a UI convenience layered on top in this module, never
+// leaking into the emitted value.
+import { computed, nextTick, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 
 export interface ParsedDateTime {
@@ -100,6 +102,27 @@ export const MONTH_NAMES = [
 
 export const WEEKDAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
+// Years offered in the year select: a reasonable window around "now" for
+// scheduling guild events — not meant to cover arbitrary historical dates.
+export function yearOptions(centerYear: number): number[] {
+  const start = centerYear - 2
+  return Array.from({ length: 9 }, (_, i) => start + i)
+}
+
+export type Period = 'AM' | 'PM'
+
+export function to12Hour(hour24: number): { hour12: number; period: Period } {
+  const period: Period = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
+  return { hour12, period }
+}
+
+export function to24Hour(hour12: number, period: Period): number {
+  const clamped = ((hour12 - 1 + 12) % 12) + 1 // normalize into 1-12
+  if (period === 'AM') return clamped === 12 ? 0 : clamped
+  return clamped === 12 ? 12 : clamped + 12
+}
+
 export interface DateTimeFieldEmit {
   (event: 'update:modelValue', value: string): void
 }
@@ -116,7 +139,25 @@ export function useDateTimeField(currentValue: () => string, emit: DateTimeField
 
   const parsed = computed(() => parseValue(currentValue()))
   const grid = computed(() => monthGrid(viewYear.value, viewMonth.value))
-  const monthLabel = computed(() => `${MONTH_NAMES[viewMonth.value - 1]} ${viewYear.value}`)
+  const years = computed(() => yearOptions(viewYear.value))
+
+  const hour12Text = ref('12')
+  const minuteText = ref('00')
+  const period = ref<Period>('AM')
+
+  // The typed HH/MM/AM-PM controls are local drafts, not directly bound to
+  // the parsed value — otherwise every keystroke on a half-typed "1" (on
+  // the way to "12") would round-trip through to24Hour/emit and fight the
+  // input. They resync from the real value whenever it changes elsewhere
+  // (a day click, or the popover opening) instead.
+  function syncTimeDraftFromParsed() {
+    const current = parsed.value
+    const { hour12, period: p } = to12Hour(current?.hour ?? 0)
+    hour12Text.value = String(hour12)
+    minuteText.value = pad2(current?.minute ?? 0)
+    period.value = p
+  }
+  watch(parsed, syncTimeDraftFromParsed, { immediate: true })
 
   function syncViewToCurrent() {
     const current = parseValue(currentValue())
@@ -145,42 +186,50 @@ export function useDateTimeField(currentValue: () => string, emit: DateTimeField
     close()
   }
 
-  function prevMonth() {
-    if (viewMonth.value === 1) {
-      viewMonth.value = 12
-      viewYear.value -= 1
-    } else {
-      viewMonth.value -= 1
-    }
+  function setViewYear(year: number) {
+    viewYear.value = year
   }
 
-  function nextMonth() {
-    if (viewMonth.value === 12) {
-      viewMonth.value = 1
-      viewYear.value += 1
-    } else {
-      viewMonth.value += 1
-    }
+  function setViewMonth(month: number) {
+    viewMonth.value = month
+  }
+
+  function currentTimeParts() {
+    const current = parsed.value
+    return { hour: current?.hour ?? 0, minute: current?.minute ?? 0 }
   }
 
   function selectDay(cell: DayCell) {
-    const base = parsed.value ?? { hour: 0, minute: 0, year: viewYear.value, month: viewMonth.value, day: cell.day }
+    const { hour, minute } = currentTimeParts()
     const [y, m] = cell.iso.split('-').map(Number)
-    emit('update:modelValue', formatValue({ year: y, month: m, day: cell.day, hour: base.hour, minute: base.minute }))
+    emit('update:modelValue', formatValue({ year: y, month: m, day: cell.day, hour, minute }))
     if (!cell.inMonth) {
       viewYear.value = y
       viewMonth.value = m
     }
   }
 
-  function setHour(hour: number) {
+  function commitTimeDraft() {
     const base = parsed.value ?? { year: viewYear.value, month: viewMonth.value, day: 1, hour: 0, minute: 0 }
-    emit('update:modelValue', formatValue({ ...base, hour }))
+    const hour12 = Math.min(12, Math.max(1, Number(hour12Text.value) || 12))
+    const minute = Math.min(59, Math.max(0, Number(minuteText.value) || 0))
+    const hour = to24Hour(hour12, period.value)
+    emit('update:modelValue', formatValue({ ...base, hour, minute }))
   }
 
-  function setMinute(minute: number) {
-    const base = parsed.value ?? { year: viewYear.value, month: viewMonth.value, day: 1, hour: 0, minute: 0 }
-    emit('update:modelValue', formatValue({ ...base, minute }))
+  function setHour12Text(value: string) {
+    hour12Text.value = value
+    commitTimeDraft()
+  }
+
+  function setMinuteText(value: string) {
+    minuteText.value = value
+    commitTimeDraft()
+  }
+
+  function setPeriod(next: Period) {
+    period.value = next
+    commitTimeDraft()
   }
 
   function onTextInput(value: string) {
@@ -196,19 +245,23 @@ export function useDateTimeField(currentValue: () => string, emit: DateTimeField
     open,
     viewYear,
     viewMonth,
+    years,
     grid,
-    monthLabel,
     parsed,
     popover,
     trigger,
+    hour12Text,
+    minuteText,
+    period,
     toggleOpen,
     close,
     onFocusOut,
-    prevMonth,
-    nextMonth,
+    setViewYear,
+    setViewMonth,
     selectDay,
-    setHour,
-    setMinute,
+    setHour12Text,
+    setMinuteText,
+    setPeriod,
     onTextInput,
   }
 }
