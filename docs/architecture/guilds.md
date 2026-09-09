@@ -548,6 +548,46 @@ with Game A becomes historical.
   catalogue/indexer work this would need). The events themselves are
   durable (see "History vs current state" above); only a read path for
   them is missing.
+- **Guild events calendar + RSVP (issue #169).** A guild plans things —
+  raid nights, tournament prep, meetups — regardless of which game (if
+  any) members currently have open; a pinned chat message is a poor
+  substitute for a real calendar. `GuildEvent`/`GuildEventRsvp`
+  (`crates/protocol/src/guilds.rs`) are served by
+  `crates/server/src/guild_events.rs`: `GET`/`POST /guilds/{id}/events`,
+  `PATCH`/`DELETE /guilds/{id}/events/{eid}`,
+  `PUT /guilds/{id}/events/{eid}/rsvp`, migration
+  `crates/server/db/migrations/0028_guild_events`. This is distinct from
+  #88's game event *result* attestations — durable claims issued after the
+  fact about outcomes — this is scheduling something upcoming.
+  **Durability call, made explicitly rather than assumed:** unlike guild
+  *channels* (#22), whose structure — create/rename/archive — is durable
+  history behind `guild.channel_*` outbox events, a guild event gets no
+  protocol event kind at all, for either the event row or its RSVPs. A
+  scheduled event doesn't have the "durable structure" character a channel
+  does: a raid night gets rescheduled or cancelled repeatedly, and that
+  churn isn't history worth preserving forever any more than the chat that
+  happens in a channel is. So the whole feature — `guild_events` and
+  `guild_event_rsvps` alike — gets the same "hot state, not history"
+  treatment already given to `guild_messages` and presence, rather than
+  channels' "structure is durable, content isn't" split. Deleting an event
+  is a real hard delete (nothing here claims to be reconstructable
+  history) and cascades to its RSVPs via the `guild_event_rsvps` table's
+  `ON DELETE CASCADE` foreign key. Creating, rescheduling, and deleting an
+  event reuse the existing `manage_channels` permission from #20's fixed
+  milestone-1 `GuildPermission` set rather than adding a new
+  "manage_events" permission — that set is still not-yet-extensible for
+  milestone 1. RSVPing is self-service and idempotent: `PUT .../rsvp`
+  always upserts the caller's own `(event_id, identity_id)` row (the
+  table's primary key), replacing any prior status rather than
+  accumulating rows; a member can never target another member's RSVP.
+  Listing and RSVPing both require current guild membership, same as
+  channels/messages. The Rust SDK exposes a read-only
+  `Session::guild(id).events()` (`guilds.read`), mirroring `channels()`;
+  create/update/delete/RSVP stay player-authority Hub-only actions, same
+  posture channel *management* already has. Hub: a new "Events" card on
+  `/guilds/:id` lists upcoming events with title/time/RSVP counts and a
+  going/maybe/not-going control, using two new `packages/ui` components
+  (`AvalonEventCard`, `AvalonRsvpControl`).
 
 ## Decisions and tickets
 

@@ -58,7 +58,7 @@
 use std::collections::HashMap;
 
 use avalon_protocol::guilds::{
-    Guild, GuildChannel, GuildLink, GuildMember, GuildMessage, GuildRole, JoinPolicy,
+    Guild, GuildChannel, GuildEvent, GuildLink, GuildMember, GuildMessage, GuildRole, JoinPolicy,
 };
 use avalon_protocol::ids::{GuildId, IdentityId};
 use avalon_protocol::permissions::Capability;
@@ -238,6 +238,49 @@ struct SendMessageRequest<'a> {
     body: &'a str,
 }
 
+/// Mirrors `crates/server/src/guild_events.rs::EventResponse`.
+///
+/// `rsvp_counts` is intentionally dropped on the way to [`GuildEvent`] —
+/// same "protocol type has nowhere to put it" posture `ChannelResponse`'s
+/// dropped `archived` field documents above. A caller that needs RSVP
+/// counts reads them off the raw JSON today; there is no SDK-side RSVP
+/// surface yet (issue #169 ships server + protocol + Hub; the ticket's
+/// "sdk" scope is limited to this read-only `events()` list, mirroring
+/// `channels()`, not create/update/delete/rsvp — those stay player-authority
+/// Hub-only actions, same posture channel management already has).
+#[derive(Deserialize)]
+struct EventResponse {
+    id: Uuid,
+    guild_id: Uuid,
+    channel_id: Option<Uuid>,
+    title: String,
+    description: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    starts_at: OffsetDateTime,
+    #[serde(default)]
+    #[serde(with = "time::serde::rfc3339::option")]
+    ends_at: Option<OffsetDateTime>,
+    created_by: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+}
+
+impl From<EventResponse> for GuildEvent {
+    fn from(response: EventResponse) -> Self {
+        GuildEvent {
+            id: response.id,
+            guild_id: GuildId(response.guild_id),
+            channel_id: response.channel_id,
+            title: response.title,
+            description: response.description,
+            starts_at: response.starts_at,
+            ends_at: response.ends_at,
+            created_by: IdentityId(response.created_by),
+            created_at: response.created_at,
+        }
+    }
+}
+
 impl Session {
     /// `GET /me/guilds` — requires `guilds.read`. Each membership's full
     /// `Guild` is fetched with one follow-up `GET /guilds/{id}` per
@@ -373,6 +416,32 @@ impl<'a> GuildHandle<'a> {
         }
         let channels: Vec<ChannelResponse> = response.json().await?;
         Ok(channels.into_iter().map(GuildChannel::from).collect())
+    }
+
+    /// `GET /guilds/{id}/events` — requires `guilds.read`. Lists all
+    /// scheduled events for the guild, unfiltered (the server also accepts
+    /// `from`/`to` date-range query params — not exposed through this
+    /// method yet, matching #169's read-only SDK scope). See
+    /// [`EventResponse`]'s doc comment for why `rsvp_counts` doesn't survive
+    /// the mapping to [`GuildEvent`].
+    pub async fn events(&self) -> Result<Vec<GuildEvent>, SdkError> {
+        self.session.require(Capability::GuildsRead)?;
+
+        let response = self
+            .session
+            .http
+            .get(format!(
+                "{}/guilds/{}/events",
+                self.session.server_url, self.guild_id.0
+            ))
+            .bearer_auth(&self.session.token)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(SdkError::ServerError(response.status()));
+        }
+        let events: Vec<EventResponse> = response.json().await?;
+        Ok(events.into_iter().map(GuildEvent::from).collect())
     }
 
     /// A handle scoped to one channel within this guild, for

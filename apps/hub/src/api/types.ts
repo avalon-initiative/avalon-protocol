@@ -494,3 +494,63 @@ export interface SignedTreeHeadResponse {
   // RFC 3339 (`time::serde::rfc3339` on the server side).
   created_at: string
 }
+
+// Guild events calendar + RSVP (issue #169). See
+// `crates/server/src/guild_events.rs` and `docs/architecture/guilds.md`'s
+// "Guild events calendar + RSVP" section for the durability call: no
+// `guild_events`/`guild_event_rsvps` row is protocol history, both are
+// plain projections, same "hot state, not history" posture chat messages
+// already have.
+
+export interface RsvpCounts {
+  going: number
+  maybe: number
+  not_going: number
+}
+
+export interface EventResponse {
+  id: string
+  guild_id: string
+  channel_id: string | null
+  title: string
+  description: string | null
+  starts_at: string
+  ends_at: string | null
+  created_by: string
+  created_at: string
+  rsvp_counts: RsvpCounts
+}
+
+export interface CreateEventRequest {
+  channel_id?: string | null
+  title: string
+  description?: string | null
+  starts_at: string
+  ends_at?: string | null
+}
+
+export interface UpdateEventRequest {
+  channel_id?: string | null
+  title: string
+  description?: string | null
+  starts_at: string
+  ends_at?: string | null
+}
+
+export type RsvpStatusValue = 'going' | 'maybe' | 'not_going'
+
+export interface RsvpRequest {
+  status: RsvpStatusValue
+}
+
+export interface RsvpResponse {
+  event_id: string
+  identity_id: string
+  status: RsvpStatusValue
+  responded_at: string
+}
+
+export interface ListEventsQuery {
+  from?: string
+  to?: string
+}

@@ -9,6 +9,7 @@ pub mod discovery;
 pub mod error;
 pub mod friends;
 pub mod games;
+pub mod guild_events;
 pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
@@ -208,6 +209,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/guilds/{id}/channels/{cid}/messages/{mid}",
             delete(guild_messages::delete_message),
+        )
+        .route(
+            "/guilds/{id}/events",
+            get(guild_events::list_events).post(guild_events::create_event),
+        )
+        .route(
+            "/guilds/{id}/events/{eid}",
+            patch(guild_events::update_event).delete(guild_events::delete_event),
+        )
+        .route(
+            "/guilds/{id}/events/{eid}/rsvp",
+            put(guild_events::upsert_rsvp),
         )
         // Issue #211: public, unauthenticated mirror-facing transparency-log
         // reads — see `crate::settlement`'s module docs for why these carry

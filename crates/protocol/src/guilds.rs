@@ -301,3 +301,70 @@ pub struct GuildMessage {
     pub body: String,
     pub sent_at: OffsetDateTime,
 }
+
+/// A scheduled guild event (issue #169) — raid night, tournament prep,
+/// meetup, anything a guild plans in advance. Distinct from #88's game
+/// event *result* attestations: this is a plan for something upcoming, not
+/// a durable claim about something that already happened.
+///
+/// `guild_events` (and `GuildEventRsvp` below) are a projection-only table
+/// with no `guild.event_*` protocol event kind — see
+/// `crates/server/src/guild_events.rs`'s module doc comment for the full
+/// durability reasoning (same "hot state, not history" treatment #22 gave
+/// chat messages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuildEvent {
+    pub id: uuid::Uuid,
+    pub guild_id: GuildId,
+    /// Optionally scopes the event to one of the guild's channels, for
+    /// discussion. `None` means the event isn't tied to a specific channel.
+    pub channel_id: Option<uuid::Uuid>,
+    pub title: String,
+    pub description: Option<String>,
+    pub starts_at: OffsetDateTime,
+    /// `None` means open-ended / no announced end time.
+    pub ends_at: Option<OffsetDateTime>,
+    pub created_by: IdentityId,
+    pub created_at: OffsetDateTime,
+}
+
+/// A member's RSVP to a `GuildEvent`. One row per (event, identity) — a
+/// member can only ever mutate their own row, never another's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuildEventRsvp {
+    pub event_id: uuid::Uuid,
+    pub identity_id: IdentityId,
+    pub status: RsvpStatus,
+    pub responded_at: OffsetDateTime,
+}
+
+/// Fixed, closed set — same "small, not extensible" posture as
+/// `JoinPolicy`/`RoleBadgeIcon` elsewhere in this module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RsvpStatus {
+    Going,
+    Maybe,
+    NotGoing,
+}
+
+impl RsvpStatus {
+    pub const ALL: [RsvpStatus; 3] = [RsvpStatus::Going, RsvpStatus::Maybe, RsvpStatus::NotGoing];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RsvpStatus::Going => "going",
+            RsvpStatus::Maybe => "maybe",
+            RsvpStatus::NotGoing => "not_going",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<RsvpStatus> {
+        match s {
+            "going" => Some(RsvpStatus::Going),
+            "maybe" => Some(RsvpStatus::Maybe),
+            "not_going" => Some(RsvpStatus::NotGoing),
+            _ => None,
+        }
+    }
+}

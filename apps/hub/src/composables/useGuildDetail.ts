@@ -8,7 +8,13 @@ import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import * as api from '../api/client'
 import { listMembersWithPresence, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
-import type { ChannelResponse, GameBreakdownResponse, GuildResponse, RoleResponse } from '../api/types'
+import type {
+  ChannelResponse,
+  EventResponse,
+  GameBreakdownResponse,
+  GuildResponse,
+  RoleResponse,
+} from '../api/types'
 import { useSessionStore } from '../stores/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
@@ -20,6 +26,7 @@ export function useGuildDetail(guildId: Ref<string>) {
   const roles = ref<RoleResponse[]>([])
   const members = ref<GuildMember[]>([])
   const channels = ref<ChannelResponse[]>([])
+  const events = ref<EventResponse[]>([])
   const selfId = ref('')
   const loading = ref(true)
   const error = ref('')
@@ -48,16 +55,18 @@ export function useGuildDetail(guildId: Ref<string>) {
   async function refresh() {
     if (!session.token) return
     try {
-      const [guildResp, rolesResp, membersResp, channelsResp] = await Promise.all([
+      const [guildResp, rolesResp, membersResp, channelsResp, eventsResp] = await Promise.all([
         api.getGuild(session.token, guildId.value),
         api.listRoles(session.token, guildId.value),
         listMembersWithPresence(session.token, guildId.value),
         api.listChannels(session.token, guildId.value),
+        api.listEvents(session.token, guildId.value),
       ])
       guild.value = guildResp
       roles.value = rolesResp
       members.value = membersResp
       channels.value = channelsResp
+      events.value = eventsResp
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
@@ -105,6 +114,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     roles,
     members,
     channels,
+    events,
     selfId,
     selfPermissions,
     isOwner,

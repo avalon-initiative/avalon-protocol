@@ -11,12 +11,15 @@ import {
   AvalonCard,
   AvalonChannelList,
   AvalonEditableField,
+  AvalonEventCard,
   AvalonFilterBar,
   AvalonForm,
   AvalonGuildMemberRow,
+  AvalonRsvpControl,
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
+import { sortByStartsAt, validateEventForm } from '../api/guildEvents'
 import {
   addFavoriteGameId,
   canChangeMemberRole,
@@ -55,6 +58,7 @@ const {
   roles,
   members,
   channels,
+  events,
   selfId,
   selfPermissions,
   isOwner,
@@ -442,6 +446,67 @@ async function onArchiveChannel(channelId: string) {
 function onSelectChannel(channelId: string) {
   router.push({ name: 'guild-channel', params: { id: guildId.value, cid: channelId } })
 }
+
+// --- Events (issue #169) -----------------------------------------------
+
+const sortedEvents = computed(() => sortByStartsAt(events.value))
+
+const showCreateEvent = ref(false)
+const newEventTitle = ref('')
+const newEventDescription = ref('')
+const newEventStartsAt = ref('')
+const creatingEvent = ref(false)
+const createEventError = ref('')
+
+function cancelCreateEvent() {
+  showCreateEvent.value = false
+  newEventTitle.value = ''
+  newEventDescription.value = ''
+  newEventStartsAt.value = ''
+  createEventError.value = ''
+}
+
+async function onCreateEvent() {
+  if (!session.token) return
+  createEventError.value = ''
+  const startsAtIso = newEventStartsAt.value ? new Date(newEventStartsAt.value).toISOString() : ''
+  const validation = validateEventForm({
+    title: newEventTitle.value,
+    description: newEventDescription.value,
+    startsAt: startsAtIso,
+  })
+  if (!validation.valid) {
+    createEventError.value = validation.titleError ?? validation.timeRangeError ?? 'Invalid event.'
+    return
+  }
+  creatingEvent.value = true
+  try {
+    await api.createEvent(session.token, guildId.value, {
+      title: newEventTitle.value.trim(),
+      description: newEventDescription.value.trim() || undefined,
+      starts_at: startsAtIso,
+    })
+    cancelCreateEvent()
+    await refresh()
+  } catch (e) {
+    createEventError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    creatingEvent.value = false
+  }
+}
+
+// Self-service only, always the caller's own RSVP — see
+// AvalonRsvpControl.types.ts and guild_events.rs::upsert_rsvp.
+async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') {
+  if (!session.token) return
+  actionError.value = ''
+  try {
+    await api.rsvpToEvent(session.token, guildId.value, eventId, { status })
+    await refresh()
+  } catch (e) {
+    actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
 </script>
 
 <template>
@@ -590,6 +655,62 @@ function onSelectChannel(channelId: string) {
               <AvalonTextField v-model="newChannelName" label="Channel name" placeholder="general" />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateChannel" />
+              </template>
+            </AvalonForm>
+          </div>
+        </AvalonCard>
+
+        <!--
+          Guild events calendar + RSVP (issue #169). Neither an event nor
+          an RSVP row is durable protocol history — see
+          docs/architecture/guilds.md's "Guild events calendar + RSVP"
+          section — so nothing here claims to be permanent. The list
+          endpoint doesn't currently return the *caller's own* RSVP status
+          per event (only aggregate counts), so AvalonRsvpControl always
+          renders with no pre-selected status today — a real gap, not
+          silently worked around.
+        -->
+        <AvalonCard title="Events">
+          <p v-if="sortedEvents.length === 0" :class="styles.empty">No upcoming events yet.</p>
+          <AvalonEventCard
+            v-for="event in sortedEvents"
+            :key="event.id"
+            :title="event.title"
+            :description="event.description ?? undefined"
+            :starts-at="event.starts_at"
+            :ends-at="event.ends_at ?? undefined"
+            :rsvp-counts="event.rsvp_counts"
+          >
+            <template #actions>
+              <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+            </template>
+          </AvalonEventCard>
+          <AvalonButton
+            v-if="canManageChannels && !showCreateEvent"
+            label="+ New event"
+            variant="secondary"
+            @click="showCreateEvent = true"
+          />
+          <div v-if="showCreateEvent">
+            <AvalonForm
+              submit-label="Create event"
+              :submitting="creatingEvent"
+              :error="createEventError"
+              @submit="onCreateEvent"
+            >
+              <AvalonTextField v-model="newEventTitle" label="Title" placeholder="Raid night" />
+              <AvalonTextField
+                v-model="newEventDescription"
+                label="Description"
+                placeholder="Optional details"
+              />
+              <AvalonTextField
+                v-model="newEventStartsAt"
+                label="Starts at"
+                placeholder="2026-09-15T20:00"
+              />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
               </template>
             </AvalonForm>
           </div>

@@ -10,6 +10,7 @@ import type {
   ConnectGameRequest,
   ConnectGameResponse,
   CreateChannelRequest,
+  CreateEventRequest,
   CreateFriendRequestRequest,
   CreateGuildInviteRequest,
   CreateGuildRequest,
@@ -18,6 +19,7 @@ import type {
   DeviceResponse,
   DiscoverGuildsResponse,
   DiscoverPeopleResponse,
+  EventResponse,
   FavoriteGamesResponse,
   FriendRequestResponse,
   FriendshipResponse,
@@ -28,6 +30,7 @@ import type {
   GuildMemberResponse,
   GuildResponse,
   HistoryEntryResponse,
+  ListEventsQuery,
   MessageResponse,
   MyConnectionsResponse,
   MyGuildMembershipResponse,
@@ -44,6 +47,8 @@ import type {
   RequestDeviceGrantRequest,
   ResolveHandleResponse,
   RoleResponse,
+  RsvpRequest,
+  RsvpResponse,
   SearchIdentitiesResponse,
   SendMessageRequest,
   SessionFinishRequest,
@@ -53,6 +58,7 @@ import type {
   SignedTreeHeadResponse,
   TransferOwnershipRequest,
   UpdateChannelRequest,
+  UpdateEventRequest,
   UpdateGuildMemberRequest,
   UpdateGuildRequest,
   UpdatePresenceRequest,
@@ -572,6 +578,57 @@ export function deleteMessage(
     method: 'DELETE',
     token,
   })
+}
+
+// Guild events calendar + RSVP (issue #169) —
+// crates/server/src/guild_events.rs.
+
+export function listEvents(
+  token: string,
+  guildId: string,
+  query: ListEventsQuery = {},
+): Promise<EventResponse[]> {
+  const params = new URLSearchParams()
+  if (query.from) params.set('from', query.from)
+  if (query.to) params.set('to', query.to)
+  const queryString = params.toString()
+  return request(`/guilds/${guildId}/events${queryString ? `?${queryString}` : ''}`, { token })
+}
+
+export function createEvent(
+  token: string,
+  guildId: string,
+  body: CreateEventRequest,
+): Promise<EventResponse> {
+  return request(`/guilds/${guildId}/events`, { method: 'POST', body, token })
+}
+
+export function updateEvent(
+  token: string,
+  guildId: string,
+  eventId: string,
+  body: UpdateEventRequest,
+): Promise<EventResponse> {
+  return request(`/guilds/${guildId}/events/${eventId}`, { method: 'PATCH', body, token })
+}
+
+export function deleteEvent(
+  token: string,
+  guildId: string,
+  eventId: string,
+): Promise<{ deleted: boolean }> {
+  return request(`/guilds/${guildId}/events/${eventId}`, { method: 'DELETE', token })
+}
+
+// Self-service only: always sets the caller's own RSVP, idempotent per
+// (event, identity) — see crates/server/src/guild_events.rs::upsert_rsvp.
+export function rsvpToEvent(
+  token: string,
+  guildId: string,
+  eventId: string,
+  body: RsvpRequest,
+): Promise<RsvpResponse> {
+  return request(`/guilds/${guildId}/events/${eventId}/rsvp`, { method: 'PUT', body, token })
 }
 
 // Game registration read (#26) + the binding/grant consent flow (#27,
