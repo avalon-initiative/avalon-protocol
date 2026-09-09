@@ -308,14 +308,12 @@ pub async fn register_finish(
     }
     insert_identity?;
 
-    sqlx::query(
-        "INSERT INTO profiles (identity_id, display_name, discriminator) VALUES ($1, $2, $3)",
-    )
-    .bind(ceremony.identity_id)
-    .bind(&ceremony.display_name)
-    .bind(&discriminator)
-    .execute(&mut *tx)
-    .await?;
+    // `profiles` is a projection (issue #42): the row is written by the
+    // indexer applying `event` below, not by an `INSERT` here. Calling
+    // `apply_in_tx` against this same transaction — rather than
+    // `state.indexer.apply`, which would open its own — keeps the
+    // identity/profile/outbox rows committing or rolling back together.
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     sqlx::query(
         "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) VALUES ($1, $2, $3)",
@@ -826,28 +824,27 @@ pub async fn update_profile(
 
     let mut tx = state.pool.begin().await?;
 
+    // `profiles` is a projection (issue #42): the write below happens
+    // through the indexer applying `event`, in this same transaction, not
+    // through a bespoke `UPDATE` here — matching `register_finish`. A
+    // request that changed nothing has no event, so nothing to apply; the
+    // `SELECT` after this still returns the (unchanged) current row.
+    if let Some(event) = &event {
+        state.indexer.apply_in_tx(&mut tx, event).await?;
+        outbox::enqueue(&mut tx, event).await?;
+    }
+
     let row = sqlx::query(
         r#"
-        UPDATE profiles p
-        SET display_name = COALESCE($2, p.display_name),
-            avatar_url = CASE WHEN $5 THEN $3 ELSE p.avatar_url END,
-            discriminator = COALESCE($4, p.discriminator)
-        FROM identities i
-        WHERE p.identity_id = $1 AND i.id = p.identity_id
-        RETURNING p.display_name, p.discriminator, p.avatar_url, i.created_at
+        SELECT p.display_name, p.discriminator, p.avatar_url, i.created_at
+        FROM profiles p
+        JOIN identities i ON i.id = p.identity_id
+        WHERE p.identity_id = $1
         "#,
     )
     .bind(identity_id)
-    .bind(body.display_name)
-    .bind(avatar_url)
-    .bind(discriminator)
-    .bind(avatar_url_provided)
     .fetch_one(&mut *tx)
     .await?;
-
-    if let Some(event) = &event {
-        outbox::enqueue(&mut tx, event).await?;
-    }
 
     tx.commit().await?;
 

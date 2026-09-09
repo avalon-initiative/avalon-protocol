@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use avalon_chain::PostgresSettlementProvider;
+use avalon_indexer::postgres::PostgresIndexer;
 use sqlx::PgPool;
 use webauthn_rs::prelude::Webauthn;
 
@@ -10,6 +11,11 @@ use crate::presence::PresenceStore;
 pub struct AppState {
     pub pool: PgPool,
     pub chain: PostgresSettlementProvider,
+    /// The query/index layer (issue #42) — `handlers::register_finish` and
+    /// `update_profile` call `indexer.apply_in_tx` in the same transaction
+    /// as the identity/outbox rows instead of writing `profiles`
+    /// themselves. See `docs/architecture/query-and-indexing.md`.
+    pub indexer: PostgresIndexer,
     /// Built once at startup from `AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`.
     /// `Webauthn` itself isn't cheap to reconstruct (origin parsing/validation),
     /// so it's shared behind an `Arc` rather than rebuilt per request.

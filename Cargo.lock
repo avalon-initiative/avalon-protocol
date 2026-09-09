@@ -143,8 +143,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "avalon-protocol",
+ "dotenvy",
  "serde",
+ "serde_json",
+ "sqlx",
  "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

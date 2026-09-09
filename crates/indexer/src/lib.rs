@@ -10,14 +10,29 @@
 //! separate from `avalon-chain`'s settlement store so the two are never
 //! conflated — settlement is not querying; see
 //! `docs/architecture/settlement.md` and issue #75.
+//!
+//! [`postgres::PostgresIndexer`] is the first real [`Indexer`] (issue #42):
+//! `projections` holds one module per read model (profiles, friendships,
+//! guild rosters, attestations), each exposing a pure `decode` (event →
+//! typed write, no I/O, unit-testable without Postgres) and an `apply`
+//! (typed write → SQL, executed against a caller-supplied transaction).
 
 use async_trait::async_trait;
 use avalon_protocol::events::ProtocolEvent;
+
+pub mod postgres;
+pub mod projections;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
     #[error("index storage error: {0}")]
     Storage(String),
+}
+
+impl From<sqlx::Error> for IndexError {
+    fn from(err: sqlx::Error) -> Self {
+        IndexError::Storage(err.to_string())
+    }
 }
 
 /// Applies durable protocol events to a rebuildable read model.

@@ -86,13 +86,41 @@ a first-class scaling dimension — see
 
 ## Today in the repo
 
-- `crates/indexer/src/lib.rs` — the `Indexer` trait and `IndexError`, nothing
-  else. No implementation.
-- `avalon-server` reads `identities` and `profiles` directly in
-  `crates/server/src/handlers.rs` (`me`, `update_profile`). These tables are
-  written by request handlers, not by an indexer applying events — which is
-  exactly the shape #75 forbids for promised-durable state and #44 replaces.
-- No registry projections, no history projections, no rebuild test.
+- `crates/indexer/src/postgres.rs` — `PostgresIndexer`, the first real
+  `Indexer` (#42). `apply_in_tx` does the actual dispatch (per-event dedup
+  via `indexer_applied_events`, then a `match` on `event.kind` into
+  `crates/indexer/src/projections/`); `Indexer::apply` is a thin wrapper that
+  opens its own transaction around the same call. `crates/indexer/src/projections/`
+  has one module per read model — `profiles`, `friendships`, `guild_rosters`,
+  `attestations` — each a pure `decode` (event → typed write, unit-tested
+  without Postgres) plus an `apply` (typed write → an upsert keyed by its
+  natural key).
+- `profiles` is the one projection retargeted onto its *existing* table
+  (`crates/server/db/migrations/0001_identity_and_auth`,
+  `.../0005_friend_handles`): `handlers::register_finish`/`update_profile`
+  no longer `INSERT`/`UPDATE` it themselves — they call
+  `state.indexer.apply_in_tx` with the same `identity.created`/
+  `profile.updated` event they enqueue into the outbox, in the same
+  transaction, so identity/profile/outbox rows commit or roll back
+  together.
+- `friendships`, `guild_rosters`, and `attestations` write their own new
+  tables (`indexer_friendships`, `indexer_guild_members`,
+  `indexer_attestations` — `crates/server/db/migrations/0015_indexer_projections`)
+  rather than the existing `friendships`/`guild_members` tables
+  `crates/server/src/friends.rs`/`guilds.rs` still write directly at request
+  time. Retargeting those write paths — so those modules stop writing them
+  and server reads go through the indexer instead — is #44's job; writing
+  both paths into the same table now would immediately create two writers
+  of one projection, which is exactly the shape this ticket's own
+  invariant forbids. `attestations` has no producer yet (achievement
+  issuing, Epic #30, isn't built) — its `decode`/`apply` are proven by
+  fixture events only, ready for #30 to start emitting into.
+- No rebuild-from-events driver yet (that's #43): `PostgresIndexer::apply`
+  is exercised directly (inline, from `handlers.rs`) and via
+  `crates/indexer/tests/postgres_indexer.rs`'s `--ignored`
+  `apply_is_idempotent_per_projection` / `unknown_kind_is_skipped_not_error`
+  tests, not yet driven by a worker replaying the full ledger.
+- No registry projections, no history projections.
 
 ## Decisions and tickets
 
