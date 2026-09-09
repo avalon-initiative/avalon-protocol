@@ -610,6 +610,11 @@ pub struct UpdateGuildRequest {
     pub links: Option<Vec<GuildLinkRequest>>,
     /// Issue #153. Omitted leaves it untouched.
     pub recruiting: Option<bool>,
+    /// "invite_only" or "open" (see [`JoinPolicy`]) — omitted leaves it
+    /// untouched. `Open` lets any authenticated identity join instantly via
+    /// `POST /guilds/{id}/join` (`can_join_directly`/`join_guild`), bypassing
+    /// the invite (#21) and join-request/approval (#242) flows entirely.
+    pub join_policy: Option<String>,
     /// Issue #206. Omitted leaves it untouched. Controls only whether the
     /// game affinity breakdown is shown on this guild's *public* profile —
     /// a `manage_guild` holder can always see it internally either way.
@@ -662,6 +667,10 @@ pub async fn update_guild(
         None => guild.links.clone(),
     };
     let new_recruiting = body.recruiting.unwrap_or(guild.recruiting);
+    let new_join_policy = match &body.join_policy {
+        Some(raw) => JoinPolicy::parse(raw).ok_or(AppError::InvalidJoinPolicy)?,
+        None => guild.join_policy,
+    };
     let new_game_breakdown_public = body
         .game_breakdown_public
         .unwrap_or(guild.game_breakdown_public);
@@ -671,7 +680,7 @@ pub async fn update_guild(
     let mut tx = state.pool.begin().await?;
 
     let updated = sqlx::query(
-        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, game_breakdown_public = $10 WHERE id = $1",
+        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, game_breakdown_public = $10, join_policy = $11 WHERE id = $1",
     )
     .bind(guild_id)
     .bind(&new_name)
@@ -683,6 +692,7 @@ pub async fn update_guild(
     .bind(&new_links_json)
     .bind(new_recruiting)
     .bind(new_game_breakdown_public)
+    .bind(new_join_policy.as_str())
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &updated {
@@ -716,6 +726,7 @@ pub async fn update_guild(
             "links": new_links,
             "recruiting": new_recruiting,
             "game_breakdown_public": new_game_breakdown_public,
+            "join_policy": new_join_policy.as_str(),
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -735,7 +746,7 @@ pub async fn update_guild(
                 description: new_description,
                 owner: guild.owner,
                 created_at: guild.created_at,
-                join_policy: guild.join_policy,
+                join_policy: new_join_policy,
                 motd: new_motd,
                 banner: new_banner,
                 icon: new_icon,

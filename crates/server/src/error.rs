@@ -89,6 +89,8 @@ pub enum AppError {
     InvalidGuildBanner,
     #[error("icon must be an http(s) URL of 2048 characters or fewer")]
     InvalidGuildIcon,
+    #[error("join_policy must be \"invite_only\" or \"open\"")]
+    InvalidJoinPolicy,
     #[error("links may contain at most 5 entries")]
     TooManyGuildLinks,
     #[error("each link's label must be 1-60 characters and url must be an http(s) URL of 2048 characters or fewer")]
@@ -275,6 +277,7 @@ impl IntoResponse for AppError {
             | AppError::InvalidGuildMotd
             | AppError::InvalidGuildBanner
             | AppError::InvalidGuildIcon
+            | AppError::InvalidJoinPolicy
             | AppError::TooManyGuildLinks
             | AppError::InvalidGuildLink => StatusCode::BAD_REQUEST,
             AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {

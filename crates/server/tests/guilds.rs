@@ -503,8 +503,8 @@ async fn joining_an_invite_only_guild_directly_is_rejected() {
         .unwrap();
     let body: serde_json::Value = create.json().await.unwrap();
     let guild_id = body["id"].as_str().unwrap();
-    // Guilds default to invite-only (ticket design) — no endpoint here
-    // flips it to open, so this always exercises the closed path.
+    // Guilds default to invite-only (ticket design) — this test never
+    // touches join_policy, so it always exercises the closed path.
     assert_eq!(body["join_policy"].as_str().unwrap(), "invite_only");
 
     let join = auth(
@@ -515,6 +515,65 @@ async fn joining_an_invite_only_guild_directly_is_rejected() {
     .await
     .unwrap();
     assert_eq!(join.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore]
+async fn opening_a_guild_lets_a_stranger_join_directly_bypassing_requests_and_invites() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (other_id, other_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+
+    let patch = auth(
+        http.patch(format!("{base}/guilds/{guild_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "join_policy": "open" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(patch.status().is_success(), "{:?}", patch.status());
+    let patched: serde_json::Value = patch.json().await.unwrap();
+    assert_eq!(patched["join_policy"].as_str().unwrap(), "open");
+
+    // No invite, no join-request/approval round trip — straight to member.
+    let join = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join")),
+        &other_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(join.status().is_success(), "{:?}", join.status());
+    let member: serde_json::Value = join.json().await.unwrap();
+    assert_eq!(
+        member["identity_id"].as_str().unwrap(),
+        other_id.to_string()
+    );
+
+    let members = auth(
+        http.get(format!("{base}/guilds/{guild_id}/members")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json::<Vec<serde_json::Value>>()
+    .await
+    .unwrap();
+    assert!(members
+        .iter()
+        .any(|m| m["identity_id"].as_str().unwrap() == other_id.to_string()));
 }
 
 #[tokio::test]

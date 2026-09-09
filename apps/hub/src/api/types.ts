@@ -355,6 +355,10 @@ export interface UpdateGuildRequest {
   recruiting?: boolean
   // Issue #206. Omitted leaves it untouched.
   game_breakdown_public?: boolean
+  // "invite_only" or "open" — omitted leaves it untouched. "open" lets any
+  // authenticated identity join instantly via POST /guilds/{id}/join,
+  // bypassing the invite and join-request/approval flows entirely.
+  join_policy?: 'invite_only' | 'open'
 }
 
 // GET /guilds/{id}/game-breakdown (issue #206, implementing decision #160):

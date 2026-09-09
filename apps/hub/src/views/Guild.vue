@@ -397,6 +397,23 @@ async function onToggleRecruiting(next: boolean) {
   }
 }
 
+const savingJoinPolicy = ref(false)
+const joinPolicyError = ref('')
+
+async function onToggleJoinPolicy(next: 'invite_only' | 'open') {
+  if (!session.token) return
+  joinPolicyError.value = ''
+  savingJoinPolicy.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { join_policy: next })
+    await refresh()
+  } catch (e) {
+    joinPolicyError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingJoinPolicy.value = false
+  }
+}
+
 const newLinkLabel = ref('')
 const newLinkUrl = ref('')
 const savingLinks = ref(false)
@@ -483,6 +500,22 @@ async function onTogglePermission(role: RoleResponse, permission: string) {
     permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     togglingPermissionFor.value = null
+  }
+}
+
+const renamingRoleFor = ref<number | null>(null)
+
+async function onRenameRole(role: RoleResponse, name: string) {
+  if (!session.token) return
+  permissionMatrixError.value = ''
+  renamingRoleFor.value = role.name_index
+  try {
+    await api.updateRole(session.token, guildId.value, role.name_index, { name })
+    await refresh()
+  } catch (e) {
+    permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    renamingRoleFor.value = null
   }
 }
 
@@ -1315,45 +1348,6 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
         </AvalonCard>
     </div>
 
-    <!-- Calendar: same event list as the Events tab above, grouped onto a
-         navigable month grid with a dot under any day that has an event —
-         click a day to see what's on it below the calendar. -->
-    <div v-else-if="activeTab === 'calendar'" :class="styles.grid">
-      <div :class="styles.mainColumn">
-        <AvalonCard title="Calendar">
-          <AvalonCalendarMonth
-            :year="calendarYear"
-            :month="calendarMonth"
-            :event-dates="calendarEventDates"
-            :selected-date="calendarSelectedDate"
-            @update:year="calendarYear = $event"
-            @update:month="calendarMonth = $event"
-            @select-date="onSelectCalendarDate"
-          />
-
-          <template v-if="calendarSelectedDate">
-            <p :class="styles.empty">{{ calendarSelectedDate }}</p>
-            <p v-if="calendarSelectedEvents.length === 0" :class="styles.empty">
-              No events on this day.
-            </p>
-            <AvalonEventCard
-              v-for="event in calendarSelectedEvents"
-              :key="event.id"
-              :title="event.title"
-              :description="event.description ?? undefined"
-              :starts-at="event.starts_at"
-              :ends-at="event.ends_at ?? undefined"
-              :rsvp-counts="event.rsvp_counts"
-            >
-              <template #actions>
-                <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
-              </template>
-            </AvalonEventCard>
-          </template>
-        </AvalonCard>
-      </div>
-    </div>
-
     <!-- Roles: read-only list for any member, add-role form canManageRoles-gated
          (unchanged permission behavior from before #241, just relocated). -->
     <div v-else-if="activeTab === 'roles'" :class="styles.mainColumn">
@@ -1373,7 +1367,14 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               </thead>
               <tbody>
                 <tr v-for="role in roles" :key="role.name_index">
-                  <td>{{ role.name }}</td>
+                  <td>
+                    <AvalonEditableField
+                      label=""
+                      :value="role.name"
+                      :saving="renamingRoleFor === role.name_index"
+                      @save="onRenameRole(role, $event)"
+                    />
+                  </td>
                   <td v-for="permission in PERMISSION_OPTIONS" :key="permission">
                     <input
                       type="checkbox"
@@ -1438,6 +1439,31 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               @click="onToggleRecruiting(!guild.recruiting)"
             />
             <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
+          </AvalonCard>
+
+          <AvalonCard
+            title="Membership"
+            subtitle="Separate from recruiting above: this controls whether joining requires an invite or approval at all."
+          >
+            <p :class="styles.empty">
+              {{
+                guild.join_policy === 'open'
+                  ? 'Open — anyone can join instantly, no invite or approval needed.'
+                  : 'Invite only — joining requires an invite, or an application a manager approves.'
+              }}
+            </p>
+            <AvalonButton
+              :label="
+                savingJoinPolicy
+                  ? 'Saving…'
+                  : guild.join_policy === 'open'
+                    ? 'Switch to invite only'
+                    : 'Switch to open'
+              "
+              variant="secondary"
+              @click="onToggleJoinPolicy(guild.join_policy === 'open' ? 'invite_only' : 'open')"
+            />
+            <p v-if="joinPolicyError" :class="styles.error">{{ joinPolicyError }}</p>
           </AvalonCard>
 
           <AvalonCard title="Message of the day, banner & icon">

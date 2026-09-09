@@ -116,8 +116,13 @@ function onSelectNav(to: string) {
       </header>
       <p v-if="error" :class="styles.error">{{ error }}</p>
       <main :class="styles.content">
-        <RouterView />
+        <div :class="styles.contentInner">
+          <RouterView />
+        </div>
       </main>
+      <footer :class="styles.footer">
+        <span>Avalon Protocol — milestone 1</span>
+      </footer>
     </div>
 
     <div :class="styles.bottomNav">
