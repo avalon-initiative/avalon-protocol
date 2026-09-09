@@ -793,7 +793,11 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
           `gameBreakdown` successfully loads, which the server itself
           gates on `guild.game_breakdown_public`.
         -->
-        <AvalonCard v-if="canManageGuild || gameBreakdown" title="Game affinity">
+        <AvalonCard
+          v-if="canManageGuild || gameBreakdown"
+          title="Game affinity"
+          subtitle="Auto-derived from members' active game bindings — not something anyone sets by hand. Managers can choose whether it's visible on this guild's public profile and discovery card; it's always visible to members."
+        >
           <p v-if="canManageGuild" :class="styles.empty">
             Shown on this guild's public profile and discovery card:
             {{ guild.game_breakdown_public ? 'yes' : 'no' }}
