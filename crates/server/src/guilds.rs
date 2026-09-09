@@ -926,7 +926,7 @@ pub async fn create_role(
     .await?;
     let name_index: i32 = next_index_row.try_get("next")?;
 
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO guild_roles (guild_id, name_index, name, permissions, description, badge_icon, badge_color) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(guild_id)
@@ -937,7 +937,13 @@ pub async fn create_role(
     .bind(badge.icon.as_str())
     .bind(badge.color.as_str())
     .execute(&mut *tx)
-    .await?;
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &inserted {
+        if db_err.is_unique_violation() {
+            return Err(AppError::GuildRoleNameTaken);
+        }
+    }
+    inserted?;
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
@@ -1000,11 +1006,14 @@ pub async fn update_role(
     }
 
     // The owner role's authority comes from `guilds.owner`, not from this
-    // row's permission list (see `has_guild_permission`) — editing it here
-    // would look meaningful but change nothing about who can actually act
-    // as owner, which is exactly the kind of silent-no-op footgun this
-    // repo avoids. Simplest fix: it isn't editable through this endpoint.
-    if name_index == OWNER_ROLE_INDEX {
+    // row's permission list (see `has_guild_permission`) — changing its
+    // permissions here would look meaningful but change nothing about who
+    // can actually act as owner, which is exactly the kind of silent-no-op
+    // footgun this repo avoids. Its name/description/badge are harmless,
+    // cosmetic-only fields with no bearing on authority, so those stay
+    // editable — only a `permissions` change on this specific role index
+    // is rejected.
+    if name_index == OWNER_ROLE_INDEX && body.permissions.is_some() {
         return Err(AppError::CannotModifyOwnerRole);
     }
 
@@ -1039,7 +1048,13 @@ pub async fn update_role(
     .bind(new_badge.icon.as_str())
     .bind(new_badge.color.as_str())
     .execute(&mut *tx)
-    .await?;
+    .await;
+    if let Err(sqlx::Error::Database(db_err)) = &updated {
+        if db_err.is_unique_violation() {
+            return Err(AppError::GuildRoleNameTaken);
+        }
+    }
+    let updated = updated?;
     if updated.rows_affected() == 0 {
         return Err(AppError::GuildRoleNotFound);
     }
@@ -1072,6 +1087,80 @@ pub async fn update_role(
         description: new_description,
         badge: new_badge,
     }))
+}
+
+/// The owner role's authority comes from `guilds.owner`, and the member
+/// role is the hardcoded fallback every `add_member` call (invite accept,
+/// join-request approval, direct open-guild join) assigns — deleting
+/// either would either be a meaningless no-op (owner) or strand every one
+/// of those code paths (member). Any other role, including the seeded
+/// "Officer" default, is deletable.
+fn is_base_role(name_index: i32) -> bool {
+    name_index == OWNER_ROLE_INDEX || name_index == MEMBER_ROLE_INDEX
+}
+
+pub async fn delete_role(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((guild_id, name_index)): Path<(Uuid, i32)>,
+) -> Result<(), AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
+    if !has_guild_permission(
+        guild.owner,
+        actor,
+        &actor_permissions,
+        GuildPermission::ManageRoles,
+    ) {
+        return Err(AppError::MissingGuildPermission);
+    }
+
+    if is_base_role(name_index) {
+        return Err(AppError::CannotDeleteBaseRole);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    // `guild_members(guild_id, role_index)` has a (deliberately ON DELETE
+    // RESTRICT, i.e. plain) foreign key into this table — a member still
+    // holding this role blocks the delete at the database level rather
+    // than needing an app-side existence check first (and a second
+    // round trip) that could race a concurrent role change.
+    let deleted = sqlx::query("DELETE FROM guild_roles WHERE guild_id = $1 AND name_index = $2")
+        .bind(guild_id)
+        .bind(name_index)
+        .execute(&mut *tx)
+        .await;
+    if let Err(sqlx::Error::Database(db_err)) = &deleted {
+        if db_err.is_foreign_key_violation() {
+            return Err(AppError::RoleHasMembers);
+        }
+    }
+    let deleted = deleted?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::GuildRoleNotFound);
+    }
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "guild.role_deleted".to_string(),
+        issuer: identity_ref(actor, "guild_role_deleted"),
+        subject: guild_ref(guild_id, "guild_role_deleted"),
+        payload: serde_json::json!({
+            "guild_id": guild_id,
+            "name_index": name_index,
+            "actor": actor,
+        }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(())
 }
 
 #[derive(Deserialize)]

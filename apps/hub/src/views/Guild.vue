@@ -536,6 +536,30 @@ async function onRenameRole(role: RoleResponse) {
   }
 }
 
+// Owner (0) and member (2) are structural — the server always rejects
+// deleting either — so the delete action isn't even offered for them.
+const BASE_ROLE_INDEXES = [0, 2]
+function isBaseRole(role: RoleResponse): boolean {
+  return BASE_ROLE_INDEXES.includes(role.name_index)
+}
+
+const deletingRoleFor = ref<number | null>(null)
+
+async function onDeleteRole(role: RoleResponse) {
+  if (!session.token) return
+  permissionMatrixError.value = ''
+  deletingRoleFor.value = role.name_index
+  try {
+    await api.deleteRole(session.token, guildId.value, role.name_index)
+    if (unlockedRoleIndex.value === role.name_index) unlockedRoleIndex.value = null
+    await refresh()
+  } catch (e) {
+    permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    deletingRoleFor.value = null
+  }
+}
+
 // --- Members: change role / kick ---------------------------------------
 
 const changingRoleFor = ref<string | null>(null)
@@ -1380,6 +1404,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
                 <tr>
                   <th>Role</th>
                   <th v-for="permission in PERMISSION_OPTIONS" :key="permission">{{ permission }}</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -1419,6 +1444,15 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
                         togglingPermissionFor === `${role.name_index}:${permission}`
                       "
                       @change="onTogglePermission(role, permission)"
+                    />
+                  </td>
+                  <td>
+                    <AvalonButton
+                      v-if="unlockedRoleIndex === role.name_index && !isBaseRole(role)"
+                      :label="deletingRoleFor === role.name_index ? 'Deleting…' : 'Delete'"
+                      variant="danger"
+                      :disabled="deletingRoleFor === role.name_index"
+                      @click="onDeleteRole(role)"
                     />
                   </td>
                 </tr>

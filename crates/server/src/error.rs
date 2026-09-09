@@ -75,6 +75,12 @@ pub enum AppError {
     GuildNameTaken,
     #[error("guild tag is already taken")]
     GuildTagTaken,
+    #[error("a role with that name already exists in this guild")]
+    GuildRoleNameTaken,
+    #[error("cannot delete the owner or member role")]
+    CannotDeleteBaseRole,
+    #[error("cannot delete a role while members still hold it")]
+    RoleHasMembers,
     #[error("guild tag must be 2-5 characters")]
     InvalidGuildTag,
     #[error("guild role not found")]
@@ -268,9 +274,12 @@ impl IntoResponse for AppError {
                 StatusCode::UNAUTHORIZED
             }
             AppError::GuildNotFound | AppError::GuildRoleNotFound => StatusCode::NOT_FOUND,
-            AppError::GuildNameTaken | AppError::GuildTagTaken | AppError::AlreadyGuildOwner => {
-                StatusCode::CONFLICT
-            }
+            AppError::GuildNameTaken
+            | AppError::GuildTagTaken
+            | AppError::AlreadyGuildOwner
+            | AppError::GuildRoleNameTaken
+            | AppError::RoleHasMembers => StatusCode::CONFLICT,
+            AppError::CannotDeleteBaseRole => StatusCode::FORBIDDEN,
             AppError::InvalidGuildTag
             | AppError::InvalidRoleDescription
             | AppError::InvalidRoleBadge

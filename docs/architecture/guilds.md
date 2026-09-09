@@ -672,6 +672,33 @@ with Game A becomes historical.
   and an "Applications" section on the guild page
   (`apps/hub/src/views/Guild.vue`, `manage_members`-gated) for managers to
   review pending requests.
+- **Role name uniqueness, open-guild joining, and role deletion.**
+  `guild_roles` had no uniqueness constraint on `name` at all — nothing
+  stopped a guild from having several roles all named the same thing.
+  Fixed with a case-insensitive unique index (`guild_roles_name_lower_idx`,
+  `(guild_id, lower(name))`, same `lower()` functional-index approach
+  `guilds.name`/`guilds.tag` already use) plus catching the resulting
+  unique-violation in `create_role`/`update_role` as `GuildRoleNameTaken`
+  (409). Separately, `join_policy` (`invite_only`/`open`, #21) had a
+  fully working direct-join path (`POST /guilds/{id}/join`,
+  `can_join_directly`) but no way to actually set a guild to `open` —
+  `UpdateGuildRequest` never carried the field. Added it end to end
+  (validation via `JoinPolicy::parse`, the `UPDATE` statement, the
+  outbox event, and a Settings toggle in the Hub). `update_role` also
+  no longer blanket-rejects any edit to the owner role (`name_index`
+  `0`) — only a `permissions` change on it is rejected (the owner's
+  authority comes from `guilds.owner`, not this row, so changing its
+  permissions would be a no-op footgun); name/description/badge are
+  cosmetic-only and stay editable. `DELETE /guilds/{id}/roles/{idx}`
+  (new) rejects the owner and member roles outright (`is_base_role`,
+  structural — member is the hardcoded default role every
+  `add_member` call assigns) and relies on `guild_members`'s existing
+  foreign key into `guild_roles` to reject deleting any other role
+  still held by a member, mapped to `RoleHasMembers` (409) rather than
+  a raw DB error. Hub: the Roles tab's permission matrix now has a
+  pencil icon that unlocks a row for renaming/permission edits (rather
+  than every checkbox always being live to click by accident), and a
+  Delete button for any unlocked, non-base role.
 
 ## Decisions and tickets
 

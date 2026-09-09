@@ -478,6 +478,10 @@ export function updateRole(
   return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'PATCH', body, token })
 }
 
+export function deleteRole(token: string, guildId: string, nameIndex: number): Promise<void> {
+  return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'DELETE', token })
+}
+
 export function transferOwnership(
   token: string,
   guildId: string,

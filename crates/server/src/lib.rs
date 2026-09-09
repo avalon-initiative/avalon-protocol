@@ -199,7 +199,10 @@ pub fn router(state: AppState) -> Router {
             "/guilds/{id}/roles",
             get(guilds::list_roles).post(guilds::create_role),
         )
-        .route("/guilds/{id}/roles/{idx}", patch(guilds::update_role))
+        .route(
+            "/guilds/{id}/roles/{idx}",
+            patch(guilds::update_role).delete(guilds::delete_role),
+        )
         .route(
             "/guilds/{id}/transfer-ownership",
             post(guilds::transfer_ownership),

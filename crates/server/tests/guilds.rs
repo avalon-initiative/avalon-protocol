@@ -201,6 +201,223 @@ async fn creating_a_role_with_an_unknown_badge_icon_is_rejected() {
     assert_eq!(create_role.status(), reqwest::StatusCode::BAD_REQUEST);
 }
 
+/// Two roles in the same guild can't share a name (case-insensitively) —
+/// nothing previously stopped a guild from having several roles all named
+/// e.g. "Master", which makes role names useless for telling roles apart.
+#[tokio::test]
+#[ignore]
+async fn creating_a_role_with_a_name_already_taken_in_the_guild_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let first = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
+        .json(&serde_json::json!({ "name": "Raid Leader" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success());
+
+    let duplicate = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
+        .json(&serde_json::json!({ "name": "raid leader" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), reqwest::StatusCode::CONFLICT);
+}
+
+/// The owner role's name/description/badge are cosmetic-only and safe to
+/// change; its permissions are structurally meaningless (owner authority
+/// comes from guilds.owner, not this row) and stay rejected.
+#[tokio::test]
+#[ignore]
+async fn the_owner_role_can_be_renamed_but_not_have_its_permissions_changed() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let rename = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/roles/0")),
+        &token,
+    )
+    .json(&serde_json::json!({ "name": "Guild Master" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(rename.status().is_success(), "{:?}", rename.status());
+    let renamed: serde_json::Value = rename.json().await.unwrap();
+    assert_eq!(renamed["name"].as_str().unwrap(), "Guild Master");
+
+    let change_permissions = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/roles/0")),
+        &token,
+    )
+    .json(&serde_json::json!({ "permissions": ["manage_guild"] }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(change_permissions.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// The owner and member roles can never be deleted (structural — owner
+/// authority lives on guilds.owner, member is the hardcoded default join
+/// role); any other role can be, as long as no member still holds it.
+#[tokio::test]
+#[ignore]
+async fn deleting_a_role() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    // Base roles: owner (0) and member (2) can never be deleted.
+    let delete_owner = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/roles/0")),
+        &token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(delete_owner.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let delete_member = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/roles/2")),
+        &token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(delete_member.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // A freshly created, unassigned custom role deletes cleanly.
+    let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
+        .json(&serde_json::json!({ "name": "Temp Role" }))
+        .send()
+        .await
+        .unwrap();
+    let role: serde_json::Value = create_role.json().await.unwrap();
+    let name_index = role["name_index"].as_i64().unwrap();
+
+    let delete = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/roles/{name_index}")),
+        &token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(delete.status().is_success(), "{:?}", delete.status());
+
+    let roles: serde_json::Value =
+        auth(http.get(format!("{base}/guilds/{guild_id}/roles")), &token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["name_index"].as_i64().unwrap() != name_index));
+}
+
+/// A custom role still held by a member can't be deleted — the database's
+/// own foreign key (`guild_members.role_index` -> `guild_roles.name_index`)
+/// catches this, mapped to a clean 409 rather than a raw DB error.
+#[tokio::test]
+#[ignore]
+async fn deleting_a_role_still_held_by_a_member_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (other_id, other_token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let create_role = auth(
+        http.post(format!("{base}/guilds/{guild_id}/roles")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "Quartermaster" }))
+    .send()
+    .await
+    .unwrap();
+    let role: serde_json::Value = create_role.json().await.unwrap();
+    let name_index = role["name_index"].as_i64().unwrap();
+
+    let open = auth(
+        http.patch(format!("{base}/guilds/{guild_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "join_policy": "open" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(open.status().is_success());
+
+    let join = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join")),
+        &other_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(join.status().is_success());
+
+    let assign = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/members/{other_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "role_index": name_index }))
+    .send()
+    .await
+    .unwrap();
+    assert!(assign.status().is_success(), "{:?}", assign.status());
+
+    let delete = auth(
+        http.delete(format!("{base}/guilds/{guild_id}/roles/{name_index}")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(delete.status(), reqwest::StatusCode::CONFLICT);
+}
+
 #[tokio::test]
 #[ignore]
 async fn guild_name_is_unique_case_insensitively() {
