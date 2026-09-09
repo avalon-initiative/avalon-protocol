@@ -184,6 +184,18 @@ candidates for both before it closes.
   cross this document's "settlement is not the general-purpose query
   database" boundary. Revisit once the indexer (#42/#43) is real — see
   [query-and-indexing.md](./query-and-indexing.md).
+- **A second `SettlementProvider` implementation now exists**:
+  `crates/chain/src/rocksdb_backend.rs`'s `RocksDbSettlementProvider`, per
+  ADR #177 (RocksDB is the decided embedded engine) and #40 (each
+  node/mirror holds its own local copy, not a shared Postgres). Behind an
+  off-by-default `rocksdb-backend` Cargo feature — **not wired into
+  `avalon-server` anywhere**; nothing about this changes what's actually
+  running today. Both backends share one hash-chain implementation
+  (`crates/chain/src/hashing.rs`) so they're provably the same ledger, not
+  two similar ones — see issue #178 for the cross-backend test proving
+  identical hashes for identical input. The migration path (making this the
+  default, syncing the indexer from it instead of from the outbox directly,
+  the validator/consensus layer) remains open under #40.
 
 ## Decisions and tickets
 
