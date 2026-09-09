@@ -106,8 +106,15 @@ fn canonical_json(value: &serde_json::Value) -> String {
     out
 }
 
-fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String {
+/// `network_id` (issue #173) is hashed in ahead of everything else, so two
+/// ledgers with different network identities produce disjoint hash spaces
+/// by construction — an entry hashed under one `network_id` can never
+/// collide with, or be mistaken for a valid link in, a chain rooted in a
+/// different one. See `PostgresSettlementProvider::connect` for where that
+/// identity is established and enforced.
+fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(network_id.as_bytes());
     hasher.update(prev_hash.as_bytes());
     hasher.update(content.event_id.as_bytes());
     hasher.update(content.kind.as_bytes());
@@ -119,8 +126,9 @@ fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn hash_event(prev_hash: &str, event: &ProtocolEvent) -> String {
+fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> String {
     hash_entry(
+        network_id,
         prev_hash,
         &EntryContent {
             event_id: event.id,
@@ -148,22 +156,117 @@ fn hash_event(prev_hash: &str, event: &ProtocolEvent) -> String {
 /// with any entry's content in the batch (not just deleting a row) changes
 /// the result. `PostgresSettlementProvider::verify` is the only caller; kept
 /// free-standing so it's directly unit-testable without Postgres.
-fn recompute_batch_root(entering_prev_hash: &str, entries: &[EntryContent<'_>]) -> String {
+fn recompute_batch_root(
+    network_id: &str,
+    entering_prev_hash: &str,
+    entries: &[EntryContent<'_>],
+) -> String {
     let mut prev = entering_prev_hash.to_string();
     for content in entries {
-        prev = hash_entry(&prev, content);
+        prev = hash_entry(network_id, &prev, content);
     }
     prev
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GenesisError {
+    /// The ledger already has a genesis row, and it doesn't match what this
+    /// process is configured to expect. Refuse to construct a provider at
+    /// all rather than let a mismatched process touch this ledger.
+    #[error(
+        "ledger genesis network_id `{stored}` does not match configured AVALON_NETWORK_ID `{configured}` — refusing to start against the wrong network"
+    )]
+    Mismatch { stored: String, configured: String },
+    #[error("storage error: {0}")]
+    Storage(String),
 }
 
 #[derive(Clone)]
 pub struct PostgresSettlementProvider {
     pool: PgPool,
+    network_id: String,
 }
 
 impl PostgresSettlementProvider {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    /// Low-level constructor for callers that already know (or don't care
+    /// about) the ledger's genesis network_id — tests against a throwaway
+    /// database, and read-only CLI inspection paired with
+    /// [`Self::read_genesis_network_id`]. Does **not** create or verify a
+    /// `chain_genesis` row; use [`Self::connect`] at real process startup,
+    /// where that enforcement actually matters.
+    pub fn new(pool: PgPool, network_id: impl Into<String>) -> Self {
+        Self {
+            pool,
+            network_id: network_id.into(),
+        }
+    }
+
+    /// Reads the ledger's genesis `network_id` without creating one —
+    /// `None` if this database has never been booted against by
+    /// [`Self::connect`]. For read-only diagnostics (`avalon inspect-ledger`)
+    /// that want to display which network they're pointed at without
+    /// asserting anything about it.
+    pub async fn read_genesis_network_id(pool: &PgPool) -> Result<Option<String>, SettlementError> {
+        sqlx::query_scalar("SELECT network_id FROM chain_genesis LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    }
+
+    /// The real boot-time entry point (issue #173). If this database has no
+    /// `chain_genesis` row yet, this is genesis: `expected_network_id` is
+    /// written once and never touched again. If a row already exists, it
+    /// must match `expected_network_id` exactly, or this returns
+    /// `GenesisError::Mismatch` instead of a provider — the caller (see
+    /// `avalon-server`'s `main.rs`) is expected to treat that as fatal and
+    /// exit before binding a listener, never as a warning to log past.
+    pub async fn connect(pool: PgPool, expected_network_id: &str) -> Result<Self, GenesisError> {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| GenesisError::Storage(e.to_string()))?;
+
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT network_id FROM chain_genesis LIMIT 1 FOR UPDATE")
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| GenesisError::Storage(e.to_string()))?;
+
+        match existing {
+            None => {
+                sqlx::query("INSERT INTO chain_genesis (network_id) VALUES ($1)")
+                    .bind(expected_network_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                tx.commit()
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                Ok(Self {
+                    pool,
+                    network_id: expected_network_id.to_string(),
+                })
+            }
+            Some(stored) if stored == expected_network_id => {
+                tx.commit()
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                Ok(Self {
+                    pool,
+                    network_id: stored,
+                })
+            }
+            Some(stored) => Err(GenesisError::Mismatch {
+                stored,
+                configured: expected_network_id.to_string(),
+            }),
+        }
+    }
+
+    /// The network identity this provider is bound to (issue #173) — every
+    /// hash it computes or verifies is rooted in this value.
+    pub fn network_id(&self) -> &str {
+        &self.network_id
     }
 
     async fn tip_hash(&self) -> Result<String, SettlementError> {
@@ -219,6 +322,7 @@ impl PostgresSettlementProvider {
             let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
 
             let recomputed = hash_entry(
+                &self.network_id,
                 &prev_hash,
                 &EntryContent {
                     event_id,
@@ -400,7 +504,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         // end of this transaction, so it's fine that `ledger_batches` doesn't
         // have this row yet.
         for event in &batch.events {
-            let entry_hash = hash_event(&prev_hash, event);
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
             let row = sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
@@ -519,7 +623,8 @@ impl SettlementProvider for PostgresSettlementProvider {
             )
             .collect();
 
-        let recomputed_root = recompute_batch_root(&entering_prev_hash, &contents);
+        let recomputed_root =
+            recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
         Ok(recomputed_root == claimed_root)
     }
@@ -583,6 +688,7 @@ mod tests {
         let b = json!({ "actor": "x", "to": "y", "from": "x" });
 
         let hash_a = hash_entry(
+            "avalon-test",
             GENESIS_HASH,
             &EntryContent {
                 event_id,
@@ -595,6 +701,7 @@ mod tests {
             },
         );
         let hash_b = hash_entry(
+            "avalon-test",
             GENESIS_HASH,
             &EntryContent {
                 event_id,
@@ -607,6 +714,30 @@ mod tests {
             },
         );
         assert_eq!(hash_a, hash_b);
+    }
+
+    /// Issue #173's core guarantee: two networks never share a hash space,
+    /// even for byte-identical entry content. This is what makes a dev
+    /// ledger's history structurally incapable of being mistaken for, or
+    /// spliced into, production's — not a policy, a hash input.
+    #[test]
+    fn hash_entry_differs_across_network_ids() {
+        let event_id = Uuid::new_v4();
+        let timestamp = time::OffsetDateTime::now_utc();
+        let payload = json!({ "same": "content" });
+        let content = EntryContent {
+            event_id,
+            kind: "friend.requested",
+            issuer: "identity:x:self:friend_requested",
+            subject: "identity:y:self:friend_requested",
+            payload: &payload,
+            timestamp,
+            version: 1,
+        };
+
+        let mainnet = hash_entry("avalon-mainnet-1", GENESIS_HASH, &content);
+        let devnet = hash_entry("avalon-dev-chris", GENESIS_HASH, &content);
+        assert_ne!(mainnet, devnet);
     }
 
     fn sample_entry(event_id: Uuid, payload: &serde_json::Value) -> EntryContent<'_> {
@@ -634,12 +765,15 @@ mod tests {
         let expected = {
             let mut prev = GENESIS_HASH.to_string();
             for entry in &entries {
-                prev = hash_entry(&prev, entry);
+                prev = hash_entry("avalon-test", &prev, entry);
             }
             prev
         };
 
-        assert_eq!(recompute_batch_root(GENESIS_HASH, &entries), expected);
+        assert_eq!(
+            recompute_batch_root("avalon-test", GENESIS_HASH, &entries),
+            expected
+        );
     }
 
     #[test]
@@ -651,7 +785,7 @@ mod tests {
             .zip(&original_payloads)
             .map(|(id, payload)| sample_entry(*id, payload))
             .collect();
-        let root = recompute_batch_root(GENESIS_HASH, &entries);
+        let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
 
         // Tamper with the *first* entry's payload — not the last — to prove
         // this isn't just re-hashing the tip; it must actually replay the
@@ -663,7 +797,7 @@ mod tests {
             .zip(&tampered_payloads)
             .map(|(id, payload)| sample_entry(*id, payload))
             .collect();
-        let tampered_root = recompute_batch_root(GENESIS_HASH, &tampered_entries);
+        let tampered_root = recompute_batch_root("avalon-test", GENESIS_HASH, &tampered_entries);
 
         assert_ne!(root, tampered_root);
     }
@@ -672,7 +806,7 @@ mod tests {
     fn recompute_batch_root_of_a_single_event_batch_is_legal() {
         let payload = json!({"solo": true});
         let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
-        let root = recompute_batch_root(GENESIS_HASH, &entries);
-        assert_eq!(root, hash_entry(GENESIS_HASH, &entries[0]));
+        let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
+        assert_eq!(root, hash_entry("avalon-test", GENESIS_HASH, &entries[0]));
     }
 }
