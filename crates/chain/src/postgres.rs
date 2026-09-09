@@ -1,32 +1,34 @@
 //! Postgres-backed `SettlementProvider` — milestone 1's implementation.
 //!
-//! Hash-chained, not yet signed: each entry commits to the hash of the entry
-//! before it (`prev_hash`) plus its own content (`entry_hash`), giving
-//! tamper-evidence today. Cryptographic signing per entry is a stronger,
-//! separate guarantee tracked as its own open decision — issue #39 — and can
-//! be layered on without changing this shape. The Merkle-root/checkpoint/
-//! external-anchor design (issue #40, issue #70) is a further layer on top
-//! of this hash chain, not built yet.
+//! Two layered tamper-evidence structures, not one (issue #210, implementing
+//! #39/#40's decided design):
+//!
+//! - The original sequential hash chain: each entry commits to the hash of
+//!   the entry before it (`prev_hash`) plus its own content (`entry_hash`).
+//!   Untouched by #210 — still the cheap, no-network, O(1)-per-link check
+//!   `avalon inspect-ledger` walks end-to-end via `list_entries`.
+//! - A real RFC 6962 Merkle tree (`crate::merkle`) over the whole ledger's
+//!   `entry_hash` values, ordered by `seq`. `ledger_batches.batch_root` is
+//!   that tree's Merkle Tree Hash (MTH) at `tree_size = last_seq`, replacing
+//!   the placeholder chain-tip value #38 shipped. A Signed Tree Head
+//!   (`crate::sth`) is produced and stored (`signed_tree_heads`) alongside
+//!   every batch, in the same transaction — STH-only Ed25519 signing per
+//!   #39, no per-entry signatures.
 //!
 //! Uses the same `PgPool` as `avalon-server` rather than its own connection —
 //! milestone 1 has exactly one shared database (see
 //! `crates/server/db/migrations/0002_ledger`).
 //!
 //! Uses runtime-checked `sqlx::query` (not the `query!` macro `avalon-server`
-//! uses elsewhere) on purpose: this table's shape is still actively evolving
-//! (signatures and Merkle fields are still open per #39/#40), and the
-//! macro's compile-time schema check would mean every one of those changes
-//! breaks the build until a live, migrated database is available — a real
-//! cost for a table that isn't stable yet.
+//! uses elsewhere) on purpose — this sandbox has no reachable live Postgres,
+//! and the macro's compile-time schema check would need one.
 //!
 //! Batching (issue #38): one protocol event is never one settlement action.
 //! `commit` groups every event in an `EventBatch` under one `batch_id`,
 //! inserted in a single transaction; `ledger_entries` stay hash-chained
 //! across batch boundaries (the chain never resets per batch), and
 //! `ledger_batches` holds one row per batch (`first_seq`, `last_seq`,
-//! `batch_root`, `committed_at`). `batch_root` is a placeholder deterministic
-//! root — the batch's chain tip, i.e. its last entry's `entry_hash` — not a
-//! Merkle root; that's issue #40's call.
+//! `batch_root`, `committed_at`).
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
@@ -34,7 +36,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::{SettlementError, SettlementProvider};
+use crate::sth::SignedTreeHead;
+use crate::{merkle, sth, SettlementError, SettlementProvider};
 
 /// All-zero hash, the `prev_hash` of the very first entry in the chain.
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -142,19 +145,21 @@ fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> Strin
     )
 }
 
-/// Recomputes a batch's root the same way [`PostgresSettlementProvider::commit`]
-/// produced it in the first place: replay the hash chain across the batch's
-/// own entries, in order, starting from the hash the batch extended (its
-/// first entry's stored `prev_hash` — the ledger's tip immediately before
-/// this batch was committed, not verified here since that's a cross-batch
+/// Recomputes a batch's *chain tip* (not its Merkle `batch_root` — see
+/// [`crate::merkle`] for that) the same way `commit` produced it in the
+/// first place: replay the sequential hash chain across the batch's own
+/// entries, in order, starting from the hash the batch extended (its first
+/// entry's stored `prev_hash` — the ledger's tip immediately before this
+/// batch was committed, not verified here since that's a cross-batch
 /// concern, not this batch's own integrity).
 ///
 /// This is a pure, DB-free function on purpose (issue #38's acceptance
 /// criteria that `verify` "recomputes and compares the batch root, not just
-/// row existence") — it recomputes from each entry's actual stored content,
-/// the same way `list_entries` re-verifies individual entries, so tampering
-/// with any entry's content in the batch (not just deleting a row) changes
-/// the result. `PostgresSettlementProvider::verify` is the only caller; kept
+/// row existence", now one of `verify`'s two checks — see its doc comment)
+/// — it recomputes from each entry's actual stored content, the same way
+/// `list_entries` re-verifies individual entries, so tampering with any
+/// entry's content in the batch (not just deleting a row) changes the
+/// result. `PostgresSettlementProvider::verify` is the only caller; kept
 /// free-standing so it's directly unit-testable without Postgres.
 fn recompute_batch_root(
     network_id: &str,
@@ -387,6 +392,40 @@ impl PostgresSettlementProvider {
         Ok(batches)
     }
 
+    /// Every Signed Tree Head, oldest (`tree_size`) first (issue #210) —
+    /// `avalon inspect-ledger` uses the latest one to report STH
+    /// verification (Merkle recompute + Ed25519 signature check) alongside
+    /// the hash-chain check `list_entries` already reports. Like
+    /// `list_entries`/`list_batches`, deliberately not part of the
+    /// `SettlementProvider` trait: a debug/inspection affordance, not a
+    /// protocol-level operation other crates should depend on.
+    pub async fn list_signed_tree_heads(&self) -> Result<Vec<SignedTreeHead>, SettlementError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT tree_size, root_hash, network_id, signing_key_id, signature, created_at
+            FROM signed_tree_heads
+            ORDER BY tree_size ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let mut heads = Vec::with_capacity(rows.len());
+        for row in rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            heads.push(SignedTreeHead {
+                tree_size: row.try_get("tree_size").map_err(get)?,
+                root_hash: row.try_get("root_hash").map_err(get)?,
+                network_id: row.try_get("network_id").map_err(get)?,
+                signing_key_id: row.try_get("signing_key_id").map_err(get)?,
+                signature: row.try_get("signature").map_err(get)?,
+                created_at: row.try_get("created_at").map_err(get)?,
+            });
+        }
+        Ok(heads)
+    }
+
     /// Every entry issued by `issuer_prefix` (a `GlobalId` prefix, e.g.
     /// `identity:<id>:self:` — every verb an identity signs itself under
     /// shares that prefix, see `crates/server/src/friends.rs`'s
@@ -465,10 +504,10 @@ pub struct LedgerEntryView {
 
 /// One committed batch — the unit of settlement (issue #38): entries are
 /// hash-chained individually, but a batch is what `get_commitment` looks up
-/// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is a
-/// placeholder deterministic root (the batch's chain tip — its last entry's
-/// `entry_hash`); a Merkle root over the batch is #40's call, not this
-/// ticket's.
+/// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is
+/// the real RFC 6962 Merkle Tree Hash of the whole ledger (not just this
+/// batch's own entries) at `tree_size = last_seq` (issue #210) — not a
+/// per-batch sub-tree, and not the placeholder chain-tip value #38 shipped.
 pub struct LedgerBatchView {
     pub batch_id: Uuid,
     pub first_seq: i64,
@@ -493,7 +532,6 @@ impl SettlementProvider for PostgresSettlementProvider {
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         let mut prev_hash = self.tip_hash().await?;
-        let mut last_hash = prev_hash.clone();
         let mut first_seq: Option<i64> = None;
         let mut last_seq: i64 = 0;
 
@@ -533,15 +571,31 @@ impl SettlementProvider for PostgresSettlementProvider {
             first_seq.get_or_insert(seq);
             last_seq = seq;
 
-            last_hash = entry_hash.clone();
             prev_hash = entry_hash;
         }
         let first_seq = first_seq.expect("checked batch.events is non-empty above");
 
-        // batch_root is a placeholder deterministic root (the batch's chain
-        // tip, i.e. its last entry's hash) — recomputable from the stored
-        // entries alone, same as `verify` does. Whether this becomes a real
-        // Merkle root is issue #40's call.
+        // batch_root is now the real RFC 6962 Merkle Tree Hash of the whole
+        // ledger — not just this batch's own entries — at
+        // `tree_size = last_seq` (issue #210, replacing the placeholder
+        // chain-tip value #38 shipped). Read back every entry_hash up to
+        // and including this batch, in the same transaction so the read is
+        // consistent with what was just inserted above.
+        let leaf_rows =
+            sqlx::query("SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC")
+                .bind(last_seq)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let leaf_hashes: Vec<String> = leaf_rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("entry_hash"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let tree_root =
+            merkle::mth_of_hex_hashes(&leaf_hashes).map_err(SettlementError::Storage)?;
+        let batch_root = hex::encode(tree_root);
+
         let batch_row = sqlx::query(
             r#"
             INSERT INTO ledger_batches (batch_id, first_seq, last_seq, batch_root)
@@ -552,7 +606,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         .bind(batch.id)
         .bind(first_seq)
         .bind(last_seq)
-        .bind(&last_hash)
+        .bind(&batch_root)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
@@ -561,21 +615,69 @@ impl SettlementProvider for PostgresSettlementProvider {
             .try_get("committed_at")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
+        // Signed Tree Head (issue #210/#39): one per batch commit, in this
+        // same transaction, STH-only signing — no per-entry signature is
+        // ever produced. The private key is loaded from the environment
+        // fresh here (never persisted) — see `crate::sth`'s doc comment.
+        let (signing_key, signing_key_id) = sth::load_signing_key_from_env()
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let tree_head = sth::sign_tree_head(
+            &signing_key,
+            &signing_key_id,
+            last_seq,
+            &batch_root,
+            &self.network_id,
+            committed_at,
+        );
+        sqlx::query(
+            r#"
+            INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(tree_head.tree_size)
+        .bind(&tree_head.root_hash)
+        .bind(&tree_head.network_id)
+        .bind(&tree_head.signing_key_id)
+        .bind(&tree_head.signature)
+        .bind(tree_head.created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
         tx.commit()
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         Ok(Commitment {
             batch_id: batch.id,
-            proof: last_hash.into_bytes(),
+            proof: batch_root.into_bytes(),
             committed_at,
         })
     }
 
+    /// Two independent checks, both must pass (issue #210 — the Merkle
+    /// check is a layered addition, the hash-chain check below is
+    /// unchanged from #38 in spirit, just no longer compared against
+    /// `commitment.proof` since that now carries a ledger-wide Merkle root
+    /// rather than this batch's own chain tip):
+    ///
+    /// 1. **Hash-chain check.** Replay this batch's own entries' stored
+    ///    content across the sequential hash chain and compare the result
+    ///    against the chain tip Postgres actually has stored for them —
+    ///    catches content tampering that left `entry_hash` stale relative
+    ///    to a mutated payload/kind/issuer/etc (same guarantee #38 always
+    ///    had; only the comparison target changed).
+    /// 2. **Merkle check.** Recompute the RFC 6962 MTH fresh from every
+    ///    `entry_hash` in the ledger up to this batch's `last_seq` and
+    ///    compare against `commitment.proof` — catches tampering with the
+    ///    ledger's *structure* (an `entry_hash` value itself, entry
+    ///    ordering, a deleted row) anywhere up to this batch, not just
+    ///    within it, which a batch-local chain replay alone can't see.
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
         let rows = sqlx::query(
             r#"
-            SELECT event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash
+            SELECT event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash
             FROM ledger_entries
             WHERE batch_id = $1
             ORDER BY seq ASC
@@ -591,6 +693,11 @@ impl SettlementProvider for PostgresSettlementProvider {
         };
         let entering_prev_hash: String = first_row
             .try_get("prev_hash")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let stored_chain_tip: String = rows
+            .last()
+            .expect("checked rows is non-empty above")
+            .try_get("entry_hash")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         let mut owned = Vec::with_capacity(rows.len());
@@ -623,10 +730,40 @@ impl SettlementProvider for PostgresSettlementProvider {
             )
             .collect();
 
-        let recomputed_root =
+        let recomputed_chain_tip =
             recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
+        let chain_intact = recomputed_chain_tip == stored_chain_tip;
+
+        let Some(batch_row) =
+            sqlx::query("SELECT last_seq FROM ledger_batches WHERE batch_id = $1")
+                .bind(commitment.batch_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?
+        else {
+            return Ok(false);
+        };
+        let last_seq: i64 = batch_row
+            .try_get("last_seq")
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let leaf_rows =
+            sqlx::query("SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC")
+                .bind(last_seq)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let leaf_hashes: Vec<String> = leaf_rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("entry_hash"))
+            .collect::<Result<_, _>>()
+            .map_err(|e: sqlx::Error| SettlementError::Storage(e.to_string()))?;
+        let recomputed_tree_root =
+            merkle::mth_of_hex_hashes(&leaf_hashes).map_err(SettlementError::Storage)?;
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
-        Ok(recomputed_root == claimed_root)
+        let merkle_intact = hex::encode(recomputed_tree_root) == claimed_root;
+
+        Ok(chain_intact && merkle_intact)
     }
 
     async fn get_commitment(&self, batch_id: Uuid) -> Result<Commitment, SettlementError> {
@@ -808,5 +945,72 @@ mod tests {
         let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
         let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
         assert_eq!(root, hash_entry("avalon-test", GENESIS_HASH, &entries[0]));
+    }
+
+    // --- Merkle root / STH (issue #210) ---
+    //
+    // `merkle.rs` owns MTH correctness against RFC 6962 reference vectors;
+    // these tests are specifically about what `commit`/`verify` build on top
+    // of it — that `batch_root` is now that real tree's root rather than the
+    // old chain-tip placeholder, and that tampering with any `entry_hash` in
+    // the tree's leaf set changes the recomputed root `verify` checks
+    // against. Both are pure, DB-free — the actual `commit`/`verify`
+    // integration is covered (live-Postgres, `#[ignore]`) in
+    // `crates/chain/tests/settlement.rs`.
+
+    #[test]
+    fn merkle_root_of_multiple_entries_differs_from_the_old_chain_tip_placeholder() {
+        // Three chained entry_hash values, exactly the shape `commit` reads
+        // back to build its leaf set.
+        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
+        let entries: Vec<EntryContent<'_>> = ids
+            .iter()
+            .zip(&payloads)
+            .map(|(id, payload)| sample_entry(*id, payload))
+            .collect();
+
+        let mut entry_hashes = Vec::new();
+        let mut prev = GENESIS_HASH.to_string();
+        for entry in &entries {
+            let hash = hash_entry("avalon-test", &prev, entry);
+            entry_hashes.push(hash.clone());
+            prev = hash;
+        }
+        let old_placeholder_root = entry_hashes.last().unwrap().clone();
+
+        let merkle_root = hex::encode(
+            crate::merkle::mth_of_hex_hashes(&entry_hashes)
+                .expect("stored entry_hash values should always be valid hex"),
+        );
+
+        assert_ne!(
+            merkle_root, old_placeholder_root,
+            "batch_root must be a real Merkle root over the leaf set, not just the last entry's hash"
+        );
+    }
+
+    #[test]
+    fn merkle_root_detects_tampering_with_any_entry_hash_in_the_leaf_set() {
+        let entry_hashes: Vec<String> = (0..5)
+            .map(|i| {
+                hash_entry(
+                    "avalon-test",
+                    GENESIS_HASH,
+                    &sample_entry(Uuid::new_v4(), &json!({ "i": i })),
+                )
+            })
+            .collect();
+        let original_root = crate::merkle::mth_of_hex_hashes(&entry_hashes).unwrap();
+
+        for i in 0..entry_hashes.len() {
+            let mut tampered = entry_hashes.clone();
+            tampered[i] = GENESIS_HASH.to_string();
+            let tampered_root = crate::merkle::mth_of_hex_hashes(&tampered).unwrap();
+            assert_ne!(
+                original_root, tampered_root,
+                "tampering with entry_hash at index {i} must change the recomputed Merkle root"
+            );
+        }
     }
 }
