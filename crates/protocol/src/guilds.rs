@@ -20,6 +20,33 @@ pub struct Guild {
     /// Whether the guild accepts open joins (`POST /guilds/{id}/join`) or
     /// requires an invite (issue #21). Defaults to `InviteOnly`.
     pub join_policy: JoinPolicy,
+    /// Message-of-the-day (issue #153) — short, capped prose set by the
+    /// owner/`manage_guild`. `None` means unset, same "no value" convention
+    /// `identity::Profile.bio` already uses; an empty string is never
+    /// stored, it's normalized to `None` on the way in.
+    pub motd: Option<String>,
+    /// Banner image URL (issue #153) — same `http`/`https`-only, length-capped
+    /// validation as a profile's `avatar_url`. `None` means unset.
+    pub banner: Option<String>,
+    /// Small, capped list of external links (Discord, website, ...) the
+    /// guild wants to point at (issue #153). Ordered; a caller that wants a
+    /// different order resends the whole list, same "full replace, not a
+    /// per-entry patch" convention `favorite_genres` already established.
+    pub links: Vec<GuildLink>,
+    /// Whether this guild is advertising for new members (issue #153). Feeds
+    /// the discovery board (issue #154) — a real, queryable column, not
+    /// derived from anything else.
+    pub recruiting: bool,
+}
+
+/// One entry in [`Guild::links`] (issue #153): a human label paired with the
+/// URL it points at. Both fields are validated/capped server-side
+/// (`crates/server/src/guilds.rs`) — this type carries no invariant of its
+/// own beyond "these are the two fields a link has."
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuildLink {
+    pub label: String,
+    pub url: String,
 }
 
 /// Whether a guild can be joined directly or only entered via invite

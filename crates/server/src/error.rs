@@ -79,6 +79,14 @@ pub enum AppError {
     InvalidRoleDescription,
     #[error("unrecognized role badge icon or color")]
     InvalidRoleBadge,
+    #[error("motd must be 500 characters or fewer")]
+    InvalidGuildMotd,
+    #[error("banner must be an http(s) URL of 2048 characters or fewer")]
+    InvalidGuildBanner,
+    #[error("links may contain at most 5 entries")]
+    TooManyGuildLinks,
+    #[error("each link's label must be 1-60 characters and url must be an http(s) URL of 2048 characters or fewer")]
+    InvalidGuildLink,
     #[error("cannot change the owner role's permissions")]
     CannotModifyOwnerRole,
     #[error("missing required guild permission")]
@@ -190,7 +198,11 @@ impl IntoResponse for AppError {
             }
             AppError::InvalidGuildTag
             | AppError::InvalidRoleDescription
-            | AppError::InvalidRoleBadge => StatusCode::BAD_REQUEST,
+            | AppError::InvalidRoleBadge
+            | AppError::InvalidGuildMotd
+            | AppError::InvalidGuildBanner
+            | AppError::TooManyGuildLinks
+            | AppError::InvalidGuildLink => StatusCode::BAD_REQUEST,
             AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {
                 StatusCode::FORBIDDEN
             }

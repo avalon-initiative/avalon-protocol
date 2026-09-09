@@ -57,6 +57,7 @@ Nothing above is game-scoped. The per-game counts are realtime presence (see
 | Concern | Owner | Notes |
 |---|---|---|
 | Guild existence, name, tag, description | Network | `Guild` in the protocol crate |
+| Guild metadata (motd, banner, links, recruiting) | Network | owner/`manage_guild`-editable via `PATCH /guilds/{id}`; `recruiting` feeds the discovery board |
 | Membership | Network | joins/leaves/removals are protocol events |
 | Roles and permissions | Network | assigned by guild members with authority |
 | Guild history | Network | append-only, reconstructable |
