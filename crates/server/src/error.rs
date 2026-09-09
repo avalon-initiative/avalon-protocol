@@ -181,6 +181,24 @@ pub enum AppError {
     ProofVerificationFailed,
     #[error("a game may only create or change its own achievement definitions")]
     AchievementDefinitionForbidden,
+    #[error("guardian set must be 1-10 distinct friends (excluding yourself), with threshold between 1 and the guardian count")]
+    InvalidGuardianSet,
+    #[error("recovery is not configured for this identity")]
+    RecoveryNotConfigured,
+    #[error("recovery request not found")]
+    RecoveryRequestNotFound,
+    #[error("a recovery attempt is already in progress for this identity")]
+    RecoveryAlreadyInProgress,
+    #[error("too many recovery attempts against this identity recently, try again later")]
+    RecoveryRateLimited,
+    #[error("this recovery request is not yet past its mandatory time-delay")]
+    RecoveryNotReadyToFinalize,
+    #[error("this recovery request has already been completed or cancelled")]
+    RecoveryAlreadyResolved,
+    #[error("caller is not a current guardian of this identity")]
+    NotAGuardian,
+    #[error("this guardian has already approved this recovery request")]
+    AlreadyApproved,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -287,6 +305,15 @@ impl IntoResponse for AppError {
             AppError::AchievementKeyTaken => StatusCode::CONFLICT,
             AppError::AchievementDefinitionNotFound => StatusCode::NOT_FOUND,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
+            AppError::InvalidGuardianSet => StatusCode::BAD_REQUEST,
+            AppError::RecoveryNotConfigured => StatusCode::CONFLICT,
+            AppError::RecoveryRequestNotFound => StatusCode::NOT_FOUND,
+            AppError::RecoveryAlreadyInProgress => StatusCode::CONFLICT,
+            AppError::RecoveryRateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::RecoveryNotReadyToFinalize => StatusCode::CONFLICT,
+            AppError::RecoveryAlreadyResolved => StatusCode::CONFLICT,
+            AppError::NotAGuardian => StatusCode::FORBIDDEN,
+            AppError::AlreadyApproved => StatusCode::CONFLICT,
             AppError::InvalidDiscoverQuery => StatusCode::BAD_REQUEST,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
                 StatusCode::BAD_REQUEST

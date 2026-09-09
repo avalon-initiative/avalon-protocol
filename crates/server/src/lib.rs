@@ -17,6 +17,7 @@ pub mod migrate;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
+pub mod recovery;
 pub mod retention;
 pub mod settlement;
 pub mod state;
@@ -126,6 +127,42 @@ pub fn router(state: AppState) -> Router {
         .route("/me/passkeys", get(passkeys::list_passkeys))
         .route("/me/passkeys/{id}", patch(passkeys::rename_passkey))
         .route("/me/passkeys/{id}/revoke", post(passkeys::revoke_passkey))
+        // Issue #201: social recovery. Guardian configuration and the
+        // caller's own status are session-authenticated (`/me/...`);
+        // `/recovery/requests/start` and `/finish` are the one deliberate
+        // exception (see `crate::recovery` module docs — the caller by
+        // definition has no valid session for the identity being
+        // recovered). `/recovery/requests/:id` (GET) and
+        // `/identities/:id/recovery/status` are public by design, per the
+        // ticket's "mandatory *public* time-delay" invariant.
+        .route(
+            "/me/recovery/guardians",
+            get(recovery::get_guardians).put(recovery::set_guardians),
+        )
+        .route("/me/recovery/status", get(recovery::my_recovery_status))
+        .route(
+            "/me/recovery/guardian-requests",
+            get(recovery::guardian_requests),
+        )
+        .route("/recovery/requests/start", post(recovery::start_request))
+        .route("/recovery/requests/finish", post(recovery::finish_request))
+        .route("/recovery/requests/{id}", get(recovery::get_request))
+        .route(
+            "/recovery/requests/{id}/approve",
+            post(recovery::approve_request),
+        )
+        .route(
+            "/recovery/requests/{id}/cancel",
+            post(recovery::cancel_request),
+        )
+        .route(
+            "/recovery/requests/{id}/finalize",
+            post(recovery::finalize_request),
+        )
+        .route(
+            "/identities/{id}/recovery/status",
+            get(recovery::identity_recovery_status),
+        )
         .route("/games", post(games::register_game))
         .route("/games/{slug}", get(games::get_game))
         .route(
