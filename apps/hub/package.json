@@ -16,7 +16,7 @@
     "vue": "^3.5.0",
     "vue-router": "^4.4.0",
     "pinia": "^2.2.0",
-    "@simplewebauthn/browser": "^13.1.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "@noble/curves": "^1.6.0",
     "@noble/hashes": "^1.5.0",
     "@scure/bip39": "^1.5.0"
