@@ -536,7 +536,7 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
                             };
                             let payload =
                                 serde_json::to_string(&view).expect("PresenceResponse always serializes");
-                            if socket.send(Message::Text(payload)).await.is_err() {
+                            if socket.send(Message::Text(payload.into())).await.is_err() {
                                 return;
                             }
                         }
@@ -555,7 +555,7 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
                         };
                         let payload =
                             serde_json::to_string(&view).expect("PresenceResponse always serializes");
-                        if socket.send(Message::Text(payload)).await.is_err() {
+                        if socket.send(Message::Text(payload.into())).await.is_err() {
                             return;
                         }
                     }

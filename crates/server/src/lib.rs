@@ -73,7 +73,7 @@ pub fn router(state: AppState) -> Router {
         .route("/identities/profiles", get(handlers::list_profiles))
         .route("/me/presence", put(presence::update_my_presence))
         .route(
-            "/presence/:identity_id",
+            "/presence/{identity_id}",
             put(presence::update_game_presence),
         )
         .route("/presence", get(presence::get_presence))
@@ -83,34 +83,34 @@ pub fn router(state: AppState) -> Router {
             get(friends::list_friend_requests).post(friends::create_friend_request),
         )
         .route(
-            "/friends/requests/:id/accept",
+            "/friends/requests/{id}/accept",
             post(friends::accept_friend_request),
         )
         .route(
-            "/friends/requests/:id",
+            "/friends/requests/{id}",
             delete(friends::decline_or_withdraw_friend_request),
         )
         .route("/friends", get(friends::list_friends))
-        .route("/friends/:identity_id", delete(friends::remove_friend))
-        .route("/friends/handle/:handle", get(friends::resolve_handle))
+        .route("/friends/{identity_id}", delete(friends::remove_friend))
+        .route("/friends/handle/{handle}", get(friends::resolve_handle))
         .route("/people/discover", get(discovery::discover_people))
         .route(
             "/blocks",
             get(blocks::list_blocks).post(blocks::create_block),
         )
-        .route("/blocks/:identity_id", delete(blocks::remove_block))
+        .route("/blocks/{identity_id}", delete(blocks::remove_block))
         .route(
             "/me/devices/grants",
             get(devices::list_device_grants).post(devices::request_device_grant),
         )
-        .route("/me/devices/grants/:id", get(devices::get_device_grant))
+        .route("/me/devices/grants/{id}", get(devices::get_device_grant))
         .route(
-            "/me/devices/grants/:id/approve",
+            "/me/devices/grants/{id}/approve",
             post(devices::approve_device_grant),
         )
         .route("/me/devices", get(devices::list_devices))
-        .route("/me/devices/:id", patch(devices::rename_device))
-        .route("/me/devices/:id/revoke", post(devices::revoke_device))
+        .route("/me/devices/{id}", patch(devices::rename_device))
+        .route("/me/devices/{id}/revoke", post(devices::revoke_device))
         .route(
             "/me/passkeys/register/start",
             post(passkeys::register_start),
@@ -120,27 +120,30 @@ pub fn router(state: AppState) -> Router {
             post(passkeys::register_finish),
         )
         .route("/me/passkeys", get(passkeys::list_passkeys))
-        .route("/me/passkeys/:id", patch(passkeys::rename_passkey))
-        .route("/me/passkeys/:id/revoke", post(passkeys::revoke_passkey))
+        .route("/me/passkeys/{id}", patch(passkeys::rename_passkey))
+        .route("/me/passkeys/{id}/revoke", post(passkeys::revoke_passkey))
         .route("/games", post(games::register_game))
-        .route("/games/:slug", get(games::get_game))
-        .route("/games/:slug/challenge", post(games::create_game_challenge))
+        .route("/games/{slug}", get(games::get_game))
+        .route(
+            "/games/{slug}/challenge",
+            post(games::create_game_challenge),
+        )
         .route("/games/whoami", get(games::game_whoami))
         .route(
-            "/games/:slug/achievements",
+            "/games/{slug}/achievements",
             get(achievements::list_achievement_definitions)
                 .post(achievements::create_achievement_definition),
         )
         .route(
-            "/games/:slug/achievements/:key",
+            "/games/{slug}/achievements/{key}",
             patch(achievements::update_achievement_definition),
         )
         .route(
-            "/games/:slug/connect",
+            "/games/{slug}/connect",
             post(connections::connect).delete(connections::disconnect),
         )
         .route(
-            "/games/:slug/grants/:capability",
+            "/games/{slug}/grants/{capability}",
             delete(connections::revoke_grant),
         )
         .route("/me/connections", get(connections::list_my_connections))
@@ -148,56 +151,59 @@ pub fn router(state: AppState) -> Router {
         .route("/guilds", post(guilds::create_guild))
         .route("/guilds/discover", get(guilds::discover_guilds))
         .route(
-            "/guilds/:id",
+            "/guilds/{id}",
             get(guilds::get_guild).patch(guilds::update_guild),
         )
         .route(
-            "/guilds/:id/roles",
+            "/guilds/{id}/roles",
             get(guilds::list_roles).post(guilds::create_role),
         )
-        .route("/guilds/:id/roles/:idx", patch(guilds::update_role))
+        .route("/guilds/{id}/roles/{idx}", patch(guilds::update_role))
         .route(
-            "/guilds/:id/transfer-ownership",
+            "/guilds/{id}/transfer-ownership",
             post(guilds::transfer_ownership),
         )
-        .route("/guilds/:id/games/:game_id", post(guilds::associate_game))
-        .route("/guilds/:id/game-breakdown", get(guilds::game_breakdown))
+        .route("/guilds/{id}/games/{game_id}", post(guilds::associate_game))
+        .route("/guilds/{id}/game-breakdown", get(guilds::game_breakdown))
         .route(
-            "/guilds/:id/favorite-games",
+            "/guilds/{id}/favorite-games",
             get(guilds::list_favorite_games).put(guilds::set_favorite_games),
         )
-        .route("/guilds/:id/invites", post(guilds::create_invite))
+        .route("/guilds/{id}/invites", post(guilds::create_invite))
         .route(
-            "/guilds/:id/invites/:invite_id/accept",
+            "/guilds/{id}/invites/{invite_id}/accept",
             post(guilds::accept_invite),
         )
         .route(
-            "/guilds/:id/invites/:invite_id/decline",
+            "/guilds/{id}/invites/{invite_id}/decline",
             post(guilds::decline_invite),
         )
-        .route("/guilds/:id/join", post(guilds::join_guild))
-        .route("/guilds/:id/leave", post(guilds::leave_guild))
-        .route("/guilds/:id/members", get(guilds::list_members))
+        .route("/guilds/{id}/join", post(guilds::join_guild))
+        .route("/guilds/{id}/leave", post(guilds::leave_guild))
+        .route("/guilds/{id}/members", get(guilds::list_members))
         .route(
-            "/guilds/:id/members/:identity_id",
+            "/guilds/{id}/members/{identity_id}",
             patch(guilds::update_member_role).delete(guilds::remove_member),
         )
         .route("/me/guilds", get(guilds::list_my_guilds))
         .route(
-            "/guilds/:id/channels",
+            "/guilds/{id}/channels",
             get(channels::list_channels).post(channels::create_channel),
         )
-        .route("/guilds/:id/channels/:cid", patch(channels::update_channel))
         .route(
-            "/guilds/:id/channels/:cid/archive",
+            "/guilds/{id}/channels/{cid}",
+            patch(channels::update_channel),
+        )
+        .route(
+            "/guilds/{id}/channels/{cid}/archive",
             post(channels::archive_channel),
         )
         .route(
-            "/guilds/:id/channels/:cid/messages",
+            "/guilds/{id}/channels/{cid}/messages",
             get(guild_messages::list_messages).post(guild_messages::send_message),
         )
         .route(
-            "/guilds/:id/channels/:cid/messages/:mid",
+            "/guilds/{id}/channels/{cid}/messages/{mid}",
             delete(guild_messages::delete_message),
         )
         .with_state(state)

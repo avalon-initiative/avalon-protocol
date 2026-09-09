@@ -23,7 +23,7 @@ thiserror = "2"
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
-axum = "0.7"
+axum = "0.8"
 tokio-tungstenite = "0.24"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tower-http = { version = "0.7", features = ["cors"] }
