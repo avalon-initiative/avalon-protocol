@@ -638,7 +638,17 @@ async fn inspect_ledger(full: bool) {
         .await
         .expect("failed to connect to Postgres");
 
-    let chain = PostgresSettlementProvider::new(pool);
+    // Read-only: reports whatever genesis is already there (issue #173)
+    // without creating or asserting one — an operator pointing this at an
+    // unfamiliar database should see which network it belongs to before
+    // anything else.
+    let network_id = PostgresSettlementProvider::read_genesis_network_id(&pool)
+        .await
+        .expect("failed to read genesis")
+        .unwrap_or_else(|| "(no genesis set)".to_string());
+    println!("network_id: {network_id}");
+
+    let chain = PostgresSettlementProvider::new(pool, network_id);
     let entries = chain.list_entries().await.expect("failed to read ledger");
     let batches = chain.list_batches().await.expect("failed to read batches");
 

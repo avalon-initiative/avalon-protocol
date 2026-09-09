@@ -1,7 +1,7 @@
 //! The ledger's hash-chain math — deliberately storage-agnostic (issue
 //! #178), shared verbatim by every `SettlementProvider` implementation
-//! (`postgres.rs`, `rocksdb_backend.rs`). Given the same prior hash and the
-//! same event content, every backend must compute the exact same
+//! (`postgres.rs`, `rocksdb_backend.rs`). Given the same `network_id`, prior
+//! hash, and event content, every backend must compute the exact same
 //! `entry_hash`/batch root — that's what makes "the ledger" a single
 //! well-defined thing independent of which engine happens to be storing it
 //! today, and it's the whole point of duplicating nothing here.
@@ -79,8 +79,16 @@ pub(crate) fn canonical_json(value: &serde_json::Value) -> String {
     out
 }
 
-pub(crate) fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String {
+/// `network_id` (issue #173) is hashed in ahead of everything else, so two
+/// ledgers with different network identities produce disjoint hash spaces
+/// by construction — an entry hashed under one `network_id` can never
+/// collide with, or be mistaken for a valid link in, a chain rooted in a
+/// different one. See `PostgresSettlementProvider::connect`/
+/// `RocksDbSettlementProvider::connect` for where that identity is
+/// established and enforced.
+pub(crate) fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(network_id.as_bytes());
     hasher.update(prev_hash.as_bytes());
     hasher.update(content.event_id.as_bytes());
     hasher.update(content.kind.as_bytes());
@@ -92,8 +100,9 @@ pub(crate) fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String 
     hex::encode(hasher.finalize())
 }
 
-pub(crate) fn hash_event(prev_hash: &str, event: &ProtocolEvent) -> String {
+pub(crate) fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> String {
     hash_entry(
+        network_id,
         prev_hash,
         &EntryContent {
             event_id: event.id,
@@ -122,12 +131,13 @@ pub(crate) fn hash_event(prev_hash: &str, event: &ProtocolEvent) -> String {
 /// caller; kept free-standing so it's directly unit-testable without any
 /// storage engine at all.
 pub(crate) fn recompute_batch_root(
+    network_id: &str,
     entering_prev_hash: &str,
     entries: &[EntryContent<'_>],
 ) -> String {
     let mut prev = entering_prev_hash.to_string();
     for content in entries {
-        prev = hash_entry(&prev, content);
+        prev = hash_entry(network_id, &prev, content);
     }
     prev
 }
@@ -168,6 +178,7 @@ mod tests {
         let b = json!({ "actor": "x", "to": "y", "from": "x" });
 
         let hash_a = hash_entry(
+            "avalon-test",
             GENESIS_HASH,
             &EntryContent {
                 event_id,
@@ -180,6 +191,7 @@ mod tests {
             },
         );
         let hash_b = hash_entry(
+            "avalon-test",
             GENESIS_HASH,
             &EntryContent {
                 event_id,
@@ -192,6 +204,30 @@ mod tests {
             },
         );
         assert_eq!(hash_a, hash_b);
+    }
+
+    /// Issue #173's core guarantee: two networks never share a hash space,
+    /// even for byte-identical entry content. This is what makes a dev
+    /// ledger's history structurally incapable of being mistaken for, or
+    /// spliced into, production's — not a policy, a hash input.
+    #[test]
+    fn hash_entry_differs_across_network_ids() {
+        let event_id = Uuid::new_v4();
+        let timestamp = time::OffsetDateTime::now_utc();
+        let payload = json!({ "same": "content" });
+        let content = EntryContent {
+            event_id,
+            kind: "friend.requested",
+            issuer: "identity:x:self:friend_requested",
+            subject: "identity:y:self:friend_requested",
+            payload: &payload,
+            timestamp,
+            version: 1,
+        };
+
+        let mainnet = hash_entry("avalon-mainnet-1", GENESIS_HASH, &content);
+        let devnet = hash_entry("avalon-dev-chris", GENESIS_HASH, &content);
+        assert_ne!(mainnet, devnet);
     }
 
     fn sample_entry(event_id: Uuid, payload: &serde_json::Value) -> EntryContent<'_> {
@@ -219,12 +255,15 @@ mod tests {
         let expected = {
             let mut prev = GENESIS_HASH.to_string();
             for entry in &entries {
-                prev = hash_entry(&prev, entry);
+                prev = hash_entry("avalon-test", &prev, entry);
             }
             prev
         };
 
-        assert_eq!(recompute_batch_root(GENESIS_HASH, &entries), expected);
+        assert_eq!(
+            recompute_batch_root("avalon-test", GENESIS_HASH, &entries),
+            expected
+        );
     }
 
     #[test]
@@ -236,7 +275,7 @@ mod tests {
             .zip(&original_payloads)
             .map(|(id, payload)| sample_entry(*id, payload))
             .collect();
-        let root = recompute_batch_root(GENESIS_HASH, &entries);
+        let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
 
         // Tamper with the *first* entry's payload — not the last — to prove
         // this isn't just re-hashing the tip; it must actually replay the
@@ -248,7 +287,7 @@ mod tests {
             .zip(&tampered_payloads)
             .map(|(id, payload)| sample_entry(*id, payload))
             .collect();
-        let tampered_root = recompute_batch_root(GENESIS_HASH, &tampered_entries);
+        let tampered_root = recompute_batch_root("avalon-test", GENESIS_HASH, &tampered_entries);
 
         assert_ne!(root, tampered_root);
     }
@@ -257,7 +296,7 @@ mod tests {
     fn recompute_batch_root_of_a_single_event_batch_is_legal() {
         let payload = json!({"solo": true});
         let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
-        let root = recompute_batch_root(GENESIS_HASH, &entries);
-        assert_eq!(root, hash_entry(GENESIS_HASH, &entries[0]));
+        let root = recompute_batch_root("avalon-test", GENESIS_HASH, &entries);
+        assert_eq!(root, hash_entry("avalon-test", GENESIS_HASH, &entries[0]));
     }
 }

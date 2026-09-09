@@ -16,11 +16,14 @@
 //! - `meta`: a single `genesis` key holding this ledger's `network_id`,
 //!   written once by [`RocksDbSettlementProvider::connect`] and never
 //!   updated after — the same genesis contract issue #173 gives
-//!   `PostgresSettlementProvider` (that work landed on a separate,
-//!   not-yet-merged branch when this was written, so the `GenesisError`
-//!   type here is this module's own for now; unifying the two into one
-//!   shared genesis module once both exist on `main` is a natural, small
-//!   follow-up, not a design disagreement).
+//!   `PostgresSettlementProvider`, including `network_id` being hashed into
+//!   every entry ahead of its own content (`crate::hashing::hash_entry`),
+//!   so this backend and the Postgres one produce byte-identical hashes for
+//!   identical input (see the cross-backend test in
+//!   `tests/rocksdb_settlement.rs`). `GenesisError` here is still this
+//!   module's own type rather than shared with Postgres's — unifying the
+//!   two into one genesis module is a natural, small follow-up, not a
+//!   design disagreement.
 //! - `entries`: big-endian `u64` seq → JSON-encoded `StoredEntry`, so a
 //!   forward iteration over the CF visits entries in seq order and the last
 //!   key is the ledger's tip.
@@ -172,12 +175,6 @@ impl RocksDbSettlementProvider {
         }
     }
 
-    /// `network_id` (issue #173) is not yet part of the hash preimage
-    /// `hash_event` computes — that ties to #173's Postgres genesis work,
-    /// still unmerged on a separate branch when this was written. Wiring it
-    /// in later (to match Postgres exactly, once both land) is a small,
-    /// contained change inside `hash_event`/`hashing.rs`, not a rework of
-    /// this backend.
     fn commit_blocking(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
         if batch.events.is_empty() {
             return Err(SettlementError::Storage(
@@ -193,7 +190,7 @@ impl RocksDbSettlementProvider {
 
         let mut write_batch = rocksdb::WriteBatch::default();
         for event in &batch.events {
-            let entry_hash = hash_event(&prev_hash, event);
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
             let stored = StoredEntry {
                 event: event.clone(),
                 batch_id: batch.id,
@@ -274,7 +271,8 @@ impl RocksDbSettlementProvider {
             })
             .collect();
 
-        let recomputed_root = recompute_batch_root(&entering_prev_hash, &contents);
+        let recomputed_root =
+            recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
         Ok(recomputed_root == claimed_root)
     }
@@ -295,7 +293,7 @@ impl RocksDbSettlementProvider {
             let (key, value) = result.map_err(storage_err)?;
             let stored: StoredEntry = serde_json::from_slice(&value).map_err(storage_err)?;
 
-            let recomputed = hash_event(&stored.prev_hash, &stored.event);
+            let recomputed = hash_event(&self.network_id, &stored.prev_hash, &stored.event);
             let content_intact = recomputed == stored.entry_hash;
             let link_intact = stored.prev_hash == expected_prev;
             expected_prev = stored.entry_hash.clone();

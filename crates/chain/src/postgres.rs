@@ -36,14 +36,105 @@ use uuid::Uuid;
 use crate::hashing::{hash_entry, hash_event, recompute_batch_root, EntryContent, GENESIS_HASH};
 use crate::{LedgerBatchView, LedgerEntryView, SettlementError, SettlementProvider};
 
+#[derive(Debug, thiserror::Error)]
+pub enum GenesisError {
+    /// The ledger already has a genesis row, and it doesn't match what this
+    /// process is configured to expect. Refuse to construct a provider at
+    /// all rather than let a mismatched process touch this ledger.
+    #[error(
+        "ledger genesis network_id `{stored}` does not match configured AVALON_NETWORK_ID `{configured}` — refusing to start against the wrong network"
+    )]
+    Mismatch { stored: String, configured: String },
+    #[error("storage error: {0}")]
+    Storage(String),
+}
+
 #[derive(Clone)]
 pub struct PostgresSettlementProvider {
     pool: PgPool,
+    network_id: String,
 }
 
 impl PostgresSettlementProvider {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    /// Low-level constructor for callers that already know (or don't care
+    /// about) the ledger's genesis network_id — tests against a throwaway
+    /// database, and read-only CLI inspection paired with
+    /// [`Self::read_genesis_network_id`]. Does **not** create or verify a
+    /// `chain_genesis` row; use [`Self::connect`] at real process startup,
+    /// where that enforcement actually matters.
+    pub fn new(pool: PgPool, network_id: impl Into<String>) -> Self {
+        Self {
+            pool,
+            network_id: network_id.into(),
+        }
+    }
+
+    /// Reads the ledger's genesis `network_id` without creating one —
+    /// `None` if this database has never been booted against by
+    /// [`Self::connect`]. For read-only diagnostics (`avalon inspect-ledger`)
+    /// that want to display which network they're pointed at without
+    /// asserting anything about it.
+    pub async fn read_genesis_network_id(pool: &PgPool) -> Result<Option<String>, SettlementError> {
+        sqlx::query_scalar("SELECT network_id FROM chain_genesis LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    }
+
+    /// The real boot-time entry point (issue #173). If this database has no
+    /// `chain_genesis` row yet, this is genesis: `expected_network_id` is
+    /// written once and never touched again. If a row already exists, it
+    /// must match `expected_network_id` exactly, or this returns
+    /// `GenesisError::Mismatch` instead of a provider — the caller (see
+    /// `avalon-server`'s `main.rs`) is expected to treat that as fatal and
+    /// exit before binding a listener, never as a warning to log past.
+    pub async fn connect(pool: PgPool, expected_network_id: &str) -> Result<Self, GenesisError> {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| GenesisError::Storage(e.to_string()))?;
+
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT network_id FROM chain_genesis LIMIT 1 FOR UPDATE")
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| GenesisError::Storage(e.to_string()))?;
+
+        match existing {
+            None => {
+                sqlx::query("INSERT INTO chain_genesis (network_id) VALUES ($1)")
+                    .bind(expected_network_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                tx.commit()
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                Ok(Self {
+                    pool,
+                    network_id: expected_network_id.to_string(),
+                })
+            }
+            Some(stored) if stored == expected_network_id => {
+                tx.commit()
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                Ok(Self {
+                    pool,
+                    network_id: stored,
+                })
+            }
+            Some(stored) => Err(GenesisError::Mismatch {
+                stored,
+                configured: expected_network_id.to_string(),
+            }),
+        }
+    }
+
+    /// The network identity this provider is bound to (issue #173) — every
+    /// hash it computes or verifies is rooted in this value.
+    pub fn network_id(&self) -> &str {
+        &self.network_id
     }
 
     async fn tip_hash(&self) -> Result<String, SettlementError> {
@@ -99,6 +190,7 @@ impl PostgresSettlementProvider {
             let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
 
             let recomputed = hash_entry(
+                &self.network_id,
                 &prev_hash,
                 &EntryContent {
                     event_id,
@@ -246,7 +338,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         // end of this transaction, so it's fine that `ledger_batches` doesn't
         // have this row yet.
         for event in &batch.events {
-            let entry_hash = hash_event(&prev_hash, event);
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
             let row = sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
@@ -365,7 +457,8 @@ impl SettlementProvider for PostgresSettlementProvider {
             )
             .collect();
 
-        let recomputed_root = recompute_batch_root(&entering_prev_hash, &contents);
+        let recomputed_root =
+            recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
         Ok(recomputed_root == claimed_root)
     }

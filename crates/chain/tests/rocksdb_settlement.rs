@@ -252,7 +252,7 @@ async fn postgres_and_rocksdb_backends_compute_identical_hashes() {
     let batch = sample_batch(3);
 
     let pg_pool = postgres_test_pool().await;
-    let pg_chain = PostgresSettlementProvider::new(pg_pool);
+    let pg_chain = PostgresSettlementProvider::new(pg_pool, "avalon-test");
     let pg_commitment = pg_chain
         .commit(&batch)
         .await
