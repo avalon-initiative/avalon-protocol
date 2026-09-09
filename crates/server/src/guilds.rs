@@ -32,17 +32,29 @@
 //! Whether a guild is invite-only or open (`join_policy`, on `guilds` and
 //! `avalon_protocol::guilds::Guild`) governs `POST /guilds/{id}/join`; it
 //! is not itself exposed for editing by any route in this module.
+//!
+//! **Discovery (issue #154).** `GET /guilds/discover` is a paged,
+//! filterable/searchable browse over the same public metadata `GET
+//! /guilds/{id}` already exposes (name/tag/description/member_count) —
+//! not a new visibility tier. It's a milestone-1 `server`-side stand-in
+//! (a direct `guilds` query) for the real read model #42's indexer will
+//! eventually own, same pragmatic call #44 documents for reads generally.
+//! Cursor pagination here (`cursor=` holding the last-seen guild id, `(sort
+//! key, id) < (subquery for that id)` keyset comparison) is the same
+//! pattern `guild_messages::list_messages`'s `before=` already established
+//! for #22 — just under the field name this ticket's own endpoint spec
+//! uses.
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::guilds::{
     GuildLink, GuildPermission, JoinPolicy, RoleBadge, RoleBadgeColor, RoleBadgeIcon,
 };
 use avalon_protocol::ids::GlobalId;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -78,6 +90,12 @@ const MAX_GUILD_LINK_LABEL_LEN: usize = 60;
 /// Cap on a single `GuildLink.url`'s length (issue #153) — same bound
 /// `MAX_AVATAR_URL_LEN`/`MAX_GUILD_BANNER_URL_LEN` use.
 const MAX_GUILD_LINK_URL_LEN: usize = 2048;
+
+/// Default/maximum page size for `GET /guilds/discover` (issue #154) — same
+/// "small default, capped maximum" shape `guild_messages`'s
+/// `DEFAULT_MESSAGE_PAGE_SIZE`/`MAX_MESSAGE_PAGE_SIZE` already use.
+const DEFAULT_DISCOVER_PAGE_SIZE: i64 = 20;
+const MAX_DISCOVER_PAGE_SIZE: i64 = 100;
 
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
@@ -1682,6 +1700,233 @@ pub async fn list_my_guilds(
     Ok(Json(memberships))
 }
 
+/// `sort=` values `GET /guilds/discover` (issue #154) accepts. `MostMembers`
+/// depends on #21's roster (`guild_members`), which is real today, so all
+/// three ticket-listed options are implemented — no "trending"/engagement
+/// ranking, per the ticket's explicit "not yet" on that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoverSort {
+    Newest,
+    Alphabetical,
+    MostMembers,
+}
+
+impl DiscoverSort {
+    fn parse(raw: Option<&str>) -> Result<DiscoverSort, AppError> {
+        Ok(match raw {
+            None | Some("newest") => DiscoverSort::Newest,
+            Some("alphabetical") => DiscoverSort::Alphabetical,
+            Some("most_members") => DiscoverSort::MostMembers,
+            Some(_) => return Err(AppError::InvalidDiscoverQuery),
+        })
+    }
+}
+
+/// Escapes `%`/`_`/backslash in free-text user input before it's embedded
+/// in an `ILIKE` pattern (Postgres's default `ILIKE` escape character is
+/// backslash) — otherwise a caller's own `q=` or `tag=` value could inject
+/// wildcard behavior rather than being matched literally.
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+#[derive(Deserialize)]
+pub struct DiscoverGuildsQuery {
+    /// Free-text search over `name`/`tag`/`description` (case-insensitive
+    /// substring).
+    pub q: Option<String>,
+    /// `true`/`false` to filter exactly; omitted falls back to the
+    /// default-visibility rule documented on [`discover_guilds`].
+    pub recruiting: Option<bool>,
+    /// Case-insensitive exact match on `guilds.tag`.
+    pub tag: Option<String>,
+    /// Filter to guilds associated (issue #20's `associate_game`) with this
+    /// game id.
+    pub game: Option<Uuid>,
+    /// `newest` (default) | `alphabetical` | `most_members`.
+    pub sort: Option<String>,
+    pub limit: Option<i64>,
+    /// The last guild id from the previous page's results — see the module
+    /// doc comment for why this is a bare id (same shape as
+    /// `guild_messages::ListMessagesQuery::before`) rather than an opaque
+    /// blob.
+    pub cursor: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+pub struct DiscoverGuildSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub tag: String,
+    pub description: String,
+    pub recruiting: bool,
+    pub member_count: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Serialize)]
+pub struct DiscoverGuildsResponse {
+    pub guilds: Vec<DiscoverGuildSummary>,
+    /// `Some(id)` when another page exists — pass it back as `cursor=` to
+    /// fetch it. `None` means this was the last page.
+    pub next_cursor: Option<Uuid>,
+}
+
+/// `GET /guilds/discover?q=&recruiting=&tag=&game=&sort=&limit=&cursor=`
+/// (issue #154). Session-authenticated only — any authenticated identity
+/// may browse, no membership requirement, matching #20's existing "guild
+/// name/tag/description/member_count are readable by any authenticated
+/// identity" precedent. Milestone-1 stand-in: a direct query over the
+/// `guilds` projection, not yet #42's real indexer read model (see module
+/// doc comment and `docs/architecture/guilds.md`).
+///
+/// Visibility rule for `recruiting`: if the caller passes `recruiting=true`
+/// or `recruiting=false` explicitly, that's an exact filter, full stop. If
+/// the parameter is omitted, the default is "recruiting guilds, plus any
+/// guild the caller is already a member of regardless of its recruiting
+/// flag" — a non-recruiting guild never appears in a stranger's browse
+/// results, but a member always sees their own guilds' discovery card, same
+/// as `GET /guilds/{id}`/`GET /me/guilds` already let them look it up
+/// directly. Exact id/tag lookup (`GET /guilds/{id}`) is untouched by any
+/// of this — a non-recruiting guild is always reachable that way.
+/// Builds the `guilds.discover` query — split out from [`discover_guilds`]
+/// so the filter/sort/pagination logic can be unit-tested (via
+/// [`sqlx::QueryBuilder::sql`]) without a live Postgres connection.
+fn build_discover_query(
+    query: &DiscoverGuildsQuery,
+    sort: DiscoverSort,
+    actor: Uuid,
+    limit: i64,
+) -> QueryBuilder<Postgres> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT g.id, g.name, g.tag, g.description, g.recruiting, g.created_at, \
+         (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count \
+         FROM guilds g WHERE 1 = 1",
+    );
+
+    if let Some(q) = query.q.as_ref().filter(|s| !s.trim().is_empty()) {
+        let like = format!("%{}%", escape_like(q));
+        builder.push(" AND (g.name ILIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR g.tag ILIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR g.description ILIKE ");
+        builder.push_bind(like);
+        builder.push(")");
+    }
+
+    match query.recruiting {
+        Some(want_recruiting) => {
+            builder.push(" AND g.recruiting = ");
+            builder.push_bind(want_recruiting);
+        }
+        None => {
+            builder.push(
+                " AND (g.recruiting = true OR g.id IN (SELECT guild_id FROM guild_members WHERE identity_id = ",
+            );
+            builder.push_bind(actor);
+            builder.push("))");
+        }
+    }
+
+    if let Some(tag) = query.tag.as_ref().filter(|s| !s.is_empty()) {
+        builder.push(" AND g.tag ILIKE ");
+        builder.push_bind(escape_like(tag));
+    }
+
+    if let Some(game_id) = query.game {
+        builder.push(
+            " AND EXISTS (SELECT 1 FROM guild_game_associations gga WHERE gga.guild_id = g.id AND gga.game_id = ",
+        );
+        builder.push_bind(game_id);
+        builder.push(")");
+    }
+
+    if let Some(cursor_id) = query.cursor {
+        match sort {
+            DiscoverSort::Newest => {
+                builder.push(
+                    " AND (g.created_at, g.id) < (SELECT created_at, id FROM guilds WHERE id = ",
+                );
+                builder.push_bind(cursor_id);
+                builder.push(")");
+            }
+            DiscoverSort::Alphabetical => {
+                builder.push(" AND (g.name, g.id) > (SELECT name, id FROM guilds WHERE id = ");
+                builder.push_bind(cursor_id);
+                builder.push(")");
+            }
+            DiscoverSort::MostMembers => {
+                builder.push(
+                    " AND ((SELECT COUNT(*) FROM guild_members gm2 WHERE gm2.guild_id = g.id), g.id) < \
+                     ((SELECT COUNT(*) FROM guild_members WHERE guild_id = ",
+                );
+                builder.push_bind(cursor_id);
+                builder.push("), ");
+                builder.push_bind(cursor_id);
+                builder.push(")");
+            }
+        }
+    }
+
+    match sort {
+        DiscoverSort::Newest => builder.push(" ORDER BY g.created_at DESC, g.id DESC"),
+        DiscoverSort::Alphabetical => builder.push(" ORDER BY g.name ASC, g.id ASC"),
+        DiscoverSort::MostMembers => builder.push(" ORDER BY member_count DESC, g.id DESC"),
+    };
+
+    // Fetch one extra row past the page size, purely to know whether a next
+    // page exists — trimmed back off before building the response.
+    builder.push(" LIMIT ");
+    builder.push_bind(limit + 1);
+
+    builder
+}
+
+pub async fn discover_guilds(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<DiscoverGuildsQuery>,
+) -> Result<Json<DiscoverGuildsResponse>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    let sort = DiscoverSort::parse(query.sort.as_deref())?;
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_DISCOVER_PAGE_SIZE)
+        .clamp(1, MAX_DISCOVER_PAGE_SIZE);
+
+    let mut builder = build_discover_query(&query, sort, actor, limit);
+    let rows = builder.build().fetch_all(&state.pool).await?;
+    let has_more = rows.len() as i64 > limit;
+
+    let mut guilds = Vec::with_capacity(rows.len().min(limit as usize));
+    for row in rows.iter().take(limit as usize) {
+        guilds.push(DiscoverGuildSummary {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            tag: row.try_get("tag")?,
+            description: row.try_get("description")?,
+            recruiting: row.try_get("recruiting")?,
+            member_count: row.try_get("member_count")?,
+            created_at: row.try_get("created_at")?,
+        });
+    }
+    let next_cursor = if has_more {
+        guilds.last().map(|g| g.id)
+    } else {
+        None
+    };
+
+    Ok(Json(DiscoverGuildsResponse {
+        guilds,
+        next_cursor,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     //! No live Postgres reachable here — pure-logic checks only. The
@@ -2077,5 +2322,192 @@ mod tests {
             validate_guild_links(&links),
             Err(AppError::InvalidGuildLink)
         ));
+    }
+
+    // -- Issue #154: discovery board query building/filtering --
+
+    #[test]
+    fn discover_sort_parses_known_values_and_defaults_to_newest() {
+        assert_eq!(DiscoverSort::parse(None).unwrap(), DiscoverSort::Newest);
+        assert_eq!(
+            DiscoverSort::parse(Some("newest")).unwrap(),
+            DiscoverSort::Newest
+        );
+        assert_eq!(
+            DiscoverSort::parse(Some("alphabetical")).unwrap(),
+            DiscoverSort::Alphabetical
+        );
+        assert_eq!(
+            DiscoverSort::parse(Some("most_members")).unwrap(),
+            DiscoverSort::MostMembers
+        );
+    }
+
+    #[test]
+    fn discover_sort_rejects_unknown_value() {
+        assert!(matches!(
+            DiscoverSort::parse(Some("trending")),
+            Err(AppError::InvalidDiscoverQuery)
+        ));
+    }
+
+    #[test]
+    fn escape_like_neutralizes_wildcard_characters() {
+        assert_eq!(escape_like("100%_evil\\"), "100\\%\\_evil\\\\");
+        assert_eq!(escape_like("normal tag"), "normal tag");
+    }
+
+    fn empty_discover_query() -> DiscoverGuildsQuery {
+        DiscoverGuildsQuery {
+            q: None,
+            recruiting: None,
+            tag: None,
+            game: None,
+            sort: None,
+            limit: None,
+            cursor: None,
+        }
+    }
+
+    /// With `recruiting` omitted, the query must fall back to "recruiting
+    /// guilds, or a guild the caller already belongs to" rather than every
+    /// guild — this is the piece of ticket #154's invariant ("non-recruiting
+    /// guilds are excluded from the general browse/search results unless
+    /// the caller is a member") that lives in query construction, so it's
+    /// asserted here at the SQL-shape level; the end-to-end behavior (a
+    /// non-recruiting guild is actually absent from a stranger's results,
+    /// exact tag/id lookup still finds it) is covered by
+    /// `crates/server/tests/guilds.rs`, gated `--ignored`.
+    #[test]
+    fn omitted_recruiting_filter_falls_back_to_recruiting_or_member() {
+        let query = empty_discover_query();
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("g.recruiting = true OR g.id IN"));
+        assert!(!sql.contains("g.recruiting = $"));
+    }
+
+    #[test]
+    fn explicit_recruiting_true_filters_exactly_and_skips_membership_fallback() {
+        let mut query = empty_discover_query();
+        query.recruiting = Some(true);
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("g.recruiting = $"));
+        assert!(!sql.contains("g.recruiting = true OR"));
+    }
+
+    #[test]
+    fn explicit_recruiting_false_is_also_an_exact_filter() {
+        let mut query = empty_discover_query();
+        query.recruiting = Some(false);
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("g.recruiting = $"));
+        assert!(!sql.contains("g.recruiting = true OR"));
+    }
+
+    #[test]
+    fn text_search_matches_name_tag_and_description() {
+        let mut query = empty_discover_query();
+        query.q = Some("dragons".to_string());
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("g.name ILIKE"));
+        assert!(sql.contains("g.tag ILIKE"));
+        assert!(sql.contains("g.description ILIKE"));
+    }
+
+    #[test]
+    fn blank_search_term_is_dropped_rather_than_matching_everything() {
+        let mut query = empty_discover_query();
+        query.q = Some("   ".to_string());
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        assert!(!builder.sql().as_str().contains("ILIKE"));
+    }
+
+    #[test]
+    fn tag_filter_is_present_only_when_given() {
+        let actor = Uuid::new_v4();
+        let without_tag =
+            build_discover_query(&empty_discover_query(), DiscoverSort::Newest, actor, 20);
+        assert!(!without_tag.sql().as_str().contains("g.tag ILIKE"));
+
+        let mut query = empty_discover_query();
+        query.tag = Some("ABC".to_string());
+        let with_tag = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        assert!(with_tag.sql().as_str().contains("g.tag ILIKE"));
+    }
+
+    #[test]
+    fn game_filter_adds_association_exists_clause() {
+        let mut query = empty_discover_query();
+        query.game = Some(Uuid::new_v4());
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        assert!(builder
+            .sql()
+            .as_str()
+            .contains("EXISTS (SELECT 1 FROM guild_game_associations"));
+    }
+
+    #[test]
+    fn sort_selects_expected_order_by_clause() {
+        let actor = Uuid::new_v4();
+        let query = empty_discover_query();
+
+        let newest = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        assert!(newest
+            .sql()
+            .as_str()
+            .contains("ORDER BY g.created_at DESC, g.id DESC"));
+
+        let alpha = build_discover_query(&query, DiscoverSort::Alphabetical, actor, 20);
+        assert!(alpha
+            .sql()
+            .as_str()
+            .contains("ORDER BY g.name ASC, g.id ASC"));
+
+        let most_members = build_discover_query(&query, DiscoverSort::MostMembers, actor, 20);
+        assert!(most_members
+            .sql()
+            .as_str()
+            .contains("ORDER BY member_count DESC, g.id DESC"));
+    }
+
+    #[test]
+    fn cursor_adds_keyset_pagination_clause_matching_the_active_sort() {
+        let mut query = empty_discover_query();
+        query.cursor = Some(Uuid::new_v4());
+        let actor = Uuid::new_v4();
+
+        let newest = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        assert!(newest
+            .sql()
+            .as_str()
+            .contains("(g.created_at, g.id) < (SELECT created_at, id FROM guilds WHERE id ="));
+
+        let alpha = build_discover_query(&query, DiscoverSort::Alphabetical, actor, 20);
+        assert!(alpha
+            .sql()
+            .as_str()
+            .contains("(g.name, g.id) > (SELECT name, id FROM guilds WHERE id ="));
+    }
+
+    #[test]
+    fn no_cursor_means_no_keyset_pagination_clause() {
+        let query = empty_discover_query();
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
+        assert!(!builder.sql().as_str().contains("WHERE id ="));
     }
 }

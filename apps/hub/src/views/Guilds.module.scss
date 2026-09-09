@@ -1,0 +1,42 @@
+/* Guilds.vue-specific styles (issue #154's Discover tab) — page.module.scss
+   still owns the shared header/grid/error/empty scaffolding. */
+.tabs {
+  display: flex;
+  gap: var(--av-space-2);
+  border-bottom: 1px solid var(--av-color-border);
+}
+
+.tab {
+  padding: var(--av-space-2) var(--av-space-3);
+  font: inherit;
+  font-weight: 600;
+  color: var(--av-color-text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tabActive {
+  color: var(--av-color-text);
+  border-bottom-color: var(--av-color-primary);
+}
+
+.discoverFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--av-space-4);
+}
+
+.recruitingToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+}
+
+.tagFilter {
+  max-width: 160px;
+}

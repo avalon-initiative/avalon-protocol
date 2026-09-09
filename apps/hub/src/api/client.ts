@@ -14,6 +14,7 @@ import type {
   CreateRoleRequest,
   DeviceGrantResponse,
   DeviceResponse,
+  DiscoverGuildsResponse,
   FriendRequestResponse,
   FriendshipResponse,
   GameBindingResponse,
@@ -242,6 +243,14 @@ export function createGuild(token: string, body: CreateGuildRequest): Promise<Gu
 
 export function getGuild(token: string, guildId: string): Promise<GuildResponse> {
   return request(`/guilds/${guildId}`, { token })
+}
+
+// GET /guilds/discover (issue #154) — a browsable/searchable listing of
+// guilds, same public-metadata visibility as getGuild above. The query
+// string is built by api/guilds.ts::buildDiscoverQueryString so that logic
+// stays testable without a fetch.
+export function discoverGuilds(token: string, queryString: string): Promise<DiscoverGuildsResponse> {
+  return request(`/guilds/discover${queryString}`, { token })
 }
 
 export function updateGuild(

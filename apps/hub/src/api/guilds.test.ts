@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildDiscoverQueryString,
   canChangeMemberRole,
   canKickMember,
   filterGuildsByNameOrTag,
@@ -362,5 +363,50 @@ describe('filterGuildsByNameOrTag', () => {
 
   it('returns no guilds when nothing matches', () => {
     expect(filterGuildsByNameOrTag(guilds, 'nope')).toEqual([])
+  })
+})
+
+describe('buildDiscoverQueryString', () => {
+  it('returns an empty string when every param is omitted', () => {
+    expect(buildDiscoverQueryString({})).toBe('')
+  })
+
+  it('includes only the params that were provided', () => {
+    expect(buildDiscoverQueryString({ q: 'dragons' })).toBe('?q=dragons')
+  })
+
+  it('omits a blank/whitespace-only q rather than sending an empty value', () => {
+    expect(buildDiscoverQueryString({ q: '   ' })).toBe('')
+  })
+
+  it('trims q and tag before encoding', () => {
+    expect(buildDiscoverQueryString({ q: '  dragons  ' })).toBe('?q=dragons')
+    expect(buildDiscoverQueryString({ tag: '  ASHV  ' })).toBe('?tag=ASHV')
+  })
+
+  it('encodes an explicit recruiting=false, distinct from omitting it', () => {
+    expect(buildDiscoverQueryString({ recruiting: false })).toBe('?recruiting=false')
+    expect(buildDiscoverQueryString({ recruiting: true })).toBe('?recruiting=true')
+    expect(buildDiscoverQueryString({})).not.toContain('recruiting')
+  })
+
+  it('combines every filter into one query string', () => {
+    const query = buildDiscoverQueryString({
+      q: 'dragons',
+      recruiting: true,
+      tag: 'ASHV',
+      game: 'game-1',
+      sort: 'alphabetical',
+      limit: 10,
+      cursor: 'guild-9',
+    })
+    const params = new URLSearchParams(query.slice(1))
+    expect(params.get('q')).toBe('dragons')
+    expect(params.get('recruiting')).toBe('true')
+    expect(params.get('tag')).toBe('ASHV')
+    expect(params.get('game')).toBe('game-1')
+    expect(params.get('sort')).toBe('alphabetical')
+    expect(params.get('limit')).toBe('10')
+    expect(params.get('cursor')).toBe('guild-9')
   })
 })

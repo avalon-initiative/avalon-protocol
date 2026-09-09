@@ -38,6 +38,16 @@
   flex-shrink: 0;
 }
 
+.recruitingBadge {
+  font-size: var(--av-text-xs);
+  font-weight: 600;
+  color: var(--av-color-success);
+  background: var(--av-color-success-soft);
+  border-radius: var(--av-radius-pill);
+  padding: 0.125rem 0.5rem;
+  flex-shrink: 0;
+}
+
 .description {
   font-size: var(--av-text-sm);
   color: var(--av-color-text-secondary);

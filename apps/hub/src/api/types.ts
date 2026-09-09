@@ -245,6 +245,39 @@ export interface GuildInviteResponse {
   created_at: string
 }
 
+// Issue #154's discovery board — a distinct, narrower shape than
+// GuildResponse (no `owner`/`games`/`join_policy`, matching
+// crates/server/src/guilds.rs::DiscoverGuildSummary field-for-field), since
+// a browse listing has no reason to fetch anything the card doesn't show.
+export interface DiscoverGuildSummary {
+  id: string
+  name: string
+  tag: string
+  description: string
+  recruiting: boolean
+  member_count: number
+  created_at: string
+}
+
+export interface DiscoverGuildsResponse {
+  guilds: DiscoverGuildSummary[]
+  // Present (non-null) only when another page exists — pass back as
+  // `cursor=` to fetch it.
+  next_cursor: string | null
+}
+
+// Query params for GET /guilds/discover — all optional, mirrors
+// crates/server/src/guilds.rs::DiscoverGuildsQuery.
+export interface DiscoverGuildsParams {
+  q?: string
+  recruiting?: boolean
+  tag?: string
+  game?: string
+  sort?: 'newest' | 'alphabetical' | 'most_members'
+  limit?: number
+  cursor?: string
+}
+
 export interface MyGuildMembershipResponse {
   guild_id: string
   role_index: number

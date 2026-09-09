@@ -751,3 +751,249 @@ async fn invalid_guild_metadata_is_rejected() {
         .unwrap();
     assert_eq!(bad_links.status(), reqwest::StatusCode::BAD_REQUEST);
 }
+
+// -- Issue #154: `GET /guilds/discover` --
+
+async fn create_guild(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    name_hint: &str,
+) -> serde_json::Value {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let body = serde_json::json!({
+        "name": format!("{name_hint} {}", &suffix[..8]),
+        "tag": suffix[..4].to_uppercase(),
+        "description": format!("a discover-test guild ({name_hint})"),
+    });
+    let create = auth(http.post(format!("{base}/guilds")), token)
+        .json(&body)
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    assert!(create.status().is_success(), "{:?}", create.status());
+    create.json().await.unwrap()
+}
+
+async fn set_recruiting(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    guild_id: &str,
+    recruiting: bool,
+) {
+    let patch = auth(http.patch(format!("{base}/guilds/{guild_id}")), token)
+        .json(&serde_json::json!({ "recruiting": recruiting }))
+        .send()
+        .await
+        .unwrap();
+    assert!(patch.status().is_success(), "{:?}", patch.status());
+}
+
+/// Ticket #154 acceptance criteria: a recruiting guild is discoverable by a
+/// non-member; a non-recruiting guild is excluded from the general browse
+/// (`recruiting=` omitted) results for a caller who isn't a member of it,
+/// while exact `GET /guilds/{id}` lookup still finds it unchanged.
+#[tokio::test]
+#[ignore]
+async fn recruiting_filter_excludes_non_recruiting_guilds_from_general_browse() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_stranger_id, stranger_token) = seed_identity_session(&pool).await;
+
+    let recruiting_guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let recruiting_id = recruiting_guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, recruiting_id, true).await;
+
+    let closed_guild = create_guild(&http, &base, &owner_token, "Closed Guild").await;
+    let closed_id = closed_guild["id"].as_str().unwrap();
+    // `recruiting` defaults to `false` — no PATCH needed to leave it closed.
+
+    // A stranger's default browse (no `recruiting=` filter) sees the
+    // recruiting guild but not the closed one.
+    let browse: serde_json::Value =
+        auth(http.get(format!("{base}/guilds/discover")), &stranger_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let ids: Vec<&str> = browse["guilds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&recruiting_id));
+    assert!(!ids.contains(&closed_id));
+
+    // Exact id lookup still finds the closed guild, unchanged.
+    let direct = auth(
+        http.get(format!("{base}/guilds/{closed_id}")),
+        &stranger_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(direct.status().is_success());
+
+    // `recruiting=false` is an explicit filter, so it surfaces the closed
+    // guild (and excludes the recruiting one).
+    let closed_browse: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/discover?recruiting=false")),
+        &stranger_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let closed_ids: Vec<&str> = closed_browse["guilds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert!(closed_ids.contains(&closed_id));
+    assert!(!closed_ids.contains(&recruiting_id));
+}
+
+/// A member of a non-recruiting guild still sees it in their own default
+/// (no `recruiting=`) browse results — only strangers lose visibility.
+#[tokio::test]
+#[ignore]
+async fn a_member_still_sees_their_own_non_recruiting_guild_in_default_browse() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let closed_guild = create_guild(&http, &base, &owner_token, "Own Closed Guild").await;
+    let closed_id = closed_guild["id"].as_str().unwrap();
+
+    let browse: serde_json::Value = auth(http.get(format!("{base}/guilds/discover")), &owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = browse["guilds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&closed_id));
+}
+
+/// Free-text `q=` matches name/tag substrings case-insensitively.
+#[tokio::test]
+#[ignore]
+async fn search_matches_name_and_tag_substrings_case_insensitively() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let suffix = Uuid::new_v4().simple().to_string();
+    let unique_word = format!("Zephyrion{}", &suffix[..6]);
+    let body = serde_json::json!({
+        "name": format!("{unique_word} Vanguard"),
+        "tag": suffix[..4].to_uppercase(),
+        "description": "a discover-test guild",
+    });
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert!(create.status().is_success());
+    let guild: serde_json::Value = create.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    let lowercase_query = unique_word.to_lowercase();
+    let search: serde_json::Value = auth(
+        http.get(format!(
+            "{base}/guilds/discover?q={lowercase_query}&recruiting=true"
+        )),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let ids: Vec<&str> = search["guilds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&guild_id));
+}
+
+/// Cursor pagination doesn't skip or duplicate rows across pages.
+#[tokio::test]
+#[ignore]
+async fn pagination_does_not_skip_or_duplicate_rows_across_pages() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+
+    let mut created_ids = Vec::new();
+    for _ in 0..5 {
+        let guild = create_guild(&http, &base, &owner_token, "Paged Guild").await;
+        let id = guild["id"].as_str().unwrap().to_string();
+        set_recruiting(&http, &base, &owner_token, &id, true).await;
+        created_ids.push(id);
+    }
+
+    let mut seen: Vec<String> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let url = match &cursor {
+            Some(c) => format!("{base}/guilds/discover?recruiting=true&limit=2&cursor={c}"),
+            None => format!("{base}/guilds/discover?recruiting=true&limit=2"),
+        };
+        let page: serde_json::Value = auth(http.get(url), &owner_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let page_ids: Vec<String> = page["guilds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["id"].as_str().unwrap().to_string())
+            .collect();
+        for id in &page_ids {
+            assert!(
+                !seen.contains(id),
+                "guild {id} appeared on more than one page"
+            );
+        }
+        seen.extend(page_ids);
+
+        cursor = page["next_cursor"].as_str().map(|s| s.to_string());
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    for id in &created_ids {
+        assert!(
+            seen.contains(id),
+            "guild {id} never appeared across any page"
+        );
+    }
+}
