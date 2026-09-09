@@ -1,22 +1,21 @@
 # Avalon Protocol
 
-**Status:** early. The Rust workspace (`protocol`, `chain`, `indexer`, `server`,
-`sdk`, `cli`), the web/mobile Hub apps, and the C# SDK skeleton all exist and
-build. Identity and auth work end to end against a live Postgres: an identity
-is a self-custodied keypair, not a password — a WebAuthn passkey for login and
-a separate Ed25519 key that signs the events an identity authors, so a hosted
-node can't fabricate one (`make create-identity`, the Rust SDK's
-`authenticate()`). Every identity creation lands in a hash-chained ledger,
-atomically with the identity itself via an outbox, inspectable with
-`make inspect-ledger` / `make outbox-status`. Social, guilds, achievements,
-permissions, the indexer, and the Hub UIs are still scaffolding. See [`docs/stakeholders/Proposal.md`](docs/stakeholders/Proposal.md)
-for the full design, [`docs/architecture/`](docs/architecture/README.md) for the
-normative architecture and its invariants, and
-[`docs/WhyAvalon.md`](docs/WhyAvalon.md) for the case for why this needs to exist.
-
 Avalon Protocol is an open, Rust-based interoperability layer for independent games:
 one persistent player identity, one social graph, that a player carries between
 games that would otherwise treat every login as a stranger.
+
+Every major platform already solved this for the web: sign in once, and that
+identity carries weight across dozens of unrelated apps — the browser or
+platform vouches for who you are everywhere you go, so nobody has to rebuild
+their identity from scratch at every login screen. Gaming never got this. Your
+online presence — who your friends are, what community you're part of, the
+journey you've built — tends to be the same person across every game you
+play, yet today it resets to zero at each one, trapped in whichever studio's
+database happens to run that particular title. There's no reason a friendship
+or a guild built in a shooter should be invisible the moment you log into a
+survival game instead. Avalon is that missing layer for games: the same
+identity, friends, and history carried with you from one game to the next —
+owned by the player, not any single game.
 
 > **Games are experiences. Your identity, friends, guilds, achievements, and
 > history belong to you.**
@@ -43,6 +42,21 @@ infrastructure between games, not a platform that owns them.
 - **Settlement is a public transparency log, not federation or blockchain consensus.** Milestone 1 is a signed, append-only ledger. Long-term, durable facts are independently verifiable and mirrorable by anyone — not gated behind servers whitelisting each other, and not requiring mining/consensus to referee a scarcity problem Avalon doesn't have — see [ADR: Attestations Before Blockchain](https://github.com/LunarVagabond/avalon-protocol/issues/68) and [ADR: Settlement Is a Public Transparency Log](https://github.com/LunarVagabond/avalon-protocol/issues/70).
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination.
+
+## Closing the gap
+
+Tools already exist that solve part of this problem, each in its own way.
+Discord is the clearest example: one identity, one friends list, presence and
+communities that already span every game you play — proof the demand this
+README opens with is real, not hypothetical. What none of them give you is
+anything a game can actually build on: there's no achievement a game can
+issue and another can independently verify, no way for a game to trust a
+claim made outside its own database, and no social graph a player actually
+owns in a portable sense — it belongs to whichever platform happens to be
+hosting it. Avalon Protocol closes that gap. It isn't a competitor to
+Discord, Slack, or anything like them — it's the open identity and social
+layer underneath, that any of them could plug into as a client, the same way
+a game or the Hub app can.
 
 ## Repository structure
 
