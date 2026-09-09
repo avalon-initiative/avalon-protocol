@@ -32,8 +32,10 @@ profile data.
 ## Player-controlled metadata is self-expression, not fact
 
 The profile carries what a player chooses to say about themselves: display
-name, avatar, and later bio, preferred title, self-described labels, and
-interests. None of it is an authoritative game fact.
+name, avatar, bio, favorite genres (drawn from a fixed, small vocabulary —
+`avalon_protocol::identity::Genre` — not free text, so it stays useful for
+matching/filtering later), and pronouns (issue #155). None of it is an
+authoritative game fact.
 
 A player writing "I am an Avion" in their bio does not make Avion a
 network-level race. A game can display that, interpret it, or ignore it. Facts
@@ -57,7 +59,10 @@ work as the projection change. For identity state:
 | `display_name` | yes | `identity.created` (initial), `profile.updated` (changes) | emitted in the same transaction as the `profiles` row, via the outbox |
 | handle discriminator | yes | `identity.created` (initial), `profile.updated` (on rename) | server-chosen, so it's carried in the event — a rebuild must land on the same `name#1234` |
 | `avatar_url` | yes | `profile.updated` | `null` in the payload means explicitly cleared; absent means untouched |
-| future bio / title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
+| `bio` | yes | `profile.updated` | free text, capped at 500 characters; `null` means explicitly cleared, absent means untouched (#155) |
+| `favorite_genres` | yes | `profile.updated` | fixed, small controlled vocabulary (`Genre`), capped at 5 entries; unknown values rejected, not dropped; a present key always fully replaces the list, including to `[]` (#155) |
+| `pronouns` | yes | `profile.updated` | free text, capped at 40 characters; `null` means explicitly cleared, absent means untouched (#155) |
+| future title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
 | WebAuthn passkey(s) | operational state, not an event | — | `identity_keys` table; see below |
 | event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
 | credentials (password hash) | **no**, pruned entirely | — | #73, done |
@@ -161,7 +166,9 @@ provider the player uses.
 ## Today in the repo
 
 - `crates/protocol/src/identity.rs` — `Identity { id, created_at }` and
-  `Profile { identity_id, display_name, avatar_url }`. No reference to any
+  `Profile { identity_id, display_name, avatar_url, bio, favorite_genres,
+  pronouns }` (the last three added by #155), plus the `Genre` enum
+  `favorite_genres` draws its fixed vocabulary from. No reference to any
   character schema, and no reference to WebAuthn/Ed25519 either — those stay
   server-side implementation detail, by design.
 - `crates/protocol/src/ids.rs` — `IdentityId(Uuid)`.
@@ -170,12 +177,14 @@ provider the player uses.
   against Postgres. `register_finish` verifies both the WebAuthn ceremony and
   the Ed25519 event signature before writing anything, and enqueues
   `identity.created` into the outbox in the same transaction as the
-  identity/profile/key rows (#71, done for this path). `update_profile` still
-  emits nothing (#86). `list_profiles` (`GET /identities/profiles?ids=…`,
-  issue #161) resolves *other* identities' public profile fields
-  (`display_name`, `discriminator`, `avatar_url`) in a batch — the gap every
-  roster surface (friends, guild members) previously had to leave as a raw
-  identity id.
+  identity/profile/key rows (#71, done for this path). `update_profile`
+  emits `profile.updated` (#86) whenever a promised-durable field changes,
+  now including `bio`/`favorite_genres`/`pronouns` (#155). `list_profiles`
+  (`GET /identities/profiles?ids=…`, issue #161) resolves *other*
+  identities' public profile fields (`display_name`, `discriminator`,
+  `avatar_url`, `bio`, `favorite_genres`, `pronouns`) in a batch — the gap
+  every roster surface (friends, guild members) previously had to leave as a
+  raw identity id.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never

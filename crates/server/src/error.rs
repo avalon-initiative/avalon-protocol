@@ -41,6 +41,14 @@ pub enum AppError {
     HandleGenerationFailed,
     #[error("avatar_url must be an http(s) URL of 2048 characters or fewer")]
     InvalidAvatarUrl,
+    #[error("bio must be 500 characters or fewer")]
+    InvalidBio,
+    #[error("pronouns must be 40 characters or fewer")]
+    InvalidPronouns,
+    #[error("favorite_genres contains a value outside the fixed genre vocabulary")]
+    InvalidGenre,
+    #[error("favorite_genres may contain at most 5 entries")]
+    TooManyFavoriteGenres,
     #[error("cannot block yourself")]
     SelfBlock,
     #[error("already blocked")]
@@ -159,7 +167,11 @@ impl IntoResponse for AppError {
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
             AppError::HandleGenerationFailed => StatusCode::CONFLICT,
-            AppError::InvalidAvatarUrl => StatusCode::BAD_REQUEST,
+            AppError::InvalidAvatarUrl
+            | AppError::InvalidBio
+            | AppError::InvalidPronouns
+            | AppError::InvalidGenre
+            | AppError::TooManyFavoriteGenres => StatusCode::BAD_REQUEST,
             AppError::SelfBlock => StatusCode::BAD_REQUEST,
             AppError::AlreadyBlocked => StatusCode::CONFLICT,
             AppError::BlockNotFound => StatusCode::NOT_FOUND,

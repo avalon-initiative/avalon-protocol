@@ -107,7 +107,7 @@ milestone-1 stand-in until actor signatures exist.
 | `identity.created` | identity → identity | identity id | identities | identity's Ed25519 event-signing key (#73, done) |
 | `identity.signing_key_added` | identity → identity | new signing key id/public key, device label, approving key id | identity signing keys | the approving device's key (#135, done) |
 | `identity.signing_key_revoked` | identity → identity | revoked signing key id | identity signing keys | network (milestone-1 stand-in, #135, done) |
-| `profile.updated` | identity → identity | changed promised-durable fields | profiles | identity key |
+| `profile.updated` | identity → identity | changed promised-durable fields (`display_name`, `discriminator`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`) | profiles | identity key |
 | `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
 | `game.binding_established` | identity → game | identity, game | bindings, registry players | identity key |
 | `game.binding_ended` | identity → game | binding ref | bindings | identity key |
@@ -181,13 +181,18 @@ the record — [`./revocation.md`](./revocation.md).
   of the WebAuthn ceremony that authenticated the registration request — with
   a payload of `identity_id`, the initial `display_name`, and the handle
   `discriminator` (no `username` field exists anywhere; #73). `update_profile`
-  emits `profile.updated` (#86) whenever `display_name` or `avatar_url`
-  actually changes, with a payload of only the changed fields (plus the
-  discriminator on a rename, since a rebuild has to reproduce the handle);
-  a no-op request emits nothing. Network-attributed, not identity-signed —
-  the same milestone-1 stand-in the social-graph events use. Both are
-  enqueued into `protocol_outbox` (`crates/server/src/outbox.rs`) in the
-  same transaction as the row they describe.
+  emits `profile.updated` (#86, widened by #155) whenever `display_name`,
+  `avatar_url`, `bio`, `favorite_genres`, or `pronouns` actually changes,
+  with a payload of only the changed fields (plus the discriminator on a
+  rename, since a rebuild has to reproduce the handle); a no-op request
+  emits nothing. `avatar_url`/`bio`/`pronouns` each use `null` in the
+  payload for an explicit clear vs. an absent key for untouched;
+  `favorite_genres` has no separate clear state — a present key is always
+  the field's new, complete value (as genre-vocabulary strings, e.g.
+  `["rpg", "puzzle"]`), including `[]` to clear it. Network-attributed, not
+  identity-signed — the same milestone-1 stand-in the social-graph events
+  use. Both are enqueued into `protocol_outbox` (`crates/server/src/outbox.rs`)
+  in the same transaction as the row they describe.
 - A second emitter: `crates/server/src/friends.rs` writes `friend.requested`,
   `friend.accepted`, and `friend.removed`, each enqueued into
   `protocol_outbox` in the same transaction as the `friendships`/

@@ -53,6 +53,9 @@ struct MeResponse {
     identity_created_at: time::OffsetDateTime,
     display_name: String,
     avatar_url: Option<String>,
+    bio: Option<String>,
+    favorite_genres: Vec<avalon_protocol::identity::Genre>,
+    pronouns: Option<String>,
 }
 
 impl AvalonClient {
@@ -99,6 +102,9 @@ impl AvalonClient {
                 identity_id: IdentityId(body.identity_id),
                 display_name: body.display_name,
                 avatar_url: body.avatar_url,
+                bio: body.bio,
+                favorite_genres: body.favorite_genres,
+                pronouns: body.pronouns,
             },
             granted,
             http: self.http.clone(),

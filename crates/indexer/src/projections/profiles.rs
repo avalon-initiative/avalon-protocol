@@ -23,15 +23,21 @@ use crate::IndexError;
 /// means "leave whatever's already stored alone" — `profile.updated` only
 /// ever carries the fields a request actually changed (see
 /// `handlers::profile_updated_payload`), so a full row isn't always
-/// available to decode. `avatar_url: Some(None)` is the one field with a
-/// third state: explicitly cleared, distinct from both "leave alone" and
-/// "set to a value."
+/// available to decode. `avatar_url`/`bio`/`pronouns`: `Some(None)` is the
+/// third state — explicitly cleared, distinct from both "leave alone" and
+/// "set to a value." `favorite_genres` has only two states (issue #155): a
+/// present key always fully replaces the list (including to empty), since
+/// there's no meaningful "clear to null" distinct from "clear to empty" for
+/// a list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileWrite {
     pub identity_id: Uuid,
     pub display_name: Option<String>,
     pub discriminator: Option<String>,
     pub avatar_url: Option<Option<String>>,
+    pub bio: Option<Option<String>>,
+    pub favorite_genres: Option<Vec<String>>,
+    pub pronouns: Option<Option<String>>,
 }
 
 /// The identity id embedded in an `identity:<id>:self:<verb>`-shaped
@@ -59,6 +65,9 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 display_name: Some(display_name),
                 discriminator: Some(discriminator),
                 avatar_url: None,
+                bio: None,
+                favorite_genres: None,
+                pronouns: None,
             })
         }
         "profile.updated" => {
@@ -80,11 +89,33 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 .payload
                 .get("avatar_url")
                 .map(|v| v.as_str().map(str::to_string));
+            let bio = event
+                .payload
+                .get("bio")
+                .map(|v| v.as_str().map(str::to_string));
+            let pronouns = event
+                .payload
+                .get("pronouns")
+                .map(|v| v.as_str().map(str::to_string));
+            // `favorite_genres` always fully replaces when present — no
+            // per-entry clear state, see `ProfileWrite`'s doc comment.
+            let favorite_genres = event.payload.get("favorite_genres").map(|v| {
+                v.as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|g| g.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
             Some(ProfileWrite {
                 identity_id,
                 display_name,
                 discriminator,
                 avatar_url,
+                bio,
+                favorite_genres,
+                pronouns,
             })
         }
         _ => None,
@@ -97,15 +128,32 @@ pub async fn apply(
 ) -> Result<(), IndexError> {
     let avatar_url_provided = write.avatar_url.is_some();
     let avatar_url = write.avatar_url.clone().flatten();
+    let bio_provided = write.bio.is_some();
+    let bio = write.bio.clone().flatten();
+    let pronouns_provided = write.pronouns.is_some();
+    let pronouns = write.pronouns.clone().flatten();
+    let genres_provided = write.favorite_genres.is_some();
+    let favorite_genres = write.favorite_genres.clone().unwrap_or_default();
 
     sqlx::query(
         r#"
-        INSERT INTO profiles (identity_id, display_name, discriminator, avatar_url)
-        VALUES ($1, $2, $3, CASE WHEN $5 THEN $4 ELSE NULL END)
+        INSERT INTO profiles (
+            identity_id, display_name, discriminator, avatar_url,
+            bio, favorite_genres, pronouns
+        )
+        VALUES (
+            $1, $2, $3, CASE WHEN $5 THEN $4 ELSE NULL END,
+            CASE WHEN $7 THEN $6 ELSE NULL END,
+            CASE WHEN $9 THEN $8 ELSE '{}' END,
+            CASE WHEN $11 THEN $10 ELSE NULL END
+        )
         ON CONFLICT (identity_id) DO UPDATE SET
             display_name = COALESCE(EXCLUDED.display_name, profiles.display_name),
             discriminator = COALESCE(EXCLUDED.discriminator, profiles.discriminator),
-            avatar_url = CASE WHEN $5 THEN EXCLUDED.avatar_url ELSE profiles.avatar_url END
+            avatar_url = CASE WHEN $5 THEN EXCLUDED.avatar_url ELSE profiles.avatar_url END,
+            bio = CASE WHEN $7 THEN EXCLUDED.bio ELSE profiles.bio END,
+            favorite_genres = CASE WHEN $9 THEN EXCLUDED.favorite_genres ELSE profiles.favorite_genres END,
+            pronouns = CASE WHEN $11 THEN EXCLUDED.pronouns ELSE profiles.pronouns END
         "#,
     )
     .bind(write.identity_id)
@@ -113,6 +161,12 @@ pub async fn apply(
     .bind(&write.discriminator)
     .bind(&avatar_url)
     .bind(avatar_url_provided)
+    .bind(&bio)
+    .bind(bio_provided)
+    .bind(&favorite_genres)
+    .bind(genres_provided)
+    .bind(&pronouns)
+    .bind(pronouns_provided)
     .execute(&mut **tx)
     .await?;
 
@@ -223,6 +277,61 @@ mod tests {
     fn identity_id_from_global_id_rejects_a_non_identity_namespace() {
         let global_id = GlobalId::new("guild", &Uuid::new_v4().to_string(), "self", "created");
         assert_eq!(identity_id_from_global_id(&global_id), None);
+    }
+
+    #[test]
+    fn decodes_a_cleared_bio() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(identity_id, serde_json::json!({ "bio": null }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.bio, Some(None));
+    }
+
+    #[test]
+    fn decodes_a_set_bio() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hello there" }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.bio, Some(Some("hello there".to_string())));
+    }
+
+    #[test]
+    fn decodes_favorite_genres_as_a_full_replace() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(
+            identity_id,
+            serde_json::json!({ "favorite_genres": ["rpg", "puzzle"] }),
+        );
+        let write = decode(&event).unwrap();
+        assert_eq!(
+            write.favorite_genres,
+            Some(vec!["rpg".to_string(), "puzzle".to_string()])
+        );
+    }
+
+    #[test]
+    fn decodes_favorite_genres_cleared_to_empty() {
+        let identity_id = Uuid::new_v4();
+        let event =
+            profile_updated_event(identity_id, serde_json::json!({ "favorite_genres": [] }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.favorite_genres, Some(Vec::new()));
+    }
+
+    #[test]
+    fn untouched_favorite_genres_decodes_to_none() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hi" }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.favorite_genres, None);
+    }
+
+    #[test]
+    fn decodes_a_cleared_pronouns() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(identity_id, serde_json::json!({ "pronouns": null }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.pronouns, Some(None));
     }
 
     #[test]

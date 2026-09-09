@@ -16,6 +16,7 @@
 //! database on every machine that so much as runs `cargo check`.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::identity::{Genre, MAX_BIO_LEN, MAX_FAVORITE_GENRES, MAX_PRONOUNS_LEN};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -506,6 +507,14 @@ pub struct ProfileResponse {
     /// stored: always computed from the two columns so it can never drift
     /// out of sync with a display-name change.
     pub handle: String,
+    /// Small, player-optional self-description fields (issue #155) — same
+    /// promised-durable tier and same public exposure level as
+    /// `display_name`/`avatar_url` above (no capability gate, no game ever
+    /// sees more of it than `GET /me`/`GET /identities/profiles` already
+    /// expose).
+    pub bio: Option<String>,
+    pub favorite_genres: Vec<Genre>,
+    pub pronouns: Option<String>,
 }
 
 fn profile_row_to_response(
@@ -514,12 +523,23 @@ fn profile_row_to_response(
 ) -> Result<ProfileResponse, AppError> {
     let display_name: String = row.try_get("display_name")?;
     let discriminator: String = row.try_get("discriminator")?;
+    let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
     Ok(ProfileResponse {
         identity_id,
         identity_created_at: row.try_get("created_at")?,
         handle: format!("{display_name}#{discriminator}"),
         display_name,
         avatar_url: row.try_get("avatar_url")?,
+        bio: row.try_get("bio")?,
+        // Stored genre strings are already server-validated at write time
+        // (`validate_favorite_genres`), so an unparseable value here would
+        // mean data corruption, not a client error — dropped rather than
+        // failing the whole read.
+        favorite_genres: favorite_genres
+            .iter()
+            .filter_map(|g| Genre::parse(g))
+            .collect(),
+        pronouns: row.try_get("pronouns")?,
     })
 }
 
@@ -531,7 +551,8 @@ pub async fn me(
 
     let row = sqlx::query(
         r#"
-        SELECT p.display_name, p.discriminator, p.avatar_url, i.created_at
+        SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
+               p.favorite_genres, p.pronouns, i.created_at
         FROM profiles p
         JOIN identities i ON i.id = p.identity_id
         WHERE p.identity_id = $1
@@ -555,16 +576,22 @@ pub struct ProfilesQuery {
 
 /// Another identity's *public* profile fields only — never anything a
 /// stranger couldn't already learn via `friends::resolve_handle`'s
-/// name-to-id lookup run in reverse. No bio, no email, nothing beyond what
+/// name-to-id lookup run in reverse. No email, nothing beyond what
 /// `ProfileResponse` already exposes for one's own profile minus the
 /// derived `handle` (a caller who wants that can build it client-side from
 /// `display_name`/`discriminator`, same as `profile_row_to_response` does).
+/// `bio`/`favorite_genres`/`pronouns` (#155) are included at the same
+/// exposure level as `display_name`/`avatar_url` — self-disclosed public
+/// profile data, not a capability-gated surface.
 #[derive(Serialize)]
 pub struct PublicProfileResponse {
     pub identity_id: Uuid,
     pub display_name: String,
     pub discriminator: String,
     pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub favorite_genres: Vec<Genre>,
+    pub pronouns: Option<String>,
 }
 
 /// `GET /identities/profiles?ids=…` — issue #161. Closes the gap every
@@ -600,7 +627,8 @@ pub async fn list_profiles(
     }
 
     let rows = sqlx::query(
-        "SELECT identity_id, display_name, discriminator, avatar_url FROM profiles WHERE identity_id = ANY($1)",
+        "SELECT identity_id, display_name, discriminator, avatar_url, bio, favorite_genres, pronouns \
+         FROM profiles WHERE identity_id = ANY($1)",
     )
     .bind(&ids)
     .fetch_all(&state.pool)
@@ -608,11 +636,18 @@ pub async fn list_profiles(
 
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
+        let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
         profiles.push(PublicProfileResponse {
             identity_id: row.try_get("identity_id")?,
             display_name: row.try_get("display_name")?,
             discriminator: row.try_get("discriminator")?,
             avatar_url: row.try_get("avatar_url")?,
+            bio: row.try_get("bio")?,
+            favorite_genres: favorite_genres
+                .iter()
+                .filter_map(|g| Genre::parse(g))
+                .collect(),
+            pronouns: row.try_get("pronouns")?,
         });
     }
     Ok(Json(profiles))
@@ -674,6 +709,17 @@ pub async fn my_history(
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
+    /// Three states, same as `avatar_url`: omitted (untouched), `Some("")`
+    /// (clear to `NULL`), `Some(nonempty)` (validate against
+    /// [`MAX_BIO_LEN`], then set).
+    pub bio: Option<String>,
+    /// Two states, not three: omitted (untouched) or `Some(list)`, which
+    /// always fully replaces the stored list — including `Some(vec![])` to
+    /// clear it. Each entry must parse as a [`Genre`]; an unknown value is
+    /// rejected outright rather than silently dropped (issue #155).
+    pub favorite_genres: Option<Vec<String>>,
+    /// Three states, same as `bio`.
+    pub pronouns: Option<String>,
 }
 
 /// Nothing renders `avatar_url` as an actual image anywhere in the Hub
@@ -705,6 +751,52 @@ fn validate_avatar_url(avatar_url: &str) -> Result<Option<String>, AppError> {
         return Err(AppError::InvalidAvatarUrl);
     }
     Ok(Some(avatar_url.to_string()))
+}
+
+/// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
+/// non-empty value must be within [`MAX_BIO_LEN`] characters or the request
+/// is rejected — never silently truncated.
+fn validate_bio(bio: &str) -> Result<Option<String>, AppError> {
+    if bio.is_empty() {
+        return Ok(None);
+    }
+    if bio.chars().count() > MAX_BIO_LEN {
+        return Err(AppError::InvalidBio);
+    }
+    Ok(Some(bio.to_string()))
+}
+
+/// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
+/// non-empty value must be within [`MAX_PRONOUNS_LEN`] characters or the
+/// request is rejected — never silently truncated.
+fn validate_pronouns(pronouns: &str) -> Result<Option<String>, AppError> {
+    if pronouns.is_empty() {
+        return Ok(None);
+    }
+    if pronouns.chars().count() > MAX_PRONOUNS_LEN {
+        return Err(AppError::InvalidPronouns);
+    }
+    Ok(Some(pronouns.to_string()))
+}
+
+/// `favorite_genres` is a fixed, small controlled vocabulary, not free text
+/// (issue #155) — an unknown value is rejected outright, not silently
+/// dropped, the same reasoning `GuildPermission` parsing already
+/// established: a bad value here is more likely a real client bug than a
+/// schema drift. Also enforces the [`MAX_FAVORITE_GENRES`] count cap and
+/// de-duplicates (a repeated genre isn't an error, just collapsed).
+fn validate_favorite_genres(genres: &[String]) -> Result<Vec<Genre>, AppError> {
+    if genres.len() > MAX_FAVORITE_GENRES {
+        return Err(AppError::TooManyFavoriteGenres);
+    }
+    let mut parsed = Vec::with_capacity(genres.len());
+    for raw in genres {
+        let genre = Genre::parse(raw).ok_or(AppError::InvalidGenre)?;
+        if !parsed.contains(&genre) {
+            parsed.push(genre);
+        }
+    }
+    Ok(parsed)
 }
 
 /// A display-name change can collide with someone else's existing handle
@@ -740,16 +832,22 @@ async fn discriminator_for_rename(
     }
 }
 
-/// The payload `profile.updated` carries (#86): only the fields this request
-/// actually changed. `discriminator` rides along with a display-name change
-/// because a rebuild of `profiles` from history (#43) has to land on the
-/// same handle, and the discriminator is server-chosen, not derivable from
-/// the name. An explicitly cleared avatar is `null`; an untouched one is
-/// absent — the same three-state distinction `update_profile` itself makes.
+/// The payload `profile.updated` carries (#86, widened by #155): only the
+/// fields this request actually changed. `discriminator` rides along with a
+/// display-name change because a rebuild of `profiles` from history (#43)
+/// has to land on the same handle, and the discriminator is server-chosen,
+/// not derivable from the name. An explicitly cleared `avatar_url`/`bio`/
+/// `pronouns` is `null`; an untouched one is absent — the same three-state
+/// distinction `update_profile` itself makes. `favorite_genres` has only two
+/// states: absent (untouched) or present (the new, complete list, including
+/// `[]` to clear it).
 fn profile_updated_payload(
     display_name: Option<&str>,
     discriminator: Option<&str>,
     avatar_url: Option<Option<&str>>,
+    bio: Option<Option<&str>>,
+    favorite_genres: Option<&[Genre]>,
+    pronouns: Option<Option<&str>>,
 ) -> serde_json::Value {
     let mut payload = serde_json::Map::new();
     if let Some(name) = display_name {
@@ -762,6 +860,24 @@ fn profile_updated_payload(
         payload.insert(
             "avatar_url".into(),
             avatar_url.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(bio) = bio {
+        payload.insert(
+            "bio".into(),
+            bio.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(genres) = favorite_genres {
+        payload.insert(
+            "favorite_genres".into(),
+            genres.iter().map(Genre::as_str).collect::<Vec<_>>().into(),
+        );
+    }
+    if let Some(pronouns) = pronouns {
+        payload.insert(
+            "pronouns".into(),
+            pronouns.map_or(serde_json::Value::Null, Into::into),
         );
     }
     serde_json::Value::Object(payload)
@@ -791,36 +907,64 @@ pub async fn update_profile(
         None => None,
     };
 
-    // `display_name` and `avatar_url` are promised-durable (ADR #75, the
-    // table in docs/architecture/identity.md), so a change to either emits
-    // `profile.updated` in the same transaction as the row — through the
-    // outbox, exactly like `register_finish`. A request that changes nothing
-    // emits nothing. Network-attributed rather than signed by the identity's
-    // own key: the same milestone-1 stand-in `friends.rs` uses, since no
-    // general per-event signing ceremony exists yet.
-    let event = (body.display_name.is_some() || avatar_url_provided).then(|| ProtocolEvent {
-        id: Uuid::new_v4(),
-        kind: "profile.updated".to_string(),
-        issuer: GlobalId::new(
-            "identity",
-            &identity_id.to_string(),
-            "self",
-            "profile_updated",
-        ),
-        subject: GlobalId::new(
-            "identity",
-            &identity_id.to_string(),
-            "self",
-            "profile_updated",
-        ),
-        payload: profile_updated_payload(
-            body.display_name.as_deref(),
-            discriminator.as_deref(),
-            avatar_url_provided.then_some(avatar_url.as_deref()),
-        ),
-        timestamp: OffsetDateTime::now_utc(),
-        version: 1,
-    });
+    let bio_provided = body.bio.is_some();
+    let bio = match &body.bio {
+        Some(raw) => validate_bio(raw)?,
+        None => None,
+    };
+
+    let pronouns_provided = body.pronouns.is_some();
+    let pronouns = match &body.pronouns {
+        Some(raw) => validate_pronouns(raw)?,
+        None => None,
+    };
+
+    let favorite_genres_provided = body.favorite_genres.is_some();
+    let favorite_genres = match &body.favorite_genres {
+        Some(raw) => validate_favorite_genres(raw)?,
+        None => Vec::new(),
+    };
+
+    // `display_name`, `avatar_url`, `bio`, `favorite_genres`, and `pronouns`
+    // are all promised-durable (ADR #75, the table in
+    // docs/architecture/identity.md; #155 widened the set), so a change to
+    // any of them emits `profile.updated` in the same transaction as the
+    // row — through the outbox, exactly like `register_finish`. A request
+    // that changes nothing emits nothing. Network-attributed rather than
+    // signed by the identity's own key: the same milestone-1 stand-in
+    // `friends.rs` uses, since no general per-event signing ceremony exists
+    // yet.
+    let event = (body.display_name.is_some()
+        || avatar_url_provided
+        || bio_provided
+        || favorite_genres_provided
+        || pronouns_provided)
+        .then(|| ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "profile.updated".to_string(),
+            issuer: GlobalId::new(
+                "identity",
+                &identity_id.to_string(),
+                "self",
+                "profile_updated",
+            ),
+            subject: GlobalId::new(
+                "identity",
+                &identity_id.to_string(),
+                "self",
+                "profile_updated",
+            ),
+            payload: profile_updated_payload(
+                body.display_name.as_deref(),
+                discriminator.as_deref(),
+                avatar_url_provided.then_some(avatar_url.as_deref()),
+                bio_provided.then_some(bio.as_deref()),
+                favorite_genres_provided.then_some(favorite_genres.as_slice()),
+                pronouns_provided.then_some(pronouns.as_deref()),
+            ),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+        });
 
     let mut tx = state.pool.begin().await?;
 
@@ -836,7 +980,8 @@ pub async fn update_profile(
 
     let row = sqlx::query(
         r#"
-        SELECT p.display_name, p.discriminator, p.avatar_url, i.created_at
+        SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
+               p.favorite_genres, p.pronouns, i.created_at
         FROM profiles p
         JOIN identities i ON i.id = p.identity_id
         WHERE p.identity_id = $1
@@ -918,27 +1063,71 @@ mod tests {
 
     #[test]
     fn profile_updated_payload_carries_only_the_changed_fields() {
-        let payload = profile_updated_payload(Some("nova"), Some("4821"), None);
+        let payload = profile_updated_payload(Some("nova"), Some("4821"), None, None, None, None);
         assert_eq!(
             payload,
             serde_json::json!({ "display_name": "nova", "discriminator": "4821" })
         );
         assert!(payload.get("avatar_url").is_none());
+        assert!(payload.get("bio").is_none());
+        assert!(payload.get("favorite_genres").is_none());
+        assert!(payload.get("pronouns").is_none());
     }
 
     #[test]
     fn profile_updated_payload_distinguishes_a_cleared_avatar_from_an_untouched_one() {
-        let cleared = profile_updated_payload(None, None, Some(None));
+        let cleared = profile_updated_payload(None, None, Some(None), None, None, None);
         assert_eq!(cleared, serde_json::json!({ "avatar_url": null }));
 
-        let set = profile_updated_payload(None, None, Some(Some("https://example.com/a.png")));
+        let set = profile_updated_payload(
+            None,
+            None,
+            Some(Some("https://example.com/a.png")),
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             set,
             serde_json::json!({ "avatar_url": "https://example.com/a.png" })
         );
 
-        let untouched = profile_updated_payload(Some("nova"), Some("4821"), None);
+        let untouched = profile_updated_payload(Some("nova"), Some("4821"), None, None, None, None);
         assert!(untouched.get("avatar_url").is_none());
+    }
+
+    #[test]
+    fn profile_updated_payload_distinguishes_a_cleared_bio_from_an_untouched_one() {
+        let cleared = profile_updated_payload(None, None, None, Some(None), None, None);
+        assert_eq!(cleared, serde_json::json!({ "bio": null }));
+
+        let set = profile_updated_payload(None, None, None, Some(Some("hello")), None, None);
+        assert_eq!(set, serde_json::json!({ "bio": "hello" }));
+
+        let untouched = profile_updated_payload(None, None, None, None, None, None);
+        assert!(untouched.get("bio").is_none());
+    }
+
+    #[test]
+    fn profile_updated_payload_carries_favorite_genres_as_strings() {
+        let payload = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            Some(&[Genre::Rpg, Genre::Puzzle]),
+            None,
+        );
+        assert_eq!(
+            payload,
+            serde_json::json!({ "favorite_genres": ["rpg", "puzzle"] })
+        );
+    }
+
+    #[test]
+    fn profile_updated_payload_carries_an_empty_favorite_genres_clear() {
+        let payload = profile_updated_payload(None, None, None, None, Some(&[]), None);
+        assert_eq!(payload, serde_json::json!({ "favorite_genres": [] }));
     }
 
     #[test]
@@ -947,5 +1136,83 @@ mod tests {
         let exactly_at_cap = format!("https://example.com/{}", "a".repeat(path_len));
         assert_eq!(exactly_at_cap.len(), MAX_AVATAR_URL_LEN);
         assert!(validate_avatar_url(&exactly_at_cap).is_ok());
+    }
+
+    #[test]
+    fn validate_bio_treats_empty_string_as_clear_not_an_error() {
+        assert_eq!(validate_bio("").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_bio_accepts_a_bio_within_the_cap() {
+        assert_eq!(
+            validate_bio("just here for the guild raids").unwrap(),
+            Some("just here for the guild raids".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_bio_rejects_an_over_length_bio() {
+        let overlong = "a".repeat(MAX_BIO_LEN + 1);
+        assert!(matches!(validate_bio(&overlong), Err(AppError::InvalidBio)));
+    }
+
+    #[test]
+    fn validate_bio_accepts_a_bio_exactly_at_the_cap() {
+        let exactly_at_cap = "a".repeat(MAX_BIO_LEN);
+        assert!(validate_bio(&exactly_at_cap).is_ok());
+    }
+
+    #[test]
+    fn validate_pronouns_treats_empty_string_as_clear_not_an_error() {
+        assert_eq!(validate_pronouns("").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_pronouns_rejects_an_over_length_value() {
+        let overlong = "a".repeat(MAX_PRONOUNS_LEN + 1);
+        assert!(matches!(
+            validate_pronouns(&overlong),
+            Err(AppError::InvalidPronouns)
+        ));
+    }
+
+    #[test]
+    fn validate_favorite_genres_accepts_known_values() {
+        let genres = validate_favorite_genres(&["rpg".to_string(), "puzzle".to_string()]).unwrap();
+        assert_eq!(genres, vec![Genre::Rpg, Genre::Puzzle]);
+    }
+
+    #[test]
+    fn validate_favorite_genres_rejects_an_unknown_value() {
+        assert!(matches!(
+            validate_favorite_genres(&["visual_novel".to_string()]),
+            Err(AppError::InvalidGenre)
+        ));
+    }
+
+    #[test]
+    fn validate_favorite_genres_rejects_too_many_entries() {
+        let too_many: Vec<String> = Genre::ALL
+            .iter()
+            .chain(Genre::ALL.iter())
+            .take(MAX_FAVORITE_GENRES + 1)
+            .map(|g| g.as_str().to_string())
+            .collect();
+        assert!(matches!(
+            validate_favorite_genres(&too_many),
+            Err(AppError::TooManyFavoriteGenres)
+        ));
+    }
+
+    #[test]
+    fn validate_favorite_genres_empty_list_stays_empty_without_error() {
+        assert_eq!(validate_favorite_genres(&[]).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn validate_favorite_genres_deduplicates_repeats() {
+        let genres = validate_favorite_genres(&["rpg".to_string(), "rpg".to_string()]).unwrap();
+        assert_eq!(genres, vec![Genre::Rpg]);
     }
 }
