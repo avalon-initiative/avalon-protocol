@@ -578,6 +578,66 @@ async fn verify_still_succeeds_via_the_merkle_check_after_a_batchs_payloads_are_
     );
 }
 
+/// Regression test for the exact bug this fix closes: pruning one entry in
+/// a batch must never disable tamper detection for the batch's *other*
+/// entries. Directly nulls one entry's payload (simulating pruning without
+/// going through the age-based `prune_payloads_older_than` cutoff, so the
+/// scenario is deterministic) and separately mutates a *different* entry's
+/// `kind` column without touching its `entry_hash` — a classic tamper that
+/// leaves the stored hash stale relative to the content. Before this fix,
+/// the presence of the first entry's missing payload caused the whole
+/// batch's hash-chain replay to be skipped, so the second entry's tamper
+/// went undetected and `verify` incorrectly returned `true`.
+#[tokio::test]
+#[ignore]
+async fn verify_still_detects_tampering_in_a_batch_with_a_separately_pruned_entry() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let batch = sample_batch(2);
+    let commitment = chain.commit(&batch).await.expect("commit should succeed");
+
+    let seqs: Vec<i64> =
+        sqlx::query("SELECT seq FROM ledger_entries WHERE batch_id = $1 ORDER BY seq ASC")
+            .bind(batch.id)
+            .fetch_all(&pool)
+            .await
+            .expect("failed to read seqs")
+            .iter()
+            .map(|row| row.try_get::<i64, _>("seq").unwrap())
+            .collect();
+    assert_eq!(seqs.len(), 2, "expected exactly two entries in this batch");
+    let (pruned_seq, tampered_seq) = (seqs[0], seqs[1]);
+
+    // Simulate pruning of the first entry only — same end state
+    // `prune_payloads_older_than` would leave it in.
+    sqlx::query(
+        "UPDATE ledger_entries SET payload = NULL, payload_pruned_at = now() WHERE seq = $1",
+    )
+    .bind(pruned_seq)
+    .execute(&pool)
+    .await
+    .expect("failed to simulate pruning the first entry");
+
+    // Tamper with the second entry's content without touching its stored
+    // entry_hash — the classic case `verify` exists to catch.
+    sqlx::query("UPDATE ledger_entries SET kind = 'tampered.kind' WHERE seq = $1")
+        .bind(tampered_seq)
+        .execute(&pool)
+        .await
+        .expect("failed to simulate tampering the second entry");
+
+    let verified = chain
+        .verify(&commitment)
+        .await
+        .expect("verify should not error");
+    assert!(
+        !verified,
+        "a genuinely tampered entry must still be caught even when a *different* \
+         entry in the same batch has had its payload pruned"
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn prunable_entry_count_matches_what_pruning_actually_prunes() {

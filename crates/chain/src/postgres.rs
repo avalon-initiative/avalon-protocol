@@ -176,14 +176,15 @@ fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> Strin
 /// batch was committed, not verified here since that's a cross-batch
 /// concern, not this batch's own integrity).
 ///
-/// This is a pure, DB-free function on purpose (issue #38's acceptance
-/// criteria that `verify` "recomputes and compares the batch root, not just
-/// row existence", now one of `verify`'s two checks — see its doc comment)
-/// — it recomputes from each entry's actual stored content, the same way
-/// `list_entries` re-verifies individual entries, so tampering with any
-/// entry's content in the batch (not just deleting a row) changes the
-/// result. `PostgresSettlementProvider::verify` is the only caller; kept
-/// free-standing so it's directly unit-testable without Postgres.
+/// A pure, DB-free function on purpose, directly unit-testable without
+/// Postgres. `PostgresSettlementProvider::verify` no longer calls this
+/// directly (issue #208: it needs a *per-entry* link/content check, not an
+/// all-or-nothing batch replay, so a batch with one pruned entry doesn't
+/// lose tamper detection for its other entries — see `verify`'s own doc
+/// comment) but it stays here as a from-scratch reference implementation
+/// these tests check `verify`'s per-entry logic against, since both are
+/// meant to agree exactly when every entry's payload is present.
+#[cfg(test)]
 fn recompute_batch_root(
     network_id: &str,
     entering_prev_hash: &str,
@@ -949,17 +950,27 @@ impl SettlementProvider for PostgresSettlementProvider {
     /// rather than this batch's own chain tip):
     ///
     /// 1. **Hash-chain check.** Replay this batch's own entries' stored
-    ///    content across the sequential hash chain and compare the result
-    ///    against the chain tip Postgres actually has stored for them —
-    ///    catches content tampering that left `entry_hash` stale relative
-    ///    to a mutated payload/kind/issuer/etc (same guarantee #38 always
-    ///    had; only the comparison target changed).
+    ///    content across the sequential hash chain, entry by entry — link
+    ///    (`prev_hash == expected_prev`) always checked, content checked
+    ///    whenever the payload is present. Catches content tampering that
+    ///    left `entry_hash` stale relative to a mutated payload/kind/
+    ///    issuer/etc (same guarantee #38 always had; only the comparison
+    ///    target changed). Issue #208: this is deliberately *per entry*,
+    ///    not an all-or-nothing batch replay — a hot-tier node may have
+    ///    pruned some entries' payloads, and content simply can't be
+    ///    independently re-verified for those (not evidence of tampering,
+    ///    an expected local-retention outcome), but that must never widen
+    ///    into skipping the check for the batch's *other*, still-complete
+    ///    entries. A batch with one pruned entry and one genuinely tampered
+    ///    (still-payload-present) entry must still fail this check.
     /// 2. **Merkle check.** Recompute the RFC 6962 MTH fresh from every
     ///    `entry_hash` in the ledger up to this batch's `last_seq` and
     ///    compare against `commitment.proof` — catches tampering with the
     ///    ledger's *structure* (an `entry_hash` value itself, entry
     ///    ordering, a deleted row) anywhere up to this batch, not just
     ///    within it, which a batch-local chain replay alone can't see.
+    ///    Built entirely from `entry_hash` values, never `payload`, so
+    ///    pruning never affects this check either way.
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
         let rows = sqlx::query(
             r#"
@@ -980,11 +991,6 @@ impl SettlementProvider for PostgresSettlementProvider {
         let entering_prev_hash: String = first_row
             .try_get("prev_hash")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
-        let stored_chain_tip: String = rows
-            .last()
-            .expect("checked rows is non-empty above")
-            .try_get("entry_hash")
-            .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         let mut owned = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -999,45 +1005,54 @@ impl SettlementProvider for PostgresSettlementProvider {
                 row.try_get::<time::OffsetDateTime, _>("event_timestamp")
                     .map_err(get)?,
                 row.try_get::<i32, _>("version").map_err(get)?,
+                row.try_get::<String, _>("prev_hash").map_err(get)?,
+                row.try_get::<String, _>("entry_hash").map_err(get)?,
             ));
         }
 
         // Issue #208: a hot-tier node may have pruned one or more of this
-        // batch's entries' payloads. The sequential hash-chain replay below
-        // needs every entry's actual content, so it's only meaningful when
-        // every entry in the batch still has its payload — if any is
-        // missing, this check is skipped rather than failed, since a
-        // missing payload is an expected, intentional local-retention
-        // outcome (issue #208), not evidence of tampering. This never
-        // weakens the batch's overall verifiability: the Merkle check
-        // below is built entirely from `entry_hash` values (never
-        // `payload`, see `crate::merkle`/#210) and stays fully intact and
-        // required either way — see `crate::retention`'s module doc
-        // comment for why this split is safe.
-        let all_payloads_present = owned.iter().all(|(.., payload, _, _)| payload.is_some());
-        let chain_intact = if all_payloads_present {
-            let contents: Vec<EntryContent<'_>> = owned
-                .iter()
-                .map(
-                    |(event_id, kind, issuer, subject, payload, timestamp, version)| EntryContent {
-                        event_id: *event_id,
-                        kind,
-                        issuer,
-                        subject,
-                        payload: payload
-                            .as_ref()
-                            .expect("checked all_payloads_present above"),
-                        timestamp: *timestamp,
-                        version: *version,
-                    },
-                )
-                .collect();
-            let recomputed_chain_tip =
-                recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
-            recomputed_chain_tip == stored_chain_tip
-        } else {
-            true
-        };
+        // batch's entries' payloads. Per-entry, not batch-wide — mirrors
+        // `list_entries`'s `link_intact`/`content_intact` split exactly.
+        // Pruning one entry must never disable tamper detection for its
+        // still-content-complete siblings in the same batch: the link
+        // (`prev_hash == expected_prev`) is always checkable regardless of
+        // pruning, and content is checked whenever the payload survives to
+        // check it against. A missing payload only ever widens what's
+        // *uncheckable* for that one entry — it never causes a batch-wide
+        // skip, and never masks a genuine mismatch on an entry whose
+        // payload is still present. `expected_prev` always advances to the
+        // entry's *stored* `entry_hash`, since that's the one thing every
+        // entry has regardless of pruning.
+        let mut expected_prev = entering_prev_hash;
+        let mut chain_intact = true;
+        for (event_id, kind, issuer, subject, payload, timestamp, version, prev_hash, entry_hash) in
+            &owned
+        {
+            let link_intact = *prev_hash == expected_prev;
+            let content_intact = match payload {
+                Some(payload) => {
+                    let recomputed = hash_entry(
+                        &self.network_id,
+                        prev_hash,
+                        &EntryContent {
+                            event_id: *event_id,
+                            kind,
+                            issuer,
+                            subject,
+                            payload,
+                            timestamp: *timestamp,
+                            version: *version,
+                        },
+                    );
+                    recomputed == *entry_hash
+                }
+                None => true,
+            };
+            if !(link_intact && content_intact) {
+                chain_intact = false;
+            }
+            expected_prev = entry_hash.clone();
+        }
 
         let Some(batch_row) =
             sqlx::query("SELECT last_seq FROM ledger_batches WHERE batch_id = $1")

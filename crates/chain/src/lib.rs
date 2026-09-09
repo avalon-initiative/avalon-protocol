@@ -59,6 +59,18 @@ pub enum SettlementError {
 pub trait SettlementProvider: Send + Sync {
     async fn commit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError>;
 
+    /// `Ok(true)` means every check this implementation runs passed — it
+    /// does **not** promise every entry's content was independently
+    /// re-verified. A retention-tiered implementation (issue #208) may
+    /// have locally pruned some entries' payloads; content for those
+    /// specific entries can't be independently re-checked (an expected
+    /// local-retention outcome, not evidence of tampering), while the
+    /// link/structure checks and the ledger-wide commitment check still
+    /// run and still gate the result. A caller that needs to know *which*
+    /// entries were and weren't content-checkable should use
+    /// `PostgresSettlementProvider::list_entries`'s per-entry
+    /// `payload_pruned`/`chain_intact` fields instead of this coarser
+    /// bool.
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError>;
 
     async fn get_commitment(&self, batch_id: uuid::Uuid) -> Result<Commitment, SettlementError>;
