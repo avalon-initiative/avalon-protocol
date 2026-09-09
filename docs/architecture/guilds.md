@@ -87,6 +87,30 @@ What a game cannot do: rename, dissolve, transfer, or govern a guild; remove
 members; grant roles. Those are guild-role authorizations, not game credentials.
 See [security model](./security-model.md) for the scoped-authority rules.
 
+**[#160](https://github.com/LunarVagabond/avalon-protocol/issues/160) (decided)
+reshapes this going forward**: a guild's connection to a game is never
+something a manager declares for a game none of their members have actually
+played — it can only ever come from what a game itself already knows via
+[game bindings](./game-bindings.md) (#83, shipped). This is a **read/display
+feature**, not new durable guild structure: a role with sufficient authority
+(`manage_guild` or an equivalent permission) can see an aggregated,
+derived breakdown of which games guildmates play or have played, with a
+count/fraction of members per game — computed from binding data, not a
+`guild.game_associated` protocol event, same "hot state, not history"
+treatment already given to presence and chat. That role chooses whether to
+show or hide this breakdown on the guild's public profile, and can pin up to
+5 games as the guild's curated "favorites" for display — pinning requires
+the underlying binding-derived association to already exist; it's never a
+way to manufacture one. No minimum-member threshold is needed since nothing
+is being gated on/off automatically — it's a display choice, not a system
+verdict. Implementation tracked as
+[#206](https://github.com/LunarVagabond/avalon-protocol/issues/206)
+(affinity view) and
+[#207](https://github.com/LunarVagabond/avalon-protocol/issues/207)
+(favorites pin), both under the Guilds epic (#19); #20's original manual
+`associate_game` endpoint predates this decision and is superseded by it
+going forward.
+
 ## Guild chat is a network primitive
 
 A channel belongs to the guild. It is visible through the Hub, the mobile-hub

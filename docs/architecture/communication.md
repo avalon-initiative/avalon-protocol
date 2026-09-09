@@ -60,11 +60,17 @@ The hot/cold split guild chat already established carries over unchanged:
 
 ## Voice
 
-**No design exists yet, and none should be assumed.** Voice needs its own
-transport and signaling decision — this is the kind of infrastructure choice
-that's expensive to unwind, so it belongs behind a `decision` ticket, not a
-straight-to-implementation one. What's already clear regardless of how that
-research lands:
+**Deferred, on hold.** [#103](https://github.com/LunarVagabond/avalon-protocol/issues/103)
+(decided) chose to defer voice indefinitely rather than commit to a
+transport/provider now: text (guild chat, DMs) already covers the core
+cross-game communication goal, and voice is a materially bigger,
+expensive-to-unwind infrastructure commitment (self-hosted SFU operations,
+or a third-party dependency the rest of the protocol has otherwise avoided)
+with no existing precedent in this codebase — matching the deferral posture
+`future-layers.md` already takes for other large optional additions. Tracked
+as its own on-hold epic; revisit only when a concrete integration actually
+demands it, not on a fixed timeline. What's already clear whenever that
+happens:
 
 - A voice session is realtime state, not durable history — the same
   classification as presence and chat delivery, never `SettlementProvider`.
@@ -117,13 +123,17 @@ into a Hub-only or game-only corner.
   Direct Messages, Voice & Notifications:
   [#102](https://github.com/LunarVagabond/avalon-protocol/issues/102)
   conversation domain model + endpoints,
-  [#103](https://github.com/LunarVagabond/avalon-protocol/issues/103) —
-  decision: voice transport, signaling, and provider (open),
   [#104](https://github.com/LunarVagabond/avalon-protocol/issues/104) SDK
   conversation API,
   [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105) Hub
   direct-message UI. Backlog — not scheduled ahead of #73/#71 (done) or
   #14/#19.
+- [#103](https://github.com/LunarVagabond/avalon-protocol/issues/103) —
+  decision: voice transport, signaling, and provider (closed/decided:
+  deferred indefinitely). Tracked as
+  [#203](https://github.com/LunarVagabond/avalon-protocol/issues/203) —
+  Epic: Voice Communication (on hold), split out from #101 since voice is
+  deferred while the rest of #101 is not.
 - [#108](https://github.com/LunarVagabond/avalon-protocol/issues/108) — Epic:
   Offline & Deferred Protocol Synchronization
   ([`./synchronization.md`](./synchronization.md)) — direct-message queuing

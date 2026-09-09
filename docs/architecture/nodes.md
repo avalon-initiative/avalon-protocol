@@ -29,6 +29,29 @@ later without a rewrite.
 | Gateway / API | SDK endpoints, auth, routing | anyone fronting the others |
 | Combined | any subset, including all | milestone 1: one `avalon-server` |
 
+### Settlement retention tiers
+
+Not every Settlement node is expected to store and serve *all* durable
+history ([#180](https://github.com/LunarVagabond/avalon-protocol/issues/180),
+decided). The commitment (the hash-chained/committed log itself) stays
+small and permanent on every Settlement node regardless of tier — retention
+tiering applies only to the raw signed event *bodies* backing each
+commitment:
+
+| Retention tier | Retains | Typical operator |
+|---|---|---|
+| Full / archive | complete history, no window | a dedicated archive operator, willing to carry long-term storage cost |
+| Hot | a configurable recent window only (e.g. "last N months") | a normal Settlement node optimized for current read/serve traffic |
+
+A hot-tier node may discard event bodies older than its configured window
+only when the network as a whole still guarantees availability elsewhere
+(at least one archive-tier node, or a minimum archive-replication factor) —
+never discard something nothing else retains, and never affect the
+commitment's own verifiability either way. Exact window defaults and the
+minimum archive-replication factor are implementation-ticket-level numbers
+(tracked in [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)),
+not decided here.
+
 ## Node authority
 
 A hosted node is not protocol authority. The concrete guarantees:
