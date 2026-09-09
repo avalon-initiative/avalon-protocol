@@ -212,6 +212,56 @@ export interface RenamePasskeyRequest {
   label: string
 }
 
+// Social recovery (issue #201), matching crates/server/src/recovery.rs
+// field-for-field.
+
+export interface SetGuardiansRequest {
+  guardian_ids: string[]
+  threshold: number
+}
+
+export interface GuardianSettingsResponse {
+  guardian_ids: string[]
+  threshold: number
+  updated_at: string | null
+}
+
+export interface RecoveryStartRequest {
+  identity_id: string
+  device_label: string | null
+}
+
+export interface RecoveryStartResponse {
+  ticket_id: string
+  challenge: { publicKey: PublicKeyCredentialCreationOptionsJSON }
+}
+
+export interface RecoveryFinishRequest {
+  ticket_id: string
+  webauthn_credential: RegistrationResponseJSON
+}
+
+export type RecoveryStatus = 'pending_approvals' | 'delay' | 'completed' | 'cancelled'
+
+export interface RecoveryRequestResponse {
+  id: string
+  identity_id: string
+  status: RecoveryStatus
+  threshold: number
+  approvals_count: number
+  requested_at: string
+  delay_ends_at: string | null
+}
+
+export interface CancelRecoveryRequest {
+  reason: string | null
+}
+
+export interface GuardianRequestSummary {
+  request: RecoveryRequestResponse
+  already_approved: boolean
+}
+
 export type PresenceStatus = 'Online' | 'Away' | 'Offline'
 
 export interface UpdatePresenceRequest {

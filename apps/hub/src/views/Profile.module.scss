@@ -150,3 +150,28 @@
   color: var(--av-color-text-muted);
   margin-right: auto;
 }
+
+// Social recovery (#201): the guardian picker's friend checkboxes and the
+// threshold stepper.
+.guardianRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+}
+
+.thresholdRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+  flex-wrap: wrap;
+}
+
+.thresholdInput {
+  width: 3.5em;
+  padding: var(--av-space-1) var(--av-space-2);
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: inherit;
+  font: inherit;
+}

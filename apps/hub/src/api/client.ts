@@ -6,6 +6,7 @@ import type {
   AddPasskeyFinishRequest,
   AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
+  CancelRecoveryRequest,
   ChannelResponse,
   ConnectGameRequest,
   ConnectGameResponse,
@@ -26,6 +27,8 @@ import type {
   GameBindingResponse,
   GameBreakdownResponse,
   GameResponse,
+  GuardianRequestSummary,
+  GuardianSettingsResponse,
   GuildInviteResponse,
   GuildMemberResponse,
   GuildResponse,
@@ -38,6 +41,10 @@ import type {
   PresenceResponse,
   ProfileResponse,
   PublicProfileResponse,
+  RecoveryFinishRequest,
+  RecoveryRequestResponse,
+  RecoveryStartRequest,
+  RecoveryStartResponse,
   RegisterFinishRequest,
   RegisterFinishResponse,
   RegisterStartRequest,
@@ -55,6 +62,7 @@ import type {
   SessionFinishResponse,
   SessionStartRequest,
   SessionStartResponse,
+  SetGuardiansRequest,
   SignedTreeHeadResponse,
   TransferOwnershipRequest,
   UpdateChannelRequest,
@@ -355,6 +363,69 @@ export function revokePasskey(
     ? `/me/passkeys/${passkeyId}/revoke?confirm=true`
     : `/me/passkeys/${passkeyId}/revoke`
   return request(path, { method: 'POST', token })
+}
+
+// Social recovery (issue #201), matching crates/server/src/recovery.rs.
+// `startRecoveryRequest`/`finishRecoveryRequest` are the one pair of
+// exported functions here that must never be called with a `token` — the
+// whole premise is the caller has none for the identity being recovered.
+
+export function getGuardians(token: string): Promise<GuardianSettingsResponse> {
+  return request('/me/recovery/guardians', { token })
+}
+
+export function setGuardians(
+  token: string,
+  body: SetGuardiansRequest,
+): Promise<GuardianSettingsResponse> {
+  return request('/me/recovery/guardians', { method: 'PUT', body, token })
+}
+
+export function getMyRecoveryStatus(token: string): Promise<RecoveryRequestResponse | null> {
+  return request('/me/recovery/status', { token })
+}
+
+export function getGuardianRequests(token: string): Promise<GuardianRequestSummary[]> {
+  return request('/me/recovery/guardian-requests', { token })
+}
+
+export function startRecoveryRequest(body: RecoveryStartRequest): Promise<RecoveryStartResponse> {
+  return request('/recovery/requests/start', { method: 'POST', body })
+}
+
+export function finishRecoveryRequest(
+  body: RecoveryFinishRequest,
+): Promise<RecoveryRequestResponse> {
+  return request('/recovery/requests/finish', { method: 'POST', body })
+}
+
+export function getRecoveryRequest(requestId: string): Promise<RecoveryRequestResponse> {
+  return request(`/recovery/requests/${requestId}`)
+}
+
+export function approveRecoveryRequest(
+  token: string,
+  requestId: string,
+): Promise<RecoveryRequestResponse> {
+  return request(`/recovery/requests/${requestId}/approve`, { method: 'POST', token })
+}
+
+export function cancelRecoveryRequest(
+  token: string,
+  requestId: string,
+  body: CancelRecoveryRequest,
+): Promise<RecoveryRequestResponse> {
+  return request(`/recovery/requests/${requestId}/cancel`, { method: 'POST', body, token })
+}
+
+export function finalizeRecoveryRequest(requestId: string): Promise<RecoveryRequestResponse> {
+  return request(`/recovery/requests/${requestId}/finalize`, { method: 'POST' })
+}
+
+export function getIdentityRecoveryStatus(
+  identityId: string,
+): Promise<RecoveryRequestResponse | null> {
+  return request(`/identities/${identityId}/recovery/status`)
 }
 
 // Guilds, roles, membership (issues #20/#21), matching
