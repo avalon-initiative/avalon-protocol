@@ -11,25 +11,47 @@ avalon-protocol = { path = "../protocol" }
 avalon-sdk = { path = "../sdk" }
 avalon-chain = { path = "../chain" }
 avalon-server = { path = "../server" }
-url.workspace = true
 tokio.workspace = true
 sqlx.workspace = true
 dotenvy.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 base64.workspace = true
-ed25519-dalek.workspace = true
-rand.workspace = true
-passkey-types.workspace = true
-passkey-client.workspace = true
-passkey-authenticator.workspace = true
+# Everything below is only reachable from `dev_tools.rs` (issue #175) — the
+# mutating commands (`create-identity`, `login`, `register-game`) that a
+# `--no-default-features` build excludes along with these dependencies
+# entirely, not just their call sites.
+url = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+passkey-types = { workspace = true, optional = true }
+passkey-client = { workspace = true, optional = true }
+passkey-authenticator = { workspace = true, optional = true }
 # Already pulled in transitively via passkey-types for the COSE key format
 # `Passkey::key` uses — pinned directly here too so `login`'s persisted-
-# passkey (de)serialization (see main.rs) has a stable `CborSerializable`
+# passkey (de)serialization (see dev_tools.rs) has a stable `CborSerializable`
 # import to use rather than reaching into a transitive dependency.
-coset = "0.4"
+coset = { version = "0.4", optional = true }
+
+[features]
+default = ["dev-tools"]
+# Local dev/test mutation commands (issue #175) — create-identity, login,
+# register-game — and every dependency only they need. A production-facing
+# build should be `cargo build -p avalon-cli --no-default-features`: those
+# commands, and this whole dependency list, are then absent from the binary,
+# not merely unreachable at runtime.
+dev-tools = [
+    "dep:url",
+    "dep:reqwest",
+    "dep:ed25519-dalek",
+    "dep:rand",
+    "dep:passkey-types",
+    "dep:passkey-client",
+    "dep:passkey-authenticator",
+    "dep:coset",
+]
 
 [[bin]]
 name = "avalon"
