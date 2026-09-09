@@ -80,6 +80,12 @@ const MAX_GUILD_MOTD_LEN: usize = 500;
 /// `MAX_AVATAR_URL_LEN` uses.
 const MAX_GUILD_BANNER_URL_LEN: usize = 2048;
 
+/// Cap on `Guild.icon`'s URL length (issue #246) — a small badge image is
+/// no more likely to need a longer URL than a banner, so this uses the
+/// same bound as [`MAX_GUILD_BANNER_URL_LEN`], as its own named constant
+/// rather than reusing the banner's, in case the two ever need to diverge.
+const MAX_GUILD_ICON_URL_LEN: usize = 2048;
+
 /// Cap on the number of entries in `Guild.links` (issue #153) — keeps this
 /// from becoming an arbitrary free-form content field, per the ticket.
 const MAX_GUILD_LINKS: usize = 5;
@@ -222,6 +228,19 @@ fn validate_guild_banner(banner: &str) -> Result<Option<String>, AppError> {
     Ok(Some(banner.to_string()))
 }
 
+/// Same empty-string-clears convention `validate_guild_banner` uses,
+/// reusing the same `http`/`https`-URL validation — mirrors it exactly,
+/// just for `Guild.icon` (issue #246) rather than `Guild.banner`.
+fn validate_guild_icon(icon: &str) -> Result<Option<String>, AppError> {
+    if icon.is_empty() {
+        return Ok(None);
+    }
+    if !is_http_url(icon, MAX_GUILD_ICON_URL_LEN) {
+        return Err(AppError::InvalidGuildIcon);
+    }
+    Ok(Some(icon.to_string()))
+}
+
 /// Wire shape for one entry of `UpdateGuildRequest.links` (issue #153).
 #[derive(Deserialize)]
 pub struct GuildLinkRequest {
@@ -303,6 +322,8 @@ struct GuildRow {
     motd: Option<String>,
     /// Issue #153.
     banner: Option<String>,
+    /// Issue #246.
+    icon: Option<String>,
     /// Issue #153.
     links: Vec<GuildLink>,
     /// Issue #153.
@@ -316,7 +337,7 @@ struct GuildRow {
 
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, links, recruiting, game_breakdown_public FROM guilds WHERE id = $1",
+        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, icon, links, recruiting, game_breakdown_public FROM guilds WHERE id = $1",
     )
     .bind(guild_id)
     .fetch_optional(&state.pool)
@@ -340,6 +361,7 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
         join_policy: JoinPolicy::parse(&join_policy_raw).unwrap_or(JoinPolicy::InviteOnly),
         motd: row.try_get("motd")?,
         banner: row.try_get("banner")?,
+        icon: row.try_get("icon")?,
         links,
         recruiting: row.try_get("recruiting")?,
         game_breakdown_public: row.try_get("game_breakdown_public")?,
@@ -362,6 +384,8 @@ pub struct GuildResponse {
     pub motd: Option<String>,
     /// Issue #153.
     pub banner: Option<String>,
+    /// Issue #246.
+    pub icon: Option<String>,
     /// Issue #153.
     pub links: Vec<GuildLink>,
     /// Issue #153.
@@ -411,6 +435,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         join_policy: guild.join_policy.as_str().to_string(),
         motd: guild.motd,
         banner: guild.banner,
+        icon: guild.icon,
         links: guild.links,
         recruiting: guild.recruiting,
         game_breakdown_public: guild.game_breakdown_public,
@@ -540,6 +565,7 @@ pub async fn create_guild(
                 join_policy: JoinPolicy::InviteOnly,
                 motd: None,
                 banner: None,
+                icon: None,
                 links: Vec::new(),
                 recruiting: false,
                 game_breakdown_public: false,
@@ -574,6 +600,9 @@ pub struct UpdateGuildRequest {
     /// Issue #153. Same three-state convention as `motd`, same
     /// `http`/`https`-URL validation as a profile's `avatar_url`.
     pub banner: Option<String>,
+    /// Issue #246. Same three-state convention as `banner`, same
+    /// `http`/`https`-URL validation.
+    pub icon: Option<String>,
     /// Issue #153. Two states, not three: omitted (untouched) or
     /// `Some(list)`, which always fully replaces the stored list —
     /// including `Some(vec![])` to clear it. Each entry is validated; an
@@ -624,6 +653,10 @@ pub async fn update_guild(
         Some(raw) => validate_guild_banner(raw)?,
         None => guild.banner.clone(),
     };
+    let new_icon = match &body.icon {
+        Some(raw) => validate_guild_icon(raw)?,
+        None => guild.icon.clone(),
+    };
     let new_links = match &body.links {
         Some(links) => validate_guild_links(links)?,
         None => guild.links.clone(),
@@ -638,7 +671,7 @@ pub async fn update_guild(
     let mut tx = state.pool.begin().await?;
 
     let updated = sqlx::query(
-        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, links = $7, recruiting = $8, game_breakdown_public = $9 WHERE id = $1",
+        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, game_breakdown_public = $10 WHERE id = $1",
     )
     .bind(guild_id)
     .bind(&new_name)
@@ -646,6 +679,7 @@ pub async fn update_guild(
     .bind(&new_description)
     .bind(&new_motd)
     .bind(&new_banner)
+    .bind(&new_icon)
     .bind(&new_links_json)
     .bind(new_recruiting)
     .bind(new_game_breakdown_public)
@@ -678,6 +712,7 @@ pub async fn update_guild(
             "description": new_description,
             "motd": new_motd,
             "banner": new_banner,
+            "icon": new_icon,
             "links": new_links,
             "recruiting": new_recruiting,
             "game_breakdown_public": new_game_breakdown_public,
@@ -703,6 +738,7 @@ pub async fn update_guild(
                 join_policy: guild.join_policy,
                 motd: new_motd,
                 banner: new_banner,
+                icon: new_icon,
                 links: new_links,
                 recruiting: new_recruiting,
                 game_breakdown_public: new_game_breakdown_public,
@@ -1099,6 +1135,7 @@ pub async fn transfer_ownership(
                 join_policy: guild.join_policy,
                 motd: guild.motd,
                 banner: guild.banner,
+                icon: guild.icon,
                 links: guild.links,
                 recruiting: guild.recruiting,
                 game_breakdown_public: guild.game_breakdown_public,
@@ -2953,6 +2990,38 @@ mod tests {
         assert!(matches!(
             validate_guild_banner(&overlong),
             Err(AppError::InvalidGuildBanner)
+        ));
+    }
+
+    // --- Issue #246: guild icon ---
+
+    #[test]
+    fn empty_icon_clears_to_none() {
+        assert_eq!(validate_guild_icon("").unwrap(), None);
+    }
+
+    #[test]
+    fn valid_https_icon_is_accepted() {
+        assert_eq!(
+            validate_guild_icon("https://example.com/icon.png").unwrap(),
+            Some("https://example.com/icon.png".to_string())
+        );
+    }
+
+    #[test]
+    fn non_http_scheme_icon_is_rejected() {
+        assert!(matches!(
+            validate_guild_icon("javascript:alert(1)"),
+            Err(AppError::InvalidGuildIcon)
+        ));
+    }
+
+    #[test]
+    fn overlong_icon_is_rejected() {
+        let overlong = format!("https://example.com/{}", "a".repeat(MAX_GUILD_ICON_URL_LEN));
+        assert!(matches!(
+            validate_guild_icon(&overlong),
+            Err(AppError::InvalidGuildIcon)
         ));
     }
 

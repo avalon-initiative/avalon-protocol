@@ -33,6 +33,7 @@ const guild = {
   join_policy: 'invite_only',
   motd: null,
   banner: null,
+  icon: null,
   links: [],
   recruiting: false,
   game_breakdown_public: false,
@@ -161,5 +162,37 @@ describe('Guild', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('Hello from c2'))
     expect(wrapper.text()).toContain('raids')
+  })
+
+  it('shows the icon badge in the header when set, and nothing when unset', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    // guild.icon is null in this fixture — no badge image rendered.
+    expect(wrapper.find('header img').exists()).toBe(false)
+  })
+
+  it('shows the icon badge in the header when guild.icon is set', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      ...baseRoutes(),
+      '/guilds/g1': { ...guild, icon: 'https://example.com/icon.png' },
+    })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const headerIcon = wrapper.find('header img')
+    expect(headerIcon.exists()).toBe(true)
+    expect(headerIcon.attributes('src')).toBe('https://example.com/icon.png')
   })
 })

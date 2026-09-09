@@ -97,6 +97,15 @@
   padding: 0.125rem var(--av-space-2);
 }
 
+/* Issue #246: a small badge image shown next to the title, same visual role
+   a Discord-style guild icon plays — only rendered when guild.icon is set. */
+.headerIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--av-radius-md);
+  object-fit: cover;
+}
+
 /* Settings tab (issue #153's motd/banner/links, wired up by #241) */
 .linkRow {
   display: flex;

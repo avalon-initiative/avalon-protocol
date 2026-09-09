@@ -148,6 +148,7 @@ async function onApplyToJoin(guildId: string) {
             :tag="guild.tag"
             :description="guild.description"
             :member-count="guild.member_count"
+            :icon-url="guild.icon ?? undefined"
             @select="openGuild(guild.id)"
           />
         </AvalonCard>

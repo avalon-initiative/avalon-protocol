@@ -24,6 +24,14 @@
   min-width: 0;
 }
 
+.icon {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--av-radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
 .name {
   font-size: var(--av-text-md);
   font-weight: 600;

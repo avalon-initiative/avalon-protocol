@@ -316,6 +316,8 @@ export interface GuildResponse {
   // strangers at all (see build_discover_query's membership gating).
   motd: string | null
   banner: string | null
+  // Issue #246. Same shape as banner: a small badge image, null when unset.
+  icon: string | null
   links: GuildLink[]
   recruiting: boolean
   // Issue #206. Whether the game affinity breakdown
@@ -346,6 +348,9 @@ export interface UpdateGuildRequest {
   // patch. recruiting: omit to leave untouched.
   motd?: string
   banner?: string
+  // Issue #246. Same three-state convention as banner: omit to leave
+  // untouched, "" to clear, non-empty to set.
+  icon?: string
   links?: GuildLink[]
   recruiting?: boolean
   // Issue #206. Omitted leaves it untouched.

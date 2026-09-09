@@ -316,12 +316,15 @@ const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMe
 // rather than fabricating activity.
 const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 
-// --- Rename / retag / redescribe / MOTD / banner --------------------------
+// --- Rename / retag / redescribe / MOTD / banner / icon --------------------
 
 const savingField = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
 
-async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | 'banner', value: string) {
+async function saveGuildField(
+  field: 'name' | 'tag' | 'description' | 'motd' | 'banner' | 'icon',
+  value: string,
+) {
   if (!session.token) return
   fieldErrors.value[field] = ''
   savingField.value = field
@@ -789,6 +792,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     <header :class="[styles.pageHeader, local.headerRow]">
       <div :class="local.titleBlock">
         <div :class="local.titleRow">
+          <img v-if="guild.icon" :src="guild.icon" :alt="`${guild.name} icon`" :class="local.headerIcon" />
           <h1 :class="styles.title">{{ guild.name }}</h1>
           <span :class="local.tagBadge">{{ guild.tag }}</span>
         </div>
@@ -1352,7 +1356,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
           </AvalonCard>
 
-          <AvalonCard title="Message of the day and banner">
+          <AvalonCard title="Message of the day, banner & icon">
             <AvalonEditableField
               label="MOTD"
               :value="guild.motd ?? ''"
@@ -1369,6 +1373,15 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               :saving="savingField === 'banner'"
               :error="fieldErrors.banner"
               @save="saveGuildField('banner', $event)"
+            />
+            <AvalonEditableField
+              label="Icon URL"
+              :value="guild.icon ?? ''"
+              empty-text="No icon set"
+              placeholder="https://…"
+              :saving="savingField === 'icon'"
+              :error="fieldErrors.icon"
+              @save="saveGuildField('icon', $event)"
             />
           </AvalonCard>
 

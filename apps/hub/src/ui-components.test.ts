@@ -266,6 +266,18 @@ describe('AvalonGuildCard', () => {
     const omitted = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
     expect(omitted.text()).not.toContain('Recruiting')
   })
+
+  it('renders an icon badge only when iconUrl is provided', () => {
+    const withIcon = mount(AvalonGuildCard, {
+      props: { name: 'A', tag: 'AA', memberCount: 1, iconUrl: 'https://example.com/icon.png' },
+    })
+    const img = withIcon.find('img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('https://example.com/icon.png')
+
+    const withoutIcon = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
+    expect(withoutIcon.find('img').exists()).toBe(false)
+  })
 })
 
 describe('AvalonGuildMemberRow', () => {
