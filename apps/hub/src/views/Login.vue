@@ -38,6 +38,9 @@ async function onSubmit() {
       <p :class="styles.switchLink">
         <RouterLink to="/create-identity">Don't have an identity yet? Create one</RouterLink>
       </p>
+      <p :class="styles.switchLink">
+        <RouterLink to="/recover-identity">Lost every device? Recover your identity</RouterLink>
+      </p>
     </AvalonAuthCard>
   </AuthLayout>
 </template>

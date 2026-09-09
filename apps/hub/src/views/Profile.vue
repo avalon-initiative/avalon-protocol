@@ -15,7 +15,22 @@ import {
   findMySigningKeyId,
 } from '../api/deviceGrants'
 import { addPasskey, listPasskeys, renamePasskey, revokePasskey } from '../api/passkeys'
-import type { DeviceGrantResponse, DeviceResponse, PasskeyResponse } from '../api/types'
+import {
+  approveRecoveryRequest,
+  cancelRecoveryRequest,
+  getGuardianRequests,
+  getGuardians,
+  getMyRecoveryStatus,
+  setGuardians,
+} from '../api/recovery'
+import type {
+  DeviceGrantResponse,
+  DeviceResponse,
+  GuardianRequestSummary,
+  PasskeyResponse,
+  RecoveryRequestResponse,
+} from '../api/types'
+import { listFriendsWithPresence, type Friend } from '../api/friends'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
@@ -78,6 +93,7 @@ onMounted(async () => {
       await refreshDevicesAndPendingGrants()
     }
     await refreshPasskeys()
+    await Promise.all([refreshGuardianSettings(), refreshMyRecoveryStatus(), refreshGuardianRequests()])
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -86,6 +102,13 @@ onMounted(async () => {
   pollHandle = setInterval(() => {
     if (hasSigningKey.value) refreshDevicesAndPendingGrants()
     if (pendingRequest.value) pollMyGrant()
+    // Social recovery (#201) is exactly the kind of security-relevant state
+    // that must stay visible without a manual refresh — an in-progress
+    // recovery against this identity, and any friend's request waiting on
+    // this identity's approval, are both polled the same cadence as the
+    // device-grant flow above.
+    refreshMyRecoveryStatus()
+    refreshGuardianRequests()
   }, POLL_INTERVAL_MS)
 })
 
@@ -386,6 +409,177 @@ async function onRevokePasskey(passkey: PasskeyResponse) {
     revokingPasskeyId.value = ''
   }
 }
+
+// Social recovery (#201) — guardian configuration. Every guardian must be
+// a current friend (crates/server/src/recovery.rs enforces this
+// server-side too; the checkbox list below only ever offers friends as
+// candidates, so there's no client path that could even attempt an
+// invalid guardian).
+const friends = ref<Friend[]>([])
+const selectedGuardianIds = ref<Set<string>>(new Set())
+const threshold = ref(1)
+const savingGuardians = ref(false)
+const guardiansError = ref('')
+const guardiansUpdatedAt = ref<string | null>(null)
+
+async function refreshGuardianSettings() {
+  if (!session.token || !identityId.value) return
+  try {
+    const [friendList, settings] = await Promise.all([
+      listFriendsWithPresence(session.token, identityId.value),
+      getGuardians(session.token),
+    ])
+    friends.value = friendList
+    selectedGuardianIds.value = new Set(settings.guardian_ids)
+    threshold.value = settings.threshold > 0 ? settings.threshold : 1
+    guardiansUpdatedAt.value = settings.updated_at
+  } catch (e) {
+    guardiansError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+
+function onToggleGuardian(friendId: string) {
+  const next = new Set(selectedGuardianIds.value)
+  if (next.has(friendId)) {
+    next.delete(friendId)
+  } else {
+    next.add(friendId)
+  }
+  selectedGuardianIds.value = next
+}
+
+// Clamped client-side purely for a responsive slider/stepper feel — the
+// server is the actual source of truth for "1..=guardian count"
+// (recovery::validate_guardian_settings) and rejects anything outside
+// that range regardless of what this does.
+const clampedThreshold = computed({
+  get: () => threshold.value,
+  set: (value: number) => {
+    const count = selectedGuardianIds.value.size || 1
+    threshold.value = Math.min(Math.max(1, value), count)
+  },
+})
+
+async function onSaveGuardians() {
+  if (!session.token) return
+  guardiansError.value = ''
+  savingGuardians.value = true
+  try {
+    const settings = await setGuardians(
+      session.token,
+      [...selectedGuardianIds.value],
+      threshold.value,
+    )
+    selectedGuardianIds.value = new Set(settings.guardian_ids)
+    threshold.value = settings.threshold
+    guardiansUpdatedAt.value = settings.updated_at
+  } catch (e) {
+    guardiansError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingGuardians.value = false
+  }
+}
+
+// This identity's own in-progress recovery, if any — the "visible to the
+// owner through every channel that still works for them" invariant, for
+// the case this device/session still works. `GET /identities/:id/recovery/status`
+// is also public (no session needed at all), for the case it doesn't.
+const myRecoveryStatus = ref<RecoveryRequestResponse | null>(null)
+const cancellingMyRecovery = ref(false)
+const cancelMyRecoveryError = ref('')
+
+async function refreshMyRecoveryStatus() {
+  if (!session.token) return
+  try {
+    myRecoveryStatus.value = await getMyRecoveryStatus(session.token)
+  } catch {
+    // Non-fatal — this is a supplementary notice, not the page's primary
+    // content; a failed poll just leaves the previous known state in
+    // place rather than surfacing a page-level error.
+  }
+}
+
+async function onCancelMyRecovery() {
+  if (!session.token || !myRecoveryStatus.value) return
+  cancelMyRecoveryError.value = ''
+  cancellingMyRecovery.value = true
+  try {
+    myRecoveryStatus.value = await cancelRecoveryRequest(
+      session.token,
+      myRecoveryStatus.value.id,
+      "This wasn't me",
+    )
+  } catch (e) {
+    cancelMyRecoveryError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    cancellingMyRecovery.value = false
+  }
+}
+
+// Recovery attempts against *other* identities where this identity is
+// currently a guardian — the approval UI.
+const guardianRequests = ref<GuardianRequestSummary[]>([])
+const guardianProfileNames = ref<Record<string, string>>({})
+const actingOnRequestId = ref('')
+const guardianRequestError = ref('')
+
+async function refreshGuardianRequests() {
+  if (!session.token) return
+  try {
+    const summaries = await getGuardianRequests(session.token)
+    // A malformed/empty response is treated as "nothing pending" rather
+    // than assigned as-is — this is a polled, supplementary list (unlike
+    // the passkeys list above, which throws on a bad shape), so failing
+    // quietly here is the right default, but it must never leave
+    // `guardianRequests.value` as anything other than a real array.
+    if (!Array.isArray(summaries)) {
+      guardianRequests.value = []
+      return
+    }
+    guardianRequests.value = summaries
+    const ids = [...new Set(summaries.map((s) => s.request.identity_id))].filter(
+      (id) => !(id in guardianProfileNames.value),
+    )
+    if (ids.length > 0) {
+      const profiles = await api.getProfiles(session.token, ids)
+      const names = { ...guardianProfileNames.value }
+      for (const profile of profiles) {
+        names[profile.identity_id] = profile.display_name
+      }
+      guardianProfileNames.value = names
+    }
+  } catch {
+    // Same non-fatal treatment as refreshMyRecoveryStatus above.
+  }
+}
+
+async function onApproveGuardianRequest(requestId: string) {
+  if (!session.token) return
+  guardianRequestError.value = ''
+  actingOnRequestId.value = requestId
+  try {
+    await approveRecoveryRequest(session.token, requestId)
+    await refreshGuardianRequests()
+  } catch (e) {
+    guardianRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    actingOnRequestId.value = ''
+  }
+}
+
+async function onCancelGuardianRequest(requestId: string) {
+  if (!session.token) return
+  guardianRequestError.value = ''
+  actingOnRequestId.value = requestId
+  try {
+    await cancelRecoveryRequest(session.token, requestId, 'I do not believe this is legitimate')
+    await refreshGuardianRequests()
+  } catch (e) {
+    guardianRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    actingOnRequestId.value = ''
+  }
+}
 </script>
 
 <template>
@@ -402,6 +596,23 @@ async function onRevokePasskey(passkey: PasskeyResponse) {
       </div>
     </header>
     <p v-if="error" :class="page.error">{{ error }}</p>
+
+    <template v-if="myRecoveryStatus">
+      <AvalonWarningBanner
+        tone="danger"
+        title="A recovery attempt is in progress against your identity"
+        :message="`Status: ${myRecoveryStatus.status}. If this isn't you, cancel it now — a recovery only completes if it goes unvetoed until its time-delay elapses.`"
+      />
+      <div :class="styles.actions">
+        <AvalonButton
+          :label="cancellingMyRecovery ? 'Cancelling…' : 'This was not me — cancel it'"
+          variant="danger"
+          :disabled="cancellingMyRecovery"
+          @click="onCancelMyRecovery"
+        />
+      </div>
+      <p v-if="cancelMyRecoveryError" :class="page.error">{{ cancelMyRecoveryError }}</p>
+    </template>
 
     <AvalonCard title="Player search" :class="styles.discoverabilityCard">
       <div :class="styles.discoverabilityRow">
@@ -542,6 +753,94 @@ async function onRevokePasskey(passkey: PasskeyResponse) {
               @click="onAddPasskey"
             />
           </div>
+        </AvalonCard>
+
+        <AvalonCard
+          title="Recovery guardians"
+          subtitle="Trusted friends who can jointly authorize recovering this identity if you ever lose every passkey at once. Requires a threshold (M-of-N) so no single guardian can act alone, plus a mandatory public delay before it takes effect."
+        >
+          <p v-if="guardiansError" :class="page.error">{{ guardiansError }}</p>
+          <p v-if="friends.length === 0" :class="page.empty">
+            You need at least one friend before you can designate a guardian.
+          </p>
+          <ul v-else :class="styles.list">
+            <li v-for="friend in friends" :key="friend.identityId" :class="styles.guardianRow">
+              <input
+                type="checkbox"
+                :id="`guardian-${friend.identityId}`"
+                :checked="selectedGuardianIds.has(friend.identityId)"
+                @change="onToggleGuardian(friend.identityId)"
+              />
+              <label :for="`guardian-${friend.identityId}`">
+                {{ friend.displayName ?? friend.identityId }}
+              </label>
+            </li>
+          </ul>
+          <div v-if="selectedGuardianIds.size > 0" :class="styles.thresholdRow">
+            <label :for="'guardian-threshold'">Require at least</label>
+            <input
+              id="guardian-threshold"
+              type="number"
+              min="1"
+              :max="selectedGuardianIds.size"
+              v-model.number="clampedThreshold"
+              :class="styles.thresholdInput"
+            />
+            <span>of {{ selectedGuardianIds.size }} guardian{{ selectedGuardianIds.size === 1 ? '' : 's' }} to approve</span>
+          </div>
+          <p v-if="guardiansUpdatedAt" :class="styles.listDetail">
+            Last updated {{ guardiansUpdatedAt }}
+          </p>
+          <div :class="styles.actions">
+            <AvalonButton
+              :label="savingGuardians ? 'Saving…' : 'Save guardians'"
+              variant="primary"
+              :disabled="savingGuardians || selectedGuardianIds.size === 0"
+              @click="onSaveGuardians"
+            />
+          </div>
+        </AvalonCard>
+
+        <AvalonCard
+          v-if="guardianRequests.length > 0"
+          title="Recovery requests to approve"
+          subtitle="A friend who made you a guardian has a recovery attempt in progress. Approve only if you're confident it's really them."
+        >
+          <p v-if="guardianRequestError" :class="page.error">{{ guardianRequestError }}</p>
+          <ul :class="styles.list">
+            <li
+              v-for="summary in guardianRequests"
+              :key="summary.request.id"
+              :class="styles.device"
+            >
+              <span :class="styles.listLabel">
+                {{ guardianProfileNames[summary.request.identity_id] ?? summary.request.identity_id }}
+              </span>
+              <span :class="styles.listDetail">
+                {{ summary.request.approvals_count }} of {{ summary.request.threshold }} approvals ·
+                status: {{ summary.request.status }}
+                <template v-if="summary.request.delay_ends_at">
+                  · delay ends {{ summary.request.delay_ends_at }}
+                </template>
+              </span>
+              <div :class="styles.deviceActions">
+                <AvalonButton
+                  v-if="!summary.already_approved"
+                  :label="actingOnRequestId === summary.request.id ? 'Approving…' : 'Approve'"
+                  variant="primary"
+                  :disabled="actingOnRequestId === summary.request.id"
+                  @click="onApproveGuardianRequest(summary.request.id)"
+                />
+                <span v-else :class="styles.listDetail">You approved this request.</span>
+                <AvalonButton
+                  :label="actingOnRequestId === summary.request.id ? 'Working…' : 'This looks malicious — cancel'"
+                  variant="danger"
+                  :disabled="actingOnRequestId === summary.request.id"
+                  @click="onCancelGuardianRequest(summary.request.id)"
+                />
+              </div>
+            </li>
+          </ul>
         </AvalonCard>
 
         <AvalonCard v-if="hasSigningKey && pendingGrants.length > 0" title="Devices waiting for your approval">

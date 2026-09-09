@@ -18,6 +18,11 @@ const router = createRouter({
       name: 'login',
       component: () => import('../views/Login.vue'),
     },
+    {
+      path: '/recover-identity',
+      name: 'recover-identity',
+      component: () => import('../views/RecoverIdentity.vue'),
+    },
     // The logged-in shell: sidebar (desktop) / bottom nav (mobile) around a
     // <RouterView />, with every page a nested child route so it stays
     // URL-addressable. `requiresAuth` here is inherited by every child via

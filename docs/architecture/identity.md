@@ -409,6 +409,22 @@ future work). None of these affect the state machine or its invariants.
   exactly one passkey (`apps/hub/src/utils/singlePasskeyWarning.ts`'s
   `shouldShowSinglePasskeyWarning`), not a one-time dismiss — it disappears
   the moment a second passkey is registered.
+- `apps/hub/src/api/recovery.ts` (#201) orchestrates guardian configuration
+  and the recovery-initiation ceremony the same way `api/passkeys.ts`
+  orchestrates add-a-passkey — `startRecovery()` is the one function in the
+  Hub's API layer that deliberately never sends a bearer token. `Profile.vue`
+  gained a "Recovery guardians" card (a friend checklist plus an M-of-N
+  threshold stepper, `packages/ui`'s `AvalonCard`/`AvalonButton` only — no
+  new library component), an owner-visible in-progress banner backed by
+  `GET /me/recovery/status` (polled the same cadence as the existing
+  device-grant list), and a "Recovery requests to approve" card for when
+  the logged-in identity is currently a guardian for someone else
+  (`GET /me/recovery/guardian-requests`, approve/cancel inline).
+  `RecoverIdentity.vue` (routed at `/recover-identity`, linked from
+  `Login.vue`) is the unauthenticated initiation flow: enter the identity
+  id, drive the real WebAuthn ceremony, then poll the public
+  `GET /identities/:id/recovery/status` for status — no session anywhere
+  on this page.
 
 ## Decisions and tickets
 
