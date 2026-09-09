@@ -3,7 +3,12 @@
 //! Always available, in any build: `avalon inspect-ledger`,
 //! `avalon inspect-ledger-full` (same view, plus each entry's payload),
 //! `avalon outbox-status` — read-only diagnostics, safe against any
-//! deployment including a real one.
+//! deployment including a real one. `inspect-ledger`/`-full` read from
+//! Postgres by default, or from a RocksDB path with `--rocksdb <path>` when
+//! this binary is built with the (off-by-default) `rocksdb-backend`
+//! feature — see `avalon_chain::RocksDbSettlementProvider` (issue #178).
+//! Nothing in `avalon-server` actually writes to RocksDB yet; this is
+//! inspection-only wiring for whichever store you point it at.
 //!
 //! Available only when this binary is built with the default `dev-tools`
 //! Cargo feature (issue #173 — see `dev_tools.rs`'s own doc comment for the
@@ -20,7 +25,24 @@ mod dev_tools;
 
 use avalon_chain::PostgresSettlementProvider;
 use sqlx::postgres::PgPoolOptions;
+use std::path::PathBuf;
 use uuid::Uuid;
+
+/// Pulls a trailing `--rocksdb <path>` flag off `args`, if present — the
+/// only extra flag `inspect-ledger`/`inspect-ledger-full` accept. Returns
+/// `None` (meaning "use Postgres, via `DATABASE_URL`") for everything else.
+fn parse_rocksdb_flag(args: &mut std::env::Args) -> Option<PathBuf> {
+    match args.next() {
+        Some(flag) if flag == "--rocksdb" => {
+            let Some(path) = args.next() else {
+                eprintln!("--rocksdb requires a path");
+                std::process::exit(1);
+            };
+            Some(PathBuf::from(path))
+        }
+        _ => None,
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -29,8 +51,14 @@ async fn main() {
     let mut args = std::env::args();
     let command = args.nth(1);
     match command.as_deref() {
-        Some("inspect-ledger") => inspect_ledger(false).await,
-        Some("inspect-ledger-full") => inspect_ledger(true).await,
+        Some("inspect-ledger") => {
+            let rocksdb_path = parse_rocksdb_flag(&mut args);
+            inspect_ledger(false, rocksdb_path).await
+        }
+        Some("inspect-ledger-full") => {
+            let rocksdb_path = parse_rocksdb_flag(&mut args);
+            inspect_ledger(true, rocksdb_path).await
+        }
         #[cfg(feature = "dev-tools")]
         Some("create-identity") => dev_tools::create_identity().await,
         #[cfg(feature = "dev-tools")]
@@ -56,7 +84,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status{}>",
+                "usage: avalon <inspect-ledger [--rocksdb <path>]|inspect-ledger-full [--rocksdb <path>]|outbox-status{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-game --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]"
                 } else {
@@ -97,11 +125,17 @@ async fn outbox_status() {
 /// payload, since it needs it to re-verify each entry's hash) — this only
 /// changes what gets printed.
 ///
-/// Prints a batch boundary header (issue #38) whenever the entry stream
-/// crosses into a new `batch_id`, showing that batch's seq range and root —
-/// entries within a batch stay hash-chained exactly as before, this only
-/// adds where the batch lines are drawn.
-async fn inspect_ledger(full: bool) {
+/// `rocksdb_path`, if given, reads from a `RocksDbSettlementProvider` at
+/// that path instead of Postgres (issue #178) — requires this binary to be
+/// built with `--features rocksdb-backend`. Either way the actual printing
+/// (`print_ledger`) is identical: both backends return the same
+/// `LedgerEntryView`/`LedgerBatchView` types, so there's exactly one
+/// rendering to keep correct.
+async fn inspect_ledger(full: bool, rocksdb_path: Option<PathBuf>) {
+    if let Some(path) = rocksdb_path {
+        return inspect_ledger_rocksdb(full, &path);
+    }
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -122,7 +156,45 @@ async fn inspect_ledger(full: bool) {
     let chain = PostgresSettlementProvider::new(pool, network_id);
     let entries = chain.list_entries().await.expect("failed to read ledger");
     let batches = chain.list_batches().await.expect("failed to read batches");
+    print_ledger(&entries, &batches, full);
+}
 
+/// The RocksDB half of `inspect_ledger` — only compiled in when this binary
+/// is built with `--features rocksdb-backend` (issue #178); otherwise
+/// `--rocksdb` fails with a clear message instead of silently doing
+/// nothing. Synchronous (unlike the Postgres path): `RocksDbSettlementProvider`'s
+/// own inspection methods are plain local-disk reads, not network I/O.
+#[cfg(feature = "rocksdb-backend")]
+fn inspect_ledger_rocksdb(full: bool, path: &std::path::Path) {
+    let chain = avalon_chain::RocksDbSettlementProvider::open_existing(path).unwrap_or_else(|e| {
+        eprintln!("failed to open {path:?}: {e}");
+        std::process::exit(1);
+    });
+    println!("network_id: {}", chain.network_id());
+
+    let entries = chain.list_entries().expect("failed to read ledger");
+    let batches = chain.list_batches().expect("failed to read batches");
+    print_ledger(&entries, &batches, full);
+}
+
+#[cfg(not(feature = "rocksdb-backend"))]
+fn inspect_ledger_rocksdb(_full: bool, _path: &std::path::Path) {
+    eprintln!("--rocksdb requires avalon-cli built with --features rocksdb-backend");
+    std::process::exit(1);
+}
+
+/// Prints a batch boundary header (issue #38) whenever the entry stream
+/// crosses into a new `batch_id`, showing that batch's seq range and root —
+/// entries within a batch stay hash-chained exactly as before, this only
+/// adds where the batch lines are drawn. Shared by both backends (issue
+/// #178) — `LedgerEntryView`/`LedgerBatchView` are backend-agnostic, so
+/// there's exactly one rendering to keep correct rather than two that could
+/// drift.
+fn print_ledger(
+    entries: &[avalon_chain::LedgerEntryView],
+    batches: &[avalon_chain::LedgerBatchView],
+    full: bool,
+) {
     if entries.is_empty() {
         println!("(ledger is empty)");
         return;
@@ -132,7 +204,7 @@ async fn inspect_ledger(full: bool) {
         batches.iter().map(|b| (b.batch_id, b)).collect();
 
     let mut current_batch: Option<Uuid> = None;
-    for entry in &entries {
+    for entry in entries {
         if current_batch != Some(entry.batch_id) {
             current_batch = Some(entry.batch_id);
             match batch_by_id.get(&entry.batch_id) {

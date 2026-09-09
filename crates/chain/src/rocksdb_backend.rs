@@ -141,6 +141,31 @@ impl RocksDbSettlementProvider {
         })
     }
 
+    /// Opens an existing ledger for read-only inspection
+    /// (`avalon inspect-ledger --rocksdb <path>`) — never creates a database
+    /// or a genesis row, unlike [`Self::connect`]. Errors if `path` doesn't
+    /// already exist. Mirrors `PostgresSettlementProvider::read_genesis_network_id`
+    /// paired with `::new` — an operator pointing this at an unfamiliar
+    /// path should see what's actually there, not have this tool decide
+    /// anything on their behalf.
+    pub fn open_existing(path: &Path) -> Result<Self, SettlementError> {
+        let db = DB::open_cf(&Options::default(), path, [CF_META, CF_ENTRIES, CF_BATCHES])
+            .map_err(storage_err)?;
+        let meta_cf = db
+            .cf_handle(CF_META)
+            .expect("meta column family exists in any database opened by connect");
+        let network_id = db
+            .get_cf(meta_cf, GENESIS_KEY)
+            .map_err(storage_err)?
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_else(|| "(no genesis set)".to_string());
+
+        Ok(Self {
+            db: Arc::new(db),
+            network_id,
+        })
+    }
+
     /// The network identity this provider is bound to (mirrors
     /// `PostgresSettlementProvider::network_id`, issue #173).
     pub fn network_id(&self) -> &str {

@@ -52,6 +52,11 @@ dev-tools = [
     "dep:passkey-authenticator",
     "dep:coset",
 ]
+# Off by default, same reasoning as avalon-chain's own rocksdb-backend
+# feature (issue #178): pass through so `avalon inspect-ledger --rocksdb
+# <path>` can build against RocksDbSettlementProvider without every default
+# build of this CLI paying RocksDB's C++ build cost.
+rocksdb-backend = ["avalon-chain/rocksdb-backend"]
 
 [[bin]]
 name = "avalon"

@@ -8,11 +8,12 @@ PID_FILE := $(PID_DIR)/avalon-server.pid
 LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
-	build run start stop restart status test test-live fmt fmt-check lint check clean \
+	build run start stop restart status test test-live test-rocksdb fmt fmt-check lint check clean \
 	migrate migrate-down db-reset \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
-	inspect-ledger inspect-ledger-full create-identity login outbox-status \
+	inspect-ledger inspect-ledger-full create-identity login register-game outbox-status \
+	cli-prod-build \
 	check-all clean-all
 
 help:
@@ -27,6 +28,7 @@ help:
 	@echo "  make status        report whether the background process is running"
 	@echo "  make test          cargo test --workspace"
 	@echo "  make test-live     cargo test --workspace -- --ignored"
+	@echo "  make test-rocksdb  cargo test -p avalon-chain --features rocksdb-backend (needs no live infra — a temp dir, unlike test-live)"
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --all -- --check"
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
@@ -53,7 +55,18 @@ help:
 	@echo "  make inspect-ledger-full   same, plus each entry's actual payload"
 	@echo "  make create-identity  register a new self-custodied (passkey) identity via avalon-cli"
 	@echo "  make login IDENTITY_ID=<uuid>  log in an identity create-identity saved locally, print a session token"
+	@echo "  make register-game SLUG=<slug> NAME=<name> DEVELOPER=<dev>  register a game, mint its signing key"
 	@echo "  make outbox-status    pending/oldest-pending count for the settlement outbox (issue #71)"
+	@echo ""
+	@echo "  All of the above (except inspect-ledger/inspect-ledger-full/outbox-status)"
+	@echo "  need the default 'dev-tools' cargo feature (on by default) — see cli-prod-build."
+	@echo "  make cli-prod-build   builds avalon-cli WITHOUT dev-tools (issue #175): no"
+	@echo "                        create-identity/login/register-game in the binary at all,"
+	@echo "                        just inspect-ledger/inspect-ledger-full/outbox-status."
+	@echo ""
+	@echo "  Every avalon-server/avalon-cli command above needs AVALON_NETWORK_ID set in"
+	@echo "  .env (issue #173) — see .env.example. A fresh database's genesis is created"
+	@echo "  from that value on first boot; a later mismatch refuses to start, on purpose."
 	@echo ""
 	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
@@ -106,6 +119,13 @@ test:
 # by default in `test`.
 test-live:
 	cargo test --workspace -- --ignored
+
+# RocksDbSettlementProvider's own suite (issue #178) — behind the off-by-
+# default `rocksdb-backend` feature, but unlike test-live, needs no live
+# infra at all (a temp directory is enough), so it's a real `test`, not
+# `--ignored`, once the feature is on.
+test-rocksdb:
+	cargo test -p avalon-chain --features rocksdb-backend
 
 fmt:
 	cargo fmt --all
@@ -185,8 +205,19 @@ create-identity:
 login:
 	cargo run -p avalon-cli -- login $(IDENTITY_ID)
 
+register-game:
+	cargo run -p avalon-cli -- register-game --slug $(SLUG) --name "$(NAME)" --developer "$(DEVELOPER)" $(if $(CAPABILITY),--capability $(CAPABILITY),) $(if $(SERVER),--server $(SERVER),)
+
 outbox-status:
 	cargo run -p avalon-cli -- outbox-status
+
+# Issue #175: everything above (except inspect-ledger/inspect-ledger-full/
+# outbox-status) only exists in a `dev-tools`-featured build — the default.
+# This is what a build meant to run anywhere near a real deployment should
+# actually use: create-identity/login/register-game are absent from the
+# resulting binary, not merely refused at runtime.
+cli-prod-build:
+	cargo build -p avalon-cli --release --no-default-features
 
 # --- Everything -------------------------------------------------------------
 
