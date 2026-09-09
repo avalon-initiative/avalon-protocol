@@ -77,5 +77,10 @@ withDefaults(defineProps<AvalonIconProps>(), {
       <path d="M12 2.5 3.5 20h4.2l1.7-3.8h5.2L16.3 20h4.2L12 2.5Z" />
       <path d="M10.6 13.2h2.8L12 9.9l-1.4 3.3Z" fill="currentColor" stroke="none" />
     </template>
+    <template v-else-if="name === 'alert'">
+      <path d="M12 3.5 2 20.5h20L12 3.5Z" />
+      <path d="M12 10v4.5" />
+      <circle cx="12" cy="17.5" r="0.9" fill="currentColor" stroke="none" />
+    </template>
   </svg>
 </template>
