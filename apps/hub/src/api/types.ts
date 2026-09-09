@@ -290,6 +290,13 @@ export interface PublicProfileResponse {
 // crates/server/src/guilds.rs, crates/server/src/channels.rs, and
 // crates/server/src/guild_messages.rs field-for-field.
 
+// One entry in GuildResponse.links (issue #153), matching
+// crates/protocol/src/guilds.rs::GuildLink field-for-field.
+export interface GuildLink {
+  label: string
+  url: string
+}
+
 export interface GuildResponse {
   id: string
   name: string
@@ -303,6 +310,11 @@ export interface GuildResponse {
   // (CreateGuildRequest doesn't take it, neither does UpdateGuildRequest),
   // so every guild is "invite_only" in practice. See guilds.ts's own note.
   join_policy: string
+  // Issue #153. `null` means unset.
+  motd: string | null
+  banner: string | null
+  links: GuildLink[]
+  recruiting: boolean
   // Issue #206. Whether the game affinity breakdown
   // (GET /guilds/{id}/game-breakdown) is shown on this guild's public
   // profile — a manage_guild holder can always fetch the breakdown
@@ -337,6 +349,15 @@ export interface UpdateGuildRequest {
   name?: string
   tag?: string
   description?: string
+  // Issue #153. Three states, same as ProfileResponse's `bio`: omitted
+  // (untouched), `""` (clear), non-empty (validate, then set).
+  motd?: string
+  banner?: string
+  // Issue #153. Two states: omitted (untouched) or a full replacement list
+  // (including `[]` to clear it) — never a per-entry patch.
+  links?: GuildLink[]
+  // Issue #153. Omitted leaves it untouched.
+  recruiting?: boolean
   // Issue #206. Omitted leaves it untouched.
   game_breakdown_public?: boolean
   // Issue #153, all four below. motd/banner: omit to leave untouched,
@@ -390,8 +411,7 @@ export interface FavoriteGamesResponse {
 
 export interface SetFavoriteGamesRequest {
   // Full desired ordered list of pinned game ids — always a full replace,
-  // same convention UpdateGuildRequest's (currently unwired-in-hub) `links`
-  // field uses server-side.
+  // same convention UpdateGuildRequest's `links` field uses server-side.
   game_ids: string[]
 }
 
