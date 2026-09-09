@@ -613,7 +613,7 @@ with Game A becomes historical.
   join" action on Discover guild cards (`apps/hub/src/views/Guilds.vue`,
   shown only for recruiting guilds the caller isn't already a member of),
   and an "Applications" section on the guild page
-  (`apps/hub/src/views/Guild.vue`, `canManageGuild`-gated) for managers to
+  (`apps/hub/src/views/Guild.vue`, `manage_members`-gated) for managers to
   review pending requests.
 
 ## Decisions and tickets
