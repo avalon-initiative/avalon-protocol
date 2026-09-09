@@ -28,3 +28,6 @@ export const Recruiting: Story = { args: { recruiting: true } }
 export const WithIcon: Story = {
   args: { iconUrl: 'https://placehold.co/48x48' },
 }
+export const WithBanner: Story = {
+  args: { bannerUrl: 'https://placehold.co/400x120', iconUrl: 'https://placehold.co/48x48' },
+}

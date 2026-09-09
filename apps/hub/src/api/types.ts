@@ -476,6 +476,10 @@ export interface DiscoverGuildSummary {
   recruiting: boolean
   member_count: number
   created_at: string
+  // Issue #258: same already-public fields GuildResponse carries
+  // (#153/#246) — null when unset.
+  banner: string | null
+  icon: string | null
 }
 
 export interface DiscoverGuildsResponse {

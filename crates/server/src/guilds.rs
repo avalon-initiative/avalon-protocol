@@ -2586,6 +2586,10 @@ pub struct DiscoverGuildSummary {
     pub member_count: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Issue #258: same already-public fields `GET /guilds/{id}` returns
+    /// (#153/#246) — `null` when unset, no new visibility exposure.
+    pub banner: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2634,6 +2638,7 @@ fn build_discover_query(
 ) -> QueryBuilder<Postgres> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT g.id, g.name, g.tag, g.description, g.recruiting, g.created_at, \
+         g.banner, g.icon, \
          (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count \
          FROM guilds g WHERE 1 = 1",
     );
@@ -2749,6 +2754,8 @@ pub async fn discover_guilds(
             recruiting: row.try_get("recruiting")?,
             member_count: row.try_get("member_count")?,
             created_at: row.try_get("created_at")?,
+            banner: row.try_get("banner")?,
+            icon: row.try_get("icon")?,
         });
     }
     let next_cursor = if has_more {
@@ -3729,6 +3736,20 @@ mod tests {
         let actor = Uuid::new_v4();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(!builder.sql().as_str().contains("WHERE id ="));
+    }
+
+    /// Issue #258: `banner`/`icon` are already-public fields on a guild
+    /// (readable via `GET /guilds/{id}` since #153/#246) — Discover's
+    /// `SELECT` must include them too so `DiscoverGuildSummary` can carry
+    /// them without a second round trip.
+    #[test]
+    fn select_list_includes_banner_and_icon() {
+        let actor = Uuid::new_v4();
+        let builder = build_discover_query(&empty_discover_query(), DiscoverSort::Newest, actor, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("g.banner"));
+        assert!(sql.contains("g.icon"));
     }
 
     // --- Issue #206: game affinity breakdown -------------------------------
