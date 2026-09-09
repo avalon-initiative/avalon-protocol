@@ -75,6 +75,10 @@ pub enum AppError {
     InvalidGuildTag,
     #[error("guild role not found")]
     GuildRoleNotFound,
+    #[error("role description must be 200 characters or fewer")]
+    InvalidRoleDescription,
+    #[error("unrecognized role badge icon or color")]
+    InvalidRoleBadge,
     #[error("cannot change the owner role's permissions")]
     CannotModifyOwnerRole,
     #[error("missing required guild permission")]
@@ -184,7 +188,9 @@ impl IntoResponse for AppError {
             AppError::GuildNameTaken | AppError::GuildTagTaken | AppError::AlreadyGuildOwner => {
                 StatusCode::CONFLICT
             }
-            AppError::InvalidGuildTag => StatusCode::BAD_REQUEST,
+            AppError::InvalidGuildTag
+            | AppError::InvalidRoleDescription
+            | AppError::InvalidRoleBadge => StatusCode::BAD_REQUEST,
             AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {
                 StatusCode::FORBIDDEN
             }

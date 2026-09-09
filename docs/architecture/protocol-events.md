@@ -120,6 +120,7 @@ milestone-1 stand-in until actor signatures exist.
 | `issuer.suspended` / `.reinstated` / `.revoked` / `.deprecated` | network or issuer → issuer | reason, effective at | issuer status | operator (audited) or issuer |
 | `friend.requested` / `.accepted` / `.removed` | identity → identity | the two identities, actor | friendships | acting identity's key — decided promised-durable; see [social-graph.md](./social-graph.md) |
 | `guild.created` | identity → guild | name, tag, description, founder | guilds | founder key |
+| `guild.role_defined` | identity → guild | name_index, name, permissions, description, badge (icon, color), actor | role definitions | acting member's key |
 | `guild.member_added` / `.member_removed` | guild → identity | role, actor | rosters, history | acting member's key |
 | `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
 | `guild.game_associated` | guild → game | guild, game | associations | guild officer key |

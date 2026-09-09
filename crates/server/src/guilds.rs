@@ -34,7 +34,9 @@
 //! is not itself exposed for editing by any route in this module.
 
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::guilds::{GuildPermission, JoinPolicy};
+use avalon_protocol::guilds::{
+    GuildPermission, JoinPolicy, RoleBadge, RoleBadgeColor, RoleBadgeIcon,
+};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -52,6 +54,11 @@ use crate::state::AppState;
 const OWNER_ROLE_INDEX: i32 = 0;
 const OFFICER_ROLE_INDEX: i32 = 1;
 const MEMBER_ROLE_INDEX: i32 = 2;
+
+/// Cap on `GuildRole.description` (issue #152) — same "short, capped text
+/// field" treatment as `validate_tag`, just a longer bound since a role
+/// description is prose, not a 2-5 character tag.
+const MAX_ROLE_DESCRIPTION_LEN: usize = 200;
 
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
@@ -80,15 +87,44 @@ pub(crate) fn has_guild_permission(
     actor_permissions.iter().any(|p| p == permission.as_str())
 }
 
-fn starter_roles() -> [(i32, &'static str, &'static [&'static str]); 3] {
+/// `(name_index, name, permissions, description, badge)` per starter role
+/// — description/badge defaults added for issue #152, same "sensible
+/// defaults for the starter roles" the ticket's design section calls for.
+fn starter_roles() -> [(
+    i32,
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+    RoleBadge,
+); 3] {
     [
-        (OWNER_ROLE_INDEX, "owner", GuildPermission::ALL_STRS),
+        (
+            OWNER_ROLE_INDEX,
+            "owner",
+            GuildPermission::ALL_STRS,
+            "Full control over the guild.",
+            RoleBadge {
+                icon: RoleBadgeIcon::Crown,
+                color: RoleBadgeColor::Gold,
+            },
+        ),
         (
             OFFICER_ROLE_INDEX,
             "officer",
             &["manage_members", "manage_channels"],
+            "Manages members and channels.",
+            RoleBadge {
+                icon: RoleBadgeIcon::Shield,
+                color: RoleBadgeColor::Blue,
+            },
         ),
-        (MEMBER_ROLE_INDEX, "member", &[]),
+        (
+            MEMBER_ROLE_INDEX,
+            "member",
+            &[],
+            "A guild member.",
+            RoleBadge::DEFAULT,
+        ),
     ]
 }
 
@@ -98,6 +134,52 @@ fn validate_tag(tag: &str) -> Result<(), AppError> {
         return Err(AppError::InvalidGuildTag);
     }
     Ok(())
+}
+
+/// Issue #152's invariant: a role description is capped, same as other
+/// guild text fields — but unlike `body.description` on `Guild` itself
+/// (never actually length-checked today), a role's description *is*
+/// validated here, since this ticket is the first one to specify a cap for
+/// it explicitly.
+fn validate_role_description(description: &str) -> Result<(), AppError> {
+    if description.chars().count() > MAX_ROLE_DESCRIPTION_LEN {
+        return Err(AppError::InvalidRoleDescription);
+    }
+    Ok(())
+}
+
+/// Wire shape for a badge in a create/update role request — plain strings
+/// rather than deserializing straight into `RoleBadgeIcon`/`RoleBadgeColor`,
+/// so an unrecognized id goes through the same explicit
+/// validate-and-reject path (`AppError::InvalidRoleBadge`) as every other
+/// guild input in this module, instead of a generic JSON-deserialization
+/// rejection a caller can't distinguish from a malformed request body.
+#[derive(Deserialize)]
+pub struct RoleBadgeRequest {
+    pub icon: String,
+    pub color: String,
+}
+
+impl RoleBadgeRequest {
+    /// Issue #152's invariant: an unrecognized icon or color id is a
+    /// rejected request, not silently dropped or coerced to a default —
+    /// deliberately different from `normalize_permissions`, which *does*
+    /// drop unknown permission strings, since a badge is presentational
+    /// and a caller sending an unknown id here is far more likely to be a
+    /// real bug (typo, stale client) worth surfacing than a
+    /// forward-compatibility case.
+    fn into_badge(self) -> Result<RoleBadge, AppError> {
+        let icon = RoleBadgeIcon::parse(&self.icon).ok_or(AppError::InvalidRoleBadge)?;
+        let color = RoleBadgeColor::parse(&self.color).ok_or(AppError::InvalidRoleBadge)?;
+        Ok(RoleBadge { icon, color })
+    }
+}
+
+fn badge_payload(badge: RoleBadge) -> serde_json::Value {
+    serde_json::json!({
+        "icon": badge.icon.as_str(),
+        "color": badge.color.as_str(),
+    })
 }
 
 struct GuildRow {
@@ -225,14 +307,17 @@ pub async fn create_guild(
     }
     inserted?;
 
-    for (name_index, name, permissions) in starter_roles() {
+    for (name_index, name, permissions, description, badge) in starter_roles() {
         sqlx::query(
-            "INSERT INTO guild_roles (guild_id, name_index, name, permissions) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO guild_roles (guild_id, name_index, name, permissions, description, badge_icon, badge_color) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(guild_id)
         .bind(name_index)
         .bind(name)
         .bind(permissions)
+        .bind(description)
+        .bind(badge.icon.as_str())
+        .bind(badge.color.as_str())
         .execute(&mut *tx)
         .await?;
     }
@@ -443,6 +528,22 @@ pub struct RoleResponse {
     pub name_index: i32,
     pub name: String,
     pub permissions: Vec<String>,
+    pub description: String,
+    pub badge: RoleBadge,
+}
+
+/// Reads `badge_icon`/`badge_color` off a `guild_roles` row and falls back
+/// to [`RoleBadge::DEFAULT`] if either is ever somehow unparseable — same
+/// "never a hard failure on a read path" posture `fetch_guild`'s
+/// `join_policy` parse already takes, since every write path validates
+/// these before they ever reach the database.
+fn row_badge(row: &sqlx::postgres::PgRow) -> Result<RoleBadge, AppError> {
+    let icon_raw: String = row.try_get("badge_icon")?;
+    let color_raw: String = row.try_get("badge_color")?;
+    Ok(RoleBadge {
+        icon: RoleBadgeIcon::parse(&icon_raw).unwrap_or(RoleBadgeIcon::Star),
+        color: RoleBadgeColor::parse(&color_raw).unwrap_or(RoleBadgeColor::Gray),
+    })
 }
 
 async fn fetch_role(
@@ -451,17 +552,20 @@ async fn fetch_role(
     name_index: i32,
 ) -> Result<RoleResponse, AppError> {
     let row = sqlx::query(
-        "SELECT name_index, name, permissions FROM guild_roles WHERE guild_id = $1 AND name_index = $2",
+        "SELECT name_index, name, permissions, description, badge_icon, badge_color FROM guild_roles WHERE guild_id = $1 AND name_index = $2",
     )
     .bind(guild_id)
     .bind(name_index)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::GuildRoleNotFound)?;
+    let badge = row_badge(&row)?;
     Ok(RoleResponse {
         name_index: row.try_get("name_index")?,
         name: row.try_get("name")?,
         permissions: row.try_get("permissions")?,
+        description: row.try_get("description")?,
+        badge,
     })
 }
 
@@ -475,7 +579,7 @@ pub async fn list_roles(
     fetch_guild(&state, guild_id).await?;
 
     let rows = sqlx::query(
-        "SELECT name_index, name, permissions FROM guild_roles WHERE guild_id = $1 ORDER BY name_index",
+        "SELECT name_index, name, permissions, description, badge_icon, badge_color FROM guild_roles WHERE guild_id = $1 ORDER BY name_index",
     )
     .bind(guild_id)
     .fetch_all(&state.pool)
@@ -483,10 +587,13 @@ pub async fn list_roles(
 
     let mut roles = Vec::with_capacity(rows.len());
     for row in rows {
+        let badge = row_badge(&row)?;
         roles.push(RoleResponse {
             name_index: row.try_get("name_index")?,
             name: row.try_get("name")?,
             permissions: row.try_get("permissions")?,
+            description: row.try_get("description")?,
+            badge,
         });
     }
     Ok(Json(roles))
@@ -508,6 +615,15 @@ pub struct CreateRoleRequest {
     pub name: String,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Issue #152. Defaults to an empty string, same "no explicit
+    /// `Option` needed, empty is a valid value" treatment `Guild.description`
+    /// already gets.
+    #[serde(default)]
+    pub description: String,
+    /// Issue #152. Omitted entirely (not just an empty object) means
+    /// [`RoleBadge::DEFAULT`] — a caller ahead of Hub UI support for
+    /// choosing a badge still gets a valid, renderable role.
+    pub badge: Option<RoleBadgeRequest>,
 }
 
 pub async fn create_role(
@@ -530,6 +646,11 @@ pub async fn create_role(
     }
 
     let permissions = normalize_permissions(&body.permissions);
+    validate_role_description(&body.description)?;
+    let badge = match body.badge {
+        Some(b) => b.into_badge()?,
+        None => RoleBadge::DEFAULT,
+    };
 
     let mut tx = state.pool.begin().await?;
 
@@ -542,12 +663,15 @@ pub async fn create_role(
     let name_index: i32 = next_index_row.try_get("next")?;
 
     sqlx::query(
-        "INSERT INTO guild_roles (guild_id, name_index, name, permissions) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO guild_roles (guild_id, name_index, name, permissions, description, badge_icon, badge_color) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(guild_id)
     .bind(name_index)
     .bind(&body.name)
     .bind(&permissions)
+    .bind(&body.description)
+    .bind(badge.icon.as_str())
+    .bind(badge.color.as_str())
     .execute(&mut *tx)
     .await?;
 
@@ -561,6 +685,8 @@ pub async fn create_role(
             "name_index": name_index,
             "name": body.name,
             "permissions": permissions,
+            "description": body.description,
+            "badge": badge_payload(badge),
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -574,6 +700,8 @@ pub async fn create_role(
         name_index,
         name: body.name,
         permissions,
+        description: body.description,
+        badge,
     }))
 }
 
@@ -581,6 +709,11 @@ pub async fn create_role(
 pub struct UpdateRoleRequest {
     pub name: Option<String>,
     pub permissions: Option<Vec<String>>,
+    /// Issue #152. `None` leaves the existing description untouched — same
+    /// partial-update convention `name`/`permissions` already use.
+    pub description: Option<String>,
+    /// Issue #152. `None` leaves the existing badge untouched.
+    pub badge: Option<RoleBadgeRequest>,
 }
 
 pub async fn update_role(
@@ -617,16 +750,30 @@ pub async fn update_role(
         Some(p) => normalize_permissions(p),
         None => existing.permissions,
     };
+    let new_description = match &body.description {
+        Some(d) => {
+            validate_role_description(d)?;
+            d.clone()
+        }
+        None => existing.description,
+    };
+    let new_badge = match body.badge {
+        Some(b) => b.into_badge()?,
+        None => existing.badge,
+    };
 
     let mut tx = state.pool.begin().await?;
 
     let updated = sqlx::query(
-        "UPDATE guild_roles SET name = $3, permissions = $4 WHERE guild_id = $1 AND name_index = $2",
+        "UPDATE guild_roles SET name = $3, permissions = $4, description = $5, badge_icon = $6, badge_color = $7 WHERE guild_id = $1 AND name_index = $2",
     )
     .bind(guild_id)
     .bind(name_index)
     .bind(&new_name)
     .bind(&new_permissions)
+    .bind(&new_description)
+    .bind(new_badge.icon.as_str())
+    .bind(new_badge.color.as_str())
     .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
@@ -643,6 +790,8 @@ pub async fn update_role(
             "name_index": name_index,
             "name": new_name,
             "permissions": new_permissions,
+            "description": new_description,
+            "badge": badge_payload(new_badge),
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -656,6 +805,8 @@ pub async fn update_role(
         name_index,
         name: new_name,
         permissions: new_permissions,
+        description: new_description,
+        badge: new_badge,
     }))
 }
 
@@ -1532,5 +1683,89 @@ mod tests {
     fn join_is_allowed_only_for_open_guilds() {
         assert!(!can_join_directly(JoinPolicy::InviteOnly));
         assert!(can_join_directly(JoinPolicy::Open));
+    }
+
+    // --- Issue #152: role description + badge ---
+
+    #[test]
+    fn role_description_at_the_cap_is_accepted() {
+        let description = "a".repeat(MAX_ROLE_DESCRIPTION_LEN);
+        assert!(validate_role_description(&description).is_ok());
+    }
+
+    #[test]
+    fn role_description_over_the_cap_is_rejected() {
+        let description = "a".repeat(MAX_ROLE_DESCRIPTION_LEN + 1);
+        assert!(matches!(
+            validate_role_description(&description),
+            Err(AppError::InvalidRoleDescription)
+        ));
+    }
+
+    #[test]
+    fn empty_role_description_is_accepted() {
+        assert!(validate_role_description("").is_ok());
+    }
+
+    #[test]
+    fn valid_badge_request_parses_into_a_role_badge() {
+        let badge = RoleBadgeRequest {
+            icon: "crown".to_string(),
+            color: "gold".to_string(),
+        }
+        .into_badge()
+        .expect("a known icon/color pair should parse");
+        assert_eq!(badge.icon, RoleBadgeIcon::Crown);
+        assert_eq!(badge.color, RoleBadgeColor::Gold);
+    }
+
+    #[test]
+    fn unrecognized_badge_icon_is_rejected_not_dropped() {
+        let result = RoleBadgeRequest {
+            icon: "not_a_real_icon".to_string(),
+            color: "gold".to_string(),
+        }
+        .into_badge();
+        assert!(matches!(result, Err(AppError::InvalidRoleBadge)));
+    }
+
+    #[test]
+    fn unrecognized_badge_color_is_rejected_not_dropped() {
+        let result = RoleBadgeRequest {
+            icon: "crown".to_string(),
+            color: "not_a_real_color".to_string(),
+        }
+        .into_badge();
+        assert!(matches!(result, Err(AppError::InvalidRoleBadge)));
+    }
+
+    #[test]
+    fn starter_roles_carry_sensible_description_and_badge_defaults() {
+        let roles = starter_roles();
+        // owner
+        assert_eq!(roles[0].3, "Full control over the guild.");
+        assert_eq!(roles[0].4.icon, RoleBadgeIcon::Crown);
+        assert_eq!(roles[0].4.color, RoleBadgeColor::Gold);
+        // officer
+        assert_eq!(roles[1].3, "Manages members and channels.");
+        assert_eq!(roles[1].4.icon, RoleBadgeIcon::Shield);
+        assert_eq!(roles[1].4.color, RoleBadgeColor::Blue);
+        // member falls back to the same default a role without an
+        // explicit badge gets.
+        assert_eq!(roles[2].4, RoleBadge::DEFAULT);
+    }
+
+    #[test]
+    fn role_badge_icon_round_trips_through_as_str_and_parse() {
+        for icon in RoleBadgeIcon::ALL {
+            assert_eq!(RoleBadgeIcon::parse(icon.as_str()), Some(icon));
+        }
+    }
+
+    #[test]
+    fn role_badge_color_round_trips_through_as_str_and_parse() {
+        for color in RoleBadgeColor::ALL {
+            assert_eq!(RoleBadgeColor::parse(color.as_str()), Some(color));
+        }
     }
 }

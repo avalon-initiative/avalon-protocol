@@ -56,6 +56,144 @@ pub struct GuildRole {
     pub name_index: u32,
 }
 
+/// Fixed milestone-1 vocabulary of role badge icons (issue #152). Not
+/// user-uploadable — a role's icon is chosen from this closed set, same
+/// "custom names allowed, custom permissions/values not yet" precedent
+/// [`GuildPermission`] already established for milestone 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleBadgeIcon {
+    Shield,
+    Crown,
+    Star,
+    Sword,
+    Wrench,
+    Heart,
+    Flag,
+    Bolt,
+}
+
+impl RoleBadgeIcon {
+    pub const ALL: [RoleBadgeIcon; 8] = [
+        RoleBadgeIcon::Shield,
+        RoleBadgeIcon::Crown,
+        RoleBadgeIcon::Star,
+        RoleBadgeIcon::Sword,
+        RoleBadgeIcon::Wrench,
+        RoleBadgeIcon::Heart,
+        RoleBadgeIcon::Flag,
+        RoleBadgeIcon::Bolt,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RoleBadgeIcon::Shield => "shield",
+            RoleBadgeIcon::Crown => "crown",
+            RoleBadgeIcon::Star => "star",
+            RoleBadgeIcon::Sword => "sword",
+            RoleBadgeIcon::Wrench => "wrench",
+            RoleBadgeIcon::Heart => "heart",
+            RoleBadgeIcon::Flag => "flag",
+            RoleBadgeIcon::Bolt => "bolt",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<RoleBadgeIcon> {
+        Some(match s {
+            "shield" => RoleBadgeIcon::Shield,
+            "crown" => RoleBadgeIcon::Crown,
+            "star" => RoleBadgeIcon::Star,
+            "sword" => RoleBadgeIcon::Sword,
+            "wrench" => RoleBadgeIcon::Wrench,
+            "heart" => RoleBadgeIcon::Heart,
+            "flag" => RoleBadgeIcon::Flag,
+            "bolt" => RoleBadgeIcon::Bolt,
+            _ => return None,
+        })
+    }
+}
+
+/// Fixed milestone-1 vocabulary of role badge colors — same closed-set
+/// reasoning as [`RoleBadgeIcon`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleBadgeColor {
+    Gray,
+    Red,
+    Orange,
+    Gold,
+    Green,
+    Blue,
+    Purple,
+}
+
+impl RoleBadgeColor {
+    pub const ALL: [RoleBadgeColor; 7] = [
+        RoleBadgeColor::Gray,
+        RoleBadgeColor::Red,
+        RoleBadgeColor::Orange,
+        RoleBadgeColor::Gold,
+        RoleBadgeColor::Green,
+        RoleBadgeColor::Blue,
+        RoleBadgeColor::Purple,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RoleBadgeColor::Gray => "gray",
+            RoleBadgeColor::Red => "red",
+            RoleBadgeColor::Orange => "orange",
+            RoleBadgeColor::Gold => "gold",
+            RoleBadgeColor::Green => "green",
+            RoleBadgeColor::Blue => "blue",
+            RoleBadgeColor::Purple => "purple",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<RoleBadgeColor> {
+        Some(match s {
+            "gray" => RoleBadgeColor::Gray,
+            "red" => RoleBadgeColor::Red,
+            "orange" => RoleBadgeColor::Orange,
+            "gold" => RoleBadgeColor::Gold,
+            "green" => RoleBadgeColor::Green,
+            "blue" => RoleBadgeColor::Blue,
+            "purple" => RoleBadgeColor::Purple,
+            _ => return None,
+        })
+    }
+}
+
+/// A role's small, fixed visual identity (issue #152): an icon id from a
+/// closed enum paired with a color id from a closed enum — deliberately
+/// not a free-form asset/upload, no user-supplied image hosting in scope
+/// for milestone 1. Shaped as icon+color today (rather than e.g. a single
+/// opaque badge id) so it can grow into a richer badge system later —
+/// more icons/colors, tiers, an uploaded custom asset as an additional
+/// variant — without a breaking change to callers that just want "an icon
+/// and a color" out of a role (`packages/ui`'s planned `AvalonRoleBadge`,
+/// #24, is the first such caller).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleBadge {
+    pub icon: RoleBadgeIcon,
+    pub color: RoleBadgeColor,
+}
+
+impl RoleBadge {
+    /// Assigned to a role that doesn't specify a badge (e.g. the `member`
+    /// starter role, or a `create_role` call that omits one).
+    pub const DEFAULT: RoleBadge = RoleBadge {
+        icon: RoleBadgeIcon::Star,
+        color: RoleBadgeColor::Gray,
+    };
+}
+
+impl Default for RoleBadge {
+    fn default() -> Self {
+        RoleBadge::DEFAULT
+    }
+}
+
 /// Guild-level permissions a role can carry. Deliberately a small, fixed
 /// set for milestone 1 (issue #20) rather than an open/extensible bitset —
 /// custom role *names* are allowed, custom permissions are not, yet.
