@@ -45,9 +45,11 @@ nothing anyone needs to prove later.
   and is never in [rebuild](./disaster-recovery.md) scope.
 - Presence may live in process memory, a cache, or a dedicated realtime service.
   It is not required to be in Postgres.
-- Presence is permissioned. Publishing it to a game requires the game to hold
-  `presence.read` under an active [binding](./game-bindings.md); who else can see
-  it is a [visibility](./privacy.md) setting (friends, guild, nobody).
+- Presence is permissioned. A game publishing presence on a player's behalf
+  requires the game to hold `presence.publish` under an active
+  [binding](./game-bindings.md); who else can see it is a
+  [visibility](./privacy.md) setting (friends, guild, nobody) — friends-only
+  by default.
 - A game publishes presence for its own players (it knows they're connected);
   it cannot publish presence for players who are not bound to it.
 - Realtime population numbers ("players online in Game A") are labeled realtime
@@ -81,21 +83,35 @@ realtime connections is a separate axis from scaling history or queries
 - `crates/server/src/presence.rs` — an in-process `PresenceStore` (`Arc<RwLock<HashMap<...>>>`
   keyed by identity), never a migrated table, never touching the outbox or
   `avalon-chain`. `PUT /me/presence` lets a player publish their own
-  `status`; they can never set `playing`, since there is no game-credential
-  auth path to attribute that claim to a specific game yet. `GET
-  /presence?ids=…` reads back presence for the requested ids, session-gated
-  only — no friends/guild/private visibility filtering (deferred to #87,
-  same scope cut `crates/server/src/friends.rs` (#15) already established
-  for its own reads). An entry not refreshed within the TTL (120s by
-  default, `AVALON_PRESENCE_TTL_SECS` overrides it for testing) reads as
-  `Offline`, never a guess.
-- **Deferred, documented, not silently missing**: the game-side publish
-  path (`PUT /presence/:identity_id` under a `GameCredential`, gated on an
-  active [binding](./game-bindings.md) and a `presence.publish`
-  capability) — there is no game-credential auth concept, `GameBinding`,
-  or capability-grant system in this repo yet (#26/#28/#83). Player-set
-  visibility scopes and opting `playing` out of view are deferred for the
-  same reason, to #87.
+  `status`; they can never set `playing`. `PUT /presence/:identity_id` lets
+  a game publish presence on behalf of a player it's bound to —
+  authenticated via `crate::authz`'s `Caller`/`require_capability` (#28):
+  the caller must resolve to `Caller::Game`, hold an active
+  `presence.publish` grant under an active [binding](./game-bindings.md)
+  to that identity (`crates/server/src/connections.rs`, #26/#83), and
+  `playing`, if set at all, must equal the game's own id — a game claiming
+  to be a *different* game's `playing` value is rejected
+  (`AppError::PresencePlayingMismatch`) even with a valid grant. `GET
+  /presence?ids=…` and `GET /ws/presence` default to friends-only
+  visibility: the caller's own entry is always visible; anyone else's is
+  visible only if they're currently friends
+  (`crates/server/src/friends.rs`'s `friend_partners`) and there's no
+  block between them (issue #97, checked first). This is a literal
+  implementation of `docs/architecture/privacy.md`'s proposed default for
+  this one resource, **not** the full per-resource visibility-scope model
+  #87 still owns (guild visibility, a private setting, etc.) — see that
+  file's own "Today in the repo" note. A player can independently opt
+  `playing` out of ever being shown, regardless of any game's grant
+  (`presence_preferences.hide_playing`, set via `PUT /me/presence`,
+  `crates/server/db/migrations/0017_presence_preferences`) — deliberately
+  a durable Postgres row, not part of the ephemeral store, since it's a
+  standing preference rather than a realtime fact. An entry not refreshed
+  within the TTL (120s by default, `AVALON_PRESENCE_TTL_SECS` overrides it
+  for testing) reads as `Offline`, never a guess.
+- **Deferred, documented, not silently missing**: the full per-resource
+  visibility-scope model (friends/guild/private, per resource, player- and
+  guild-configurable) is #87's open decision — presence's friends-only
+  default above is one literal instance of it, not the general mechanism.
 - `GET /ws/presence?token=…` (#136, transport chosen in #119) — a live push
   transport, additive to `GET /presence`, not a replacement. Auth is a
   `?token=` query parameter,

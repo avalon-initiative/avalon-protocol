@@ -41,7 +41,7 @@ accident:
 |---|---|
 | display name | public |
 | avatar | public |
-| presence | friend-visible |
+| presence | friend-visible (implemented as a hardcoded default, #16 — see "Today in the repo") |
 | friends list | private |
 | guild membership | guild-visible |
 | achievement history | public, individually hideable |
@@ -78,9 +78,17 @@ durable.
   (game-visible only). No `Visibility` type.
 - `crates/server/src/handlers.rs` — `/me` reads the caller's own profile.
   Several cross-identity read paths exist now (`GET /friends`,
-  `GET /presence`, `GET /ws/presence`, `GET /friends/handle/:handle`), all
-  session-gated only, with no visibility-scope check at all — that's #87's
-  open decision, not yet built.
+  `GET /ws/presence`, `GET /friends/handle/:handle`), still session-gated
+  only, with no visibility-scope check at all — that's #87's open
+  decision, not yet built.
+- `crates/server/src/presence.rs` (#16) is the first read path with any
+  visibility check at all: `GET /presence` and `GET /ws/presence` apply a
+  literal, hardcoded friends-only default (self always visible; otherwise
+  only if `crates/server/src/friends.rs`'s `friend_partners` says the
+  caller and subject are currently friends, and there's no block between
+  them). This is one resource's proposed default made real, **not** #87's
+  general per-resource/guild/private scope model — everything else in this
+  list (friends list, guild membership, etc.) is still unscoped.
 - `crates/server/src/blocks.rs` (#97) — a block is visible only to the
   identity that created it; no endpoint, anywhere in this crate, reveals to
   the blocked party that they've been blocked. A blocked pair's friend
@@ -95,11 +103,15 @@ durable.
   [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86).
 - `crates/server/src/authz.rs` (#28) implements the write-side half of the
   "active binding → active `PermissionGrant`" chain this section describes —
-  `require_capability(caller, capability, state)` for a `Caller::Game`.
-  No read path (visibility scopes, #87) uses it yet, and no game-calling-the-API
-  endpoint exists yet either (see the module's own doc comment): it is
-  built, documented, and exhaustively unit-tested, ready for the first
-  ticket that needs either.
+  `require_capability(caller, capability, state)` for a `Caller::Game`. Its
+  first real caller is `crates/server/src/presence.rs`'s
+  `update_game_presence` (#16), gating `presence.publish`; every other
+  game-calling-the-API endpoint is still hypothetical (see the module's
+  own doc comment) and should reuse this rather than hand-rolling a check.
+- `presence_preferences.hide_playing` (`crates/server/db/migrations/0017_presence_preferences`)
+  is a player-controlled setting that's *not* a visibility scope at all —
+  it removes `playing` from view entirely, independent of who's asking or
+  what they're otherwise allowed to see. Set via `PUT /me/presence`.
 
 ## Decisions and tickets
 

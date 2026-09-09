@@ -1,27 +1,47 @@
-//! In-memory presence tracking (issue #16).
+//! Presence tracking: publish + read (issue #16).
 //!
 //! Ephemeral realtime state per ADR #78
-//! (docs/architecture/presence.md): presence is never a `ProtocolEvent`,
-//! never touches `crate::outbox` or `avalon_chain`, and never lives in a
-//! migrated Postgres table. It is intentionally lost on server restart —
-//! everyone reads as `Offline` until their next heartbeat, which is the
-//! correct failure mode for state nobody needs to prove later.
+//! (docs/architecture/presence.md): presence itself is never a
+//! `ProtocolEvent`, never touches `crate::outbox` or `avalon_chain`, and
+//! never lives in a migrated Postgres table (`PresenceStore` below). It is
+//! intentionally lost on server restart — everyone reads as `Offline`
+//! until their next heartbeat, which is the correct failure mode for state
+//! nobody needs to prove later.
 //!
-//! Two scope cuts from the issue, both deliberate and documented rather
-//! than silently missing:
+//! **Publishing.** `PUT /me/presence` is a player publishing their own
+//! status under their own session (`crate::handlers::authenticate`) — it
+//! can never set `playing`. `PUT /presence/:identity_id` is a game
+//! publishing on behalf of a bound player, authenticated via
+//! `crate::authz::authenticate_caller`/`require_capability` (issue #28's
+//! guard, resolving issues #26/#83's `GameCredential`/`GameBinding`
+//! machinery, which — contrary to an earlier version of this doc comment —
+//! is now built): a `Caller::Game` must hold an active
+//! `presence.publish` grant under an active binding to the target
+//! identity, and `playing`, if set at all, must equal the game's own
+//! `game_id` — [`validate_game_playing`] is the one place that rule lives.
 //!
-//! - **No game-side publish endpoint.** The issue describes
-//!   `PUT /presence/:identity_id` under a `GameCredential`, gated on an
-//!   active `GameBinding` and a `presence.publish` capability grant. None
-//!   of that exists in this repo yet — there is no game-credential auth
-//!   concept, no `GameBinding`, no capability-grant system (#26/#28/#83
-//!   are all unbuilt). Only a player's own session can publish their own
-//!   presence here, and it can never claim to be `playing` a game.
-//! - **No visibility filtering.** `GET /presence` returns exactly the
-//!   requested ids' presence to any valid session, with no friends/guild/
-//!   private scoping — the same "reads are session-gated only, no
-//!   capability/visibility model yet" cut `crates/server/src/friends.rs`
-//!   (#15) already established, deferred to #87.
+//! **Reading.** `GET /presence` and `GET /ws/presence` default to
+//! friends-only visibility (`docs/architecture/privacy.md`'s proposed
+//! default for this resource): the caller always sees their own entry;
+//! for anyone else, only if the caller and that identity are currently
+//! friends (`crate::friends::friend_partners`) and there's no block
+//! between them (`crate::blocks::block_partners`, issue #97, checked
+//! first — a block hides presence even between friends). This is a
+//! literal implementation of that one proposed default, **not** the full
+//! per-resource visibility-scope model issue #87 still owns (guild
+//! visibility, a private setting, etc.) — seeing the friends-only rule
+//! land nowhere else in this file is expected, not an oversight.
+//!
+//! **Player opt-out.** Independent of any game's capability grant, a
+//! player can opt out of `playing` being shown at all
+//! (`presence_preferences.hide_playing`, set via `PUT /me/presence`) —
+//! [`hide_playing_for`] is the one place that preference is read; every
+//! caller of it treats a missing row as "not hidden" (the default), the
+//! same "absence means the default, never invented" posture
+//! `PresenceStore::get` already uses for a missing presence entry.
+//! Deliberately a durable Postgres row, not part of the ephemeral
+//! in-memory store: it's a standing *preference*, not a realtime fact —
+//! see `crates/server/db/migrations/0017_presence_preferences/up.sql`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -29,17 +49,20 @@ use std::time::{Duration, Instant};
 
 use avalon_protocol::social::PresenceStatus;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::authz::{authenticate_caller, require_capability, Caller};
 use crate::error::AppError;
 use crate::handlers::{authenticate, authenticate_token};
 use crate::state::AppState;
+use avalon_protocol::permissions::Capability;
 
 /// A published presence entry that hasn't been refreshed within this window
 /// reads as `Offline`. Overridable via `AVALON_PRESENCE_TTL_SECS` (see
@@ -196,25 +219,138 @@ impl From<PresenceView> for PresenceResponse {
     }
 }
 
+/// Reads `presence_preferences.hide_playing` for every id in `ids` in one
+/// batched query, returning the set of ids that currently have it set.
+/// Absence (no row at all) means "not hidden" — see module doc comment —
+/// so the caller only ever needs the positive set, never a full map with
+/// defaults filled in.
+async fn hide_playing_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uuid>, AppError> {
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let rows = sqlx::query(
+        "SELECT identity_id FROM presence_preferences WHERE identity_id = ANY($1) \
+         AND hide_playing = true",
+    )
+    .bind(ids)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut set = HashSet::with_capacity(rows.len());
+    for row in rows {
+        set.insert(row.try_get("identity_id")?);
+    }
+    Ok(set)
+}
+
+/// Upserts `identity_id`'s own `hide_playing` preference — the durable
+/// half of `PUT /me/presence`, see module doc comment for why this isn't
+/// part of the ephemeral `PresenceStore`.
+async fn set_hide_playing(state: &AppState, identity_id: Uuid, hide: bool) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO presence_preferences (identity_id, hide_playing) VALUES ($1, $2) \
+         ON CONFLICT (identity_id) DO UPDATE SET hide_playing = EXCLUDED.hide_playing",
+    )
+    .bind(identity_id)
+    .bind(hide)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct UpdatePresenceRequest {
     pub status: PresenceStatus,
+    /// Opt out of (or back into) `playing` ever being shown, independent
+    /// of any game's `presence.publish` grant. `None` leaves the existing
+    /// preference untouched — this endpoint publishes a status on every
+    /// call, but the caller doesn't have to re-state its opt-out choice
+    /// every heartbeat.
+    #[serde(default)]
+    pub hide_playing: Option<bool>,
 }
 
 /// `PUT /me/presence` — a player publishing their own status. Deliberately
-/// cannot set `playing`: that's reserved for a game's own credential once
-/// game-side publishing exists (see module docs).
+/// cannot set `playing`: that's reserved for a game's own credential
+/// (`update_game_presence` below).
 pub async fn update_my_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<UpdatePresenceRequest>,
 ) -> Result<Json<PresenceResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
+    if let Some(hide) = body.hide_playing {
+        set_hide_playing(&state, identity_id, hide).await?;
+    }
     let updated_at = state.presence.set(identity_id, body.status, None);
     Ok(Json(PresenceResponse {
         identity_id,
         status: body.status,
         playing: None,
+        updated_at,
+    }))
+}
+
+/// The one rule a game's presence claim must satisfy: `playing`, if set at
+/// all, must name the calling game's own id. Pure and DB-free so it's
+/// directly unit-testable — see this module's tests below — separate from
+/// `require_capability`'s binding/grant check, which does need the
+/// database.
+fn validate_game_playing(caller_game_id: Uuid, playing: Option<Uuid>) -> Result<(), AppError> {
+    match playing {
+        Some(game_id) if game_id != caller_game_id => Err(AppError::PresencePlayingMismatch),
+        _ => Ok(()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateGamePresenceRequest {
+    pub status: PresenceStatus,
+    /// Must be the calling game's own id, or omitted/`null` — see
+    /// [`validate_game_playing`].
+    #[serde(default)]
+    pub playing: Option<Uuid>,
+}
+
+/// `PUT /presence/:identity_id` — a game publishing presence on behalf of
+/// a player it's bound to. Authenticated via `crate::authz`'s
+/// `Caller`/`require_capability` (issue #28): the caller must be
+/// `Caller::Game` (a player session hitting this route is rejected — that
+/// endpoint is `PUT /me/presence` above), the path `identity_id` must
+/// match the identity the game claims to act for
+/// (`x-avalon-identity-id`, resolved by `authenticate_caller` — see
+/// `authz`'s own doc comment for why this heads off a game naming one
+/// identity in the path and another in the header), and the game must
+/// hold an active `presence.publish` grant under an active binding to
+/// that identity — `require_capability` alone is what rejects an unbound
+/// identity or a revoked/missing grant, no separate hand-rolled check
+/// here (see `authz`'s own module doc comment on why that's the one
+/// authorization decision, not two).
+pub async fn update_game_presence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(identity_id): Path<Uuid>,
+    Json(body): Json<UpdateGamePresenceRequest>,
+) -> Result<Json<PresenceResponse>, AppError> {
+    let caller = authenticate_caller(&state, &headers).await?;
+    let Caller::Game {
+        game_id,
+        identity_id: caller_identity_id,
+    } = caller
+    else {
+        return Err(AppError::Forbidden);
+    };
+    if identity_id != caller_identity_id {
+        return Err(AppError::Forbidden);
+    }
+
+    validate_game_playing(game_id, body.playing)?;
+    require_capability(&caller, Capability::PresencePublish, &state).await?;
+
+    let updated_at = state.presence.set(identity_id, body.status, body.playing);
+    Ok(Json(PresenceResponse {
+        identity_id,
+        status: body.status,
+        playing: body.playing,
         updated_at,
     }))
 }
@@ -225,9 +361,43 @@ pub struct PresenceQuery {
     pub ids: String,
 }
 
-/// `GET /presence?ids=…` — session-authenticated, no visibility filtering
-/// yet (see module docs, deferred to #87). Any valid session may look up
-/// presence for any ids it names.
+/// True if `caller` may see `subject`'s real presence: always for their
+/// own entry, otherwise only if they're currently friends
+/// (`crate::friends::friend_partners`) and there's no block between them
+/// (checked first — a block hides presence even between friends that
+/// haven't unfriended each other, issue #97). This is the literal
+/// friends-only default `docs/architecture/privacy.md` proposes for this
+/// resource, not the full scope model issue #87 owns — see module doc
+/// comment.
+fn presence_visible(
+    caller: Uuid,
+    subject: Uuid,
+    friend_ids: &HashSet<Uuid>,
+    blocked_partners: &HashSet<Uuid>,
+) -> bool {
+    if blocked_partners.contains(&subject) {
+        return false;
+    }
+    subject == caller || friend_ids.contains(&subject)
+}
+
+fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> PresenceResponse {
+    if hidden.contains(&view.identity_id) {
+        PresenceResponse {
+            playing: None,
+            ..view
+        }
+    } else {
+        view
+    }
+}
+
+/// `GET /presence?ids=…` — session-authenticated. Reads default to
+/// friends-only visibility (see [`presence_visible`] and module doc
+/// comment); a caller-hidden `playing` preference
+/// (`presence_preferences.hide_playing`, see [`hide_playing_for`]) is
+/// applied independently on top, so an identity visible to the caller can
+/// still have `playing` come back `null` if they've opted out of it.
 pub async fn get_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -249,20 +419,23 @@ pub async fn get_presence(
     // Issue #97: a blocked identity's presence reads exactly like a
     // missing/stale entry (Offline, `updated_at: now`) — never a
     // distinguishable "hidden" state, matching this store's own existing
-    // "never a guess" precedent for a genuinely missing entry.
+    // "never a guess" precedent for a genuinely missing entry. A
+    // non-friend reads identically, for the same reason.
+    let friend_ids = crate::friends::friend_partners(&state, caller).await?;
     let blocked_partners = crate::blocks::block_partners(&state, caller).await?;
+    let hidden_playing = hide_playing_for(&state, &ids).await?;
     let views = ids
         .into_iter()
         .map(|id| {
-            if blocked_partners.contains(&id) {
+            if presence_visible(caller, id, &friend_ids, &blocked_partners) {
+                hidden_playing_view(state.presence.get(id).into(), &hidden_playing)
+            } else {
                 PresenceResponse {
                     identity_id: id,
                     status: PresenceStatus::Offline,
                     playing: None,
                     updated_at: OffsetDateTime::now_utc(),
                 }
-            } else {
-                state.presence.get(id).into()
             }
         })
         .collect();
@@ -283,9 +456,8 @@ pub struct PresenceWsQuery {
 /// to `GET /presence` above, not a replacement for it. Authenticates before
 /// upgrading (a bad/missing token gets a real 401, not a socket that opens
 /// and then silently closes) and hands off to `handle_presence_socket` for
-/// the connection's lifetime. Same "no visibility filtering yet" cut as
-/// `GET /presence` (deferred to #87, see module docs) — any valid session
-/// may subscribe to any ids it names.
+/// the connection's lifetime. Same friends-only default visibility as
+/// `GET /presence` (see module doc comment and [`presence_visible`]).
 pub async fn presence_ws(
     State(state): State<AppState>,
     Query(query): Query<PresenceWsQuery>,
@@ -306,8 +478,9 @@ enum ClientMessage {
 }
 
 /// Forces a presence view for `id` to `Offline` — issue #97: a blocked
-/// identity must read exactly like a missing/stale entry, never a
-/// distinguishable "hidden" state.
+/// identity (or, now, a non-friend under the friends-only default) must
+/// read exactly like a missing/stale entry, never a distinguishable
+/// "hidden" state.
 fn offline_view(id: Uuid) -> PresenceResponse {
     PresenceResponse {
         identity_id: id,
@@ -320,12 +493,19 @@ fn offline_view(id: Uuid) -> PresenceResponse {
 async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: Uuid) {
     // Loaded once per connection, not per message — see
     // `blocks::block_partners`'s own doc comment for the staleness
-    // tradeoff this accepts.
+    // tradeoff this accepts; `friend_partners` and each subscribed id's
+    // `hide_playing` preference accept the same tradeoff for the same
+    // reason.
+    let friend_ids = match crate::friends::friend_partners(&state, caller).await {
+        Ok(set) => set,
+        Err(_) => return,
+    };
     let blocked_partners = match crate::blocks::block_partners(&state, caller).await {
         Ok(set) => set,
         Err(_) => return,
     };
     let mut subscribed: HashSet<Uuid> = HashSet::new();
+    let mut hidden_playing: HashSet<Uuid> = HashSet::new();
     let mut updates = state.presence.subscribe();
 
     loop {
@@ -336,22 +516,28 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
                         let Ok(ClientMessage::Subscribe { ids }) = serde_json::from_str(&text) else {
                             continue;
                         };
+                        let new_ids: Vec<Uuid> = ids.into_iter().filter(|id| !subscribed.contains(id)).collect();
+                        if new_ids.is_empty() {
+                            continue;
+                        }
+                        if let Ok(hidden) = hide_playing_for(&state, &new_ids).await {
+                            hidden_playing.extend(hidden);
+                        }
                         // Send a catch-up snapshot for each newly-subscribed
                         // id immediately, rather than making the client wait
                         // for that identity's next publish to learn its
                         // current status.
-                        for id in ids {
-                            if subscribed.insert(id) {
-                                let view: PresenceResponse = if blocked_partners.contains(&id) {
-                                    offline_view(id)
-                                } else {
-                                    state.presence.get(id).into()
-                                };
-                                let payload =
-                                    serde_json::to_string(&view).expect("PresenceResponse always serializes");
-                                if socket.send(Message::Text(payload)).await.is_err() {
-                                    return;
-                                }
+                        for id in new_ids {
+                            subscribed.insert(id);
+                            let view: PresenceResponse = if presence_visible(caller, id, &friend_ids, &blocked_partners) {
+                                hidden_playing_view(state.presence.get(id).into(), &hidden_playing)
+                            } else {
+                                offline_view(id)
+                            };
+                            let payload =
+                                serde_json::to_string(&view).expect("PresenceResponse always serializes");
+                            if socket.send(Message::Text(payload)).await.is_err() {
+                                return;
                             }
                         }
                     }
@@ -362,10 +548,10 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
             update = updates.recv() => {
                 match update {
                     Ok(update) if subscribed.contains(&update.identity_id) => {
-                        let view = if blocked_partners.contains(&update.identity_id) {
-                            offline_view(update.identity_id)
+                        let view = if presence_visible(caller, update.identity_id, &friend_ids, &blocked_partners) {
+                            hidden_playing_view(update, &hidden_playing)
                         } else {
-                            update
+                            offline_view(update.identity_id)
                         };
                         let payload =
                             serde_json::to_string(&view).expect("PresenceResponse always serializes");
@@ -420,7 +606,119 @@ mod tests {
         assert_eq!(view.status, PresenceStatus::Offline);
     }
 
-    // ADR #78's hard rule — presence never touches the outbox or the chain
-    // crate — is enforced by this module's imports alone (neither is
-    // imported above) rather than by a self-referential source grep here.
+    #[test]
+    fn a_game_publishing_playing_for_another_games_id_is_rejected() {
+        let own_game_id = Uuid::new_v4();
+        let other_game_id = Uuid::new_v4();
+        assert!(matches!(
+            validate_game_playing(own_game_id, Some(other_game_id)),
+            Err(AppError::PresencePlayingMismatch)
+        ));
+    }
+
+    #[test]
+    fn a_game_publishing_playing_for_its_own_id_is_accepted() {
+        let game_id = Uuid::new_v4();
+        assert!(validate_game_playing(game_id, Some(game_id)).is_ok());
+    }
+
+    #[test]
+    fn a_game_publishing_with_no_playing_claim_is_always_accepted() {
+        assert!(validate_game_playing(Uuid::new_v4(), None).is_ok());
+    }
+
+    // The DB-backed "a game publishing for an unbound identity is
+    // rejected" case is `require_capability`'s job, not
+    // `validate_game_playing`'s — see `crate::authz`'s own exhaustive
+    // pure-logic test matrix (`no_binding_at_all_is_rejected` et al.) plus
+    // its `live_tests` submodule for the real-Postgres version, and
+    // `crates/server/tests/presence.rs`'s
+    // `a_game_cannot_publish_presence_for_an_unbound_identity` for the
+    // full `PUT /presence/:identity_id` endpoint exercising it end to end.
+
+    #[test]
+    fn presence_visible_to_self_regardless_of_friend_state() {
+        let caller = Uuid::new_v4();
+        let empty = HashSet::new();
+        assert!(presence_visible(caller, caller, &empty, &empty));
+    }
+
+    #[test]
+    fn presence_visible_to_a_friend() {
+        let caller = Uuid::new_v4();
+        let friend = Uuid::new_v4();
+        let friends: HashSet<Uuid> = [friend].into_iter().collect();
+        assert!(presence_visible(caller, friend, &friends, &HashSet::new()));
+    }
+
+    #[test]
+    fn presence_hidden_from_a_non_friend_by_default() {
+        let caller = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        assert!(!presence_visible(
+            caller,
+            stranger,
+            &HashSet::new(),
+            &HashSet::new()
+        ));
+    }
+
+    #[test]
+    fn presence_hidden_from_a_blocked_friend() {
+        // A block hides presence even when the two are still friends —
+        // the block check runs first in `presence_visible`.
+        let caller = Uuid::new_v4();
+        let friend_and_blocked = Uuid::new_v4();
+        let friends: HashSet<Uuid> = [friend_and_blocked].into_iter().collect();
+        let blocked: HashSet<Uuid> = [friend_and_blocked].into_iter().collect();
+        assert!(!presence_visible(
+            caller,
+            friend_and_blocked,
+            &friends,
+            &blocked
+        ));
+    }
+
+    #[test]
+    fn hidden_playing_view_nulls_out_playing_only_for_hidden_ids() {
+        let shown = Uuid::new_v4();
+        let hidden_id = Uuid::new_v4();
+        let hidden: HashSet<Uuid> = [hidden_id].into_iter().collect();
+
+        let view = PresenceResponse {
+            identity_id: shown,
+            status: PresenceStatus::Online,
+            playing: Some(Uuid::new_v4()),
+            updated_at: OffsetDateTime::now_utc(),
+        };
+        assert!(hidden_playing_view(view.clone(), &hidden).playing.is_some());
+
+        let hidden_view = PresenceResponse {
+            identity_id: hidden_id,
+            ..view
+        };
+        assert_eq!(hidden_playing_view(hidden_view, &hidden).playing, None);
+    }
+
+    /// The ticket's own explicit ask (issue #16's Tests section): a
+    /// grep-level check that no handler in this file calls
+    /// `state.chain` `.commit` — belt-and-suspenders on top of the fact
+    /// that this module imports neither `avalon_chain` nor `crate::outbox`
+    /// at all (ADR #78). Reads its own source via `include_str!` rather
+    /// than walking the filesystem, so it runs the same in any working
+    /// directory `cargo test` is invoked from.
+    ///
+    /// The needle is built from two joined halves, deliberately never
+    /// written as one contiguous string literal anywhere in this file —
+    /// otherwise `include_str!` would pull in this very assertion's own
+    /// text and the check would trivially fail against itself.
+    #[test]
+    fn presence_handlers_never_call_chain_commit() {
+        let source = include_str!("presence.rs");
+        let needle = format!("{}{}", "chain.", "commit");
+        assert!(
+            !source.contains(&needle),
+            "presence is ephemeral (ADR #78) and must never touch SettlementProvider::commit"
+        );
+    }
 }

@@ -20,6 +20,8 @@
 //! stand-in, attributed to the acting identity via `issuer` rather than to
 //! the node, since the request already proves the actor's session.
 
+use std::collections::HashSet;
+
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
@@ -37,6 +39,32 @@ use crate::state::AppState;
 
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
+}
+
+/// Every identity `caller` is currently friends with — one batched query,
+/// same shape as `crate::blocks::block_partners`. Used by
+/// `presence::get_presence`/`presence::handle_presence_socket` to apply
+/// presence's default friends-only visibility scope (issue #16), pending
+/// the full per-resource scope granularity issue #87 owns.
+pub(crate) async fn friend_partners(
+    state: &AppState,
+    caller: Uuid,
+) -> Result<HashSet<Uuid>, AppError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT b AS other FROM friendships WHERE a = $1
+        UNION
+        SELECT a AS other FROM friendships WHERE b = $1
+        "#,
+    )
+    .bind(caller)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut set = HashSet::with_capacity(rows.len());
+    for row in rows {
+        set.insert(row.try_get("other")?);
+    }
+    Ok(set)
 }
 
 fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
