@@ -606,6 +606,18 @@ describe('AvalonWarningBanner', () => {
   })
 })
 
+describe('AvalonDateTimeField', () => {
+  it('marks exactly one day as selected when the popover is open on the value\'s own month', async () => {
+    const wrapper = mount(AvalonDateTimeField, {
+      props: { label: 'Starts at', modelValue: '2026-09-15T20:00' },
+    })
+    await wrapper.find('button[aria-label="Open date and time picker"]').trigger('click')
+    const selected = wrapper.findAll('button').filter((b) => b.classes().some((c) => c.includes('daySelected')))
+    expect(selected).toHaveLength(1)
+    expect(selected[0].text()).toContain('15')
+  })
+})
+
 describe('AvalonCalendarMonth', () => {
   const baseProps = { year: 2026, month: 9, eventDates: ['2026-09-05', '2026-09-15'] }
 

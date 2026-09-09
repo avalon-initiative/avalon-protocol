@@ -18,7 +18,7 @@ const {
   viewMonth,
   years,
   grid,
-  parsed,
+  selectedIso,
   popover,
   trigger,
   hour12Text,
@@ -97,9 +97,7 @@ const {
               :class="[
                 styles.dayCell,
                 !cell.inMonth && styles.dayOutside,
-                parsed && cell.inMonth && cell.iso === `${parsed.year}-${String(parsed.month).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}`
-                  ? styles.daySelected
-                  : '',
+                cell.inMonth && cell.iso === selectedIso ? styles.daySelected : '',
               ]"
               @click="selectDay(cell)"
             >

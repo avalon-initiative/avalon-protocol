@@ -73,6 +73,17 @@ export function useDateTimeField(currentValue: () => string, emit: DateTimeField
   const parsed = computed(() => parseValue(currentValue()))
   const grid = computed(() => monthGrid(viewYear.value, viewMonth.value))
   const years = computed(() => yearOptions(viewYear.value))
+  // The one "YYYY-MM-DD" a day cell must match to render as selected.
+  // Previously reconstructed per-cell in the template from
+  // `parsed.year`/`parsed.month` + *that cell's own* day, which made every
+  // in-month cell compare equal to itself whenever the viewed month
+  // matched the parsed one — every day of the month lit up as selected.
+  // Building it once, using `parsed.day`, avoids that class of bug.
+  const selectedIso = computed(() => {
+    const current = parsed.value
+    if (!current) return null
+    return `${current.year}-${pad2(current.month)}-${pad2(current.day)}`
+  })
 
   const hour12Text = ref('12')
   const minuteText = ref('00')
@@ -181,6 +192,7 @@ export function useDateTimeField(currentValue: () => string, emit: DateTimeField
     years,
     grid,
     parsed,
+    selectedIso,
     popover,
     trigger,
     hour12Text,
