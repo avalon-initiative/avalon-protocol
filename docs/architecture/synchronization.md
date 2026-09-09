@@ -62,9 +62,10 @@ if internet_available {
 Some things need a live round trip by their nature: an achievement needs
 *someone* to eventually issue it, but guild membership is shared state that
 can't be unilaterally granted client-side, and voice needs a live connection,
-full stop. The classification is its own decision, not an assumption baked
-into this document — see [#109](https://github.com/LunarVagabond/avalon-protocol/issues/109),
-whose table is the authoritative version of:
+full stop. The classification is decided — see
+[#109](https://github.com/LunarVagabond/avalon-protocol/issues/109) (closed) —
+and this table is now the authoritative version, referenced by every
+operation ticket rather than each re-deriving its own answer:
 
 | Operation | Offline? | Behavior |
 |---|---|---|
@@ -95,24 +96,23 @@ This is the trust model ([trust-model.md](./trust-model.md), ADR #76 —
 authentic, valid, and recognized are separate) applied to a new axis: *how*
 a claim came to exist changes what a receiving game should be willing to
 believe, even when the signature checks out. [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112)
-is the open decision, with two real alternatives:
+(closed) decided **deferred requests, not deferred attestations**: the
+offline period queues an unsigned local record of intent, not a valid
+attestation — no issuer key exists client-side at all. On reconnect the
+request goes to the game's *own* server, which independently decides
+whether to believe its own client's record and only then issues a normal,
+fully-authoritative attestation through the existing online path.
 
-1. **A distinct, lower-trust issuer variant for client-recorded claims** —
-   a separate, explicitly lower-privilege key a game chooses to embed
-   client-side, never the same key that signs server-attested claims,
-   recognized independently by consuming games' trust policies. Real offline
-   attestations exist the moment they're recorded, at the cost of every
-   participating game shipping a client-embedded key with a permanently
-   bounded blast radius.
-2. **Deferred requests, not deferred attestations** — the offline period
-   queues an unsigned local record of intent, not a valid attestation. No
-   issuer key exists client-side at all. On reconnect the request goes to
-   the game's *own* server, which independently decides whether to believe
-   its own client's record and only then issues a normal, fully-authoritative
-   attestation through the existing online path.
-
-Not yet decided which wins — see #112 for the full reasoning and a stated
-(not yet ratified) recommendation.
+This adds no new key material anywhere and doesn't expand what a
+compromised client can forge — "authoritative attestation" keeps meaning
+exactly what it already means everywhere else in the protocol; the offline
+period is a queuing convenience for *requests*, never a new class of
+cryptographic claim. The alternative considered and rejected as the
+default — a distinct, lower-trust issuer variant with a separate,
+explicitly lower-privilege key a game embeds client-side — is a real option
+some games may still want later (a genuinely offline-only game with no
+server of its own at all), but it's a strictly bigger, riskier addition and
+isn't where this defaults.
 
 ## Mechanism
 
@@ -164,13 +164,15 @@ Not yet decided which wins — see #112 for the full reasoning and a stated
 - [#108](https://github.com/LunarVagabond/avalon-protocol/issues/108) —
   Epic: Offline & Deferred Protocol Synchronization.
 - [#109](https://github.com/LunarVagabond/avalon-protocol/issues/109) —
-  decision: operation capability classification (open).
+  decision: operation capability classification (closed/decided — table
+  above is authoritative).
 - [#110](https://github.com/LunarVagabond/avalon-protocol/issues/110) —
   SDK local event journal + persistence abstraction.
 - [#111](https://github.com/LunarVagabond/avalon-protocol/issues/111) —
   deferred submission engine: retry, idempotency, ordering, reconciliation.
 - [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112) —
-  decision: offline trust model, client-recorded vs server-attested (open).
+  decision: offline trust model, client-recorded vs server-attested
+  (closed/decided — deferred requests, not deferred attestations).
 - [#113](https://github.com/LunarVagabond/avalon-protocol/issues/113) —
   SDK sync status API.
 - [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:

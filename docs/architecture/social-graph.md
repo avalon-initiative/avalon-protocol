@@ -93,7 +93,18 @@ fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-q
   discriminator unless the new pair collides, in which case a fresh one is
   generated so uniqueness holds without the handle churning on every rename.
   Fuzzy/partial handle lookup is out of scope here — that's player discovery
-  ([#129](https://github.com/LunarVagabond/avalon-protocol/issues/129), not decided).
+  ([#129](https://github.com/LunarVagabond/avalon-protocol/issues/129), decided:
+  two-tier. Private-by-default, always-on surfacing of players via mutual
+  friends ("friends of friends") and shared guild membership — never a name
+  search, just relationships that already exist. Separately, a first-class,
+  easily reversible per-player toggle ("make me publicly searchable") that
+  opts a player into open name/handle search — off by default, matches only
+  opted-in players when on, and flips off just as easily as it flips on).
+  Implementation tracked as
+  [#204](https://github.com/LunarVagabond/avalon-protocol/issues/204)
+  (scoped surfacing) and
+  [#205](https://github.com/LunarVagabond/avalon-protocol/issues/205)
+  (opt-in global toggle), both under this epic.
 - Reads are restricted to the caller's own session for now — the capability/
   visibility composition in [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87)
   (which this doc's "What a game sees" section describes) is not built yet, so

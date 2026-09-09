@@ -108,11 +108,27 @@ discoverable ("tap your passkey, no identifier at all") login would need
 that wasn't built for this milestone. The meaningful property survives
 regardless: no shared secret, a real challenge-response proof every time.
 
-Still open: recovery after every passkey is lost
-([#99](https://github.com/LunarVagabond/avalon-protocol/issues/99)),
-migrating an existing username/password identity (none exist outside
-development, so not applicable yet), and whether identities can be
-transferred (Proposal §32).
+Recovery after every passkey is lost
+([#99](https://github.com/LunarVagabond/avalon-protocol/issues/99), decided,
+tracked as [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an epic under #2): a layered answer, since the options
+aren't mutually exclusive. Multi-device/multi-passkey registration (add a
+second passkey at onboarding or any time after) ships as the cheap,
+near-term mitigation for the common single-device-loss case. Social recovery
+via an M-of-N set of trusted guardians — plausibly drawn from a player's own
+Avalon friends, gated by a mandatory public time-delay so the real owner can
+veto a malicious attempt — is the real answer being designed next; it
+composes naturally with the social graph already being network-owned and
+avoids a centralized custodian. An opt-in custodial fallback (email/SMS)
+stays explicitly off the table as a *default*: it reintroduces exactly the
+shared-secret, centralized-trust surface #73 exists to eliminate, and would
+only ever ship as a clearly-labeled, separately opted-into weaker-security
+tier, never silently. Until guardians ship, onboarding must make the
+total-loss consequence of relying on a single passkey loud and explicit, not
+a buried settings toggle discovered only after someone has already lost
+everything — that requirement holds regardless of what else lands first.
+Separately open: migrating an existing username/password identity (none
+exist outside development, so not applicable yet), and whether identities
+can be transferred (Proposal §32).
 
 ### Where the Ed25519 signing key lives in a browser
 
@@ -252,8 +268,10 @@ provider the player uses.
 - [#71](https://github.com/LunarVagabond/avalon-protocol/issues/71) —
   identity creation and its ledger entry weren't atomic. Done for the
   identity path; the outbox pattern generalizes to every future emitter.
-- [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) — open
-  decision: identity recovery when every passkey is lost.
+- [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) — decided:
+  identity recovery when every passkey is lost (multi-device now, guardian
+  social recovery next, custodial fallback opt-in-only, never a default).
+  Tracked as [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an epic under #2.
 - [#55](https://github.com/LunarVagabond/avalon-protocol/issues/55) — Hub
   identity creation/login UI: the real WebAuthn + Ed25519 flow, in-browser.
 - [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122) —
