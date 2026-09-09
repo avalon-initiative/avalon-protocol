@@ -18,6 +18,19 @@ Avalon Protocol is an open, Rust-based interoperability layer for independent ga
 one persistent player identity, one social graph, that a player carries between
 games that would otherwise treat every login as a stranger.
 
+Every major platform already solved this for the web: sign in once, and that
+identity carries weight across dozens of unrelated apps — the browser or
+platform vouches for who you are everywhere you go, so nobody has to rebuild
+their identity from scratch at every login screen. Gaming never got this. Your
+online presence — who your friends are, what community you're part of, the
+journey you've built — tends to be the same person across every game you
+play, yet today it resets to zero at each one, trapped in whichever studio's
+database happens to run that particular title. There's no reason a friendship
+or a guild built in a shooter should be invisible the moment you log into a
+survival game instead. Avalon is that missing layer for games: the same
+identity, friends, and history carried with you from one game to the next —
+owned by the player, not any single game.
+
 > **Games are experiences. Your identity, friends, guilds, achievements, and
 > history belong to you.**
 
