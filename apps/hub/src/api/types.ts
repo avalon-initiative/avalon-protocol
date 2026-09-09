@@ -553,5 +553,4 @@ export interface RsvpResponse {
 export interface ListEventsQuery {
   from?: string
   to?: string
->>>>>>> 1190b01 ([#169] - Guild events calendar: scheduled events + RSVP)
 }
