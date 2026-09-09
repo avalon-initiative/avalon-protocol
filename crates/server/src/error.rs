@@ -121,6 +121,16 @@ pub enum AppError {
     MessageTooLong,
     #[error("message not found")]
     MessageNotFound,
+    #[error("guild event not found")]
+    GuildEventNotFound,
+    #[error("event title must be 1-200 characters")]
+    InvalidEventTitle,
+    #[error("event description must be 4000 characters or fewer")]
+    InvalidEventDescription,
+    #[error("event ends_at cannot be before starts_at")]
+    InvalidEventTimeRange,
+    #[error("rsvp status must be one of going, maybe, not_going")]
+    InvalidRsvpStatus,
     #[error("game slug must be lowercase and match [a-z0-9-], 2-64 characters")]
     InvalidGameSlug,
     #[error("game slug is already taken")]
@@ -246,6 +256,11 @@ impl IntoResponse for AppError {
             AppError::ChannelNotFound | AppError::MessageNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidChannelName | AppError::MessageTooLong => StatusCode::BAD_REQUEST,
             AppError::ChannelArchived => StatusCode::CONFLICT,
+            AppError::GuildEventNotFound => StatusCode::NOT_FOUND,
+            AppError::InvalidEventTitle
+            | AppError::InvalidEventDescription
+            | AppError::InvalidEventTimeRange
+            | AppError::InvalidRsvpStatus => StatusCode::BAD_REQUEST,
             AppError::InvalidGameSlug | AppError::InvalidGameKey => StatusCode::BAD_REQUEST,
             AppError::GameSlugTaken => StatusCode::CONFLICT,
             AppError::GameNotFound => StatusCode::NOT_FOUND,

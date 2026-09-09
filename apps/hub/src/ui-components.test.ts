@@ -14,6 +14,7 @@ import {
   AvalonChatComposer,
   AvalonChatMessage,
   AvalonConnectionCard,
+  AvalonEventCard,
   AvalonFilterBar,
   AvalonForm,
   AvalonFriendRequestRow,
@@ -22,6 +23,7 @@ import {
   AvalonGuildMemberRow,
   AvalonPresenceBadge,
   AvalonRoleBadge,
+  AvalonRsvpControl,
   AvalonSidebarNav,
   AvalonSuggestionRow,
   AvalonUserChip,
@@ -339,6 +341,71 @@ describe('AvalonChannelList', () => {
 
     const withManage = mount(AvalonChannelList, { props: { channels, canManage: true } })
     expect(withManage.text()).toContain('New channel')
+  })
+})
+
+describe('AvalonEventCard', () => {
+  const baseProps = {
+    title: 'Raid night',
+    startsAt: '2026-09-15T20:00:00Z',
+    rsvpCounts: { going: 2, maybe: 1, not_going: 0 },
+  }
+
+  it('renders the title and rsvp counts', () => {
+    const wrapper = mount(AvalonEventCard, { props: baseProps })
+    expect(wrapper.text()).toContain('Raid night')
+    expect(wrapper.text()).toContain('2 going')
+    expect(wrapper.text()).toContain('1 maybe')
+  })
+
+  it('shows a description only when given', () => {
+    const withDescription = mount(AvalonEventCard, {
+      props: { ...baseProps, description: 'Bring consumables' },
+    })
+    expect(withDescription.text()).toContain('Bring consumables')
+
+    const withoutDescription = mount(AvalonEventCard, { props: baseProps })
+    expect(withoutDescription.text()).not.toContain('Bring consumables')
+  })
+
+  it('shows a no-responses hint only when every rsvp count is zero', () => {
+    const empty = mount(AvalonEventCard, {
+      props: { ...baseProps, rsvpCounts: { going: 0, maybe: 0, not_going: 0 } },
+    })
+    expect(empty.text()).toContain('No responses yet')
+
+    const withResponses = mount(AvalonEventCard, { props: baseProps })
+    expect(withResponses.text()).not.toContain('No responses yet')
+  })
+})
+
+describe('AvalonRsvpControl', () => {
+  it('renders all three RSVP options', () => {
+    const wrapper = mount(AvalonRsvpControl)
+    expect(wrapper.text()).toContain('Going')
+    expect(wrapper.text()).toContain('Maybe')
+    expect(wrapper.text()).toContain("Can't go")
+  })
+
+  it('marks the current status as pressed', () => {
+    const wrapper = mount(AvalonRsvpControl, { props: { currentStatus: 'going' } })
+    const buttons = wrapper.findAll('button')
+    expect(buttons[0].attributes('aria-pressed')).toBe('true')
+    expect(buttons[1].attributes('aria-pressed')).toBe('false')
+    expect(buttons[2].attributes('aria-pressed')).toBe('false')
+  })
+
+  it('emits rsvp with the clicked status', async () => {
+    const wrapper = mount(AvalonRsvpControl)
+    await wrapper.findAll('button')[1].trigger('click')
+    expect(wrapper.emitted('rsvp')).toEqual([['maybe']])
+  })
+
+  it('disables every button when disabled is true', () => {
+    const wrapper = mount(AvalonRsvpControl, { props: { disabled: true } })
+    for (const button of wrapper.findAll('button')) {
+      expect(button.attributes('disabled')).toBeDefined()
+    }
   })
 })
 
