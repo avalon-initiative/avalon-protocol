@@ -110,16 +110,70 @@ needs them.
   — there was never a chain to anchor to in the first place under this
   decision.
 
-## What is open
+## What is decided (continued): transparency log structure
 
-Signatures (#39, #80, #84) and Merkle/signed-tree-head structure (folded
-into whatever #40 becomes, now that its validator/consensus scope is
-dropped per ADR #186) are the remaining real design work — both properties
-of the log's data model, independent of storage engine or consensus. If
-Avalon ever runs more than one independent settlement operator, detecting
-one of them secretly serving two different histories (equivocation) via
-witnessed, gossiped checkpoints would be the relevant design question then
-— not filed as its own ticket now, since there's only one operator today.
+[#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) and
+[#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) (both
+closed) settled the log's actual hash/Merkle structure and signing scheme,
+following the RFC 6962 (Certificate Transparency) design directly rather
+than inventing one — the same precedent ADR #186 already cited for keeping
+Postgres as the backend:
+
+- **Two structures, not one, doing different jobs.** The existing
+  sequential hash chain (`entry_hash = SHA-256(prev_hash ‖ content)`,
+  #37/#173) is untouched — it stays the cheap, O(1)-per-link tamper-evidence
+  mechanism that `avalon inspect-ledger` already walks end-to-end. Layered
+  on top: a single append-only **Merkle tree over the whole ledger's
+  `entry_hash` values, ordered by `seq`**, computed with RFC 6962's exact
+  tree-hashing algorithm (domain-separated leaf/interior hashing, the
+  standard largest-power-of-two-less-than-n split) rather than a bespoke
+  scheme — this is what makes succinct inclusion/consistency proofs
+  possible, which a plain hash chain alone cannot give a mirror without
+  transferring every entry.
+- **`ledger_batches.batch_root` becomes that real answer** to the question
+  #38 explicitly left open ("whether the root is a simple chain-tip or a
+  Merkle root over the batch is #40's call"): `batch_root` is now the
+  tree's Merkle Tree Hash (MTH) at `tree_size = last_seq`, replacing the
+  placeholder chain-tip value — not a per-batch sub-tree, the whole
+  ledger's tree as of that batch. Cadence needs no new decision: it's
+  already whatever #38/#71's settlement worker does (a batch, and now also
+  an STH, closes whenever the outbox drain tick runs).
+- **Signed Tree Heads, not per-entry signatures.** #39 resolves to
+  STH-only signing, matching real transparency-log precedent — Certificate
+  Transparency logs never sign individual certificates, only the tree head;
+  an inclusion proof anchored to one valid signed STH already lets anyone
+  verify a specific entry belongs to the operator-endorsed tree, with no
+  need for the operator to separately sign every entry. One `SignedTreeHead
+  { tree_size, root_hash, network_id, timestamp, signing_key_id, signature
+  }` is produced per batch commit, in the same transaction, Ed25519,
+  covering exactly this settlement-operator key domain (distinct from
+  issuer keys, #80, and player keys, #73 — three separate lifecycles, per
+  #39's own original scoping).
+- **Mirror sync stays minimal, no witness quorum required yet.** With one
+  settlement operator today, the simplest viable protocol suffices: expose
+  the latest STH, a historical STH by `tree_size`, RFC 6962 consistency
+  proofs (tree at size A is a strict append-only extension of tree at size
+  B), and inclusion proofs (entry at `seq` is in the tree at `tree_size`).
+  Any mirror that stores every STH it has independently observed can be
+  compared against any other mirror's history for the same `tree_size` —
+  a mismatch is cryptographic proof of operator equivocation, publishable
+  as misbehavior evidence, without a formal witness-cosigning protocol.
+  Witness cosigning (Sigsum-style — a small independent witness set must
+  countersign an STH before it's trusted) stays the natural strengthening
+  *if* Avalon ever runs more than one independent settlement operator —
+  not needed, and not built, while there's only one.
+- **Storage stays exactly what ADR #186 already decided**: Merkle proofs
+  computed on demand from `ledger_entries.entry_hash`, ordered by `seq`, in
+  Postgres — no embedded engine, no per-node full copy. An incremental
+  frontier/proof-cache table is a valid future optimization if proof
+  computation cost ever matters at scale; it doesn't change this decision's
+  wire format and isn't required to close it.
+
+Implementation tracked as
+[#210](https://github.com/LunarVagabond/avalon-protocol/issues/210)
+(real Merkle root + signed tree heads, replacing #38's placeholder) and
+[#211](https://github.com/LunarVagabond/avalon-protocol/issues/211)
+(mirror-facing proof/sync endpoints), both under epic #36.
 
 ## Today in the repo
 
@@ -156,8 +210,10 @@ witnessed, gossiped checkpoints would be the relevant design question then
   with a single `SettlementProvider::commit` call — a batch closes when the
   worker runs, not on a size threshold or timer, and a single-event batch is
   legal. No handler calls `commit` directly.
-- Not yet: signatures (#39), Merkle roots or signed tree heads (#40), an
-  export/mirror format.
+- Not yet implemented (decided, not built): the real Merkle root/signed
+  tree head structure (#39/#40, both closed — see "What is decided" above),
+  an export/mirror format. `batch_root` is still the placeholder chain-tip
+  value in the code today; #210/#211 are the implementation tickets.
 - **Genesis and network identity (#173).** A singleton `chain_genesis` table
   commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
   `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —
@@ -196,9 +252,12 @@ witnessed, gossiped checkpoints would be the relevant design question then
 - Epic [#36](https://github.com/LunarVagabond/avalon-protocol/issues/36)
   Settlement Ledger
 - #68, #70, #79, #186 decided (#93 partially superseded by #186); #40, #39
-  open engineering decisions
+  decided (Merkle/STH structure, STH-only signing) — implementation tracked
+  as #210, #211
 - #38 batching, #71 atomicity, #173 genesis/network identity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider
 - #75 durable history is canonical; #82 event catalogue
 - #178/#179 (RocksDB-backed provider) reverted (#185), won't-fix per #186
+- #80, #84 — issuer key lifecycle, a separate key domain from the
+  settlement operator key #39 decided
