@@ -103,7 +103,9 @@ preference, and, later, operator reputation. Version and capability negotiation
 happen on connect; failover and retry live inside the SDK
 ([`./sdk.md`](./sdk.md)). Self-hosting stays possible without any central
 registry — `connect_to(url)` remains for local development and private
-deployments.
+deployments. A node mirroring the public network and a private, disconnected
+instance both "self-host" the same code — they are not the same thing; see
+[`./self-hosting.md`](./self-hosting.md).
 
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);

@@ -309,3 +309,11 @@ See the root `README.md` for current build status and
 this is held to. For the actual integration surface once it exists, see
 [`../architecture/sdk.md`](../architecture/sdk.md) and this directory's
 `README.md`.
+
+If your studio wants to run this internally instead — your own games, your
+own network, not connected to the public one — that's supported, and
+[`../architecture/self-hosting.md`](../architecture/self-hosting.md) covers
+what that actually means. Short version: it's a fork, not a way to join, and
+none of the network effects above apply to it. We'd rather have your games on
+the real network. But if a private instance is genuinely what you need, the
+code doesn't stop you.

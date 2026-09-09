@@ -39,6 +39,7 @@ Each document below links the ones that govern it.
 | Settlement | [settlement.md](settlement.md) | Batched commitments; transparency log on Postgres, no blockchain/validator consensus |
 | Query & indexing | [query-and-indexing.md](query-and-indexing.md) | Postgres is a projection, rebuildable from history |
 | Nodes | [nodes.md](nodes.md) | Infrastructure providers, not authorities; roles, mirrors, discovery |
+| Self-hosting | [self-hosting.md](self-hosting.md) | Running your own instance is supported, but it forks the network — mirroring the public log is not the same thing as a private `network_id` |
 | SDK | [sdk.md](sdk.md) | Exposes protocol capabilities, not infrastructure topology |
 | Hub | [hub.md](hub.md) | A client of the network, not the network |
 | Disaster recovery | [disaster-recovery.md](disaster-recovery.md) | Every Postgres disappears; what gets rebuilt, from what |
@@ -75,6 +76,7 @@ established it.
 | Presence | Realtime presence is ephemeral and never enters durable history. | [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) |
 | Game Space | Schema publication and data exposure are independently authorized; historical data is read under the schema version it was recorded against, never reinterpreted. | [game-space.md](game-space.md), [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) |
 | Nodes | Nodes are infrastructure providers, not authorities. A node cannot fabricate an issuer's claim. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
+| Self-hosting | A private instance (its own `network_id`) is cryptographically incapable of merging with the public network's log — running the code privately is supported, but it is a fork, not membership. | [#173](https://github.com/LunarVagabond/avalon-protocol/issues/173), [self-hosting.md](self-hosting.md) |
 | SDK | SDKs expose protocol capabilities, not infrastructure topology. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
 | Hub | The Hub is a client of the network, not the network. | [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77) |
 | Registry | Network statistics inform decisions; they never determine trust. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
