@@ -180,7 +180,7 @@ with Game A becomes historical.
   `description` and `badge`, no new event kind. The starter roles get
   sensible defaults (`owner` → crown/gold, `officer` → shield/blue,
   `member` → star/gray); the migration
-  (`crates/server/db/migrations/0017_guild_role_badges`) backfills existing
+  (`crates/server/db/migrations/0019_guild_role_badges`) backfills existing
   rows with those same column defaults rather than leaving them null, so no
   reader needs a null-handling branch. `packages/ui`'s `AvalonRoleBadge`
   component (tracked in #24) is what will eventually render this — that
@@ -202,7 +202,7 @@ with Game A becomes historical.
   and `guild.role_changed` are written into the outbox in the same
   transaction as the `guilds`/`guild_roles`/`guild_game_associations`/
   `guild_members` projection change (`crates/server/db/migrations/0008_guilds`,
-  `0009_guild_membership`, `0017_guild_role_badges`). Invites, declines, and withdrawals are
+  `0009_guild_membership`, `0019_guild_role_badges`). Invites, declines, and withdrawals are
   deliberately not durable — resolving one is a plain `guild_invites`
   projection update, no event, same pattern `friends.rs` uses for
   declined/withdrawn friend requests; a pending invite is idempotent
