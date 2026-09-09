@@ -1,19 +1,5 @@
 # Avalon Protocol
 
-**Status:** early. The Rust workspace (`protocol`, `chain`, `indexer`, `server`,
-`sdk`, `cli`), the web/mobile Hub apps, and the C# SDK skeleton all exist and
-build. Identity and auth work end to end against a live Postgres: an identity
-is a self-custodied keypair, not a password — a WebAuthn passkey for login and
-a separate Ed25519 key that signs the events an identity authors, so a hosted
-node can't fabricate one (`make create-identity`, the Rust SDK's
-`authenticate()`). Every identity creation lands in a hash-chained ledger,
-atomically with the identity itself via an outbox, inspectable with
-`make inspect-ledger` / `make outbox-status`. Social, guilds, achievements,
-permissions, the indexer, and the Hub UIs are still scaffolding. See [`docs/stakeholders/Proposal.md`](docs/stakeholders/Proposal.md)
-for the full design, [`docs/architecture/`](docs/architecture/README.md) for the
-normative architecture and its invariants, and
-[`docs/WhyAvalon.md`](docs/WhyAvalon.md) for the case for why this needs to exist.
-
 Avalon Protocol is an open, Rust-based interoperability layer for independent games:
 one persistent player identity, one social graph, that a player carries between
 games that would otherwise treat every login as a stranger.
@@ -56,6 +42,21 @@ infrastructure between games, not a platform that owns them.
 - **Settlement is a public transparency log, not federation or blockchain consensus.** Milestone 1 is a signed, append-only ledger. Long-term, durable facts are independently verifiable and mirrorable by anyone — not gated behind servers whitelisting each other, and not requiring mining/consensus to referee a scarcity problem Avalon doesn't have — see [ADR: Attestations Before Blockchain](https://github.com/LunarVagabond/avalon-protocol/issues/68) and [ADR: Settlement Is a Public Transparency Log](https://github.com/LunarVagabond/avalon-protocol/issues/70).
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination.
+
+## Where Discord fits
+
+Discord already gets part of this right: one identity, one friends list,
+presence and communities that already span every game you play — exactly the
+problem this README opens with. What it doesn't give you is anything a game
+can actually build on: there's no achievement a game can issue and another
+can independently verify, no way for a game to trust a claim made outside its
+own database, and your social graph doesn't belong to you in any portable
+sense — it belongs to Discord's platform, not you. Discord is a real, working
+middle ground for presence and social continuity, not a competitor to Avalon.
+There's no reason Discord couldn't become a *client* of Avalon Protocol —
+surfacing a player's real identity, friends, and verifiable achievements
+inside a server people already live in — the same way a game or the Hub app
+are clients today.
 
 ## Repository structure
 
