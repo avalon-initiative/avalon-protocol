@@ -107,6 +107,11 @@ milestone-1 stand-in until actor signatures exist.
 | `identity.created` | identity → identity | identity id | identities | identity's Ed25519 event-signing key (#73, done) |
 | `identity.signing_key_added` | identity → identity | new signing key id/public key, device label, approving key id | identity signing keys | the approving device's key (#135, done) |
 | `identity.signing_key_revoked` | identity → identity | revoked signing key id | identity signing keys | network (milestone-1 stand-in, #135, done) |
+| `identity.recovery_configured` | identity → identity | guardian ids, threshold | recovery guardian settings | identity key (session-authenticated, #201, done) |
+| `identity.recovery_requested` | identity → identity | request id, threshold | recovery requests | network (milestone-1 stand-in — the requester by definition has no session; #201, done) |
+| `identity.recovery_approved` | identity (guardian) → identity | request id, guardian id, approvals count, threshold, delay end | recovery requests/approvals | network (milestone-1 stand-in, #201, done) |
+| `identity.recovery_cancelled` | identity (owner or guardian) → identity | request id, cancelled by, reason | recovery requests | network (milestone-1 stand-in, #201, done) |
+| `identity.recovered` | identity → identity | request id, new device label | identity keys | network (milestone-1 stand-in, #201, done) |
 | `profile.updated` | identity → identity | changed promised-durable fields (`display_name`, `discriminator`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`) | profiles | identity key |
 | `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
 | `game.binding_established` | identity → game | identity, game | bindings, registry players | identity key |
@@ -250,6 +255,25 @@ the record — [`./revocation.md`](./revocation.md).
   "game → achievement id" shape above. Network-attributed rather than
   game-signed for the same reason `game.registered` is: no general per-event
   signing ceremony exists yet beyond `identity.created`.
+- A seventh emitter: `crates/server/src/recovery.rs` (#201) writes
+  `identity.recovery_configured` (guardian-set/threshold change),
+  `identity.recovery_requested` (a new device completes the recovery
+  ceremony), `identity.recovery_approved` (one per guardian approval, with
+  the running approvals count/threshold/delay end in the payload),
+  `identity.recovery_cancelled` (owner or guardian veto), and
+  `identity.recovered` (finalize, once the delay elapses unvetoed) — each
+  enqueued into `protocol_outbox` in the same transaction as the
+  `recovery_guardians`/`recovery_requests`/`recovery_approvals`/
+  `identity_keys` row change it accompanies. `issuer`/`subject` are
+  `identity:<id>:self:<verb>` `GlobalId`s, same shape `friends.rs` and
+  `devices.rs` use; `identity.recovery_approved`/`.recovery_cancelled`'s
+  issuer is the acting guardian's or canceller's own identity, not
+  necessarily the identity being recovered. Network-attributed rather than
+  identity-signed for the same "network as signer" milestone-1 stand-in
+  every emitter but `identity.created`/`identity.signing_key_added` uses —
+  most acutely necessary here, since `identity.recovery_requested` is
+  authored by a caller who by definition has no session, let alone a
+  signing key, for the identity being recovered.
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`
   plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`); the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,

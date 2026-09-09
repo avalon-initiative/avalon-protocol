@@ -123,20 +123,22 @@ is the cheap, near-term mitigation for the common single-device-loss case —
 it does nothing for someone who only ever registers one passkey and then
 loses it, which is exactly why it's a mitigation, not the full answer.
 Social recovery
-via an M-of-N set of trusted guardians — plausibly drawn from a player's own
-Avalon friends, gated by a mandatory public time-delay so the real owner can
-veto a malicious attempt — is the real answer being designed next; it
-composes naturally with the social graph already being network-owned and
-avoids a centralized custodian. An opt-in custodial fallback (email/SMS)
-stays explicitly off the table as a *default*: it reintroduces exactly the
-shared-secret, centralized-trust surface #73 exists to eliminate, and would
-only ever ship as a clearly-labeled, separately opted-into weaker-security
-tier, never silently. Until guardians ship, onboarding must make the
-total-loss consequence of relying on a single passkey loud and explicit, not
-a buried settings toggle discovered only after someone has already lost
-everything — that requirement holds regardless of what else lands first.
-Separately open: migrating an existing username/password identity (none
-exist outside development, so not applicable yet), and whether identities
+via an M-of-N set of trusted guardians — drawn from a player's own Avalon
+friends, gated by a mandatory public time-delay so the real owner can veto a
+malicious attempt — is the real answer for losing every device at once
+([#201](https://github.com/LunarVagabond/avalon-protocol/issues/201), done;
+see below); it composes naturally with the social graph already being
+network-owned and avoids a centralized custodian. An opt-in custodial
+fallback (email/SMS) stays explicitly off the table as a *default*: it
+reintroduces exactly the shared-secret, centralized-trust surface #73 exists
+to eliminate, and would only ever ship as a clearly-labeled, separately
+opted-into weaker-security tier, never silently. Onboarding must still make
+the total-loss consequence of relying on a single passkey loud and explicit
+for a player who hasn't configured guardians, not a buried settings toggle
+discovered only after someone has already lost everything — that
+requirement holds regardless of what else has shipped. Separately open:
+migrating an existing username/password identity (none exist outside
+development, so not applicable yet), and whether identities
 can be transferred (Proposal §32).
 
 ### Where the Ed25519 signing key lives in a browser
@@ -178,6 +180,89 @@ granting one never by itself authenticates a login. The WebAuthn passkey
 has no equivalent client-storage decision here: it never leaves the
 platform authenticator, already synced across devices by whatever passkey
 provider the player uses.
+
+### Social recovery via M-of-N guardians (#201)
+
+The real answer to losing every registered passkey at once — #200's
+multi-passkey registration only helps if a second device was registered
+*before* the loss. A player designates a set of guardians (drawn only from
+their current friends, issue #15's network-level primitive — the only pool
+this is allowed to draw from) and a threshold M-of-N. Configuring or
+changing that set (`PUT /me/recovery/guardians`) requires the identity's
+*current* session, same as every other session-gated route in this crate —
+never reachable by an attacker who has compromised only a not-yet-valid new
+device, which is what makes "changing the guardian set requires the current
+set of valid credentials" true by construction rather than by a special-case
+check.
+
+Recovery itself is a four-stage state machine, one `recovery_requests` row
+per attempt:
+
+1. **Request.** From a new device with no valid session, a player names the
+   identity to recover and completes a WebAuthn registration ceremony for
+   that device (`POST /recovery/requests/start` then `/finish` — the same
+   two-step shape `handlers::register_start`/`register_finish` and
+   `passkeys::register_start`/`register_finish` already use). This is the
+   one deliberate exception to "every route requires a session" in this
+   crate, since the entire premise is that the caller has none for the
+   identity in question. It is not an open door: the identity id must be
+   real, the identity must actually have guardians configured (an
+   unconfigured identity can never satisfy any M, so there is nothing to
+   spam toward), at most one *active* request may exist per identity at a
+   time (a partial unique index on `recovery_requests`, not an
+   application-level check-then-act), and a rolling 24-hour window caps how
+   many requests may be initiated against a single identity regardless of
+   outcome. The new device's passkey is captured but not yet a valid
+   credential — it sits in `recovery_requests.pending_passkey_data` until
+   the request actually finalizes.
+2. **Approval.** Each guardian independently approves
+   (`POST /recovery/requests/:id/approve`), gated on currently — not
+   historically — being one of the identity's guardians. Once approvals
+   reach the threshold that was in effect at request time
+   (`threshold_at_request`, frozen so a guardian-set change mid-attempt
+   can't retroactively change what the attempt needs), the request enters
+   the delay phase and `delay_ends_at` is set.
+3. **Mandatory public time-delay.** `AVALON_RECOVERY_DELAY_HOURS`
+   (default 48 — long enough that an owner who only logs in occasionally
+   plausibly notices, short enough that a genuine all-devices-lost recovery
+   doesn't drag on for a week) must elapse with no veto. The delay's
+   existence and countdown are public — `GET /identities/:id/recovery/status`
+   requires no auth at all, a deliberate reading of the ticket's "mandatory
+   *public* time-delay" language as a public marker on the identity, not
+   merely something the owner happens to be told. `GET /me/recovery/status`
+   is the session-authenticated mirror of the same data, so the owner sees
+   a prominent notice through any surviving session without a separate
+   notification channel being invented.
+4. **Veto or finalize.** The original owner (any session for the identity
+   itself) or any *current* guardian may cancel at any point before
+   finalization (`POST /recovery/requests/:id/cancel`) — a former guardian
+   who has since been removed cannot, matching the config-change invariant
+   above: the owner's own recourse against a compromised guardian is to
+   remove them, not to leave their veto/approval power intact.
+   `POST /recovery/requests/:id/finalize` is deliberately public and
+   idempotent: it grants nothing beyond what approvals and the elapsed
+   delay already authorized, so no caller identity needs checking. It
+   inserts the pending passkey as an ordinary new `identity_keys` row —
+   exactly #200's own mechanism — and never touches or revokes anything the
+   real owner might still hold.
+
+The node operator has no path anywhere in this flow that bypasses guardian
+approval or the delay — finalize only ever acts on what approvals and
+elapsed time already durably recorded in Postgres, not on anything an
+operator can unilaterally assert. Every phase transition is durable history
+via the outbox: `identity.recovery_configured`, `.recovery_requested`,
+`.recovery_approved`, `.recovery_cancelled`, `.recovered` — see
+[`./protocol-events.md`](./protocol-events.md).
+
+Scoped out of #201's first pass, deliberately: a background sweep that
+auto-finalizes every eligible request the moment its delay elapses (today,
+`finalize_request` is called lazily — by the recovering device polling, or
+by anyone else who happens to check — which is correct but not
+self-triggering); Rust SDK and C# binding surface for this flow; and Hub UI
+polish beyond a functional guardian-management card, initiation flow, and
+approval list (an owner-visible in-progress banner shows wherever
+`GET /me/recovery/status` is checked, but a dedicated real-time alert is
+future work). None of these affect the state machine or its invariants.
 
 ## What identity is not
 
@@ -259,6 +344,28 @@ provider the player uses.
   The first device's `identity_signing_keys` row is labeled at
   registration too (`register_finish`'s optional `device_label`, #145) —
   previously only devices added through a grant carried a label.
+- `crates/server/db/migrations/0028_social_recovery/` — `recovery_guardian_settings`
+  (per-identity threshold), `recovery_guardians` (the guardian set, a
+  friend-only rule enforced at the handler layer against `friendships`, not
+  a DB constraint), `recovery_requests` (one row per attempt, with a
+  partial unique index capping one *active* — `pending_approvals`/`delay` —
+  attempt per identity), and `recovery_approvals`; widens
+  `webauthn_ceremonies.kind` to allow `'recovery_start'` (#201).
+- `crates/server/src/recovery.rs` (#201) — the full guardian-configuration
+  and recovery-request state machine described above:
+  `PUT`/`GET /me/recovery/guardians`, `POST /recovery/requests/start`,
+  `POST /recovery/requests/finish`, `POST /recovery/requests/:id/approve`,
+  `POST /recovery/requests/:id/cancel`, `POST /recovery/requests/:id/finalize`,
+  `GET /recovery/requests/:id`, `GET /identities/:id/recovery/status`,
+  `GET /me/recovery/status`, `GET /me/recovery/guardian-requests`. Every
+  security-load-bearing invariant (threshold enforcement, delay
+  enforcement, veto authority, rate limiting) is factored into a pure,
+  unit-tested function, same convention `passkeys::guard_revoke_last_passkey`
+  established. `crates/server/tests/recovery.rs` (`--ignored`) covers the
+  full flow against a live server: a 3-guardian 2-of-3 recovery, a lone
+  guardian below threshold never finalizing, an owner veto, a removed
+  guardian losing approve/cancel authority, and guardian-set changes
+  requiring a session.
 - `crates/cli/src/main.rs` — `avalon create-identity` drives a real WebAuthn
   registration via a virtual authenticator (`passkey-authenticator`'s
   `testable` feature) and prints the loss-of-everything warning #99 calls
@@ -315,14 +422,22 @@ provider the player uses.
   identity creation and its ledger entry weren't atomic. Done for the
   identity path; the outbox pattern generalizes to every future emitter.
 - [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) — decided:
-  identity recovery when every passkey is lost (multi-device now, guardian
-  social recovery next, custodial fallback opt-in-only, never a default).
-  Tracked as [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an epic under #2.
+  identity recovery when every passkey is lost (multi-device, done via
+  #200; guardian social recovery, done via #201; custodial fallback
+  opt-in-only, never a default, not built). Tracked as
+  [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an
+  epic under #2.
 - [#200](https://github.com/LunarVagabond/avalon-protocol/issues/200) —
   multi-device/multi-passkey registration, #99's cheap near-term mitigation.
   Done: `crates/server/src/passkeys.rs`, `apps/hub/src/api/passkeys.ts`.
-  Guardian social recovery (the next layer #99 calls for) is not this
-  ticket's scope.
+- [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) —
+  social recovery via an M-of-N set of trusted guardians, #99's real answer
+  for losing every device at once. Done: `crates/server/src/recovery.rs`,
+  `crates/server/tests/recovery.rs`. Scoped out this pass: a background
+  auto-finalize sweep (finalize is currently caller-triggered, not
+  self-triggering), Rust SDK / C# binding surface, and Hub UI polish beyond
+  a functional guardian-management/initiation/approval flow — see the
+  section above for the full scoping rationale.
 - [#199](https://github.com/LunarVagabond/avalon-protocol/issues/199) —
   onboarding/settings total-loss warning for a single-passkey identity, part
   of [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198).
