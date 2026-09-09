@@ -43,20 +43,20 @@ infrastructure between games, not a platform that owns them.
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination.
 
-## Where Discord fits
+## Closing the gap
 
-Discord already gets part of this right: one identity, one friends list,
-presence and communities that already span every game you play — exactly the
-problem this README opens with. What it doesn't give you is anything a game
-can actually build on: there's no achievement a game can issue and another
-can independently verify, no way for a game to trust a claim made outside its
-own database, and your social graph doesn't belong to you in any portable
-sense — it belongs to Discord's platform, not you. Discord is a real, working
-middle ground for presence and social continuity, not a competitor to Avalon.
-There's no reason Discord couldn't become a *client* of Avalon Protocol —
-surfacing a player's real identity, friends, and verifiable achievements
-inside a server people already live in — the same way a game or the Hub app
-are clients today.
+Tools already exist that solve part of this problem, each in its own way.
+Discord is the clearest example: one identity, one friends list, presence and
+communities that already span every game you play — proof the demand this
+README opens with is real, not hypothetical. What none of them give you is
+anything a game can actually build on: there's no achievement a game can
+issue and another can independently verify, no way for a game to trust a
+claim made outside its own database, and no social graph a player actually
+owns in a portable sense — it belongs to whichever platform happens to be
+hosting it. Avalon Protocol closes that gap. It isn't a competitor to
+Discord, Slack, or anything like them — it's the open identity and social
+layer underneath, that any of them could plug into as a client, the same way
+a game or the Hub app can.
 
 ## Repository structure
 
