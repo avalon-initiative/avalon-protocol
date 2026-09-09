@@ -160,6 +160,31 @@ with Game A becomes historical.
   `GuildPermission` (issue #20): the fixed milestone-1 permission set a
   role can carry — `manage_guild`, `manage_roles`, `manage_members`,
   `manage_channels`, not yet extensible.
+- **Role descriptions and badges (issue #152).** A guild role now carries a
+  `description` (free text, capped at 200 characters) and a `badge` — a
+  small, fixed visual identity, not a free-form upload: an icon id from a
+  closed milestone-1 enum (`RoleBadgeIcon` — `shield`, `crown`, `star`,
+  `sword`, `wrench`, `heart`, `flag`, `bolt`) paired with a color id from a
+  closed enum (`RoleBadgeColor` — `gray`, `red`, `orange`, `gold`, `green`,
+  `blue`, `purple`), both defined in `crates/protocol/src/guilds.rs` as
+  `RoleBadge { icon, color }`. No user-supplied image hosting is in scope
+  for milestone 1; the icon+color shape is deliberately open to grow into a
+  richer badge system later (more icons/colors, tiers, an uploaded custom
+  asset as an additional variant) without a breaking change to callers that
+  just want "an icon and a color" out of a role.
+  `crates/server/src/guilds.rs`'s `create_role`/`update_role` accept and
+  validate both fields — an out-of-range description or an unrecognized
+  badge icon/color is a rejected (400) request, not silently dropped or
+  coerced to a default, same posture `validate_tag` already takes for a
+  guild's own tag. `guild.role_defined`'s payload grew to include
+  `description` and `badge`, no new event kind. The starter roles get
+  sensible defaults (`owner` → crown/gold, `officer` → shield/blue,
+  `member` → star/gray); the migration
+  (`crates/server/db/migrations/0017_guild_role_badges`) backfills existing
+  rows with those same column defaults rather than leaving them null, so no
+  reader needs a null-handling branch. `packages/ui`'s `AvalonRoleBadge`
+  component (tracked in #24) is what will eventually render this — that
+  component itself isn't built by #152, which is backend-only.
 - Guild creation, rename/retag/redescribe, roles, ownership transfer, and
   membership lifecycle are real and served by `avalon-server`
   (`crates/server/src/guilds.rs`, issues #20 and #21): `POST /guilds`,
@@ -177,7 +202,7 @@ with Game A becomes historical.
   and `guild.role_changed` are written into the outbox in the same
   transaction as the `guilds`/`guild_roles`/`guild_game_associations`/
   `guild_members` projection change (`crates/server/db/migrations/0008_guilds`,
-  `0009_guild_membership`). Invites, declines, and withdrawals are
+  `0009_guild_membership`, `0017_guild_role_badges`). Invites, declines, and withdrawals are
   deliberately not durable — resolving one is a plain `guild_invites`
   projection update, no event, same pattern `friends.rs` uses for
   declined/withdrawn friend requests; a pending invite is idempotent
@@ -273,6 +298,8 @@ with Game A becomes historical.
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22) (channels +
   messages), [#23](https://github.com/LunarVagabond/avalon-protocol/issues/23)
   (SDK), [#24](https://github.com/LunarVagabond/avalon-protocol/issues/24) (Hub).
+- [#152](https://github.com/LunarVagabond/avalon-protocol/issues/152) — role
+  descriptions and badges, done.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

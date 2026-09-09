@@ -108,6 +108,99 @@ async fn creating_a_guild_makes_the_creator_the_owner() {
     assert_eq!(role_names, vec!["owner", "officer", "member"]);
 }
 
+/// Issue #152: creating a role with a description/badge round-trips
+/// through `GET /guilds/{id}/roles`.
+#[tokio::test]
+#[ignore]
+async fn creating_a_role_with_description_and_badge_round_trips() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    assert!(create_guild.status().is_success());
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
+        .json(&serde_json::json!({
+            "name": "Raid Leader",
+            "permissions": ["manage_members"],
+            "description": "Leads raid nights and manages the roster.",
+            "badge": { "icon": "sword", "color": "purple" },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        create_role.status().is_success(),
+        "{:?}",
+        create_role.status()
+    );
+    let created: serde_json::Value = create_role.json().await.unwrap();
+    assert_eq!(
+        created["description"].as_str().unwrap(),
+        "Leads raid nights and manages the roster."
+    );
+    assert_eq!(created["badge"]["icon"].as_str().unwrap(), "sword");
+    assert_eq!(created["badge"]["color"].as_str().unwrap(), "purple");
+
+    let roles: serde_json::Value =
+        auth(http.get(format!("{base}/guilds/{guild_id}/roles")), &token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let raid_leader = roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"].as_str().unwrap() == "Raid Leader")
+        .expect("newly created role should be listed");
+    assert_eq!(
+        raid_leader["description"].as_str().unwrap(),
+        "Leads raid nights and manages the roster."
+    );
+    assert_eq!(raid_leader["badge"]["icon"].as_str().unwrap(), "sword");
+    assert_eq!(raid_leader["badge"]["color"].as_str().unwrap(), "purple");
+}
+
+/// Issue #152: an unrecognized badge icon is rejected outright, not
+/// silently dropped or coerced to a default.
+#[tokio::test]
+#[ignore]
+async fn creating_a_role_with_an_unknown_badge_icon_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
+        .json(&serde_json::json!({
+            "name": "Bogus",
+            "badge": { "icon": "not_a_real_icon", "color": "gold" },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create_role.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 #[ignore]
 async fn guild_name_is_unique_case_insensitively() {
