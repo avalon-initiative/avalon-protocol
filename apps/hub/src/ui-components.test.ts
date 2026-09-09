@@ -23,6 +23,7 @@ import {
   AvalonPresenceBadge,
   AvalonRoleBadge,
   AvalonSidebarNav,
+  AvalonSuggestionRow,
   AvalonUserChip,
 } from '@avalon/ui'
 
@@ -95,6 +96,35 @@ describe('AvalonFriendRequestRow', () => {
     })
     await wrapper.find('button').trigger('click')
     expect(wrapper.emitted('remove')).toHaveLength(1)
+  })
+})
+
+describe('AvalonSuggestionRow', () => {
+  it('falls back to the identity id when no display name is given', () => {
+    const wrapper = mount(AvalonSuggestionRow, { props: { identityId: 'id-1' } })
+    expect(wrapper.text()).toContain('id-1')
+  })
+
+  it('prefers the display name when one is given', () => {
+    const wrapper = mount(AvalonSuggestionRow, {
+      props: { identityId: 'id-1', displayName: 'Avalon Player' },
+    })
+    expect(wrapper.text()).toContain('Avalon Player')
+  })
+
+  it('emits add when the add button is clicked', async () => {
+    const wrapper = mount(AvalonSuggestionRow, { props: { identityId: 'id-1' } })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('add')).toHaveLength(1)
+  })
+
+  it('shows a disabled "Requested" state once requested, instead of Add', () => {
+    const wrapper = mount(AvalonSuggestionRow, {
+      props: { identityId: 'id-1', requested: true },
+    })
+    expect(wrapper.text()).toContain('Requested')
+    expect(wrapper.text()).not.toContain('Add')
+    expect(wrapper.find('button').attributes('disabled')).toBeDefined()
   })
 })
 

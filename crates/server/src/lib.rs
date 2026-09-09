@@ -5,6 +5,7 @@ pub mod blocks;
 pub mod channels;
 pub mod connections;
 pub mod devices;
+pub mod discovery;
 pub mod error;
 pub mod friends;
 pub mod games;
@@ -92,6 +93,7 @@ pub fn router(state: AppState) -> Router {
         .route("/friends", get(friends::list_friends))
         .route("/friends/:identity_id", delete(friends::remove_friend))
         .route("/friends/handle/:handle", get(friends::resolve_handle))
+        .route("/people/discover", get(discovery::discover_people))
         .route(
             "/blocks",
             get(blocks::list_blocks).post(blocks::create_block),
