@@ -310,7 +310,10 @@ export interface GuildResponse {
   // (CreateGuildRequest doesn't take it, neither does UpdateGuildRequest),
   // so every guild is "invite_only" in practice. See guilds.ts's own note.
   join_policy: string
-  // Issue #153. `null` means unset.
+  // Issue #153, all four below. motd/banner are null when unset;
+  // recruiting gates the "recruiting only" discovery filter (#154) and
+  // whether this guild shows up under a recruiting=false lookup for
+  // strangers at all (see build_discover_query's membership gating).
   motd: string | null
   banner: string | null
   links: GuildLink[]
@@ -324,19 +327,6 @@ export interface GuildResponse {
   // order — always part of the public profile (unlike the full
   // breakdown, which stays behind game_breakdown_public).
   favorite_games: FavoriteGameEntry[]
-  // Issue #153, all four below. motd/banner are null when unset;
-  // recruiting gates the "recruiting only" discovery filter (#154) and
-  // whether this guild shows up under a recruiting=false lookup for
-  // strangers at all (see build_discover_query's membership gating).
-  motd: string | null
-  banner: string | null
-  links: GuildLink[]
-  recruiting: boolean
-}
-
-export interface GuildLink {
-  label: string
-  url: string
 }
 
 export interface CreateGuildRequest {
@@ -349,26 +339,17 @@ export interface UpdateGuildRequest {
   name?: string
   tag?: string
   description?: string
-  // Issue #153. Three states, same as ProfileResponse's `bio`: omitted
-  // (untouched), `""` (clear), non-empty (validate, then set).
-  motd?: string
-  banner?: string
-  // Issue #153. Two states: omitted (untouched) or a full replacement list
-  // (including `[]` to clear it) — never a per-entry patch.
-  links?: GuildLink[]
-  // Issue #153. Omitted leaves it untouched.
-  recruiting?: boolean
-  // Issue #206. Omitted leaves it untouched.
-  game_breakdown_public?: boolean
   // Issue #153, all four below. motd/banner: omit to leave untouched,
   // "" to clear, non-empty to set (three-state, same convention as
   // UpdateProfileRequest.bio). links: omit to leave untouched, any array
-  // (including []) to fully replace the stored list. recruiting: omit to
-  // leave untouched.
+  // (including []) to fully replace the stored list — never a per-entry
+  // patch. recruiting: omit to leave untouched.
   motd?: string
   banner?: string
   links?: GuildLink[]
   recruiting?: boolean
+  // Issue #206. Omitted leaves it untouched.
+  game_breakdown_public?: boolean
 }
 
 // GET /guilds/{id}/game-breakdown (issue #206, implementing decision #160):
