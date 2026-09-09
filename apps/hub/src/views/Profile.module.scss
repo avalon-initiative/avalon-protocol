@@ -103,6 +103,45 @@
   flex-wrap: wrap;
 }
 
+.discoverabilityCard {
+  margin-bottom: var(--av-space-4);
+}
+
+.discoverabilityRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--av-space-4);
+  flex-wrap: wrap;
+}
+
+.discoverabilityText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.discoverabilityStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+  font-weight: 600;
+}
+
+.discoverabilityDot {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  background: var(--av-color-text-muted);
+  flex-shrink: 0;
+}
+
+.discoverabilityDotOn {
+  background: var(--av-color-success);
+}
+
 .revoked {
   font-size: var(--av-text-xs);
   font-weight: 600;

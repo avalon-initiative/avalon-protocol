@@ -95,6 +95,7 @@ pub fn router(state: AppState) -> Router {
         .route("/friends/{identity_id}", delete(friends::remove_friend))
         .route("/friends/handle/{handle}", get(friends::resolve_handle))
         .route("/people/discover", get(discovery::discover_people))
+        .route("/identities/search", get(discovery::search_identities))
         .route(
             "/blocks",
             get(blocks::list_blocks).post(blocks::create_block),

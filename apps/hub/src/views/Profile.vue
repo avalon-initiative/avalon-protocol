@@ -47,6 +47,15 @@ const identityId = ref('')
 const loading = ref(true)
 const error = ref('')
 
+// Issue #205's opt-in global search toggle — off by default. A
+// first-class control on this page (not tucked into a settings submenu),
+// with `discoverable` doubling as its own "you are currently publicly
+// searchable" indicator: it's always the server's current value, never
+// assumed from the last click.
+const discoverable = ref(false)
+const savingDiscoverable = ref(false)
+const discoverableError = ref('')
+
 // #134: this device has no signing key for the current identity — either
 // it's brand new, or storage was cleared. Recovering from a saved phrase
 // is one fallback; requesting a grant from another trusted device (#135,
@@ -63,6 +72,7 @@ onMounted(async () => {
     avatarUrl.value = profile.avatar_url ?? ''
     handle.value = profile.handle
     identityId.value = profile.identity_id
+    discoverable.value = profile.discoverable
     hasSigningKey.value = loadSigningKey(profile.identity_id) !== null
     if (hasSigningKey.value) {
       await refreshDevicesAndPendingGrants()
@@ -111,6 +121,23 @@ async function saveProfileField(field: ProfileField, value: string) {
     }
   } finally {
     savingField.value = ''
+  }
+}
+
+// Flips the toggle and reads back the server's own value into `discoverable`
+// rather than assuming the request succeeded as sent — same "trust the
+// response, not the optimistic click" posture `saveProfileField` uses.
+async function onToggleDiscoverable() {
+  if (!session.token) return
+  discoverableError.value = ''
+  savingDiscoverable.value = true
+  try {
+    const profile = await api.updateProfile(session.token, { discoverable: !discoverable.value })
+    discoverable.value = profile.discoverable
+  } catch (e) {
+    discoverableError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingDiscoverable.value = false
   }
 }
 
@@ -375,6 +402,30 @@ async function onRevokePasskey(passkey: PasskeyResponse) {
       </div>
     </header>
     <p v-if="error" :class="page.error">{{ error }}</p>
+
+    <AvalonCard title="Player search" :class="styles.discoverabilityCard">
+      <div :class="styles.discoverabilityRow">
+        <div :class="styles.discoverabilityText">
+          <p :class="styles.discoverabilityStatus">
+            <span
+              :class="[styles.discoverabilityDot, discoverable ? styles.discoverabilityDotOn : '']"
+            />
+            {{ discoverable ? 'You are currently publicly searchable.' : 'You are not publicly searchable.' }}
+          </p>
+          <p :class="styles.listDetail">
+            Turning this on lets any player find you by name or handle in search. Off by
+            default — turning it off removes you from search immediately.
+          </p>
+        </div>
+        <AvalonButton
+          :label="savingDiscoverable ? 'Saving…' : discoverable ? 'Turn off' : 'Turn on'"
+          :variant="discoverable ? 'secondary' : 'primary'"
+          :disabled="savingDiscoverable"
+          @click="onToggleDiscoverable"
+        />
+      </div>
+      <p v-if="discoverableError" :class="page.error">{{ discoverableError }}</p>
+    </AvalonCard>
 
     <div :class="page.grid">
       <div :class="page.mainColumn">

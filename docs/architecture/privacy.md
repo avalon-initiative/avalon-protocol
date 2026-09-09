@@ -112,6 +112,18 @@ durable.
   is a player-controlled setting that's *not* a visibility scope at all —
   it removes `playing` from view entirely, independent of who's asking or
   what they're otherwise allowed to see. Set via `PUT /me/presence`.
+- `discovery_preferences.discoverable` (`crates/server/db/migrations/0026_discovery_preferences`,
+  issue #205) is the same kind of setting, applied to a different surface:
+  off by default for every identity, no exceptions, it gates whether the
+  identity can be found at all via `GET /identities/search` — not a
+  visibility scope on an already-locatable identity's fields, but whether
+  the identity is locatable by open search in the first place. Set via
+  `PATCH /me`. Turning it off removes the identity from every subsequent
+  search call immediately (the check reads the live preference on every
+  call, never a cached/snapshotted value) — no grace period, matching
+  #129's decision. `GET /me` echoes the current value back so a player who
+  flipped it on to test something has a standing "you are currently
+  publicly searchable" signal, not just a fire-and-forget toggle.
 
 ## Decisions and tickets
 

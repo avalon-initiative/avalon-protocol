@@ -6,7 +6,7 @@
 //! real WebAuthn ceremony.
 
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -251,6 +251,158 @@ async fn discover_requires_a_session_token() {
 
     let response = http
         .get(format!("{base}/people/discover"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+// --- #205: opt-in global name/handle search -----------------------------
+
+/// `PATCH /me` with `{"discoverable": true|false}`.
+async fn set_discoverable(http: &reqwest::Client, base: &str, token: &str, discoverable: bool) {
+    let response = auth(http.patch(format!("{base}/me")), token)
+        .json(&serde_json::json!({ "discoverable": discoverable }))
+        .send()
+        .await
+        .expect("PATCH /me failed — is `make start` running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["discoverable"], discoverable);
+}
+
+async fn search(http: &reqwest::Client, base: &str, token: &str, q: &str) -> Vec<String> {
+    let response = auth(http.get(format!("{base}/identities/search")), token)
+        .query(&[("q", q)])
+        .send()
+        .await
+        .expect("search request failed — is `make start` running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+    let body: serde_json::Value = response.json().await.unwrap();
+    body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["identity_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Fetches an identity's own `display_name` (needed to build a query term
+/// that will actually match it, since `seed_identity_session` gives each
+/// identity a unique random-ish display name).
+async fn display_name(pool: &PgPool, identity_id: Uuid) -> String {
+    let row = sqlx::query("SELECT display_name FROM profiles WHERE identity_id = $1")
+        .bind(identity_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    row.try_get::<String, _>("display_name").unwrap()
+}
+
+/// Core acceptance criterion: off by default, opting in makes an identity
+/// searchable by a substring of its display name, opting back out removes
+/// it again immediately (no grace period) — the full round trip #205
+/// promises.
+#[tokio::test]
+#[ignore]
+async fn opting_in_then_out_of_search_takes_effect_immediately() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+
+    let (target_id, target_token) = seed_identity_session(&pool).await;
+    let (_searcher_id, searcher_token) = seed_identity_session(&pool).await;
+    let name = display_name(&pool, target_id).await;
+    let q = &name[..name.len().min(12)];
+
+    // Off by default: not found before ever toggling.
+    let before = search(&http, &base, &searcher_token, q).await;
+    assert!(
+        !before.contains(&target_id.to_string()),
+        "an identity must never be searchable before opting in: {before:?}"
+    );
+
+    // Opt in: now searchable.
+    set_discoverable(&http, &base, &target_token, true).await;
+    let during = search(&http, &base, &searcher_token, q).await;
+    assert!(
+        during.contains(&target_id.to_string()),
+        "expected the opted-in identity to appear in search: {during:?}"
+    );
+
+    // Opt out: gone again, immediately (this same call, no polling/retry).
+    set_discoverable(&http, &base, &target_token, false).await;
+    let after = search(&http, &base, &searcher_token, q).await;
+    assert!(
+        !after.contains(&target_id.to_string()),
+        "an opted-out identity must disappear from search immediately: {after:?}"
+    );
+}
+
+/// A non-opted-in identity never appears in search, even to a caller who
+/// searches its exact full handle (`display_name#discriminator`) — that
+/// exact-match path is `GET /friends/handle/:handle`, deliberately
+/// untouched and separate from this fuzzy endpoint.
+#[tokio::test]
+#[ignore]
+async fn a_non_opted_in_identity_never_appears_even_via_its_exact_handle() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+
+    let (target_id, _target_token) = seed_identity_session(&pool).await;
+    let (_searcher_id, searcher_token) = seed_identity_session(&pool).await;
+    let name = display_name(&pool, target_id).await;
+
+    let results = search(&http, &base, &searcher_token, &name).await;
+    assert!(
+        !results.contains(&target_id.to_string()),
+        "a non-opted-in identity must never appear in search, even by exact name: {results:?}"
+    );
+}
+
+/// A block hides an opted-in identity from search in either direction,
+/// same invariant `a_blocked_identity_never_surfaces_even_via_mutual_guild`
+/// exercises for `GET /people/discover`.
+#[tokio::test]
+#[ignore]
+async fn a_blocked_searcher_gets_no_result_even_when_the_target_is_opted_in() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+
+    let (target_id, target_token) = seed_identity_session(&pool).await;
+    let (_blocker_id, blocker_token) = seed_identity_session(&pool).await;
+    let name = display_name(&pool, target_id).await;
+    let q = &name[..name.len().min(12)];
+
+    set_discoverable(&http, &base, &target_token, true).await;
+
+    // The searcher blocks the target.
+    let block = auth(http.post(format!("{base}/blocks")), &blocker_token)
+        .json(&serde_json::json!({ "identity_id": target_id }))
+        .send()
+        .await
+        .unwrap();
+    assert!(block.status().is_success(), "{:?}", block.status());
+
+    let results = search(&http, &base, &blocker_token, q).await;
+    assert!(
+        !results.contains(&target_id.to_string()),
+        "a blocked identity must not appear in the blocker's search results: {results:?}"
+    );
+}
+
+/// Search is session-authenticated, same as every other route in this
+/// module.
+#[tokio::test]
+#[ignore]
+async fn search_requires_a_session_token() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http
+        .get(format!("{base}/identities/search?q=alice"))
         .send()
         .await
         .unwrap();

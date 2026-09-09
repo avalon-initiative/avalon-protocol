@@ -1765,8 +1765,10 @@ impl DiscoverSort {
 /// Escapes `%`/`_`/backslash in free-text user input before it's embedded
 /// in an `ILIKE` pattern (Postgres's default `ILIKE` escape character is
 /// backslash) — otherwise a caller's own `q=` or `tag=` value could inject
-/// wildcard behavior rather than being matched literally.
-fn escape_like(input: &str) -> String {
+/// wildcard behavior rather than being matched literally. `pub(crate)` since
+/// `crates/server/src/discovery.rs`'s `GET /identities/search` (#205) reuses
+/// it for the exact same reason rather than re-implementing the escape.
+pub(crate) fn escape_like(input: &str) -> String {
     input
         .replace('\\', "\\\\")
         .replace('%', "\\%")

@@ -16,6 +16,7 @@ import {
   requestDeviceGrant,
   resolveHandle,
   revokeDevice,
+  searchIdentities,
   updateProfile,
 } from './client'
 import { AvalonApiError } from './errors'
@@ -205,6 +206,22 @@ describe('api client', () => {
     } satisfies Partial<AvalonApiError>)
   })
 
+  it('sends the discoverable field on PATCH /me', async () => {
+    mockFetchOnce(200, {
+      identity_id: 'x',
+      identity_created_at: 't',
+      display_name: 'x',
+      avatar_url: null,
+      handle: 'x#0001',
+      discoverable: true,
+    })
+    await updateProfile('token', { discoverable: true })
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/me')
+    expect(options.method).toBe('PATCH')
+    expect(JSON.parse(options.body)).toEqual({ discoverable: true })
+  })
+
   it('surfaces the server\'s own message for an invalid avatar_url', async () => {
     mockFetchOnce(400, {
       error: 'avatar_url must be an http(s) URL of 2048 characters or fewer',
@@ -215,6 +232,22 @@ describe('api client', () => {
       status: 400,
       message: 'avatar_url must be an http(s) URL of 2048 characters or fewer',
     } satisfies Partial<AvalonApiError>)
+  })
+})
+
+describe('searchIdentities (issue #205)', () => {
+  it('sends the q query param', async () => {
+    mockFetchOnce(200, { results: [] })
+    await searchIdentities('token', 'alice')
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/identities/search?q=alice')
+  })
+
+  it('short-circuits a blank query, never calling fetch', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const result = await searchIdentities('token', '   ')
+    expect(result).toEqual({ results: [] })
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
 

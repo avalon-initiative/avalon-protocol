@@ -44,6 +44,7 @@ import type {
   RequestDeviceGrantRequest,
   ResolveHandleResponse,
   RoleResponse,
+  SearchIdentitiesResponse,
   SendMessageRequest,
   SessionFinishRequest,
   SessionFinishResponse,
@@ -172,6 +173,19 @@ export function resolveHandle(token: string, handle: string): Promise<ResolveHan
 // caller's own session is the only input, never a search term.
 export function discoverPeople(token: string): Promise<DiscoverPeopleResponse> {
   return request('/people/discover', { token })
+}
+
+// GET /identities/search?q=&limit= (issue #205) — the opt-in global
+// name/handle search counterpart to discoverPeople above. Matches only
+// identities that have turned on their own `discoverable` preference (see
+// updateProfile's `discoverable` field). An empty/blank query returns no
+// results without a round trip.
+export function searchIdentities(token: string, q: string): Promise<SearchIdentitiesResponse> {
+  if (q.trim().length === 0) {
+    return Promise.resolve({ results: [] })
+  }
+  const params = new URLSearchParams({ q })
+  return request(`/identities/search?${params.toString()}`, { token })
 }
 
 // PUT /me/presence — the caller publishing their own status. The shell
