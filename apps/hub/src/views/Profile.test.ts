@@ -57,4 +57,24 @@ describe('Profile single-passkey warning', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('Laptop'))
     expect(wrapper.text()).not.toContain('You have only one passkey')
   })
+
+  // A safety-critical, non-dismissible warning must never silently
+  // disappear just because a response didn't look like the expected array
+  // — a malformed `GET /me/passkeys` body (still a 200, just an unexpected
+  // shape) must surface as an honest error rather than being quietly
+  // treated as "0 passkeys, nothing to warn about."
+  it('surfaces an error instead of silently treating a malformed passkey list as empty', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({ '/me': profile, '/me/passkeys': null })
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Profile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Passkeys'))
+
+    await vi.waitFor(() =>
+      expect(wrapper.text()).toContain('Unexpected response fetching passkeys.'),
+    )
+  })
 })
