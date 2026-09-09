@@ -726,3 +726,26 @@ describe('AvalonCalendarMonth', () => {
     expect(wrapper.emitted('select-date')?.[0]).toEqual(['2026-09-05'])
   })
 })
+
+describe('AvalonModal', () => {
+  it('renders nothing when closed', () => {
+    const wrapper = mount(AvalonModal, { props: { title: 'Edit', open: false } })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it('renders the title and slot content when open', () => {
+    const wrapper = mount(AvalonModal, {
+      props: { title: 'Edit guild', open: true },
+      slots: { default: '<p>body content</p>' },
+    })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Edit guild')
+    expect(wrapper.text()).toContain('body content')
+  })
+
+  it('emits close when the close button is clicked', async () => {
+    const wrapper = mount(AvalonModal, { props: { title: 'Edit', open: true } })
+    await wrapper.find('button[aria-label="Close"]').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+})

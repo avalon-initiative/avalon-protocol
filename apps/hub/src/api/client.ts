@@ -25,7 +25,6 @@ import type {
   FavoriteGamesResponse,
   FriendRequestResponse,
   FriendshipResponse,
-  GameBindingResponse,
   GameBreakdownResponse,
   GameResponse,
   GuardianRequestSummary,
