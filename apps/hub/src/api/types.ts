@@ -290,6 +290,13 @@ export interface PublicProfileResponse {
 // crates/server/src/guilds.rs, crates/server/src/channels.rs, and
 // crates/server/src/guild_messages.rs field-for-field.
 
+// One entry in GuildResponse.links (issue #153), matching
+// crates/protocol/src/guilds.rs::GuildLink field-for-field.
+export interface GuildLink {
+  label: string
+  url: string
+}
+
 export interface GuildResponse {
   id: string
   name: string
@@ -303,6 +310,14 @@ export interface GuildResponse {
   // (CreateGuildRequest doesn't take it, neither does UpdateGuildRequest),
   // so every guild is "invite_only" in practice. See guilds.ts's own note.
   join_policy: string
+  // Issue #153, all four below. motd/banner are null when unset;
+  // recruiting gates the "recruiting only" discovery filter (#154) and
+  // whether this guild shows up under a recruiting=false lookup for
+  // strangers at all (see build_discover_query's membership gating).
+  motd: string | null
+  banner: string | null
+  links: GuildLink[]
+  recruiting: boolean
   // Issue #206. Whether the game affinity breakdown
   // (GET /guilds/{id}/game-breakdown) is shown on this guild's public
   // profile — a manage_guild holder can always fetch the breakdown
@@ -312,19 +327,6 @@ export interface GuildResponse {
   // order — always part of the public profile (unlike the full
   // breakdown, which stays behind game_breakdown_public).
   favorite_games: FavoriteGameEntry[]
-  // Issue #153, all four below. motd/banner are null when unset;
-  // recruiting gates the "recruiting only" discovery filter (#154) and
-  // whether this guild shows up under a recruiting=false lookup for
-  // strangers at all (see build_discover_query's membership gating).
-  motd: string | null
-  banner: string | null
-  links: GuildLink[]
-  recruiting: boolean
-}
-
-export interface GuildLink {
-  label: string
-  url: string
 }
 
 export interface CreateGuildRequest {
@@ -337,17 +339,17 @@ export interface UpdateGuildRequest {
   name?: string
   tag?: string
   description?: string
-  // Issue #206. Omitted leaves it untouched.
-  game_breakdown_public?: boolean
   // Issue #153, all four below. motd/banner: omit to leave untouched,
   // "" to clear, non-empty to set (three-state, same convention as
   // UpdateProfileRequest.bio). links: omit to leave untouched, any array
-  // (including []) to fully replace the stored list. recruiting: omit to
-  // leave untouched.
+  // (including []) to fully replace the stored list — never a per-entry
+  // patch. recruiting: omit to leave untouched.
   motd?: string
   banner?: string
   links?: GuildLink[]
   recruiting?: boolean
+  // Issue #206. Omitted leaves it untouched.
+  game_breakdown_public?: boolean
 }
 
 // GET /guilds/{id}/game-breakdown (issue #206, implementing decision #160):
@@ -390,8 +392,7 @@ export interface FavoriteGamesResponse {
 
 export interface SetFavoriteGamesRequest {
   // Full desired ordered list of pinned game ids — always a full replace,
-  // same convention UpdateGuildRequest's (currently unwired-in-hub) `links`
-  // field uses server-side.
+  // same convention UpdateGuildRequest's `links` field uses server-side.
   game_ids: string[]
 }
 

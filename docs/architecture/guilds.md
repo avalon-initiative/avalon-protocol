@@ -290,6 +290,43 @@ with Game A becomes historical.
   own resolved permission list, but the server is the real authority — a
   hidden-but-still-reachable action shows a plain error on a 403 rather
   than crashing. `apps/mobile-hub` isn't wired to guilds yet (still #60).
+- **Guild page navigation: tabs, and chat folded into the page (issue
+  #241).** `/guilds/:id` (`apps/hub/src/views/Guild.vue`) was one long
+  scrolling page; it's now Overview/Members/Channels/Events/Roles/Settings
+  tabs, plain client-side state (`activeTab` ref) using the same
+  `local.tabs`/`local.tab`/`local.tabActive` CSS-module pattern
+  `Guilds.vue`'s "My guilds"/"Discover" tabs already established — no
+  routing involved for switching between them. Overview carries header
+  info, MOTD/banner/links (read-only), game affinity, favorite games, and
+  associated games (now visible to any member, read-only — previously the
+  whole "Associated games" card was hidden from non-managers, not just its
+  "associate a game" action); Members carries the roster, currently-playing
+  summary, and invites; Roles and Events are unchanged content, just
+  relocated; Settings carries the recruiting toggle, MOTD/banner/link
+  editing, and ownership transfer, all still `canManageGuild`-gated exactly
+  as before. `motd`/`banner`/`links`/`recruiting` (issue #153) previously
+  had no Hub UI at all despite being live on `PATCH /guilds/{id}` since
+  #153 landed — `apps/hub/src/api/types.ts`'s `GuildResponse`/
+  `UpdateGuildRequest` grew those fields and the Settings tab is their
+  first real caller.
+
+  The standalone `GuildChannel.vue` route/view is gone. `apps/hub/src/composables/useGuildChat.ts`
+  is now driven from inside the Channels tab instead: a persistent
+  `AvalonChannelList` sidebar next to the active channel's messages, and
+  picking a different channel just reassigns the `channelId` ref
+  `useGuildChat` already watches (`watch([guildId, channelId], load)`) —
+  no route navigation and no component remount per channel switch, which
+  is what made guild → channel → back to guild "messy" before. The
+  composable itself grew guards for an empty `channelId` (no channel
+  selected/available yet is a quiet state, not an error) since it's now
+  mounted for as long as the guild page is, not just while viewing one
+  channel. `/guilds/:id/channels/:cid` still resolves — to the same
+  `Guild.vue` component, opening the Channels tab with that channel
+  pre-selected — so existing deep links keep working; selecting a channel
+  from the sidebar updates the URL via `router.replace` (no history entry
+  per switch) so a channel stays link-shareable, while switching to any
+  other tab, or away from Channels, is plain in-memory state with no URL
+  effect.
   **Correction (2026-09-08, issue #24):** building this surfaced that
   `crates/server/src/channels.rs`'s `manage_channels` check was still
   calling a leftover stub (always-empty permissions) from when #22 was
@@ -639,6 +676,11 @@ with Game A becomes historical.
   #57's proposed `AvalonRosterRow`/`AvalonMessageList`/`AvalonMessageComposer`
   component names describe what #24 already built as `AvalonGuildMemberRow`/
   `AvalonChatMessage`/`AvalonChatComposer`; not duplicated under new names).
+- [#241](https://github.com/LunarVagabond/avalon-protocol/issues/241) — guild
+  page tabbed layout, done: Overview/Members/Channels/Events/Roles/Settings
+  tabs, chat folded into a Channels tab (persistent sidebar, no per-channel
+  route hop) replacing the standalone `GuildChannel.vue` route, and the
+  first Hub wiring for #153's `motd`/`banner`/`links`/`recruiting` fields.
 - [#152](https://github.com/LunarVagabond/avalon-protocol/issues/152) — role
   descriptions and badges, done.
 - [#153](https://github.com/LunarVagabond/avalon-protocol/issues/153) — guild

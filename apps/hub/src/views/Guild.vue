@@ -1,15 +1,20 @@
 <script setup lang="ts">
-// Guild overview / roster / roles / channels (issue #24). Management
-// controls are shown only when the caller's own role grants the matching
-// permission (crates/server/src/guilds.rs's fixed permission set) — the
-// server re-checks independently and is the real authority, so a 403 here
-// is possible and shown as a plain error rather than crashing the page.
-import { computed, ref } from 'vue'
+// Guild overview / roster / roles / channels (issue #24), restructured into
+// tabs by issue #241 — Overview / Members / Channels / Events / Roles /
+// Settings, same activeTab-ref + local.tabs/tab/tabActive pattern
+// Guilds.vue's "My guilds"/"Discover" tabs already use. Management controls
+// are shown only when the caller's own role grants the matching permission
+// (crates/server/src/guilds.rs's fixed permission set) — the server
+// re-checks independently and is the real authority, so a 403 here is
+// possible and shown as a plain error rather than crashing the page.
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AvalonButton,
   AvalonCard,
   AvalonChannelList,
+  AvalonChatComposer,
+  AvalonChatMessage,
   AvalonEditableField,
   AvalonEventCard,
   AvalonFilterBar,
@@ -19,6 +24,7 @@ import {
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
+import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { sortByStartsAt, validateEventForm } from '../api/guildEvents'
 import {
   addFavoriteGameId,
@@ -42,8 +48,10 @@ import {
   sortMembersByPresence,
   type MemberSortOrder,
 } from '../api/guilds'
+import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useSessionStore } from '../stores/session'
+import local from './Guild.module.scss'
 import styles from './page.module.scss'
 
 const PERMISSION_OPTIONS = ['manage_guild', 'manage_roles', 'manage_members', 'manage_channels']
@@ -87,6 +95,118 @@ const canManageChannels = computed(
     guild.value !== null && hasGuildPermission(guild.value, selfId.value, selfPermissions.value, 'manage_channels'),
 )
 const isMember = computed(() => members.value.some((m) => m.identityId === selfId.value))
+
+// --- Tabs (issue #241) ---------------------------------------------------
+// Overview/Members/Events/Roles/Settings are plain client-side state, same
+// as Guilds.vue's "My guilds"/"Discover" tabs — no route involved. Channels
+// is the one exception: a channel is independently deep-linkable
+// (`/guilds/:id/channels/:cid`), so selecting one is reflected into the URL
+// via router.replace (no push — switching channels shouldn't pile up
+// browser history entries) rather than kept purely in memory.
+type TabKey = 'overview' | 'members' | 'channels' | 'events' | 'roles' | 'settings'
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'members', label: 'Members' },
+  { key: 'channels', label: 'Channels' },
+  { key: 'events', label: 'Events' },
+  { key: 'roles', label: 'Roles' },
+  { key: 'settings', label: 'Settings' },
+]
+
+const activeTab = ref<TabKey>(route.name === 'guild-channel' ? 'channels' : 'overview')
+
+function selectTab(tab: TabKey) {
+  activeTab.value = tab
+  // Leaving the Channels tab drops the channel-specific URL back to the
+  // plain guild route — the channel selection itself is kept in memory
+  // (selectedChannelId below) so returning to Channels doesn't lose it.
+  if (tab !== 'channels' && route.name === 'guild-channel') {
+    router.replace({ name: 'guild', params: { id: guildId.value } })
+  }
+}
+
+// --- Channels (issue #22/#24, folded into this tab by #241) --------------
+// AvalonChannelList renders as a persistent left sidebar; the active
+// channel's messages/composer render beside it via useGuildChat, which is
+// reused as-is (no polling/pagination logic duplicated here) — it already
+// reloads whenever channelId changes, which is exactly what happens when
+// the reader clicks a different channel in the sidebar. No component
+// remount, no route round-trip per channel switch.
+const selectedChannelId = ref((route.params.cid as string | undefined) ?? '')
+
+// A direct/deep link (or browser back/forward) into `/guilds/:id/channels/:cid`
+// should open the Channels tab with that channel pre-selected.
+watch(
+  () => route.params.cid as string | undefined,
+  (cid) => {
+    if (cid) {
+      activeTab.value = 'channels'
+      selectedChannelId.value = cid
+    }
+  },
+)
+
+// Once the channel list loads, default to the first (preferring a
+// non-archived one) if nothing is selected yet — e.g. arriving at
+// `/guilds/:id` with no `:cid` at all.
+watch(
+  channels,
+  (list) => {
+    if (selectedChannelId.value || list.length === 0) return
+    selectedChannelId.value = list.find((c) => !c.archived)?.id ?? list[0].id
+  },
+  { immediate: true },
+)
+
+function selectChannel(channelId: string) {
+  selectedChannelId.value = channelId
+  router.replace({ name: 'guild-channel', params: { id: guildId.value, cid: channelId } })
+}
+
+// The scroll container below is a persistent DOM node reused across
+// channel switches (#241 — no remount per channel anymore), so its
+// scrollTop from the previous channel would otherwise carry over. Reset
+// it whenever the selected channel changes, matching the old per-channel
+// route's remount behavior.
+const messageScrollEl = ref<HTMLElement | null>(null)
+watch(selectedChannelId, () => {
+  nextTick(() => {
+    if (messageScrollEl.value) messageScrollEl.value.scrollTop = 0
+  })
+})
+
+const {
+  channel: activeChannel,
+  messages,
+  authorNames,
+  canDelete: canDeleteMessage,
+  loading: chatLoading,
+  loadingOlder,
+  hasMoreOlder,
+  error: chatError,
+  sendError,
+  sending,
+  loadOlder,
+  sendMessage,
+  deleteMessage,
+} = useGuildChat(guildId, selectedChannelId)
+
+const draft = ref('')
+
+async function onSendMessage() {
+  const body = draft.value
+  draft.value = ''
+  await sendMessage(body)
+}
+
+// Loads the next older page once the reader scrolls near the top of the
+// history, rather than a separate "load more" button.
+function onMessageScroll(event: Event) {
+  const el = event.target as HTMLElement
+  if (el.scrollTop < 80 && hasMoreOlder.value && !loadingOlder.value) {
+    loadOlder()
+  }
+}
 
 // --- Game affinity breakdown (issue #206, implementing decision #160) -----
 // Aggregated from real GameBinding (#83) data only — never a manager-added
@@ -192,7 +312,7 @@ const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMe
 // rather than fabricating activity.
 const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
 
-// --- Rename / retag / redescribe ------------------------------------------
+// --- Rename / retag / redescribe / MOTD / banner --------------------------
 
 const savingField = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
@@ -213,6 +333,7 @@ async function saveGuildField(field: 'name' | 'tag' | 'description' | 'motd' | '
 
 // --- Recruiting toggle + links (issue #153) -------------------------------
 
+const guildLinks = computed(() => guild.value?.links ?? [])
 const savingRecruiting = ref(false)
 const recruitingError = ref('')
 
@@ -493,7 +614,7 @@ async function onAssociateGame() {
   }
 }
 
-// --- Channels ---------------------------------------------------------
+// --- Channel management (create/archive) -------------------------------
 
 const showCreateChannel = ref(false)
 const newChannelName = ref('')
@@ -530,10 +651,6 @@ async function onArchiveChannel(channelId: string) {
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
-}
-
-function onSelectChannel(channelId: string) {
-  router.push({ name: 'guild-channel', params: { id: guildId.value, cid: channelId } })
 }
 
 // --- Events (issue #169) -----------------------------------------------
@@ -638,7 +755,179 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
     <p v-if="error" :class="styles.error">{{ error }}</p>
     <p v-if="actionError" :class="styles.error">{{ actionError }}</p>
 
-    <div :class="styles.grid">
+    <div :class="local.tabs">
+      <button
+        v-for="tab in TABS"
+        :key="tab.key"
+        type="button"
+        :class="[local.tab, activeTab === tab.key && local.tabActive]"
+        @click="selectTab(tab.key)"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- Overview: header info already above, plus MOTD/banner/links, game
+         affinity, favorite games, associated games, and guild history —
+         all read-only here; editing lives in Settings. -->
+    <div v-if="activeTab === 'overview'" :class="styles.grid">
+      <div :class="styles.mainColumn">
+        <AvalonCard v-if="guild.motd || guild.banner || guildLinks.length > 0" title="About">
+          <p v-if="guild.motd" :class="styles.subtitle">{{ guild.motd }}</p>
+          <p v-if="guild.banner" :class="styles.empty">Banner: {{ guild.banner }}</p>
+          <p v-for="link in guildLinks" :key="link.url" :class="styles.empty">
+            <a :href="link.url" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>
+          </p>
+        </AvalonCard>
+
+        <AvalonCard
+          v-if="canManageGuild || gameBreakdown"
+          title="Game affinity"
+          subtitle="Auto-derived from members' active game bindings — not something anyone sets by hand. Managers can choose whether it's visible on this guild's public profile and discovery card; it's always visible to members."
+        >
+          <p v-if="canManageGuild" :class="styles.empty">
+            Shown on this guild's public profile and discovery card:
+            {{ guild.game_breakdown_public ? 'yes' : 'no' }}
+          </p>
+          <AvalonButton
+            v-if="canManageGuild"
+            :label="
+              savingGameBreakdownPublic
+                ? 'Saving…'
+                : guild.game_breakdown_public
+                  ? 'Hide from public profile'
+                  : 'Show on public profile'
+            "
+            variant="secondary"
+            @click="onToggleGameBreakdownPublic(!guild.game_breakdown_public)"
+          />
+          <p v-if="gameBreakdownPublicError" :class="styles.error">{{ gameBreakdownPublicError }}</p>
+
+          <p v-if="gameBreakdownError && !canManageGuild" :class="styles.empty">
+            This guild hasn't shared its game affinity breakdown publicly.
+          </p>
+          <template v-else>
+            <p v-for="line in gameBreakdownLines" :key="line" :class="styles.empty">{{ line }}</p>
+            <p v-if="gameBreakdownEmpty" :class="styles.empty">
+              No guild member has an active game binding yet.
+            </p>
+          </template>
+        </AvalonCard>
+
+        <AvalonCard v-if="canManageGuild || favorites.length > 0" title="Favorite games">
+          <p v-if="favorites.length === 0" :class="styles.empty">No favorite games pinned yet.</p>
+          <div v-for="(entry, index) in favorites" :key="entry.game_id" :class="styles.empty">
+            {{ formatFavoriteGameEntry(entry) }}
+            <template v-if="canManageGuild">
+              <AvalonButton
+                v-if="index > 0"
+                label="Move up"
+                variant="secondary"
+                :disabled="savingFavorites"
+                @click="onReorderFavorite(entry.game_id, 'up')"
+              />
+              <AvalonButton
+                v-if="index < favorites.length - 1"
+                label="Move down"
+                variant="secondary"
+                :disabled="savingFavorites"
+                @click="onReorderFavorite(entry.game_id, 'down')"
+              />
+              <AvalonButton
+                label="Unpin"
+                variant="danger"
+                :disabled="savingFavorites"
+                @click="onUnpinFavorite(entry.game_id)"
+              />
+            </template>
+          </div>
+
+          <template v-if="canManageGuild">
+            <p v-if="!canPinMore" :class="styles.empty">Up to 5 games may be pinned at once.</p>
+            <p v-else-if="pinnableGames.length === 0" :class="styles.empty">
+              No unpinned game currently has affinity to pin.
+            </p>
+            <div v-for="entry in pinnableGames" :key="entry.game_id" :class="styles.empty">
+              {{ entry.game_name }}
+              <AvalonButton
+                label="Pin"
+                variant="secondary"
+                :disabled="savingFavorites"
+                @click="onPinFavorite(entry.game_id)"
+              />
+            </div>
+            <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
+          </template>
+        </AvalonCard>
+
+        <!--
+          Associated games (#20's original manual associate_game flow,
+          superseded by #206/#207's real-binding-derived affinity above but
+          still live): now visible to any member, read-only — only the
+          "associate a game" action itself stays canManageGuild-gated
+          (issue #241).
+        -->
+        <AvalonCard v-if="canManageGuild || guild.games.length > 0" title="Associated games">
+          <p v-for="gameId in guild.games" :key="gameId" :class="styles.empty">{{ gameId }}</p>
+          <p v-if="guild.games.length === 0" :class="styles.empty">No games associated yet.</p>
+          <template v-if="canManageGuild">
+            <AvalonButton
+              v-show="!showAssociateGame"
+              label="Associate a game"
+              variant="secondary"
+              @click="showAssociateGame = true"
+            />
+            <div v-show="showAssociateGame">
+              <AvalonForm
+                submit-label="Associate"
+                :submitting="associatingGame"
+                :error="associateGameError"
+                @submit="onAssociateGame"
+              >
+                <AvalonTextField v-model="associateGameId" label="Game id" />
+                <template #secondary-actions>
+                  <AvalonButton label="Cancel" variant="secondary" @click="cancelAssociateGame" />
+                </template>
+              </AvalonForm>
+            </div>
+          </template>
+        </AvalonCard>
+
+        <!--
+          Guild history (created / member joined / left / role changed) is
+          durable per docs/architecture/guilds.md, but #82's event catalogue
+          and indexer exposure for it isn't necessarily done, and no
+          endpoint like GET /guilds/:id/history exists today (see
+          docs/architecture/hub.md's endpoint list). Rather than fabricate a
+          history feed from the current roster/role snapshot, this section
+          says plainly that it isn't available yet.
+        -->
+        <AvalonCard title="History">
+          <p :class="styles.empty">
+            History isn't available yet — this guild's events (created, joined, left, role
+            changed) are recorded on the network, but no view of them is exposed here until the
+            event catalogue and its indexer projection land.
+          </p>
+        </AvalonCard>
+      </div>
+
+      <div :class="styles.sideColumn">
+        <AvalonCard title="Membership">
+          <p :class="styles.empty">{{ membershipStatus }}</p>
+          <AvalonButton
+            v-if="guild.join_policy === 'open' && !isMember"
+            label="Join guild"
+            variant="primary"
+            @click="onJoin"
+          />
+          <AvalonButton v-if="isMember && !isOwner" label="Leave guild" variant="danger" @click="onLeave" />
+        </AvalonCard>
+      </div>
+    </div>
+
+    <!-- Members: roster (search/sort/role management), currently-playing
+         summary, and invite. -->
+    <div v-else-if="activeTab === 'members'" :class="styles.grid">
       <div :class="styles.mainColumn">
         <AvalonCard title="Members">
           <AvalonFilterBar
@@ -691,136 +980,6 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             </AvalonForm>
           </div>
         </AvalonCard>
-
-        <AvalonCard v-if="canManageRoles" title="Roles">
-          <p v-for="role in roles" :key="role.name_index" :class="styles.empty">
-            {{ role.name }} — {{ role.permissions.join(', ') || 'no permissions' }}
-          </p>
-          <AvalonButton
-            v-show="!showAddRole"
-            label="Define a role"
-            variant="secondary"
-            @click="showAddRole = true"
-          />
-          <div v-show="showAddRole">
-            <AvalonForm
-              submit-label="Create role"
-              :submitting="addingRole"
-              :error="addRoleError"
-              @submit="onAddRole"
-            >
-              <AvalonTextField v-model="newRoleName" label="Role name" placeholder="raid leader" />
-              <div v-for="permission in PERMISSION_OPTIONS" :key="permission">
-                <label>
-                  <input type="checkbox" :value="permission" v-model="newRolePermissions" />
-                  {{ permission }}
-                </label>
-              </div>
-              <template #secondary-actions>
-                <AvalonButton label="Cancel" variant="secondary" @click="cancelAddRole" />
-              </template>
-            </AvalonForm>
-          </div>
-        </AvalonCard>
-
-        <AvalonCard title="Channels">
-          <AvalonChannelList
-            :channels="channels"
-            :can-manage="canManageChannels"
-            @select="onSelectChannel"
-            @create="showCreateChannel = true"
-            @archive="onArchiveChannel"
-          />
-          <p :class="styles.empty">
-            Message history is subject to the server's retention policy, not permanent.
-          </p>
-          <div v-if="showCreateChannel">
-            <AvalonForm
-              submit-label="Create channel"
-              :submitting="creatingChannel"
-              :error="createChannelError"
-              @submit="onCreateChannel"
-            >
-              <AvalonTextField v-model="newChannelName" label="Channel name" placeholder="general" />
-              <template #secondary-actions>
-                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateChannel" />
-              </template>
-            </AvalonForm>
-          </div>
-        </AvalonCard>
-
-        <!--
-          Guild events calendar + RSVP (issue #169). Neither an event nor
-          an RSVP row is durable protocol history — see
-          docs/architecture/guilds.md's "Guild events calendar + RSVP"
-          section — so nothing here claims to be permanent. The list
-          endpoint doesn't currently return the *caller's own* RSVP status
-          per event (only aggregate counts), so AvalonRsvpControl always
-          renders with no pre-selected status today — a real gap, not
-          silently worked around.
-        -->
-        <AvalonCard title="Events">
-          <p v-if="sortedEvents.length === 0" :class="styles.empty">No upcoming events yet.</p>
-          <AvalonEventCard
-            v-for="event in sortedEvents"
-            :key="event.id"
-            :title="event.title"
-            :description="event.description ?? undefined"
-            :starts-at="event.starts_at"
-            :ends-at="event.ends_at ?? undefined"
-            :rsvp-counts="event.rsvp_counts"
-          >
-            <template #actions>
-              <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
-            </template>
-          </AvalonEventCard>
-          <AvalonButton
-            v-if="canManageChannels && !showCreateEvent"
-            label="+ New event"
-            variant="secondary"
-            @click="showCreateEvent = true"
-          />
-          <div v-if="showCreateEvent">
-            <AvalonForm
-              submit-label="Create event"
-              :submitting="creatingEvent"
-              :error="createEventError"
-              @submit="onCreateEvent"
-            >
-              <AvalonTextField v-model="newEventTitle" label="Title" placeholder="Raid night" />
-              <AvalonTextField
-                v-model="newEventDescription"
-                label="Description"
-                placeholder="Optional details"
-              />
-              <AvalonTextField
-                v-model="newEventStartsAt"
-                label="Starts at"
-                placeholder="2026-09-15T20:00"
-              />
-              <template #secondary-actions>
-                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
-              </template>
-            </AvalonForm>
-          </div>
-        </AvalonCard>
-
-        <!--
-          Guild history (created / member joined / left / role changed) is
-          durable per docs/architecture/guilds.md, but #82's event catalogue
-          and indexer exposure for it isn't necessarily done, and no
-          endpoint like GET /guilds/:id/history exists today (see
-          docs/architecture/hub.md's endpoint list). Rather than fabricate a
-          history feed from the current roster/role snapshot, this section
-          says plainly that it isn't available yet.
-        -->
-        <AvalonCard title="History">
-          <p :class="styles.empty">
-            History isn't available yet — this guild's events (created, joined, left, role
-            changed) are recorded on the network, but no view of them is exposed here until the
-            event catalogue and its indexer projection land.
-          </p>
-        </AvalonCard>
       </div>
 
       <div :class="styles.sideColumn">
@@ -834,17 +993,6 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
             </p>
           </template>
           <p :class="styles.empty">Live presence, not a durable stat — updates as members' status changes.</p>
-        </AvalonCard>
-
-        <AvalonCard title="Membership">
-          <p :class="styles.empty">{{ membershipStatus }}</p>
-          <AvalonButton
-            v-if="guild.join_policy === 'open' && !isMember"
-            label="Join guild"
-            variant="primary"
-            @click="onJoin"
-          />
-          <AvalonButton v-if="isMember && !isOwner" label="Leave guild" variant="danger" @click="onLeave" />
         </AvalonCard>
 
         <AvalonCard v-if="canManageMembers" title="Invite a player">
@@ -899,214 +1047,267 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
           </div>
           <p v-if="joinRequestsError" :class="styles.error">{{ joinRequestsError }}</p>
         </AvalonCard>
+      </div>
+    </div>
 
-        <!--
-          Issue #206 (implementing decision #160): a read-only, derived
-          breakdown of which games guildmates actually play, aggregated
-          from real GameBinding (#83) data — never a manually-declared
-          association. Shown whenever there's something to show: a
-          manage_guild holder sees it (and the public-exposure toggle)
-          regardless of the toggle's own state; anyone else only once
-          `gameBreakdown` successfully loads, which the server itself
-          gates on `guild.game_breakdown_public`.
-        -->
-        <AvalonCard
-          v-if="canManageGuild || gameBreakdown"
-          title="Game affinity"
-          subtitle="Auto-derived from members' active game bindings — not something anyone sets by hand. Managers can choose whether it's visible on this guild's public profile and discovery card; it's always visible to members."
-        >
-          <p v-if="canManageGuild" :class="styles.empty">
-            Shown on this guild's public profile and discovery card:
-            {{ guild.game_breakdown_public ? 'yes' : 'no' }}
-          </p>
-          <AvalonButton
-            v-if="canManageGuild"
-            :label="
-              savingGameBreakdownPublic
-                ? 'Saving…'
-                : guild.game_breakdown_public
-                  ? 'Hide from public profile'
-                  : 'Show on public profile'
-            "
-            variant="secondary"
-            @click="onToggleGameBreakdownPublic(!guild.game_breakdown_public)"
+    <!-- Channels (issue #241): a persistent sidebar of channels next to the
+         active channel's messages — switching channels updates
+         `selectedChannelId` and lets useGuildChat reload in place, never a
+         route navigation or component remount. -->
+    <div v-else-if="activeTab === 'channels'" :class="local.channelsLayout">
+      <div :class="local.channelSidebar">
+        <AvalonCard title="Channels">
+          <AvalonChannelList
+            :channels="channels"
+            :active-channel-id="selectedChannelId"
+            :can-manage="canManageChannels"
+            @select="selectChannel"
+            @create="showCreateChannel = true"
+            @archive="onArchiveChannel"
           />
-          <p v-if="gameBreakdownPublicError" :class="styles.error">{{ gameBreakdownPublicError }}</p>
-
-          <p v-if="gameBreakdownError && !canManageGuild" :class="styles.empty">
-            This guild hasn't shared its game affinity breakdown publicly.
-          </p>
-          <template v-else>
-            <p v-for="line in gameBreakdownLines" :key="line" :class="styles.empty">{{ line }}</p>
-            <p v-if="gameBreakdownEmpty" :class="styles.empty">
-              No guild member has an active game binding yet.
-            </p>
-          </template>
-        </AvalonCard>
-
-        <!--
-          Issue #207 (implementing decision #160): a manage_guild-curated
-          top-5 subset of the affinity breakdown above, always shown on the
-          public profile (guild.favorite_games) — visible to anyone once
-          there's something to show, with pin/unpin/reorder controls added
-          for a manage_guild holder. A pin can only ever be added from
-          `pinnableGames` (games `gameBreakdown` already shows real
-          affinity for), so there's no path to pinning an unaffiliated game
-          from this UI.
-        -->
-        <AvalonCard v-if="canManageGuild || favorites.length > 0" title="Favorite games">
-          <p v-if="favorites.length === 0" :class="styles.empty">No favorite games pinned yet.</p>
-          <div v-for="(entry, index) in favorites" :key="entry.game_id" :class="styles.empty">
-            {{ formatFavoriteGameEntry(entry) }}
-            <template v-if="canManageGuild">
-              <AvalonButton
-                v-if="index > 0"
-                label="Move up"
-                variant="secondary"
-                :disabled="savingFavorites"
-                @click="onReorderFavorite(entry.game_id, 'up')"
-              />
-              <AvalonButton
-                v-if="index < favorites.length - 1"
-                label="Move down"
-                variant="secondary"
-                :disabled="savingFavorites"
-                @click="onReorderFavorite(entry.game_id, 'down')"
-              />
-              <AvalonButton
-                label="Unpin"
-                variant="danger"
-                :disabled="savingFavorites"
-                @click="onUnpinFavorite(entry.game_id)"
-              />
-            </template>
+          <div v-if="showCreateChannel">
+            <AvalonForm
+              submit-label="Create channel"
+              :submitting="creatingChannel"
+              :error="createChannelError"
+              @submit="onCreateChannel"
+            >
+              <AvalonTextField v-model="newChannelName" label="Channel name" placeholder="general" />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateChannel" />
+              </template>
+            </AvalonForm>
           </div>
+        </AvalonCard>
+      </div>
 
-          <template v-if="canManageGuild">
-            <p v-if="!canPinMore" :class="styles.empty">Up to 5 games may be pinned at once.</p>
-            <p v-else-if="pinnableGames.length === 0" :class="styles.empty">
-              No unpinned game currently has affinity to pin.
+      <div :class="local.channelMain">
+        <p v-if="channels.length === 0" :class="styles.empty">
+          No channels yet — {{ canManageChannels ? 'create one to start chatting.' : 'nothing to read yet.' }}
+        </p>
+        <template v-else>
+          <p v-if="chatError" :class="styles.error">{{ chatError }}</p>
+          <p v-if="chatLoading" :class="styles.empty">Loading channel…</p>
+          <AvalonCard v-else :title="activeChannel ? `#${activeChannel.name}` : 'channel'">
+            <p v-if="activeChannel?.archived" :class="styles.subtitle">
+              This channel is archived — history is readable, but new messages can't be sent.
             </p>
-            <div v-for="entry in pinnableGames" :key="entry.game_id" :class="styles.empty">
-              {{ entry.game_name }}
-              <AvalonButton
-                label="Pin"
-                variant="secondary"
-                :disabled="savingFavorites"
-                @click="onPinFavorite(entry.game_id)"
+            <p :class="styles.empty">
+              Message history is subject to the server's retention policy, not permanent.
+            </p>
+            <div ref="messageScrollEl" :class="local.messageScroll" @scroll="onMessageScroll">
+              <p v-if="loadingOlder" :class="styles.empty">Loading older messages…</p>
+              <p v-else-if="!hasMoreOlder && messages.length > 0" :class="styles.empty">
+                Start of channel history.
+              </p>
+              <p v-if="messages.length === 0" :class="styles.empty">No messages yet — say hello.</p>
+              <AvalonChatMessage
+                v-for="message in messages"
+                :key="message.id"
+                :author-id="message.author"
+                :author-display-name="authorNames[message.author]"
+                :body="message.body"
+                :sent-at-label="new Date(message.sent_at).toLocaleString()"
+                :can-delete="canDeleteMessage"
+                @delete="deleteMessage(message.id)"
               />
             </div>
-            <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
-          </template>
-        </AvalonCard>
 
-        <AvalonCard
-          v-if="canManageGuild"
-          title="Recruiting & profile"
-          subtitle="Controls what strangers see when browsing Discover (issue #154) and what members see on the guild page."
-        >
-          <p :class="styles.empty">
-            Recruiting: {{ guild.recruiting ? 'yes — visible under Discover' : 'no — hidden from Discover' }}
+            <AvalonChatComposer
+              v-model="draft"
+              :max-chars="MESSAGE_BODY_MAX_CHARS"
+              :sending="sending"
+              :error="sendError"
+              :disabled="activeChannel?.archived ?? false"
+              @send="onSendMessage"
+            />
+          </AvalonCard>
+        </template>
+      </div>
+    </div>
+
+    <!--
+      Guild events calendar + RSVP (issue #169). Neither an event nor
+      an RSVP row is durable protocol history — see
+      docs/architecture/guilds.md's "Guild events calendar + RSVP"
+      section — so nothing here claims to be permanent. The list
+      endpoint doesn't currently return the *caller's own* RSVP status
+      per event (only aggregate counts), so AvalonRsvpControl always
+      renders with no pre-selected status today — a real gap, not
+      silently worked around.
+    -->
+    <div v-else-if="activeTab === 'events'" :class="styles.grid">
+      <div :class="styles.mainColumn">
+        <AvalonCard title="Events">
+          <p v-if="sortedEvents.length === 0" :class="styles.empty">No upcoming events yet.</p>
+          <AvalonEventCard
+            v-for="event in sortedEvents"
+            :key="event.id"
+            :title="event.title"
+            :description="event.description ?? undefined"
+            :starts-at="event.starts_at"
+            :ends-at="event.ends_at ?? undefined"
+            :rsvp-counts="event.rsvp_counts"
+          >
+            <template #actions>
+              <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+            </template>
+          </AvalonEventCard>
+          <AvalonButton
+            v-if="canManageChannels && !showCreateEvent"
+            label="+ New event"
+            variant="secondary"
+            @click="showCreateEvent = true"
+          />
+          <div v-if="showCreateEvent">
+            <AvalonForm
+              submit-label="Create event"
+              :submitting="creatingEvent"
+              :error="createEventError"
+              @submit="onCreateEvent"
+            >
+              <AvalonTextField v-model="newEventTitle" label="Title" placeholder="Raid night" />
+              <AvalonTextField
+                v-model="newEventDescription"
+                label="Description"
+                placeholder="Optional details"
+              />
+              <AvalonTextField
+                v-model="newEventStartsAt"
+                label="Starts at"
+                placeholder="2026-09-15T20:00"
+              />
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
+              </template>
+            </AvalonForm>
+          </div>
+        </AvalonCard>
+      </div>
+    </div>
+
+    <!-- Roles: read-only list for any member, add-role form canManageRoles-gated
+         (unchanged permission behavior from before #241, just relocated). -->
+    <div v-else-if="activeTab === 'roles'" :class="styles.grid">
+      <div :class="styles.mainColumn">
+        <AvalonCard v-if="canManageRoles" title="Roles">
+          <p v-for="role in roles" :key="role.name_index" :class="styles.empty">
+            {{ role.name }} — {{ role.permissions.join(', ') || 'no permissions' }}
           </p>
           <AvalonButton
-            :label="savingRecruiting ? 'Saving…' : guild.recruiting ? 'Stop recruiting' : 'Start recruiting'"
+            v-show="!showAddRole"
+            label="Define a role"
             variant="secondary"
-            :disabled="savingRecruiting"
-            @click="onToggleRecruiting(!guild.recruiting)"
+            @click="showAddRole = true"
           />
-          <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
+          <div v-show="showAddRole">
+            <AvalonForm
+              submit-label="Create role"
+              :submitting="addingRole"
+              :error="addRoleError"
+              @submit="onAddRole"
+            >
+              <AvalonTextField v-model="newRoleName" label="Role name" placeholder="raid leader" />
+              <div v-for="permission in PERMISSION_OPTIONS" :key="permission">
+                <label>
+                  <input type="checkbox" :value="permission" v-model="newRolePermissions" />
+                  {{ permission }}
+                </label>
+              </div>
+              <template #secondary-actions>
+                <AvalonButton label="Cancel" variant="secondary" @click="cancelAddRole" />
+              </template>
+            </AvalonForm>
+          </div>
+        </AvalonCard>
+        <p v-else :class="styles.empty">You don't have permission to manage this guild's roles.</p>
+      </div>
+    </div>
 
-          <AvalonEditableField
-            label="Message of the day"
-            :value="guild.motd ?? ''"
-            empty-text="No message set"
-            :saving="savingField === 'motd'"
-            :error="fieldErrors.motd"
-            @save="saveGuildField('motd', $event)"
-          />
-          <AvalonEditableField
-            label="Banner URL"
-            :value="guild.banner ?? ''"
-            empty-text="No banner set"
-            :saving="savingField === 'banner'"
-            :error="fieldErrors.banner"
-            @save="saveGuildField('banner', $event)"
-          />
+    <!-- Settings: recruiting toggle, MOTD/banner/links editing, transfer
+         ownership — canManageGuild-gated, same as every other management
+         action on this page. -->
+    <div v-else-if="activeTab === 'settings'" :class="styles.grid">
+      <template v-if="canManageGuild">
+        <div :class="styles.mainColumn">
+          <AvalonCard title="Recruiting">
+            <p :class="styles.empty">
+              Recruiting guilds are discoverable on the "Discover" board:
+              {{ guild.recruiting ? 'yes' : 'no' }}
+            </p>
+            <AvalonButton
+              :label="savingRecruiting ? 'Saving…' : guild.recruiting ? 'Stop recruiting' : 'Start recruiting'"
+              variant="secondary"
+              @click="onToggleRecruiting(!guild.recruiting)"
+            />
+            <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
+          </AvalonCard>
 
-          <p :class="styles.empty">Links</p>
-          <ul :class="styles.list">
-            <li v-for="(link, index) in guild.links" :key="`${link.label}-${index}`" :class="styles.listRow">
-              <span :class="styles.listText">
-                <span :class="styles.listLabel">{{ link.label }}</span>
-                <span :class="styles.listDetail">{{ link.url }}</span>
-              </span>
+          <AvalonCard title="Message of the day and banner">
+            <AvalonEditableField
+              label="MOTD"
+              :value="guild.motd ?? ''"
+              empty-text="No MOTD set"
+              :saving="savingField === 'motd'"
+              :error="fieldErrors.motd"
+              @save="saveGuildField('motd', $event)"
+            />
+            <AvalonEditableField
+              label="Banner URL"
+              :value="guild.banner ?? ''"
+              empty-text="No banner set"
+              placeholder="https://…"
+              :saving="savingField === 'banner'"
+              :error="fieldErrors.banner"
+              @save="saveGuildField('banner', $event)"
+            />
+          </AvalonCard>
+
+          <AvalonCard title="Links">
+            <p v-if="guildLinks.length === 0" :class="styles.empty">No links added yet.</p>
+            <div v-for="(link, index) in guildLinks" :key="link.url" :class="local.linkRow">
+              <span :class="styles.empty">{{ link.label }} — {{ link.url }}</span>
               <AvalonButton
                 label="Remove"
                 variant="danger"
                 :disabled="savingLinks"
                 @click="onRemoveLink(index)"
               />
-            </li>
-          </ul>
-          <p v-if="linksError" :class="styles.error">{{ linksError }}</p>
-          <div :class="styles.actions">
-            <AvalonTextField v-model="newLinkLabel" label="Label" placeholder="Discord" />
-            <AvalonTextField v-model="newLinkUrl" label="URL" placeholder="https://discord.gg/…" />
+            </div>
+            <div :class="local.addLinkRow">
+              <AvalonTextField v-model="newLinkLabel" label="Label" placeholder="Discord" />
+              <AvalonTextField v-model="newLinkUrl" label="URL" placeholder="https://discord.gg/…" />
+              <AvalonButton label="Add link" variant="secondary" :disabled="savingLinks" @click="onAddLink" />
+            </div>
+            <p v-if="linksError" :class="styles.error">{{ linksError }}</p>
+          </AvalonCard>
+        </div>
+
+        <div :class="styles.sideColumn">
+          <AvalonCard v-if="isOwner" title="Transfer ownership">
             <AvalonButton
-              :label="savingLinks ? 'Saving…' : 'Add link'"
-              variant="secondary"
-              :disabled="savingLinks || !newLinkLabel.trim() || !newLinkUrl.trim()"
-              @click="onAddLink"
+              v-show="!showTransfer"
+              label="Transfer ownership"
+              variant="danger"
+              @click="showTransfer = true"
             />
-          </div>
-        </AvalonCard>
-
-        <AvalonCard v-if="canManageGuild" title="Associated games">
-          <p v-for="gameId in guild.games" :key="gameId" :class="styles.empty">{{ gameId }}</p>
-          <p v-if="guild.games.length === 0" :class="styles.empty">No games associated yet.</p>
-          <AvalonButton
-            v-show="!showAssociateGame"
-            label="Associate a game"
-            variant="secondary"
-            @click="showAssociateGame = true"
-          />
-          <div v-show="showAssociateGame">
-            <AvalonForm
-              submit-label="Associate"
-              :submitting="associatingGame"
-              :error="associateGameError"
-              @submit="onAssociateGame"
-            >
-              <AvalonTextField v-model="associateGameId" label="Game id" />
-              <template #secondary-actions>
-                <AvalonButton label="Cancel" variant="secondary" @click="cancelAssociateGame" />
-              </template>
-            </AvalonForm>
-          </div>
-        </AvalonCard>
-
-        <AvalonCard v-if="isOwner" title="Transfer ownership">
-          <AvalonButton
-            v-show="!showTransfer"
-            label="Transfer ownership"
-            variant="danger"
-            @click="showTransfer = true"
-          />
-          <div v-show="showTransfer">
-            <AvalonForm
-              submit-label="Transfer"
-              :submitting="transferring"
-              :error="transferError"
-              @submit="onTransferOwnership"
-            >
-              <AvalonTextField v-model="transferTo" label="New owner's identity id" />
-              <template #secondary-actions>
-                <AvalonButton label="Cancel" variant="secondary" @click="cancelTransfer" />
-              </template>
-            </AvalonForm>
-          </div>
-        </AvalonCard>
-      </div>
+            <div v-show="showTransfer">
+              <AvalonForm
+                submit-label="Transfer"
+                :submitting="transferring"
+                :error="transferError"
+                @submit="onTransferOwnership"
+              >
+                <AvalonTextField v-model="transferTo" label="New owner's identity id" />
+                <template #secondary-actions>
+                  <AvalonButton label="Cancel" variant="secondary" @click="cancelTransfer" />
+                </template>
+              </AvalonForm>
+            </div>
+          </AvalonCard>
+        </div>
+      </template>
+      <p v-else :class="styles.empty">Only this guild's managers can view its settings.</p>
     </div>
   </div>
 </template>

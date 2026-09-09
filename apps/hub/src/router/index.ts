@@ -37,11 +37,16 @@ const router = createRouter({
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
         { path: 'guilds', name: 'guilds', component: () => import('../views/Guilds.vue') },
+        // Issue #241: the Channels tab lives inside Guild.vue itself now
+        // (a persistent channel sidebar, no route hop to switch channels),
+        // so `guild-channel` renders the same component as `guild` — the
+        // :cid param just pre-selects a channel and opens the Channels tab
+        // on load, preserving the old deep link.
         { path: 'guilds/:id', name: 'guild', component: () => import('../views/Guild.vue') },
         {
           path: 'guilds/:id/channels/:cid',
           name: 'guild-channel',
-          component: () => import('../views/GuildChannel.vue'),
+          component: () => import('../views/Guild.vue'),
         },
         { path: 'connect/:slug', name: 'connect-game', component: () => import('../views/ConnectGame.vue') },
         { path: 'connections', name: 'connections', component: () => import('../views/Connections.vue') },

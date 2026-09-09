@@ -1,0 +1,77 @@
+/* Guild.vue-specific styles (issue #241's tabbed layout) — page.module.scss
+   still owns the shared header/grid/error/empty scaffolding. Tab styles
+   mirror Guilds.module.scss's own .tabs/.tab/.tabActive pattern exactly. */
+.tabs {
+  display: flex;
+  gap: var(--av-space-2);
+  border-bottom: 1px solid var(--av-color-border);
+  flex-wrap: wrap;
+}
+
+.tab {
+  padding: var(--av-space-2) var(--av-space-3);
+  font: inherit;
+  font-weight: 600;
+  color: var(--av-color-text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tabActive {
+  color: var(--av-color-text);
+  border-bottom-color: var(--av-color-primary);
+}
+
+/* Channels tab (issue #241): a persistent channel sidebar next to the
+   active channel's messages — swapping channels updates `channelSidebar`'s
+   selection and useGuildChat's data in place, never a route navigation. */
+.channelsLayout {
+  display: flex;
+  gap: var(--av-space-4);
+  align-items: flex-start;
+}
+
+.channelSidebar {
+  flex: 0 0 220px;
+  min-width: 0;
+}
+
+.channelMain {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .channelsLayout {
+    flex-direction: column;
+  }
+
+  .channelSidebar {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
+
+.messageScroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Settings tab (issue #153's motd/banner/links, wired up by #241) */
+.linkRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+}
+
+.addLinkRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--av-space-2);
+}
