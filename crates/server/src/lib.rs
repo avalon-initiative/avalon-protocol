@@ -278,6 +278,10 @@ pub fn router(state: AppState) -> Router {
             "/guilds/{id}/events/{eid}/rsvp",
             put(guild_events::upsert_rsvp),
         )
+        .route(
+            "/guilds/{id}/events/{eid}/rsvps",
+            get(guild_events::list_rsvps),
+        )
         // Issue #211: public, unauthenticated mirror-facing transparency-log
         // reads — see `crate::settlement`'s module docs for why these carry
         // no auth requirement, unlike everything else in this router.

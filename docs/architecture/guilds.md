@@ -645,6 +645,28 @@ with Game A becomes historical.
   `/guilds/:id` lists upcoming events with title/time/RSVP counts and a
   going/maybe/not-going control, using two new `packages/ui` components
   (`AvalonEventCard`, `AvalonRsvpControl`).
+- **Per-member RSVP roster (issue #248).** The event list's `rsvp_counts`
+  is aggregate-only — no way to see *who* is going/maybe/can't-go, only
+  how many. `GET /guilds/{id}/events/{eid}/rsvps`
+  (`crates/server/src/guild_events.rs::list_rsvps`) mirrors `rsvp_counts`'s
+  own query against `guild_event_rsvps` but returns every row
+  (`identity_id`, `status`, `responded_at`) unaggregated instead. Gated
+  the same as `list_events`/`rsvp_counts` — current guild membership only,
+  no `manage_channels` or any other management permission, since RSVP
+  status is ordinary guild-internal social info rather than a moderation
+  concern (same posture the member roster already takes). Strictly
+  additive: the aggregate `rsvp_counts` on `GET /guilds/{id}/events` is
+  unchanged. Hub resolves the returned identity ids to
+  `display_name#discriminator` via the existing batched
+  `GET /identities/profiles` (issue #161), the same pattern
+  `useGuildChat`'s `resolveAuthorNames` and `listMembersWithPresence`
+  already use, and groups them into going/maybe/can't-go buckets
+  (`apps/hub/src/api/guildEvents.ts::groupRsvpRoster`,
+  `apps/hub/src/composables/useRsvpRoster.ts`). One shared
+  `packages/ui` component, `AvalonRsvpRosterPanel` (a thin wrapper around
+  `AvalonModal`), renders the roster; it's reachable by clicking an event
+  card from both the Events tab and the Calendar tab's selected-day list
+  in `Guild.vue`, rather than each tab getting its own roster UI.
 - **Guild join requests (issue #242).** `guild_join_requests`
   (`crates/server/db/migrations/0030_guild_join_requests`) is the
   applicant-initiated counterpart to `guild_invites` — a stranger applying
@@ -747,6 +769,9 @@ with Game A becomes historical.
   manufacture an association #206 wouldn't itself show).
 - [#246](https://github.com/LunarVagabond/avalon-protocol/issues/246) — guild
   icon, done: a small badge image, independent of #153's `banner`.
+- [#248](https://github.com/LunarVagabond/avalon-protocol/issues/248) —
+  per-member RSVP roster, done: who's going/maybe/can't-go per event, not
+  just aggregate counts.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild

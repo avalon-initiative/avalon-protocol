@@ -1,0 +1,35 @@
+.status {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-muted);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+}
+
+.groupLabel {
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+  color: var(--av-color-text);
+  margin: 0;
+}
+
+.empty {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+  font-style: italic;
+  margin: 0;
+}
+
+.names {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+  margin: 0;
+  padding: 0;
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+}

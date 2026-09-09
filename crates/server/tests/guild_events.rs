@@ -361,3 +361,138 @@ async fn a_member_without_manage_channels_cannot_create_events() {
     .unwrap();
     assert_eq!(create.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+#[ignore]
+async fn rsvp_roster_lists_every_response_with_identity_and_status() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+    seed_membership(
+        &pool,
+        Uuid::parse_str(&guild_id).unwrap(),
+        member_id,
+        2, // member role index
+    )
+    .await;
+
+    let create = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body("Guild social"))
+    .send()
+    .await
+    .unwrap();
+    assert!(create.status().is_success(), "{:?}", create.status());
+    let event: serde_json::Value = create.json().await.unwrap();
+    let event_id = event["id"].as_str().unwrap();
+
+    auth(
+        http.put(format!("{base}/guilds/{guild_id}/events/{event_id}/rsvp")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "status": "going" }))
+    .send()
+    .await
+    .unwrap();
+    auth(
+        http.put(format!("{base}/guilds/{guild_id}/events/{event_id}/rsvp")),
+        &member_token,
+    )
+    .json(&serde_json::json!({ "status": "maybe" }))
+    .send()
+    .await
+    .unwrap();
+
+    let roster = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events/{event_id}/rsvps")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(roster.status().is_success(), "{:?}", roster.status());
+    let roster: serde_json::Value = roster.json().await.unwrap();
+    let roster = roster.as_array().unwrap();
+    assert_eq!(roster.len(), 2);
+
+    let owner_entry = roster
+        .iter()
+        .find(|r| r["identity_id"] == owner_id.to_string())
+        .expect("owner's rsvp should be in the roster");
+    assert_eq!(owner_entry["status"], "going");
+    assert!(owner_entry["responded_at"].is_string());
+
+    let member_entry = roster
+        .iter()
+        .find(|r| r["identity_id"] == member_id.to_string())
+        .expect("member's rsvp should be in the roster");
+    assert_eq!(member_entry["status"], "maybe");
+}
+
+#[tokio::test]
+#[ignore]
+async fn rsvp_roster_is_empty_when_nobody_has_responded() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+
+    let create = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body("Empty roster event"))
+    .send()
+    .await
+    .unwrap();
+    let event: serde_json::Value = create.json().await.unwrap();
+    let event_id = event["id"].as_str().unwrap();
+
+    let roster = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events/{event_id}/rsvps")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(roster.status().is_success(), "{:?}", roster.status());
+    let roster: serde_json::Value = roster.json().await.unwrap();
+    assert_eq!(roster.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_non_member_cannot_view_the_rsvp_roster() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&pool, &http, &base, owner_id, &owner_token).await;
+
+    let create = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body("Members-only roster"))
+    .send()
+    .await
+    .unwrap();
+    let event: serde_json::Value = create.json().await.unwrap();
+    let event_id = event["id"].as_str().unwrap();
+
+    let roster = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events/{event_id}/rsvps")),
+        &outsider_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(roster.status(), reqwest::StatusCode::FORBIDDEN);
+}

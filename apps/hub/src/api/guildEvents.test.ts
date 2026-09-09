@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   EVENT_DESCRIPTION_MAX_CHARS,
   EVENT_TITLE_MAX_CHARS,
+  groupRsvpRoster,
   localDateKey,
   rsvpStatusLabel,
   sortByStartsAt,
@@ -9,7 +10,7 @@ import {
   totalRsvps,
   validateEventForm,
 } from './guildEvents'
-import type { EventResponse } from './types'
+import type { EventResponse, RsvpRosterEntry } from './types'
 
 function makeEvent(overrides: Partial<EventResponse> = {}): EventResponse {
   return {
@@ -150,5 +151,51 @@ describe('localDateKey', () => {
   it('pads single-digit months and days', () => {
     const local = new Date(2026, 0, 5, 9, 0) // Jan 5 2026 local
     expect(localDateKey(local.toISOString())).toBe('2026-01-05')
+  })
+})
+
+describe('groupRsvpRoster', () => {
+  function makeEntry(overrides: Partial<RsvpRosterEntry> = {}): RsvpRosterEntry {
+    return {
+      identity_id: 'id-1',
+      status: 'going',
+      responded_at: '2026-09-10T20:00:00Z',
+      ...overrides,
+    }
+  }
+
+  it('buckets resolved display names by status, in going/maybe/not_going order', () => {
+    const entries = [
+      makeEntry({ identity_id: 'id-1', status: 'going' }),
+      makeEntry({ identity_id: 'id-2', status: 'maybe' }),
+      makeEntry({ identity_id: 'id-3', status: 'not_going' }),
+      makeEntry({ identity_id: 'id-4', status: 'going' }),
+    ]
+    const namesById = {
+      'id-1': 'Rowan#1234',
+      'id-2': 'Sable#0007',
+      'id-3': 'Quill#4821',
+      'id-4': 'Ash#9999',
+    }
+    const groups = groupRsvpRoster(entries, namesById)
+    expect(groups.map((g) => g.status)).toEqual(['going', 'maybe', 'not_going'])
+    expect(groups.map((g) => g.label)).toEqual(['Going', 'Maybe', "Can't go"])
+    expect(groups.find((g) => g.status === 'going')?.names).toEqual(['Rowan#1234', 'Ash#9999'])
+    expect(groups.find((g) => g.status === 'maybe')?.names).toEqual(['Sable#0007'])
+    expect(groups.find((g) => g.status === 'not_going')?.names).toEqual(['Quill#4821'])
+  })
+
+  it('falls back to the raw identity id when no name has resolved yet', () => {
+    const entries = [makeEntry({ identity_id: 'unresolved-id', status: 'going' })]
+    const groups = groupRsvpRoster(entries, {})
+    expect(groups.find((g) => g.status === 'going')?.names).toEqual(['unresolved-id'])
+  })
+
+  it('returns all three groups, empty, when there are no RSVPs', () => {
+    const groups = groupRsvpRoster([], {})
+    expect(groups).toHaveLength(3)
+    for (const group of groups) {
+      expect(group.names).toEqual([])
+    }
   })
 })
