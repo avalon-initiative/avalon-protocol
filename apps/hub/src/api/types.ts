@@ -100,6 +100,18 @@ export interface ResolveHandleResponse {
   identity_id: string
 }
 
+// GET /people/discover (issue #204) — matches
+// crates/server/src/discovery.rs's DiscoverPeopleResponse. No request
+// params: the only input is the caller's own session, never a search term
+// (see that module's own doc comment).
+export interface DiscoveryCandidate {
+  identity_id: string
+}
+
+export interface DiscoverPeopleResponse {
+  candidates: DiscoveryCandidate[]
+}
+
 // GET /me/history (issue #121) — the caller's own protocol event history,
 // matching crates/server/src/handlers.rs's HistoryEntryResponse.
 export interface HistoryEntryResponse {

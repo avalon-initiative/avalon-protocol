@@ -105,6 +105,22 @@ fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-q
   (scoped surfacing) and
   [#205](https://github.com/LunarVagabond/avalon-protocol/issues/205)
   (opt-in global toggle), both under this epic.
+- `crates/server/src/discovery.rs` (#204) — `GET /people/discover`, the
+  always-on half of #129's decided shape. Session-authenticated with no
+  query parameter of any kind — the only input is the caller's own
+  session, never a search term. Candidates come from two sources, unioned
+  and deduplicated: friends-of-friends (`friendships` rows touching one of
+  the caller's own friends) and mutual guild membership (`guild_members`
+  rows sharing a `guild_id` with the caller). Both sources are filtered
+  through the caller themselves, `friends::friend_partners`, and
+  `blocks::block_partners` — the exact same "compute related identities"
+  helpers `presence.rs` established for #16, reused rather than
+  reimplemented, so a blocked relationship is excluded from discovery with
+  the identical guarantee it already gets from presence and friend
+  requests. Milestone-1 stand-in, matching #154's `guilds::discover_guilds`
+  precedent: a direct query, not the real indexer read model. Read-only —
+  acting on a suggestion still goes through `POST /friends/requests`
+  unchanged; this endpoint never creates or modifies a friendship.
 - Reads are restricted to the caller's own session for now — the capability/
   visibility composition in [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87)
   (which this doc's "What a game sees" section describes) is not built yet, so
@@ -141,5 +157,11 @@ fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-q
   list view.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes for friends lists and presence.
+- [#129](https://github.com/LunarVagabond/avalon-protocol/issues/129) — decision:
+  player discovery is two-tier (scoped always-on + opt-in global search).
+- [#204](https://github.com/LunarVagabond/avalon-protocol/issues/204) — scoped
+  player discovery: friends-of-friends and mutual-guild surfacing (done).
+- [#205](https://github.com/LunarVagabond/avalon-protocol/issues/205) — opt-in
+  global name/handle search toggle (not yet built).
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) — ADR:
   presence is ephemeral.

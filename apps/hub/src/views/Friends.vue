@@ -1,17 +1,21 @@
 <script setup lang="ts">
 // Friends/presence page (issue #18) inside the shell (issue #148). Loading,
 // live presence, and the membership poll live in useFriendsPresence — this
-// view owns only the add/accept/decline/remove actions.
-import { ref } from 'vue'
+// view owns only the add/accept/decline/remove actions, plus the
+// "people you may know" suggestions section (issue #204).
+import { onMounted, ref } from 'vue'
 import {
   AvalonButton,
   AvalonCard,
   AvalonFriendRequestRow,
   AvalonFriendRow,
   AvalonForm,
+  AvalonSuggestionRow,
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
+import { listSuggestions } from '../api/discovery'
+import type { Suggestion } from '../api/discovery'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useSessionStore } from '../stores/session'
 import styles from './page.module.scss'
@@ -26,6 +30,37 @@ const {
   outgoingRequests,
   refresh,
 } = useFriendsPresence()
+
+// "People you may know" (issue #204) — friends-of-friends and mutual-guild
+// suggestions, loaded once on mount alongside the rest of the page. A
+// suggestion never disappears the moment it's added (the server response
+// doesn't change until a page reload) — instead its row flips to a
+// disabled "Requested" state, tracked locally here.
+const suggestions = ref<Suggestion[]>([])
+const requestedSuggestionIds = ref<Set<string>>(new Set())
+
+async function loadSuggestions() {
+  if (!session.token) return
+  try {
+    suggestions.value = await listSuggestions(session.token)
+  } catch {
+    // Suggestions are a secondary surface — a failure here shouldn't block
+    // or clutter the primary friends/requests error state above.
+    suggestions.value = []
+  }
+}
+
+async function onAddSuggestion(identityId: string) {
+  if (!session.token) return
+  try {
+    await api.createFriendRequest(session.token, { to: identityId })
+    requestedSuggestionIds.value = new Set(requestedSuggestionIds.value).add(identityId)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+
+onMounted(loadSuggestions)
 
 // Button-first: the add-friend input only appears once the player says
 // they want to add someone — no open entry sits on the page by default.
@@ -169,6 +204,21 @@ async function onRemoveFriend(identityId: string) {
             :identity-id="request.otherIdentityId"
             direction="outgoing"
             @remove="onRemoveRequest(request.id)"
+          />
+        </AvalonCard>
+
+        <AvalonCard
+          v-if="suggestions.length > 0"
+          title="People you may know"
+          subtitle="Friends of friends and people in your guilds."
+        >
+          <AvalonSuggestionRow
+            v-for="suggestion in suggestions"
+            :key="suggestion.identityId"
+            :identity-id="suggestion.identityId"
+            :display-name="suggestion.displayName"
+            :requested="requestedSuggestionIds.has(suggestion.identityId)"
+            @add="onAddSuggestion(suggestion.identityId)"
           />
         </AvalonCard>
       </div>

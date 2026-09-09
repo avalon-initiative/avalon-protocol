@@ -17,6 +17,7 @@ import type {
   DeviceGrantResponse,
   DeviceResponse,
   DiscoverGuildsResponse,
+  DiscoverPeopleResponse,
   FriendRequestResponse,
   FriendshipResponse,
   GameBindingResponse,
@@ -163,6 +164,13 @@ export function removeFriend(token: string, identityId: string): Promise<void> {
 // URL path segment, so it's escaped here rather than left to the caller.
 export function resolveHandle(token: string, handle: string): Promise<ResolveHandleResponse> {
   return request(`/friends/handle/${encodeURIComponent(handle)}`, { token })
+}
+
+// GET /people/discover (issue #204) — "people you may know", scoped to
+// friends-of-friends and mutual guild membership. No parameters: the
+// caller's own session is the only input, never a search term.
+export function discoverPeople(token: string): Promise<DiscoverPeopleResponse> {
+  return request('/people/discover', { token })
 }
 
 // PUT /me/presence — the caller publishing their own status. The shell
