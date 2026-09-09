@@ -16,6 +16,14 @@ pub struct AchievementDefinition {
     pub issuer: Issuer,
     pub name: String,
     pub description: String,
+    /// An issuer-declared schema reference (e.g. a game-event-result schema,
+    /// #88) so a consumer can recognize a claim's shape independently of the
+    /// issuer's own naming for it. Optional: not every definition needs one.
+    pub schema: Option<GlobalId>,
+    /// Bumped on every `achievement.definition_updated`; the definition's
+    /// `id` never changes, so this is what lets a consumer notice a
+    /// definition evolved (see `docs/architecture/achievements-and-attestations.md`).
+    pub version: u32,
 }
 
 /// Whoever is entitled to issue attestations — currently always a registered

@@ -119,6 +119,14 @@ pub enum AppError {
     GrantNotFound,
     #[error("forbidden")]
     Forbidden,
+    #[error("achievement key must be lowercase and match [a-z0-9_]+, 2-128 characters")]
+    InvalidAchievementKey,
+    #[error("an achievement definition with this key already exists for this game")]
+    AchievementKeyTaken,
+    #[error("achievement definition not found")]
+    AchievementDefinitionNotFound,
+    #[error("a game may only create or change its own achievement definitions")]
+    AchievementDefinitionForbidden,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -194,6 +202,10 @@ impl IntoResponse for AppError {
             // never says *which* of "no binding" / "wrong game" / "no
             // grant" / "revoked grant" applied.
             AppError::Forbidden => StatusCode::FORBIDDEN,
+            AppError::InvalidAchievementKey => StatusCode::BAD_REQUEST,
+            AppError::AchievementKeyTaken => StatusCode::CONFLICT,
+            AppError::AchievementDefinitionNotFound => StatusCode::NOT_FOUND,
+            AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::Database(_) | AppError::Ledger(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —

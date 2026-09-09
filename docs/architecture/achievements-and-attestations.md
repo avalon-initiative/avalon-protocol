@@ -65,9 +65,14 @@ results separately so a game can *display* claims it doesn't *recognize*.
 ## Definitions
 
 A game defines its achievements before it issues them. An
-`AchievementDefinition` carries the namespaced id, the issuer, a name, and a
-description. Definitions are durable (`achievement.defined`) so the registry
-and the Hub can render an issued attestation even after the game is gone.
+`AchievementDefinition` carries the namespaced id, the issuer, a name, a
+description, an optional `schema` reference, and a `version`. Definitions are
+durable (`achievement.defined`) so the registry and the Hub can render an
+issued attestation even after the game is gone. `version` is bumped by
+`achievement.definition_updated`; the id never changes, so a consumer can
+notice a definition evolved without losing track of what it is. A definition
+can be retired (`achievement.definition_retired`) — no new issuances against
+it — without deleting it or touching any attestation already issued.
 
 ## Lifecycle
 
@@ -92,7 +97,17 @@ game-event schema, not a separate mechanism — see
   and `AttestationId`.
 - `crates/sdk/src/lib.rs` — `Session::achievements()` and
   `issue_achievement()` check the capability, then return `NotImplemented`.
-- No server endpoints, no definition storage, no signing.
+- `crates/server/src/achievements.rs` (#31) — `AchievementDefinition` CRUD:
+  `POST /games/{slug}/achievements` (create, 409 on a duplicate key for that
+  game), `PATCH /games/{slug}/achievements/{key}` (update name/description/
+  schema and bump `version`, and/or retire), `GET /games/{slug}/achievements`
+  (public listing). The write endpoints are game-credential-authenticated
+  (`games::authenticate_game`, #26's challenge-response scheme) and reject a
+  game acting under another game's slug with 403; the id is always
+  `game:<slug>:achievement:<key>` and is immutable. `achievement_definitions`
+  is a rebuildable projection, written into the outbox in the same
+  transaction as the row change (#71's pattern). No issuing yet (#32), no
+  signing.
 
 ## Decisions and tickets
 
