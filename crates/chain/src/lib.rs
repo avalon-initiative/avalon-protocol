@@ -15,7 +15,9 @@
 
 mod postgres;
 
-pub use postgres::{IssuerHistoryEntry, LedgerEntryView, PostgresSettlementProvider};
+pub use postgres::{
+    IssuerHistoryEntry, LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
+};
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch};

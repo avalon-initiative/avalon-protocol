@@ -1,3 +1,4 @@
+pub mod achievements;
 pub mod auth;
 pub mod authz;
 pub mod blocks;
@@ -107,6 +108,15 @@ pub fn router(state: AppState) -> Router {
         .route("/games/:slug", get(games::get_game))
         .route("/games/:slug/challenge", post(games::create_game_challenge))
         .route("/games/whoami", get(games::game_whoami))
+        .route(
+            "/games/:slug/achievements",
+            get(achievements::list_achievement_definitions)
+                .post(achievements::create_achievement_definition),
+        )
+        .route(
+            "/games/:slug/achievements/:key",
+            patch(achievements::update_achievement_definition),
+        )
         .route(
             "/games/:slug/connect",
             post(connections::connect).delete(connections::disconnect),

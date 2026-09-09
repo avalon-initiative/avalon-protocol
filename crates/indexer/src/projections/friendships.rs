@@ -1,7 +1,7 @@
 //! The friendships read model, built from `friend.accepted`/`friend.removed`.
 //!
 //! Deliberately its own `indexer_friendships` table
-//! (`crates/server/db/migrations/0014_indexer_projections`), not the
+//! (`crates/server/db/migrations/0015_indexer_projections`), not the
 //! `friendships` table `crates/server/src/friends.rs` already writes
 //! directly at request time
 //! (`crates/server/db/migrations/0004_social_graph`). Retargeting that

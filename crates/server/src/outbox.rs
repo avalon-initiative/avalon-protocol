@@ -13,6 +13,14 @@
 //! rows into `avalon-chain` at its own pace. A row that fails to publish
 //! immediately is not data loss — it is already durably recorded here, and
 //! is retried on the worker's next tick.
+//!
+//! Batching (issue #38): a drain tick groups every row it picks up into one
+//! `EventBatch` and commits it with a single `SettlementProvider::commit`
+//! call, not one call per event — a batch closes whenever the worker runs;
+//! a batch of one event is legal (an idle system draining a single pending
+//! row). Rows are marked with the `batch_id` the commit actually produced,
+//! not left `NULL` — the column has been reserved for this since #71's
+//! `0003_outbox` migration.
 
 use avalon_chain::{PostgresSettlementProvider, SettlementProvider};
 use avalon_protocol::events::{EventBatch, ProtocolEvent};
@@ -60,6 +68,11 @@ async fn drain_once(pool: &PgPool, chain: &PostgresSettlementProvider) -> Result
     .fetch_all(pool)
     .await?;
 
+    // One EventBatch for this whole tick's rows, not one per row — issue
+    // #38: a protocol event is never its own settlement action.
+    let mut pending_ids = Vec::with_capacity(rows.len());
+    let mut events = Vec::with_capacity(rows.len());
+
     for row in rows {
         let id: Uuid = row.try_get("id")?;
         let event_json: serde_json::Value = row.try_get("event")?;
@@ -81,19 +94,33 @@ async fn drain_once(pool: &PgPool, chain: &PostgresSettlementProvider) -> Result
             continue;
         };
 
-        let batch = EventBatch {
-            id: Uuid::new_v4(),
-            events: vec![event],
-            created_at: OffsetDateTime::now_utc(),
-        };
+        pending_ids.push(id);
+        events.push(event);
+    }
 
-        if chain.commit(&batch).await.is_ok() {
-            sqlx::query("UPDATE protocol_outbox SET committed_at = now() WHERE id = $1")
-                .bind(id)
-                .execute(pool)
-                .await?;
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    let batch = EventBatch {
+        id: Uuid::new_v4(),
+        events,
+        created_at: OffsetDateTime::now_utc(),
+    };
+
+    // Failure: leave every row in this tick's batch pending, retried whole
+    // (as a new batch) next tick — `commit` is one transaction, so nothing
+    // was partially settled.
+    if let Ok(commitment) = chain.commit(&batch).await {
+        for id in pending_ids {
+            sqlx::query(
+                "UPDATE protocol_outbox SET committed_at = now(), batch_id = $2 WHERE id = $1",
+            )
+            .bind(id)
+            .bind(commitment.batch_id)
+            .execute(pool)
+            .await?;
         }
-        // Failure: leave it pending, retried next tick.
     }
 
     Ok(())

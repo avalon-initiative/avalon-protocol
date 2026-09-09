@@ -105,7 +105,7 @@ a first-class scaling dimension — see
   together.
 - `friendships`, `guild_rosters`, and `attestations` write their own new
   tables (`indexer_friendships`, `indexer_guild_members`,
-  `indexer_attestations` — `crates/server/db/migrations/0014_indexer_projections`)
+  `indexer_attestations` — `crates/server/db/migrations/0015_indexer_projections`)
   rather than the existing `friendships`/`guild_members` tables
   `crates/server/src/friends.rs`/`guilds.rs` still write directly at request
   time. Retargeting those write paths — so those modules stop writing them

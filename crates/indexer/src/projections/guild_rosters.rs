@@ -2,7 +2,7 @@
 //! `guild.member_removed`, and `guild.role_changed`.
 //!
 //! Its own `indexer_guild_members` table
-//! (`crates/server/db/migrations/0014_indexer_projections`), for the same
+//! (`crates/server/db/migrations/0015_indexer_projections`), for the same
 //! reason [`super::friendships`] isn't `crates/server`'s existing
 //! `guild_members` table (`crates/server/db/migrations/0009_guild_membership`,
 //! written directly by `crates/server/src/guilds.rs`): retargeting that
