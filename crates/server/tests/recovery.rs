@@ -163,13 +163,16 @@ async fn configure_guardians(
     guardians: &[Uuid],
     threshold: i32,
 ) {
-    auth(http.put(format!("{base}/me/recovery/guardians")), owner_token)
-        .json(&serde_json::json!({ "guardian_ids": guardians, "threshold": threshold }))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .expect("guardian configuration should succeed");
+    auth(
+        http.put(format!("{base}/me/recovery/guardians")),
+        owner_token,
+    )
+    .json(&serde_json::json!({ "guardian_ids": guardians, "threshold": threshold }))
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .expect("guardian configuration should succeed");
 }
 
 #[tokio::test]
@@ -246,11 +249,13 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     // Backdate the delay directly (see module docs) rather than sleeping
     // for real hours, then finalize should succeed.
     let request_uuid = Uuid::parse_str(&request_id).unwrap();
-    sqlx::query("UPDATE recovery_requests SET delay_ends_at = now() - interval '1 minute' WHERE id = $1")
-        .bind(request_uuid)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE recovery_requests SET delay_ends_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(request_uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let finalized = http
         .post(format!("{base}/recovery/requests/{request_id}/finalize"))
@@ -265,13 +270,12 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     assert_eq!(finalized["status"], "completed");
 
     // The new device's passkey is now a real, ordinary login credential.
-    let passkey_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM identity_keys WHERE identity_id = $1",
-    )
-    .bind(owner_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let passkey_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM identity_keys WHERE identity_id = $1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(passkey_count, 1);
 
     // Finalizing again is a harmless idempotent no-op, not an error.
@@ -281,13 +285,12 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
         .await
         .unwrap();
     assert!(refinalized.status().is_success());
-    let passkey_count_after_refinalize: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM identity_keys WHERE identity_id = $1",
-    )
-    .bind(owner_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let passkey_count_after_refinalize: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM identity_keys WHERE identity_id = $1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(passkey_count_after_refinalize, 1);
 }
 
@@ -509,10 +512,155 @@ async fn guardians_must_be_current_friends_not_arbitrary_identities() {
     let (stranger_id, _stranger_token) = seed_identity_session(&pool).await;
     let _ = owner_id;
 
-    let attempt = auth(http.put(format!("{base}/me/recovery/guardians")), &owner_token)
-        .json(&serde_json::json!({ "guardian_ids": [stranger_id], "threshold": 1 }))
+    let attempt = auth(
+        http.put(format!("{base}/me/recovery/guardians")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "guardian_ids": [stranger_id], "threshold": 1 }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(attempt.status().as_u16(), 400);
+}
+
+/// Regression test for a real enumeration oracle found in review:
+/// `POST /recovery/requests/start` must give an unauthenticated caller no
+/// way to distinguish "this identity doesn't exist" from "this identity
+/// exists but has no guardians configured" — same status, same body, for
+/// both cases.
+#[tokio::test]
+#[ignore]
+async fn start_gives_no_distinguishable_signal_between_nonexistent_and_unconfigured_identity() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (configured_owner, _configured_token) = seed_identity_session(&pool).await;
+    let (guardian_id, _guardian_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, configured_owner, guardian_id).await;
+    // Deliberately NOT calling configure_guardians for a second, real
+    // identity — that one stays "exists but unconfigured".
+    let (unconfigured_owner, _unconfigured_token) = seed_identity_session(&pool).await;
+
+    let nonexistent_id = Uuid::new_v4();
+
+    let start_request = |identity_id: Uuid| {
+        let http = &http;
+        let base = &base;
+        async move {
+            http.post(format!("{base}/recovery/requests/start"))
+                .json(&serde_json::json!({ "identity_id": identity_id, "device_label": "probe" }))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let against_nonexistent = start_request(nonexistent_id).await;
+    let nonexistent_status = against_nonexistent.status().as_u16();
+    let nonexistent_body: serde_json::Value = against_nonexistent.json().await.unwrap();
+
+    let against_unconfigured = start_request(unconfigured_owner).await;
+    let unconfigured_status = against_unconfigured.status().as_u16();
+    let unconfigured_body: serde_json::Value = against_unconfigured.json().await.unwrap();
+
+    assert_eq!(
+        nonexistent_status, unconfigured_status,
+        "a nonexistent identity and an unconfigured-but-real one must return the same status"
+    );
+    assert_eq!(
+        nonexistent_body, unconfigured_body,
+        "a nonexistent identity and an unconfigured-but-real one must return the same body — \
+         any difference is an oracle for enumerating which identity ids are real"
+    );
+    // Sanity: a *configured* identity behaves differently (returns a real
+    // challenge, not an error), so this test would fail if the endpoint
+    // stopped distinguishing configured-vs-not at all.
+    let against_configured = start_request(configured_owner).await;
+    assert!(against_configured.status().is_success());
+}
+
+/// Regression test for a real race condition found in review: a guardian
+/// approval racing a concurrent owner/guardian cancellation must never
+/// silently resurrect a cancelled request. Fires both requests
+/// concurrently (real async tasks, not sequential awaits) — Postgres row
+/// locking (`SELECT ... FOR UPDATE` in `approve_request`/`cancel_request`)
+/// is what actually guarantees the invariant below regardless of which
+/// request's transaction commits first, not test scheduling luck.
+#[tokio::test]
+#[ignore]
+async fn a_racing_approval_never_resurrects_a_cancelled_request() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (g1_id, g1_token) = seed_identity_session(&pool).await;
+    let (g2_id, g2_token) = seed_identity_session(&pool).await;
+    for guardian in [g1_id, g2_id] {
+        seed_friendship(&pool, owner_id, guardian).await;
+    }
+    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+
+    let request = initiate_recovery(&http, &base, owner_id).await;
+    let request_id = request["id"].as_str().unwrap().to_string();
+
+    // First guardian approves normally, so the request is one approval
+    // away from crossing the threshold.
+    auth(
+        http.post(format!("{base}/recovery/requests/{request_id}/approve")),
+        &g1_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+
+    // Now race the owner's veto against the second guardian's approval —
+    // whichever the database actually serializes first is authoritative;
+    // what must never happen is the row ending up with `cancelled_at` set
+    // while `status` says anything other than `cancelled`.
+    let cancel = auth(
+        http.post(format!("{base}/recovery/requests/{request_id}/cancel")),
+        &owner_token,
+    )
+    .send();
+    let approve = auth(
+        http.post(format!("{base}/recovery/requests/{request_id}/approve")),
+        &g2_token,
+    )
+    .send();
+    let (_cancel_result, _approve_result) = tokio::join!(cancel, approve);
+
+    let row = sqlx::query("SELECT status, cancelled_at FROM recovery_requests WHERE id = $1")
+        .bind(Uuid::parse_str(&request_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let status: String = sqlx::Row::try_get(&row, "status").unwrap();
+    let cancelled_at: Option<OffsetDateTime> = sqlx::Row::try_get(&row, "cancelled_at").unwrap();
+
+    if cancelled_at.is_some() {
+        assert_eq!(
+            status, "cancelled",
+            "a request with cancelled_at set must have status = 'cancelled', never \
+             silently overwritten back to an active state by a racing approval"
+        );
+    }
+
+    // Whatever the final state, finalize must never succeed for a request
+    // whose status isn't a genuine, uncancelled 'delay' past its window —
+    // regardless of which way the race resolved.
+    let finalize = http
+        .post(format!("{base}/recovery/requests/{request_id}/finalize"))
         .send()
         .await
         .unwrap();
-    assert_eq!(attempt.status().as_u16(), 400);
+    if status == "cancelled" {
+        assert!(
+            !finalize.status().is_success(),
+            "finalize must never succeed for a cancelled request"
+        );
+    }
 }

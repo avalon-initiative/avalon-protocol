@@ -354,11 +354,15 @@ async fn fetch_guardian_settings(
     })
 }
 
-async fn current_guardian_set(state: &AppState, identity_id: Uuid) -> Result<HashSet<Uuid>, AppError> {
-    let rows = sqlx::query("SELECT guardian_identity_id FROM recovery_guardians WHERE identity_id = $1")
-        .bind(identity_id)
-        .fetch_all(&state.pool)
-        .await?;
+async fn current_guardian_set(
+    state: &AppState,
+    identity_id: Uuid,
+) -> Result<HashSet<Uuid>, AppError> {
+    let rows =
+        sqlx::query("SELECT guardian_identity_id FROM recovery_guardians WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_all(&state.pool)
+            .await?;
     let mut set = HashSet::with_capacity(rows.len());
     for row in rows {
         set.insert(row.try_get("guardian_identity_id")?);
@@ -407,16 +411,15 @@ async fn recent_request_count(state: &AppState, identity_id: Uuid) -> Result<i64
 /// recovery), so this and `finish_request` below are the one deliberate
 /// exception to this crate's "every route requires a session" norm.
 /// Guarded three ways rather than left as an open door: `identity_id` must
-/// name a real identity (`AppError::IdentityNotFound` otherwise, same
-/// response an unauthenticated caller would get from any other identity
-/// lookup in this crate — no distinguishable "found but not
-/// recovery-configured" signal that would let a prober enumerate which
-/// identities have guardians set up), it must actually have guardians
-/// configured (an unconfigured identity can never satisfy any M, so
-/// there's nothing to spam toward — same `AppError::RecoveryNotConfigured`
-/// either way), and the rolling-window rate limit
-/// ([`guard_rate_limit`]) is checked *before* any WebAuthn ceremony work
-/// happens, since that ceremony is the expensive part.
+/// name a real identity, and must actually have guardians configured (an
+/// unconfigured identity can never satisfy any M, so there's nothing to
+/// spam toward) — both cases return the exact same
+/// `AppError::RecoveryNotAvailable` (same status, same body), so an
+/// unauthenticated prober can never distinguish "this identity doesn't
+/// exist" from "this identity exists but has no guardians set up." The
+/// rolling-window rate limit ([`guard_rate_limit`]) is checked *before*
+/// any WebAuthn ceremony work happens, since that ceremony is the
+/// expensive part.
 pub async fn start_request(
     State(state): State<AppState>,
     Json(body): Json<RecoveryStartRequest>,
@@ -426,19 +429,20 @@ pub async fn start_request(
         .fetch_optional(&state.pool)
         .await?;
     if identity_exists.is_none() {
-        return Err(AppError::IdentityNotFound);
+        return Err(AppError::RecoveryNotAvailable);
     }
 
-    let settings_row = sqlx::query("SELECT threshold FROM recovery_guardian_settings WHERE identity_id = $1")
-        .bind(body.identity_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let settings_row =
+        sqlx::query("SELECT threshold FROM recovery_guardian_settings WHERE identity_id = $1")
+            .bind(body.identity_id)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(settings_row) = settings_row else {
-        return Err(AppError::RecoveryNotConfigured);
+        return Err(AppError::RecoveryNotAvailable);
     };
     let threshold: i32 = settings_row.try_get("threshold")?;
     if threshold < 1 {
-        return Err(AppError::RecoveryNotConfigured);
+        return Err(AppError::RecoveryNotAvailable);
     }
 
     let recent_count = recent_request_count(&state, body.identity_id).await?;
@@ -538,16 +542,23 @@ pub async fn finish_request(
     let ceremony: RecoveryStartCeremonyState =
         serde_json::from_value(state_json).map_err(|_| AppError::CeremonyNotFound)?;
 
-    let settings_row = sqlx::query("SELECT threshold FROM recovery_guardian_settings WHERE identity_id = $1")
-        .bind(ceremony.identity_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    // Same unified error as `start_request` above, for the same reason —
+    // even though reaching this point already required a valid ceremony
+    // ticket (not something an outside prober can guess), re-checking
+    // guardian configuration here (it could have changed between start and
+    // finish) should stay consistent rather than reintroducing a
+    // distinguishable signal on a code path that's easy to overlook later.
+    let settings_row =
+        sqlx::query("SELECT threshold FROM recovery_guardian_settings WHERE identity_id = $1")
+            .bind(ceremony.identity_id)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(settings_row) = settings_row else {
-        return Err(AppError::RecoveryNotConfigured);
+        return Err(AppError::RecoveryNotAvailable);
     };
     let threshold: i32 = settings_row.try_get("threshold")?;
     if threshold < 1 {
-        return Err(AppError::RecoveryNotConfigured);
+        return Err(AppError::RecoveryNotAvailable);
     }
 
     let recent_count = recent_request_count(&state, ceremony.identity_id).await?;
@@ -695,6 +706,29 @@ pub async fn approve_request(
 
     let mut tx = state.pool.begin().await?;
 
+    // Re-check status inside the transaction against a row lock, the same
+    // way `finalize_request` does — the `request.status` read above (before
+    // this transaction even opened) is only a cheap early-reject, not the
+    // authority for the decision below. Without this lock, a concurrent
+    // `cancel_request` could commit a veto between our earlier unlocked
+    // read and this point, and this approval would then unconditionally
+    // overwrite that veto's `status` back to `delay` — silently undoing an
+    // owner's/guardian's cancellation. Whichever of a concurrent cancel or
+    // approve commits first is authoritative; the loser sees a status this
+    // guard rejects.
+    let locked = sqlx::query(
+        "SELECT status, delay_ends_at, threshold_at_request FROM recovery_requests WHERE id = $1 FOR UPDATE",
+    )
+    .bind(request_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let locked_status: String = locked.try_get("status")?;
+    let locked_delay_ends_at: Option<OffsetDateTime> = locked.try_get("delay_ends_at")?;
+    let locked_threshold: i32 = locked.try_get("threshold_at_request")?;
+    if locked_status != "pending_approvals" && locked_status != "delay" {
+        return Err(AppError::RecoveryAlreadyResolved);
+    }
+
     let approved_at = OffsetDateTime::now_utc();
     let inserted = sqlx::query(
         "INSERT INTO recovery_approvals (request_id, guardian_identity_id, approved_at) VALUES ($1, $2, $3)",
@@ -711,20 +745,26 @@ pub async fn approve_request(
     }
     inserted?;
 
-    let count_row = sqlx::query("SELECT COUNT(*) AS count FROM recovery_approvals WHERE request_id = $1")
-        .bind(request_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let count_row =
+        sqlx::query("SELECT COUNT(*) AS count FROM recovery_approvals WHERE request_id = $1")
+            .bind(request_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let count: i64 = count_row.try_get("count")?;
 
-    let mut delay_ends_at = request.delay_ends_at;
-    let mut status = request.status.clone();
-    if status == "pending_approvals" && meets_threshold(count, request.threshold_at_request) {
+    let mut delay_ends_at = locked_delay_ends_at;
+    let mut status = locked_status;
+    if status == "pending_approvals" && meets_threshold(count, locked_threshold) {
         status = "delay".to_string();
-        delay_ends_at =
-            Some(approved_at + time::Duration::hours(recovery_delay_hours_from_env()));
+        delay_ends_at = Some(approved_at + time::Duration::hours(recovery_delay_hours_from_env()));
+        // Still guarded by `WHERE status = 'pending_approvals'` as a second,
+        // belt-and-suspenders layer on top of the row lock above — this
+        // UPDATE can only ever affect the row we're already holding locked,
+        // so it can't race, but keeping the guard makes the invariant this
+        // statement relies on explicit at the call site, not just upheld by
+        // the lock elsewhere in the function.
         sqlx::query(
-            "UPDATE recovery_requests SET status = 'delay', delay_ends_at = $2 WHERE id = $1",
+            "UPDATE recovery_requests SET status = 'delay', delay_ends_at = $2 WHERE id = $1 AND status = 'pending_approvals'",
         )
         .bind(request_id)
         .bind(delay_ends_at)
@@ -878,12 +918,11 @@ pub async fn finalize_request(
     // a concurrent cancel racing this finalize can't both "win" — whichever
     // commits first is authoritative, and the loser's UPDATE below simply
     // affects zero rows.
-    let locked = sqlx::query(
-        "SELECT status, delay_ends_at FROM recovery_requests WHERE id = $1 FOR UPDATE",
-    )
-    .bind(request_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let locked =
+        sqlx::query("SELECT status, delay_ends_at FROM recovery_requests WHERE id = $1 FOR UPDATE")
+            .bind(request_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let locked_status: String = locked.try_get("status")?;
     let locked_delay_ends_at: Option<OffsetDateTime> = locked.try_get("delay_ends_at")?;
     guard_can_finalize(&locked_status, locked_delay_ends_at, now)?;
@@ -1235,7 +1274,10 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_RECOVERY_DELAY_HOURS");
         }
-        assert_eq!(recovery_delay_hours_from_env(), DEFAULT_RECOVERY_DELAY_HOURS);
+        assert_eq!(
+            recovery_delay_hours_from_env(),
+            DEFAULT_RECOVERY_DELAY_HOURS
+        );
     }
 
     #[test]
@@ -1243,7 +1285,10 @@ mod tests {
         unsafe {
             std::env::set_var("AVALON_RECOVERY_DELAY_HOURS", "0");
         }
-        assert_eq!(recovery_delay_hours_from_env(), DEFAULT_RECOVERY_DELAY_HOURS);
+        assert_eq!(
+            recovery_delay_hours_from_env(),
+            DEFAULT_RECOVERY_DELAY_HOURS
+        );
         unsafe {
             std::env::remove_var("AVALON_RECOVERY_DELAY_HOURS");
         }

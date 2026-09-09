@@ -185,6 +185,18 @@ pub enum AppError {
     InvalidGuardianSet,
     #[error("recovery is not configured for this identity")]
     RecoveryNotConfigured,
+    /// Deliberately generic and used for both "this identity doesn't
+    /// exist" and "this identity exists but has no guardians configured"
+    /// on the unauthenticated `POST /recovery/requests/start`/`finish`
+    /// endpoints (see `crate::recovery`'s module doc comment) — those two
+    /// cases must be indistinguishable to an unauthenticated caller, or
+    /// the endpoint becomes an oracle for enumerating which identity ids
+    /// are real and which of those have recovery configured. Never use
+    /// this for an authenticated-context lookup; `IdentityNotFound`/
+    /// `RecoveryNotConfigured` above remain correct there, where
+    /// distinguishing is fine.
+    #[error("recovery is not available for this identity right now")]
+    RecoveryNotAvailable,
     #[error("recovery request not found")]
     RecoveryRequestNotFound,
     #[error("a recovery attempt is already in progress for this identity")]
@@ -307,6 +319,11 @@ impl IntoResponse for AppError {
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidGuardianSet => StatusCode::BAD_REQUEST,
             AppError::RecoveryNotConfigured => StatusCode::CONFLICT,
+            // Same status AND same body as a genuinely nonexistent
+            // identity would get from this endpoint — see the variant's
+            // own doc comment for why the two must be indistinguishable
+            // here specifically.
+            AppError::RecoveryNotAvailable => StatusCode::NOT_FOUND,
             AppError::RecoveryRequestNotFound => StatusCode::NOT_FOUND,
             AppError::RecoveryAlreadyInProgress => StatusCode::CONFLICT,
             AppError::RecoveryRateLimited => StatusCode::TOO_MANY_REQUESTS,
