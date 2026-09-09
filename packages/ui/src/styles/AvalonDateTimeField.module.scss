@@ -60,12 +60,17 @@
 }
 
 .pickerButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--av-radius-md);
   border: 1px solid var(--av-color-border);
   background: var(--av-color-bg);
-  padding: 0 var(--av-space-3);
+  padding: 0.625rem var(--av-space-3);
   cursor: pointer;
   font-size: var(--av-text-base);
+  font-family: inherit;
+  line-height: 1;
 
   &:hover:not(:disabled) {
     border-color: var(--av-color-border-strong);
@@ -150,6 +155,7 @@
   border-radius: var(--av-radius-sm);
   color: var(--av-color-text);
   font-size: var(--av-text-sm);
+  font-family: inherit;
   cursor: pointer;
 
   &:hover {
@@ -228,6 +234,7 @@
   color: var(--av-color-text-secondary);
   padding: var(--av-space-1) var(--av-space-2);
   font-size: var(--av-text-sm);
+  font-family: inherit;
   cursor: pointer;
 
   &:hover {
@@ -252,6 +259,7 @@
   color: var(--av-color-on-primary, #fff);
   padding: var(--av-space-2) var(--av-space-3);
   font-size: var(--av-text-sm);
+  font-family: inherit;
   cursor: pointer;
 
   &:hover {

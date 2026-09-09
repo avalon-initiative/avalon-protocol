@@ -60,6 +60,19 @@ export function sortByStartsAt(events: EventResponse[]): EventResponse[] {
   return [...events].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))
 }
 
+// "YYYY-MM-DD" in the *viewer's local* timezone — starts_at is stored/
+// transmitted as UTC (same "store universal, translate for UI" model
+// AvalonEventCard's display already uses), so grouping events onto a
+// calendar grid by day has to localize first or a late-night UTC event
+// could land on the wrong day for a reader west of UTC.
+export function localDateKey(isoUtc: string): string {
+  const d = new Date(isoUtc)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 // Splits a list into "still upcoming" vs. "already started/ended", given
 // the current time — used to fade or section past events in the calendar
 // view without a second server round-trip.

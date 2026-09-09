@@ -11,6 +11,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AvalonButton,
+  AvalonCalendarMonth,
   AvalonCard,
   AvalonChannelList,
   AvalonChatComposer,
@@ -27,7 +28,7 @@ import {
 } from '@avalon/ui'
 import * as api from '../api/client'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
-import { sortByStartsAt, validateEventForm } from '../api/guildEvents'
+import { localDateKey, sortByStartsAt, validateEventForm } from '../api/guildEvents'
 import {
   addFavoriteGameId,
   canChangeMemberRole,
@@ -105,12 +106,13 @@ const isMember = computed(() => members.value.some((m) => m.identityId === selfI
 // (`/guilds/:id/channels/:cid`), so selecting one is reflected into the URL
 // via router.replace (no push — switching channels shouldn't pile up
 // browser history entries) rather than kept purely in memory.
-type TabKey = 'overview' | 'members' | 'channels' | 'events' | 'roles' | 'settings'
+type TabKey = 'overview' | 'members' | 'channels' | 'events' | 'calendar' | 'roles' | 'settings'
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'members', label: 'Members' },
   { key: 'channels', label: 'Channels' },
   { key: 'events', label: 'Events' },
+  { key: 'calendar', label: 'Calendar' },
   { key: 'roles', label: 'Roles' },
   { key: 'settings', label: 'Settings' },
 ]
@@ -697,10 +699,31 @@ async function onArchiveChannel(channelId: string) {
 
 const sortedEvents = computed(() => sortByStartsAt(events.value))
 
+// --- Calendar tab: a navigable month view of the same events list above,
+// grouped by local calendar day (localDateKey — see its own doc comment
+// on why "local," not the raw UTC starts_at). No separate fetch: the
+// guild's full event list is already loaded for the Events tab.
+const today = new Date()
+const calendarYear = ref(today.getFullYear())
+const calendarMonth = ref(today.getMonth() + 1)
+const calendarSelectedDate = ref<string | null>(null)
+
+const calendarEventDates = computed(() => events.value.map((e) => localDateKey(e.starts_at)))
+
+const calendarSelectedEvents = computed(() => {
+  if (!calendarSelectedDate.value) return []
+  return sortedEvents.value.filter((e) => localDateKey(e.starts_at) === calendarSelectedDate.value)
+})
+
+function onSelectCalendarDate(date: string) {
+  calendarSelectedDate.value = calendarSelectedDate.value === date ? null : date
+}
+
 const showCreateEvent = ref(false)
 const newEventTitle = ref('')
 const newEventDescription = ref('')
 const newEventStartsAt = ref('')
+const newEventEndsAt = ref('')
 const creatingEvent = ref(false)
 const createEventError = ref('')
 
@@ -709,6 +732,7 @@ function cancelCreateEvent() {
   newEventTitle.value = ''
   newEventDescription.value = ''
   newEventStartsAt.value = ''
+  newEventEndsAt.value = ''
   createEventError.value = ''
 }
 
@@ -716,10 +740,12 @@ async function onCreateEvent() {
   if (!session.token) return
   createEventError.value = ''
   const startsAtIso = newEventStartsAt.value ? new Date(newEventStartsAt.value).toISOString() : ''
+  const endsAtIso = newEventEndsAt.value ? new Date(newEventEndsAt.value).toISOString() : ''
   const validation = validateEventForm({
     title: newEventTitle.value,
     description: newEventDescription.value,
     startsAt: startsAtIso,
+    endsAt: endsAtIso || undefined,
   })
   if (!validation.valid) {
     createEventError.value = validation.titleError ?? validation.timeRangeError ?? 'Invalid event.'
@@ -731,6 +757,7 @@ async function onCreateEvent() {
       title: newEventTitle.value.trim(),
       description: newEventDescription.value.trim() || undefined,
       starts_at: startsAtIso,
+      ends_at: endsAtIso || undefined,
     })
     cancelCreateEvent()
     await refresh()
@@ -1213,11 +1240,51 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
                 placeholder="Optional details"
               />
               <AvalonDateTimeField v-model="newEventStartsAt" label="Starts at" />
+              <AvalonDateTimeField v-model="newEventEndsAt" label="Ends at (optional)" />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
               </template>
             </AvalonForm>
           </div>
+        </AvalonCard>
+      </div>
+    </div>
+
+    <!-- Calendar: same event list as the Events tab above, grouped onto a
+         navigable month grid with a dot under any day that has an event —
+         click a day to see what's on it below the calendar. -->
+    <div v-else-if="activeTab === 'calendar'" :class="styles.grid">
+      <div :class="styles.mainColumn">
+        <AvalonCard title="Calendar">
+          <AvalonCalendarMonth
+            :year="calendarYear"
+            :month="calendarMonth"
+            :event-dates="calendarEventDates"
+            :selected-date="calendarSelectedDate"
+            @update:year="calendarYear = $event"
+            @update:month="calendarMonth = $event"
+            @select-date="onSelectCalendarDate"
+          />
+
+          <template v-if="calendarSelectedDate">
+            <p :class="styles.empty">{{ calendarSelectedDate }}</p>
+            <p v-if="calendarSelectedEvents.length === 0" :class="styles.empty">
+              No events on this day.
+            </p>
+            <AvalonEventCard
+              v-for="event in calendarSelectedEvents"
+              :key="event.id"
+              :title="event.title"
+              :description="event.description ?? undefined"
+              :starts-at="event.starts_at"
+              :ends-at="event.ends_at ?? undefined"
+              :rsvp-counts="event.rsvp_counts"
+            >
+              <template #actions>
+                <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+              </template>
+            </AvalonEventCard>
+          </template>
         </AvalonCard>
       </div>
     </div>
