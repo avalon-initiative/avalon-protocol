@@ -22,6 +22,7 @@ import {
   AvalonFilterBar,
   AvalonForm,
   AvalonGuildMemberRow,
+  AvalonIcon,
   AvalonModal,
   AvalonRsvpControl,
   AvalonTextField,
@@ -503,10 +504,26 @@ async function onTogglePermission(role: RoleResponse, permission: string) {
   }
 }
 
+// A row starts locked (plain text name, disabled checkboxes) — clicking
+// the pencil unlocks it for both renaming and permission edits together,
+// rather than checkboxes always being live to click by accident.
+const unlockedRoleIndex = ref<number | null>(null)
+const roleNameDraft = ref('')
 const renamingRoleFor = ref<number | null>(null)
 
-async function onRenameRole(role: RoleResponse, name: string) {
+function unlockRole(role: RoleResponse) {
+  unlockedRoleIndex.value = role.name_index
+  roleNameDraft.value = role.name
+}
+
+function lockRole() {
+  unlockedRoleIndex.value = null
+}
+
+async function onRenameRole(role: RoleResponse) {
   if (!session.token) return
+  const name = roleNameDraft.value.trim()
+  if (!name || name === role.name) return
   permissionMatrixError.value = ''
   renamingRoleFor.value = role.name_index
   try {
@@ -1354,7 +1371,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
         <AvalonCard
           v-if="canManageRoles"
           title="Roles"
-          subtitle="Check a box to grant that permission to a role, uncheck to revoke."
+          subtitle="Click the pencil to unlock a role for renaming and permission changes."
         >
           <p v-if="permissionMatrixError" :class="styles.error">{{ permissionMatrixError }}</p>
           <div :class="local.permissionMatrixScroll">
@@ -1368,18 +1385,39 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
               <tbody>
                 <tr v-for="role in roles" :key="role.name_index">
                   <td>
-                    <AvalonEditableField
-                      label=""
-                      :value="role.name"
-                      :saving="renamingRoleFor === role.name_index"
-                      @save="onRenameRole(role, $event)"
-                    />
+                    <div :class="local.roleNameCell">
+                      <button
+                        type="button"
+                        :class="local.roleLockButton"
+                        :aria-label="unlockedRoleIndex === role.name_index ? 'Lock role' : 'Unlock role to edit'"
+                        @click="
+                          unlockedRoleIndex === role.name_index
+                            ? lockRole()
+                            : unlockRole(role)
+                        "
+                      >
+                        <AvalonIcon :name="unlockedRoleIndex === role.name_index ? 'check' : 'pencil'" :size="14" />
+                      </button>
+                      <input
+                        v-if="unlockedRoleIndex === role.name_index"
+                        v-model="roleNameDraft"
+                        :class="local.roleNameInput"
+                        type="text"
+                        :disabled="renamingRoleFor === role.name_index"
+                        @blur="onRenameRole(role)"
+                        @keydown.enter="onRenameRole(role)"
+                      />
+                      <span v-else>{{ role.name }}</span>
+                    </div>
                   </td>
                   <td v-for="permission in PERMISSION_OPTIONS" :key="permission">
                     <input
                       type="checkbox"
                       :checked="role.permissions.includes(permission)"
-                      :disabled="togglingPermissionFor === `${role.name_index}:${permission}`"
+                      :disabled="
+                        unlockedRoleIndex !== role.name_index ||
+                        togglingPermissionFor === `${role.name_index}:${permission}`
+                      "
                       @change="onTogglePermission(role, permission)"
                     />
                   </td>

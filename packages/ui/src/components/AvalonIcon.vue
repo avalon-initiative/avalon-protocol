@@ -82,5 +82,12 @@ withDefaults(defineProps<AvalonIconProps>(), {
       <path d="M12 10v4.5" />
       <circle cx="12" cy="17.5" r="0.9" fill="currentColor" stroke="none" />
     </template>
+    <template v-else-if="name === 'pencil'">
+      <path d="M4 20l0.9-4.2L15.5 5.2a1.5 1.5 0 0 1 2.1 0l1.2 1.2a1.5 1.5 0 0 1 0 2.1L8.2 19.1 4 20Z" />
+      <path d="M13.8 6.9l3.3 3.3" />
+    </template>
+    <template v-else-if="name === 'check'">
+      <path d="M4.5 12.5 9.5 17.5 19.5 6.5" />
+    </template>
   </svg>
 </template>

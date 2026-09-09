@@ -153,3 +153,46 @@
     color: var(--av-color-text);
   }
 }
+
+.roleNameCell {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+}
+
+.roleLockButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--av-radius-sm);
+  background: none;
+  color: var(--av-color-text-secondary);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+    color: var(--av-color-text);
+  }
+}
+
+.roleNameInput {
+  min-width: 0;
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: var(--av-color-text);
+  padding: var(--av-space-1) var(--av-space-2);
+  font-size: inherit;
+  font-weight: inherit;
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: var(--av-color-primary);
+    box-shadow: 0 0 0 3px var(--av-color-primary-soft);
+  }
+}
