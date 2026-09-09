@@ -31,6 +31,8 @@ pub enum AppError {
     NotFriends,
     #[error("invalid presence query")]
     InvalidPresenceQuery,
+    #[error("a game may only publish presence claiming to be its own game id")]
+    PresencePlayingMismatch,
     #[error("invalid profile query")]
     InvalidProfileQuery,
     #[error("no profile matches that handle")]
@@ -146,6 +148,13 @@ impl IntoResponse for AppError {
             AppError::SelfFriendRequest
             | AppError::InvalidPresenceQuery
             | AppError::InvalidProfileQuery => StatusCode::BAD_REQUEST,
+            // A game authenticated fine and even holds `presence.publish`
+            // under an active binding — this is a distinct, narrower
+            // rejection than `Forbidden` below: the one thing a capability
+            // grant can never authorize is claiming to be a *different*
+            // game. Still a 403: the request is well-formed, the caller
+            // just isn't allowed to make this particular claim.
+            AppError::PresencePlayingMismatch => StatusCode::FORBIDDEN,
             AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,

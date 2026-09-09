@@ -474,6 +474,7 @@ identity.read
 profile.read
 friends.read
 presence.read
+presence.publish
 guilds.read
 guilds.chat
 guilds.issue

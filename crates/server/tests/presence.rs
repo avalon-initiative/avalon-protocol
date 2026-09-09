@@ -1,6 +1,9 @@
 //! Exercises the presence publish/read flow (issue #16) against a real,
 //! running `avalon-server`. Gated `--ignored` since it needs live infra —
-//! see `make test-live` / `make start`.
+//! see `make test-live` / `make start`. Skipped in this sandbox per
+//! `.claude/CLAUDE.md` (no reachable Postgres here); written but not run
+//! against a live database, same posture as every other `--ignored` file
+//! in this directory.
 //!
 //! Expiry is exercised by starting the server with a short
 //! `AVALON_PRESENCE_TTL_SECS` rather than sleeping the real 120s default —
@@ -10,8 +13,16 @@
 //!
 //! Test identities are seeded directly via SQL rather than through a real
 //! WebAuthn ceremony — same approach as `crates/server/tests/friends.rs`,
-//! since presence doesn't care how a session was established.
+//! since presence doesn't care how a session was established. The
+//! game-side tests below reuse `crates/server/tests/connections.rs` and
+//! `crates/server/tests/games.rs`'s own patterns for registering a game
+//! and completing its challenge-response auth over real HTTP, since
+//! `PUT /presence/:identity_id` is authenticated the same way
+//! `crate::authz::authenticate_caller` authenticates any `Caller::Game`.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -181,4 +192,263 @@ async fn stale_presence_expires_to_offline() {
     .await
     .unwrap();
     assert_eq!(read[0]["status"], "Offline");
+}
+
+/// Registers a fresh game via the real `POST /games` endpoint declaring
+/// `presence.publish` — same pattern
+/// `crates/server/tests/connections.rs::register_unique_game` uses.
+async fn register_unique_game(
+    http: &reqwest::Client,
+    base: &str,
+) -> (serde_json::Value, SigningKey) {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let body = serde_json::json!({
+        "slug": format!("presence-test-{}", &suffix[..12]),
+        "name": format!("Presence Test Game {}", &suffix[..8]),
+        "developer": "Test Studio",
+        "requested_capabilities": ["presence.publish"],
+        "initial_key": {
+            "algorithm": "ed25519",
+            "public_key": BASE64.encode(signing_key.verifying_key().as_bytes()),
+        },
+    });
+
+    let response = http
+        .post(format!("{base}/games"))
+        .json(&body)
+        .send()
+        .await
+        .expect("register game failed — is `make start` running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+    (response.json().await.unwrap(), signing_key)
+}
+
+/// Completes one round of the challenge-response game-auth handshake
+/// (`crate::games::authenticate_game`) and returns a request builder
+/// carrying every header `crate::authz::authenticate_caller` needs to
+/// resolve a `Caller::Game { game_id, identity_id }` — the three
+/// `x-avalon-game-*` headers plus `x-avalon-identity-id`, same shape
+/// `crates/server/tests/games.rs`'s own round-trip test builds by hand.
+async fn game_auth_request(
+    http: &reqwest::Client,
+    base: &str,
+    slug: &str,
+    key_id: &str,
+    signing_key: &SigningKey,
+    identity_id: Uuid,
+    request: reqwest::RequestBuilder,
+) -> reqwest::RequestBuilder {
+    let challenge: serde_json::Value = http
+        .post(format!("{base}/games/{slug}/challenge"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
+    let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
+    let signature = signing_key.sign(&nonce);
+
+    request
+        .header("x-avalon-game-key-id", key_id)
+        .header("x-avalon-game-challenge-id", challenge_id)
+        .header(
+            "x-avalon-game-signature",
+            BASE64.encode(signature.to_bytes()),
+        )
+        .header("x-avalon-identity-id", identity_id.to_string())
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_bound_game_can_publish_its_own_playing_claim() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (game, signing_key) = register_unique_game(&http, &base).await;
+    let slug = game["slug"].as_str().unwrap();
+    let game_id = game["id"].as_str().unwrap();
+    let key_id = game["credential"]["key_id"].as_str().unwrap();
+
+    auth(
+        http.post(format!("{base}/games/{slug}/connect")),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
+    .send()
+    .await
+    .unwrap();
+
+    let request = game_auth_request(
+        &http,
+        &base,
+        slug,
+        key_id,
+        &signing_key,
+        alice_id,
+        http.put(format!("{base}/presence/{alice_id}")),
+    )
+    .await;
+    let response = request
+        .json(&serde_json::json!({ "status": "Online", "playing": game_id }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+
+    let read: serde_json::Value = auth(
+        http.get(format!("{base}/presence?ids={alice_id}")),
+        &alice_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(read[0]["status"], "Online");
+    assert_eq!(read[0]["playing"].as_str().unwrap(), game_id);
+}
+
+/// The ticket's own explicit ask: a game publishing `playing` for a game
+/// id that isn't its own — even one it's otherwise fully bound and
+/// granted against — is rejected.
+#[tokio::test]
+#[ignore]
+async fn a_game_cannot_claim_to_be_playing_a_different_game() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (game, signing_key) = register_unique_game(&http, &base).await;
+    let slug = game["slug"].as_str().unwrap();
+    let key_id = game["credential"]["key_id"].as_str().unwrap();
+
+    auth(
+        http.post(format!("{base}/games/{slug}/connect")),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
+    .send()
+    .await
+    .unwrap();
+
+    let some_other_game_id = Uuid::new_v4();
+    let request = game_auth_request(
+        &http,
+        &base,
+        slug,
+        key_id,
+        &signing_key,
+        alice_id,
+        http.put(format!("{base}/presence/{alice_id}")),
+    )
+    .await;
+    let response = request
+        .json(&serde_json::json!({ "status": "Online", "playing": some_other_game_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// The ticket's other explicit ask: a game with no active binding to the
+/// target identity at all — never connected, or connected without
+/// `presence.publish` — cannot publish presence for them.
+#[tokio::test]
+#[ignore]
+async fn a_game_cannot_publish_presence_for_an_unbound_identity() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (alice_id, _alice_token) = seed_identity_session(&pool).await;
+    let (game, signing_key) = register_unique_game(&http, &base).await;
+    let slug = game["slug"].as_str().unwrap();
+    let key_id = game["credential"]["key_id"].as_str().unwrap();
+
+    // Deliberately never calls `POST /games/{slug}/connect` — no binding,
+    // no grant, at all.
+    let request = game_auth_request(
+        &http,
+        &base,
+        slug,
+        key_id,
+        &signing_key,
+        alice_id,
+        http.put(format!("{base}/presence/{alice_id}")),
+    )
+    .await;
+    let response = request
+        .json(&serde_json::json!({ "status": "Online" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// Acceptance criteria's own named scenario: identity A publishes Online,
+/// friend B sees it, a non-friend C sees nothing (reads as `Offline`,
+/// indistinguishable from a missing entry — same posture issue #97's
+/// blocking already established).
+#[tokio::test]
+#[ignore]
+async fn presence_visible_to_friends_only() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (bob_id, bob_token) = seed_identity_session(&pool).await;
+    let (_carol_id, carol_token) = seed_identity_session(&pool).await;
+
+    // Alice and Bob become friends; Carol never does.
+    let friend_request: serde_json::Value =
+        auth(http.post(format!("{base}/friends/requests")), &alice_token)
+            .json(&serde_json::json!({ "to": bob_id }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let request_id = friend_request["id"].as_str().unwrap();
+    auth(
+        http.post(format!("{base}/friends/requests/{request_id}/accept")),
+        &bob_token,
+    )
+    .send()
+    .await
+    .unwrap();
+
+    auth(http.put(format!("{base}/me/presence")), &alice_token)
+        .json(&serde_json::json!({ "status": "Online" }))
+        .send()
+        .await
+        .unwrap();
+
+    let bob_read: serde_json::Value = auth(
+        http.get(format!("{base}/presence?ids={alice_id}")),
+        &bob_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(bob_read[0]["status"], "Online");
+
+    let carol_read: serde_json::Value = auth(
+        http.get(format!("{base}/presence?ids={alice_id}")),
+        &carol_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(carol_read[0]["status"], "Offline");
 }

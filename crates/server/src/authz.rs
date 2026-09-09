@@ -4,17 +4,18 @@
 //! lets a game act on a player's behalf never has to hand-roll either
 //! question.
 //!
-//! **No caller exists for this yet.** As of this ticket, every real
-//! endpoint in this repo is either player-session-only (`friends.rs`,
-//! `guilds.rs`, `connections.rs` — a grant is a player action, a game never
-//! grants itself anything) or game-credential-only with nothing
-//! player-specific to check (`games::game_whoami`, which only proves the
-//! game's own identity). `Caller`/`require_capability` are infrastructure
-//! for the first future ticket that adds a real game-calling-the-API
-//! endpoint (achievement issuance, etc.) — see this module's own test
-//! matrix below and this module's own `live_tests` submodule for the coverage that
-//! stands in for a downstream handler that doesn't exist yet. **Any future
-//! endpoint that lets a game act on a player's behalf must call
+//! **First real caller: `crate::presence::update_game_presence`** (issue
+//! #16's `PUT /presence/:identity_id`) — a game publishing presence on
+//! behalf of a bound player, gated on an active `presence.publish` grant.
+//! Every other endpoint in this repo is still either player-session-only
+//! (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is a player
+//! action, a game never grants itself anything) or game-credential-only
+//! with nothing player-specific to check (`games::game_whoami`, which only
+//! proves the game's own identity); `Caller`/`require_capability` remain
+//! the infrastructure any *future* game-calling-the-API endpoint
+//! (achievement issuance, etc.) should reuse rather than reinventing — see
+//! this module's own test matrix below and its `live_tests` submodule.
+//! **Any endpoint that lets a game act on a player's behalf must call
 //! [`require_capability`] rather than inventing its own check** — a
 //! hand-rolled `game_has_access_to_player` boolean is exactly the failure
 //! mode issue #28 exists to close off.
@@ -68,21 +69,21 @@
 //! ## No cache (yet)
 //!
 //! The ticket suggests a short in-process cache keyed by
-//! `(identity, game, capability)`. Not built here: with no real caller of
-//! `require_capability` yet, there is nothing to profile a cache against,
-//! and a wrong invalidation rule (the one hard part of any cache) would be
-//! actively dangerous for an authorization check — "revoked is rejected on
-//! the next request, no grace window" is the invariant, and a stale cache
-//! entry is precisely the shape of bug that would silently violate it. A
-//! plain DB read per check is correct today; add the cache once a real
-//! caller exists to measure the read volume against.
+//! `(identity, game, capability)`. Not built here: with only one real
+//! caller (`presence::update_game_presence`) so far, there is nothing to
+//! profile a cache against, and a wrong invalidation rule (the one hard
+//! part of any cache) would be actively dangerous for an authorization
+//! check — "revoked is rejected on the next request, no grace window" is
+//! the invariant, and a stale cache entry is precisely the shape of bug
+//! that would silently violate it. A plain DB read per check is correct
+//! today; add the cache once real call volume exists to measure it
+//! against.
 //!
-//! `#![allow(dead_code)]`: every `pub(crate)` item here is real,
-//! documented, and covered by this module's own tests plus
-//! this module's own `live_tests` submodule — it's just genuinely unused by any
-//! handler yet, per this module's own doc comment above. Suppressing here
-//! rather than per-item keeps that one fact in one place instead of
-//! scattered across every `fn`.
+//! `#![allow(dead_code)]`: kept at the module level rather than removed
+//! now that `presence::update_game_presence` is a real caller, since not
+//! every item here is reachable from that one call site alone — keeping
+//! it here (one place) rather than scattering per-item allows across
+//! whichever helper a future compiler pass happens to flag.
 #![allow(dead_code)]
 
 use avalon_protocol::permissions::Capability;
