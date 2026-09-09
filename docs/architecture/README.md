@@ -46,6 +46,7 @@ Each document below links the ones that govern it.
 | Privacy | [privacy.md](privacy.md) | Visibility is intentionally scoped; nothing is public because it can be |
 | Scalability | [scalability.md](scalability.md) | 1,000 games × 100,000 players, without becoming a gameplay bottleneck |
 | Future layers | [future-layers.md](future-layers.md) | Portable assets and economy: later phases, not foundations |
+| Game Space | [game-space.md](game-space.md) | Game-defined schemas, publication, versioning, and mappings; not built yet — the design a decision has to close before it starts |
 
 ## Invariants
 
@@ -72,6 +73,7 @@ established it.
 | Query | Query databases are projections. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
 | Rebuild | Promised-durable state is reconstructable from canonical history. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
 | Presence | Realtime presence is ephemeral and never enters durable history. | [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) |
+| Game Space | Schema publication and data exposure are independently authorized; historical data is read under the schema version it was recorded against, never reinterpreted. | [game-space.md](game-space.md), [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) |
 | Nodes | Nodes are infrastructure providers, not authorities. A node cannot fabricate an issuer's claim. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
 | SDK | SDKs expose protocol capabilities, not infrastructure topology. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
 | Hub | The Hub is a client of the network, not the network. | [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77) |

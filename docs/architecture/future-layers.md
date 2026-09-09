@@ -43,7 +43,10 @@ Boundaries that hold from day one:
 - **Games have scoped authority.** Game A can issue Game A assets. It cannot
   rewrite Game B's, and it cannot alter ownership history.
 - **Standardized asset schemas are an open question**, listed in
-  [`../stakeholders/Proposal.md#32-open-questions`](../stakeholders/Proposal.md#32-open-questions). A
+  [`../stakeholders/Proposal.md#32-open-questions`](../stakeholders/Proposal.md#32-open-questions)
+  and generalized beyond assets to game data broadly in
+  [`./game-space.md`](./game-space.md), tracked by
+  [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181). A
   schema reference on the asset, like the one attestations carry, is the likely
   shape; a universal item format is not.
 
