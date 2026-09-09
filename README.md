@@ -107,6 +107,17 @@ decisions.
 This repo is private and pre-release; see [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the
 workflow once it opens up.
 
+## Support the project
+
+Avalon stays useful because people use it, report what's broken, and help
+build it out — that's worth as much as the financial side. If you enjoy the
+protocol and want to support development directly, buying a coffee is
+appreciated but entirely optional:
+
+<a href="https://www.buymeacoffee.com/lunarvagabond" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
+Code, docs, bug reports, and testing feedback all help just as much.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

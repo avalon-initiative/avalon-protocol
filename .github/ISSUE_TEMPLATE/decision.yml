@@ -11,8 +11,12 @@ body:
         moment the decision is made (that's the signal, not a comment saying so), and if
         it changes later, open a new decision issue with "Supersedes #<this one>" rather
         than editing this one.
-        <<If this project documents its own decision-log convention (e.g. under
-        docs/project-management/), link it here instead of this generic version.>>
+        This `decision` label stays on the issue even once closed — open means
+        deciding, closed means decided. `architecture-decision-record` is a
+        separate label for decisions that are filed and closed together in one
+        step, not a status this issue graduates into. If the decision changes an
+        invariant or a document under `docs/architecture/`, update that document's
+        "Decisions and tickets" section to link back here.
 
   - type: textarea
     id: context

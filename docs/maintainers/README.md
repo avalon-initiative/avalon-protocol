@@ -1,19 +1,70 @@
 # For Maintainers
 
-Documentation for people maintaining or contributing to this repository itself
-— distinct from people building games *on* Avalon (see [`../developers/`](../developers/)).
+Documentation for people maintaining or contributing to this repository
+itself — distinct from people building games *on* Avalon (see
+[`../developers/`](../developers/)).
 
-Nothing lives here yet. Once there's a real contribution workflow beyond the
-scaffolded templates, this is where local dev setup, release process, and
-"how this codebase is organized and why" belong.
+## Start here
 
-Until then, see:
+- [`../../.github/CONTRIBUTING.md`](../../.github/CONTRIBUTING.md) —
+  contribution workflow: branching, commit/PR title format, issue claiming,
+  the docs-first rule, and the local `make` commands
+- [`../architecture/README.md`](../architecture/README.md) — the normative
+  architecture reference: invariants, authority boundaries, the three
+  verticals, what exists in each crate today, and which issue governs each
+  area. Read this before proposing or reviewing anything non-trivial.
+- Root `README.md` — repository layout and current build status
+- [`../../.github/CODE_OF_CONDUCT.md`](../../.github/CODE_OF_CONDUCT.md) and
+  [`../../.github/SECURITY.md`](../../.github/SECURITY.md)
 
-- [`../../.github/CONTRIBUTING.md`](../../.github/CONTRIBUTING.md) — contribution workflow
-  (still template placeholders pending a fill-in pass)
-- [`../architecture/`](../architecture/README.md) — the normative architecture
-  reference: invariants, authority boundaries, the three verticals, what exists
-  in each crate today, and which issue governs each area
-- Architecture decisions — tracked as closed GitHub issues labeled
-  `architecture-decision-record`, not as files in this repo. Open ongoing
-  decisions are tracked separately as issues labeled `decision`.
+## How work is tracked
+
+Open work lives in GitHub Issues, claimed via `/claim`. Architecture
+decisions that are settled are closed issues labeled
+`architecture-decision-record`; questions still being decided are open
+issues labeled `decision`. There is no separate backlog file in the repo —
+git and the issue tracker are the history.
+
+Ticket bodies (work items under epics) use a fixed structure: Motivation /
+Design / Invariants / Affected crates / Tests / Documentation / Acceptance
+criteria (checkboxes). Decision tickets use Context / Decision / Why /
+Alternatives considered / Consequences / Related. ADR issues use Context /
+Decision / Consequences / Related.
+
+## Repo state and process
+
+- **Private for now.** GitHub Actions workflows under `.github/workflows/`
+  (claim-issue, claim-check, stale-claim-check, PR title lint, the
+  Dependabot security-title bot, the welcome bot) are already committed but
+  stay disabled at the repo-settings level until the repo actually goes
+  public — see the note in `CONTRIBUTING.md`. GitHub Discussions is off for
+  the same reason; use Issues for everything in the meantime.
+- **No live database in most sandboxes.** `crates/server` and `crates/chain`
+  use runtime-checked `sqlx::query` rather than the compile-time `sqlx::query!`
+  macro specifically so `cargo build`/`test`/`clippy` all pass without a
+  reachable Postgres. `make test-live` is the real, `--ignored` test suite
+  that needs `make start` running against an actual dev database — see the
+  root `.env.example`.
+- **Merges are squash-only by convention** — the PR title becomes the commit
+  message on `main`, so it's the one place the `[#<issue>] - ...` format is
+  strictly enforced (branch commit messages aren't).
+
+## Local dev setup
+
+```bash
+cp .env.example .env   # fill in DATABASE_URL, AVALON_SERVER_ADDR, etc.
+make migrate            # apply db/migrations/
+make build               # cargo build --workspace
+make check               # fmt-check + lint + test — what CI runs
+make web-install          # npm install for apps/hub, apps/mobile-hub, packages/ui (npm workspaces, root-level install)
+```
+
+Run `make help` for the full command list, including the C# SDK
+(`bindings/csharp`) build/test targets and the `avalon-cli` dev/ops commands
+(`create-identity`, `inspect-ledger`, `outbox-status`, ...).
+
+## Related projects
+
+`world_zero` is a related Rust MMO server framework and the first candidate
+external integration for Avalon (see WorldZero issue #309 — an opt-in
+`AuthProvider`/account system there).

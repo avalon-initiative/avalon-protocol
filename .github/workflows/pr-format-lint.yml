@@ -18,8 +18,7 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -euo pipefail
-          # <<Adjust this pattern to match this repo's actual CONTRIBUTING.md
-          # title convention.>>
+          # Matches CONTRIBUTING.md -> Pull Request Titles.
           pattern='^(\[#[0-9]+\]|\[noissue\]|\[hotfix\]|\[security\]) - .+$'
           if ! [[ "$TITLE" =~ $pattern ]]; then
             echo "PR title does not match the required format:"

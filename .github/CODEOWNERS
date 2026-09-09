@@ -1,9 +1,16 @@
 # Default: everything not matched more specifically below.
-* @<<OWNER>>
+* @LunarVagabond
 
-# Per-area ownership — only fill this in if this project is a multi-crate/
-# multi-package workspace where different areas genuinely have different
-# owners. Delete this whole block for a single-package project.
-# /<<path/to/area>>/   @<<OWNER>>
-# /docs/               @<<OWNER>>
-# /.github/            @<<OWNER>>
+# Per-area ownership
+# /crates/protocol/   @LunarVagabond
+# /crates/chain/       @LunarVagabond
+# /crates/indexer/     @LunarVagabond
+# /crates/server/      @LunarVagabond
+# /crates/sdk/         @LunarVagabond
+# /crates/cli/         @LunarVagabond
+# /apps/hub/           @LunarVagabond
+# /apps/mobile-hub/    @LunarVagabond
+# /packages/ui/        @LunarVagabond
+# /bindings/csharp/    @LunarVagabond
+# /docs/               @LunarVagabond
+# /.github/            @LunarVagabond

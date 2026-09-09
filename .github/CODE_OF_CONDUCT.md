@@ -10,7 +10,7 @@ Be good to one another. Disagree on ideas, not people. Don't be a jerk.
 - Assume good faith — most disagreements are misunderstandings, not attacks.
 - Harassment, personal insults, and deliberately derailing discussions with
   unrelated arguments aren't welcome here.
-- Keep issues, PRs, and discussions focused on <<project name>>.
+- Keep issues, PRs, and discussions focused on Avalon Protocol.
 
 ## Enforcement
 

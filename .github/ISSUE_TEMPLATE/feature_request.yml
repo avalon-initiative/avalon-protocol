@@ -6,15 +6,16 @@ body:
   - type: markdown
     attributes:
       value: |
-        <<If this project has a design-principles doc or a "does this belong in core"
-        filter, mention it here so requests get checked against it up front. Delete this
-        line if the project has no such filter yet.>>
+        Before filing: does this keep a game fully sovereign over its own world,
+        economy, and rules, giving Avalon only the connective infrastructure between
+        games? See the [Guiding Principles](https://github.com/LunarVagabond/avalon-protocol/blob/main/docs/stakeholders/Proposal.md#30-guiding-principles)
+        and the [architecture tests](https://github.com/LunarVagabond/avalon-protocol/blob/main/docs/architecture/README.md#architecture-tests).
 
   - type: textarea
     id: problem
     attributes:
       label: What problem are you trying to solve?
-      placeholder: e.g. <<a concrete situation where the current behavior falls short>>
+      placeholder: e.g. A game wants to know which of a player's guildmates are online without polling presence per-friend
     validations:
       required: true
 
@@ -31,5 +32,5 @@ body:
     attributes:
       label: Feature filter
       options:
-        - label: <<one-line restatement of the project's core scope filter>>
+        - label: This keeps games sovereign over their own world/economy/rules and doesn't give Avalon authority it doesn't need.
           required: true

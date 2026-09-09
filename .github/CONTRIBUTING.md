@@ -1,119 +1,171 @@
 # Contributing
 
-<!--
-Fill in every <<PLACEHOLDER>> below from what you can infer about this repo
-(README, existing docs, git log) and ask the user only for what you can't.
-Delete any section whose feature isn't installed on this repo (e.g. the
-Claiming An Issue section only makes sense if claim-issue.yml/claim-check.yml
-are installed, which only happens for OSS/public repos).
--->
-
 ## Purpose
 
-Contribution standards for <<project name>>, with emphasis on clarity and
-safety.
+Contribution standards for Avalon Protocol, with emphasis on clarity, safety,
+and keeping games sovereign over their own worlds while the network stays open.
 
-<!-- Delete this section if the project has no scope filter / design
-principles doc to check proposals against. -->
 ## Feature Proposal Gate
 
 Each feature proposal or implementation should answer:
 
-- <<one-line restatement of the project's core scope filter — e.g. "does
-  this keep the core small and push project-specific behavior to
-  configuration/plugins?">>
+- Does this keep a game fully sovereign over its own world, economy, and
+  rules — giving Avalon only the connective infrastructure between games,
+  never authority over any single one — per the
+  [Guiding Principles](../docs/stakeholders/Proposal.md#30-guiding-principles)
+  and the [architecture tests](../docs/architecture/README.md#architecture-tests)?
 
 If no, refine or drop the proposal.
 
 ## Questions before you file
 
-<<If Discussions is enabled: point contributors there for a sanity check
-before opening an issue. Otherwise drop this section.>>
+This repo is currently private, so GitHub Discussions isn't enabled yet —
+open an issue instead, even for a design question or a sanity check. Once
+the repo goes public, this section will point there instead.
 
 ## If A Convention Gets In The Way
 
 The branching model, commit format, and process rules below are a starting
-point, not a settled standard. Follow them as written. But if one is
-genuinely getting in the way of a contribution, doesn't fit a situation, or
-just seems off, raise it first — an issue or Discussion — before working
-around it. Same goes for friction in the tools, the codebase, or the workflow
-generally: surfacing it is always welcome.
+point, not a settled standard — assembled from what's worked on this user's
+other repos, not handed down from experience running this specific project.
+Follow them as written. But if one is genuinely getting in the way of a
+contribution, doesn't fit a situation, or just seems off, raise it first — an
+issue — before working around it. Same goes for friction in the tools, the
+codebase, or the workflow generally: surfacing it is always welcome. The goal
+is to talk it through and adjust the rule if it's wrong, not to greenlight
+quietly deviating from it.
+
+## Contribution Principles
+
+Straight from Avalon's [Guiding Principles](../docs/stakeholders/Proposal.md#30-guiding-principles) —
+read that section for the full reasoning behind each:
+
+- Games remain sovereign — a game keeps final authority over its own world,
+  characters, and rules; Avalon never overrides that.
+- Identity belongs to the player, not any single game or platform.
+- Interoperability is opt-in — a game chooses which capabilities it exposes
+  and which other issuers' attestations it trusts. Nothing is forced.
+- Least privilege — a game gets only the capabilities a player has explicitly
+  granted, never blanket access to an identity's whole history.
+- History is portable, and provenance is preserved even through revocation.
+- Blockchain is optional infrastructure detail, never the model — settlement
+  is a public transparency log, not federation and not consensus/mining.
+- Don't build the universe. Avalon is the railroad between games, not another
+  platform trying to own every destination.
 
 ## Branching
 
 - `main` — integration branch
 - `<issue#>-short-description` — topic branches off `main`, named after the
-  GitHub issue number; no `feature/`/`bug/` prefix, the issue number is the
-  lookup
-<!-- Delete the two lines below if this repo doesn't restrict any commit/PR
-tags to a maintainer allowlist. -->
-- `noissue-short-description` — maintainer-only
-- `hotfix-short-description` — maintainer-only
+  GitHub issue number (e.g. `154-guild-discovery-board`); no `feature/`,
+  `bug/`, or similar prefix, the issue number is the lookup
+- `noissue-short-description` — maintainer-only, mirroring the `[noissue]`
+  commit/PR restriction below. If you see a branch like this, it's a
+  maintainer quick fix, not a pattern open to other contributors
+- `hotfix-short-description` — maintainer-only, mirroring the `[hotfix]`
+  commit/PR restriction below. If you see a branch like this, it's a
+  maintainer hotfix, not a pattern open to other contributors
 
 ## Work Tracking
 
-Open work lives in GitHub Issues. Completed history is in git; don't
-maintain a separate backlog file in the repo.
+Open work lives in GitHub Issues. Design direction lives in
+[`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) (narrative)
+and [`docs/architecture/`](../docs/architecture/README.md) (normative —
+invariants and authority boundaries); acceptance criteria for specific work
+items live on their tracking issue, not in a docs file. Architecture
+decisions are closed GitHub issues labeled `architecture-decision-record`;
+questions still being decided are open issues labeled `decision`. Completed
+history is in git; don't maintain a separate backlog file in the repo.
 
-<!-- Delete this whole "Claiming An Issue" section if claim-issue.yml /
-claim-check.yml aren't installed on this repo (private/non-OSS repos skip
-these workflows by default). -->
 ### Claiming An Issue
 
 Before starting work, comment `/claim` on the issue — a bot assigns it to
-you automatically, which is what actually reserves it. If an issue is
-already assigned, treat it as taken; comment to ask if it looks stalled
-instead of opening a competing PR. Epics don't work this way — find the
-specific sub-issue you want and `/claim` that instead.
+you automatically, which is what actually reserves it, so someone else
+doesn't start the same ticket in parallel. If an issue is already assigned,
+treat it as taken; comment to ask if it looks stalled instead of opening a
+competing PR. Epics don't work this way — find the specific sub-issue you
+want and `/claim` that instead.
 
 *If it's a longer-running ticket, you don't have to post progress updates,
-but it's nice to leave one now and then — a claimed issue that's been quiet
-for 10 days gets an automatic ping, and is unassigned automatically 4 days
-after that if there's still no activity.*
+but it's nice to leave one now and then so we know it's still moving — a
+claimed issue that's been quiet for 10 days gets an automatic ping, and is
+unassigned automatically 4 days after that if there's still no activity, so
+someone else can pick it up.*
 
 A CI check (`claim-check.yml`) enforces this: it reads the issue number(s)
-your PR closes (via a closing keyword like `Closes #123`) and fails if you
-aren't assigned to every one of them. `[noissue]`/`[hotfix]` titles skip this
-check, but only for PR authors with write access to the repo.
+your PR closes (via a closing keyword like `Closes #123` in the PR body) and
+fails the check if you aren't assigned to every one of them. `[noissue]`/
+`[hotfix]` titles skip this check, but only for PR authors with write access
+to the repo (the maintainer/named-core-dev list this format is already
+restricted to) — everyone else needs a real issue reference regardless of
+title.
+
+*This repo is currently private, so these Actions workflows stay disabled at
+the repo-settings level per house convention until it goes public — the
+process below is what activates once they're turned on.*
 
 ## Commits And Pull Requests
 
-Open an issue first when the work is non-trivial. The issue carries context —
-commits and PRs reference it by number.
+Open an issue first when the work is non-trivial. The issue carries context
+(motivation, design, invariants, acceptance criteria) — commits and PRs
+reference it by number.
 
 ### Commit Messages
 
-<<If merges are squash-only, say so here — individual commit messages on the
-branch are then just a convention, not a requirement, since only the PR title
-survives onto main.>>
+Merges into `main` are **squash-only** by convention — your branch's
+individual commits never appear in `main`'s history, only the squashed PR
+title does (see [Pull Request Titles](#pull-request-titles) below, which
+*is* strict). Because of that, commit messages on your branch are a
+suggested convention, not a requirement: write them however helps you work,
+`wip`/`fixup`/whatever included.
 
 If you'd like to follow the convention anyway, it's the same pattern as PR
-titles below.
+titles:
 
-<!-- Delete this restricted-tags block if this repo has no maintainer-only
-tag convention. -->
+```
+[#<issue>] - <short description>
+```
+
 **`[noissue]`, `[hotfix]`, and `[security]` are restricted.** All three exist
-only for the maintainer, a small explicitly-named set of trusted core
-developers, and (for `[security]`/`[noissue]`) Dependabot.
+only for the maintainer, a small, explicitly-named set of trusted core
+developers, and (for `[security]`/`[noissue]`) Dependabot. If you are not on
+that short list, use your issue number when you do tag commits. The tags
+mean different things:
 
-- `[noissue]` — trivial, no ticket is warranted at all.
+- `[noissue]` — trivial, no ticket is warranted at all (typo, comment,
+  one-line fix). Also what Dependabot's routine scheduled dependency bumps
+  carry.
 - `[hotfix]` — must be fixed now and there's a clear path to the fix, but
-  there wasn't time to write up a ticket first.
+  there wasn't time to write up a ticket first. Reaching for this signals
+  "this was a real bug/issue," not "there was nothing to file."
 - `[security]` — a fix for a known vulnerability.
-
-### Pull Request Titles
-
-**Title format:** `<<e.g. "[#<issue>] - <short description>", or
-"type(scope): summary", or whatever this repo actually uses>>`
-
-<<If merges are squash-only, note that the PR title becomes the actual commit
-message on main — it's the one place this format has to be right.>>
 
 Examples:
 
+- `[#154] - Add guild discovery query to indexer`
+- `[#154] - Wire discovery board into Hub UI`
+- `[noissue] - Fix typo in Contributing commit examples` (maintainer/core-only
+  example)
+- `[hotfix] - Guard against panic on missing outbox row` (maintainer/core-only
+  example)
+
+### Pull Request Titles
+
+**This one is a hard requirement, unlike commit messages above.** Merges are
+squash-only by convention, so the PR title becomes the actual commit message
+on `main` — it's the one place this format has to be right.
+
 ```
-<<[#123] - Add real example title in this repo's actual format>>
+[#154] - Guild discovery board: browse + search recruiting guilds
+[noissue] - Fix typo in README quick start
+[hotfix] - Guard against panic on missing outbox row
+[security] - Bump a dependency to patch a known CVE
 ```
+
+`[noissue]`, `[hotfix]`, and `[security]` follow the same restriction as
+commit messages above — maintainer, named core developers, and Dependabot
+only. Everyone else opens an issue first and references it in the title. The
+PR body can go deeper on approach and testing.
 
 ### AI-Assisted Contributions
 
@@ -123,7 +175,7 @@ it). If an assistant materially helped with a commit, tag it with a trailer
 so it's easy to trace later, without cluttering the subject line:
 
 ```
-git commit -m "<<title>>" --trailer "Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "[#154] - Add guild discovery query to indexer" --trailer "Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 This is optional and about being open, not a requirement — reviewers still
@@ -146,28 +198,66 @@ addition:
   not this file).
 - Don't add any other AI-attribution mention beyond that single trailer line
   unless explicitly asked to.
-- **Never reach for a lint/format suppression just to make a check pass** — fix
-  the underlying code, or ask if the rule itself seems wrong.
+- **Never reach for a lint/format suppression just to make a check pass** —
+  fix the underlying code, or ask if the rule itself seems wrong.
+- Never switch `sqlx::query!`/`sqlx::query_as!` back to compile-time-checked
+  macros in `crates/server` or `crates/chain` without checking first — this
+  sandbox and CI have no reachable Postgres, and that's a deliberate,
+  documented tradeoff (see `handlers.rs`, `outbox.rs`, and `chain`'s
+  `postgres.rs`), not an oversight to "fix."
 - When filing a work-item ticket, give real checkable acceptance criteria —
   what needs to be built, why, and how to tell it's done. A title plus a
-  one-line pointer elsewhere isn't enough.
+  one-line pointer elsewhere isn't enough. Ticket bodies use the fixed
+  structure Motivation / Design / Invariants / Affected crates / Tests /
+  Documentation / Acceptance criteria — see other open tickets for the
+  pattern.
 
 ## Documentation-First Workflow
 
-<<Delete if this repo has no docs/ convention.>> For major work: update the
-relevant file in `docs/` first, align implementation with the accepted docs,
-then update docs and behavior together on later changes.
+For non-trivial work: update the relevant file in
+[`docs/architecture/`](../docs/architecture/README.md) (and
+[`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) if the
+narrative changes) in the same PR as the implementation, not after — a doc
+that lags the code is treated as a bug. Each architecture file ends with
+"Today in the repo" (what actually exists, with paths) and "Decisions and
+tickets" (the issues that govern it); keep both current.
 
 ## Development Interface
 
-<<The canonical local dev entry point — Makefile/package.json scripts/
-justfile/etc. Include the common commands (install, build/dev, test, lint)
-and how to point tests at any required local infra (env vars, .env.example).>>
+The Rust workspace (`crates/`), the JS/TS workspace (`apps/hub`,
+`apps/mobile-hub`, `packages/ui`), and the C# SDK (`bindings/csharp`) all run
+through the root `Makefile` — run `make help` for the full list. The common
+ones:
+
+```bash
+make build         # cargo build --workspace
+make test           # cargo test --workspace
+make test-live       # cargo test --workspace -- --ignored (needs `make start` running against real Postgres)
+make lint           # cargo clippy --workspace --all-targets -- -D warnings
+make fmt             # cargo fmt --all
+make check           # fmt-check + lint + test — what CI runs
+make migrate         # apply pending db/migrations/ (up)
+make db-reset        # wipe db and reapply all migrations
+make web-install      # npm install at the workspace root (apps/hub, apps/mobile-hub, packages/ui)
+make check-all       # check (Rust) + web-lint + web-test + csharp-build + csharp-test
+```
+
+Needs a `.env` at the repo root with `DATABASE_URL` and `AVALON_SERVER_ADDR`
+at minimum — copy `.env.example` and fill it in. `AVALON_NETWORK_ID` is
+checked against the ledger's genesis on every boot; never point a dev
+`.env` at a production database, and never share a `network_id` between the
+two.
 
 ## Where To Contribute
 
-<<Links to this repo's actual docs entry points: getting-started doc,
-architecture doc, specs, roadmap/decisions if tracked as labeled issues.>>
+- [`docs/architecture/README.md`](../docs/architecture/README.md) — start
+  here: invariants, authority boundaries, the crate layout, "what survives a
+  game's death," and the architecture tests every proposed change is held to
+- [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) — the
+  full narrative design and phased roadmap
+- [`docs/developers/`](../docs/developers/) — the game-developer-facing SDK
+  story
+- Root `README.md` — current build status and what actually works today
 
 ## Code Of Conduct
 

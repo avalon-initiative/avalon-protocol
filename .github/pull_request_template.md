@@ -1,7 +1,7 @@
 ## Issue
 
-<!-- Title must follow: <<PR title format>> (fill in from CONTRIBUTING.md) -->
-Closes #<!-- omit if this repo allows maintainer quick fixes without a ticket -->
+<!-- Title must follow: [#<issue>] - <short description>, or [noissue]/[hotfix]/[security] for maintainer-only quick fixes — see CONTRIBUTING.md -->
+Closes #<!-- omit only for [noissue]/[hotfix]/[security] titles -->
 
 ## What changed
 
@@ -15,6 +15,5 @@ Closes #<!-- omit if this repo allows maintainer quick fixes without a ticket --
 ## Checklist
 
 - [ ] Checks pass (or I noted why not)
-- [ ] Docs updated if behavior changed
-<!-- Delete the line below if this repo doesn't run the claim-issue/claim-check workflows -->
+- [ ] Docs updated if behavior changed (`docs/architecture/` and/or `docs/stakeholders/Proposal.md`)
 - [ ] I ran `/claim` on the linked issue before starting this work

@@ -2,15 +2,15 @@
 
 ## Supported Versions
 
-<<State current support status: e.g. "pre-release, security fixes target
-main only" or a real version-support table once there's a release line.>>
+Avalon Protocol is pre-release — there is no published version yet. Once
+there is a first release, security fixes will target the latest code on
+`main` until a stable release line is established.
 
 ## Reporting a Vulnerability
 
 Please **do not** open a public GitHub issue for security vulnerabilities.
 
-Instead, report it privately to the maintainers (see the repository's
-GitHub Security Advisories tab, or contact a maintainer directly) with:
+Instead, report it privately by emailing **cconlon@dcorps.dev** with:
 
 - A description of the vulnerability and its potential impact.
 - Steps to reproduce (proof-of-concept code or commands are helpful).
@@ -22,7 +22,11 @@ credit you in the release notes if you'd like.
 
 ## Scope
 
-<<Call out the areas most relevant to this project's actual attack
-surface once implementation exists — e.g. a plugin sandbox boundary, an
-auth path, anything that validates untrusted input. Leave as a placeholder
-pre-implementation.>>
+The areas most relevant to Avalon specifically: the identity/auth path
+(`crates/server` — WebAuthn passkey registration/login, Ed25519 event
+signing, session issuance), the settlement ledger's hash-chaining and outbox
+atomicity (`crates/chain`, `crates/server/src/outbox.rs`), and — once
+implemented — the permission/capability model that decides what a game can
+read from a player's identity. Anything that could let one identity or one
+game act with another's authority, forge an attestation, or read data a
+player hasn't granted is in scope even if it's in a crate not listed here.

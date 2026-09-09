@@ -3,7 +3,9 @@
 Documentation for game developers integrating Avalon into their own game —
 the audience the SDKs (`crates/sdk`, `bindings/csharp`) exist for.
 
-Nothing lives here yet — there's no stable SDK to document integration against.
+Start with [`WhyBuildOnAvalon.md`](WhyBuildOnAvalon.md) for the case for
+integrating your game with Avalon at all. It's a vision document, not an
+integration guide — there's no stable SDK to document integration against yet.
 Once `crates/sdk` and `bindings/csharp/AvalonSdk` have real implementations
 (not the current `NotImplemented` stubs), this is where getting-started guides,
 capability/permission reference, and integration examples belong.

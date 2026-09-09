@@ -28,9 +28,7 @@ jobs:
               return;
             }
 
-            // <<Adjust this restricted-tag list to match this repo's actual
-            // CONTRIBUTING.md convention, or delete this block entirely if
-            // this repo has no maintainer-only tag convention.>>
+            // Matches CONTRIBUTING.md's maintainer-only tag convention.
             if (/^(\[noissue\]|\[hotfix\]|\[security\]) - .+/.test(title)) {
               const { owner, repo } = context.repo;
               const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
