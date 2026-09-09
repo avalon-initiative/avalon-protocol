@@ -29,141 +29,112 @@
 //! Merkle root; that's issue #40's call.
 
 use async_trait::async_trait;
-use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
-use sha2::{Digest, Sha256};
+use avalon_protocol::events::{Commitment, EventBatch};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::{SettlementError, SettlementProvider};
+use crate::hashing::{hash_entry, hash_event, recompute_batch_root, EntryContent, GENESIS_HASH};
+use crate::{LedgerBatchView, LedgerEntryView, SettlementError, SettlementProvider};
 
-/// All-zero hash, the `prev_hash` of the very first entry in the chain.
-const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-
-/// The fields that make up an entry's content hash — grouped so recomputing
-/// a hash (at insert time from a `ProtocolEvent`, or at verify time from a
-/// stored row) takes one argument, not eight.
-struct EntryContent<'a> {
-    event_id: Uuid,
-    kind: &'a str,
-    issuer: &'a str,
-    subject: &'a str,
-    payload: &'a serde_json::Value,
-    timestamp: time::OffsetDateTime,
-    version: i32,
-}
-
-/// Serializes `value` with object keys sorted, recursively, so the result
-/// is independent of the `Value`'s in-memory map ordering.
-///
-/// This matters because that ordering is *not* stable across this entry's
-/// own lifecycle: a payload is built once in-process (order depends on
-/// whether `serde_json`'s `preserve_order` feature is active in whichever
-/// binary links this crate in — this crate doesn't request it itself, but
-/// picks it up transitively when built into `avalon-server`/`avalon-cli`,
-/// both of which pull it in via `webauthn-rs`/`passkey-types`), then
-/// travels through the outbox's `JSONB` column and the ledger's own
-/// `JSONB` column before `avalon inspect-ledger(-full)` ever reads it back
-/// to verify — and Postgres's `jsonb` type does not preserve original key
-/// order or formatting at all; it re-emits object keys in its own internal
-/// canonical order. Hashing `Value::to_string()` directly, as this used to,
-/// made the hash depend on which of those orderings happened to be current
-/// at the moment of hashing rather than on the payload's actual content,
-/// producing false "broken chain" reports for any multi-key payload
-/// despite nothing being tampered with. Sorting keys ourselves removes the
-/// dependency on any of those orderings agreeing with each other.
-fn canonical_json(value: &serde_json::Value) -> String {
-    fn write(value: &serde_json::Value, out: &mut String) {
-        match value {
-            serde_json::Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                out.push('{');
-                for (i, key) in keys.into_iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&serde_json::to_string(key).expect("string always serializes"));
-                    out.push(':');
-                    write(&map[key], out);
-                }
-                out.push('}');
-            }
-            serde_json::Value::Array(items) => {
-                out.push('[');
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write(item, out);
-                }
-                out.push(']');
-            }
-            leaf => out.push_str(&leaf.to_string()),
-        }
-    }
-    let mut out = String::new();
-    write(value, &mut out);
-    out
-}
-
-fn hash_entry(prev_hash: &str, content: &EntryContent<'_>) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(prev_hash.as_bytes());
-    hasher.update(content.event_id.as_bytes());
-    hasher.update(content.kind.as_bytes());
-    hasher.update(content.issuer.as_bytes());
-    hasher.update(content.subject.as_bytes());
-    hasher.update(canonical_json(content.payload).as_bytes());
-    hasher.update(content.timestamp.unix_timestamp().to_le_bytes());
-    hasher.update(content.version.to_le_bytes());
-    hex::encode(hasher.finalize())
-}
-
-fn hash_event(prev_hash: &str, event: &ProtocolEvent) -> String {
-    hash_entry(
-        prev_hash,
-        &EntryContent {
-            event_id: event.id,
-            kind: &event.kind,
-            issuer: event.issuer.as_str(),
-            subject: event.subject.as_str(),
-            payload: &event.payload,
-            timestamp: event.timestamp,
-            version: event.version as i32,
-        },
-    )
-}
-
-/// Recomputes a batch's root the same way [`PostgresSettlementProvider::commit`]
-/// produced it in the first place: replay the hash chain across the batch's
-/// own entries, in order, starting from the hash the batch extended (its
-/// first entry's stored `prev_hash` — the ledger's tip immediately before
-/// this batch was committed, not verified here since that's a cross-batch
-/// concern, not this batch's own integrity).
-///
-/// This is a pure, DB-free function on purpose (issue #38's acceptance
-/// criteria that `verify` "recomputes and compares the batch root, not just
-/// row existence") — it recomputes from each entry's actual stored content,
-/// the same way `list_entries` re-verifies individual entries, so tampering
-/// with any entry's content in the batch (not just deleting a row) changes
-/// the result. `PostgresSettlementProvider::verify` is the only caller; kept
-/// free-standing so it's directly unit-testable without Postgres.
-fn recompute_batch_root(entering_prev_hash: &str, entries: &[EntryContent<'_>]) -> String {
-    let mut prev = entering_prev_hash.to_string();
-    for content in entries {
-        prev = hash_entry(&prev, content);
-    }
-    prev
+#[derive(Debug, thiserror::Error)]
+pub enum GenesisError {
+    /// The ledger already has a genesis row, and it doesn't match what this
+    /// process is configured to expect. Refuse to construct a provider at
+    /// all rather than let a mismatched process touch this ledger.
+    #[error(
+        "ledger genesis network_id `{stored}` does not match configured AVALON_NETWORK_ID `{configured}` — refusing to start against the wrong network"
+    )]
+    Mismatch { stored: String, configured: String },
+    #[error("storage error: {0}")]
+    Storage(String),
 }
 
 #[derive(Clone)]
 pub struct PostgresSettlementProvider {
     pool: PgPool,
+    network_id: String,
 }
 
 impl PostgresSettlementProvider {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    /// Low-level constructor for callers that already know (or don't care
+    /// about) the ledger's genesis network_id — tests against a throwaway
+    /// database, and read-only CLI inspection paired with
+    /// [`Self::read_genesis_network_id`]. Does **not** create or verify a
+    /// `chain_genesis` row; use [`Self::connect`] at real process startup,
+    /// where that enforcement actually matters.
+    pub fn new(pool: PgPool, network_id: impl Into<String>) -> Self {
+        Self {
+            pool,
+            network_id: network_id.into(),
+        }
+    }
+
+    /// Reads the ledger's genesis `network_id` without creating one —
+    /// `None` if this database has never been booted against by
+    /// [`Self::connect`]. For read-only diagnostics (`avalon inspect-ledger`)
+    /// that want to display which network they're pointed at without
+    /// asserting anything about it.
+    pub async fn read_genesis_network_id(pool: &PgPool) -> Result<Option<String>, SettlementError> {
+        sqlx::query_scalar("SELECT network_id FROM chain_genesis LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    }
+
+    /// The real boot-time entry point (issue #173). If this database has no
+    /// `chain_genesis` row yet, this is genesis: `expected_network_id` is
+    /// written once and never touched again. If a row already exists, it
+    /// must match `expected_network_id` exactly, or this returns
+    /// `GenesisError::Mismatch` instead of a provider — the caller (see
+    /// `avalon-server`'s `main.rs`) is expected to treat that as fatal and
+    /// exit before binding a listener, never as a warning to log past.
+    pub async fn connect(pool: PgPool, expected_network_id: &str) -> Result<Self, GenesisError> {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| GenesisError::Storage(e.to_string()))?;
+
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT network_id FROM chain_genesis LIMIT 1 FOR UPDATE")
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| GenesisError::Storage(e.to_string()))?;
+
+        match existing {
+            None => {
+                sqlx::query("INSERT INTO chain_genesis (network_id) VALUES ($1)")
+                    .bind(expected_network_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                tx.commit()
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                Ok(Self {
+                    pool,
+                    network_id: expected_network_id.to_string(),
+                })
+            }
+            Some(stored) if stored == expected_network_id => {
+                tx.commit()
+                    .await
+                    .map_err(|e| GenesisError::Storage(e.to_string()))?;
+                Ok(Self {
+                    pool,
+                    network_id: stored,
+                })
+            }
+            Some(stored) => Err(GenesisError::Mismatch {
+                stored,
+                configured: expected_network_id.to_string(),
+            }),
+        }
+    }
+
+    /// The network identity this provider is bound to (issue #173) — every
+    /// hash it computes or verifies is rooted in this value.
+    pub fn network_id(&self) -> &str {
+        &self.network_id
     }
 
     async fn tip_hash(&self) -> Result<String, SettlementError> {
@@ -219,6 +190,7 @@ impl PostgresSettlementProvider {
             let batch_id: Uuid = row.try_get("batch_id").map_err(get)?;
 
             let recomputed = hash_entry(
+                &self.network_id,
                 &prev_hash,
                 &EntryContent {
                     event_id,
@@ -339,40 +311,6 @@ pub struct IssuerHistoryEntry {
     pub event_timestamp: time::OffsetDateTime,
 }
 
-/// One ledger entry plus whether it's actually intact — computed by
-/// `list_entries` — both that its own content still matches its claimed
-/// hash, and that it correctly links to the entry before it. `payload` is
-/// carried through mainly for `avalon inspect-ledger-full`; the concise
-/// `avalon inspect-ledger` view doesn't print it.
-pub struct LedgerEntryView {
-    pub seq: i64,
-    pub event_id: Uuid,
-    pub kind: String,
-    pub issuer: String,
-    pub subject: String,
-    pub payload: serde_json::Value,
-    pub version: i32,
-    pub event_timestamp: time::OffsetDateTime,
-    pub prev_hash: String,
-    pub entry_hash: String,
-    pub batch_id: Uuid,
-    pub chain_intact: bool,
-}
-
-/// One committed batch — the unit of settlement (issue #38): entries are
-/// hash-chained individually, but a batch is what `get_commitment` looks up
-/// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is a
-/// placeholder deterministic root (the batch's chain tip — its last entry's
-/// `entry_hash`); a Merkle root over the batch is #40's call, not this
-/// ticket's.
-pub struct LedgerBatchView {
-    pub batch_id: Uuid,
-    pub first_seq: i64,
-    pub last_seq: i64,
-    pub batch_root: String,
-    pub committed_at: time::OffsetDateTime,
-}
-
 #[async_trait]
 impl SettlementProvider for PostgresSettlementProvider {
     async fn commit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
@@ -400,7 +338,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         // end of this transaction, so it's fine that `ledger_batches` doesn't
         // have this row yet.
         for event in &batch.events {
-            let entry_hash = hash_event(&prev_hash, event);
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
             let row = sqlx::query(
                 r#"
                 INSERT INTO ledger_entries
@@ -519,7 +457,8 @@ impl SettlementProvider for PostgresSettlementProvider {
             )
             .collect();
 
-        let recomputed_root = recompute_batch_root(&entering_prev_hash, &contents);
+        let recomputed_root =
+            recompute_batch_root(&self.network_id, &entering_prev_hash, &contents);
         let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
         Ok(recomputed_root == claimed_root)
     }
@@ -544,135 +483,5 @@ impl SettlementProvider for PostgresSettlementProvider {
             proof: batch_root.into_bytes(),
             committed_at,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn canonical_json_is_stable_across_key_order() {
-        let a = json!({ "from": "x", "to": "y", "actor": "x" });
-        let b = json!({ "actor": "x", "to": "y", "from": "x" });
-        let c = json!({ "to": "y", "from": "x", "actor": "x" });
-        assert_eq!(canonical_json(&a), canonical_json(&b));
-        assert_eq!(canonical_json(&b), canonical_json(&c));
-    }
-
-    #[test]
-    fn canonical_json_sorts_nested_objects_too() {
-        let a = json!({ "outer": { "z": 1, "a": 2 } });
-        let b = json!({ "outer": { "a": 2, "z": 1 } });
-        assert_eq!(canonical_json(&a), canonical_json(&b));
-    }
-
-    #[test]
-    fn canonical_json_still_distinguishes_different_content() {
-        let a = json!({ "from": "x", "to": "y" });
-        let b = json!({ "from": "x", "to": "z" });
-        assert_ne!(canonical_json(&a), canonical_json(&b));
-    }
-
-    #[test]
-    fn hash_entry_is_order_independent_for_the_full_entry() {
-        let event_id = Uuid::new_v4();
-        let timestamp = time::OffsetDateTime::now_utc();
-        let a = json!({ "from": "x", "to": "y", "actor": "x" });
-        let b = json!({ "actor": "x", "to": "y", "from": "x" });
-
-        let hash_a = hash_entry(
-            GENESIS_HASH,
-            &EntryContent {
-                event_id,
-                kind: "friend.requested",
-                issuer: "identity:x:self:friend_requested",
-                subject: "identity:y:self:friend_requested",
-                payload: &a,
-                timestamp,
-                version: 1,
-            },
-        );
-        let hash_b = hash_entry(
-            GENESIS_HASH,
-            &EntryContent {
-                event_id,
-                kind: "friend.requested",
-                issuer: "identity:x:self:friend_requested",
-                subject: "identity:y:self:friend_requested",
-                payload: &b,
-                timestamp,
-                version: 1,
-            },
-        );
-        assert_eq!(hash_a, hash_b);
-    }
-
-    fn sample_entry(event_id: Uuid, payload: &serde_json::Value) -> EntryContent<'_> {
-        EntryContent {
-            event_id,
-            kind: "guild.created",
-            issuer: "identity:x:self:guild_created",
-            subject: "guild:y:self:guild_created",
-            payload,
-            timestamp: time::OffsetDateTime::UNIX_EPOCH,
-            version: 1,
-        }
-    }
-
-    #[test]
-    fn recompute_batch_root_matches_sequential_hash_entry_calls() {
-        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
-        let entries: Vec<EntryContent<'_>> = ids
-            .iter()
-            .zip(&payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
-            .collect();
-
-        let expected = {
-            let mut prev = GENESIS_HASH.to_string();
-            for entry in &entries {
-                prev = hash_entry(&prev, entry);
-            }
-            prev
-        };
-
-        assert_eq!(recompute_batch_root(GENESIS_HASH, &entries), expected);
-    }
-
-    #[test]
-    fn recompute_batch_root_detects_tampering_with_any_entry_in_the_batch() {
-        let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let original_payloads = [json!({"a": 1}), json!({"b": 2}), json!({"c": 3})];
-        let entries: Vec<EntryContent<'_>> = ids
-            .iter()
-            .zip(&original_payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
-            .collect();
-        let root = recompute_batch_root(GENESIS_HASH, &entries);
-
-        // Tamper with the *first* entry's payload — not the last — to prove
-        // this isn't just re-hashing the tip; it must actually replay the
-        // whole chain to notice.
-        let mut tampered_payloads = original_payloads.clone();
-        tampered_payloads[0] = json!({"a": 999});
-        let tampered_entries: Vec<EntryContent<'_>> = ids
-            .iter()
-            .zip(&tampered_payloads)
-            .map(|(id, payload)| sample_entry(*id, payload))
-            .collect();
-        let tampered_root = recompute_batch_root(GENESIS_HASH, &tampered_entries);
-
-        assert_ne!(root, tampered_root);
-    }
-
-    #[test]
-    fn recompute_batch_root_of_a_single_event_batch_is_legal() {
-        let payload = json!({"solo": true});
-        let entries = vec![sample_entry(Uuid::new_v4(), &payload)];
-        let root = recompute_batch_root(GENESIS_HASH, &entries);
-        assert_eq!(root, hash_entry(GENESIS_HASH, &entries[0]));
     }
 }

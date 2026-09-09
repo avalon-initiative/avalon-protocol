@@ -54,7 +54,7 @@ fn sample_batch(event_count: usize) -> EventBatch {
 #[ignore]
 async fn commit_groups_events_under_one_batch() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool.clone());
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -99,7 +99,7 @@ async fn commit_groups_events_under_one_batch() {
 #[ignore]
 async fn get_commitment_returns_committed_batch() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool);
+    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let batch = sample_batch(2);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -116,7 +116,7 @@ async fn get_commitment_returns_committed_batch() {
 #[ignore]
 async fn get_commitment_of_unknown_batch_is_not_found() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool);
+    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let result = chain.get_commitment(Uuid::new_v4()).await;
     assert!(matches!(result, Err(SettlementError::BatchNotFound)));
@@ -126,7 +126,7 @@ async fn get_commitment_of_unknown_batch_is_not_found() {
 #[ignore]
 async fn verify_accepts_an_untampered_batch() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool);
+    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -142,7 +142,7 @@ async fn verify_accepts_an_untampered_batch() {
 #[ignore]
 async fn verify_detects_tampered_batch_root() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool.clone());
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
     let commitment = chain.commit(&batch).await.expect("commit should succeed");
@@ -172,7 +172,7 @@ async fn verify_detects_tampered_batch_root() {
 #[ignore]
 async fn list_entries_reports_chain_intact_across_batch_boundaries() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool);
+    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let first_batch = sample_batch(2);
     chain
@@ -201,7 +201,7 @@ async fn list_entries_reports_chain_intact_across_batch_boundaries() {
 #[ignore]
 async fn commit_of_an_empty_batch_is_rejected() {
     let pool = test_pool().await;
-    let chain = PostgresSettlementProvider::new(pool);
+    let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let empty = EventBatch {
         id: Uuid::new_v4(),
@@ -210,4 +210,104 @@ async fn commit_of_an_empty_batch_is_rejected() {
     };
     let result = chain.commit(&empty).await;
     assert!(result.is_err(), "an empty batch should never be committed");
+}
+
+// --- Genesis / network identity (issue #173) ---
+//
+// `chain_genesis` is a real singleton — at most one row per database — so
+// these tests can't share the same `public` schema as the tests above (and
+// each other) without racing on that row. Each test gets its own throwaway
+// schema with just the one table `PostgresSettlementProvider::connect`
+// actually touches, mirroring `0016_chain_genesis/up.sql`, then drops it —
+// isolation without needing a second database or a full migration run.
+
+async fn isolated_genesis_pool(schema: &str) -> PgPool {
+    let pool = test_pool().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&pool)
+    .await
+    .expect("failed to drop any stale test schema");
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&pool)
+        .await
+        .expect("failed to create test schema");
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TABLE {schema}.chain_genesis (
+            id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+            network_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"
+    )))
+    .execute(&pool)
+    .await
+    .expect("failed to create test chain_genesis table");
+
+    // `PostgresSettlementProvider` addresses `chain_genesis` unqualified, so
+    // every connection this pool hands out needs this schema ahead of
+    // `public` on its search_path.
+    let owned_schema = schema.to_string();
+    let search_path_pool = PgPoolOptions::new()
+        .after_connect(move |conn, _meta| {
+            let schema = owned_schema.clone();
+            Box::pin(async move {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SET search_path = {schema}, public"
+                )))
+                .execute(conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .connect_lazy_with((*pool.connect_options()).clone());
+    search_path_pool
+}
+
+#[tokio::test]
+#[ignore]
+async fn connect_creates_genesis_on_an_empty_table() {
+    let pool = isolated_genesis_pool("test_genesis_create").await;
+
+    let chain = PostgresSettlementProvider::connect(pool.clone(), "avalon-dev-alpha")
+        .await
+        .expect("first connect should create genesis");
+    assert_eq!(chain.network_id(), "avalon-dev-alpha");
+
+    let stored = PostgresSettlementProvider::read_genesis_network_id(&pool)
+        .await
+        .expect("read should succeed")
+        .expect("genesis row should now exist");
+    assert_eq!(stored, "avalon-dev-alpha");
+}
+
+#[tokio::test]
+#[ignore]
+async fn connect_succeeds_when_network_id_matches_existing_genesis() {
+    let pool = isolated_genesis_pool("test_genesis_match").await;
+
+    PostgresSettlementProvider::connect(pool.clone(), "avalon-dev-beta")
+        .await
+        .expect("first connect should create genesis");
+
+    let second = PostgresSettlementProvider::connect(pool, "avalon-dev-beta")
+        .await
+        .expect("reconnecting with the same network_id should succeed");
+    assert_eq!(second.network_id(), "avalon-dev-beta");
+}
+
+#[tokio::test]
+#[ignore]
+async fn connect_fails_fast_on_network_id_mismatch() {
+    let pool = isolated_genesis_pool("test_genesis_mismatch").await;
+
+    PostgresSettlementProvider::connect(pool.clone(), "avalon-dev-gamma")
+        .await
+        .expect("first connect should create genesis");
+
+    let result = PostgresSettlementProvider::connect(pool, "avalon-mainnet-1").await;
+    assert!(
+        result.is_err(),
+        "a mismatched network_id must never produce a usable provider"
+    );
 }

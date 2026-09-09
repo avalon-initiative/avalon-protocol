@@ -170,6 +170,24 @@ candidates for both before it closes.
   legal. No handler calls `commit` directly.
 - Not yet: signatures (#39), Merkle roots or signed tree heads (#40), an
   export/mirror format.
+- **Genesis and network identity (#173).** A singleton `chain_genesis` table
+  commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
+  `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —
+  written once, on `avalon-server`'s first boot against an empty database,
+  and never updated after. Every boot after that verifies the running
+  process's configured `network_id` against the stored one
+  (`PostgresSettlementProvider::connect`); a mismatch is fatal — the process
+  exits before binding a listener, not a warning. `network_id` is also
+  hashed into every `entry_hash` ahead of the entry's own content, so two
+  ledgers with different network identities produce disjoint hash spaces:
+  a dev chain's entries cannot be mistaken for, or spliced into, a valid
+  link in production's chain, by construction rather than by convention.
+  This deliberately does not yet extend to per-event *signatures* (an
+  EIP-155-style "signature covers chain identity" guarantee) — that depends
+  on a signing scheme that doesn't exist yet (#39/#80/#84) and is left for
+  when it does. `avalon inspect-ledger`/`-full` print whichever `network_id`
+  the target database already has (read-only, no genesis creation) so an
+  operator always sees which network they're looking at.
 - The ledger shares `avalon-server`'s `PgPool` and migrations; milestone 1 has
   one database. Split when `chain` gets its own deployment, not before.
 - `list_entries_for_issuer_prefix` — a narrower, unverified issuer-filtered
@@ -184,6 +202,18 @@ candidates for both before it closes.
   cross this document's "settlement is not the general-purpose query
   database" boundary. Revisit once the indexer (#42/#43) is real — see
   [query-and-indexing.md](./query-and-indexing.md).
+- **A second `SettlementProvider` implementation now exists**:
+  `crates/chain/src/rocksdb_backend.rs`'s `RocksDbSettlementProvider`, per
+  ADR #177 (RocksDB is the decided embedded engine) and #40 (each
+  node/mirror holds its own local copy, not a shared Postgres). Behind an
+  off-by-default `rocksdb-backend` Cargo feature — **not wired into
+  `avalon-server` anywhere**; nothing about this changes what's actually
+  running today. Both backends share one hash-chain implementation
+  (`crates/chain/src/hashing.rs`) so they're provably the same ledger, not
+  two similar ones — see issue #178 for the cross-backend test proving
+  identical hashes for identical input. The migration path (making this the
+  default, syncing the indexer from it instead of from the outbox directly,
+  the validator/consensus layer) remains open under #40.
 
 ## Decisions and tickets
 
