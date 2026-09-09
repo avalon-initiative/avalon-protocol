@@ -73,6 +73,7 @@ function baseRoutes() {
     // The owner (canManageGuild) can always fetch the breakdown regardless
     // of the public-exposure toggle.
     '/guilds/g1/game-breakdown': { guild_id: 'g1', total_members: 1, breakdown: [] },
+    '/guilds/g1/join-requests': [],
     '/guilds/g1/channels/c1/messages': messagesFor('c1'),
     '/guilds/g1/channels/c2/messages': messagesFor('c2'),
   }
