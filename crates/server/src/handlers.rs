@@ -673,7 +673,10 @@ pub struct HistoryEntryResponse {
     pub event_id: Uuid,
     pub kind: String,
     pub subject: String,
-    pub payload: serde_json::Value,
+    /// `null` if this event's payload has been pruned locally (issue
+    /// #208, a hot-tier node) — the event's existence and `kind` are still
+    /// reported, just not its content.
+    pub payload: Option<serde_json::Value>,
     #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
 }

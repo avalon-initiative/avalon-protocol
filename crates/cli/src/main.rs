@@ -3,7 +3,12 @@
 //! Always available, in any build: `avalon inspect-ledger`,
 //! `avalon inspect-ledger-full` (same view, plus each entry's payload),
 //! `avalon outbox-status` — read-only diagnostics, safe against any
-//! deployment including a real one.
+//! deployment including a real one. `avalon prune-ledger` (issue #208) is
+//! the operator-facing entry point for node-tiered retention pruning — see
+//! `avalon_chain::retention`'s module doc comment for the full design;
+//! this command itself only reads `AVALON_RETENTION_*` from the
+//! environment and reports/executes exactly what that config says, nothing
+//! more.
 //!
 //! Available only when this binary is built with the default `dev-tools`
 //! Cargo feature (issue #173 — see `dev_tools.rs`'s own doc comment for the
@@ -42,6 +47,10 @@ async fn main() {
             dev_tools::login(identity_id).await;
         }
         Some("outbox-status") => outbox_status().await,
+        Some("prune-ledger") => {
+            let dry_run = args.any(|a| a == "--dry-run");
+            prune_ledger(dry_run).await;
+        }
         #[cfg(feature = "dev-tools")]
         Some("register-game") => {
             let raw_args: Vec<String> = args.collect();
@@ -56,7 +65,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-game --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]"
                 } else {
@@ -87,6 +96,73 @@ async fn outbox_status() {
             status.pending_count
         ),
     }
+}
+
+/// `avalon prune-ledger [--dry-run]` — issue #208's operator-facing entry
+/// point for node-tiered retention pruning. Reads `AVALON_RETENTION_*` from
+/// the environment (`avalon_chain::retention::RetentionConfig::from_env`)
+/// and does exactly, and only, what that config says:
+///
+/// - `full` tier, or `hot` tier with pruning left disabled: reports the
+///   config and exits without touching anything — running this command is
+///   always safe regardless of configuration.
+/// - `hot` tier with `AVALON_RETENTION_PRUNING_ENABLED=true`: reports how
+///   many entries are prunable right now, then actually prunes them,
+///   unless `--dry-run` was passed, in which case it stops after
+///   reporting the count.
+///
+/// This is deliberately a manual/cron-invoked command rather than only a
+/// background loop — see `crates/server/src/retention.rs::run_worker` for
+/// the periodic in-process version `avalon-server` runs when its own
+/// config enables pruning; both call the same
+/// `avalon_chain::PostgresSettlementProvider::prune_payloads_older_than`.
+async fn prune_ledger(dry_run: bool) {
+    let config = avalon_chain::retention::RetentionConfig::from_env().unwrap_or_else(|e| {
+        eprintln!("invalid retention configuration: {e}");
+        std::process::exit(1);
+    });
+    println!("retention tier: {}", config.describe());
+
+    let Some(cutoff) = config.prune_cutoff(time::OffsetDateTime::now_utc()) else {
+        println!("nothing to do (either full tier, or hot tier with pruning disabled)");
+        return;
+    };
+
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres");
+    let network_id = PostgresSettlementProvider::read_genesis_network_id(&pool)
+        .await
+        .expect("failed to read genesis")
+        .unwrap_or_else(|| "(no genesis set)".to_string());
+    let chain = PostgresSettlementProvider::new(pool, network_id);
+
+    let prunable = chain
+        .prunable_entry_count(cutoff)
+        .await
+        .expect("failed to count prunable entries");
+    println!("cutoff: {cutoff} — {prunable} entries currently prunable");
+
+    if dry_run {
+        println!("--dry-run passed: not pruning anything");
+        return;
+    }
+    if prunable == 0 {
+        println!("nothing to prune");
+        return;
+    }
+
+    let report = chain
+        .prune_payloads_older_than(cutoff)
+        .await
+        .expect("failed to prune ledger payloads");
+    println!(
+        "pruned {} entries' payloads (kept entry_hash/prev_hash/seq/batch_id intact)",
+        report.pruned_count
+    );
 }
 
 /// `full: false` is `avalon inspect-ledger` — the concise chain-integrity
@@ -147,10 +223,16 @@ async fn inspect_ledger(full: bool) {
             }
         }
 
-        let verified = if entry.chain_intact {
-            "✓"
-        } else {
+        let verified = if !entry.chain_intact {
             "✗ BROKEN CHAIN"
+        } else if entry.payload_pruned {
+            // Issue #208: a pruned entry's link is still intact — its
+            // content just isn't independently re-checkable from this
+            // node any more. This is never reported as broken; it's a
+            // distinct, honest third state.
+            "✓ (payload pruned — content not locally re-verifiable)"
+        } else {
+            "✓"
         };
         println!(
             "┌─ Block #{} ─────────────────────────────────────────",
@@ -162,11 +244,16 @@ async fn inspect_ledger(full: bool) {
         println!("│ timestamp: {}", entry.event_timestamp);
         if full {
             println!("│ version:   {}", entry.version);
-            let pretty = serde_json::to_string_pretty(&entry.payload)
-                .unwrap_or_else(|_| entry.payload.to_string());
-            println!("│ payload:");
-            for line in pretty.lines() {
-                println!("│   {line}");
+            match &entry.payload {
+                Some(payload) => {
+                    let pretty = serde_json::to_string_pretty(payload)
+                        .unwrap_or_else(|_| payload.to_string());
+                    println!("│ payload:");
+                    for line in pretty.lines() {
+                        println!("│   {line}");
+                    }
+                }
+                None => println!("│ payload:   [pruned — see AVALON_RETENTION_* in .env.example]"),
             }
         }
         println!("│ hash:      {}", short_hash(&entry.entry_hash));
@@ -176,6 +263,7 @@ async fn inspect_ledger(full: bool) {
     }
 
     let broken = entries.iter().filter(|e| !e.chain_intact).count();
+    let pruned = entries.iter().filter(|e| e.payload_pruned).count();
     println!();
     println!(
         "{} entries across {} batch(es), {}",
@@ -187,6 +275,19 @@ async fn inspect_ledger(full: bool) {
             format!("{broken} broken link(s) ✗")
         }
     );
+    // Issue #208: tell an operator whether they're looking at a full node
+    // or a (partially) pruned hot-tier node, in-band with everything else
+    // this command already reports — derived from the data itself
+    // (payload_pruned_at), not from this process's own env config, so it's
+    // accurate no matter which node's database this is pointed at.
+    if pruned == 0 {
+        println!("retention: full — every entry's payload is present");
+    } else {
+        println!(
+            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see docs/architecture/nodes.md)",
+            entries.len()
+        );
+    }
 
     // Signed Tree Head verification (issue #210) — a second, independent
     // tamper-evidence layer on top of the hash-chain check above: the
@@ -297,7 +398,8 @@ mod tests {
                 kind: "test.event".to_string(),
                 issuer: "identity:x:self:test_event".to_string(),
                 subject: "identity:y:self:test_event".to_string(),
-                payload: json!({}),
+                payload: Some(json!({})),
+                payload_pruned: false,
                 version: 1,
                 event_timestamp: time::OffsetDateTime::UNIX_EPOCH,
                 prev_hash: "0".repeat(64),
