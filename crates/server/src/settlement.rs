@@ -134,8 +134,8 @@ pub async fn consistency_proof(
         return Err(AppError::InvalidProofQuery);
     }
 
-    let max_seq = state.chain.max_seq().await?;
-    if second > max_seq {
+    let entry_count = state.chain.entry_count().await?;
+    if second > entry_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
@@ -200,26 +200,42 @@ pub struct InclusionProofResponse {
 
 /// `GET /ledger/proof/inclusion?seq={n}&tree_size={s}` — an RFC 6962
 /// inclusion proof that the ledger entry at `seq` is included in the tree
-/// at `tree_size`. `seq` is 1-based (matching `ledger_entries.seq`); the
-/// corresponding Merkle leaf index is `seq - 1`.
+/// at `tree_size`. `seq` is `ledger_entries.seq`, a real row identifier —
+/// **not** a dense 1-based position. `seq` can have gaps (a batch commit
+/// that fails partway through permanently burns whatever `seq` values it
+/// already allocated, since Postgres identity/sequence advancement isn't
+/// transactional), so the Merkle leaf index is never `seq - 1`; it's the
+/// entry's *rank* among all committed entries, resolved via
+/// `leaf_index_for_seq`.
 pub async fn inclusion_proof(
     State(state): State<AppState>,
     Query(query): Query<InclusionProofQuery>,
 ) -> Result<Json<InclusionProofResponse>, AppError> {
     let (seq, tree_size) = (query.seq, query.tree_size);
-    if seq < 1 || tree_size < 1 || seq > tree_size {
+    if seq < 1 || tree_size < 1 {
         return Err(AppError::InvalidProofQuery);
     }
 
-    let max_seq = state.chain.max_seq().await?;
-    if tree_size > max_seq {
+    let entry_count = state.chain.entry_count().await?;
+    if tree_size > entry_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
-    let leaves = state.chain.entry_hashes_up_to(tree_size).await?;
-    let leaf_index = (seq - 1) as usize;
+    let leaf_index = state
+        .chain
+        .leaf_index_for_seq(seq)
+        .await?
+        .ok_or(AppError::InvalidProofQuery)?;
+    if leaf_index >= tree_size {
+        // A real entry, just not (yet) included in a tree this small —
+        // same "well-formed but unanswerable" shape as the bounds check
+        // above, not a fabricated/truncated proof.
+        return Err(AppError::InvalidProofQuery);
+    }
+    let leaf_index = leaf_index as usize;
     let tree_size_usize = tree_size as usize;
 
+    let leaves = state.chain.entry_hashes_up_to(tree_size).await?;
     let leaf_hash_hex = leaves[leaf_index].clone();
     let leaf_bytes = hex::decode(&leaf_hash_hex)
         .map_err(|e: hex::FromHexError| avalon_chain::SettlementError::Storage(e.to_string()))?;

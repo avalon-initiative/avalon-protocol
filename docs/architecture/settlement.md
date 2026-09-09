@@ -135,11 +135,19 @@ Postgres as the backend:
 - **`ledger_batches.batch_root` becomes that real answer** to the question
   #38 explicitly left open ("whether the root is a simple chain-tip or a
   Merkle root over the batch is #40's call"): `batch_root` is now the
-  tree's Merkle Tree Hash (MTH) at `tree_size = last_seq`, replacing the
-  placeholder chain-tip value — not a per-batch sub-tree, the whole
-  ledger's tree as of that batch. Cadence needs no new decision: it's
-  already whatever #38/#71's settlement worker does (a batch, and now also
-  an STH, closes whenever the outbox drain tick runs).
+  tree's Merkle Tree Hash (MTH) over every entry committed so far,
+  replacing the placeholder chain-tip value — not a per-batch sub-tree, the
+  whole ledger's tree as of that batch. `tree_size` (the STH's field,
+  stored separately from `ledger_batches`) is always the real leaf
+  *count*, never `last_seq` — `seq` is `GENERATED ALWAYS AS IDENTITY`, and
+  Postgres identity/sequence advancement isn't transactional, so a batch
+  commit that fails partway through and rolls back permanently burns
+  whatever `seq` values it had already allocated. Conflating `last_seq`
+  with leaf count once a gap like that exists would silently mislabel
+  every `tree_size` from that point on; `commit` derives `tree_size` from
+  the actual number of rows fetched, not from `last_seq`. Cadence needs no
+  new decision: it's already whatever #38/#71's settlement worker does (a
+  batch, and now also an STH, closes whenever the outbox drain tick runs).
 - **Signed Tree Heads, not per-entry signatures.** #39 resolves to
   STH-only signing, matching real transparency-log precedent — Certificate
   Transparency logs never sign individual certificates, only the tree head;
@@ -258,10 +266,13 @@ implemented, see "Today in the repo" below.
     alone).
   - `GET /ledger/proof/inclusion?seq={n}&tree_size={s}` — an RFC 6962
     inclusion proof (`crate::merkle::inclusion_proof`/
-    `verify_inclusion_proof`) that the ledger entry at `seq` (1-based,
-    matching `ledger_entries.seq`) is included in the tree at `tree_size`,
-    plus that entry's `entry_hash` (the proof's leaf input — no entry
-    payload content, same value `list_entries`/`inspect-ledger` already
+    `verify_inclusion_proof`) that the ledger entry at `seq` (a real
+    `ledger_entries.seq` row identifier — **not** a dense position; `seq`
+    can have gaps, see `crates/chain/src/postgres.rs`'s module doc comment,
+    so the Merkle leaf index is the entry's rank among committed entries,
+    resolved via `leaf_index_for_seq`, never `seq - 1`) is included in the
+    tree at `tree_size`, plus that entry's `entry_hash` (the proof's leaf
+    input — no entry payload content, same value `list_entries`/`inspect-ledger` already
     expose) and the tree's root hash.
   - Every proof is independently re-verified with the same standalone RFC
     6962 verifier a remote mirror would use, against the exact root(s) the
