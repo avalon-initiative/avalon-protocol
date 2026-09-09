@@ -187,6 +187,73 @@ async fn inspect_ledger(full: bool) {
             format!("{broken} broken link(s) ✗")
         }
     );
+
+    // Signed Tree Head verification (issue #210) — a second, independent
+    // tamper-evidence layer on top of the hash-chain check above: the
+    // latest Merkle root is recomputed fresh from every stored entry_hash
+    // and checked against what was actually signed, then that signature is
+    // checked against the configured operator public key. Either failure is
+    // reported with the same severity as a broken hash-chain link — this is
+    // exactly the kind of thing that must never be silently accepted.
+    let signed_tree_heads = chain
+        .list_signed_tree_heads()
+        .await
+        .expect("failed to read signed tree heads");
+    println!();
+    match signed_tree_heads.last() {
+        None => println!("signed tree head: (none yet)"),
+        Some(sth) => {
+            let root_matches = merkle_root_matches(&entries, sth);
+            println!(
+                "signed tree head @ size {}: root {}",
+                sth.tree_size,
+                short_hash(&sth.root_hash)
+            );
+            println!(
+                "  merkle recompute: {}",
+                if root_matches {
+                    "✓".to_string()
+                } else {
+                    "✗ TAMPER EVIDENCE — recomputed root does not match the signed root".to_string()
+                }
+            );
+            match avalon_chain::sth::load_verify_key_from_env() {
+                Ok(verify_key) => {
+                    let signature_valid = avalon_chain::sth::verify_tree_head(&verify_key, sth);
+                    println!(
+                        "  signature (key {}): {}",
+                        sth.signing_key_id,
+                        if signature_valid {
+                            "✓".to_string()
+                        } else {
+                            "✗ TAMPER EVIDENCE — STH signature invalid for the configured verify key".to_string()
+                        }
+                    );
+                }
+                Err(e) => println!("  signature: unable to verify — {e}"),
+            }
+        }
+    }
+}
+
+/// Recomputes the RFC 6962 Merkle Tree Hash of every `entries` entry up to
+/// `sth.tree_size` and checks it against `sth.root_hash` — the structural
+/// half of STH verification, independent of the signature check
+/// (`avalon_chain::sth::verify_tree_head`). Pure and directly unit-testable
+/// without Postgres; `inspect_ledger` is its only real caller.
+fn merkle_root_matches(
+    entries: &[avalon_chain::LedgerEntryView],
+    sth: &avalon_chain::sth::SignedTreeHead,
+) -> bool {
+    let hashes: Vec<String> = entries
+        .iter()
+        .filter(|e| e.seq <= sth.tree_size)
+        .map(|e| e.entry_hash.clone())
+        .collect();
+    avalon_chain::merkle::mth_of_hex_hashes(&hashes)
+        .map(hex::encode)
+        .map(|root| root == sth.root_hash)
+        .unwrap_or(false)
 }
 
 fn short_hash(hash: &str) -> String {
@@ -194,5 +261,98 @@ fn short_hash(hash: &str) -> String {
         hash.to_string()
     } else {
         format!("{}...{}", &hash[..8], &hash[hash.len() - 8..])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use avalon_chain::sth::sign_tree_head;
+    use avalon_chain::LedgerEntryView;
+    use ed25519_dalek::SigningKey;
+    use serde_json::json;
+
+    fn sample_entries(hashes: &[&str]) -> Vec<LedgerEntryView> {
+        hashes
+            .iter()
+            .enumerate()
+            .map(|(i, hash)| LedgerEntryView {
+                seq: (i + 1) as i64,
+                event_id: Uuid::new_v4(),
+                kind: "test.event".to_string(),
+                issuer: "identity:x:self:test_event".to_string(),
+                subject: "identity:y:self:test_event".to_string(),
+                payload: json!({}),
+                version: 1,
+                event_timestamp: time::OffsetDateTime::UNIX_EPOCH,
+                prev_hash: "0".repeat(64),
+                entry_hash: hash.to_string(),
+                batch_id: Uuid::new_v4(),
+                chain_intact: true,
+            })
+            .collect()
+    }
+
+    /// Issue #210's `inspect_ledger_reports_sth_signature_mismatch`: an STH
+    /// whose recomputed Merkle root is correct but whose signature doesn't
+    /// verify against the configured operator key must be reported as
+    /// invalid, not silently accepted just because the root matched.
+    #[test]
+    fn inspect_ledger_reports_sth_signature_mismatch() {
+        let entries = sample_entries(&["aa".repeat(32).as_str(), "bb".repeat(32).as_str()]);
+        let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
+
+        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let sth = sign_tree_head(
+            &signing_key,
+            "test-key",
+            2,
+            &root,
+            "avalon-test",
+            time::OffsetDateTime::UNIX_EPOCH,
+        );
+
+        // The Merkle recompute is correct on its own...
+        assert!(merkle_root_matches(&entries, &sth));
+
+        // ...but verifying against a DIFFERENT key's public half — a
+        // forged/mismatched signature, or the wrong operator key configured
+        // — must be reported as invalid.
+        let wrong_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        assert!(
+            !avalon_chain::sth::verify_tree_head(&wrong_key.verifying_key(), &sth),
+            "a signature that doesn't verify against the configured key must be reported, not accepted"
+        );
+
+        // Sanity: the actual signing key's public half verifies fine.
+        assert!(avalon_chain::sth::verify_tree_head(
+            &signing_key.verifying_key(),
+            &sth
+        ));
+    }
+
+    #[test]
+    fn merkle_root_matches_detects_a_tampered_entry() {
+        let entries = sample_entries(&["aa".repeat(32).as_str(), "bb".repeat(32).as_str()]);
+        let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
+        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let sth = sign_tree_head(
+            &signing_key,
+            "test-key",
+            2,
+            &root,
+            "avalon-test",
+            time::OffsetDateTime::UNIX_EPOCH,
+        );
+        assert!(merkle_root_matches(&entries, &sth));
+
+        let mut tampered = entries;
+        tampered[0].entry_hash = "cc".repeat(32);
+        assert!(
+            !merkle_root_matches(&tampered, &sth),
+            "a tampered entry_hash must change the recomputed root and fail the match"
+        );
     }
 }

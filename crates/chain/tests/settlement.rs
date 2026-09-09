@@ -1,8 +1,13 @@
 //! Exercises `PostgresSettlementProvider::commit`/`verify`/`get_commitment`
-//! against a real Postgres instance (issue #38 — event batching). Gated
-//! `--ignored` since it needs live infra — see `make test-live` / `make
-//! start`; mirrors the pattern `crates/server/tests/*.rs` already uses for
-//! its own live-only tests (see e.g. `crates/server/tests/history.rs`).
+//! against a real Postgres instance (issue #38 — event batching; issue #210
+//! — the real Merkle root and Signed Tree Head `commit` now also produces).
+//! Gated `--ignored` since it needs live infra — see `make test-live` /
+//! `make start`; mirrors the pattern `crates/server/tests/*.rs` already
+//! uses for its own live-only tests (see e.g. `crates/server/tests/history.rs`).
+//!
+//! Since issue #210, `commit` also needs `AVALON_SETTLEMENT_SIGNING_KEY` set
+//! (see `.env.example`) — every test here goes through `test_pool()`, which
+//! loads `.env` via `dotenvy` the same way `make test-live` expects.
 //!
 //! These tests exercise `avalon-chain` directly rather than through
 //! `avalon-server`'s outbox/HTTP surface: `SettlementProvider` is `chain`'s
@@ -210,6 +215,117 @@ async fn commit_of_an_empty_batch_is_rejected() {
     };
     let result = chain.commit(&empty).await;
     assert!(result.is_err(), "an empty batch should never be committed");
+}
+
+// --- Real Merkle root + Signed Tree Head (issue #210) ---
+
+#[tokio::test]
+#[ignore]
+async fn commit_produces_real_merkle_root_not_placeholder() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let batch = sample_batch(3);
+    let commitment = chain.commit(&batch).await.expect("commit should succeed");
+    let claimed_root = String::from_utf8_lossy(&commitment.proof).to_string();
+
+    let last_entry_hash: String = sqlx::query(
+        "SELECT entry_hash FROM ledger_entries WHERE batch_id = $1 ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(batch.id)
+    .fetch_one(&pool)
+    .await
+    .expect("failed to read last entry")
+    .try_get("entry_hash")
+    .unwrap();
+
+    assert_ne!(
+        claimed_root, last_entry_hash,
+        "batch_root must be a real Merkle root, not the old placeholder chain tip"
+    );
+
+    // It must actually equal the RFC 6962 MTH of the whole ledger up to this
+    // batch's last_seq — not just "some value that happens to differ".
+    let rows = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq ASC")
+        .fetch_all(&pool)
+        .await
+        .expect("failed to read ledger_entries");
+    let hashes: Vec<String> = rows
+        .iter()
+        .map(|r| r.try_get::<String, _>("entry_hash").unwrap())
+        .collect();
+    let expected_root = hex::encode(
+        avalon_chain::merkle::mth_of_hex_hashes(&hashes)
+            .expect("stored entry_hash values should always be valid hex"),
+    );
+    assert_eq!(claimed_root, expected_root);
+
+    // A Signed Tree Head must exist for this batch's tree_size too.
+    let last_seq: i64 = sqlx::query("SELECT last_seq FROM ledger_batches WHERE batch_id = $1")
+        .bind(batch.id)
+        .fetch_one(&pool)
+        .await
+        .expect("failed to read ledger_batches")
+        .try_get("last_seq")
+        .unwrap();
+    let sth_root: String =
+        sqlx::query("SELECT root_hash FROM signed_tree_heads WHERE tree_size = $1")
+            .bind(last_seq)
+            .fetch_one(&pool)
+            .await
+            .expect("a signed_tree_heads row should exist for this batch's tree_size")
+            .try_get("root_hash")
+            .unwrap();
+    assert_eq!(sth_root, claimed_root);
+}
+
+#[tokio::test]
+#[ignore]
+async fn verify_detects_entry_tampering_via_merkle_recomputation() {
+    let pool = test_pool().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let first_batch = sample_batch(2);
+    chain
+        .commit(&first_batch)
+        .await
+        .expect("first commit should succeed");
+    let second_batch = sample_batch(2);
+    let commitment = chain
+        .commit(&second_batch)
+        .await
+        .expect("second commit should succeed");
+
+    assert!(
+        chain
+            .verify(&commitment)
+            .await
+            .expect("verify should not error"),
+        "an untampered second batch should verify"
+    );
+
+    // Tamper with an entry_hash from the FIRST batch — the second batch's
+    // own entries and hash-chain replay are completely untouched, so a
+    // purely batch-local check would miss this. The ledger-wide Merkle
+    // recompute at the second batch's tree_size must still catch it, since
+    // that first-batch entry is one of its leaves.
+    sqlx::query(
+        "UPDATE ledger_entries SET entry_hash = $1 WHERE batch_id = $2 AND seq = (SELECT min(seq) FROM ledger_entries WHERE batch_id = $2)",
+    )
+    .bind("0".repeat(64))
+    .bind(first_batch.id)
+    .execute(&pool)
+    .await
+    .expect("failed to tamper with entry_hash");
+
+    let verified = chain
+        .verify(&commitment)
+        .await
+        .expect("verify should not error");
+    assert!(
+        !verified,
+        "tampering with any entry_hash in the ledger's tree, even outside this batch, must fail verification"
+    );
 }
 
 // --- Genesis / network identity (issue #173) ---

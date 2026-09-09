@@ -43,9 +43,11 @@ today a batch closes whenever the settlement worker's drain tick runs
 (`crates/server/src/outbox.rs`), not on a size threshold or timer, and a
 single-event batch is legal — see [`./scalability.md`](./scalability.md) and
 [#38](https://github.com/LunarVagabond/avalon-protocol/issues/38). The batch
-root itself is a placeholder deterministic value (the batch's chain tip) —
-whether it becomes a real Merkle root is
-[#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)'s call.
+root is a real RFC 6962 Merkle Tree Hash over the whole ledger as of that
+batch ([#210](https://github.com/LunarVagabond/avalon-protocol/issues/210),
+implementing [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)'s
+decision) — see "What is decided (continued)" and "Today in the repo"
+below for the full design and what's actually built.
 
 ## The boundary
 
@@ -192,17 +194,43 @@ Implementation tracked as
   `commit` inserts every entry in `batch.events` plus the batch's own
   `ledger_batches` row in one transaction (the row-to-batch foreign key is
   deferred to transaction end, since the batch row is inserted after its
-  entries) and returns the batch's root (its last entry's hash — a
-  placeholder deterministic root, not yet a Merkle root) as the
-  `Commitment.proof`.
-- `get_commitment` reads `ledger_batches` by `batch_id`. `verify` recomputes
-  a batch's root by replaying the hash chain across its own entries' stored
-  content (not by trusting the stored `entry_hash`/`batch_root` values), so
-  tampering with any entry in the batch is caught, not just a missing row.
-  `list_entries` still independently rehashes every row and checks each
-  link across the whole ledger, which is what `avalon inspect-ledger`
-  (`crates/cli/src/main.rs`, `make inspect-ledger`) prints, now with batch
-  boundary headers and each batch's root — `avalon inspect-ledger-full` /
+  entries).
+- **Real Merkle root + Signed Tree Heads, implemented (#210, closing out
+  #39/#40's design — see "What is decided (continued)" above).**
+  `crates/chain/src/merkle.rs` implements RFC 6962's Merkle Tree Hash
+  (domain-separated leaf/interior hashing, tested against the reference
+  vectors published by `transparency-dev/merkle`, the maintained successor
+  to Google's original Certificate Transparency Go/Trillian implementation,
+  for tree sizes 1 through 8). `commit` reads back every `entry_hash` up to
+  and including its batch's `last_seq`, in the same transaction as the
+  inserts above, computes that tree's root, and stores it as
+  `ledger_batches.batch_root` — the whole ledger's tree as of that batch,
+  not a per-batch sub-tree, replacing the placeholder chain-tip value #38
+  shipped. `commit` also signs and stores one `SignedTreeHead` per batch
+  (`crates/chain/src/sth.rs`, table `signed_tree_heads`,
+  `crates/server/db/migrations/0024_signed_tree_heads`) — Ed25519,
+  STH-only per #39 (no per-entry signatures), covering
+  `(tree_size, root_hash, network_id, timestamp)`. The signing key is
+  loaded from `AVALON_SETTLEMENT_SIGNING_KEY` (never stored in Postgres);
+  verification needs only `AVALON_SETTLEMENT_VERIFY_KEY` (see
+  `.env.example`). `Commitment.proof` now carries this Merkle root rather
+  than the old chain-tip value.
+- `get_commitment` reads `ledger_batches` by `batch_id`. `verify` runs two
+  independent checks, both must pass: it still replays the sequential hash
+  chain across a batch's own entries' stored content (unchanged from #38 in
+  spirit — content tampering that leaves `entry_hash` stale is caught, just
+  no longer compared against `commitment.proof`, which is now a ledger-wide
+  value rather than this batch's own chain tip), and it separately
+  recomputes the RFC 6962 tree fresh from every `entry_hash` up to the
+  batch's `last_seq` and compares that against `commitment.proof` — catching
+  tampering with the ledger's structure anywhere up to this batch, not just
+  within it. `list_entries` still independently rehashes every row and
+  checks each link across the whole ledger, which is what
+  `avalon inspect-ledger` (`crates/cli/src/main.rs`, `make inspect-ledger`)
+  prints, with batch boundary headers and each batch's root, now followed by
+  STH verification (Merkle recompute + Ed25519 signature check against
+  `AVALON_SETTLEMENT_VERIFY_KEY`, reported with the same severity as a
+  broken hash-chain link on mismatch) — `avalon inspect-ledger-full` /
   `make inspect-ledger-full` is the same view plus each entry's actual JSON
   payload.
 - The settlement worker (`crates/server/src/outbox.rs`, #71) drains pending
@@ -210,10 +238,10 @@ Implementation tracked as
   with a single `SettlementProvider::commit` call — a batch closes when the
   worker runs, not on a size threshold or timer, and a single-event batch is
   legal. No handler calls `commit` directly.
-- Not yet implemented (decided, not built): the real Merkle root/signed
-  tree head structure (#39/#40, both closed — see "What is decided" above),
-  an export/mirror format. `batch_root` is still the placeholder chain-tip
-  value in the code today; #210/#211 are the implementation tickets.
+- Not yet implemented: mirror-facing proof/sync endpoints (inclusion and
+  consistency proofs, latest/historical STH lookup) — tracked as #211,
+  which consumes the Merkle tree and STHs this section now describes as
+  real.
 - **Genesis and network identity (#173).** A singleton `chain_genesis` table
   commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
   `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —
@@ -252,8 +280,9 @@ Implementation tracked as
 - Epic [#36](https://github.com/LunarVagabond/avalon-protocol/issues/36)
   Settlement Ledger
 - #68, #70, #79, #186 decided (#93 partially superseded by #186); #40, #39
-  decided (Merkle/STH structure, STH-only signing) — implementation tracked
-  as #210, #211
+  decided (Merkle/STH structure, STH-only signing) — #210 (real Merkle root
+  + Signed Tree Heads) implemented; #211 (mirror-facing proof/sync
+  endpoints) still open
 - #38 batching, #71 atomicity, #173 genesis/network identity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider

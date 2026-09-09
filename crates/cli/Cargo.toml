@@ -18,13 +18,20 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 base64.workspace = true
+hex.workspace = true
+# Required (not dev-tools-gated): `avalon inspect-ledger`'s STH signature
+# verification (issue #210) needs `VerifyingKey` in every build, including
+# `--no-default-features` — inspect-ledger is explicitly "always available,
+# in any build" (see this crate's top-level doc comment), unlike the
+# dev_tools.rs commands below, which do also use ed25519-dalek (signing, not
+# just verifying) for their own reasons.
+ed25519-dalek.workspace = true
 # Everything below is only reachable from `dev_tools.rs` (issue #175) — the
 # mutating commands (`create-identity`, `login`, `register-game`) that a
 # `--no-default-features` build excludes along with these dependencies
 # entirely, not just their call sites.
 url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-ed25519-dalek = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 passkey-types = { workspace = true, optional = true }
 passkey-client = { workspace = true, optional = true }
@@ -34,6 +41,10 @@ passkey-authenticator = { workspace = true, optional = true }
 # passkey (de)serialization (see dev_tools.rs) has a stable `CborSerializable`
 # import to use rather than reaching into a transitive dependency.
 coset = { version = "0.4", optional = true }
+
+[dev-dependencies]
+rand.workspace = true
+time.workspace = true
 
 [features]
 default = ["dev-tools"]
@@ -45,7 +56,6 @@ default = ["dev-tools"]
 dev-tools = [
     "dep:url",
     "dep:reqwest",
-    "dep:ed25519-dalek",
     "dep:rand",
     "dep:passkey-types",
     "dep:passkey-client",

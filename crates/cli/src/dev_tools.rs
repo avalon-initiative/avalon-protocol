@@ -16,9 +16,13 @@
 //! "local dev/ops CLI" its own top-level doc comment describes), but a build
 //! meant to ship anywhere near a production deployment should be built with
 //! `--no-default-features` — at which point this entire module, and every
-//! dependency it alone pulls in (`ed25519-dalek`, `rand`, `passkey-*`,
-//! `coset`, `reqwest`, `url`), is compiled out of the binary completely, not
-//! merely hidden behind a runtime check.
+//! dependency it alone pulls in (`rand`, `passkey-*`, `coset`, `reqwest`,
+//! `url`), is compiled out of the binary completely, not merely hidden
+//! behind a runtime check. `ed25519-dalek` itself is the one exception as
+//! of issue #210 — `main.rs`'s always-available `inspect-ledger` now needs
+//! `VerifyingKey` for signed-tree-head verification, so it's a required
+//! dependency of this crate, not gated behind `dev-tools` alongside the
+//! signing usage below.
 
 use std::io::Write as _;
 use std::path::PathBuf;
