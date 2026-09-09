@@ -3,7 +3,7 @@
 //! signatures, only the tree head is signed). One [`SignedTreeHead`] is
 //! produced per batch commit (`PostgresSettlementProvider::commit`),
 //! always in the same transaction as the batch itself, and stored in the
-//! `signed_tree_heads` table (`crates/server/db/migrations/0022_signed_tree_heads`).
+//! `signed_tree_heads` table (`crates/server/db/migrations/0024_signed_tree_heads`).
 //!
 //! The private signing key is loaded from the environment — never stored
 //! in Postgres, the same precedent every other key-handling note in this
