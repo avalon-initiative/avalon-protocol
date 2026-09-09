@@ -190,7 +190,18 @@ is visibly marked.
   [guilds](./guilds.md)'s "Today in the repo" for the two real gaps this
   surfaced (the `manage_channels` permission stub, and no endpoint to list
   a player's own pending guild invites) rather than working around them
-  with a Hub-only endpoint.
+  with a Hub-only endpoint. **Issue #57** completed this view rather than
+  starting it over: a "Currently playing" card on `Guild.vue` groups the
+  roster's merged presence by game (`apps/hub/src/api/guilds.ts`'s
+  `groupMembersPlayingByGame`/`formatPlayingSummary`, "N members playing
+  X" per #74), and a "History" card states plainly that guild event
+  history isn't available yet rather than fabricating one from the
+  current roster (no `GET /guilds/{id}/history` endpoint or indexer
+  projection exists — #82). Roster/chat access itself is already exactly
+  what #87 would additionally scope down: current guild membership gates
+  `GET /guilds/{id}/members` and the channel/message endpoints outright,
+  with no separate public/members-only/hidden mode to render — #87 stays
+  open and undecided, and nothing here simulates scopes it hasn't defined.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).

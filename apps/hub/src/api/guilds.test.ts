@@ -4,7 +4,9 @@ import {
   canKickMember,
   filterGuildsByNameOrTag,
   filterMembersByIdentityId,
+  formatPlayingSummary,
   groupMembersByRole,
+  groupMembersPlayingByGame,
   hasGuildPermission,
   membershipStatusText,
   mergeGuildMember,
@@ -62,6 +64,27 @@ describe('mergeGuildMember', () => {
     }
     const merged = mergeGuildMember(member, new Map(), new Map([[MEMBER, 'raid-leader-99']]))
     expect(merged.displayName).toBe('raid-leader-99')
+  })
+
+  it('defaults to not-playing (null) when the presence map has no playing entry', () => {
+    const member: GuildMemberResponse = {
+      guild_id: 'g1',
+      identity_id: MEMBER,
+      role_index: 2,
+      joined_at: 't',
+    }
+    expect(mergeGuildMember(member, new Map()).playing).toBeNull()
+  })
+
+  it('carries the playing game id through when present (#57)', () => {
+    const member: GuildMemberResponse = {
+      guild_id: 'g1',
+      identity_id: MEMBER,
+      role_index: 2,
+      joined_at: 't',
+    }
+    const merged = mergeGuildMember(member, new Map(), new Map(), new Map([[MEMBER, 'ashen-realms']]))
+    expect(merged.playing).toBe('ashen-realms')
   })
 })
 
@@ -275,6 +298,47 @@ describe('sortMembers', () => {
       { identityId: 'identity:3', roleIndex: 2, status: 'Online', joinedAt: 't' },
     ]
     expect(sortMembers(mixed, 'name').map((m) => m.identityId)).toEqual(['identity:2', 'identity:3', 'identity:1'])
+  })
+})
+
+describe('groupMembersPlayingByGame', () => {
+  it('groups by game id, counts descending', () => {
+    const members: GuildMember[] = [
+      { identityId: 'a', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'ashen-realms' },
+      { identityId: 'b', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'worldzero' },
+      { identityId: 'c', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'ashen-realms' },
+      { identityId: 'd', roleIndex: 2, status: 'Offline', joinedAt: 't', playing: null },
+    ]
+    expect(groupMembersPlayingByGame(members)).toEqual([
+      { gameId: 'ashen-realms', count: 2 },
+      { gameId: 'worldzero', count: 1 },
+    ])
+  })
+
+  it('omits members with no playing value entirely, rather than a null bucket', () => {
+    const members: GuildMember[] = [
+      { identityId: 'a', roleIndex: 2, status: 'Online', joinedAt: 't', playing: null },
+      { identityId: 'b', roleIndex: 2, status: 'Offline', joinedAt: 't' },
+    ]
+    expect(groupMembersPlayingByGame(members)).toEqual([])
+  })
+
+  it('breaks ties alphabetically by game id', () => {
+    const members: GuildMember[] = [
+      { identityId: 'a', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'worldzero' },
+      { identityId: 'b', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'ashen-realms' },
+    ]
+    expect(groupMembersPlayingByGame(members).map((g) => g.gameId)).toEqual(['ashen-realms', 'worldzero'])
+  })
+})
+
+describe('formatPlayingSummary', () => {
+  it('uses the #74-safe "N members playing X" phrasing, never "Game X\'s guild"', () => {
+    expect(formatPlayingSummary({ gameId: 'Ashen Realms', count: 42 })).toBe('42 members playing Ashen Realms')
+  })
+
+  it('uses singular "member" for a count of one', () => {
+    expect(formatPlayingSummary({ gameId: 'WorldZero', count: 1 })).toBe('1 member playing WorldZero')
   })
 })
 

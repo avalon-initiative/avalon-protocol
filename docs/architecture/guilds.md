@@ -280,6 +280,39 @@ with Game A becomes historical.
   don't take it), so every guild is `invite_only` in practice — the Hub's
   "Join" button is wired for the day that changes but is currently dead
   code by construction, not by a Hub-side restriction.
+- **Roster visibility today, and the #87 gap (issue #57).** #57 asked for
+  roster/chat UI against #87's public/members-only/hidden-roster visibility
+  scopes, but #87 is still an open, undecided
+  [decision](https://github.com/LunarVagabond/avalon-protocol/issues/87) —
+  nothing in this pass invents fine-grained visibility that doesn't exist
+  server-side. The concrete rule that does exist today and is what the UI
+  actually enforces: `GET /guilds/{id}/members`, channels, and messages all
+  require current guild membership (session-authenticated, checked against
+  `guild_members`), so a member sees the roster and chat and a non-member's
+  request is rejected outright — there is no separate "public" or "hidden"
+  roster mode to render differently. When #87 lands, the Hub renders
+  whatever additional scopes it defines; until then this is the whole
+  story, stated here rather than simulated in the UI.
+- **"Members currently playing" (#57).** `apps/hub/src/api/guilds.ts`'s
+  `groupMembersPlayingByGame`/`formatPlayingSummary` group the roster's
+  merged presence by `playing` game id and render "N members playing X" —
+  the #74-safe phrasing, never "Game X's guild" — in `Guild.vue`'s
+  "Currently playing" card, labeled as live presence, never a durable
+  stat. Same honest-empty-state posture as `Friends.vue`'s own
+  "Playing &lt;game&gt;" gap: `PresenceResponse.playing` is always null in
+  practice today (no game has a live presence-publish binding yet), so
+  this card renders "No members currently reporting an in-game presence"
+  in every real guild right now — the grouping/formatting logic itself is
+  real and tested, and needs no further wiring once a game actually
+  publishes `playing`.
+- **Guild history section (#57).** `Guild.vue` has a "History" card, but it
+  states plainly that history isn't available yet rather than fabricating
+  a feed from the current roster/role snapshot — there is no
+  `GET /guilds/{id}/history` endpoint and no indexer projection over
+  `guild.*` events exposed to any client today (#82 tracks the event
+  catalogue/indexer work this would need). The events themselves are
+  durable (see "History vs current state" above); only a read path for
+  them is missing.
 
 ## Decisions and tickets
 
@@ -297,7 +330,13 @@ with Game A becomes historical.
   owner-departure-without-transfer guard),
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22) (channels +
   messages), [#23](https://github.com/LunarVagabond/avalon-protocol/issues/23)
-  (SDK), [#24](https://github.com/LunarVagabond/avalon-protocol/issues/24) (Hub).
+  (SDK), [#24](https://github.com/LunarVagabond/avalon-protocol/issues/24) (Hub,
+  done), [#57](https://github.com/LunarVagabond/avalon-protocol/issues/57)
+  (roster/chat completion against #87's currently-real visibility rule, the
+  "members currently playing" summary, and the honest guild-history gap —
+  #57's proposed `AvalonRosterRow`/`AvalonMessageList`/`AvalonMessageComposer`
+  component names describe what #24 already built as `AvalonGuildMemberRow`/
+  `AvalonChatMessage`/`AvalonChatComposer`; not duplicated under new names).
 - [#152](https://github.com/LunarVagabond/avalon-protocol/issues/152) — role
   descriptions and badges, done.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
