@@ -2168,3 +2168,176 @@ async fn only_the_applicant_can_withdraw_their_own_join_request() {
     .unwrap();
     assert!(withdraw.status().is_success(), "{:?}", withdraw.status());
 }
+
+/// `GET .../join-requests/mine` (issue #256) returns the applicant's own
+/// pending request once one exists, and `null` beforehand — no
+/// `manage_members` grant required either way, since it's the caller's own
+/// data.
+#[tokio::test]
+#[ignore]
+async fn my_join_request_returns_own_pending_request_or_none() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    // Before applying: no pending request of the applicant's own.
+    let before = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests/mine")),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(before.status().is_success(), "{:?}", before.status());
+    let before_body: serde_json::Value = before.json().await.unwrap();
+    assert!(before_body.is_null());
+
+    let apply = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({ "message": "would love to join!" }))
+    .send()
+    .await
+    .unwrap();
+    let apply_body: serde_json::Value = apply.json().await.unwrap();
+    let request_id = apply_body["id"].as_str().unwrap();
+
+    // After applying: the applicant's own pending request comes back,
+    // matching the same shape POST already returned.
+    let after = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests/mine")),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(after.status().is_success(), "{:?}", after.status());
+    let after_body: serde_json::Value = after.json().await.unwrap();
+    assert_eq!(after_body["id"].as_str().unwrap(), request_id);
+    assert_eq!(
+        after_body["applicant"].as_str().unwrap(),
+        applicant_id.to_string()
+    );
+    assert_eq!(after_body["status"].as_str().unwrap(), "pending");
+    assert_eq!(after_body["message"].as_str().unwrap(), "would love to join!");
+}
+
+/// `GET .../join-requests/mine` never leaks another applicant's pending
+/// request for the same guild — each caller only ever sees their own.
+#[tokio::test]
+#[ignore]
+async fn my_join_request_never_returns_another_identitys_request() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+    let (_bystander_id, bystander_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+
+    // The bystander never applied — `mine` reports none for them even
+    // though the applicant has a pending request in this same guild.
+    let bystander_mine = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests/mine")),
+        &bystander_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(
+        bystander_mine.status().is_success(),
+        "{:?}",
+        bystander_mine.status()
+    );
+    let bystander_body: serde_json::Value = bystander_mine.json().await.unwrap();
+    assert!(bystander_body.is_null());
+
+    // The owner also has no pending request of their own here.
+    let owner_mine = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests/mine")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(owner_mine.status().is_success(), "{:?}", owner_mine.status());
+    let owner_body: serde_json::Value = owner_mine.json().await.unwrap();
+    assert!(owner_body.is_null());
+}
+
+/// End-to-end: an applicant can discover their own pending request via
+/// `mine`, then withdraw it via the existing `DELETE` route (issue #256's
+/// motivation — the Hub previously had no way to reach this at all), and
+/// `mine` reflects the withdrawal afterward.
+#[tokio::test]
+#[ignore]
+async fn my_join_request_then_withdraw_is_reachable_end_to_end() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_applicant_id, applicant_token) = seed_identity_session(&pool).await;
+
+    let guild = create_guild(&http, &base, &owner_token, "Recruiting Guild").await;
+    let guild_id = guild["id"].as_str().unwrap();
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+
+    auth(
+        http.post(format!("{base}/guilds/{guild_id}/join-requests")),
+        &applicant_token,
+    )
+    .json(&serde_json::json!({}))
+    .send()
+    .await
+    .unwrap();
+
+    let mine = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests/mine")),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    let mine_body: serde_json::Value = mine.json().await.unwrap();
+    let request_id = mine_body["id"].as_str().unwrap().to_string();
+
+    let withdraw = auth(
+        http.delete(format!(
+            "{base}/guilds/{guild_id}/join-requests/{request_id}"
+        )),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(withdraw.status().is_success(), "{:?}", withdraw.status());
+
+    let mine_after = auth(
+        http.get(format!("{base}/guilds/{guild_id}/join-requests/mine")),
+        &applicant_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    let mine_after_body: serde_json::Value = mine_after.json().await.unwrap();
+    assert!(mine_after_body.is_null());
+}

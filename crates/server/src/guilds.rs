@@ -2225,6 +2225,37 @@ pub async fn list_join_requests(
         .map(Json)
 }
 
+/// `GET /guilds/{id}/join-requests/mine` — issue #256. Any authenticated
+/// caller, no `manage_members` gate: this is the caller's own data, not a
+/// moderation view, unlike [`list_join_requests`]. Returns the caller's own
+/// pending join request for this guild if one exists, or `null` if it
+/// doesn't — same `Json<Option<T>>` "single item belonging to the caller,
+/// or none" shape `recovery::my_recovery_status` already established,
+/// rather than a 404 for the "none" case.
+pub async fn my_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(guild_id): Path<Uuid>,
+) -> Result<Json<Option<GuildJoinRequestResponse>>, AppError> {
+    let actor = authenticate(&state, &headers).await?;
+    // 404s if the guild doesn't exist, same as GET /guilds/{id}.
+    fetch_guild(&state, guild_id).await?;
+
+    let row = sqlx::query(
+        "SELECT id, guild_id, applicant, message, status, created_at, decided_at, decided_by \
+         FROM guild_join_requests WHERE guild_id = $1 AND applicant = $2 AND status = 'pending'",
+    )
+    .bind(guild_id)
+    .bind(actor)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(Json(Some(join_request_response(&row)?))),
+        None => Ok(Json(None)),
+    }
+}
+
 struct PendingJoinRequest {
     applicant: Uuid,
 }

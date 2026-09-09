@@ -780,6 +780,22 @@ with Game A becomes historical.
   and an "Applications" section on the guild page
   (`apps/hub/src/views/Guild.vue`, `manage_members`-gated) for managers to
   review pending requests.
+- **Withdrawing your own join request (issue #256).** `DELETE
+  .../join-requests/{id}` existed from #242, but the Hub had no way to
+  discover the request's own id to call it with — `GET
+  /guilds/{id}/join-requests` is `manage_members`-gated, so an applicant
+  couldn't even see their own pending application. `GET
+  /guilds/{id}/join-requests/mine` closes that gap: deliberately *not*
+  `manage_members`-gated, since it only ever returns the caller's own
+  pending request for the guild (or `null` on a 200, not a 404 for "none"),
+  the same nullable-on-200 "single resource belonging to the caller, or
+  none" convention `GET /me/recovery/status` already established.
+  `Guild.vue`'s Membership card now checks it directly: a pending request
+  shows its status and a "Withdraw request" button (wired to the
+  previously-unused `withdrawJoinRequest` client call) instead of — or
+  alongside, for a recruiting invite-only guild with no pending request —
+  an "Apply to join" action. Scoped to the single guild's own page; no
+  separate cross-guild "my applications" view, per the ticket's scope.
 - **Role name uniqueness, open-guild joining, and role deletion.**
   `guild_roles` had no uniqueness constraint on `name` at all — nothing
   stopped a guild from having several roles all named the same thing.

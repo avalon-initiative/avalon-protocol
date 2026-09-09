@@ -611,6 +611,18 @@ export function listJoinRequests(token: string, guildId: string): Promise<GuildJ
   return request(`/guilds/${guildId}/join-requests`, { token })
 }
 
+// Issue #256: the caller's own pending join request for this guild, or
+// `null` if they don't have one — unlike listJoinRequests above, not
+// manage_members-gated, since it's only ever the caller's own data. Same
+// nullable-on-200 shape getMyRecoveryStatus already uses for a
+// single-resource-or-none self-scoped lookup.
+export function getMyJoinRequest(
+  token: string,
+  guildId: string,
+): Promise<GuildJoinRequestResponse | null> {
+  return request(`/guilds/${guildId}/join-requests/mine`, { token })
+}
+
 export function approveJoinRequest(
   token: string,
   guildId: string,

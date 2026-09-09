@@ -96,6 +96,7 @@ const {
   gameBreakdown,
   gameBreakdownError,
   joinRequests,
+  myJoinRequest,
   refresh,
 } = useGuildDetail(guildId)
 
@@ -686,6 +687,45 @@ async function onRejectJoinRequest(requestId: string) {
   }
 }
 
+// Issue #256: the applicant's own view of their application to *this*
+// guild — `myJoinRequest` (GET .../join-requests/mine) is self-scoped, so
+// unlike `joinRequests` above it's populated for every caller, not just
+// managers. Applying reuses the same `create_join_request` endpoint
+// Guilds.vue's Discover tab already calls; withdrawing finally exercises
+// `withdrawJoinRequest`, present in client.ts since #242 but never wired to
+// anything until now.
+const myJoinRequestError = ref('')
+const applyingToJoin = ref(false)
+const withdrawingJoinRequest = ref(false)
+
+async function onApplyToJoin() {
+  if (!session.token) return
+  myJoinRequestError.value = ''
+  applyingToJoin.value = true
+  try {
+    await api.createJoinRequest(session.token, guildId.value, {})
+    await refresh()
+  } catch (e) {
+    myJoinRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    applyingToJoin.value = false
+  }
+}
+
+async function onWithdrawJoinRequest() {
+  if (!session.token || !myJoinRequest.value) return
+  myJoinRequestError.value = ''
+  withdrawingJoinRequest.value = true
+  try {
+    await api.withdrawJoinRequest(session.token, guildId.value, myJoinRequest.value.id)
+    await refresh()
+  } catch (e) {
+    myJoinRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    withdrawingJoinRequest.value = false
+  }
+}
+
 // --- Invite / join / leave / transfer -----------------------------------
 
 const showInvite = ref(false)
@@ -1148,7 +1188,39 @@ const {
             variant="primary"
             @click="onJoin"
           />
+          <!--
+            Issue #256: invite-only guilds have no direct "Join guild"
+            button above — the applicant path is apply-then-approve. `mine`
+            (myJoinRequest) tells this specific guild page whether the
+            caller already has one pending, so it can show a withdraw
+            action instead of a second "Apply to join" that would just
+            return the same pending row (create_join_request is idempotent,
+            but this reads better).
+          -->
+          <template v-if="guild.join_policy !== 'open' && !isMember">
+            <template v-if="myJoinRequest">
+              <p :class="styles.empty">
+                Application pending<template v-if="myJoinRequest.message">
+                  — "{{ myJoinRequest.message }}"</template
+                >.
+              </p>
+              <AvalonButton
+                :label="withdrawingJoinRequest ? 'Withdrawing…' : 'Withdraw request'"
+                variant="danger"
+                :disabled="withdrawingJoinRequest"
+                @click="onWithdrawJoinRequest"
+              />
+            </template>
+            <AvalonButton
+              v-else-if="guild.recruiting"
+              :label="applyingToJoin ? 'Applying…' : 'Apply to join'"
+              variant="secondary"
+              :disabled="applyingToJoin"
+              @click="onApplyToJoin"
+            />
+          </template>
           <AvalonButton v-if="isMember && !isOwner" label="Leave guild" variant="danger" @click="onLeave" />
+          <p v-if="myJoinRequestError" :class="styles.error">{{ myJoinRequestError }}</p>
         </AvalonCard>
       </div>
     </div>
