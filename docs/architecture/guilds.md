@@ -422,11 +422,11 @@ with Game A becomes historical.
   but nothing resolves "invites addressed to me" the way
   `GET /friends/requests` does for friend requests, so an invited player
   has no way to discover or accept an invite through the Hub UI today; the
-  invite id has to be shared out of band. And no endpoint ever sets
-  `join_policy` to `"open"` (`CreateGuildRequest`/`UpdateGuildRequest`
-  don't take it), so every guild is `invite_only` in practice — the Hub's
-  "Join" button is wired for the day that changes but is currently dead
-  code by construction, not by a Hub-side restriction.
+  invite id has to be shared out of band. `join_policy` toggling has since
+  shipped (issue #21): `UpdateGuildRequest.join_policy` lets an owner/officer
+  flip a guild between `invite_only` and `open`, and `Guild.vue`'s Settings
+  tab exposes it as a live toggle (`onToggleJoinPolicy`) — see the open-guild
+  joining section below for the current, real behavior.
 - **Roster visibility today, and the #87 gap (issue #57).** #57 asked for
   roster/chat UI against #87's public/members-only/hidden-roster visibility
   scopes, but #87 is still an open, undecided
@@ -494,10 +494,12 @@ with Game A becomes historical.
   browsable surface over data #20/#153 already made public, not a
   privacy boundary of its own. **Milestone-1 stand-in**, explicitly: this
   is a direct query against the `guilds`/`guild_members`/
-  `guild_game_associations` projections in `server`, not #42's real indexer
-  read model — the same pragmatic call #44 documents for reads generally.
-  When #42's guild read models land, this endpoint's implementation should
-  move into `crates/indexer`, unchanged at the HTTP surface.
+  `guild_game_associations` tables in `server`, not routed through
+  `crates/indexer`'s `guild_rosters` projection (#42, closed) — the same
+  pragmatic call #44 (open: wire `avalon-server` reads to use the indexer)
+  documents for reads generally. When #44 lands, this endpoint's
+  implementation should move onto the indexer, unchanged at the HTTP
+  surface.
   - **Filters**: `q=` does a case-insensitive substring match across
     `name`/`tag`/`description`; `tag=` is an exact case-insensitive match
     (indexed via `crates/server/db/migrations/0021_guild_discovery_index`'s
@@ -547,7 +549,8 @@ with Game A becomes historical.
   (`ended_at IS NULL`) JOIN `games`, grouped by game. Same milestone-1
   direct-query stand-in #154's discovery board already established
   (`build_game_breakdown_query`, split out and unit-tested the same way
-  `build_discover_query` is), not #42's real indexer read model. No
+  `build_discover_query` is), not routed through the indexer (#42, closed;
+  #44, open, is what would move reads like this onto it). No
   protocol event and no durable table backs the breakdown itself — it's
   derived/computed data, the same "hot state, not history" tier as
   presence (#57) and the discovery board, never touching
@@ -861,8 +864,8 @@ with Game A becomes historical.
   MOTD/banner/links/recruiting metadata, done.
 - [#154](https://github.com/LunarVagabond/avalon-protocol/issues/154) — guild
   discovery board (browse + search recruiting guilds), done as a milestone-1
-  `server`-side stand-in pending [#42](https://github.com/LunarVagabond/avalon-protocol/issues/42)'s
-  real indexer read model.
+  `server`-side stand-in pending [#44](https://github.com/LunarVagabond/avalon-protocol/issues/44)
+  (server reads moved onto the indexer's `guild_rosters` projection, #42).
 - [#160](https://github.com/LunarVagabond/avalon-protocol/issues/160) — decided:
   guild-game association is derived from real member bindings, never
   manager-declared; superseded #20's `associate_game`. Implemented by
@@ -880,6 +883,15 @@ with Game A becomes historical.
 - [#248](https://github.com/LunarVagabond/avalon-protocol/issues/248) —
   per-member RSVP roster, done: who's going/maybe/can't-go per event, not
   just aggregate counts.
+- [#242](https://github.com/LunarVagabond/avalon-protocol/issues/242) — guild
+  join applications (request-to-join + manager review), done.
+- [#256](https://github.com/LunarVagabond/avalon-protocol/issues/256) — let an
+  applicant withdraw their own pending join request, done.
+- [#243](https://github.com/LunarVagabond/avalon-protocol/issues/243) —
+  decided: expand the fixed milestone-1 `GuildPermission` set for events +
+  channels. Implemented by
+  [#250](https://github.com/LunarVagabond/avalon-protocol/issues/250)
+  (per-resource permission overrides, done), described above.
 - [#193](https://github.com/LunarVagabond/avalon-protocol/issues/193) — decided:
   guild chat message retention keeps the existing count cap, but cap-pruned
   messages move to a long-window archive tier instead of being hard-deleted.

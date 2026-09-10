@@ -92,13 +92,19 @@ Rebuilding the projection from history reproduces the same status.
 #80) revokes the key as of time T. Claims signed at T−1 stay authentic and
 valid; claims signed at T+1 are rejected. Nothing historical is destroyed.
 
-## Open mechanics
+## Mechanics
 
-Settled: the invariant above. Open under
-[#81](https://github.com/LunarVagabond/avalon-protocol/issues/81): the exact
-shape of a revocation entry, supersession vs revoke-and-reissue,
-reinstatement, the issuer-status event set, and how validity is computed when
-entries chain.
+Settled: the invariant above, and — as of
+[#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) (decided) —
+the mechanics too: a signed revocation entry (reason code, timestamp, signed
+by an issuer key valid at revocation time), supersession (an issuer can
+replace an attestation rather than revoke-and-reissue), reinstatement (a
+later entry can reverse a revocation — validity computed by walking history,
+never read from a flag), and issuer-level suspend/revoke as their own
+events. Consumer policy under issuer revocation stays the consumer's choice;
+no network-wide default is imposed. Implementation (replacing `revoked_at`
+with these entries) is [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85),
+still open.
 
 ## Today in the repo
 
@@ -106,8 +112,8 @@ entries chain.
   `is_valid(now)`, both slated for replacement.
 - `crates/protocol/src/permissions.rs` — `PermissionGrant.revoked_at` uses the
   same mutable-field shape; grants are not promised-durable protocol history,
-  so this is a projection concern, but it should follow the same pattern once
-  #81 settles.
+  so this is a projection concern, but it should follow the same pattern #81
+  settled once #85 implements it.
 - No revocation events, endpoints, or issuer-status types exist.
 
 ## Decisions and tickets
@@ -115,7 +121,8 @@ entries chain.
 - [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) — ADR:
   history is append-only.
 - [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
-  decision, open: revocation mechanics.
+  decision, closed: revocation mechanics (revocation entries, supersession,
+  reinstatement, issuer-status events), described above.
 - [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85) —
   implementation: replace `revoked_at` with revocation entries.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —

@@ -114,6 +114,7 @@ validity.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
   decision, open: issuer signing keys and lifecycle (the authenticity input).
 - [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
-  decision, open: revocation mechanics (the validity input).
+  decision, closed: revocation mechanics (the validity input) — see
+  [revocation.md](revocation.md). Implementation is #85, still open.
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry
   read model, including recognition relationships.
