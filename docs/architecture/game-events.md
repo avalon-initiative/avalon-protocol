@@ -122,7 +122,9 @@ a scoring correction), the history shows both the issuance and the
 - Nothing game-event-specific exists. `crates/protocol/src/achievements.rs` has
   `AchievementAttestation` and `crates/protocol/src/ids.rs` has `GlobalId`, both
   of which the design reuses.
-- No schema reference field exists on attestations yet.
+- The schema reference field (#88) lives on `AchievementDefinition.schema`
+  (`Option<GlobalId>`), not on `AchievementAttestation` itself — an
+  attestation only references its achievement, which carries the schema.
 - Filed as on-hold: not a milestone-1 item, tracked now so the attestation and
   event designs don't preclude it.
 
