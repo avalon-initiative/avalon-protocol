@@ -59,19 +59,6 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-async fn seed_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid, role_index: i32) {
-    sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
-         VALUES ($1, $2, $3, now())",
-    )
-    .bind(guild_id)
-    .bind(identity_id)
-    .bind(role_index)
-    .execute(pool)
-    .await
-    .expect("failed to seed guild membership");
-}
-
 fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
     request.bearer_auth(token)
 }
@@ -119,16 +106,16 @@ async fn create_guild_with_general_channel(
     (guild_id, channel_id)
 }
 
+/// `create_guild_with_general_channel` already makes the caller a real
+/// `guild_members` owner row — no separate seed needed, and seeding it
+/// again would collide on `guild_members`'s `(guild_id, identity_id)`
+/// primary key (same fix as `guild_channels.rs`/`guild_events.rs`).
 async fn seed_membership_and_guild(
-    pool: &PgPool,
     http: &reqwest::Client,
     base: &str,
-    owner_id: Uuid,
     owner_token: &str,
 ) -> (String, String) {
-    let (guild_id, channel_id) = create_guild_with_general_channel(http, base, owner_token).await;
-    seed_membership(pool, Uuid::parse_str(&guild_id).unwrap(), owner_id, 0).await;
-    (guild_id, channel_id)
+    create_guild_with_general_channel(http, base, owner_token).await
 }
 
 /// Inserts a row directly into `guild_messages_archive` — see module doc
@@ -164,8 +151,7 @@ async fn a_current_member_can_read_the_archive() {
     let base = server_url();
     let pool = test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let archived_id = seed_archived_message(
         &pool,
@@ -208,8 +194,7 @@ async fn a_non_member_cannot_read_the_archive() {
     let pool = test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     seed_archived_message(
         &pool,
@@ -243,8 +228,7 @@ async fn moderation_delete_purges_an_already_archived_message() {
     let base = server_url();
     let pool = test_pool().await;
     let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let archived_id = seed_archived_message(
         &pool,
@@ -293,9 +277,8 @@ async fn deleting_a_nonexistent_message_id_404s_even_with_an_archive_fallback() 
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let delete = auth(
         http.delete(format!(
