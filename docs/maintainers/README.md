@@ -51,12 +51,17 @@ Decision / Consequences / Related.
 
 ## Local dev setup
 
+See [`local-development.md`](local-development.md) for the full, ordered
+path from a clean clone — Postgres via `docker compose`, `make migrate`,
+running the server, creating an identity, and the Hub/Storybook/C# SDK
+setup, with what "it worked" looks like at each step.
+
+Quick reference once you've read that page:
+
 ```bash
-cp .env.example .env   # fill in DATABASE_URL, AVALON_SERVER_ADDR, etc.
-make migrate            # apply db/migrations/
-make build               # cargo build --workspace
-make check               # fmt-check + lint + test — what CI runs
-make web-install          # npm install for apps/hub, apps/mobile-hub, packages/ui (npm workspaces, root-level install)
+docker compose up -d && cp .env.compose.example .env   # Postgres + env
+make migrate && make start                              # db + server
+make web-install                                        # JS workspace, once
 ```
 
 Run `make help` for the full command list, including the C# SDK

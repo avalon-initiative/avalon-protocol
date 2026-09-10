@@ -33,6 +33,7 @@ bindings/csharp/**/obj/
 .env
 .env.*
 !.env.example
+!.env.compose.example
 *.local
 *.key
 

@@ -1,0 +1,28 @@
+# Postgres only — avalon-server, the CLI, and the JS/TS workspace all run
+# natively via `make` (cargo/npm), not in a container. This just gives you a
+# local Postgres with the `avalon` role/database already provisioned.
+#
+# Defaults here match `.env.compose.example`'s DATABASE_URL. Bring it up with
+# `docker compose up -d`, then follow docs/maintainers/local-development.md.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: avalon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: avalon
+      POSTGRES_PASSWORD: avalon
+      POSTGRES_DB: avalon
+    ports:
+      - "5432:5432"
+    volumes:
+      - avalon-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avalon -d avalon"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  avalon-postgres-data:
