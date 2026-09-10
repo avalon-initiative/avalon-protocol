@@ -207,21 +207,33 @@ is visibly marked.
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).
 - `GameDirectory.vue` / `GameProfile.vue` (#270, first buildable slice of
-  #90) — `/games` (a search box + name/newest sort over `GET /games`,
+  #90) — `/integrations` (a search box + name/newest sort over `GET /games`,
   `apps/hub/src/composables/useDiscoverGames.ts`, same server-side
   cursor-pagination-on-filter-change pattern `useDiscoverGuilds.ts`
-  established for #154) and `/games/:slug` (the profile page: `GET
+  established for #154) and `/integrations/:slug` (the profile page: `GET
   /games/{slug}`'s public fields plus `GET /games/{slug}/registry`'s five
   metrics, each rendered through `AvalonMetricTile` with its definition
-  and class label — never a bare number). Both public, unauthenticated
-  reads — no session token required, matching the endpoints' own
-  visibility. `status` renders through a badge that's visibly distinct
-  whenever it isn't `"active"`; no key-history UI (blocked on the
-  still-open #80). Nav entry no longer disabled in `HubShell.vue`. No
+  and class label — never a bare number). `/games` and `/games/:slug`
+  redirect to the routes above (`apps/hub/src/router/index.ts`), so
+  existing deep links don't 404. The nav entry (`HubShell.vue`) reads
+  "Connected Apps", not "Games" — per #282/#275, `category` tabs
+  (Games/Apps/Services) filter the fetched list client-side, though only
+  Games has real registrants today. Both public, unauthenticated reads —
+  no session token required, matching the endpoints' own visibility (#273).
+  `status` renders through a badge that's visibly distinct whenever it
+  isn't `"active"`; no key-history UI (blocked on the still-open #80). No
   ranking, no score, no "recommended" ordering anywhere in either view,
   per #89's invariant — `apps/hub/src/views/GameDirectory.test.ts` and
   `GameProfile.test.ts` assert every metric's label renders and that no
   score/ranking element exists.
+- `Connections.vue` (`/connections`, #27/#83) — lists the caller's own
+  `GameBinding`s with a revoke action. `ConnectGame.vue` (`/connect/:slug`,
+  #27) — the capability-consent flow a player lands on to authorize a game,
+  posting to `POST /games/{slug}/connect`.
+- `RecoverIdentity.vue` (`/recover-identity`, #201) — the guardian-based
+  recovery flow's entry point for a device with no registered passkey; see
+  [identity](./identity.md)'s "Today in the repo" for the server-side
+  mechanics.
 - `packages/ui/` — `@avalon/ui`: `AvalonButton`, `AvalonTextField`,
   `AvalonForm`, `AvalonAuthCard`, `AvalonPresenceBadge`, `AvalonFriendRow`,
   `AvalonFriendRequestRow`, `AvalonAvatar`, `AvalonCard`, `AvalonIcon` (a
@@ -254,7 +266,11 @@ is visibly marked.
   `PATCH /guilds/:id/channels/:cid`, `POST /guilds/:id/channels/:cid/archive`,
   `GET|POST /guilds/:id/channels/:cid/messages`,
   `DELETE /guilds/:id/channels/:cid/messages/:mid`. Since #270:
-  `GET /games`, `GET /games/:slug/registry`.
+  `GET /games`, `GET /games/:slug/registry`. Also called, not yet listed
+  above: `POST|DELETE /games/:slug/connect` (bind/unbind), `GET
+  /me/connections`, `GET /me/grants`, and `DELETE
+  /games/:slug/grants/:capability` (#27/#83), used by
+  `Connections.vue`/`ConnectGame.vue`.
 
 ## Decisions and tickets
 
@@ -269,7 +285,11 @@ is visibly marked.
   [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) game discovery
   ([#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) is its
   first buildable slice: `GET /games`, the game directory, and the
-  per-game profile page).
+  per-game profile page; [#273](https://github.com/LunarVagabond/avalon-protocol/issues/273)
+  made the directory and profile page render without auth;
+  [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275)/[#282](https://github.com/LunarVagabond/avalon-protocol/issues/282)
+  generalized the nav/routes to "Connected Apps"/`/integrations` with
+  category tabs, described above).
 - [#59](https://github.com/LunarVagabond/avalon-protocol/issues/59) — Epic: Avalon
   Mobile-Hub (Tauri): [#60](https://github.com/LunarVagabond/avalon-protocol/issues/60),
   [#61](https://github.com/LunarVagabond/avalon-protocol/issues/61),
