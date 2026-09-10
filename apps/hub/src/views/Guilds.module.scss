@@ -1,5 +1,16 @@
 /* Guilds.vue-specific styles (issue #154's Discover tab) — page.module.scss
    still owns the shared header/grid/error/empty scaffolding. */
+
+/* Issue #281: "Create a guild" moved from a permanent side-column card into
+   this header row, next to the title, freeing the grid for a single
+   full-width column. */
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--av-space-4);
+}
+
 .tabs {
   display: flex;
   gap: var(--av-space-2);
