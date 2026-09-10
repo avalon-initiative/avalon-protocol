@@ -454,7 +454,11 @@ async fn get_games_slug_redirects_to_integrations_slug() {
         .send()
         .await
         .unwrap();
-    assert!(response.status().is_redirection(), "{:?}", response.status());
+    assert!(
+        response.status().is_redirection(),
+        "{:?}",
+        response.status()
+    );
     let location = response
         .headers()
         .get(reqwest::header::LOCATION)
@@ -479,7 +483,11 @@ async fn get_games_redirects_to_integrations_preserving_query_string() {
         .send()
         .await
         .unwrap();
-    assert!(response.status().is_redirection(), "{:?}", response.status());
+    assert!(
+        response.status().is_redirection(),
+        "{:?}",
+        response.status()
+    );
     let location = response
         .headers()
         .get(reqwest::header::LOCATION)
