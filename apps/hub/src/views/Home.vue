@@ -76,8 +76,8 @@ const quickActions = [
     </header>
     <p v-if="error" :class="styles.error">{{ error }}</p>
 
-    <AvalonCard v-if="featuredGame" title="Featured Game" :class="styles.featuredCard">
-      <div :class="styles.featured">
+    <AvalonCard v-if="!gamesLoading" title="Featured Game" :class="styles.featuredCard">
+      <div v-if="featuredGame" :class="styles.featured">
         <span :class="styles.featuredIcon"><AvalonIcon name="games" :size="28" /></span>
         <div :class="styles.featuredText">
           <p :class="styles.featuredLabel">{{ featuredGame.name }}</p>
@@ -91,6 +91,18 @@ const quickActions = [
           @click="router.push({ name: 'integration-profile', params: { slug: featuredGame.slug } })"
         />
       </div>
+      <div v-else :class="styles.featured">
+        <span :class="styles.featuredIcon"><AvalonIcon name="discover" :size="28" /></span>
+        <div :class="styles.featuredText">
+          <p :class="styles.featuredLabel">No games connected yet</p>
+          <p :class="styles.featuredMeta">Browse the directory to find your first game.</p>
+        </div>
+        <AvalonButton
+          label="Explore Games"
+          variant="secondary"
+          @click="router.push({ name: 'integrations' })"
+        />
+      </div>
     </AvalonCard>
 
     <div :class="styles.grid">
@@ -99,9 +111,14 @@ const quickActions = [
           <template #action>
             <RouterLink to="/connections">View all</RouterLink>
           </template>
-          <p v-if="!gamesLoading && connectedGames.length === 0" :class="styles.empty">
-            You haven't connected to any games yet.
-          </p>
+          <template v-if="!gamesLoading && connectedGames.length === 0">
+            <p :class="styles.empty">You haven't connected to any games yet.</p>
+            <AvalonButton
+              label="Explore Games"
+              variant="secondary"
+              @click="router.push({ name: 'integrations' })"
+            />
+          </template>
           <ul v-else :class="styles.gameGrid">
             <li v-for="binding in connectedGames" :key="binding.binding_id" :class="styles.gameTile">
               <RouterLink
@@ -176,9 +193,14 @@ const quickActions = [
           <template #action>
             <RouterLink to="/guilds">View all</RouterLink>
           </template>
-          <p v-if="!guildsLoading && guilds.length === 0" :class="styles.empty">
-            You haven't joined a guild yet.
-          </p>
+          <template v-if="!guildsLoading && guilds.length === 0">
+            <p :class="styles.empty">You haven't joined a guild yet.</p>
+            <AvalonButton
+              label="Find a Guild"
+              variant="secondary"
+              @click="router.push({ name: 'guilds' })"
+            />
+          </template>
           <ul v-else :class="styles.guildList">
             <li v-for="guild in homeGuilds" :key="guild.id">
               <RouterLink

@@ -49,6 +49,50 @@ describe('summarizeActivityEntry', () => {
     )
   })
 
+  it('summarizes guild events with the name/reason payload fields when present', () => {
+    expect(summarizeActivityEntry(makeEntry('guild.created', { name: 'Celestial Forge' }))).toBe(
+      'You created the guild Celestial Forge.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.created', {}))).toBe('You created a guild.')
+    expect(summarizeActivityEntry(makeEntry('guild.updated', { name: 'Celestial Forge' }))).toBe(
+      "You updated Celestial Forge's settings.",
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.role_defined', { name: 'Officer' }))).toBe(
+      'You defined the role Officer.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.role_deleted'))).toBe(
+      'You deleted a guild role.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.role_changed'))).toBe(
+      "You changed a member's role.",
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.owner_transferred'))).toBe(
+      'You transferred guild ownership.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.game_associated'))).toBe(
+      'You associated a game with your guild.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.member_added'))).toBe('You joined a guild.')
+    expect(summarizeActivityEntry(makeEntry('guild.member_removed', { reason: 'left' }))).toBe(
+      'You left a guild.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.member_removed', { reason: 'removed' }))).toBe(
+      'You removed a member from a guild.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.favorite_games_updated'))).toBe(
+      "You updated your guild's favorite games.",
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.channel_created', { name: 'raids' }))).toBe(
+      'You created the channel #raids.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.channel_renamed', { name: 'raids' }))).toBe(
+      'You renamed a channel to #raids.',
+    )
+    expect(summarizeActivityEntry(makeEntry('guild.channel_archived'))).toBe(
+      'You archived a guild channel.',
+    )
+  })
+
   it('falls back to the raw kind for an unrecognized event, never throwing', () => {
     expect(summarizeActivityEntry(makeEntry('some.future.kind', { anything: 'here' }))).toBe(
       'some.future.kind',
