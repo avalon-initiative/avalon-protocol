@@ -186,6 +186,11 @@ pub async fn connect(
             timestamp: now,
             version: 1,
         };
+        // outbox::enqueue alone only drives ledger settlement — the Game
+        // Registry's players/total_players_ever metrics (crate::registry,
+        // backed by indexer_game_bindings) need the projection applied too,
+        // same as register_finish/update_profile do for their own events.
+        state.indexer.apply_in_tx(&mut tx, &event).await?;
         outbox::enqueue(&mut tx, &event).await?;
     }
 
@@ -381,6 +386,7 @@ pub async fn disconnect(
         timestamp: now,
         version: 1,
     };
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
