@@ -7,6 +7,7 @@
 import { ref } from 'vue'
 import { useNetworkTrust } from '../composables/useNetworkTrust'
 import { getServerUrl, setServerUrl } from '../api/client'
+import { AvalonModal } from '@avalon/ui'
 import styles from './NetworkStatus.module.scss'
 
 const { state, knownNetworks, refresh } = useNetworkTrust()
@@ -67,13 +68,13 @@ function statusTone(): 'ok' | 'warn' | 'danger' | 'pending' {
       type="button"
       :class="[styles.summary, styles[statusTone()]]"
       :aria-expanded="expanded"
-      @click="expanded = !expanded"
+      @click="expanded = true"
     >
       <span :class="styles.dot" />
       <span :class="styles.label">{{ statusLabel() }}</span>
     </button>
 
-    <div v-if="expanded" :class="styles.panel">
+    <AvalonModal title="Network trust" :open="expanded" @close="expanded = false">
       <p v-if="state.kind === 'verified'" :class="styles.detail">
         Signed Tree Head verified against the pinned key for
         <code>{{ state.entry.network_id }}</code>.
@@ -90,64 +91,67 @@ function statusTone(): 'ok' | 'warn' | 'danger' | 'pending' {
         {{ state.message }}
       </p>
 
-      <p :class="styles.knownHeading">Networks this Hub build recognizes:</p>
-      <ul :class="styles.knownList">
-        <li v-for="network in knownNetworks" :key="network.network_id" :class="styles.knownItem">
-          <span :class="styles.knownLabel">{{ network.label }}</span>
-          <span :class="styles.knownId">{{ network.network_id }}</span>
-          <span v-if="network.placeholder" :class="styles.knownPlaceholder">placeholder</span>
-        </li>
-      </ul>
-
-      <button type="button" :class="styles.refresh" @click="refresh">Re-check now</button>
+      <section :class="styles.section">
+        <h3 :class="styles.sectionHeading">Networks this Hub build recognizes</h3>
+        <ul :class="styles.knownList">
+          <li v-for="network in knownNetworks" :key="network.network_id" :class="styles.knownItem">
+            <span :class="styles.knownLabel">{{ network.label }}</span>
+            <span :class="styles.knownId">{{ network.network_id }}</span>
+            <span v-if="network.placeholder" :class="styles.knownPlaceholder">placeholder</span>
+          </li>
+        </ul>
+        <button type="button" :class="styles.refresh" @click="refresh">Re-check now</button>
+      </section>
 
       <!-- Issue #232's actual network selector — picking an entry (or a
            custom URL) is an explicit, visible switch, never silent, and the
            active network is always what the status line above reports
            after the reload this triggers. -->
-      <p :class="styles.switchHeading">Switch network:</p>
-      <ul :class="styles.switchList">
-        <li v-for="network in knownNetworks" :key="network.network_id" :class="styles.switchItem">
-          <span>{{ network.label }}</span>
-          <span v-if="network.server_url === getServerUrl()" :class="styles.currentBadge"
-            >Current</span
-          >
-          <button
-            v-else-if="network.server_url"
-            type="button"
-            :class="styles.switchButton"
-            @click="switchTo(network.server_url)"
-          >
-            Switch
-          </button>
-          <span v-else :class="styles.knownId">No known server URL yet</span>
-        </li>
-      </ul>
+      <section :class="styles.section">
+        <h3 :class="styles.sectionHeading">Switch network</h3>
+        <ul :class="styles.switchList">
+          <li v-for="network in knownNetworks" :key="network.network_id" :class="styles.switchItem">
+            <span>{{ network.label }}</span>
+            <span v-if="network.server_url === getServerUrl()" :class="styles.currentBadge"
+              >Current</span
+            >
+            <button
+              v-else-if="network.server_url"
+              type="button"
+              :class="styles.switchButton"
+              @click="switchTo(network.server_url)"
+            >
+              Switch
+            </button>
+            <span v-else :class="styles.knownId">No known server URL yet</span>
+          </li>
+        </ul>
 
-      <button
-        v-if="!showCustomForm"
-        type="button"
-        :class="styles.switchButton"
-        @click="showCustomForm = true"
-      >
-        Connect to a custom network…
-      </button>
-      <div v-else :class="styles.customForm">
-        <input
-          v-model="customUrl"
-          type="text"
-          placeholder="https://…"
-          :class="styles.customInput"
-          @keyup.enter="connectToCustomUrl"
-        />
-        <button type="button" :class="styles.switchButton" @click="connectToCustomUrl">
-          Connect
+        <button
+          v-if="!showCustomForm"
+          type="button"
+          :class="styles.switchButton"
+          @click="showCustomForm = true"
+        >
+          Connect to a custom network…
         </button>
-      </div>
-      <p v-if="showCustomForm" :class="[styles.detail, styles.customWarning]">
-        A custom network is never treated as verified unless its Signed Tree Head happens to match
-        an entry already pinned in this Hub build's trust-anchor list.
-      </p>
-    </div>
+        <div v-else :class="styles.customForm">
+          <input
+            v-model="customUrl"
+            type="text"
+            placeholder="https://…"
+            :class="styles.customInput"
+            @keyup.enter="connectToCustomUrl"
+          />
+          <button type="button" :class="styles.switchButton" @click="connectToCustomUrl">
+            Connect
+          </button>
+        </div>
+        <p v-if="showCustomForm" :class="[styles.detail, styles.customWarning]">
+          A custom network is never treated as verified unless its Signed Tree Head happens to
+          match an entry already pinned in this Hub build's trust-anchor list.
+        </p>
+      </section>
+    </AvalonModal>
   </div>
 </template>
