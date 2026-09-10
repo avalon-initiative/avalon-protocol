@@ -1,5 +1,5 @@
 //! Reference Rust SDK. A game depends on this crate, never on `avalon-server`
-//! or `avalon-chain` directly — see `docs/Proposal.md` §17 and
+//! or `avalon-chain` directly — see `docs/stakeholders/Proposal.md` §17 and
 //! `docs/architecture/sdk.md`.
 //!
 //! `authenticate()` is wired to a real `avalon-server`: `GET /me` for

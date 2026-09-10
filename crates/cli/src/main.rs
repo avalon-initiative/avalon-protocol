@@ -16,7 +16,7 @@
 //! (issue #115), `avalon register-game` (issue #29). A build compiled with
 //! `--no-default-features` doesn't merely refuse these commands at
 //! runtime — they, and every dependency only they need, are absent from the
-//! binary entirely. `issue-achievement` (per `docs/Proposal.md` §23's
+//! binary entirely. `issue-achievement` (per `docs/stakeholders/Proposal.md` §23's
 //! milestone-1 vertical slice) isn't wired up yet either way — it depends
 //! on the Achievements epic, still unbuilt.
 

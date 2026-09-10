@@ -2,7 +2,7 @@
 //! considers interoperable or durable.
 //!
 //! Not every game action is a protocol event; ordinary gameplay (combat,
-//! movement, XP ticks) never becomes one. See `docs/Proposal.md` §14 and
+//! movement, XP ticks) never becomes one. See `docs/stakeholders/Proposal.md` §14 and
 //! `docs/architecture/protocol-events.md` for the hot-data/durable-fact
 //! distinction, and issue #75 for why durable history is canonical.
 

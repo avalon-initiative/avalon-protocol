@@ -5,7 +5,7 @@
 //! definitions as the source of truth for what Avalon *is*, independent of how
 //! any particular deployment implements it.
 //!
-//! See `docs/Proposal.md` for the narrative version of this model. Real
+//! See `docs/stakeholders/Proposal.md` for the narrative version of this model. Real
 //! architecture decisions are recorded as closed GitHub issues labeled
 //! `architecture-decision-record`, not as files in this repo (e.g. why
 //! identity and game characters are modeled separately: issue #67).
