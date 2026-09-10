@@ -61,7 +61,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 /// with it — exercising `devices::approve_device_grant`'s real
 /// `verify_event_signature` check, not a bypass.
 async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let signing_key = SigningKey::generate(&mut rand::rng());
     let public_key = signing_key.verifying_key().to_bytes();
 
     let row = sqlx::query(
@@ -115,7 +115,7 @@ async fn a_grant_approved_by_a_valid_trusted_key_succeeds_and_the_new_key_is_reg
         .unwrap();
     assert_eq!(devices_before.as_array().unwrap().len(), 1);
 
-    let new_device_signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let new_device_signing_key = SigningKey::generate(&mut rand::rng());
     let new_device_public_key = new_device_signing_key.verifying_key().to_bytes();
 
     let request_body = serde_json::json!({
@@ -188,7 +188,7 @@ async fn an_approval_attempt_from_a_revoked_key_is_rejected() {
         .await
         .unwrap();
 
-    let new_device_signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let new_device_signing_key = SigningKey::generate(&mut rand::rng());
     let new_device_public_key = new_device_signing_key.verifying_key().to_bytes();
     let request_body = serde_json::json!({
         "requested_signing_public_key": BASE64.encode(new_device_public_key),

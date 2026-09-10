@@ -66,7 +66,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
@@ -341,7 +341,7 @@ pub async fn create_game_challenge(
     let game_id = fetch_game_id_by_slug(&state, &slug).await?;
 
     let mut nonce = [0u8; GAME_CHALLENGE_NONCE_BYTES];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand::rng().fill_bytes(&mut nonce);
     let challenge_id = Uuid::new_v4();
     let expires_at =
         OffsetDateTime::now_utc() + time::Duration::minutes(GAME_CHALLENGE_TTL_MINUTES);
@@ -490,7 +490,7 @@ mod tests {
     /// from any other key or over any other nonce.
     #[test]
     fn a_game_signed_nonce_verifies_against_its_own_key_only() {
-        let mut csprng = rand::rngs::OsRng;
+        let mut csprng = rand::rng();
         let signing_key = SigningKey::generate(&mut csprng);
         let nonce = b"a-challenge-nonce";
         let signature = signing_key.sign(nonce);

@@ -94,14 +94,14 @@ async fn generate_unique_discriminator(
     state: &AppState,
     display_name: &str,
 ) -> Result<String, AppError> {
-    use rand::Rng;
+    use rand::RngExt;
     const MAX_ATTEMPTS: u32 = 20;
     for _ in 0..MAX_ATTEMPTS {
-        // `thread_rng()` is `!Send` and must not live across an `.await` —
+        // `rng()` is `!Send` and must not live across an `.await` —
         // dropping it within this statement (rather than binding it once
         // outside the loop) keeps this function's future `Send`, which
         // axum's `Handler` bound requires of every route it's awaited from.
-        let candidate = format!("{:04}", rand::thread_rng().gen_range(0..10000));
+        let candidate = format!("{:04}", rand::rng().random_range(0..10000));
         let taken =
             sqlx::query("SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2")
                 .bind(display_name)

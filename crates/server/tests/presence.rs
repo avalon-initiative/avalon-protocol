@@ -202,7 +202,7 @@ async fn register_unique_game(
     base: &str,
 ) -> (serde_json::Value, SigningKey) {
     let suffix = Uuid::new_v4().simple().to_string();
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let signing_key = SigningKey::generate(&mut rand::rng());
     let body = serde_json::json!({
         "slug": format!("presence-test-{}", &suffix[..12]),
         "name": format!("Presence Test Game {}", &suffix[..8]),

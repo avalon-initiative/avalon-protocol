@@ -147,7 +147,7 @@ pub(crate) async fn create_identity() {
     // The identity's event-signing key (see docs/architecture/identity.md
     // and crates/server/src/auth.rs) — separate from the WebAuthn passkey
     // below, and the only thing that signs `identity.created`.
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let event_signing_public_key = BASE64.encode(signing_key.verifying_key().to_bytes());
 
@@ -422,7 +422,7 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
     let base = args.server.clone().unwrap_or_else(server_url);
     let http = reqwest::Client::new();
 
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let public_key_base64 = BASE64.encode(signing_key.verifying_key().to_bytes());
     let private_key_base64 = BASE64.encode(signing_key.to_bytes());

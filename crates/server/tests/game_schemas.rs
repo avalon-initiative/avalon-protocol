@@ -27,7 +27,7 @@ struct RegisteredGame {
 
 async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
     let suffix = Uuid::new_v4().simple().to_string();
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let slug = format!("test-schema-{}", &suffix[..12]);
     let body = serde_json::json!({
