@@ -40,13 +40,22 @@ async fn seed_game(pool: &PgPool) -> Uuid {
     game_id
 }
 
+/// Scoped by `game_id`, not just `version` — the real id shape
+/// (`game:<slug>:schema:<version>`) is per-game, and `indexer_game_schemas`
+/// upserts on `id` alone, so a global constant here would race with any
+/// other test using the same `version` (this file's tests run in parallel
+/// by default) instead of just this test's own freshly-seeded game.
+fn schema_id(game_id: Uuid, version: u32) -> String {
+    format!("game:{game_id}:schema:{version}")
+}
+
 fn published_event(
     game_id: Uuid,
     version: u32,
     proto_source: &str,
     supersedes: Option<&str>,
 ) -> ProtocolEvent {
-    let id = format!("game:test:schema:{version}");
+    let id = schema_id(game_id, version);
     ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "game_schema.published".to_string(),
@@ -83,7 +92,7 @@ async fn a_game_with_publications_surfaces_them_oldest_first_with_lineage() {
     let indexer = PostgresIndexer::new(pool.clone());
     let game_id = seed_game(&pool).await;
 
-    let v1_id = "game:test:schema:1".to_string();
+    let v1_id = schema_id(game_id, 1);
     let v1 = published_event(game_id, 1, "message Character { uint32 level = 1; }", None);
     indexer.apply(&v1).await.expect("apply v1 failed");
 
@@ -107,7 +116,7 @@ async fn a_game_with_publications_surfaces_them_oldest_first_with_lineage() {
     );
     assert_eq!(
         versions[0].superseded_by.as_deref(),
-        Some("game:test:schema:2")
+        Some(schema_id(game_id, 2).as_str())
     );
 
     assert_eq!(versions[1].version, 2);
