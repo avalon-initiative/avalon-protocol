@@ -2,14 +2,11 @@
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 //!
-//! Depends on issue #21's `guild_members` table (`guild_id, identity_id,
-//! role_index, joined_at`), which is not on `main` yet at the time this
-//! file was written — see `crates/server/src/channels.rs`'s module doc
-//! comment. `seed_membership` below inserts directly into that table, same
-//! "seed state via SQL rather than a real ceremony/flow" pattern
-//! `crates/server/tests/guilds.rs` already uses for identities/sessions.
-//! These tests won't run until both issues are merged and migrated
-//! together; they're written now so the intended behavior is pinned down.
+//! `seed_membership` inserts directly into `guild_members` for a
+//! non-owner role; the owner role is never seeded that way since
+//! `POST /guilds` already creates a real owner `guild_members` row
+//! atomically (`guilds::create_guild`) — seeding it again would collide on
+//! `guild_members`'s `(guild_id, identity_id)` primary key.
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -137,22 +134,16 @@ async fn guild_creation_seeds_a_default_general_channel() {
 /// Helper shared by several tests below: creates a guild, seeds the
 /// creator as an owner-role member (so subsequent membership-gated calls
 /// succeed), and returns `(guild_id, general_channel_id)`.
+/// `create_guild_with_general_channel` already makes the caller a real
+/// `guild_members` owner row — this is just that call under a name matching
+/// what most tests below actually want ("a guild that already has its
+/// owner seeded"), not a second, redundant membership insert.
 async fn seed_membership_and_guild(
-    pool: &PgPool,
     http: &reqwest::Client,
     base: &str,
-    owner_id: Uuid,
     owner_token: &str,
 ) -> (String, String) {
-    let (guild_id, channel_id) = create_guild_with_general_channel(http, base, owner_token).await;
-    seed_membership(
-        pool,
-        Uuid::parse_str(&guild_id).unwrap(),
-        owner_id,
-        0, // owner role index
-    )
-    .await;
-    (guild_id, channel_id)
+    create_guild_with_general_channel(http, base, owner_token).await
 }
 
 #[tokio::test]
@@ -161,9 +152,8 @@ async fn a_member_can_send_and_list_messages_in_order() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     for body in ["first", "second", "third"] {
         let send = auth(
@@ -207,9 +197,8 @@ async fn pagination_walks_older_pages_via_before_cursor() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     for i in 0..5 {
         auth(
@@ -275,10 +264,9 @@ async fn a_non_member_cannot_read_or_send_messages() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let list = auth(
         http.get(format!(
@@ -310,9 +298,8 @@ async fn an_archived_channel_rejects_new_posts() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let archive = auth(
         http.post(format!(
@@ -348,9 +335,8 @@ async fn manage_channels_can_hard_delete_a_message() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let send = auth(
         http.post(format!(
@@ -403,9 +389,8 @@ async fn a_message_body_over_the_length_cap_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     let too_long = "a".repeat(4001);
     let send = auth(
@@ -484,10 +469,9 @@ async fn announcement_only_channel_blocks_a_plain_member_base_only() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
 
     set_announcement_only(&http, &base, &owner_token, &guild_id, &channel_id, true).await;
@@ -513,10 +497,9 @@ async fn announcement_only_channel_grant_override_allows_a_plain_member_to_post(
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
 
     set_announcement_only(&http, &base, &owner_token, &guild_id, &channel_id, true).await;
@@ -554,10 +537,9 @@ async fn deny_override_blocks_an_officer_from_managing_one_specific_channel() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
     let (officer_id, officer_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
     // Officer (role index 1) holds `manage_channels` guild-wide by
     // default (see `guilds::starter_roles`).
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), officer_id, 1).await;
@@ -605,9 +587,8 @@ async fn owner_bypasses_a_deny_override_on_a_channel() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (owner_id, owner_token) = seed_identity_session(&pool).await;
-    let (guild_id, channel_id) =
-        seed_membership_and_guild(&pool, &http, &base, owner_id, &owner_token).await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     // A deny override against the owner's own role index (0) still can't
     // block the owner — ownership is structural (`guilds.owner`), not a
