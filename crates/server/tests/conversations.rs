@@ -53,6 +53,62 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
     request.bearer_auth(token)
 }
 
+/// Seeds an accepted friendship directly into `friendships`, which requires
+/// `a < b` — ordered here rather than trusting caller order.
+async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
+    let (a, b) = if x < y { (x, y) } else { (y, x) };
+    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+        .bind(a)
+        .bind(b)
+        .execute(pool)
+        .await
+        .expect("failed to seed friendship");
+}
+
+/// Opts `identity_id` into global discoverability (issue #205).
+async fn seed_discoverable(pool: &PgPool, identity_id: Uuid) {
+    sqlx::query("INSERT INTO discovery_preferences (identity_id, discoverable) VALUES ($1, true)")
+        .bind(identity_id)
+        .execute(pool)
+        .await
+        .expect("failed to seed discovery preference");
+}
+
+/// Creates a guild owned by `owner_token`'s identity and returns its id.
+async fn create_guild(client: &reqwest::Client, owner_token: &str) -> Uuid {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let body = serde_json::json!({
+        "name": format!("Conversations Test Guild {}", &suffix[..8]),
+        "tag": suffix[..4].to_uppercase(),
+        "description": "a guild created by a conversations integration test",
+    });
+    let created: serde_json::Value = auth(
+        client.post(format!("{}/guilds", server_url())),
+        owner_token,
+    )
+    .json(&body)
+    .send()
+    .await
+    .expect("create guild request failed")
+    .json()
+    .await
+    .expect("expected JSON guild body");
+    Uuid::parse_str(created["id"].as_str().expect("expected guild id")).expect("guild id is a UUID")
+}
+
+/// Seeds a `guild_members` row directly at the `member` role (index 2).
+async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
+    sqlx::query(
+        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
+         VALUES ($1, $2, 2, now())",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .execute(pool)
+    .await
+    .expect("failed to seed guild membership");
+}
+
 /// Two identities create a conversation and exchange messages across two
 /// independent sessions — the acceptance-criteria flow for #102's
 /// endpoints end to end.
@@ -63,6 +119,7 @@ async fn two_identities_create_a_conversation_and_exchange_messages_across_sessi
     let client = reqwest::Client::new();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     let created: serde_json::Value = auth(
         client.post(format!("{}/conversations", server_url())),
@@ -147,6 +204,7 @@ async fn a_block_created_mid_conversation_rejects_the_next_send() {
     let client = reqwest::Client::new();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     let created: serde_json::Value = auth(
         client.post(format!("{}/conversations", server_url())),
@@ -248,9 +306,10 @@ async fn a_block_created_mid_conversation_rejects_the_next_send() {
 async fn a_non_participant_cannot_read_or_post() {
     let pool = test_pool().await;
     let client = reqwest::Client::new();
-    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, _bob_token) = seed_identity_session(&pool).await;
     let (_eve_id, eve_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     let created: serde_json::Value = auth(
         client.post(format!("{}/conversations", server_url())),
@@ -306,8 +365,9 @@ async fn a_non_participant_cannot_read_or_post() {
 async fn retrying_a_send_with_the_same_client_entry_id_does_not_double_apply() {
     let pool = test_pool().await;
     let client = reqwest::Client::new();
-    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, _bob_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     let created: serde_json::Value = auth(
         client.post(format!("{}/conversations", server_url())),
@@ -415,4 +475,117 @@ async fn retrying_a_send_with_the_same_client_entry_id_does_not_double_apply() {
             .await
             .expect("total row count query failed");
     assert_eq!(total_count, 2);
+}
+
+/// Issue #269: no relationship, no conversation.
+#[tokio::test]
+#[ignore]
+async fn unrelated_participant_cannot_create_a_conversation() {
+    let pool = test_pool().await;
+    let client = reqwest::Client::new();
+    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (bob_id, _bob_token) = seed_identity_session(&pool).await;
+
+    let response = auth(
+        client.post(format!("{}/conversations", server_url())),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "participants": [bob_id] }))
+    .send()
+    .await
+    .expect("create conversation request failed");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+/// Issue #269 / #205: opting into global search discoverability never
+/// substitutes for an actual relationship.
+#[tokio::test]
+#[ignore]
+async fn discoverable_but_unrelated_participant_is_still_rejected() {
+    let pool = test_pool().await;
+    let client = reqwest::Client::new();
+    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (bob_id, _bob_token) = seed_identity_session(&pool).await;
+    seed_discoverable(&pool, bob_id).await;
+
+    let response = auth(
+        client.post(format!("{}/conversations", server_url())),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "participants": [bob_id] }))
+    .send()
+    .await
+    .expect("create conversation request failed");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+/// Issue #269: shared guild membership satisfies the relationship gate just
+/// like friendship does, with no friend request involved.
+#[tokio::test]
+#[ignore]
+async fn shared_guild_membership_permits_conversation_creation() {
+    let pool = test_pool().await;
+    let client = reqwest::Client::new();
+    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (bob_id, _bob_token) = seed_identity_session(&pool).await;
+
+    let guild_id = create_guild(&client, &alice_token).await;
+    seed_guild_membership(&pool, guild_id, bob_id).await;
+
+    let created: serde_json::Value = auth(
+        client.post(format!("{}/conversations", server_url())),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "participants": [bob_id] }))
+    .send()
+    .await
+    .expect("create conversation request failed")
+    .json()
+    .await
+    .expect("expected JSON conversation body");
+    assert!(created["id"].as_str().is_some());
+}
+
+/// Issue #269: a nonexistent participant id and an existing-but-unrelated
+/// one must be indistinguishable — same status, same body.
+#[tokio::test]
+#[ignore]
+async fn nonexistent_and_unrelated_participant_get_identical_rejection() {
+    let pool = test_pool().await;
+    let client = reqwest::Client::new();
+    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (unrelated_id, _unrelated_token) = seed_identity_session(&pool).await;
+    let nonexistent_id = Uuid::new_v4();
+
+    let unrelated_response = auth(
+        client.post(format!("{}/conversations", server_url())),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "participants": [unrelated_id] }))
+    .send()
+    .await
+    .expect("create conversation request failed");
+    let unrelated_status = unrelated_response.status();
+    let unrelated_body: serde_json::Value = unrelated_response
+        .json()
+        .await
+        .expect("expected JSON error body");
+
+    let nonexistent_response = auth(
+        client.post(format!("{}/conversations", server_url())),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "participants": [nonexistent_id] }))
+    .send()
+    .await
+    .expect("create conversation request failed");
+    let nonexistent_status = nonexistent_response.status();
+    let nonexistent_body: serde_json::Value = nonexistent_response
+        .json()
+        .await
+        .expect("expected JSON error body");
+
+    assert_eq!(unrelated_status, reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(unrelated_status, nonexistent_status);
+    assert_eq!(unrelated_body, nonexistent_body);
 }

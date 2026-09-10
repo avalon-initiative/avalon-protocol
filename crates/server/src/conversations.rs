@@ -70,6 +70,16 @@
 //! disappears from the blocked-out party's list exactly as if they'd never
 //! been a participant, matching what `list_messages`/`send_message` now
 //! show them.
+//!
+//! **Relationship gate (issue #269).** [`create_conversation`] requires
+//! every named participant to be an existing friend or mutual guild member
+//! of the caller (`friends::friend_partners` / `discovery::mutual_guild_members`,
+//! reused rather than reimplemented). A nonexistent id can never satisfy
+//! that check either, since both relationship tables FK to `identities`, so
+//! it collapses into the same [`AppError::InvalidConversationParticipants`]
+//! an unrelated-but-real id gets — no separate existence check, no oracle.
+//! `discoverable` (#205) doesn't factor in: it's not a substitute for a
+//! relationship either way.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -80,7 +90,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::blocks;
+use crate::discovery;
 use crate::error::AppError;
+use crate::friends;
 use crate::handlers::authenticate;
 use crate::state::AppState;
 
@@ -178,6 +190,19 @@ pub(crate) async fn require_unblocked_participant(
     }
 }
 
+/// True if every id in `others` is a friend or guild-mate of `caller` — the
+/// relationship gate [`create_conversation`] applies to every named
+/// participant. Pure, so it's unit-testable without a database.
+fn all_related_to_caller(
+    others: &[Uuid],
+    friends: &std::collections::HashSet<Uuid>,
+    guild_mates: &std::collections::HashSet<Uuid>,
+) -> bool {
+    others
+        .iter()
+        .all(|id| friends.contains(id) || guild_mates.contains(id))
+}
+
 #[derive(Serialize)]
 pub struct ConversationResponse {
     pub id: Uuid,
@@ -190,11 +215,10 @@ pub struct CreateConversationRequest {
 }
 
 /// `POST /conversations` — session-authenticated. The caller is always
-/// added to the participant set (even if they omitted their own id), then
-/// the set is deduplicated; a resulting set of fewer than two distinct
-/// identities, or one containing an id that isn't a real identity, is
-/// rejected. Idempotent on the final participant set — see the module doc
-/// comment's "Idempotent creation" section.
+/// added to the participant set, then deduplicated; rejects fewer than two
+/// distinct identities or any participant the caller isn't related to (see
+/// the module doc comment's "Relationship gate" section). Idempotent on the
+/// final participant set — see "Idempotent creation" above.
 pub async fn create_conversation(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -211,13 +235,12 @@ pub async fn create_conversation(
         return Err(AppError::InvalidConversationParticipants);
     }
 
-    let existing_count: i64 =
-        sqlx::query("SELECT count(*) AS c FROM identities WHERE id = ANY($1)")
-            .bind(&participants)
-            .fetch_one(&state.pool)
-            .await?
-            .try_get("c")?;
-    if existing_count as usize != participants.len() {
+    // Relationship gate (#269) — also closes the existence oracle, since a
+    // nonexistent id can never be a friend or guild-mate.
+    let others: Vec<Uuid> = participants.iter().copied().filter(|&id| id != actor).collect();
+    let friend_ids = friends::friend_partners(&state, actor).await?;
+    let guild_mates = discovery::mutual_guild_members(&state, actor).await?;
+    if !all_related_to_caller(&others, &friend_ids, &guild_mates) {
         return Err(AppError::InvalidConversationParticipants);
     }
 
@@ -599,6 +622,55 @@ mod tests {
         assert_eq!(participants_key(&[a, b, c]), participants_key(&[c, a, b]));
         assert_eq!(participants_key(&[a, b]), participants_key(&[b, a, a, b]));
         assert_ne!(participants_key(&[a, b]), participants_key(&[a, c]));
+    }
+
+    // --- Relationship gate (issue #269) ------------------------------
+
+    #[test]
+    fn unrelated_participant_is_denied() {
+        // Stands in for both an unrelated real identity and a nonexistent
+        // one — neither is ever in either relationship set.
+        let stranger = Uuid::new_v4();
+        let friends = std::collections::HashSet::new();
+        let guild_mates = std::collections::HashSet::new();
+
+        assert!(!all_related_to_caller(&[stranger], &friends, &guild_mates));
+    }
+
+    #[test]
+    fn friend_participant_is_allowed() {
+        let friend = Uuid::new_v4();
+        let mut friends = std::collections::HashSet::new();
+        friends.insert(friend);
+        let guild_mates = std::collections::HashSet::new();
+
+        assert!(all_related_to_caller(&[friend], &friends, &guild_mates));
+    }
+
+    #[test]
+    fn mutual_guild_participant_is_allowed() {
+        let guild_mate = Uuid::new_v4();
+        let friends = std::collections::HashSet::new();
+        let mut guild_mates = std::collections::HashSet::new();
+        guild_mates.insert(guild_mate);
+
+        assert!(all_related_to_caller(&[guild_mate], &friends, &guild_mates));
+    }
+
+    #[test]
+    fn one_unrelated_participant_denies_the_whole_group() {
+        let friend = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        let mut friends = std::collections::HashSet::new();
+        friends.insert(friend);
+        let guild_mates = std::collections::HashSet::new();
+
+        // Every named participant must clear the gate, not just some.
+        assert!(!all_related_to_caller(
+            &[friend, stranger],
+            &friends,
+            &guild_mates
+        ));
     }
 
     #[test]

@@ -86,8 +86,12 @@ async fn friends_of_friends(
 }
 
 /// Every identity that shares at least one guild membership with `caller`,
-/// not yet filtered against the caller's own friends/blocks/self.
-async fn mutual_guild_members(state: &AppState, caller: Uuid) -> Result<HashSet<Uuid>, AppError> {
+/// not yet filtered against the caller's own friends/blocks/self. Also
+/// reused by `conversations::create_conversation` (issue #269).
+pub(crate) async fn mutual_guild_members(
+    state: &AppState,
+    caller: Uuid,
+) -> Result<HashSet<Uuid>, AppError> {
     let rows = sqlx::query(
         r#"
         SELECT DISTINCT gm2.identity_id AS candidate
