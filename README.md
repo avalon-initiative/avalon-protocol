@@ -1,8 +1,9 @@
 # Avalon Protocol
 
-Avalon Protocol is an open, Rust-based interoperability layer for independent games:
-one persistent player identity, one social graph, that a player carries between
-games that would otherwise treat every login as a stranger.
+Avalon Protocol is an open, Rust-based interoperability layer for independent
+games, apps, and services: one persistent identity, one social graph, that a
+user carries between the games, apps, and services that would otherwise treat
+every login as a stranger.
 
 Every major platform already solved this for the web: sign in once, and that
 identity carries weight across dozens of unrelated apps — the browser or
@@ -15,12 +16,12 @@ database happens to run that particular title. There's no reason a friendship
 or a guild built in a shooter should be invisible the moment you log into a
 survival game instead. Avalon is that missing layer for games: the same
 identity, friends, and history carried with you from one game to the next —
-owned by the player, not any single game.
+owned by the user, not any single game.
 
 > **Games are experiences. Your identity, friends, guilds, achievements, and
 > history belong to you.**
 
-A player has one Avalon identity. That identity can have completely different,
+A user has one Avalon identity. That identity can have completely different,
 unrelated characters in different games — Avalon never dictates a character model.
 Friends, guilds, and achievements are network-level concepts a game opts into, not
 things a game is required to expose or trust blindly. A game stays fully sovereign
@@ -34,7 +35,7 @@ infrastructure between games, not a platform that owns them.
 - **Interoperability is opt-in.** A game chooses which Avalon capabilities it wants
   (identity, guilds, achievements, ...) and which other issuers' attestations it
   trusts. Nothing is forced.
-- **Least privilege by default.** A game receives only the capabilities a player
+- **Least privilege by default.** A game receives only the capabilities a user
   has explicitly granted — never blanket access to an identity's whole history.
 - **History is verifiable, not just shared.** Achievements are signed attestations
   a receiving game can independently verify and decide whether to trust — not
@@ -51,7 +52,7 @@ communities that already span every game you play — proof the demand this
 README opens with is real, not hypothetical. What none of them give you is
 anything a game can actually build on: there's no achievement a game can
 issue and another can independently verify, no way for a game to trust a
-claim made outside its own database, and no social graph a player actually
+claim made outside its own database, and no social graph a user actually
 owns in a portable sense — it belongs to whichever platform happens to be
 hosting it. Avalon Protocol closes that gap. It isn't a competitor to
 Discord, Slack, or anything like them — it's the open identity and social
@@ -115,7 +116,7 @@ docs/
   WhyAvalon.md   the case for why this needs to exist
   architecture/  the normative architecture reference, one file per topic
   players/       docs for people playing games that use Avalon
-  developers/    docs for game developers integrating the SDKs
+  developers/    docs for developers integrating the SDKs
   maintainers/   docs for contributors to this repo
   stakeholders/  docs for people evaluating Avalon from the outside
 ```
