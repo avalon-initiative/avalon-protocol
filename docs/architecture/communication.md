@@ -11,9 +11,11 @@ query infrastructure, the same vertical presence already occupies
 ([presence.md](./presence.md)), never settlement infrastructure.** Narrative:
 [Proposal §12](../stakeholders/Proposal.md#12-communication).
 
-None of this is scheduled work. It is documented now so that when it is
-picked up, the shape is already decided instead of falling out of whatever
-gets implemented first.
+Direct/small-group conversations now have a real, shipped design and
+implementation (issue #102); voice and notifications remain undesigned, and
+neither is scheduled work — documented now so that when either is picked up,
+the shape is already decided instead of falling out of whatever gets
+implemented first.
 
 ## What's already decided elsewhere
 
@@ -21,18 +23,18 @@ gets implemented first.
   bodies are explicitly not protocol history. See
   [guilds.md](./guilds.md#guild-chat-is-a-network-primitive) and
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22).
-- **Blocking** — private, unilateral, server-side, and already specified to
-  reject direct messages between blocked parties once they exist. See
+- **Blocking** — private, unilateral, server-side, and enforced against
+  conversation sends (below). See
   [#97](https://github.com/LunarVagabond/avalon-protocol/issues/97).
 - **Presence** — ephemeral, never ledgered, the same vertical this document's
   realtime traffic shares. See [presence.md](./presence.md).
 
 ## Direct messages and small-group conversations
 
-A `Conversation` is the identity-to-identity sibling of a `GuildChannel`: it
-exists between two or more identities directly, with no guild in between, and
-no game owns it. The same reasoning that makes a friendship
-([social-graph.md](./social-graph.md)) and a guild
+A `Conversation` (`crates/protocol/src/social.rs`) is the identity-to-identity
+sibling of a `GuildChannel`: it exists between two or more identities
+directly, with no guild in between, and no game owns it. The same reasoning
+that makes a friendship ([social-graph.md](./social-graph.md)) and a guild
 ([guilds.md](./guilds.md)) network-level applies here — a conversation between
 two players is a fact about their relationship, not about whatever game either
 of them happened to be in when they started talking.
@@ -43,10 +45,26 @@ The hot/cold split guild chat already established carries over unchanged:
   server state, not a `ProtocolEvent` — the same reasoning as
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22) (high
   volume, non-interoperable, not something a receiving game ever needs to
-  verify).
-- What *is* worth being explicit about, unlike guild channels: a conversation
-  requires the blocking rule from [#97](https://github.com/LunarVagabond/avalon-protocol/issues/97)
-  to be enforced on send, not just on friend requests and presence.
+  verify). `ConversationMessage { id, conversation_id, author, body, sent_at }`
+  lives in its own `conversation_messages` table, outside
+  `SettlementProvider::commit`; no `conversation.message_*` event kind exists.
+- Retention is a configurable per-conversation cap
+  (`CONVERSATION_MESSAGE_CAP`, default 10,000), keeping the newest N and
+  hard-deleting the rest once the cap is exceeded — plain count-cap pruning,
+  not the archive tier guild chat later grew (#253); that was a follow-up
+  decision specific to guild chat, not part of this design. Conversation
+  history is not permanent.
+- Creating a conversation is idempotent on its exact participant set: asking
+  for a conversation with the same identities again, in any order, returns
+  the existing conversation rather than creating a duplicate.
+- A conversation requires the blocking rule from
+  [#97](https://github.com/LunarVagabond/avalon-protocol/issues/97) to be
+  enforced on send, not just on friend requests and presence — including
+  across a group conversation of more than two people, where a block between
+  *any* two participants (not only the sender) rejects the send. The
+  rejection is silent from the blocked party's perspective: it returns the
+  exact same error a genuine non-participant gets, never a distinguishable
+  "blocked" response. See [social-graph.md](./social-graph.md#blocking-and-harassment).
 - A game may render a conversation as a client of it, exactly as it may render
   a guild channel — it never becomes the conversation's host.
 - **Sending while offline is not this domain's problem to solve.** A message
@@ -106,13 +124,27 @@ into a Hub-only or game-only corner.
 
 ## Today in the repo
 
-- No `Conversation` type, endpoint, or event exists in any crate.
+- `crates/protocol/src/social.rs` — `Conversation { id, participants }` and
+  `ConversationMessage { id, conversation_id, author, body, sent_at }`.
+- `crates/server/src/conversations.rs` (issue #102) — session-authenticated,
+  participant-only endpoints: `POST /conversations` (idempotent on
+  participant set), `GET /conversations` (the caller's own list),
+  `GET /conversations/{id}/messages?before=&limit=` (cursor pagination, same
+  style as guild messages), `POST /conversations/{id}/messages`.
+  `conversations`/`conversation_participants`/`conversation_messages`
+  (migration `0035_conversations`) hold the state; nothing here touches the
+  outbox or `SettlementProvider::commit`, checked both by construction and by
+  a source grep (`crates/server/tests/conversations_no_ledger.rs`, mirroring
+  `guild_messages_no_ledger.rs`'s approach for #22).
+- Blocking is enforced on send via `crate::blocks::has_block_among`, reused
+  rather than reinvented — the same table and "never reveal" posture
+  [#97](https://github.com/LunarVagabond/avalon-protocol/issues/97) already
+  established for friend requests and presence, extended here to check every
+  pair within a conversation's participant set, not just a fixed pair.
 - No voice module, session type, or transport of any kind exists.
 - No notification delivery mechanism exists; `avalon-server` has no
   websocket/push path yet (same gap noted in [presence.md](./presence.md)).
-- Guild chat ([#22](https://github.com/LunarVagabond/avalon-protocol/issues/22))
-  and blocking ([#97](https://github.com/LunarVagabond/avalon-protocol/issues/97))
-  are the only communication-adjacent surfaces with a real design.
+- No Hub UI for conversations yet — that's [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105).
 
 ## Decisions and tickets
 
@@ -122,12 +154,12 @@ into a Hub-only or game-only corner.
 - [#101](https://github.com/LunarVagabond/avalon-protocol/issues/101) — Epic:
   Direct Messages, Voice & Notifications:
   [#102](https://github.com/LunarVagabond/avalon-protocol/issues/102)
-  conversation domain model + endpoints,
+  conversation domain model + endpoints (done — `crates/server/src/conversations.rs`),
   [#104](https://github.com/LunarVagabond/avalon-protocol/issues/104) SDK
   conversation API,
   [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105) Hub
-  direct-message UI. Backlog — not scheduled ahead of #73/#71 (done) or
-  #14/#19.
+  direct-message UI. The remainder of the epic is backlog — not scheduled
+  ahead of #14/#19.
 - [#103](https://github.com/LunarVagabond/avalon-protocol/issues/103) —
   decision: voice transport, signaling, and provider (closed/decided:
   deferred indefinitely). Tracked as

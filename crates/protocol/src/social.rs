@@ -45,3 +45,30 @@ pub struct Presence {
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
+
+/// A direct or small-group conversation (issue #102) — the identity-to-identity
+/// sibling of [`crate::guilds::GuildChannel`], mirroring its shape: pure
+/// structure, no game reference anywhere. A conversation between players is
+/// a fact about their relationship, not about whichever game either of them
+/// had open when it started — see `docs/architecture/communication.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conversation {
+    pub id: uuid::Uuid,
+    pub participants: Vec<IdentityId>,
+}
+
+/// A single message within a [`Conversation`]. Deliberately **not** protocol
+/// history, for the same reason [`crate::guilds::GuildMessage`] isn't
+/// (issue #22): high-volume, non-interoperable, nothing a receiving game
+/// ever needs to verify. No `conversation.message_*` event kind exists, and
+/// nothing in the send/read path touches `SettlementProvider::commit` — see
+/// `crates/server/src/conversations.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMessage {
+    pub id: uuid::Uuid,
+    pub conversation_id: uuid::Uuid,
+    pub author: IdentityId,
+    pub body: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub sent_at: OffsetDateTime,
+}

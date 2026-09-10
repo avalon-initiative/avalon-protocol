@@ -4,6 +4,7 @@ pub mod authz;
 pub mod blocks;
 pub mod channels;
 pub mod connections;
+pub mod conversations;
 pub mod devices;
 pub mod discovery;
 pub mod error;
@@ -106,6 +107,14 @@ pub fn router(state: AppState) -> Router {
             get(blocks::list_blocks).post(blocks::create_block),
         )
         .route("/blocks/{identity_id}", delete(blocks::remove_block))
+        .route(
+            "/conversations",
+            get(conversations::list_my_conversations).post(conversations::create_conversation),
+        )
+        .route(
+            "/conversations/{id}/messages",
+            get(conversations::list_messages).post(conversations::send_message),
+        )
         .route(
             "/me/devices/grants",
             get(devices::list_device_grants).post(devices::request_device_grant),

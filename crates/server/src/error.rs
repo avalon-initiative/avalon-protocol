@@ -239,6 +239,21 @@ pub enum AppError {
     GameSchemaNotFound,
     #[error("a game may only publish schemas attributed to its own id")]
     GameSchemaForbidden,
+    #[error(
+        "participants must include yourself plus at least one other distinct existing identity"
+    )]
+    InvalidConversationParticipants,
+    /// Deliberately reused for two different reasons — see
+    /// `crate::conversations`' module doc comment: the caller genuinely
+    /// isn't a participant in this conversation, *or* they are a
+    /// participant but a block exists between some pair of participants
+    /// and the request was a send. Both cases return this exact same
+    /// error, on purpose, so a blocked participant sending into a group
+    /// conversation sees nothing that distinguishes "you're blocked" from
+    /// "you were never in this conversation" — the same never-reveal
+    /// posture issue #97 established for friend requests and presence.
+    #[error("not a participant in this conversation")]
+    NotConversationParticipant,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -378,6 +393,12 @@ impl IntoResponse for AppError {
             // the `{slug}` path segment — never allowed to publish a
             // schema attributed to another game's id.
             AppError::GameSchemaForbidden => StatusCode::FORBIDDEN,
+            AppError::InvalidConversationParticipants => StatusCode::BAD_REQUEST,
+            // Same status as `NotGuildMember`: an authorization fact, not a
+            // missing resource, and — per this variant's own doc comment —
+            // deliberately reused for the blocked-pair-on-send case too, so
+            // the response never distinguishes the two.
+            AppError::NotConversationParticipant => StatusCode::FORBIDDEN,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
                 StatusCode::BAD_REQUEST
             }
