@@ -186,18 +186,33 @@ settles are correct.
 
 ## Today in the repo
 
-- `crates/protocol/src/` — `identity`, `ids`, `games`, `guilds`, `social`,
-  `achievements`, `permissions`, `events` modules; pure types, no I/O.
-- `crates/chain/` — `SettlementProvider` trait and a hash-chained Postgres
-  ledger (`postgres.rs`). Real, not stubbed, but unsigned and unbatched.
-- `crates/indexer/src/lib.rs` — the `Indexer` trait only; no implementation yet.
-- `crates/server/` — identity registration, login, authenticated profile
-  read/update, migrations. Reads its own tables directly; no indexer, no
-  realtime yet.
-- `crates/sdk/` — `authenticate()` wired to a live server; everything
-  capability-gated still returns `NotImplemented`.
-- `crates/cli/` — `avalon inspect-ledger`.
-- `apps/hub`, `apps/mobile-hub`, `packages/ui`, `bindings/csharp` — scaffolding.
+- `crates/protocol/src/` — `identity`, `ids`, `games`, `game_schemas`,
+  `guilds`, `social`, `achievements`, `permissions`, `events` modules; pure
+  types, no I/O.
+- `crates/chain/` — `SettlementProvider` trait and a hash-chained,
+  RFC 6962 Merkle-batched Postgres ledger (`postgres.rs`, `merkle.rs`,
+  `sth.rs`). Real, not stubbed, and signed at the tree-head level (not
+  per-entry) since #39/#210.
+- `crates/indexer/` — `PostgresIndexer` (`postgres.rs`, #42) is a real,
+  dispatched, idempotent `Indexer`, with one projection module per read
+  model under `projections/` (`profiles`, `friendships`, `guild_rosters`,
+  `attestations`, `game_bindings`, `game_schemas`) plus a `registry` module.
+  See [`./query-and-indexing.md`](./query-and-indexing.md).
+- `crates/server/` — far beyond identity/login/profile now: friends, blocks,
+  guilds/channels/events, conversations, achievements, game/issuer
+  registration and discovery, the game registry, a real WebSocket presence
+  service (`presence.rs`), settlement/outbox, retention, and recovery all
+  have their own module. Most reads still go directly against `server`'s own
+  tables rather than through the indexer (that migration is #44's job).
+- `crates/sdk/` — `authenticate()` wired to a live server; friends/presence,
+  guilds (roster/channels/chat), and conversations are real, not stubbed;
+  `sync_journal`/`submission` (#110/#111) implement offline durability and
+  deferred submission. Achievement issuance still returns `NotImplemented`.
+- `crates/cli/` — `avalon create-identity`, `login`, `register-game`,
+  `inspect-ledger`/`inspect-ledger-full`, `outbox-status`, `prune-ledger`.
+- `apps/hub` — a real Vue3 client (identity, friends, guilds, conversations,
+  game discovery), not just scaffolding. `apps/mobile-hub`, `packages/ui`,
+  `bindings/csharp` — still scaffolding/skeleton.
 
 ## Decisions and tickets
 
@@ -219,12 +234,17 @@ settles are correct.
   client of the network
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) realtime
   presence is ephemeral
-- Open decisions: [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)
-  log/Merkle design, [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99)
-  identity recovery, [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
-  issuer keys, [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81)
-  revocation mechanics. Decided since: [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) —
+- Open decisions: [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
+  issuer keys. Implementation still open on decided questions:
+  [#210](https://github.com/LunarVagabond/avalon-protocol/issues/210) (Merkle
+  root / Signed Tree Heads, decided by #40) and
+  [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) (guardian
+  recovery, decided by #99). Decided since: [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) —
   no blockchain or validator consensus, a transparency log on Postgres,
   superseding part of [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93);
   [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) —
-  identity is a self-custodied keypair.
+  identity is a self-custodied keypair; [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) —
+  log/Merkle design; [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) —
+  identity recovery; [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
+  revocation mechanics; [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) —
+  log operator signing (Signed Tree Heads only, not per-entry).
