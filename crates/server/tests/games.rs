@@ -258,3 +258,99 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+// --- Issue #270: GET /games list + directory read path -------------------
+
+#[tokio::test]
+#[ignore]
+async fn listing_games_finds_a_freshly_registered_game_by_name_search() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let game = unique_game();
+
+    let register = http
+        .post(format!("{base}/games"))
+        .json(&game.body)
+        .send()
+        .await
+        .expect("register game failed — is `make start` running?");
+    assert!(register.status().is_success());
+    let registered: serde_json::Value = register.json().await.unwrap();
+    let slug = registered["slug"].as_str().unwrap();
+    let name = registered["name"].as_str().unwrap();
+
+    // No auth header at all — GET /games is public and unauthenticated.
+    let response = http
+        .get(format!("{base}/games"))
+        .query(&[("q", name), ("sort", "name")])
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    let games = body["games"].as_array().unwrap();
+    assert!(games.iter().any(|g| g["slug"].as_str() == Some(slug)));
+    let found = games
+        .iter()
+        .find(|g| g["slug"].as_str() == Some(slug))
+        .unwrap();
+    assert_eq!(found["name"].as_str().unwrap(), name);
+    assert_eq!(found["status"].as_str().unwrap(), "active");
+    // Directory listing returns only the public summary fields — no
+    // credential/requested_capabilities noise a card doesn't show.
+    assert!(found.get("credential").is_none());
+    assert!(found.get("requested_capabilities").is_none());
+}
+
+#[tokio::test]
+#[ignore]
+async fn listing_games_paginates_with_cursor_and_next_cursor() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    for _ in 0..3 {
+        let game = unique_game();
+        http.post(format!("{base}/games"))
+            .json(&game.body)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    let first_page: serde_json::Value = http
+        .get(format!("{base}/games"))
+        .query(&[("sort", "newest"), ("limit", "1")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_games = first_page["games"].as_array().unwrap();
+    assert_eq!(first_games.len(), 1);
+    let next_cursor = first_page["next_cursor"].as_str();
+    assert!(
+        next_cursor.is_some(),
+        "expected a next_cursor with 3+ games registered"
+    );
+
+    let second_page: serde_json::Value = http
+        .get(format!("{base}/games"))
+        .query(&[
+            ("sort", "newest"),
+            ("limit", "1"),
+            ("cursor", next_cursor.unwrap()),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_games = second_page["games"].as_array().unwrap();
+    assert_eq!(second_games.len(), 1);
+    // The second page's game must differ from the first's — the cursor
+    // actually advanced rather than re-returning the same row.
+    assert_ne!(first_games[0]["id"], second_games[0]["id"]);
+}

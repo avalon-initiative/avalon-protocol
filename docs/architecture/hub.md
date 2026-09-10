@@ -104,8 +104,9 @@ is visibly marked.
   `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable;
   `requiresAuth` is set once on the parent route and inherited by every
   child via `vue-router`'s meta-merging. Nav entries for features that
-  don't exist yet (Games, Guilds, Chat, Discover) render disabled with a
-  "Soon" tag rather than being hidden. The shell also heartbeats
+  don't exist yet (Chat, Discover) render disabled with a
+  "Soon" tag rather than being hidden. Games (#270) is no longer one of
+  them, same as Guilds (#24) before it. The shell also heartbeats
   `PUT /me/presence` (Online, every 60s, inside the server's 120s TTL) so
   the player actually reads as online to their friends while the Hub is
   open. Visual language: one dark theme via CSS custom properties in
@@ -205,13 +206,30 @@ is visibly marked.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
   yet (#60).
+- `GameDirectory.vue` / `GameProfile.vue` (#270, first buildable slice of
+  #90) — `/games` (a search box + name/newest sort over `GET /games`,
+  `apps/hub/src/composables/useDiscoverGames.ts`, same server-side
+  cursor-pagination-on-filter-change pattern `useDiscoverGuilds.ts`
+  established for #154) and `/games/:slug` (the profile page: `GET
+  /games/{slug}`'s public fields plus `GET /games/{slug}/registry`'s five
+  metrics, each rendered through `AvalonMetricTile` with its definition
+  and class label — never a bare number). Both public, unauthenticated
+  reads — no session token required, matching the endpoints' own
+  visibility. `status` renders through a badge that's visibly distinct
+  whenever it isn't `"active"`; no key-history UI (blocked on the
+  still-open #80). Nav entry no longer disabled in `HubShell.vue`. No
+  ranking, no score, no "recommended" ordering anywhere in either view,
+  per #89's invariant — `apps/hub/src/views/GameDirectory.test.ts` and
+  `GameProfile.test.ts` assert every metric's label renders and that no
+  score/ranking element exists.
 - `packages/ui/` — `@avalon/ui`: `AvalonButton`, `AvalonTextField`,
   `AvalonForm`, `AvalonAuthCard`, `AvalonPresenceBadge`, `AvalonFriendRow`,
   `AvalonFriendRequestRow`, `AvalonAvatar`, `AvalonCard`, `AvalonIcon` (a
   small inline-SVG set, no icon library), `AvalonSidebarNav`,
   `AvalonBottomNav`, `AvalonUserChip`, `AvalonGuildCard`,
   `AvalonGuildMemberRow`, `AvalonRoleBadge`, `AvalonChannelList`,
-  `AvalonChatMessage`, `AvalonChatComposer` (#24) — all presentational (props in,
+  `AvalonChatMessage`, `AvalonChatComposer` (#24), `AvalonGameCard`,
+  `AvalonMetricTile` (#270) — all presentational (props in,
   events out; the nav components take `{ label, to, icon, active, disabled }[]`
   and emit which entry was picked, never emitting for a disabled one) in
   the `components/` / `styles/` / `stories/` split, plus `styles/tokens.css`
@@ -235,7 +253,8 @@ is visibly marked.
   `GET /me/guilds`, `GET|POST /guilds/:id/channels`,
   `PATCH /guilds/:id/channels/:cid`, `POST /guilds/:id/channels/:cid/archive`,
   `GET|POST /guilds/:id/channels/:cid/messages`,
-  `DELETE /guilds/:id/channels/:cid/messages/:mid`.
+  `DELETE /guilds/:id/channels/:cid/messages/:mid`. Since #270:
+  `GET /games`, `GET /games/:slug/registry`.
 
 ## Decisions and tickets
 
@@ -247,7 +266,10 @@ is visibly marked.
   friends/presence, [#57](https://github.com/LunarVagabond/avalon-protocol/issues/57)
   guilds + chat, [#58](https://github.com/LunarVagabond/avalon-protocol/issues/58)
   achievements + connected games/permissions,
-  [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) game discovery.
+  [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) game discovery
+  ([#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) is its
+  first buildable slice: `GET /games`, the game directory, and the
+  per-game profile page).
 - [#59](https://github.com/LunarVagabond/avalon-protocol/issues/59) — Epic: Avalon
   Mobile-Hub (Tauri): [#60](https://github.com/LunarVagabond/avalon-protocol/issues/60),
   [#61](https://github.com/LunarVagabond/avalon-protocol/issues/61),
