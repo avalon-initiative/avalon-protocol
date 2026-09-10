@@ -165,6 +165,17 @@ protocol and the domain model in `crates/protocol`; they never pull in
   round-tripping a message through the default `general` channel every
   guild is seeded with, and `guilds.chat` being required independently of
   `guilds.read`.
+- `crates/sdk/src/sync_journal.rs` (#110, see
+  [synchronization](./synchronization.md)) — `SyncJournal` trait
+  (`append`/`pending`/`mark_submitted`/`mark_failed`) plus `FileJournal`, a
+  dependency-light reference implementation: an append-only, `fsync`-per-
+  write JSON-lines file, replayed on `open()` to recover pending state after
+  a crash. `EntryId` is a client-generated `Uuid`, stable and never
+  server-assigned. `mark_submitted` is idempotent; `append` never
+  deduplicates identical payloads — both are unit-tested in the same file,
+  no `make test-live`/Postgres dependency. `AvalonClient`/`Session` don't
+  call it yet — that's #111 (deferred submission engine), which drains and
+  submits what a game journals.
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — `AvalonClient.cs`, `Session.cs` skeleton; no

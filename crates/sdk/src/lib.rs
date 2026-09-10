@@ -9,10 +9,14 @@
 //! `NotImplemented` until that epic's endpoints exist. Friends/presence
 //! (issue #17, see `social`) and guild membership/roster/channels/chat
 //! (issue #23, see `guilds`) are wired to live endpoints rather than
-//! stubbed.
+//! stubbed. `sync_journal` (issue #110) is the local durable-storage half
+//! of offline participation described in
+//! `docs/architecture/synchronization.md` — nothing in `AvalonClient`/
+//! `Session` writes to it yet; that's the deferred-submission engine, #111.
 
 pub mod guilds;
 pub mod social;
+pub mod sync_journal;
 
 use avalon_protocol::achievements::AchievementAttestation;
 use avalon_protocol::identity::{Identity, Profile};

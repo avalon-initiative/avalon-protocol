@@ -116,11 +116,17 @@ isn't where this defaults.
 
 ## Mechanism
 
-- **Local durable journal** ([#110](https://github.com/LunarVagabond/avalon-protocol/issues/110)) —
-  a crash-safe local store for offline-capable operations, behind a trait so
-  each SDK (Rust, C#, future) backs it with whatever's appropriate. Every
-  entry gets a client-generated, stable id — the idempotency key everything
-  downstream depends on.
+- **Local durable journal** ([#110](https://github.com/LunarVagabond/avalon-protocol/issues/110),
+  done) — a crash-safe local store for offline-capable operations, behind a
+  `SyncJournal` trait so each SDK (Rust, C#, future) backs it with whatever's
+  appropriate. Every entry gets a client-generated, stable id (`EntryId`,
+  a `Uuid`) — the idempotency key everything downstream depends on. Shipped
+  in `avalon-sdk` (`crates/sdk/src/sync_journal.rs`) with a dependency-light
+  reference implementation, `FileJournal`, backed by an append-only,
+  `fsync`-per-write JSON-lines file rather than embedded SQLite — see that
+  module's doc comment for the full trade-off. Nothing calls `append()` from
+  `AvalonClient`/`Session` yet; that wiring, plus draining/submitting what's
+  recorded, is #111.
 - **Deferred submission** ([#111](https://github.com/LunarVagabond/avalon-protocol/issues/111)) —
   drains the journal on reconnect, submits in per-kind order, retries with
   capped exponential backoff, dedupes on the entry id so a retried
@@ -144,14 +150,23 @@ isn't where this defaults.
 - Not a way around the trust model. Every offline-capable operation still
   answers authentic/valid/recognized — deferring *when* something reaches
   Avalon never changes *what* it's allowed to claim about itself.
-- Not built yet. Every piece above is an open ticket; nothing in this
-  document describes shipped behavior.
+- Not built yet, except the journal itself. Deferred submission,
+  reconciliation, and sync status are still open tickets; nothing in this
+  document past the local journal describes shipped behavior.
 
 ## Today in the repo
 
-- No journal, no deferred submission, no sync status API exists in any SDK.
+- The local durable journal (#110) exists: `SyncJournal` trait and
+  `FileJournal` reference implementation in `crates/sdk/src/sync_journal.rs`
+  — `append`/`pending`/`mark_submitted`/`mark_failed`, crash-recovery tested
+  by dropping a `FileJournal` mid-session (no clean-shutdown method exists
+  to call) and reopening it from the same path. Nothing else in this
+  document is built yet: no deferred submission, no reconciliation, no sync
+  status API in any SDK.
 - `crates/sdk/src/lib.rs`'s `AvalonClient` methods either succeed against a
-  live server or fail outright — there is no offline path today.
+  live server or fail outright — no code path appends to the journal yet,
+  so there is no *end-to-end* offline path today, even though the local
+  storage half now exists.
 - `crates/server/src/outbox.rs` (issue #71, done) is the *server-side*
   analog of the same pattern — durable local recording before a slower,
   retriable downstream step — applied to the settlement ledger rather than
