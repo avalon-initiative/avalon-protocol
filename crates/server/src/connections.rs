@@ -140,7 +140,14 @@ pub async fn connect(
         }
     }
 
+    // Truncated to microseconds up front: Postgres timestamptz only stores
+    // that much precision, so the freshly-inserted response below would
+    // otherwise claim more precision than what a later read of this same
+    // row (the `existing_binding` branch) actually returns.
     let now = OffsetDateTime::now_utc();
+    let now = now
+        .replace_nanosecond((now.nanosecond() / 1_000) * 1_000)
+        .expect("truncating toward zero always stays in the valid nanosecond range");
     let existing_binding = active_binding(&mut tx, identity_id, game_id).await?;
 
     let (binding_id, established_at, newly_created) = if let Some(binding_id) = existing_binding {
