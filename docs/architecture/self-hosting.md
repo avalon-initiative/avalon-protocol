@@ -115,6 +115,9 @@ on the public network" — that's a real gap, not a hidden feature; see
   (`avalon-mainnet-1`, per `.env.example`'s convention) and no tooling yet
   that assumes multiple simultaneous `network_id`s in one process — a
   private instance today means a wholly separate deployment, not a mode flag.
+- Whether a private instance or a mirror of the public network, any instance
+  reachable beyond localhost must run behind TLS termination — see
+  [`../maintainers/deployment.md`](../maintainers/deployment.md).
 
 ## Decisions and tickets
 

@@ -56,6 +56,12 @@ path from a clean clone — Postgres via `docker compose`, `make migrate`,
 running the server, creating an identity, and the Hub/Storybook/C# SDK
 setup, with what "it worked" looks like at each step.
 
+## Deploying beyond localhost
+
+See [`deployment.md`](deployment.md) for putting `avalon-server` behind TLS
+(required before any non-local deployment) — recommended reverse-proxy
+setup, example configs, and which existing env vars need production values.
+
 Quick reference once you've read that page:
 
 ```bash
