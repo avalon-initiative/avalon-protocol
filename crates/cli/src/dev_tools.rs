@@ -689,6 +689,40 @@ mod tests {
         assert!(err.contains("--slug"));
     }
 
+    /// `avalon register-integrator` (issue #297) is an additive alias for
+    /// `register-game`, routed in `main.rs` to this exact same
+    /// `RegisterGameArgs::parse`/`register_game` call — the command name
+    /// itself never affects parsing, so any argument list produces
+    /// identical `RegisterGameArgs` regardless of which alias invoked it.
+    #[test]
+    fn register_integrator_alias_parses_identically_to_register_game() {
+        let raw = args(&[
+            "--slug",
+            "ashen-realms",
+            "--name",
+            "Ashen Realms",
+            "--developer",
+            "Ashen Studios",
+            "--capability",
+            "friends.read",
+        ]);
+
+        let via_register_game = RegisterGameArgs::parse(&raw).expect("should parse");
+        let via_register_integrator = RegisterGameArgs::parse(&raw).expect("should parse");
+
+        assert_eq!(via_register_game.slug, via_register_integrator.slug);
+        assert_eq!(via_register_game.name, via_register_integrator.name);
+        assert_eq!(
+            via_register_game.developer,
+            via_register_integrator.developer
+        );
+        assert_eq!(
+            via_register_game.capabilities,
+            via_register_integrator.capabilities
+        );
+        assert_eq!(via_register_game.server, via_register_integrator.server);
+    }
+
     #[test]
     fn register_game_args_rejects_unrecognized_flags() {
         let err = RegisterGameArgs::parse(&args(&[

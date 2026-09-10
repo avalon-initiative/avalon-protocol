@@ -6,15 +6,15 @@
 //! capability *before* making any request, same convention `social.rs`
 //! (#17) already established — a `Session` with no grants rejects without
 //! ever touching the network. The server enforces the same capabilities
-//! again once #26–#28 land; this check is a convenience for game
+//! again once #26–#28 land; this check is a convenience for integrator
 //! developers, not the security boundary. There is no `guilds.*` blanket
 //! check anywhere: reads use `guilds.read`, chat uses `guilds.chat`.
 //!
-//! The SDK never lets a game act with guild authority — creating guilds,
-//! inviting, kicking, changing roles, and managing channels all stay
-//! player-authority-only actions taken through the Hub, not exposed here.
-//! `Session::guild(id).channel(cid).send(body)` posts *as the player*,
-//! never as the game.
+//! The SDK never lets an integrator act with guild authority — creating
+//! guilds, inviting, kicking, changing roles, and managing channels all
+//! stay identity-authority-only actions taken through the Hub, not exposed
+//! here. `Session::guild(id).channel(cid).send(body)` posts *as the
+//! identity*, never as the integrator.
 //!
 //! ## Builder handles, not a flat method list
 //!
@@ -182,7 +182,7 @@ impl From<GuildMemberResponse> for GuildMember {
                 // `owner` role, counting up from there) — while the
                 // protocol type models it as `u32`. Clamped rather than
                 // panicking on the wire value; a negative index would be a
-                // server-side bug, not something a game's read should
+                // server-side bug, not something an integrator's read should
                 // crash on.
                 name_index: response.role_index.max(0) as u32,
             },
@@ -510,8 +510,8 @@ impl ChannelHandle<'_> {
     }
 
     /// `POST /guilds/{id}/channels/{cid}/messages` — requires `guilds.chat`.
-    /// Posts *as the player* under their own session token; there is no
-    /// path for a game to post as itself.
+    /// Posts *as the identity* under their own session token; there is no
+    /// path for an integrator to post as itself.
     pub async fn send(&self, body: &str) -> Result<GuildMessage, SdkError> {
         self.session.require(Capability::GuildsChat)?;
 

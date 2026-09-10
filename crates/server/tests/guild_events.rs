@@ -387,12 +387,9 @@ async fn create_event(
     guild_id: &str,
     title: &str,
 ) -> String {
-    let create = auth(
-        http.post(format!("{base}/guilds/{guild_id}/events")),
-        token,
-    )
-    .json(&event_body(title))
-    .send()
+    let create = auth(http.post(format!("{base}/guilds/{guild_id}/events")), token)
+        .json(&event_body(title))
+        .send()
         .await
         .unwrap();
     assert!(create.status().is_success(), "{:?}", create.status());
@@ -448,7 +445,11 @@ async fn grant_override_lets_a_plain_member_manage_one_specific_event() {
     .send()
     .await
     .unwrap();
-    assert!(edit_after.status().is_success(), "{:?}", edit_after.status());
+    assert!(
+        edit_after.status().is_success(),
+        "{:?}",
+        edit_after.status()
+    );
 }
 
 #[tokio::test]

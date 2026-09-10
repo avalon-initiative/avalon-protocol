@@ -103,7 +103,7 @@ protocol and the domain model in `crates/protocol`; they never pull in
 ## Today in the repo
 
 - `crates/sdk/src/lib.rs` — `AvalonClient::new(AvalonConfig { server_url,
-  game_credential_key_id })` and `authenticate(player_token)` wired to a real
+  game_credential_key_id })` and `authenticate(identity_token)` wired to a real
   `avalon-server` (`GET /me`). `Session::require(capability)` is the per-method
   check; `achievements()` and `issue_achievement()` check it, then return
   `NotImplemented`. `granted` is always empty until grants exist —

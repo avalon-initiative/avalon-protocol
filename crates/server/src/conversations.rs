@@ -237,7 +237,11 @@ pub async fn create_conversation(
 
     // Relationship gate (#269) — also closes the existence oracle, since a
     // nonexistent id can never be a friend or guild-mate.
-    let others: Vec<Uuid> = participants.iter().copied().filter(|&id| id != actor).collect();
+    let others: Vec<Uuid> = participants
+        .iter()
+        .copied()
+        .filter(|&id| id != actor)
+        .collect();
     let friend_ids = friends::friend_partners(&state, actor).await?;
     let guild_mates = discovery::mutual_guild_members(&state, actor).await?;
     if !all_related_to_caller(&others, &friend_ids, &guild_mates) {
