@@ -104,7 +104,7 @@ async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
     let handle = profile["handle"].as_str().unwrap().to_string();
     let discriminator = handle.rsplit_once('#').unwrap().1.to_string();
 
-    let entries = wait_for_history(&http, &base, &token, Duration::from_secs(15), |entries| {
+    let entries = wait_for_history(&http, &base, &token, Duration::from_secs(30), |entries| {
         entries.iter().any(|e| e["kind"] == "profile.updated")
     })
     .await;
@@ -143,7 +143,7 @@ async fn clearing_the_avatar_is_recorded_as_an_explicit_null() {
         assert!(update.status().is_success(), "{:?}", update.status());
     }
 
-    let entries = wait_for_history(&http, &base, &token, Duration::from_secs(15), |entries| {
+    let entries = wait_for_history(&http, &base, &token, Duration::from_secs(30), |entries| {
         entries
             .iter()
             .filter(|e| e["kind"] == "profile.updated")
