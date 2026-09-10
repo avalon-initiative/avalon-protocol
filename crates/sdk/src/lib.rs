@@ -11,12 +11,17 @@
 //! (issue #23, see `guilds`) are wired to live endpoints rather than
 //! stubbed. `sync_journal` (issue #110) is the local durable-storage half
 //! of offline participation described in
-//! `docs/architecture/synchronization.md` — nothing in `AvalonClient`/
-//! `Session` writes to it yet; that's the deferred-submission engine, #111.
+//! `docs/architecture/synchronization.md`; `submission` (issue #111) is the
+//! drain/retry/reconciliation half. Neither is wired into `AvalonClient`'s
+//! or `Session`'s other methods yet — no method appends to the journal on
+//! its own. A game constructs a `FileJournal` and `SubmissionEngine`
+//! itself and drives them explicitly; `Session::submission_transport`
+//! supplies the `Transport` the engine submits through.
 
 pub mod conversations;
 pub mod guilds;
 pub mod social;
+pub mod submission;
 pub mod sync_journal;
 
 use avalon_protocol::achievements::AchievementAttestation;
@@ -210,6 +215,23 @@ impl Session {
     pub fn grant_for_testing(mut self, capability: impl Into<Capability>) -> Self {
         self.granted.push(capability.into());
         self
+    }
+
+    /// Builds the [`crate::submission::HttpTransport`] a
+    /// [`crate::submission::SubmissionEngine`] submits through, borrowing
+    /// this session — a game never constructs `HttpTransport` directly. Not
+    /// capability-gated itself: each operation kind the transport actually
+    /// submits enforces whatever the underlying `Session`/handle method
+    /// already enforces (e.g. `messages.send`, conversation
+    /// participation/blocking, per `crates/sdk/src/conversations.rs` and
+    /// `crates/server/src/conversations.rs`).
+    ///
+    /// Scoped to `&self`: a session whose token has expired needs a fresh
+    /// `AvalonClient::authenticate()` call (a new `Session`) before
+    /// draining again — see `crates/sdk/src/submission.rs`'s
+    /// `SubmitError::AuthenticationRequired` doc comment.
+    pub fn submission_transport(&self) -> crate::submission::HttpTransport<'_> {
+        crate::submission::HttpTransport::new(self)
     }
 
     pub fn identity(&self) -> &Identity {

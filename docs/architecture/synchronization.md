@@ -127,15 +127,63 @@ isn't where this defaults.
   module's doc comment for the full trade-off. Nothing calls `append()` from
   `AvalonClient`/`Session` yet; that wiring, plus draining/submitting what's
   recorded, is #111.
-- **Deferred submission** ([#111](https://github.com/LunarVagabond/avalon-protocol/issues/111)) —
-  drains the journal on reconnect, submits in per-kind order, retries with
-  capped exponential backoff, dedupes on the entry id so a retried
-  submission never double-applies.
-- **Reconciliation** (same ticket) — a submission can come back rejected
-  because the world moved on while it was pending (a guild disbanded, a
-  target blocked the sender, an achievement definition retired). Surfaced
-  as an explicit `Rejected { reason }` outcome, never silently dropped and
-  never retried forever.
+- **Deferred submission** ([#111](https://github.com/LunarVagabond/avalon-protocol/issues/111),
+  done) — `SubmissionEngine` (`crates/sdk/src/submission.rs`) drains a
+  `SyncJournal`'s `pending()` entries, grouped by `kind` and submitted
+  oldest-first *within* each group — cross-kind ordering is never
+  guaranteed or meaningful (a queued chat message and a queued friend
+  request have no ordering relationship to each other). Each entry is
+  submitted through a `Transport`, an async trait with one method
+  (`submit`) that classifies the result into exactly one of: `Applied`,
+  `Rejected { reason }` (terminal — a 4xx meaning the request itself is now
+  invalid), a retryable failure (network error or 5xx/429), or — as of this
+  pass — `AuthenticationRequired`, split out from the retryable/terminal
+  buckets specifically for a `401`. A retryable failure schedules the next
+  attempt using `BackoffPolicy` — exponential, capped, tracked in memory per
+  `EntryId` (not persisted; a process restart resets backoff, which is
+  fine). `SubmissionEngine` owns no journal or transport itself; a game
+  calls `drain(&journal, &transport)` from whatever loop/timer/reconnect-hook
+  it wants, so draining never blocks gameplay.
+  - **A `401` is not a terminal rejection.** `HttpTransport` classifies a
+    `401` (session token missing/unknown/expired,
+    `crates/server/src/handlers.rs::authenticate_token`) as
+    `SubmitError::AuthenticationRequired`, not `SubmitOutcome::Rejected`: a
+    stale credential is recoverable by re-authenticating, unlike a request
+    that's actually invalid. The entry is left pending — not marked
+    submitted — with no backoff state scheduled (retrying against the same
+    expired token would just fail again; only a fresh
+    `AvalonClient::authenticate()` call, i.e. a new `Session` and
+    `submission_transport()`, fixes it), and reported to the caller as
+    `DrainOutcome::AuthenticationRequired` so it knows to re-authenticate
+    before its next `drain()`. Before this, a game that queued messages
+    offline and later drained with an expired token would have every one of
+    those messages permanently discarded as `Rejected`.
+  - A `403` on `POST /conversations/{id}/messages`, by contrast, stays a
+    terminal `Rejected`: that endpoint only ever returns 403 from
+    `require_unblocked_participant` (not a participant, or blocked — see
+    `SdkError::NotConversationParticipant`'s doc comment for why those two
+    cases are indistinguishable on purpose), and this codebase has no
+    separate capability/authorization layer on this endpoint yet (#26–#28)
+    that a 403 could also mean "re-grant and retry" for. A queued message's
+    target-conversation/block state isn't expected to change on its own, so
+    retrying it automatically wouldn't help.
+  - A `404` from this same endpoint, with `client_entry_id` always set by
+    `HttpTransport`, is treated as `Applied` rather than `Rejected`: the
+    server's idempotency lookup (`find_message_by_client_entry_id`) only
+    returns `MessageNotFound` when this retry lost the `client_entry_id`
+    conflict to an earlier attempt whose row was then pruned by normal
+    message-cap behavior before this lookup ran — the message really was
+    applied once, it just isn't findable by that lookup anymore. A missing
+    conversation or non-participant caller both surface as the 403 above
+    instead, so a 404 here has no other cause.
+- **Reconciliation** (same ticket, done) — a submission can come back
+  rejected because the world moved on while it was pending (a guild
+  disbanded, a target blocked the sender, an achievement definition
+  retired). Surfaced as an explicit `DrainOutcome::Rejected { reason }`,
+  never silently dropped and never retried forever — a rejected entry is
+  marked submitted in the journal (so it leaves `pending()`) the same as an
+  applied one, the difference being entirely in what's reported back to the
+  caller.
 - **Sync status** ([#113](https://github.com/LunarVagabond/avalon-protocol/issues/113)) —
   a read-only, local-only API (`pending_count`, `status_of(entry_id)`, a
   subscription for transitions) so a game can render "🕓 Pending" for a
@@ -150,23 +198,67 @@ isn't where this defaults.
 - Not a way around the trust model. Every offline-capable operation still
   answers authentic/valid/recognized — deferring *when* something reaches
   Avalon never changes *what* it's allowed to claim about itself.
-- Not built yet, except the journal itself. Deferred submission,
-  reconciliation, and sync status are still open tickets; nothing in this
-  document past the local journal describes shipped behavior.
+- Not a one-call-whether-online-or-offline wrapper yet. `SubmissionEngine`
+  is a drain/retry/reconciliation *mechanism* a game drives explicitly
+  (construct a `FileJournal` and a `SubmissionEngine`, call `drain(...)`);
+  no `AvalonClient`/`Session` method appends to the journal on its own or
+  calls `drain` for you. Wiring that convenience in — so
+  `avalon.achievements().issue(...)` really is one call either way — is
+  future SDK polish, not part of #111's scope.
+- Sync status is still an open ticket ([#113](https://github.com/LunarVagabond/avalon-protocol/issues/113)):
+  no `pending_count`/`status_of`/subscription API in any SDK yet. A caller
+  of `SubmissionEngine::drain` gets its `Vec<DrainReport>` return value in
+  the moment, but nothing persists or exposes sync status beyond that.
 
 ## Today in the repo
 
-- The local durable journal (#110) exists: `SyncJournal` trait and
+- The local durable journal (#110, done) — `SyncJournal` trait and
   `FileJournal` reference implementation in `crates/sdk/src/sync_journal.rs`
   — `append`/`pending`/`mark_submitted`/`mark_failed`, crash-recovery tested
   by dropping a `FileJournal` mid-session (no clean-shutdown method exists
-  to call) and reopening it from the same path. Nothing else in this
-  document is built yet: no deferred submission, no reconciliation, no sync
-  status API in any SDK.
+  to call) and reopening it from the same path.
+- The deferred submission engine (#111, done) —
+  `crates/sdk/src/submission.rs`: `SubmissionEngine::drain` (per-kind
+  ordering, in-memory capped exponential backoff via `BackoffPolicy`), the
+  `Transport` trait, and `HttpTransport` — the real transport, wired for
+  exactly one journal `kind` end-to-end: `CONVERSATION_MESSAGE_KIND`
+  (`"chat.message"`), submitted via
+  `Session::conversation(id).send_with_client_entry_id(...)` — the same
+  `crates/sdk/src/conversations.rs` code path a game's own direct
+  `Session::conversation(id).send()` call uses for
+  `POST /conversations/{id}/messages`, rather than `HttpTransport` building
+  a second, parallel `reqwest` request of its own. `HttpTransport` borrows
+  the `Session` it was built from (`Session::submission_transport()`) so it
+  can call through it. One consequence: a missing `messages.send` grant now
+  fails identically (an instant local `SdkError`/`SubmitOutcome::Rejected`,
+  no request sent) whichever path a game uses, instead of the direct path
+  rejecting locally and the submission-engine path only discovering the
+  same problem after a round trip through the server. Every other `kind`
+  gets `SubmitError::UnsupportedKind` from `HttpTransport` — left pending,
+  untouched, not a failure — since only conversation messages were wired
+  this pass; friend requests and guild join requests are equally
+  offline-capable per the table above but were deliberately left for a
+  future ticket to wire, one endpoint at a time, rather than bulk-adding
+  idempotency handling to every endpoint speculatively.
+- Idempotency for that one endpoint: `conversation_messages.client_entry_id`
+  (migration `0037_conversation_message_idempotency`) carries the journal
+  entry's `EntryId` through, with a partial unique index on
+  `(conversation_id, client_entry_id) WHERE client_entry_id IS NOT NULL`.
+  `crates/server/src/conversations.rs::send_message` inserts with
+  `ON CONFLICT ... DO NOTHING` and, on a conflict, looks the already-landed
+  row up and returns it instead of erroring or duplicating — the same
+  "unique constraint is what actually prevents duplicates, the query just
+  discovers which case it's in" shape `create_conversation` already uses
+  for `participants_key`. A message sent directly online (not through the
+  journal) never sets `client_entry_id` and never dedupes against anything.
+- Reconciliation (#111, done): `DrainOutcome::Rejected { reason }` — see
+  above. No separate reconciliation-specific code path exists; it's the
+  same `drain` call classifying `Transport::submit`'s result.
 - `crates/sdk/src/lib.rs`'s `AvalonClient` methods either succeed against a
-  live server or fail outright — no code path appends to the journal yet,
-  so there is no *end-to-end* offline path today, even though the local
-  storage half now exists.
+  live server or fail outright — no code path appends to the journal on its
+  own yet, so there is no *automatic* end-to-end offline path today, even
+  though the local storage and submission halves both now exist and are
+  tested end-to-end when driven explicitly.
 - `crates/server/src/outbox.rs` (issue #71, done) is the *server-side*
   analog of the same pattern — durable local recording before a slower,
   retriable downstream step — applied to the settlement ledger rather than
