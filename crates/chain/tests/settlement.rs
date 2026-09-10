@@ -327,10 +327,14 @@ async fn verify_detects_entry_tampering_via_merkle_recomputation() {
     // purely batch-local check would miss this. The ledger-wide Merkle
     // recompute at the second batch's tree_size must still catch it, since
     // that first-batch entry is one of its leaves.
+    // A fresh random value, not a fixed constant: entry_hash is UNIQUE, so a
+    // hardcoded literal collides with the leftover row a previous run of
+    // this same test left behind in this persistent live database.
+    let tampered_hash = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     sqlx::query(
         "UPDATE ledger_entries SET entry_hash = $1 WHERE batch_id = $2 AND seq = (SELECT min(seq) FROM ledger_entries WHERE batch_id = $2)",
     )
-    .bind("0".repeat(64))
+    .bind(tampered_hash)
     .bind(first_batch.id)
     .execute(&pool)
     .await
