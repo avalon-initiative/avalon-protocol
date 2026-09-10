@@ -81,6 +81,28 @@ pub(crate) async fn block_partners(
     Ok(set)
 }
 
+/// True if any block row (either direction) exists entirely *within*
+/// `participants` — i.e. some pair `(a, b)` both present in the slice has a
+/// block between them. Used by `crate::conversations::send_message` (issue
+/// #102) to enforce blocking across a group conversation: unlike
+/// [`has_block_between`]'s fixed pair, a conversation can have more than
+/// two participants, so the check has to be "does a blocked pair exist
+/// anywhere in this set," not just "are the two request-scoped identities
+/// blocked." One query rather than an O(n^2) loop of [`has_block_between`]
+/// calls — Postgres does the pairwise check via `blocker = ANY($1) AND
+/// blocked = ANY($1)`.
+pub(crate) async fn has_block_among(
+    state: &AppState,
+    participants: &[Uuid],
+) -> Result<bool, AppError> {
+    let row =
+        sqlx::query("SELECT 1 FROM blocks WHERE blocker = ANY($1) AND blocked = ANY($1) LIMIT 1")
+            .bind(participants)
+            .fetch_optional(&state.pool)
+            .await?;
+    Ok(row.is_some())
+}
+
 #[derive(Deserialize)]
 pub struct CreateBlockRequest {
     pub identity_id: Uuid,
@@ -203,13 +225,59 @@ pub async fn list_blocks(
     Ok(Json(entries))
 }
 
+/// Pure mirror of [`has_block_among`]'s "does a blocked pair exist entirely
+/// within this set" query, so the group-conversation semantics can be unit
+/// tested without a live Postgres — see [`tests`] below. Not called from
+/// the request path; `#[cfg(test)]` only.
+#[cfg(test)]
+fn any_pair_blocked(blocks: &[(Uuid, Uuid)], participants: &[Uuid]) -> bool {
+    blocks
+        .iter()
+        .any(|(a, b)| participants.contains(a) && participants.contains(b))
+}
+
 #[cfg(test)]
 mod tests {
     //! No live Postgres reachable here. The full block/enforcement flow
     //! (presence hidden in both directions, friend requests rejected
     //! indistinguishably from a nonexistent identity, unblock restoring
     //! access) is covered by `crates/server/tests/blocks.rs`, gated
-    //! `--ignored`. Nothing purely-logical to unit test in this module on
-    //! its own — every function here is a thin, directly-verified SQL
-    //! wrapper, unlike e.g. `friends::ordered_pair`.
+    //! `--ignored`. `has_block_among` (issue #102) gets a pure-logic model
+    //! below since its "any pair within an arbitrary-size set" semantics
+    //! are worth exercising directly; every other function here is a thin,
+    //! directly-verified SQL wrapper, unlike e.g. `friends::ordered_pair`.
+
+    use super::*;
+
+    #[test]
+    fn any_pair_blocked_finds_a_block_between_two_non_adjacent_participants() {
+        let alice = Uuid::new_v4();
+        let bob = Uuid::new_v4();
+        let carol = Uuid::new_v4();
+        let dave = Uuid::new_v4();
+
+        // alice blocked dave; neither is directly "adjacent" in the
+        // group's natural ordering — the check still has to find it.
+        let blocks = vec![(alice, dave)];
+        let participants = vec![alice, bob, carol, dave];
+        assert!(any_pair_blocked(&blocks, &participants));
+    }
+
+    #[test]
+    fn any_pair_blocked_ignores_a_block_involving_someone_outside_the_set() {
+        let alice = Uuid::new_v4();
+        let bob = Uuid::new_v4();
+        let outsider = Uuid::new_v4();
+
+        let blocks = vec![(alice, outsider)];
+        let participants = vec![alice, bob];
+        assert!(!any_pair_blocked(&blocks, &participants));
+    }
+
+    #[test]
+    fn any_pair_blocked_is_false_with_no_blocks_at_all() {
+        let alice = Uuid::new_v4();
+        let bob = Uuid::new_v4();
+        assert!(!any_pair_blocked(&[], &[alice, bob]));
+    }
 }

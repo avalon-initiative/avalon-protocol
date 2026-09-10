@@ -63,6 +63,16 @@ block means *inside* a game (can they still be matched, can they see each other
 in a shared world) is still the game's own decision, informed by the network
 fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-questions).
 
+**Conversations (#102).** The same never-reveal rule extends to direct/small-group
+messaging: `crate::blocks::has_block_among` (`crates/server/src/blocks.rs`)
+checks whether a block exists between *any* two participants in a
+conversation — not just a fixed sender/recipient pair, since a conversation
+can have more than two people — and `crate::conversations::send_message`
+rejects the send if so. The rejection reuses the exact same error a genuine
+non-participant gets (`AppError::NotConversationParticipant`), so a blocked
+participant's failed send looks identical to never having been in the
+conversation at all. See [communication.md](./communication.md#direct-messages-and-small-group-conversations).
+
 ## Today in the repo
 
 - `crates/protocol/src/social.rs` — `Friendship`, `FriendRequest { from, to,
@@ -159,9 +169,11 @@ fact, and remains open per [Proposal §32](../stakeholders/Proposal.md#32-open-q
   `DELETE /blocks/:identity_id`, `GET /blocks` (the caller's own list only).
   Blocking a pending-friend-request partner auto-resolves that request.
   Enforced in `friends::create_friend_request` (a blocked pair's rejection
-  is identical to a nonexistent-identity rejection) and
+  is identical to a nonexistent-identity rejection),
   `presence::get_presence`/`presence_ws` (a blocked identity's presence
-  reads as `Offline`, indistinguishable from a genuinely missing entry).
+  reads as `Offline`, indistinguishable from a genuinely missing entry), and
+  `conversations::send_message` (#102) via the group-aware
+  `blocks::has_block_among` — see "Blocking and harassment" above.
 - **A friendship is promised-durable history**, not server-only state — the
   same reasoning [guilds](./guilds.md) apply, since it's a social fact
   between two identities, not something any game owns. `friend.requested`,
