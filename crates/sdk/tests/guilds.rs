@@ -72,6 +72,7 @@ fn client() -> AvalonClient {
 }
 
 /// Creates a guild as `token` via the real HTTP API and returns its id.
+/// `tag` must be 2-5 chars (`validate_tag` in `crates/server/src/guilds.rs`).
 async fn create_guild(http: &reqwest::Client, base: &str, token: &str, tag: &str) -> Uuid {
     let response = http
         .post(format!("{base}/guilds"))
@@ -99,7 +100,7 @@ async fn guilds_lists_a_membership_created_via_the_http_api() {
 
     let (alice_id, alice_token) =
         seed_identity_session(&pool, &format!("sdk-guilds-alice-{}", Uuid::new_v4())).await;
-    let tag = format!("SDKG{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let tag = format!("G{}", &Uuid::new_v4().simple().to_string()[..4]);
     let guild_id = create_guild(&http, &base, &alice_token, &tag).await;
 
     let session = client
@@ -143,7 +144,7 @@ async fn roster_returns_the_owner_as_a_member() {
 
     let (alice_id, alice_token) =
         seed_identity_session(&pool, &format!("sdk-roster-alice-{}", Uuid::new_v4())).await;
-    let tag = format!("SDKR{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let tag = format!("R{}", &Uuid::new_v4().simple().to_string()[..4]);
     let guild_id = create_guild(&http, &base, &alice_token, &tag).await;
 
     let session = client
@@ -173,7 +174,7 @@ async fn send_then_messages_round_trips_a_message() {
 
     let (alice_id, alice_token) =
         seed_identity_session(&pool, &format!("sdk-chat-alice-{}", Uuid::new_v4())).await;
-    let tag = format!("SDKC{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let tag = format!("C{}", &Uuid::new_v4().simple().to_string()[..4]);
     let guild_id = create_guild(&http, &base, &alice_token, &tag).await;
 
     let session = client
@@ -222,7 +223,7 @@ async fn channels_without_guilds_chat_is_rejected_even_with_guilds_read() {
 
     let (_alice_id, alice_token) =
         seed_identity_session(&pool, &format!("sdk-chat-nogrant-{}", Uuid::new_v4())).await;
-    let tag = format!("SDKN{}", &Uuid::new_v4().simple().to_string()[..6]);
+    let tag = format!("N{}", &Uuid::new_v4().simple().to_string()[..4]);
     let guild_id = create_guild(&http, &base, &alice_token, &tag).await;
 
     // Only guilds.read granted, not guilds.chat — there is no guilds.*
