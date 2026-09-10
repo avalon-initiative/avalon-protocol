@@ -31,9 +31,11 @@ const { latestMessages, loading: messagesLoading } = useLatestGuildMessages(guil
 const homeGuilds = computed(() => guilds.value.slice(0, HOME_GUILDS_LIMIT))
 const homeMessages = computed(() => latestMessages.value.slice(0, HOME_MESSAGES_LIMIT))
 
-// The most recently connected game, if any — the only honest ordering
+// The most recently connected app/game, if any — the only honest ordering
 // available (GameBindingResponse has no last-played/session data yet), so
-// "Featured" means "newest connection", not "most played".
+// "Recently Connected" means exactly that, not "most played" or a curated
+// pick — renamed from "Featured Game" since it isn't curated and connected
+// apps aren't only games.
 const featuredGame = computed(() =>
   [...connectedGames.value].sort((a, b) => b.established_at.localeCompare(a.established_at))[0],
 )
@@ -76,7 +78,7 @@ const quickActions = [
     </header>
     <p v-if="error" :class="styles.error">{{ error }}</p>
 
-    <AvalonCard v-if="!gamesLoading" title="Featured Game" :class="styles.featuredCard">
+    <AvalonCard v-if="!gamesLoading" title="Recently Connected" :class="styles.featuredCard">
       <div v-if="featuredGame" :class="styles.featured">
         <span :class="styles.featuredIcon"><AvalonIcon name="games" :size="28" /></span>
         <div :class="styles.featuredText">
@@ -86,7 +88,7 @@ const quickActions = [
           </p>
         </div>
         <AvalonButton
-          label="View Game"
+          label="View"
           variant="secondary"
           @click="router.push({ name: 'integration-profile', params: { slug: featuredGame.slug } })"
         />
@@ -94,11 +96,11 @@ const quickActions = [
       <div v-else :class="styles.featured">
         <span :class="styles.featuredIcon"><AvalonIcon name="discover" :size="28" /></span>
         <div :class="styles.featuredText">
-          <p :class="styles.featuredLabel">No games connected yet</p>
-          <p :class="styles.featuredMeta">Browse the directory to find your first game.</p>
+          <p :class="styles.featuredLabel">Nothing connected yet</p>
+          <p :class="styles.featuredMeta">Browse the directory to find your first app or game.</p>
         </div>
         <AvalonButton
-          label="Explore Games"
+          label="Browse Apps & Games"
           variant="secondary"
           @click="router.push({ name: 'integrations' })"
         />
@@ -107,14 +109,14 @@ const quickActions = [
 
     <div :class="styles.grid">
       <div :class="styles.mainColumn">
-        <AvalonCard title="Your Games">
+        <AvalonCard title="Your Apps & Games">
           <template #action>
             <RouterLink to="/connections">View all</RouterLink>
           </template>
           <template v-if="!gamesLoading && connectedGames.length === 0">
-            <p :class="styles.empty">You haven't connected to any games yet.</p>
+            <p :class="styles.empty">You haven't connected anything yet.</p>
             <AvalonButton
-              label="Explore Games"
+              label="Browse Apps & Games"
               variant="secondary"
               @click="router.push({ name: 'integrations' })"
             />
