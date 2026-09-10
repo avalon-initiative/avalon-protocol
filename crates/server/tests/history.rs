@@ -59,12 +59,26 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 /// `avalon_chain::PostgresSettlementProvider::list_entries_for_issuer_prefix`'s
 /// own docs on why), only reads issuer/kind/subject/payload/timestamp back.
 async fn seed_ledger_entry(pool: &PgPool, identity_id: Uuid, kind: &str, verb: &str) {
+    // ledger_entries.batch_id is NOT NULL with an FK to ledger_batches
+    // (issue #38) — this endpoint doesn't care about real batching either
+    // (same "junk is fine" reasoning as prev_hash/entry_hash above), but a
+    // referenced row still has to exist.
+    let batch_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ledger_batches (batch_id, first_seq, last_seq, batch_root) \
+         VALUES ($1, 0, 0, 'seed')",
+    )
+    .bind(batch_id)
+    .execute(pool)
+    .await
+    .expect("failed to seed ledger batch");
+
     let issuer = format!("identity:{identity_id}:self:{verb}");
     sqlx::query(
         r#"
         INSERT INTO ledger_entries
-            (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash)
-        VALUES ($1, $2, $3, $4, $5, $6, 1, 'seed', $7)
+            (event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id)
+        VALUES ($1, $2, $3, $4, $5, $6, 1, 'seed', $7, $8)
         "#,
     )
     .bind(Uuid::new_v4())
@@ -74,6 +88,7 @@ async fn seed_ledger_entry(pool: &PgPool, identity_id: Uuid, kind: &str, verb: &
     .bind(serde_json::json!({ "identity_id": identity_id }))
     .bind(OffsetDateTime::now_utc())
     .bind(format!("seed-{}", Uuid::new_v4()))
+    .bind(batch_id)
     .execute(pool)
     .await
     .expect("failed to seed ledger entry");
