@@ -1317,7 +1317,11 @@ pub struct PermissionOverrideResponse {
     pub allow: bool,
 }
 
-async fn require_manage_roles(state: &AppState, guild: &GuildRow, actor: Uuid) -> Result<(), AppError> {
+async fn require_manage_roles(
+    state: &AppState,
+    guild: &GuildRow,
+    actor: Uuid,
+) -> Result<(), AppError> {
     let actor_permissions = actor_role_permissions(state, guild.id, actor).await?;
     if has_guild_permission(
         guild.owner,
@@ -1468,11 +1472,12 @@ pub async fn delete_permission_override(
     let guild = fetch_guild(&state, guild_id).await?;
     require_manage_roles(&state, &guild, actor).await?;
 
-    let deleted = sqlx::query("DELETE FROM guild_permission_overrides WHERE id = $1 AND guild_id = $2")
-        .bind(override_id)
-        .bind(guild_id)
-        .execute(&state.pool)
-        .await?;
+    let deleted =
+        sqlx::query("DELETE FROM guild_permission_overrides WHERE id = $1 AND guild_id = $2")
+            .bind(override_id)
+            .bind(guild_id)
+            .execute(&state.pool)
+            .await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::PermissionOverrideNotFound);
     }
@@ -3776,7 +3781,8 @@ mod tests {
     #[test]
     fn select_list_includes_banner_and_icon() {
         let actor = Uuid::new_v4();
-        let builder = build_discover_query(&empty_discover_query(), DiscoverSort::Newest, actor, 20);
+        let builder =
+            build_discover_query(&empty_discover_query(), DiscoverSort::Newest, actor, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
         assert!(sql.contains("g.banner"));

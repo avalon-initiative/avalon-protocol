@@ -82,17 +82,15 @@ async fn create_guild(client: &reqwest::Client, owner_token: &str) -> Uuid {
         "tag": suffix[..5].to_uppercase(),
         "description": "a guild created by a conversations integration test",
     });
-    let created: serde_json::Value = auth(
-        client.post(format!("{}/guilds", server_url())),
-        owner_token,
-    )
-    .json(&body)
-    .send()
-    .await
-    .expect("create guild request failed")
-    .json()
-    .await
-    .expect("expected JSON guild body");
+    let created: serde_json::Value =
+        auth(client.post(format!("{}/guilds", server_url())), owner_token)
+            .json(&body)
+            .send()
+            .await
+            .expect("create guild request failed")
+            .json()
+            .await
+            .expect("expected JSON guild body");
     Uuid::parse_str(created["id"].as_str().expect("expected guild id")).expect("guild id is a UUID")
 }
 

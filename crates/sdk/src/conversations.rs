@@ -6,12 +6,12 @@
 //! capability *before* making any request — same convention `social.rs`
 //! (#17) and `guilds.rs` (#23) already established. The server enforces the
 //! same capabilities again once #26–#28 land; this check is a convenience
-//! for game developers, not the security boundary.
+//! for integrator developers, not the security boundary.
 //!
 //! ## Two capabilities, split the same way `achievements()`/
 //! `issue_achievement()` split theirs
 //!
-//! `messages.read` covers discovering and reading conversations a player is
+//! `messages.read` covers discovering and reading conversations an identity is
 //! already in: [`Session::conversations`] (`GET /conversations`) and
 //! [`ConversationHandle::messages`] (`GET /conversations/{id}/messages`).
 //! `messages.send` covers *starting* a conversation and posting into one:
@@ -21,11 +21,12 @@
 //! `dm(other_identity_id)` is gated on `messages.send`, not `messages.read`,
 //! even though the server's `POST /conversations` also returns the full
 //! participant list: the only thing a caller can *do* with a brand-new
-//! conversation is start it, and a game that only has `messages.send` (e.g.
-//! "let a player reply to a support conversation" without being able to
-//! browse the player's whole DM list) should still be able to open one. A
-//! `messages.read`-only game isn't left without a way to reach a specific
-//! conversation's messages either — it can still learn conversation ids from
+//! conversation is start it, and an integrator that only has `messages.send`
+//! (e.g. "let an identity reply to a support conversation" without being
+//! able to browse the identity's whole DM list) should still be able to
+//! open one. A `messages.read`-only integrator isn't left without a way to
+//! reach a specific conversation's messages either — it can still learn
+//! conversation ids from
 //! [`Session::conversations`] and open a handle to any of them via
 //! [`Session::conversation`], which — like [`crate::guilds::GuildHandle`] —
 //! is a plain, ungated local constructor that makes no request of its own;
@@ -37,7 +38,7 @@
 //! entries through [`Session::conversation`]/[`ConversationHandle::send_with_client_entry_id`]
 //! rather than building its own request — one request-building path, so a
 //! capability check (or any other classification) behaves the same whether
-//! a game calls [`ConversationHandle::send`] directly or drains a
+//! an integrator calls [`ConversationHandle::send`] directly or drains a
 //! [`crate::sync_journal::SyncJournal`] through the submission engine.
 //!
 //! ## No conversation content is cached
@@ -163,7 +164,10 @@ impl Session {
     /// `crates/server/src/conversations.rs`'s module doc comment). See the
     /// module doc comment for why this is gated on `messages.send` rather
     /// than `messages.read`.
-    pub async fn dm(&self, other_identity_id: IdentityId) -> Result<ConversationHandle<'_>, SdkError> {
+    pub async fn dm(
+        &self,
+        other_identity_id: IdentityId,
+    ) -> Result<ConversationHandle<'_>, SdkError> {
         self.require(Capability::MessagesSend)?;
 
         let response = self
@@ -233,12 +237,15 @@ impl ConversationHandle<'_> {
             return Err(conversation_error(response.status()));
         }
         let messages: Vec<MessageResponse> = response.json().await?;
-        Ok(messages.into_iter().map(ConversationMessage::from).collect())
+        Ok(messages
+            .into_iter()
+            .map(ConversationMessage::from)
+            .collect())
     }
 
     /// `POST /conversations/{id}/messages` — requires `messages.send`.
-    /// Posts *as the player* under their own session token; there is no
-    /// path for a game to post as itself. Fails with
+    /// Posts *as the identity* under their own session token; there is no
+    /// path for an integrator to post as itself. Fails with
     /// [`SdkError::NotConversationParticipant`] if the caller isn't (or is
     /// no longer, due to a block) a participant — see that variant's doc
     /// comment for why a blocked send is indistinguishable from a
@@ -253,7 +260,7 @@ impl ConversationHandle<'_> {
     /// builds a `POST /conversations/{id}/messages` request; both `send`
     /// and the submission engine's transport route through it so a
     /// capability check failure (or any other classification) behaves
-    /// identically regardless of which path a game used.
+    /// identically regardless of which path an integrator used.
     pub(crate) async fn send_with_client_entry_id(
         &self,
         body: &str,

@@ -149,7 +149,11 @@ Game A continues issuing under k2.
   own SDK/CLI send only the new name. Neither the `/games/{slug}/challenge`
   and `/games/whoami` paths nor any JSON field were renamed by this pass.
 - `crates/protocol/src/achievements.rs` — `Issuer::Game(GameId)`; no status,
-  no key set.
+  no key set. #297 added additive sibling variants `Issuer::App(GameId)` and
+  `Issuer::Service(GameId)`, mirroring `IntegratorCategory` (#282) — each
+  mints its own `app:`/`service:` `GlobalId` namespace prefix via
+  `Issuer::namespace()`, parallel to (never replacing) `Issuer::Game`'s
+  `game:` namespace.
 - `crates/cli` — `avalon register-game --slug <slug> --name <name>
   --developer <dev> [--capability <cap>]... [--server <url>]` (#29): generates
   a fresh Ed25519 keypair locally, calls `POST /integrations` (#293's
@@ -160,9 +164,9 @@ Game A continues issuing under k2.
   exercises the challenge-response round trip
   (`POST /games/{slug}/challenge` → `GET /games/whoami`, sending the
   `x-avalon-integrator-*` header names) once as a sanity check. A slug
-  collision (409) prints a clear message instead of a raw HTTP error. The
-  command name itself is unchanged — a `register-integrator` alias is a
-  separate, lower-priority follow-up (#293's own scope note).
+  collision (409) prints a clear message instead of a raw HTTP error.
+  `avalon register-integrator` (#297) is now an additive alias for the same
+  command — identical parsing and behavior, `register-game` still works too.
 
 ## Decisions and tickets
 
@@ -185,6 +189,9 @@ Game A continues issuing under k2.
   described above.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
   identity implementation (blocked by #80).
+- [#297](https://github.com/LunarVagabond/avalon-protocol/issues/297) —
+  additive `Issuer::App`/`Issuer::Service` variants and the
+  `register-integrator` CLI alias, described above.
 - [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) — ledger
   entry signing; the operator's key, a separate domain.
 - [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) — player
