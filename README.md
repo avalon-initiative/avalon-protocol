@@ -58,6 +58,36 @@ Discord, Slack, or anything like them — it's the open identity and social
 layer underneath, that any of them could plug into as a client, the same way
 a game or the Hub app can.
 
+## Status
+
+Identity and auth are real and working end to end against a live Postgres
+instance: an Avalon identity is a self-custodied keypair — a WebAuthn
+passkey for login plus a separate Ed25519 key that signs the events an
+identity authors — wired through `avalon create-identity` and the Rust SDK.
+The chain crate has a real hash-chained Postgres ledger
+(`avalon inspect-ledger`), with identity creation and its ledger entry
+committed atomically via an outbox pattern. The social graph (friend
+requests, accept/decline, blocks) and guilds (roles with a fixed permission
+vocabulary plus per-resource overrides, membership, channels, messages,
+events with per-member RSVP) are built out with real server endpoints and a
+working Hub UI, not just scaffolding. Achievements/attestations have their
+core protocol types defined but no issuance or verification flow yet, and
+the indexer/query layer and permissioned-validator settlement design are
+still early. See [`docs/architecture/`](docs/architecture/) for the current
+state of each area, one file per topic.
+
+## Running locally
+
+```bash
+docker compose up -d && cp .env.compose.example .env
+make migrate && make start
+make create-identity && make inspect-ledger
+```
+
+See [`docs/maintainers/local-development.md`](docs/maintainers/local-development.md)
+for the full setup path (prerequisites, the Hub web client, Storybook, the
+C# SDK, resetting the database, and running the live test suite).
+
 ## Repository structure
 
 ```text
