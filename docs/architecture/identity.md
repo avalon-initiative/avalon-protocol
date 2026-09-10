@@ -272,6 +272,24 @@ future work). None of these affect the state machine or its invariants.
   [`./game-bindings.md`](./game-bindings.md).
 - Not a platform identity in the Steam/Xbox sense. No single operator owns it;
   see [`./nodes.md`](./nodes.md).
+- **Not a real-world or government identity system, and not headed toward
+  becoming one.** An Avalon identity identifies a keypair, never a person.
+  Nothing in `identity.created`'s payload or anywhere else in identity
+  creation asks for a legal name, date of birth, government ID, biometric,
+  phone number, or email — there is no field for one, and no KYC step.
+  This isn't a policy that could quietly change later; it's structural. Because
+  identity is self-custodied (#73) with no central issuer, there is no party
+  anywhere in the system — including Avalon's own maintainers or any node
+  operator — that ever holds, or could be compelled to produce, a mapping
+  from a keypair back to a real person, because that mapping is never
+  created in the first place. A player who loses every passkey with no
+  recovery configured loses the identity outright; nobody can "look it up"
+  and reissue it. What Avalon identifies and makes portable is *online
+  activity* — friendships, guild membership, achievements — never
+  personhood. The heavy investment in decentralization throughout this
+  protocol (no validator set, no platform lock-in, self-hostable nodes; see
+  [`./nodes.md`](./nodes.md)) exists in large part to keep that true by
+  construction rather than by promise.
 
 ## Today in the repo
 

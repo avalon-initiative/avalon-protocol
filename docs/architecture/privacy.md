@@ -6,6 +6,13 @@ are aggregates**, never per-player data. A portable identity makes surveillance
 portable too ([Proposal §31](../stakeholders/Proposal.md#31-major-risks)); the answer is
 intentional scoping, not hoping nobody looks.
 
+This document is about who can see *what a player has done within Avalon* —
+a separate and prior question from whether Avalon identity ties back to a
+real person at all. It does not: see
+[`./identity.md`](./identity.md#what-identity-is-not) for why that's a
+structural property of self-custodied identity, not a visibility setting
+that could be reconfigured.
+
 ## Scopes
 
 | Scope | Who can see |

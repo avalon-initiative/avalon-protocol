@@ -86,6 +86,24 @@ identity separate from characters, guilds and friends as network entities,
 achievements as attestations, and games that stay fully sovereign while opting in
 to whichever of it they want.
 
+## What this is not
+
+Worth saying plainly, because the shape invites the comparison and a lot of
+people (reasonably) don't want this: **this is not a government or platform
+digital ID system, and it is not on a path to becoming one.** An Avalon
+identity identifies a keypair, not a person — there is no name, government
+ID, biometric, or any other real-world identifier anywhere in it, by
+construction, not by policy. See
+[`architecture/identity.md`](architecture/identity.md#what-identity-is-not)
+for the technical detail. The heavy commitment to decentralization
+throughout this protocol — no validator set, no platform owning identity, no
+single operator anyone could compel — is a large part of *why*: not one
+party in the system ever holds, or could be made to produce, a mapping from
+a keypair back to a real human, because that mapping is never collected in
+the first place. What's portable here is online activity — who you've
+played with, what you've earned, which communities you belong to — never
+personhood.
+
 > Your character in one game can remain unique to that game. Your character in
 > another game can be completely different. But the player behind them remains
 > the same — and for the first time, that fact is something the games themselves,
