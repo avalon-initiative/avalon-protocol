@@ -16,6 +16,7 @@ pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
 pub mod migrate;
+pub mod mirror_watcher;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
@@ -342,6 +343,10 @@ pub fn router(state: AppState) -> Router {
             get(settlement::consistency_proof),
         )
         .route("/ledger/proof/inclusion", get(settlement::inclusion_proof))
+        // Issue #299: bulk entry content, the read path a mirror needs to
+        // hold real ledger content, not just verify STHs — same public,
+        // unauthenticated posture as the rest of this block.
+        .route("/ledger/entries", get(settlement::list_entries))
         .with_state(state)
         .layer(cors_layer_from_env())
 }

@@ -11,7 +11,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use avalon_server::{auth, guild_messages, migrate, outbox, retention, state::AppState};
+use avalon_server::{
+    auth, guild_messages, migrate, mirror_watcher, outbox, retention, state::AppState,
+};
 use sqlx::postgres::PgPoolOptions;
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -94,6 +96,20 @@ async fn main() {
     // Hard-deletes guild message archive rows past their retention window —
     // see crates/server/src/guild_messages.rs (issue #253).
     tokio::spawn(guild_messages::run_archive_expiry_worker(state.clone()));
+
+    // Mirror-watcher (issue #299, implementing #40's decided design):
+    // watches whatever peers `AVALON_MIRROR_PEERS` names, verifying and
+    // storing their STHs, detecting equivocation, and backfilling entry
+    // content — see crates/server/src/mirror_watcher.rs. Only spawned when
+    // configured, same "only run what's actually turned on" pattern the
+    // retention worker above uses.
+    if let Some(mirror_config) = mirror_watcher::MirrorWatcherConfig::from_env() {
+        tokio::spawn(mirror_watcher::run_worker(
+            pool.clone(),
+            chain.clone(),
+            mirror_config,
+        ));
+    }
 
     let app = avalon_server::router(state);
 
