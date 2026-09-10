@@ -5,10 +5,13 @@ the audience the SDKs (`crates/sdk`, `bindings/csharp`) exist for.
 
 Start with [`WhyBuildOnAvalon.md`](WhyBuildOnAvalon.md) for the case for
 integrating your game with Avalon at all. It's a vision document, not an
-integration guide — there's no stable SDK to document integration against yet.
-Once `crates/sdk` and `bindings/csharp/AvalonSdk` have real implementations
-(not the current `NotImplemented` stubs), this is where getting-started guides,
-capability/permission reference, and integration examples belong.
+integration guide — there's no stable, documented SDK to integrate against
+yet. `crates/sdk` now has real implementations for authentication, friends/
+presence, guilds, conversations, and offline sync/submission — achievement
+issuance is still `NotImplemented`, and `bindings/csharp/AvalonSdk` is still
+a skeleton. Once the surface is stable enough to commit to, this is where
+getting-started guides, capability/permission reference, and integration
+examples belong.
 
 Until then, see [`../architecture/sdk.md`](../architecture/sdk.md) for the SDK
 design principle (protocol capabilities, not infrastructure),
