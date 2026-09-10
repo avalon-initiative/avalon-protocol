@@ -92,9 +92,9 @@ a first-class scaling dimension — see
   `crates/indexer/src/projections/`); `Indexer::apply` is a thin wrapper that
   opens its own transaction around the same call. `crates/indexer/src/projections/`
   has one module per read model — `profiles`, `friendships`, `guild_rosters`,
-  `attestations` — each a pure `decode` (event → typed write, unit-tested
-  without Postgres) plus an `apply` (typed write → an upsert keyed by its
-  natural key).
+  `attestations`, `game_bindings` (#261), `game_schemas` (#255) — each a
+  pure `decode` (event → typed write, unit-tested without Postgres) plus an
+  `apply` (typed write → an upsert keyed by its natural key).
 - `profiles` is the one projection retargeted onto its *existing* table
   (`crates/server/db/migrations/0001_identity_and_auth`,
   `.../0005_friend_handles`): `handlers::register_finish`/`update_profile`
@@ -120,7 +120,11 @@ a first-class scaling dimension — see
   `crates/indexer/tests/postgres_indexer.rs`'s `--ignored`
   `apply_is_idempotent_per_projection` / `unknown_kind_is_skipped_not_error`
   tests, not yet driven by a worker replaying the full ledger.
-- No registry projections, no history projections.
+- **Registry projections now exist**: `game_bindings` (`indexer_game_bindings`,
+  migration `0039_indexer_game_bindings`) backs the `players`/`total players
+  ever` metrics (#261); `game_schemas` (#255) backs schema-version discovery
+  — see [`./game-registry.md`](./game-registry.md). No history projections
+  yet.
 
 ## Decisions and tickets
 

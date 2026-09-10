@@ -87,8 +87,14 @@ answer for the current code is: partly, and not yet provably.
   loses the log too. Mirrors and an export format
   ([#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)) are what
   make "obtain the log" in step 1 possible.
-- **No rebuild test exists** (#43), and no `Indexer` implementation exists to
-  run one against.
+- **No rebuild test exists** (#43). A concrete `Indexer` now does exist —
+  `crates/indexer/src/postgres.rs::PostgresIndexer` (#42), dispatching by
+  `event.kind` to per-projection modules under `crates/indexer/src/projections/`
+  (`profiles`, `friendships`, `game_bindings`, `game_schemas`, `guild_rosters`,
+  `attestations`), guarded by an `indexer_applied_events(event_id)` dedup
+  table so a replayed event is a no-op the second time — but nothing yet
+  drives `Indexer::rebuild` end to end against it and diffs the result, so
+  #43's rebuild-from-genesis proof is still unbuilt.
 - **Step 1 ("obtain the log") is not full-replay-only for the commitment
   layer any more.** #208 gives a settlement-state checkpoint — the latest
   `SignedTreeHead` (`PostgresSettlementProvider::checkpoint`, see
@@ -102,7 +108,9 @@ answer for the current code is: partly, and not yet provably.
 ## Today in the repo
 
 - `crates/indexer/src/lib.rs` — `rebuild` default implementation (replay every
-  event through `apply`); no concrete indexer.
+  event through `apply`); `crates/indexer/src/postgres.rs::PostgresIndexer`
+  is the concrete implementation (see above), but nothing yet exercises
+  `rebuild` itself against it.
 - `crates/chain/src/postgres.rs` — `list_entries` re-verifies every entry's
   content hash and link; this is step 2 for the current unsigned chain.
 - `crates/server/src/migrate.rs` — `reset` drops and recreates the schema for
