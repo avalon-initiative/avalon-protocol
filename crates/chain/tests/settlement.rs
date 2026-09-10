@@ -265,7 +265,7 @@ async fn commit_produces_real_merkle_root_not_placeholder() {
     );
 
     // It must actually equal the RFC 6962 MTH of the whole ledger up to this
-    // batch's last_seq — not just "some value that happens to differ".
+    // batch's tree_size — not just "some value that happens to differ".
     let rows = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq ASC")
         .fetch_all(&pool)
         .await
@@ -280,17 +280,14 @@ async fn commit_produces_real_merkle_root_not_placeholder() {
     );
     assert_eq!(claimed_root, expected_root);
 
-    // A Signed Tree Head must exist for this batch's tree_size too.
-    let last_seq: i64 = sqlx::query("SELECT last_seq FROM ledger_batches WHERE batch_id = $1")
-        .bind(batch.id)
-        .fetch_one(&pool)
-        .await
-        .expect("failed to read ledger_batches")
-        .try_get("last_seq")
-        .unwrap();
+    // A Signed Tree Head must exist for this batch's tree_size — a leaf
+    // *count* (`hashes.len()`), never `ledger_batches.last_seq`: `seq` can
+    // have gaps (see postgres.rs's module doc), so the two diverge once any
+    // commit anywhere has ever rolled back.
+    let tree_size = hashes.len() as i64;
     let sth_root: String =
         sqlx::query("SELECT root_hash FROM signed_tree_heads WHERE tree_size = $1")
-            .bind(last_seq)
+            .bind(tree_size)
             .fetch_one(&pool)
             .await
             .expect("a signed_tree_heads row should exist for this batch's tree_size")
