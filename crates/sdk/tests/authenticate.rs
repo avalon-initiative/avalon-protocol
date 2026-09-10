@@ -47,7 +47,7 @@ async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &s
     let origin_url =
         url::Url::parse(&origin_str).expect("AVALON_WEBAUTHN_ORIGIN must be a valid URL");
 
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let event_signing_public_key = BASE64.encode(signing_key.verifying_key().to_bytes());
 

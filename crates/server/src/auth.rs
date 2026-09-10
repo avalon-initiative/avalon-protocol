@@ -22,7 +22,7 @@
 //! revoked by deleting its row rather than waiting out an embedded expiry.
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use rand::RngCore;
+use rand::Rng;
 use webauthn_rs::prelude::{Url, Webauthn, WebauthnBuilder};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -66,7 +66,7 @@ pub fn verify_event_signature(
 /// embedded data, unlike a JWT. Session state lives in the `sessions` table.
 pub fn generate_session_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn event_signature_rejects_tampering() {
-        let mut csprng = rand::rngs::OsRng;
+        let mut csprng = rand::rng();
         let signing_key = SigningKey::generate(&mut csprng);
         let message = b"avalon:identity.created:v1:test";
         let signature = signing_key.sign(message);

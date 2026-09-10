@@ -24,7 +24,7 @@ struct UnregisteredGame {
 
 fn unique_game() -> UnregisteredGame {
     let suffix = Uuid::new_v4().simple().to_string();
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let body = serde_json::json!({
         "slug": format!("test-game-{}", &suffix[..12]),
@@ -244,7 +244,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
 
     // Signed with a key the game never registered.
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let wrong_key = SigningKey::generate(&mut csprng);
     let signature_b64 = BASE64.encode(wrong_key.sign(&nonce).to_bytes());
 

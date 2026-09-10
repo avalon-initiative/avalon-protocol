@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn sign_then_verify_round_trip_succeeds() {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let verifying_key = signing_key.verifying_key();
 
         let sth = sign_tree_head(
@@ -204,8 +204,8 @@ mod tests {
 
     #[test]
     fn verify_rejects_signature_from_a_different_key() {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
-        let other_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
+        let other_key = SigningKey::generate(&mut rand::rng());
 
         let sth = sign_tree_head(
             &signing_key,
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_tampered_field() {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let verifying_key = signing_key.verifying_key();
         let sth = sign_tree_head(
             &signing_key,
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_malformed_signature_without_panicking() {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let mut sth = sign_tree_head(
             &signing_key,
             "test-key",
@@ -266,6 +266,69 @@ mod tests {
 
         sth.signature = "ab".to_string(); // valid hex, wrong length
         assert!(!verify_tree_head(&signing_key.verifying_key(), &sth));
+    }
+
+    /// Independent cross-implementation reference vector for issue #234
+    /// (the `ed25519-dalek` 2.x -> 3.0.0 / `rand` 0.8 -> 0.10 bump) — the
+    /// same rigor #210/#211 applied to the Merkle side
+    /// (`crates/chain/src/merkle.rs`'s externally-sourced RFC 6962 vectors),
+    /// applied here to the Ed25519 signing primitive this module wraps.
+    /// `seed`/`public_key`/`signature` were produced independently by
+    /// Python's `cryptography` library (OpenSSL-backed Ed25519, a
+    /// completely separate implementation from `curve25519-dalek`) signing
+    /// `message` — not derived from or copied out of this codebase. If the
+    /// 3.0.0 bump had changed key derivation, signing, or the signature
+    /// wire format in any way, this would fail even though every other test
+    /// in this file (which only ever round-trips against itself) would
+    /// still pass.
+    #[test]
+    fn sign_matches_independent_ed25519_implementation() {
+        let seed_hex = "e7daaf365088407baa0fb9be13f67a04b59c04357ff7d02a22686aa7cbfb8271";
+        let expected_public_key_hex =
+            "ff096f4d891c5b05dcb85c076278226bc718f4767a9be75fb1d7abdaf0bc0d31";
+        let message: &[u8] =
+            b"avalon-settlement-sth-v1 cross-implementation reference vector for issue #234";
+        let expected_signature_hex = "2726c91e79e546a24dc01d49a5552a3d4c4eeffe86d801943dcde26b8f9306325fc0db30965f70882c98ee826d7a5b1d9a3fe6eb15f70e4dad8ea8f7865d9607";
+
+        let seed: [u8; 32] = hex::decode(seed_hex)
+            .expect("reference seed should be valid hex")
+            .try_into()
+            .expect("reference seed should be 32 bytes");
+        let signing_key = SigningKey::from_bytes(&seed);
+
+        // Key derivation matches the independent implementation exactly.
+        assert_eq!(
+            hex::encode(signing_key.verifying_key().to_bytes()),
+            expected_public_key_hex,
+            "public key derived from the reference seed no longer matches the \
+             independently-produced reference public key"
+        );
+
+        // Ed25519 is deterministic — signing the same message with the same
+        // key must reproduce the exact same signature bytes the independent
+        // implementation produced, not just "a valid-looking signature".
+        let signature: Signature = signing_key.sign(message);
+        assert_eq!(
+            hex::encode(signature.to_bytes()),
+            expected_signature_hex,
+            "signature produced by ed25519-dalek no longer matches the \
+             independently-produced reference signature"
+        );
+
+        // And the reverse direction: this crate's verifier must accept a
+        // signature it did not itself produce.
+        let signature_bytes: [u8; 64] = hex::decode(expected_signature_hex)
+            .expect("reference signature should be valid hex")
+            .try_into()
+            .expect("reference signature should be 64 bytes");
+        let externally_produced_signature = Signature::from_bytes(&signature_bytes);
+        assert!(
+            signing_key
+                .verifying_key()
+                .verify(message, &externally_produced_signature)
+                .is_ok(),
+            "failed to verify a signature produced by an independent Ed25519 implementation"
+        );
     }
 
     #[test]

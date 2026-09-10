@@ -58,7 +58,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 /// two capabilities these tests approve/reject against.
 async fn register_unique_game(http: &reqwest::Client, base: &str) -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
-    let mut csprng = rand::rngs::OsRng;
+    let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let body = serde_json::json!({
         "slug": format!("test-conn-{}", &suffix[..12]),

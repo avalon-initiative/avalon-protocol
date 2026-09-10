@@ -95,7 +95,7 @@ async fn create_identity_with_one_passkey(
         .expect("virtual authenticator registration should succeed");
 
     use ed25519_dalek::{Signer, SigningKey};
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes =
         format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
     let signature = signing_key.sign(&signing_bytes);

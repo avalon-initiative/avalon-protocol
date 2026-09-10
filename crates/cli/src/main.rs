@@ -420,7 +420,7 @@ mod tests {
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
         let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
 
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let sth = sign_tree_head(
             &signing_key,
             "test-key",
@@ -436,7 +436,7 @@ mod tests {
         // ...but verifying against a DIFFERENT key's public half — a
         // forged/mismatched signature, or the wrong operator key configured
         // — must be reported as invalid.
-        let wrong_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let wrong_key = SigningKey::generate(&mut rand::rng());
         assert!(
             !avalon_chain::sth::verify_tree_head(&wrong_key.verifying_key(), &sth),
             "a signature that doesn't verify against the configured key must be reported, not accepted"
@@ -454,7 +454,7 @@ mod tests {
         let entries = sample_entries(&["aa".repeat(32).as_str(), "bb".repeat(32).as_str()]);
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
         let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let sth = sign_tree_head(
             &signing_key,
             "test-key",
@@ -497,7 +497,7 @@ mod tests {
 
         let hashes: Vec<String> = entries.iter().map(|e| e.entry_hash.clone()).collect();
         let root = hex::encode(avalon_chain::merkle::mth_of_hex_hashes(&hashes).unwrap());
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut rand::rng());
         // tree_size = 3: the true leaf count (three real rows), not 5 (the
         // highest raw seq value) — matching what `commit()` now signs.
         let sth = sign_tree_head(
