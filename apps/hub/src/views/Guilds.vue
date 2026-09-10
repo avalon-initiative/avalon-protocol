@@ -1,10 +1,18 @@
 <script setup lang="ts">
 // "My guilds" landing page (issue #24): every guild the caller belongs to
-// (GET /me/guilds), plus a button-first "create guild" form — same
-// read-only-until-action shape as Friends.vue's "Add a friend".
+// (GET /me/guilds), plus a header-button "create guild" form in a modal
+// (issue #281).
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonForm, AvalonGuildCard, AvalonTextField } from '@avalon/ui'
+import {
+  AvalonButton,
+  AvalonCard,
+  AvalonFilterBar,
+  AvalonForm,
+  AvalonGuildCard,
+  AvalonModal,
+  AvalonTextField,
+} from '@avalon/ui'
 import * as api from '../api/client'
 import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
@@ -102,7 +110,10 @@ async function onApplyToJoin(guildId: string) {
 <template>
   <div v-if="!loading" :class="styles.page">
     <header :class="styles.pageHeader">
-      <h1 :class="styles.title">Guilds</h1>
+      <div :class="local.headerRow">
+        <h1 :class="styles.title">Guilds</h1>
+        <AvalonButton label="Create a guild" variant="primary" @click="showCreateGuild = true" />
+      </div>
       <p :class="styles.subtitle">Communities you belong to, wherever their members are playing.</p>
     </header>
     <p v-if="error" :class="styles.error">{{ error }}</p>
@@ -124,121 +135,109 @@ async function onApplyToJoin(guildId: string) {
       </button>
     </div>
 
-    <div :class="styles.grid">
-      <div v-if="activeTab === 'mine'" :class="styles.mainColumn">
-        <AvalonCard :title="`My guilds (${guilds.length})`">
-          <p v-if="guilds.length === 0" :class="styles.empty">
-            You're not in any guilds yet — create one to get started.
+    <div v-if="activeTab === 'mine'" :class="styles.mainColumn">
+      <AvalonCard :title="`My guilds (${guilds.length})`">
+        <p v-if="guilds.length === 0" :class="styles.empty">
+          You're not in any guilds yet — create one to get started.
+        </p>
+        <template v-else>
+          <AvalonFilterBar
+            label="Search by name or tag"
+            placeholder="Ashen Vanguard"
+            :query="guildQuery"
+            @update:query="guildQuery = $event"
+          />
+          <p v-if="guildQuery && visibleGuilds.length === 0" :class="styles.empty">
+            No guilds match "{{ guildQuery }}".
           </p>
-          <template v-else>
-            <AvalonFilterBar
-              label="Search by name or tag"
-              placeholder="Ashen Vanguard"
-              :query="guildQuery"
-              @update:query="guildQuery = $event"
-            />
-            <p v-if="guildQuery && visibleGuilds.length === 0" :class="styles.empty">
-              No guilds match "{{ guildQuery }}".
-            </p>
-          </template>
+        </template>
+        <AvalonGuildCard
+          v-for="guild in visibleGuilds"
+          :key="guild.id"
+          :name="guild.name"
+          :tag="guild.tag"
+          :description="guild.description"
+          :member-count="guild.member_count"
+          :icon-url="guild.icon ?? undefined"
+          :banner-url="guild.banner ?? undefined"
+          @select="openGuild(guild.id)"
+        />
+      </AvalonCard>
+    </div>
+
+    <div v-else :class="styles.mainColumn">
+      <AvalonCard title="Discover guilds" subtitle="Browse and search guilds that are recruiting new members.">
+        <div :class="local.discoverFilters">
+          <AvalonFilterBar
+            label="Search by name, tag, or description"
+            placeholder="Ashen Vanguard"
+            :query="discover.query.value"
+            no-margin
+            @update:query="discover.query.value = $event"
+          />
+          <AvalonTextField v-model="discover.tag.value" label="Tag" placeholder="ASHV" />
+          <label :class="local.recruitingToggle">
+            <input v-model="discover.recruitingOnly.value" type="checkbox" />
+            Recruiting only
+          </label>
+        </div>
+        <p v-if="discover.error.value" :class="styles.error">{{ discover.error.value }}</p>
+        <p v-else-if="!discover.loading.value && discover.guilds.value.length === 0" :class="styles.empty">
+          No guilds match your search.
+        </p>
+        <p v-if="applyError" :class="styles.error">{{ applyError }}</p>
+        <div v-for="guild in discover.guilds.value" :key="guild.id" :class="local.discoverCard">
           <AvalonGuildCard
-            v-for="guild in visibleGuilds"
-            :key="guild.id"
             :name="guild.name"
             :tag="guild.tag"
             :description="guild.description"
             :member-count="guild.member_count"
+            :recruiting="guild.recruiting"
             :icon-url="guild.icon ?? undefined"
             :banner-url="guild.banner ?? undefined"
             @select="openGuild(guild.id)"
           />
-        </AvalonCard>
-      </div>
-
-      <div v-else :class="styles.mainColumn">
-        <AvalonCard title="Discover guilds" subtitle="Browse and search guilds that are recruiting new members.">
-          <div :class="local.discoverFilters">
-            <AvalonFilterBar
-              label="Search by name, tag, or description"
-              placeholder="Ashen Vanguard"
-              :query="discover.query.value"
-              no-margin
-              @update:query="discover.query.value = $event"
-            />
-            <AvalonTextField v-model="discover.tag.value" label="Tag" placeholder="ASHV" />
-            <label :class="local.recruitingToggle">
-              <input v-model="discover.recruitingOnly.value" type="checkbox" />
-              Recruiting only
-            </label>
-          </div>
-          <p v-if="discover.error.value" :class="styles.error">{{ discover.error.value }}</p>
-          <p v-else-if="!discover.loading.value && discover.guilds.value.length === 0" :class="styles.empty">
-            No guilds match your search.
-          </p>
-          <p v-if="applyError" :class="styles.error">{{ applyError }}</p>
-          <div v-for="guild in discover.guilds.value" :key="guild.id" :class="local.discoverCard">
-            <AvalonGuildCard
-              :name="guild.name"
-              :tag="guild.tag"
-              :description="guild.description"
-              :member-count="guild.member_count"
-              :recruiting="guild.recruiting"
-              :icon-url="guild.icon ?? undefined"
-              :banner-url="guild.banner ?? undefined"
-              @select="openGuild(guild.id)"
-            />
-            <AvalonButton
-              v-if="appliedGuildIds.has(guild.id)"
-              label="Applied"
-              variant="secondary"
-              disabled
-            />
-            <AvalonButton
-              v-else-if="canApplyToJoinGuild(guild, myGuildIds)"
-              :label="applyingTo === guild.id ? 'Applying…' : 'Apply to join'"
-              variant="secondary"
-              :disabled="applyingTo === guild.id"
-              @click="onApplyToJoin(guild.id)"
-            />
-          </div>
           <AvalonButton
-            v-if="discover.nextCursor.value"
-            label="Load more"
+            v-if="appliedGuildIds.has(guild.id)"
+            label="Applied"
             variant="secondary"
-            @click="discover.loadMore()"
+            disabled
           />
-        </AvalonCard>
-      </div>
-
-      <div :class="styles.sideColumn">
-        <AvalonCard title="Create a guild">
           <AvalonButton
-            v-show="!showCreateGuild"
-            label="Create a guild"
-            variant="primary"
-            @click="showCreateGuild = true"
+            v-else-if="canApplyToJoinGuild(guild, myGuildIds)"
+            :label="applyingTo === guild.id ? 'Applying…' : 'Apply to join'"
+            variant="secondary"
+            :disabled="applyingTo === guild.id"
+            @click="onApplyToJoin(guild.id)"
           />
-          <div v-show="showCreateGuild">
-            <AvalonForm
-              submit-label="Create guild"
-              :submitting="creating"
-              :error="createError"
-              @submit="onCreateGuild"
-            >
-              <AvalonTextField v-model="createName" label="Name" placeholder="Ashen Vanguard" />
-              <AvalonTextField v-model="createTag" label="Tag (2-5 characters)" placeholder="ASHV" :maxlength="5" />
-              <AvalonTextField
-                v-model="createDescription"
-                label="Description (optional)"
-                placeholder="What's this guild about?"
-              />
-              <template #secondary-actions>
-                <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateGuild" />
-              </template>
-            </AvalonForm>
-          </div>
-        </AvalonCard>
-      </div>
+        </div>
+        <AvalonButton
+          v-if="discover.nextCursor.value"
+          label="Load more"
+          variant="secondary"
+          @click="discover.loadMore()"
+        />
+      </AvalonCard>
     </div>
+
+    <AvalonModal title="Create a guild" :open="showCreateGuild" @close="cancelCreateGuild">
+      <AvalonForm
+        submit-label="Create guild"
+        :submitting="creating"
+        :error="createError"
+        @submit="onCreateGuild"
+      >
+        <AvalonTextField v-model="createName" label="Name" placeholder="Ashen Vanguard" />
+        <AvalonTextField v-model="createTag" label="Tag (2-5 characters)" placeholder="ASHV" :maxlength="5" />
+        <AvalonTextField
+          v-model="createDescription"
+          label="Description (optional)"
+          placeholder="What's this guild about?"
+        />
+        <template #secondary-actions>
+          <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateGuild" />
+        </template>
+      </AvalonForm>
+    </AvalonModal>
   </div>
 </template>
