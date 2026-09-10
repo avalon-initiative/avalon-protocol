@@ -20,12 +20,12 @@ A game connecting to Avalon establishes:
 | key history | every add / rotate / revoke / expire as an appended event |
 | status | `ACTIVE` · `SUSPENDED` · `REVOKED` · `DEPRECATED` |
 | category | `game` · `app` · `service` (#282, decision #275) — additive, defaults to `game`, doesn't rename `game id`/issuer vocabulary above |
-| capabilities requested | what it will ask players for — a request, never a grant |
+| capabilities requested | what it will ask identities for — a request, never a grant |
 | public metadata | name, developer, website, and similar |
 | supported protocol version / Avalon features | what the game actually implements |
 | recognition policy (optional) | which other issuers it publicly recognizes |
 
-Registering grants nothing. A player still authorizes each capability through
+Registering grants nothing. An identity still authorizes each capability through
 their own binding ([`./game-bindings.md`](./game-bindings.md)).
 
 Achievement ids are namespaced under the game:
@@ -90,7 +90,7 @@ own explicit authorization and audit trail.
 
 | Key | Belongs to | Governs | Tracked in |
 |---|---|---|---|
-| player key | the identity | mutations to the identity's own data | #73 |
+| identity key | the identity | mutations to the identity's own data | #73 |
 | issuer key | the game | attestations the game issues | #80 / #84 |
 | log operator key | the settlement operator | signing log entries / tree heads | #39 |
 
@@ -187,5 +187,5 @@ Game A continues issuing under k2.
   identity implementation (blocked by #80).
 - [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) — ledger
   entry signing; the operator's key, a separate domain.
-- [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) — player
+- [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) — identity
   keys; a separate domain.

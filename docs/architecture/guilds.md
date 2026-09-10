@@ -80,7 +80,7 @@ What a game can do through the association:
 
 - render the roster and member presence (subject to [visibility](./privacy.md))
 - render guild chat in its own UI as a client of the channel
-- ask "is this player a member of guild X, with role Y?"
+- ask "is this identity a member of guild X, with role Y?"
 - unlock game-side content based on membership
 
 What a game cannot do: rename, dissolve, transfer, or govern a guild; remove
@@ -354,7 +354,7 @@ with Game A becomes historical.
   `crates/sdk/src/guilds.rs`'s `Session::guilds()` (`guilds.read`) lists the
   caller's own memberships, `Session::guild(id).roster()` (`guilds.read`)
   and `.channels()`/`.channel(cid).messages()`/`.send()` (`guilds.chat`)
-  read the roster and chat and post as the player — never as the game.
+  read the roster and chat and post as the identity — never as the game.
   Creating guilds, inviting, kicking, changing roles, and managing channels
   stay Hub-only, not exposed on the SDK. See `docs/architecture/sdk.md`.
 - Hub guild views (issue #24) are real: `/guilds` (my guilds + create),
@@ -417,10 +417,10 @@ with Game A becomes historical.
   `guild_members`/`guild_roles` lookup — fixed alongside landing #24 by
   having `channels.rs` reuse `guilds::actor_role_permissions` directly
   instead of its own duplicate. Two real gaps remain, not worked around
-  with a Hub-only endpoint: there is no endpoint that lists a player's own
+  with a Hub-only endpoint: there is no endpoint that lists an identity's own
   pending guild invites — `POST /guilds/{id}/invites` returns an invite id,
   but nothing resolves "invites addressed to me" the way
-  `GET /friends/requests` does for friend requests, so an invited player
+  `GET /friends/requests` does for friend requests, so an invited identity
   has no way to discover or accept an invite through the Hub UI today; the
   invite id has to be shared out of band. `join_policy` toggling has since
   shipped (issue #21): `UpdateGuildRequest.join_policy` lets an owner/officer
@@ -732,7 +732,7 @@ with Game A becomes historical.
   Listing and RSVPing both require current guild membership, same as
   channels/messages. The Rust SDK exposes a read-only
   `Session::guild(id).events()` (`guilds.read`), mirroring `channels()`;
-  create/update/delete/RSVP stay player-authority Hub-only actions, same
+  create/update/delete/RSVP stay identity-authority Hub-only actions, same
   posture channel *management* already has. Hub: a new "Events" card on
   `/guilds/:id` lists upcoming events with title/time/RSVP counts and a
   going/maybe/not-going control, using two new `packages/ui` components

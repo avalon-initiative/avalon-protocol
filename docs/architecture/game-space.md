@@ -1,6 +1,6 @@
 # Game Space: Schemas, Publication, and Mapping
 
-**A binding says a player participates in a game. A Game Space says what the
+**A binding says an identity participates in a game. A Game Space says what the
 game has chosen to describe to Avalon about its own data model, and how much
 of it is actually exposed.** Neither one gives Avalon an opinion about what a
 "level" or a "class" is. This document is the design for the layer that lets a
@@ -20,8 +20,8 @@ and data exposure (actual instances) remain unbuilt — see
 [Game bindings](./game-bindings.md) already establish "this identity
 participates in this game," deliberately with no game-data field, per
 [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67). A **Game
-Space** is a different thing: it belongs to the *game*, not to a
-player-game pair, and it is where a game optionally publishes *how its data is
+Space** is a different thing: it belongs to the *game*, not to an
+identity-game pair, and it is where a game optionally publishes *how its data is
 shaped* (schemas) and optionally exposes *instances of that data* (data
 exposure). It does not replace the game's own database, and it does not
 replace or extend `GameBinding`:
@@ -102,7 +102,7 @@ Not every schema needs a mapping, and not every mapping needs to be
 mechanically executable — a mapping may just document field correspondence for
 a human or another developer to read (renames, merges, splits, dropped
 fields, default values), rather than being a transformation Avalon runs.
-**The game developer owns the semantic transformation.** Avalon's job is
+**The integrator owns the semantic transformation.** Avalon's job is
 infrastructure for describing, storing, discovering, and validating a mapping
 where one exists — never deciding what a game's migration means.
 
@@ -263,7 +263,7 @@ guarantee is actually needed, following the same discipline
 - `crates/server/src/game_schemas.rs` — `POST /games/{slug}/schemas`
   (publish the next version, game-credential-authenticated the same way
   `achievements.rs` authenticates achievement-definition writes — proving
-  the game owns the slug, not a player-granted capability), `GET
+  the game owns the slug, not an identity-granted capability), `GET
   /games/{slug}/schemas` (list, public), `GET
   /games/{slug}/schemas/{version}` (one version, public). `game_schemas`
   (`crates/server/db/migrations/0034_game_schemas`) is the request-serving

@@ -21,7 +21,7 @@ Each document below links the ones that govern it.
 | Topic | Document | One line |
 |---|---|---|
 | Overview | [overview.md](overview.md) | What Avalon is and is not; the three verticals; the six crates; phases |
-| Identity | [identity.md](identity.md) | Player-owned, game-independent anchor; player-controlled metadata |
+| Identity | [identity.md](identity.md) | Self-owned, game-independent anchor; identity-controlled metadata |
 | Game bindings | [game-bindings.md](game-bindings.md) | An identity's scoped participation in a game; characters stay game-owned |
 | Achievements & attestations | [achievements-and-attestations.md](achievements-and-attestations.md) | An achievement is an issuer's signed claim, namespaced by issuer |
 | Provenance | [provenance.md](provenance.md) | Who issued, where, when, who owns, revoked, valid, recognized |
@@ -46,7 +46,7 @@ Each document below links the ones that govern it.
 | Disaster recovery | [disaster-recovery.md](disaster-recovery.md) | Every Postgres disappears; what gets rebuilt, from what |
 | Security model | [security-model.md](security-model.md) | Scoped authority; node authority; the three key domains; limitations |
 | Privacy | [privacy.md](privacy.md) | Visibility is intentionally scoped; nothing is public because it can be |
-| Scalability | [scalability.md](scalability.md) | 1,000 games × 100,000 players, without becoming a gameplay bottleneck |
+| Scalability | [scalability.md](scalability.md) | 1,000 games × 100,000 identities, without becoming a gameplay bottleneck |
 | Future layers | [future-layers.md](future-layers.md) | Portable assets and economy: later phases, not foundations |
 | Game Space | [game-space.md](game-space.md) | Game-defined schemas, publication, versioning, and mappings; not built yet — the design a decision has to close before it starts |
 
@@ -57,7 +57,7 @@ established it.
 
 | Area | Invariant | Record |
 |---|---|---|
-| Identity | Avalon identity is player-owned and game-independent. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
+| Identity | Avalon identity is self-owned and game-independent. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
 | Identity | An identity is a self-custodied keypair — a WebAuthn passkey for login, a separate Ed25519 key that signs the events it authors. No password, no shared secret. | [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) |
 | Characters | Characters, and every game-defined attribute, belong to the game unless explicitly promoted. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
 | Guilds | Avalon guilds are network-level, game-independent social primitives. | [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74) |
@@ -141,7 +141,7 @@ answers it.
 
 | | Scenario | Answered in |
 |---|---|---|
-| A | A player enters a second game; it recognizes them without owning their identity | [game-bindings.md](game-bindings.md) |
+| A | An identity's owner enters a second game; it recognizes them without owning their identity | [game-bindings.md](game-bindings.md) |
 | B | Game A issues `Dragon Slayer`; Game B verifies it | [achievements-and-attestations.md](achievements-and-attestations.md), [trust-model.md](trust-model.md) |
 | C | Game A revokes it; history shows issued **and** revoked | [revocation.md](revocation.md) |
 | D | Game C issues a trivial `Dragon Slayer`; Avalon preserves it, Game B rejects it | [trust-model.md](trust-model.md) |
@@ -152,7 +152,7 @@ answers it.
 | I | Game A shuts down; what survives | the table above |
 | J | Every PostgreSQL database disappears; projections are rebuilt | [disaster-recovery.md](disaster-recovery.md) |
 | K | A node disappears; SDKs route elsewhere | [nodes.md](nodes.md), [sdk.md](sdk.md) |
-| L | 1,000 games and 100M players; Avalon is not a gameplay bottleneck | [scalability.md](scalability.md) |
+| L | 1,000 games and 100M identities; Avalon is not a gameplay bottleneck | [scalability.md](scalability.md) |
 
 ## Implementation priority
 

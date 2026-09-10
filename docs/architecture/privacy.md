@@ -1,12 +1,12 @@
 # Privacy and Visibility
 
-**Nothing about a player is exposed because the protocol can technically expose
+**Nothing about an identity is exposed because the protocol can technically expose
 it.** Every read path names the visibility scope it checks. **Network analytics
-are aggregates**, never per-player data. A portable identity makes surveillance
+are aggregates**, never per-identity data. A portable identity makes surveillance
 portable too ([Proposal §31](../stakeholders/Proposal.md#31-major-risks)); the answer is
 intentional scoping, not hoping nobody looks.
 
-This document is about who can see *what a player has done within Avalon* —
+This document is about who can see *what an identity has done within Avalon* —
 a separate and prior question from whether Avalon identity ties back to a
 real person at all. It does not: see
 [`./identity.md`](./identity.md#what-identity-is-not) for why that's a
@@ -54,14 +54,14 @@ accident:
 | achievement history | public, individually hideable |
 | game bindings (which games a player plays) | private |
 
-Visibility settings are player state, not durable protocol history, unless a
+Visibility settings are identity state, not durable protocol history, unless a
 later decision promotes them.
 
 ## Presence and guilds
 
 Presence is the most sensitive realtime signal ("where is this person right
 now") and defaults to friends. See [presence](./presence.md). Guild membership
-visibility is policy-controlled by both the player and the guild; a guild that
+visibility is policy-controlled by both the identity and the guild; a guild that
 wants a hidden roster gets one. See [guilds](./guilds.md).
 
 ## Analytics
@@ -76,7 +76,7 @@ Never a list of who they are. Metrics are derived from protocol events, but the
 events themselves are subject to the same scopes when read individually — a
 public transparency log ([settlement](./settlement.md)) is public, which is
 exactly why what goes *into* it is limited to promised-durable facts and never
-includes presence, credentials, or anything a player did not choose to make
+includes presence, credentials, or anything an identity did not choose to make
 durable.
 
 ## Today in the repo
@@ -116,7 +116,7 @@ durable.
   game-calling-the-API endpoint is still hypothetical (see the module's
   own doc comment) and should reuse this rather than hand-rolling a check.
 - `presence_preferences.hide_playing` (`crates/server/db/migrations/0017_presence_preferences`)
-  is a player-controlled setting that's *not* a visibility scope at all —
+  is an identity-controlled setting that's *not* a visibility scope at all —
   it removes `playing` from view entirely, independent of who's asking or
   what they're otherwise allowed to see. Set via `PUT /me/presence`.
 - `discovery_preferences.discoverable` (`crates/server/db/migrations/0026_discovery_preferences`,
@@ -128,7 +128,7 @@ durable.
   `PATCH /me`. Turning it off removes the identity from every subsequent
   search call immediately (the check reads the live preference on every
   call, never a cached/snapshotted value) — no grace period, matching
-  #129's decision. `GET /me` echoes the current value back so a player who
+  #129's decision. `GET /me` echoes the current value back so an identity that
   flipped it on to test something has a standing "you are currently
   publicly searchable" signal, not just a fire-and-forget toggle.
 

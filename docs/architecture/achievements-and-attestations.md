@@ -1,7 +1,7 @@
 # Achievements and Attestations
 
 **An achievement is an issuer attestation, not a `player_id → achievement_id`
-row.** The durable fact is "Game A asserts that Player X accomplished Y", signed
+row.** The durable fact is "Game A asserts that Identity X accomplished Y", signed
 by Game A's key, with a timestamp and a schema. Avalon records that claim and
 its provenance. **It never dictates what another game does with it.**
 
@@ -54,8 +54,8 @@ Three distinct claims that happen to share a title. The display name stays
 
 All three are cryptographically authentic. Avalon does not pretend they are
 semantically identical, and it does not rank them. The Hub shows each with its
-issuer; a consuming game recognizes whichever it chooses; a player features or
-hides whichever they like.
+issuer; a consuming game recognizes whichever it chooses; an identity's owner
+features or hides whichever they like.
 
 ## The receiving game decides meaning
 
