@@ -6,20 +6,20 @@
 //! grants (which is every `Session` today; see `crate::AvalonClient::authenticate`)
 //! correctly rejects without ever touching the network. The server enforces
 //! the same capabilities again once #26–#28 land; this check is a
-//! convenience for game developers, not the security boundary.
+//! convenience for integrator developers, not the security boundary.
 //!
 //! ## `update_presence` deviates from issue #17's original design
 //!
 //! The issue describes presence *publishing* as `AvalonClient::publish_presence(identity_id,
-//! status)`, gated on a game credential and an active `GameBinding` (#83).
+//! status)`, gated on an integrator credential and an active `GameBinding` (#83).
 //! None of that exists in this repo yet — there is no `GameCredential`, no
 //! `GameBinding`, no capability-grant system. What #16 actually built is
-//! `PUT /me/presence`: a *player*, under their own session, publishing their
-//! own status. It has no `playing` field (no game can attribute that claim
+//! `PUT /me/presence`: an *identity*, under their own session, publishing their
+//! own status. It has no `playing` field (no integrator can attribute that claim
 //! to itself yet) and cannot target another identity. So this module exposes
 //! `Session::update_presence` instead — matching what the server actually
-//! does — rather than a game-authority method the server has no endpoint
-//! for. Revisit once #26/#28/#83 land and a real game-side publish path
+//! does — rather than an integrator-authority method the server has no endpoint
+//! for. Revisit once #26/#28/#83 land and a real integrator-side publish path
 //! exists.
 //!
 //! ## `presence_of` has no visibility filtering yet
@@ -54,7 +54,7 @@ pub struct Friend {
     pub identity_id: IdentityId,
     pub display_name: Option<String>,
     /// Populated only if `presence.read` is also granted alongside
-    /// `friends.read` — otherwise always `None`, so a game with only
+    /// `friends.read` — otherwise always `None`, so an integrator with only
     /// `friends.read` gets names (once resolvable) and nothing else.
     pub presence: Option<Presence>,
 }
@@ -190,11 +190,11 @@ impl Session {
         Ok(response.json().await?)
     }
 
-    /// `PUT /me/presence` — a player publishing their own status. See the
+    /// `PUT /me/presence` — an identity publishing their own status. See the
     /// module-level docs for why this lives here rather than as
     /// `AvalonClient::publish_presence`. Not capability-gated: the server
-    /// requires only a valid player session for this, matching what's
-    /// implemented, not the game-credential design #17 originally
+    /// requires only a valid identity session for this, matching what's
+    /// implemented, not the integrator-credential design #17 originally
     /// described.
     pub async fn update_presence(&self, status: PresenceStatus) -> Result<(), SdkError> {
         let response = self

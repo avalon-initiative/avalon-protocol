@@ -31,7 +31,7 @@ namespace Avalon.Sdk
     }
 
     /// <summary>
-    /// An authenticated player session scoped to whichever capabilities were
+    /// An authenticated identity session scoped to whichever capabilities were
     /// actually granted. Every read/write method checks its own required
     /// capability rather than trusting the caller — see docs/stakeholders/Proposal.md §13.
     /// </summary>

@@ -177,7 +177,16 @@ unverifiable.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
-  one process. No mirror, no second node.
+  one process. There is still no distinct "mirror" binary/deployment
+  shape — a mirror is simply an `avalon-server` deployment with
+  `AVALON_MIRROR_PEERS` set, watching another deployment
+  ([#299](https://github.com/LunarVagabond/avalon-protocol/issues/299),
+  see [`settlement.md`](./settlement.md)'s "Mirror-watcher" section for the
+  actual observation/equivocation-detection/backfill mechanism). What #299
+  does *not* change: there is still no node-to-node discovery, capability
+  advertisement, or general node-to-node protocol beyond the specific
+  public HTTP read endpoints Settlement mirroring uses — the honesty note
+  in the next bullet still stands.
   **This is also why the retention-tier mechanism above cannot yet
   deliver #180's actual availability guarantee** — there is only one
   database for a hot-tier node's pruning to be gated against, not a
@@ -201,7 +210,9 @@ unverifiable.
 - #70 mirrors of a public log, not federation
 - #79 long-term settlement backend; #186 decided no blockchain/validator
   consensus (transparency log on Postgres instead, superseding part of #93);
-  #40 log design and mirror sync (validator/consensus design dropped)
+  #40 log design and mirror sync (validator/consensus design dropped) —
+  [#299](https://github.com/LunarVagabond/avalon-protocol/issues/299)
+  (implemented) is the actual mirror-watcher built against that design
 - #180 (decided) / [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)
   (implemented) — node-tiered durable history retention: retention-tier
   config, payload pruning, the settlement-state checkpoint. The

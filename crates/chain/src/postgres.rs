@@ -415,6 +415,66 @@ impl PostgresSettlementProvider {
         Ok(entries)
     }
 
+    /// Entries with `seq` strictly greater than `since_seq`, oldest first,
+    /// up to `limit` rows — issue #299's bulk entries endpoint (`GET
+    /// /ledger/entries?since_seq={n}&limit={m}`), the read path a mirror
+    /// needs to hold real ledger content, not just verify STHs (#211 only
+    /// ever exposed bare `entry_hash` values via `entry_hashes_up_to`, not
+    /// full entry content).
+    ///
+    /// Unlike [`Self::list_entries`], this does **not** recompute or verify
+    /// the hash-chain link or content hash for each row — `chain_intact` is
+    /// always `true` here and must never be trusted as a real check: a
+    /// windowed query has no way to validate a page's first row's
+    /// `prev_hash` against a predecessor it wasn't asked to fetch. A caller
+    /// that needs verified content (a mirror backfilling, per #40's
+    /// design) must independently verify each entry against a
+    /// signature-checked STH via `GET /ledger/proof/inclusion` before
+    /// accepting it — this endpoint alone is not sufficient trust.
+    pub async fn list_entries_since(
+        &self,
+        since_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<LedgerEntryView>, SettlementError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+            FROM ledger_entries
+            WHERE seq > $1
+            ORDER BY seq ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(since_seq)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+            let payload_pruned_at: Option<time::OffsetDateTime> =
+                row.try_get("payload_pruned_at").map_err(get)?;
+            entries.push(LedgerEntryView {
+                seq: row.try_get("seq").map_err(get)?,
+                event_id: row.try_get("event_id").map_err(get)?,
+                kind: row.try_get("kind").map_err(get)?,
+                issuer: row.try_get("issuer").map_err(get)?,
+                subject: row.try_get("subject").map_err(get)?,
+                payload: row.try_get("payload").map_err(get)?,
+                payload_pruned: payload_pruned_at.is_some(),
+                version: row.try_get("version").map_err(get)?,
+                event_timestamp: row.try_get("event_timestamp").map_err(get)?,
+                prev_hash: row.try_get("prev_hash").map_err(get)?,
+                entry_hash: row.try_get("entry_hash").map_err(get)?,
+                batch_id: row.try_get("batch_id").map_err(get)?,
+                chain_intact: true,
+            });
+        }
+        Ok(entries)
+    }
+
     /// Every committed batch, oldest first — `avalon inspect-ledger` uses
     /// this alongside [`Self::list_entries`] to print batch boundaries and
     /// each batch's root. Like `list_entries`, deliberately not part of the

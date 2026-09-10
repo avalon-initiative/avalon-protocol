@@ -1,10 +1,10 @@
-//! Reference Rust SDK. A game depends on this crate, never on `avalon-server`
-//! or `avalon-chain` directly — see `docs/stakeholders/Proposal.md` §17 and
-//! `docs/architecture/sdk.md`.
+//! Reference Rust SDK. An integrator (game, app, or service) depends on this
+//! crate, never on `avalon-server` or `avalon-chain` directly — see
+//! `docs/stakeholders/Proposal.md` §17 and `docs/architecture/sdk.md`.
 //!
 //! `authenticate()` is wired to a real `avalon-server`: `GET /me` for
-//! identity/profile, `GET /me/grants` (issue #27) for this game's own
-//! active capability grants for the authenticating player, identified via
+//! identity/profile, `GET /me/grants` (issue #27) for this integrator's own
+//! active capability grants for the authenticating identity, identified via
 //! `AvalonConfig::game_credential_key_id`. Achievements still stub
 //! `NotImplemented` until that epic's endpoints exist. Friends/presence
 //! (issue #17, see `social`) and guild membership/roster/channels/chat
@@ -14,7 +14,7 @@
 //! `docs/architecture/synchronization.md`; `submission` (issue #111) is the
 //! drain/retry/reconciliation half. Neither is wired into `AvalonClient`'s
 //! or `Session`'s other methods yet — no method appends to the journal on
-//! its own. A game constructs a `FileJournal` and `SubmissionEngine`
+//! its own. An integrator constructs a `FileJournal` and `SubmissionEngine`
 //! itself and drives them explicitly; `Session::submission_transport`
 //! supplies the `Transport` the engine submits through.
 
@@ -86,14 +86,14 @@ impl AvalonClient {
         }
     }
 
-    /// Exchanges a player's existing Avalon session token (obtained via the
-    /// Hub or a direct login, not by this SDK — a game never creates
-    /// identities itself) for a `Session` scoped to this game.
-    pub async fn authenticate(&self, player_token: &str) -> Result<Session, SdkError> {
+    /// Exchanges an identity's existing Avalon session token (obtained via
+    /// the Hub or a direct login, not by this SDK — an integrator never
+    /// creates identities itself) for a `Session` scoped to this integrator.
+    pub async fn authenticate(&self, identity_token: &str) -> Result<Session, SdkError> {
         let response = self
             .http
             .get(format!("{}/me", self.config.server_url))
-            .bearer_auth(player_token)
+            .bearer_auth(identity_token)
             .send()
             .await?;
 
@@ -103,17 +103,18 @@ impl AvalonClient {
 
         let body: MeResponse = response.json().await?;
 
-        // Permission grants (#27) — `GET /me/grants` returns this game's own
-        // active grants for the authenticating player, identified via
-        // `game_credential_key_id` (`x-avalon-integrator-key-id` — #293's
-        // generic header name; the server still accepts the older
-        // `x-avalon-game-key-id` too, but this SDK sends only the new one).
-        // A non-success response (e.g. an unrecognized/placeholder key id,
-        // or the game has no grants yet) is treated as "no grants" rather
-        // than an authentication failure — the player token already proved
-        // who they are; an unknown game key just means this game has
-        // nothing granted, same as if it had never connected.
-        let granted = self.fetch_granted(player_token).await.unwrap_or_default();
+        // Permission grants (#27) — `GET /me/grants` returns this
+        // integrator's own active grants for the authenticating identity,
+        // identified via `game_credential_key_id`
+        // (`x-avalon-integrator-key-id` — #293's generic header name; the
+        // server still accepts the older `x-avalon-game-key-id` too, but
+        // this SDK sends only the new one). A non-success response (e.g. an
+        // unrecognized/placeholder key id, or the integrator has no grants
+        // yet) is treated as "no grants" rather than an authentication
+        // failure — the identity token already proved who they are; an
+        // unknown integrator key just means this integrator has nothing
+        // granted, same as if it had never connected.
+        let granted = self.fetch_granted(identity_token).await.unwrap_or_default();
 
         Ok(Session {
             identity: Identity {
@@ -131,15 +132,15 @@ impl AvalonClient {
             granted,
             http: self.http.clone(),
             server_url: self.config.server_url.clone(),
-            token: player_token.to_string(),
+            token: identity_token.to_string(),
         })
     }
 
-    async fn fetch_granted(&self, player_token: &str) -> Result<Vec<Capability>, SdkError> {
+    async fn fetch_granted(&self, identity_token: &str) -> Result<Vec<Capability>, SdkError> {
         let response = self
             .http
             .get(format!("{}/me/grants", self.config.server_url))
-            .bearer_auth(player_token)
+            .bearer_auth(identity_token)
             .header(
                 "x-avalon-integrator-key-id",
                 &self.config.game_credential_key_id,
@@ -165,7 +166,7 @@ struct MyGrantsResponse {
     capabilities: Vec<String>,
 }
 
-/// An authenticated player session scoped to whichever capabilities were
+/// An authenticated identity session scoped to whichever capabilities were
 /// actually granted — see `Proposal.md` §13. Every read/write method checks
 /// its own required capability rather than trusting the caller.
 pub struct Session {
@@ -174,7 +175,7 @@ pub struct Session {
     granted: Vec<Capability>,
     http: reqwest::Client,
     server_url: String,
-    /// The player's own session bearer token, kept so `Session` methods can
+    /// The identity's own session bearer token, kept so `Session` methods can
     /// call `avalon-server` on the player's behalf (e.g. `social::friends`,
     /// `social::update_presence`) without the caller having to thread it
     /// through again.
@@ -197,8 +198,8 @@ impl Session {
 
     /// Test-only escape hatch, kept even now that `authenticate()`
     /// populates `granted` from a real `GET /me/grants` call (#27): using
-    /// the real flow end to end means driving a full game registration +
-    /// player consent (`POST /games/{slug}/connect`) for every test that
+    /// the real flow end to end means driving a full integrator registration +
+    /// identity consent (`POST /games/{slug}/connect`) for every test that
     /// needs a granted capability, which `crates/sdk/tests/guilds.rs` and
     /// `crates/sdk/tests/social.rs` do not otherwise need to exercise —
     /// they're testing `guilds.rs`/`social.rs`'s methods, not the consent
@@ -209,7 +210,7 @@ impl Session {
     /// builds, off otherwise) rather than merely `#[doc(hidden)]` — the
     /// server doesn't enforce capability grants yet either (#28), so a
     /// `pub` method that self-grants capabilities would otherwise ship as
-    /// a real, callable capability bypass in every game's build.
+    /// a real, callable capability bypass in every integrator's build.
     ///
     /// Takes `impl Into<Capability>` rather than `Capability` directly so
     /// existing test call sites can keep passing a raw string
@@ -224,7 +225,7 @@ impl Session {
 
     /// Builds the [`crate::submission::HttpTransport`] a
     /// [`crate::submission::SubmissionEngine`] submits through, borrowing
-    /// this session — a game never constructs `HttpTransport` directly. Not
+    /// this session — an integrator never constructs `HttpTransport` directly. Not
     /// capability-gated itself: each operation kind the transport actually
     /// submits enforces whatever the underlying `Session`/handle method
     /// already enforces (e.g. `messages.send`, conversation
