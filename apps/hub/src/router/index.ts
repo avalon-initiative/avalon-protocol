@@ -36,8 +36,26 @@ const router = createRouter({
         { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue') },
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
-        { path: 'games', name: 'games', component: () => import('../views/GameDirectory.vue') },
-        { path: 'games/:slug', name: 'game-profile', component: () => import('../views/GameProfile.vue') },
+        // Issue #273: GET /games is public/unauthenticated (#270) and this
+        // directory is meant to be browsable by a logged-out prospective
+        // player. vue-router's meta merging is a shallow Object.assign
+        // across `to.matched` (parent then child), so the leaf's
+        // `requiresAuth: false` here overrides the HubShell parent's
+        // `requiresAuth: true` in the merged `to.meta` the guard below
+        // reads — the parent route itself, and every other child, stays
+        // gated.
+        {
+          path: 'games',
+          name: 'games',
+          component: () => import('../views/GameDirectory.vue'),
+          meta: { requiresAuth: false },
+        },
+        {
+          path: 'games/:slug',
+          name: 'game-profile',
+          component: () => import('../views/GameProfile.vue'),
+          meta: { requiresAuth: false },
+        },
         { path: 'guilds', name: 'guilds', component: () => import('../views/Guilds.vue') },
         // Issue #241: the Channels tab lives inside Guild.vue itself now
         // (a persistent channel sidebar, no route hop to switch channels),
