@@ -79,7 +79,7 @@ async fn create_guild(client: &reqwest::Client, owner_token: &str) -> Uuid {
     let suffix = Uuid::new_v4().simple().to_string();
     let body = serde_json::json!({
         "name": format!("Conversations Test Guild {}", &suffix[..8]),
-        "tag": suffix[..4].to_uppercase(),
+        "tag": suffix[..5].to_uppercase(),
         "description": "a guild created by a conversations integration test",
     });
     let created: serde_json::Value = auth(

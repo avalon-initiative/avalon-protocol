@@ -63,7 +63,7 @@ fn unique_guild_body() -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
     serde_json::json!({
         "name": format!("Test Guild {}", &suffix[..8]),
-        "tag": suffix[..4].to_uppercase(),
+        "tag": suffix[..5].to_uppercase(),
         "description": "a guild created by an integration test",
     })
 }
@@ -1039,7 +1039,7 @@ async fn create_guild(
     let suffix = Uuid::new_v4().simple().to_string();
     let body = serde_json::json!({
         "name": format!("{name_hint} {}", &suffix[..8]),
-        "tag": suffix[..4].to_uppercase(),
+        "tag": suffix[..5].to_uppercase(),
         "description": format!("a discover-test guild ({name_hint})"),
     });
     let create = auth(http.post(format!("{base}/guilds")), token)
@@ -1263,7 +1263,7 @@ async fn search_matches_name_and_tag_substrings_case_insensitively() {
     let unique_word = format!("Zephyrion{}", &suffix[..6]);
     let body = serde_json::json!({
         "name": format!("{unique_word} Vanguard"),
-        "tag": suffix[..4].to_uppercase(),
+        "tag": suffix[..5].to_uppercase(),
         "description": "a discover-test guild",
     });
     let create = auth(http.post(format!("{base}/guilds")), &owner_token)

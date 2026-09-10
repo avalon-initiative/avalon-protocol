@@ -70,7 +70,7 @@ fn unique_guild_body() -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
     serde_json::json!({
         "name": format!("Test Guild {}", &suffix[..8]),
-        "tag": suffix[..4].to_uppercase(),
+        "tag": suffix[..5].to_uppercase(),
         "description": "a guild created by an integration test",
     })
 }
