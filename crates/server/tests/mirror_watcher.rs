@@ -4,8 +4,8 @@
 //! `tests/settlement.rs` (#211) already uses.
 //!
 //! This ticket's POC topology is "one canonical Settlement authority, one
-//! mirror node watching it" (see the ticket body / `.vscode/POC-MVP.md`),
-//! which needs two real `avalon-server` processes to exercise end-to-end —
+//! mirror node watching it" (see the ticket body / issue #301), which
+//! needs two real `avalon-server` processes to exercise end-to-end —
 //! not available in this sandbox even with a live Postgres reachable. What
 //! *is* exercisable against a single running server plus its own Postgres:
 //!
@@ -218,18 +218,33 @@ async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
     assert!(sth::verify_tree_head(&verify_key, &sth_struct));
 
     // Bulk-fetch everything up to tree_size, exactly as a mirror
-    // backfilling from scratch would (since_seq starts at 0), so the
-    // fetched list's own order gives the correct 0-based leaf rank for
-    // each entry.
-    let entries: Vec<serde_json::Value> = http
-        .get(format!("{base}/ledger/entries"))
-        .query(&[("since_seq", 0), ("limit", 1000)])
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    // backfilling from scratch would: paginated with a since_seq cursor,
+    // not a single request — this dev ledger accumulates real history
+    // across every test run, so it can already exceed one page's cap
+    // (`MAX_ENTRIES_LIMIT`) well before `tree_size` is reached.
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    loop {
+        let since_seq = entries
+            .last()
+            .and_then(|e: &serde_json::Value| e["seq"].as_i64())
+            .unwrap_or(0);
+        let page: Vec<serde_json::Value> = http
+            .get(format!("{base}/ledger/entries"))
+            .query(&[("since_seq", since_seq), ("limit", 1000)])
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        entries.extend(page);
+        if entries.len() as i64 >= tree_size {
+            break;
+        }
+    }
 
     let root = hash32(&sth_struct.root_hash);
     let mut verified_count = 0usize;

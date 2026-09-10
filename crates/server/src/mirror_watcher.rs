@@ -18,11 +18,11 @@
 //! migration-running, and its own long-lived-process lifecycle (`avalon`
 //! today is a short-lived diagnostic tool — `inspect-ledger`,
 //! `outbox-status` — that runs once and exits, not a daemon) duplicating
-//! what `avalon-server` already has. The POC's "2 Settlement nodes"
-//! topology (`.vscode/POC-MVP.md`) is two `avalon-server` deployments, each
-//! against its own Postgres — a "mirror" is just one of them started with
-//! `AVALON_MIRROR_PEERS` pointed at the other; nothing here requires the
-//! watching node to be a pure mirror with no writes of its own.
+//! what `avalon-server` already has. A "2 Settlement nodes" topology is two
+//! `avalon-server` deployments, each against its own Postgres — a "mirror"
+//! is just one of them started with `AVALON_MIRROR_PEERS` pointed at the
+//! other; nothing here requires the watching node to be a pure mirror with
+//! no writes of its own.
 //!
 //! **Multi-peer by design, not just multi-peer-configurable.**
 //! `AVALON_MIRROR_PEERS` accepts more than one URL, and every configured
