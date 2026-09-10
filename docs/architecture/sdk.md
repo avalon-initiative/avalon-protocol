@@ -150,6 +150,23 @@ protocol and the domain model in `crates/protocol`; they never pull in
   already has). Creating guilds, inviting, kicking, changing roles, and
   managing channels are deliberately not on the SDK — player-authority-only
   actions taken through the Hub.
+- `crates/sdk/src/conversations.rs` (#104) — `Session::conversations()`
+  (`messages.read`, `GET /conversations`) and `Session::conversation(id)`, an
+  ungated `ConversationHandle` constructor mirroring `Session::guild(id)`,
+  with `messages(before, limit)` (`messages.read`, `GET
+  /conversations/{id}/messages`) and `send(body)` (`messages.send`, `POST
+  /conversations/{id}/messages`). `Session::dm(other_identity_id)`
+  (`messages.send`, `POST /conversations`) creates-or-gets the 1:1
+  conversation with another identity and returns a `ConversationHandle` —
+  gated on `messages.send` rather than `messages.read` so a send-only grant
+  can still open a conversation; a read-only grant reaches the same
+  conversations through `conversations()` plus `conversation(id)` instead.
+  No `messages.*` blanket check, same posture `guilds.rs` takes for
+  `guilds.read`/`guilds.chat`. A rejected read or send — whether the caller
+  was never a participant or is a blocked one (#97) — surfaces as the same
+  `SdkError::NotConversationParticipant`, mapped from the server's identical
+  `403` for both cases without inspecting the response body, so the SDK
+  never has more to leak than the server does.
 - `crates/sdk/tests/authenticate.rs` — live test (`make test-live`) covering a
   successful authenticate, an invalid token, and a capability being rejected.
 - `crates/sdk/tests/social.rs` — live tests (`make test-live`) covering
@@ -176,6 +193,13 @@ protocol and the domain model in `crates/protocol`; they never pull in
   no `make test-live`/Postgres dependency. `AvalonClient`/`Session` don't
   call it yet — that's #111 (deferred submission engine), which drains and
   submits what a game journals.
+- `crates/sdk/tests/conversations.rs` — live tests (`make test-live`)
+  covering `dm()`/`send()`/`messages()` round-tripping across two real
+  sessions (alice starts and sends, bob discovers the conversation via
+  `conversations()` and replies through `conversation(id)`), a missing
+  capability grant being rejected before any request, and a non-participant
+  reading or sending into someone else's conversation being rejected with
+  `NotConversationParticipant`.
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — `AvalonClient.cs`, `Session.cs` skeleton; no
@@ -202,3 +226,7 @@ protocol and the domain model in `crates/protocol`; they never pull in
   [#23](https://github.com/LunarVagabond/avalon-protocol/issues/23),
   [#34](https://github.com/LunarVagabond/avalon-protocol/issues/34) — SDK methods
   for friends/presence, guilds, achievements.
+- [#102](https://github.com/LunarVagabond/avalon-protocol/issues/102) —
+  conversation domain model + server endpoints;
+  [#104](https://github.com/LunarVagabond/avalon-protocol/issues/104) — this
+  SDK surface.

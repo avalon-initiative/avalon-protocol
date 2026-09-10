@@ -52,6 +52,8 @@ pub enum Capability {
     AssetsIssue,
     WalletRead,
     WalletWrite,
+    MessagesRead,
+    MessagesSend,
     /// Anything not yet known to this build — never dropped, never
     /// rejected.
     Other(String),
@@ -77,6 +79,8 @@ impl Capability {
         Capability::AssetsIssue,
         Capability::WalletRead,
         Capability::WalletWrite,
+        Capability::MessagesRead,
+        Capability::MessagesSend,
     ];
 
     /// The permanent wire string this capability (de)serializes as. See
@@ -98,6 +102,8 @@ impl Capability {
             Capability::AssetsIssue => "assets.issue",
             Capability::WalletRead => "wallet.read",
             Capability::WalletWrite => "wallet.write",
+            Capability::MessagesRead => "messages.read",
+            Capability::MessagesSend => "messages.send",
             Capability::Other(s) => s,
         }
     }
@@ -132,6 +138,8 @@ impl FromStr for Capability {
             "assets.issue" => Capability::AssetsIssue,
             "wallet.read" => Capability::WalletRead,
             "wallet.write" => Capability::WalletWrite,
+            "messages.read" => Capability::MessagesRead,
+            "messages.send" => Capability::MessagesSend,
             other => Capability::Other(other.to_string()),
         })
     }
@@ -209,6 +217,8 @@ mod tests {
             (Capability::AssetsIssue, "assets.issue"),
             (Capability::WalletRead, "wallet.read"),
             (Capability::WalletWrite, "wallet.write"),
+            (Capability::MessagesRead, "messages.read"),
+            (Capability::MessagesSend, "messages.send"),
         ];
         assert_eq!(expected.len(), Capability::KNOWN.len());
         for (capability, wire) in expected {
