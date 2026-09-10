@@ -181,6 +181,34 @@ export interface RenameDeviceRequest {
   label: string
 }
 
+// Cross-device pairing (issue #307), matching
+// crates/server/src/device_pairing.rs field-for-field. Bootstraps a session
+// for a WebAuthn-incapable client — distinct from the device grant model
+// above, which adds a signing key to an identity that's already
+// authenticated somewhere.
+
+export interface StartPairingResponse {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  expires_in: number
+  poll_interval: number
+}
+
+export interface PollPairingResponse {
+  status: 'pending' | 'slow_down' | 'denied' | 'expired' | 'approved'
+  token?: string
+  expires_at?: string
+}
+
+export interface UserCodeRequest {
+  user_code: string
+}
+
+export interface ResolvePairingResponse {
+  status: 'approved' | 'denied'
+}
+
 // Multi-passkey registration (issue #200), matching
 // crates/server/src/passkeys.rs field-for-field. Distinct from the
 // DeviceGrantResponse/DeviceResponse pair above: those manage

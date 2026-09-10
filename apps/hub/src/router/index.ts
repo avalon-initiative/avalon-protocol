@@ -66,6 +66,9 @@ const router = createRouter({
         },
         { path: 'connect/:slug', name: 'connect-game', component: () => import('../views/ConnectGame.vue') },
         { path: 'connections', name: 'connections', component: () => import('../views/Connections.vue') },
+        // #307: cross-device pairing — matches `verification_uri`'s
+        // `/pair?user_code=...` shape (see crates/server/src/device_pairing.rs).
+        { path: 'pair', name: 'pair-device', component: () => import('../views/PairDevice.vue') },
       ],
     },
   ],

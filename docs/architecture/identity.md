@@ -113,6 +113,49 @@ discoverable ("tap your passkey, no identifier at all") login would need
 that wasn't built for this milestone. The meaningful property survives
 regardless: no shared secret, a real challenge-response proof every time.
 
+### Cross-device pairing for a WebAuthn-incapable client (#307)
+
+WebAuthn login above assumes the client has some ceremony surface — a
+browser, or a platform authenticator. A game engine with no embedded
+browser, a console, or any other headless client doesn't, and never needs
+to: `avalon-sdk`'s `authenticate()` already takes a bearer session token,
+not a live WebAuthn exchange, so the only real gap is *how such a client
+obtains that token in the first place*. Cross-device pairing
+(`crates/server/src/device_pairing.rs`) solves it the way platform account
+systems solve the identical problem: the incapable client requests a
+pairing (`POST /auth/device/start`, unauthenticated) and gets back a short,
+human-typeable `user_code` (shown to the player, e.g. as a QR code pointing
+at `verification_uri`) plus an opaque `device_code` it alone holds. The
+player completes a real WebAuthn login on a capable device — the Hub, in a
+browser — and approves the pairing there (`POST /auth/device/approve`,
+`apps/hub/src/views/PairDevice.vue`); the waiting client polls
+(`POST /auth/device/poll`, bearer = `device_code`) until it receives an
+ordinary session token, minted through the exact same
+`auth::generate_session_token`/`sessions`-table mechanism
+`handlers::session_finish` uses for a normal login — not a second,
+differently-trusted token type.
+
+The security boundary is deliberately not the `user_code`'s secrecy:
+approval requires the *approver's own already-authenticated session* — the
+same `authenticate()` check every other authenticated route in this crate
+uses — so there is no path from "knows the user_code" alone to a minted
+session. The `user_code` only disambiguates which pending pairing to act
+on; it still carries real entropy (8 chars from an alphabet with
+`0`/`O`/`1`/`I`/`L` removed), a ~10-minute expiry, and single-use poll
+delivery (an approved pairing's token is returned exactly once; every
+later poll of that `device_code` gets `expired`), but none of those are
+the reason this is safe — the authenticated-approver requirement is.
+Structurally this mirrors `crates/server/src/devices.rs`'s
+request/approve/poll shape (#135/#122) and its rate-limiting/expiry
+conventions, but solves a genuinely different problem — bootstrapping a
+session for a client with *no* prior session at all, versus adding a
+trusted signing device to an identity that's already authenticated
+somewhere — so it lives in its own module and its own `device_pairings`
+table rather than being bolted onto `devices.rs`. No password field or
+password-shaped persistent secret is introduced anywhere in this flow.
+`avalon pair-device` (`crates/cli`) drives the `start`/`poll` side as a
+stand-in incapable client, for testing this without a real console/engine.
+
 Recovery after every passkey is lost
 ([#99](https://github.com/LunarVagabond/avalon-protocol/issues/99), decided,
 tracked as [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198), an epic under #2): a layered answer, since the options
@@ -443,6 +486,22 @@ future work). None of these affect the state machine or its invariants.
   id, drive the real WebAuthn ceremony, then poll the public
   `GET /identities/:id/recovery/status` for status — no session anywhere
   on this page.
+- `crates/server/db/migrations/0042_device_pairings/` — `device_pairings`
+  (#307): `device_code`/`user_code`, `status`
+  (`pending`/`approved`/`denied`/`expired`), nullable `identity_id`/
+  `session_token` (set only on approval), `expires_at`, `last_polled_at`.
+- `crates/server/src/device_pairing.rs` (#307) — `POST /auth/device/start`,
+  `POST /auth/device/poll`, `POST /auth/device/approve`,
+  `POST /auth/device/deny`; see the cross-device pairing section above.
+  `crates/server/tests/device_pairing.rs` (`--ignored`) covers the full
+  `start → approve → poll` round trip against a live server, plus wrong
+  `user_code`, denial, single-use consumption, and poll-rate limiting.
+- `crates/cli/src/dev_tools.rs` (#307) — `avalon pair-device` drives the
+  `start`/`poll` side of the flow as a stand-in incapable client.
+- `apps/hub/src/views/PairDevice.vue` (#307), routed at `/pair` (matching
+  `verification_uri`'s `?user_code=` shape) — a `user_code` field plus
+  approve/deny buttons, using the player's existing authenticated Hub
+  session; `apps/hub/src/api/client.ts`'s `approvePairing`/`denyPairing`.
 
 ## Decisions and tickets
 
@@ -486,5 +545,9 @@ future work). None of these affect the state machine or its invariants.
   are the two halves it decided on.
 - [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86) — profile
   updates still emit no event; classify promised-durable identity state.
+- [#307](https://github.com/LunarVagabond/avalon-protocol/issues/307) —
+  cross-device pairing for a WebAuthn-incapable client. Done:
+  `crates/server/src/device_pairing.rs`, `apps/hub/src/views/PairDevice.vue`,
+  `avalon pair-device`. See the section above.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:
   Identity & Player Profile.

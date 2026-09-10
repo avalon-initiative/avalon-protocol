@@ -361,6 +361,83 @@ pub(crate) async fn login(identity_id: Uuid) {
     println!("throwaway database, not a pattern to carry into any real deployment.");
 }
 
+/// `avalon pair-device` (issue #307) — drives the `start`/`poll` side of
+/// cross-device pairing, standing in for a real WebAuthn-incapable client
+/// (a console, a headless game engine) so the flow is testable end to end
+/// without one. Prints the `user_code` for a player to enter on the Hub's
+/// pairing page, then polls until the pairing is approved, denied, or
+/// expires.
+pub(crate) async fn pair_device() {
+    let base = server_url();
+    let http = reqwest::Client::new();
+
+    let start: serde_json::Value = http
+        .post(format!("{base}/auth/device/start"))
+        .send()
+        .await
+        .expect("device/start request failed — is `make start` running?")
+        .json()
+        .await
+        .expect("device/start response was not JSON");
+
+    let device_code = start["device_code"]
+        .as_str()
+        .expect("device/start response missing device_code")
+        .to_string();
+    let user_code = start["user_code"]
+        .as_str()
+        .expect("device/start response missing user_code");
+    let verification_uri = start["verification_uri"]
+        .as_str()
+        .expect("device/start response missing verification_uri");
+    let poll_interval_secs = start["poll_interval"].as_u64().unwrap_or(5);
+
+    println!();
+    println!("Go to: {verification_uri}");
+    println!("Enter code: {user_code}");
+    println!();
+    println!("Waiting for approval...");
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(poll_interval_secs)).await;
+
+        let poll: serde_json::Value = http
+            .post(format!("{base}/auth/device/poll"))
+            .bearer_auth(&device_code)
+            .send()
+            .await
+            .expect("device/poll request failed")
+            .json()
+            .await
+            .expect("device/poll response was not JSON");
+
+        match poll["status"].as_str().unwrap_or("") {
+            "pending" | "slow_down" => continue,
+            "approved" => {
+                let token = poll["token"]
+                    .as_str()
+                    .expect("approved poll response missing token");
+                let expires_at = poll["expires_at"]
+                    .as_str()
+                    .expect("approved poll response missing expires_at");
+                println!();
+                println!("Paired.");
+                println!("Token:      {token}");
+                println!("Expires at: {expires_at}");
+                return;
+            }
+            "denied" => {
+                eprintln!("pairing was denied.");
+                std::process::exit(1);
+            }
+            other => {
+                eprintln!("pairing {other} — request a new code with `avalon pair-device`.");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 pub(crate) const REGISTER_GAME_USAGE: &str = "usage: avalon register-game --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]";
 
 /// Parsed `avalon register-game` arguments. Hand-rolled to match this file's
