@@ -29,6 +29,7 @@
 //! calls out as needing a real second `avalon-server` deployment to
 //! exercise end-to-end.
 
+use avalon_protocol::events::EventBatch;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -110,11 +111,16 @@ where
 async fn ledger_submit_rejects_requests_with_no_or_wrong_bearer_key() {
     let base = authority_url();
     let http = reqwest::Client::new();
-    let batch = serde_json::json!({
-        "id": Uuid::new_v4(),
-        "events": [],
-        "created_at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap(),
-    });
+    // Built via the real `EventBatch` struct, not hand-typed JSON —
+    // `created_at`'s bare `OffsetDateTime` field round-trips through
+    // `time`'s own default (de)serialization, not RFC3339; a hand-built
+    // RFC3339 string here would fail JSON deserialization before the
+    // handler's auth check ever runs, silently testing the wrong thing.
+    let batch = EventBatch {
+        id: Uuid::new_v4(),
+        events: vec![],
+        created_at: time::OffsetDateTime::now_utc(),
+    };
 
     let no_auth = http
         .post(format!("{base}/ledger/submit"))

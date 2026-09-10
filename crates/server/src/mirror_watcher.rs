@@ -78,6 +78,7 @@ use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
+use sqlx::Acquire;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -583,20 +584,48 @@ async fn backfill(
             };
             let protocol_event = protocol_event_from_mirrored(&mirrored_entry);
 
-            // Same transaction: the `mirrored_entries` write and this
-            // node's own local-indexer projection either land together or
-            // not at all, matching the outbox's own atomicity invariant
-            // (#71) for the write side.
+            // The `mirrored_entries` write always lands — that's the
+            // cryptographically-verified fact this node is recording, and
+            // it must never be held hostage by a projection failure.
+            // Applying the event to the local indexer is best-effort on
+            // top of it, via a SAVEPOINT: most projections assume core
+            // rows a normal in-process write creates directly (outside the
+            // outbox/ledger entirely, e.g. `identities`), so a replay-only
+            // node can hit an FK a live write never would (`identity.created`
+            // handled via `ensure_identity_row_exists` below; other kinds
+            // may hit the same class of gap — tracked as a known
+            // limitation, not chased further here). A projection failure
+            // rolls back only its own savepoint and is logged loudly —
+            // never aborts the outer commit, never blocks this node's
+            // backfill/verification progress on every later entry forever.
             let mut tx = pool
                 .begin()
                 .await
                 .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
             mirror::insert_mirrored_entry(&mut *tx, &mirrored_entry).await?;
             if let Some(event) = &protocol_event {
-                indexer
-                    .apply_in_tx(&mut tx, event)
-                    .await
-                    .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+                let mut savepoint = tx.begin().await.map_err(|e: sqlx::Error| {
+                    avalon_chain::SettlementError::Storage(e.to_string())
+                })?;
+                ensure_identity_row_exists(&mut savepoint, event).await?;
+                match indexer.apply_in_tx(&mut savepoint, event).await {
+                    Ok(()) => {
+                        savepoint
+                            .commit()
+                            .await
+                            .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+                    }
+                    Err(err) => {
+                        savepoint
+                            .rollback()
+                            .await
+                            .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+                        eprintln!(
+                            "mirror-watcher: {}: seq={} verified and mirrored, but the local indexer projection failed ({err}) — likely a core row this replay-only node never independently created; entry is stored, indexer state for it is incomplete",
+                            sth.network_id, mirrored_entry.seq
+                        );
+                    }
+                }
             } else {
                 eprintln!(
                     "mirror-watcher: {}: seq={} could not be decoded into a ProtocolEvent (pruned payload or malformed issuer/subject) — mirrored, but not applied to the local indexer",
@@ -640,6 +669,38 @@ fn protocol_event_from_mirrored(entry: &mirror::MirroredEntry) -> Option<Protoco
 /// there is no public raw-string constructor on `GlobalId` itself.
 fn global_id_from_str(raw: &str) -> Option<GlobalId> {
     serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
+}
+
+/// For `identity.created` only: idempotently inserts the `identities` row
+/// the event describes, from its own `identity_id` payload field — see the
+/// call site's comment for why a remote-settlement node needs this at all.
+/// Every other event kind is a no-op here; this is a narrow, known fix for
+/// the one core-row dependency this ticket's live verification actually
+/// hit, not a general "reconstruct all app-state from replay" mechanism —
+/// other event kinds (`game.registered`, `guild.created`, ...) may have the
+/// same class of gap against their own core tables and haven't been
+/// verified; tracked as a follow-up rather than guessed at here.
+async fn ensure_identity_row_exists(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: &ProtocolEvent,
+) -> Result<(), MirrorWatcherError> {
+    if event.kind != "identity.created" {
+        return Ok(());
+    }
+    let Some(identity_id) = event
+        .payload
+        .get("identity_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    else {
+        return Ok(());
+    };
+    sqlx::query("INSERT INTO identities (id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(identity_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+    Ok(())
 }
 
 fn decode_proof_nodes(hex_nodes: &[String]) -> Result<Vec<[u8; 32]>, MirrorWatcherError> {
