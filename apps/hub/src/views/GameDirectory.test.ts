@@ -23,7 +23,7 @@ beforeEach(() => {
 describe('GameDirectory', () => {
   it('lists games from GET /games with no score or ranking element anywhere', async () => {
     mockFetchByPath({
-      '/games': {
+      '/integrations': {
         games: [
           {
             id: 'g1',
@@ -66,7 +66,7 @@ describe('GameDirectory', () => {
   })
 
   it('shows an empty message rather than an error when no games match', async () => {
-    mockFetchByPath({ '/games': { games: [], next_cursor: null } })
+    mockFetchByPath({ '/integrations': { games: [], next_cursor: null } })
 
     const router = testRouter()
     router.push('/games')
@@ -78,7 +78,7 @@ describe('GameDirectory', () => {
 
   it('renders the Apps/Services tabs as empty rather than hiding them', async () => {
     mockFetchByPath({
-      '/games': {
+      '/integrations': {
         games: [
           {
             id: 'g1',

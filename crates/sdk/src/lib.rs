@@ -105,12 +105,14 @@ impl AvalonClient {
 
         // Permission grants (#27) — `GET /me/grants` returns this game's own
         // active grants for the authenticating player, identified via
-        // `game_credential_key_id` (`x-avalon-game-key-id`). A non-success
-        // response (e.g. an unrecognized/placeholder key id, or the game has
-        // no grants yet) is treated as "no grants" rather than an
-        // authentication failure — the player token already proved who they
-        // are; an unknown game key just means this game has nothing granted,
-        // same as if it had never connected.
+        // `game_credential_key_id` (`x-avalon-integrator-key-id` — #293's
+        // generic header name; the server still accepts the older
+        // `x-avalon-game-key-id` too, but this SDK sends only the new one).
+        // A non-success response (e.g. an unrecognized/placeholder key id,
+        // or the game has no grants yet) is treated as "no grants" rather
+        // than an authentication failure — the player token already proved
+        // who they are; an unknown game key just means this game has
+        // nothing granted, same as if it had never connected.
         let granted = self.fetch_granted(player_token).await.unwrap_or_default();
 
         Ok(Session {
@@ -138,7 +140,10 @@ impl AvalonClient {
             .http
             .get(format!("{}/me/grants", self.config.server_url))
             .bearer_auth(player_token)
-            .header("x-avalon-game-key-id", &self.config.game_credential_key_id)
+            .header(
+                "x-avalon-integrator-key-id",
+                &self.config.game_credential_key_id,
+            )
             .send()
             .await?;
 

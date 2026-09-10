@@ -174,8 +174,22 @@ pub fn router(state: AppState) -> Router {
             "/identities/{id}/recovery/status",
             get(recovery::identity_recovery_status),
         )
-        .route("/games", post(games::register_game).get(games::list_games))
-        .route("/games/{slug}", get(games::get_game))
+        // #293: `/integrations` is the canonical public API path
+        // (generalizing #282's Hub-internal `/games` -> `/integrations`
+        // route rename onto the server's public API). `/games` keeps
+        // working identically: reads redirect to `/integrations`, and
+        // registration (`POST`, non-redirectable) dual-routes to the same
+        // handler.
+        .route(
+            "/integrations",
+            post(games::register_game).get(games::list_games),
+        )
+        .route("/integrations/{slug}", get(games::get_game))
+        .route(
+            "/games",
+            post(games::register_game).get(games::redirect_list_games),
+        )
+        .route("/games/{slug}", get(games::redirect_get_game))
         .route(
             "/games/{slug}/challenge",
             post(games::create_game_challenge),

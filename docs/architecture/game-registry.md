@@ -177,22 +177,23 @@ the [visibility](./privacy.md) rules that apply to those identities.
   zeros (not an error) for a game with no activity. Exposed publicly and
   unauthenticated at `GET /games/{slug}/registry`
   (`crates/server/src/registry.rs`) — a separate endpoint from `GET
-  /games/{slug}` on purpose, so the class-label contract can't be
+  /integrations/{slug}` on purpose, so the class-label contract can't be
   accidentally skipped by flattening metrics alongside plain registration
   fields. Fixture-based unit tests per metric (no live Postgres) live
   alongside each projection module.
-- **`GET /games` — the Hub game directory's list endpoint (#270)**:
-  public, unauthenticated, cursor-paginated the same way `GET
-  /guilds/discover` already is (#154) — `crates/server/src/games.rs`'s
-  `build_games_list_query` mirrors `guilds.rs`'s `build_discover_query`
-  keyset-pagination shape exactly. `q=`/`sort=` (`newest` default | `name`,
-  no ranking/score option) /`limit=`/`cursor=`, returning each game's
-  public summary (id/slug/name/developer/registered_at/status) — the same
-  fields `GET /games/{slug}` exposes, just listed, with
-  `requested_capabilities` left off since a directory card has no reason
-  to fetch a field it doesn't show. Milestone-1 stand-in over the `games`
-  table, not #42's real indexer read model, same pragmatic call
-  `discover_guilds` already made for guilds.
+- **`GET /integrations` — the Hub game directory's list endpoint (#270,
+  canonical path per #293)**: public, unauthenticated, cursor-paginated the
+  same way `GET /guilds/discover` already is (#154) —
+  `crates/server/src/games.rs`'s `build_games_list_query` mirrors
+  `guilds.rs`'s `build_discover_query` keyset-pagination shape exactly.
+  `q=`/`sort=` (`newest` default | `name`, no ranking/score option)
+  /`limit=`/`cursor=`, returning each game's public summary
+  (id/slug/name/developer/registered_at/status) — the same fields `GET
+  /integrations/{slug}` exposes, just listed, with `requested_capabilities`
+  left off since a directory card has no reason to fetch a field it
+  doesn't show. Milestone-1 stand-in over the `games` table, not #42's real
+  indexer read model, same pragmatic call `discover_guilds` already made
+  for guilds.
 - **Hub directory generalized to "Connected Apps" (#282)**: the Hub nav
   entry and route moved from `/games` to `/integrations`
   (`apps/hub/src/router/index.ts`); `/games` and `/games/:slug` still
@@ -201,11 +202,28 @@ the [visibility](./privacy.md) rules that apply to those identities.
   filtering the fetched list client-side by `category`; only `Games` has
   real registrants today, so the other tabs render correctly empty rather
   than being hidden.
+- **Server public API generalized: `/integrations` canonical, `/games`
+  compatibility path (#293)**: `crates/server/src/games.rs`/`lib.rs` route
+  `GET /integrations`/`GET /integrations/{slug}` as the canonical reads,
+  with `GET /games`/`GET /games/{slug}` kept working as real HTTP redirects
+  (`redirect_list_games`/`redirect_get_game`) to the new paths, preserving
+  the query string. `POST /integrations` and `POST /games` (registration)
+  both dual-route to the same `register_game` handler rather than one
+  redirecting to the other — a redirect would silently turn the `POST` into
+  a `GET` in many clients. The `x-avalon-game-key-id`/
+  `x-avalon-game-challenge-id`/`x-avalon-game-signature` auth headers on the
+  challenge-response flow (below) gained generic
+  `x-avalon-integrator-*` equivalents; either name is accepted from a
+  caller, and this repo's own SDK/CLI/Hub send only the new name. No JSON
+  field was renamed. The Hub's API client (`apps/hub/src/api/client.ts`)
+  now calls `/integrations`/`/integrations/{slug}` directly rather than the
+  compatibility path.
 - **Hub game directory + per-game profile page (#270, first slice of
-  #90)**: `apps/hub/src/views/GameDirectory.vue` lists `GET /games`
+  #90)**: `apps/hub/src/views/GameDirectory.vue` lists `GET /integrations`
   results with a search box and name/newest sort toggle — no
   "recommended" ordering, matching #89's invariant. `GameProfile.vue`
-  (`/integrations/:slug`, `/games/:slug` redirects) renders `GET /games/{slug}`'s public fields plus `GET
+  (`/integrations/:slug`, `/games/:slug` redirects) renders `GET
+  /integrations/{slug}`'s public fields plus `GET
   /games/{slug}/registry`'s five metrics via `AvalonMetricTile` — value,
   definition, and class label together, never a bare number. A
   non-`active` `status` renders as a visibly distinct badge
@@ -252,13 +270,18 @@ the [visibility](./privacy.md) rules that apply to those identities.
   first slice: the five binding/achievement `durable-derived` metrics and
   `GET /games/{slug}/registry`, described above.
 - [#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) —
-  first buildable Hub slice on #90: `GET /games`, the game directory, and
-  the per-game profile page reading #261's metrics, described above.
+  first buildable Hub slice on #90: `GET /integrations`, the game
+  directory, and the per-game profile page reading #261's metrics,
+  described above.
 - [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275) —
   decision: additive `category` field, no durable rename.
 - [#282](https://github.com/LunarVagabond/avalon-protocol/issues/282) —
   implementation of #275: `category` on registration, the generic Hub
   nav/route, and category tabs, described above.
+- [#293](https://github.com/LunarVagabond/avalon-protocol/issues/293) —
+  generalized #282's Hub-internal route rename onto the server's public
+  API: `/integrations` canonical, `/games` a compatibility path, generic
+  `x-avalon-integrator-*` auth headers, described above.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic
   this ticket and the rest of the registry work sit under.
 - [#96](https://github.com/LunarVagabond/avalon-protocol/issues/96) —

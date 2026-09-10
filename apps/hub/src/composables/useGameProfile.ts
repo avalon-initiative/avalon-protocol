@@ -1,7 +1,9 @@
 // Per-game profile page (issue #270, first slice of #90): GET
-// /games/{slug} (public fields) + GET /games/{slug}/registry (#261's five
-// class-labeled metrics), fetched together since the profile page always
-// needs both. Both reads are public/unauthenticated — no session token.
+// /integrations/{slug} (#293's canonical alias for GET /games/{slug},
+// public fields) + GET /games/{slug}/registry (#261's five class-labeled
+// metrics — not renamed by #293), fetched together since the profile page
+// always needs both. Both reads are public/unauthenticated — no session
+// token.
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import * as api from '../api/client'

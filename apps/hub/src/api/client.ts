@@ -801,24 +801,26 @@ export function listEventRsvps(
 
 // Game registration read (#26) + the binding/grant consent flow (#27,
 // #83), matching crates/server/src/games.rs's #27 companion module
-// field-for-field.
+// field-for-field. Issue #293 made `/integrations` the server's canonical
+// path for these reads (`/games` still works as a compatibility redirect,
+// but this repo's own client calls the canonical path directly).
 
 export function getGame(token: string, slug: string): Promise<GameResponse> {
-  return request(`/games/${slug}`, { token })
+  return request(`/integrations/${slug}`, { token })
 }
 
-// Issue #270's game directory + profile page: GET /games and GET
-// /games/{slug} are both public and unauthenticated
+// Issue #270's game directory + profile page: GET /integrations and GET
+// /integrations/{slug} are both public and unauthenticated
 // (crates/server/src/games.rs), so unlike getGame above (always called
 // from an already-authenticated screen) these take no bearer token at
 // all — a logged-out visitor to the Hub could browse them exactly as-is
 // once routing allows that (not scoped here).
 export function listGames(queryString: string): Promise<ListGamesResponse> {
-  return request(`/games${queryString}`)
+  return request(`/integrations${queryString}`)
 }
 
 export function getGamePublic(slug: string): Promise<GameResponse> {
-  return request(`/games/${slug}`)
+  return request(`/integrations/${slug}`)
 }
 
 // Issue #261's registry-metrics endpoint — same public, unauthenticated

@@ -8,6 +8,21 @@
 //! logic); `requested_capabilities` is only ever a declaration presented to
 //! players.
 //!
+//! **`/integrations` is the canonical public API path (#293)**, generalizing
+//! #282's Hub-internal `/games` → `/integrations` route rename onto the
+//! server's own public API, ahead of the POC test environment putting these
+//! routes in front of real outside testers. `GET /games` and
+//! `GET /games/{slug}` keep working as redirects to `GET /integrations`/
+//! `GET /integrations/{slug}` ([`redirect_list_games`]/[`redirect_get_game`]);
+//! `POST /games` keeps working identically to `POST /integrations` (both
+//! routed to the same [`register_game`] handler, never a redirect — a 30x
+//! silently turns a POST into a GET in many clients). The
+//! `x-avalon-game-*`/`x-avalon-integrator-*` auth headers below follow the
+//! same pattern: either name is accepted from a caller, and this repo's own
+//! outbound code sends only the `integrator` name going forward. None of
+//! this renames `Issuer::Game`, `GameId`, the `games` table, or any ledger
+//! event kind — those stay permanent (#275).
+//!
 //! **Slugs are forever.** A slug is the `owner` segment of every `GlobalId`
 //! the game later mints (`game:<slug>:achievement:<key>`), so it must be
 //! lowercase `[a-z0-9-]` and unique — enforced with a unique index plus an
@@ -107,9 +122,19 @@ const GAME_CHALLENGE_NONCE_BYTES: usize = 32;
 const DEFAULT_GAMES_LIST_PAGE_SIZE: i64 = 20;
 const MAX_GAMES_LIST_PAGE_SIZE: i64 = 100;
 
+/// Header names accepted for game/integrator server-to-server auth.
+///
+/// `x-avalon-game-*` is the original name; `x-avalon-integrator-*` is the
+/// generic replacement added by #293 (mirroring #282's `IntegratorCategory`
+/// generalization on the server's public API). Both are accepted from any
+/// caller indefinitely — see [`header_value`] — but this repo's own
+/// outbound code (SDK, CLI) sends only the `integrator` name from now on.
 const GAME_KEY_ID_HEADER: &str = "x-avalon-game-key-id";
+const INTEGRATOR_KEY_ID_HEADER: &str = "x-avalon-integrator-key-id";
 const GAME_CHALLENGE_ID_HEADER: &str = "x-avalon-game-challenge-id";
+const INTEGRATOR_CHALLENGE_ID_HEADER: &str = "x-avalon-integrator-challenge-id";
 const GAME_SIGNATURE_HEADER: &str = "x-avalon-game-signature";
+const INTEGRATOR_SIGNATURE_HEADER: &str = "x-avalon-integrator-signature";
 
 /// Only algorithm `crate::auth::verify_event_signature` (and thus the
 /// challenge-response scheme below) can verify. Registration itself rejects
@@ -511,6 +536,32 @@ pub async fn list_games(
     Ok(Json(ListGamesResponse { games, next_cursor }))
 }
 
+/// `GET /games` compatibility redirect (#293) → `GET /integrations`,
+/// preserving the query string as-is (`?q=&sort=&limit=&cursor=`). A real
+/// HTTP redirect is safe here since this is a `GET`, unlike registration
+/// below (see the module doc comment / issue #293's own invariant about not
+/// redirecting a `POST`).
+pub async fn redirect_list_games(
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> axum::response::Redirect {
+    match query {
+        Some(q) if !q.is_empty() => {
+            axum::response::Redirect::temporary(&format!("/integrations?{q}"))
+        }
+        _ => axum::response::Redirect::temporary("/integrations"),
+    }
+}
+
+/// `GET /games/{slug}` compatibility redirect (#293) → `GET
+/// /integrations/{slug}`. `slug` is already validated to `[a-z0-9-]` at
+/// registration time, so no further escaping is needed to embed it in the
+/// redirect target.
+pub async fn redirect_get_game(
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> axum::response::Redirect {
+    axum::response::Redirect::temporary(&format!("/integrations/{slug}"))
+}
+
 #[derive(Serialize)]
 pub struct GameChallengeResponse {
     pub challenge_id: Uuid,
@@ -550,9 +601,17 @@ pub async fn create_game_challenge(
     }))
 }
 
-fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AppError> {
+/// Reads a header by trying `new_name` first, then `old_name` — either
+/// name is accepted from a caller (#293), preferring the generic
+/// `integrator` name when both happen to be present.
+fn header_value<'a>(
+    headers: &'a HeaderMap,
+    new_name: &str,
+    old_name: &str,
+) -> Result<&'a str, AppError> {
     headers
-        .get(name)
+        .get(new_name)
+        .or_else(|| headers.get(old_name))
         .and_then(|v| v.to_str().ok())
         .ok_or(AppError::InvalidGameSignature)
 }
@@ -572,14 +631,22 @@ pub(crate) async fn authenticate_game(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Uuid, AppError> {
-    let key_id: Uuid = header_value(headers, GAME_KEY_ID_HEADER)?
+    let key_id: Uuid = header_value(headers, INTEGRATOR_KEY_ID_HEADER, GAME_KEY_ID_HEADER)?
         .parse()
         .map_err(|_| AppError::InvalidGameSignature)?;
-    let challenge_id: Uuid = header_value(headers, GAME_CHALLENGE_ID_HEADER)?
-        .parse()
-        .map_err(|_| AppError::InvalidGameSignature)?;
+    let challenge_id: Uuid = header_value(
+        headers,
+        INTEGRATOR_CHALLENGE_ID_HEADER,
+        GAME_CHALLENGE_ID_HEADER,
+    )?
+    .parse()
+    .map_err(|_| AppError::InvalidGameSignature)?;
     let signature_bytes = BASE64
-        .decode(header_value(headers, GAME_SIGNATURE_HEADER)?)
+        .decode(header_value(
+            headers,
+            INTEGRATOR_SIGNATURE_HEADER,
+            GAME_SIGNATURE_HEADER,
+        )?)
         .map_err(|_| AppError::InvalidGameSignature)?;
 
     let challenge_row = sqlx::query(

@@ -29,7 +29,7 @@ const registryResponse = {
 
 async function mountProfile(gameOverrides: Record<string, unknown> = {}) {
   mockFetchByPath({
-    '/games/ashen-realms': {
+    '/integrations/ashen-realms': {
       id: 'g1',
       slug: 'ashen-realms',
       name: 'Ashen Realms',
