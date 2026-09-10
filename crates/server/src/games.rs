@@ -79,7 +79,7 @@
 //! doesn't need to change again once #84 lands.
 
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::games::GameStatus;
+use avalon_protocol::games::{GameStatus, IntegratorCategory};
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::permissions::Capability;
 use axum::extract::{Query, State};
@@ -157,6 +157,9 @@ pub struct CreateGameRequest {
     #[serde(default)]
     pub requested_capabilities: Vec<String>,
     pub initial_key: InitialKeyRequest,
+    /// `game` / `app` / `service` (#282); omitted means `game`.
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -174,6 +177,7 @@ pub struct GameResponse {
     #[serde(with = "time::serde::rfc3339")]
     pub registered_at: OffsetDateTime,
     pub status: String,
+    pub category: String,
     pub requested_capabilities: Vec<String>,
     pub credential: GameCredentialResponse,
 }
@@ -183,6 +187,11 @@ pub async fn register_game(
     Json(body): Json<CreateGameRequest>,
 ) -> Result<Json<GameResponse>, AppError> {
     validate_slug(&body.slug)?;
+
+    let category = match body.category.as_deref() {
+        None => IntegratorCategory::Game,
+        Some(raw) => IntegratorCategory::parse(raw).ok_or(AppError::InvalidGameCategory)?,
+    };
 
     if body.initial_key.algorithm != SUPPORTED_KEY_ALGORITHM {
         return Err(AppError::InvalidGameKey);
@@ -208,8 +217,8 @@ pub async fn register_game(
     let mut tx = state.pool.begin().await?;
 
     let inserted = sqlx::query(
-        "INSERT INTO games (id, slug, name, developer, registered_at, status) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO games (id, slug, name, developer, registered_at, status, category) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(game_id)
     .bind(&body.slug)
@@ -217,6 +226,7 @@ pub async fn register_game(
     .bind(&body.developer)
     .bind(registered_at)
     .bind(GameStatus::Active.as_str())
+    .bind(category.as_str())
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &inserted {
@@ -258,6 +268,7 @@ pub async fn register_game(
             "slug": body.slug,
             "name": body.name,
             "developer": body.developer,
+            "category": category.as_str(),
             "requested_capabilities": requested_capabilities,
             "initial_key": {
                 "key_id": key_id,
@@ -279,6 +290,7 @@ pub async fn register_game(
         developer: body.developer,
         registered_at,
         status: GameStatus::Active.as_str().to_string(),
+        category: category.as_str().to_string(),
         requested_capabilities,
         credential: GameCredentialResponse {
             game_id,
@@ -307,6 +319,7 @@ pub struct GamePublicResponse {
     #[serde(with = "time::serde::rfc3339")]
     pub registered_at: OffsetDateTime,
     pub status: String,
+    pub category: String,
     pub requested_capabilities: Vec<String>,
 }
 
@@ -322,7 +335,7 @@ pub async fn get_game(
     axum::extract::Path(slug): axum::extract::Path<String>,
 ) -> Result<Json<GamePublicResponse>, AppError> {
     let row = sqlx::query(
-        "SELECT id, slug, name, developer, registered_at, status FROM games WHERE slug = $1",
+        "SELECT id, slug, name, developer, registered_at, status, category FROM games WHERE slug = $1",
     )
     .bind(&slug)
     .fetch_optional(&state.pool)
@@ -347,6 +360,7 @@ pub async fn get_game(
         developer: row.try_get("developer")?,
         registered_at: row.try_get("registered_at")?,
         status: row.try_get("status")?,
+        category: row.try_get("category")?,
         requested_capabilities,
     }))
 }
@@ -393,6 +407,7 @@ pub struct GameSummary {
     #[serde(with = "time::serde::rfc3339")]
     pub registered_at: OffsetDateTime,
     pub status: String,
+    pub category: String,
 }
 
 #[derive(Serialize)]
@@ -413,7 +428,7 @@ fn build_games_list_query(
     limit: i64,
 ) -> QueryBuilder<Postgres> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT id, slug, name, developer, registered_at, status FROM games WHERE 1 = 1",
+        "SELECT id, slug, name, developer, registered_at, status, category FROM games WHERE 1 = 1",
     );
 
     if let Some(q) = query.q.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -484,6 +499,7 @@ pub async fn list_games(
             developer: row.try_get("developer")?,
             registered_at: row.try_get("registered_at")?,
             status: row.try_get("status")?,
+            category: row.try_get("category")?,
         });
     }
     let next_cursor = if has_more {
@@ -725,7 +741,7 @@ mod tests {
         let builder = build_games_list_query(&empty_list_games_query(), GamesListSort::Newest, 20);
         let sql = builder.sql();
         let sql = sql.as_str();
-        assert!(sql.contains("id, slug, name, developer, registered_at, status"));
+        assert!(sql.contains("id, slug, name, developer, registered_at, status, category"));
         assert!(sql.contains("FROM games"));
     }
 

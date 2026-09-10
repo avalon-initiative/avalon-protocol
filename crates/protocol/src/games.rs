@@ -37,6 +37,37 @@ impl GameStatus {
     }
 }
 
+/// What kind of integrator a registrant is (issue #282, decision #275).
+/// Additive only — does not rename `GameId`/`Issuer::Game`/`games`/`game.*`
+/// events. Defaults to `Game`, so a caller that omits `category` is unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegratorCategory {
+    #[default]
+    Game,
+    App,
+    Service,
+}
+
+impl IntegratorCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IntegratorCategory::Game => "game",
+            IntegratorCategory::App => "app",
+            IntegratorCategory::Service => "service",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<IntegratorCategory> {
+        Some(match s {
+            "game" => IntegratorCategory::Game,
+            "app" => IntegratorCategory::App,
+            "service" => IntegratorCategory::Service,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
     pub id: GameId,
@@ -45,6 +76,8 @@ pub struct Game {
     pub developer: String,
     pub registered_at: OffsetDateTime,
     pub status: GameStatus,
+    #[serde(default)]
+    pub category: IntegratorCategory,
 }
 
 /// The first signing key a game registers with (issue #26). Shaped so issue
@@ -110,5 +143,30 @@ mod tests {
         assert_eq!(GameStatus::Active.as_str(), "active");
         assert_eq!(GameStatus::parse("active"), Some(GameStatus::Active));
         assert_eq!(GameStatus::parse("bogus"), None);
+    }
+
+    #[test]
+    fn integrator_category_round_trips_through_its_wire_string() {
+        assert_eq!(IntegratorCategory::Game.as_str(), "game");
+        assert_eq!(IntegratorCategory::App.as_str(), "app");
+        assert_eq!(IntegratorCategory::Service.as_str(), "service");
+        assert_eq!(
+            IntegratorCategory::parse("game"),
+            Some(IntegratorCategory::Game)
+        );
+        assert_eq!(
+            IntegratorCategory::parse("app"),
+            Some(IntegratorCategory::App)
+        );
+        assert_eq!(
+            IntegratorCategory::parse("service"),
+            Some(IntegratorCategory::Service)
+        );
+        assert_eq!(IntegratorCategory::parse("bogus"), None);
+    }
+
+    #[test]
+    fn integrator_category_defaults_to_game() {
+        assert_eq!(IntegratorCategory::default(), IntegratorCategory::Game);
     }
 }

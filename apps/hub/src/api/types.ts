@@ -568,6 +568,9 @@ export interface SendMessageRequest {
 // field-for-field. `requested_capabilities` is a declaration only — see
 // games.rs's own module doc comment — never itself a grant.
 
+// What kind of integrator a registration is (#282). Additive on the wire.
+export type IntegratorCategory = 'game' | 'app' | 'service'
+
 export interface GameResponse {
   id: string
   slug: string
@@ -575,6 +578,7 @@ export interface GameResponse {
   developer: string
   registered_at: string
   status: string
+  category: IntegratorCategory
   requested_capabilities: string[]
 }
 
@@ -590,6 +594,7 @@ export interface GameSummary {
   developer: string
   registered_at: string
   status: string
+  category: IntegratorCategory
 }
 
 export interface ListGamesResponse {

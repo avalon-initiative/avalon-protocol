@@ -19,6 +19,7 @@ A game connecting to Avalon establishes:
 | signing key(s) | public keys, each with an id, algorithm, validity window |
 | key history | every add / rotate / revoke / expire as an appended event |
 | status | `ACTIVE` · `SUSPENDED` · `REVOKED` · `DEPRECATED` |
+| category | `game` · `app` · `service` (#282, decision #275) — additive, defaults to `game`, doesn't rename `game id`/issuer vocabulary above |
 | capabilities requested | what it will ask players for — a request, never a grant |
 | public metadata | name, developer, website, and similar |
 | supported protocol version / Avalon features | what the game actually implements |
@@ -109,17 +110,21 @@ Game A continues issuing under k2.
 ## Today in the repo
 
 - `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
-  registered_at, status }` (`GameStatus`, currently just `Active`),
-  `GameRegistration { game, requested_capabilities, initial_key }`,
-  `IssuerKeyInfo { key_id, algorithm, public_key }`, `GameCredential
-  { game_id, key_id }`.
+  registered_at, status, category }` (`GameStatus`, currently just
+  `Active`; `category` is `IntegratorCategory` — `Game`/`App`/`Service`,
+  #282, defaults to `Game`), `GameRegistration { game,
+  requested_capabilities, initial_key }`, `IssuerKeyInfo { key_id,
+  algorithm, public_key }`, `GameCredential { game_id, key_id }`.
 - `crates/server/src/games.rs` (#26) — `POST /games` registers a game: slug
   (unique, lowercase `[a-z0-9-]`, 409 on collision — enforced with a unique
   index + `is_unique_violation()`, same pattern `guilds.rs::create_guild`
   uses), name, developer, `requested_capabilities`, and an initial Ed25519
   public key, all recorded atomically with a `game.registered` event via the
-  outbox pattern. Projection tables: `games`,
-  `game_requested_capabilities`, and a minimal `issuer_keys` (`key_id,
+  outbox pattern. `category` (`game`/`app`/`service`, #282) is optional in
+  the request body; omitted means `game`. Projection tables: `games`
+  (migration `0040_game_category` added the `category` column, `NOT NULL
+  DEFAULT 'game'`), `game_requested_capabilities`, and a minimal
+  `issuer_keys` (`key_id,
   game_id, algorithm, public_key, created_at`) shaped for #84 to extend
   rather than replace — this only ever inserts the one key recorded at
   registration. `game.registered`'s `issuer`/`subject` name the game itself
@@ -155,6 +160,11 @@ Game A continues issuing under k2.
   `avalon register-game`.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
   decision, open: issuer signing keys and lifecycle.
+- [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275) —
+  decision: additive `category` field (game/app/service), no rename of
+  `GameId`/`Issuer::Game`/the `games` table/`game.*` event kinds.
+- [#282](https://github.com/LunarVagabond/avalon-protocol/issues/282) —
+  implementation of #275, described above.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
   identity implementation (blocked by #80).
 - [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) — ledger
