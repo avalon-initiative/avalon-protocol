@@ -204,6 +204,49 @@ unverifiable.
   `AVALON_RETENTION_PRUNING_ENABLED` left unset — nothing about the
   capability table changes; only the retention-tier config differs between
   a full and a hot deployment of the same Settlement role.
+- **The first real instance of "a node without its own Settlement"**
+  ([#313](https://github.com/LunarVagabond/avalon-protocol/issues/313),
+  implementing the decision on
+  [#296](https://github.com/LunarVagabond/avalon-protocol/issues/296)): an
+  `avalon-server` process can now run Indexer/Realtime/Gateway against its
+  own local Postgres while deferring *writes* to a separate Settlement
+  authority, still inside the same single binary/single-database-per-node
+  shape — no separate deployable roles yet (that's the full
+  [#291](https://github.com/LunarVagabond/avalon-protocol/issues/291) epic).
+  Two independent config knobs:
+  - **Reads** stay exactly #299's mirror-watcher mechanism, extended by one
+    step: once `mirror_watcher::backfill` verifies and stores an entry into
+    `mirrored_entries`, it now also decodes it into a `ProtocolEvent` and
+    applies it to this node's own `PostgresIndexer`
+    (`avalon_indexer::postgres::PostgresIndexer::apply_in_tx`), in the same
+    transaction as the `mirrored_entries` write. A remote-settlement node's
+    local reads are therefore fed *only* by content this node
+    independently verified itself (inclusion-proof-checked against a
+    signature-checked STH) — never by trusting a peer's response, and
+    never by trusting `POST /ledger/submit`'s own request body.
+  - **Writes**: `AVALON_SETTLEMENT_REMOTE_URL`, read by
+    `crates/server/src/outbox.rs`'s `run_worker`. When set, a drain tick
+    posts its `EventBatch` to `POST /ledger/submit` on the named authority
+    instead of calling `chain.commit` locally; the authority runs the exact
+    same `chain.commit` call there that it runs for its own local outbox.
+    Unset (the default), the worker's behavior is completely unchanged.
+    Exactly one Settlement authority is ever configured as a write target —
+    no automatic failover across multiple peers, matching #70/#186's "no
+    contested writes" invariant.
+  - This is eventually consistent, not synchronous: a write accepted by a
+    remote-settlement node's own API is durably committed on the authority
+    immediately, but that node's own local reads only pick it up once
+    mirror-watcher's next backfill tick applies it — real latency (bounded
+    by `AVALON_MIRROR_POLL_INTERVAL_SECS`, 30s by default), not hidden.
+  - `POST /ledger/submit` is the one write route among `settlement.rs`'s
+    otherwise-public mirror-facing endpoints — see
+    [`settlement.md`](./settlement.md) for its authentication.
+  - Still not built (explicitly out of scope for #313, deferred to #291):
+    separate deployable binaries per role, automatic multi-peer write
+    failover, role-aware/partial migrations (a remote-settlement node still
+    runs every migration, including settlement-only tables it never
+    writes to), and general node discovery/routing (the remote write
+    target is a fixed config value, not discovered).
 
 ## Decisions and tickets
 
@@ -218,6 +261,14 @@ unverifiable.
   config, payload pruning, the settlement-state checkpoint. The
   indexer-projection-snapshot half of #180's ask stays open, tracked under
   #43.
+- [#296](https://github.com/LunarVagabond/avalon-protocol/issues/296)
+  (decided) the 8-node POC topology: Settlement nodes genuinely mirror each
+  other (#40/#299); Indexer/Realtime/Gateway nodes reach a Settlement node
+  over its API rather than sharing its database.
+  [#313](https://github.com/LunarVagabond/avalon-protocol/issues/313)
+  (implemented) is the scoped-down slice of #291 that makes that real —
+  `AVALON_SETTLEMENT_REMOTE_URL` plus `POST /ledger/submit`, per the "Today
+  in the repo" section above.
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
   discovery and capability negotiation
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) TLS before

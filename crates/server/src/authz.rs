@@ -434,6 +434,7 @@ mod live_tests {
             indexer,
             webauthn,
             presence: PresenceStore::from_env(),
+            settlement_submit_key: None,
         }
     }
 

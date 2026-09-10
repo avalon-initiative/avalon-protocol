@@ -1,0 +1,205 @@
+//! Issue #313: a remote-settlement node's write path (`outbox::run_worker`
+//! posting to `POST /ledger/submit` instead of committing locally) and read
+//! path (mirror-watcher backfilling into its own local `PostgresIndexer`,
+//! not just `mirrored_entries`).
+//!
+//! Gated `--ignored`, same convention `tests/settlement.rs` (#211) and
+//! `tests/mirror_watcher.rs` (#299) already use for anything needing live
+//! infra. The full scenario needs **two** real `avalon-server` processes
+//! against **two** separate Postgres databases sharing one `AVALON_NETWORK_ID`
+//! — one plain Settlement authority (`make start`'s usual config), one
+//! configured as a remote-settlement node:
+//!
+//! ```text
+//! # authority (the usual `make start` config)
+//! AVALON_SETTLEMENT_SIGNING_KEY=...
+//! AVALON_SETTLEMENT_SUBMIT_KEY=<shared secret>
+//!
+//! # remote-settlement node — separate DATABASE_URL, same AVALON_NETWORK_ID
+//! AVALON_SETTLEMENT_REMOTE_URL=http://127.0.0.1:8080   # the authority
+//! AVALON_SETTLEMENT_SUBMIT_KEY=<same shared secret>
+//! AVALON_MIRROR_PEERS=http://127.0.0.1:8080            # watch the authority
+//! AVALON_SETTLEMENT_VERIFY_KEY=<authority's public key>
+//! ```
+//!
+//! This sandbox has no live database access (see `.claude/CLAUDE.md`), so
+//! this file is written and expected to compile/lint here, but was not run
+//! against real infra from this environment — it needs the same
+//! `make test-live`-style verification `tests/mirror_watcher.rs` already
+//! calls out as needing a real second `avalon-server` deployment to
+//! exercise end-to-end.
+
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row};
+use uuid::Uuid;
+
+/// The Settlement authority — same env var every other live test in this
+/// crate reads.
+fn authority_url() -> String {
+    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
+}
+
+/// The second `avalon-server` process, configured with
+/// `AVALON_SETTLEMENT_REMOTE_URL` pointed at the authority above and
+/// `AVALON_MIRROR_PEERS` watching it. New to this ticket — no other live
+/// test needs a second server, so no existing env var covers it.
+fn remote_settlement_url() -> Option<String> {
+    std::env::var("AVALON_REMOTE_SETTLEMENT_SERVER_URL").ok()
+}
+
+/// The remote-settlement node's *own* Postgres — separate from the
+/// authority's `DATABASE_URL` (which every other live test in this crate
+/// reads), since the whole point of this ticket is that these are two
+/// independent databases.
+async fn remote_settlement_pool() -> Option<PgPool> {
+    let url = std::env::var("AVALON_REMOTE_SETTLEMENT_DATABASE_URL").ok()?;
+    Some(
+        PgPoolOptions::new()
+            .connect(&url)
+            .await
+            .expect("failed to connect to the remote-settlement node's own Postgres"),
+    )
+}
+
+async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let slug = format!("test-remote-settlement-{}", &suffix[..8]);
+    let body = serde_json::json!({
+        "slug": slug,
+        "name": "Remote Settlement Test Game",
+        "developer": "Test Studio",
+        "requested_capabilities": [],
+        "initial_key": {
+            "algorithm": "ed25519",
+            "public_key": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                [0u8; 32],
+            ),
+        },
+    });
+    let response = http
+        .post(format!("{base}/games"))
+        .json(&body)
+        .send()
+        .await
+        .expect("POST /games failed — is the remote-settlement node running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+    format!("game:{slug}:self:registered")
+}
+
+async fn wait_for_row<T, F>(mut fetch: F, description: &str) -> T
+where
+    F: AsyncFnMut() -> Option<T>,
+{
+    for _ in 0..30 {
+        if let Some(value) = fetch().await {
+            return value;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    panic!("{description} — never appeared within the retry budget");
+}
+
+/// `POST /ledger/submit` refuses any request without a correct bearer
+/// credential — the invariant that this endpoint is privileged, unlike
+/// every other endpoint `crate::settlement` exposes. Runs against a single
+/// already-running server (the usual `make start` authority), so this one
+/// doesn't need the second remote-settlement process.
+#[tokio::test]
+#[ignore]
+async fn ledger_submit_rejects_requests_with_no_or_wrong_bearer_key() {
+    let base = authority_url();
+    let http = reqwest::Client::new();
+    let batch = serde_json::json!({
+        "id": Uuid::new_v4(),
+        "events": [],
+        "created_at": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap(),
+    });
+
+    let no_auth = http
+        .post(format!("{base}/ledger/submit"))
+        .json(&batch)
+        .send()
+        .await
+        .expect("POST /ledger/submit failed — is `make start` running?");
+    assert_eq!(no_auth.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let wrong_auth = http
+        .post(format!("{base}/ledger/submit"))
+        .bearer_auth("definitely-not-the-configured-key")
+        .json(&batch)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_auth.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+/// The ticket's own acceptance criterion: a write submitted to the
+/// remote-settlement node's normal API is committed on the real authority,
+/// and the remote-settlement node's own mirror-watcher independently
+/// re-verifies and stores that exact entry — eventually, not
+/// synchronously; this test polls rather than asserting immediacy.
+#[tokio::test]
+#[ignore]
+async fn a_write_on_the_remote_settlement_node_lands_on_the_authority_and_is_backfilled_back() {
+    let Some(remote_base) = remote_settlement_url() else {
+        panic!(
+            "AVALON_REMOTE_SETTLEMENT_SERVER_URL not set — this test needs a second \
+             avalon-server process configured with AVALON_SETTLEMENT_REMOTE_URL pointed at \
+             the authority; see this file's module doc comment"
+        );
+    };
+    let Some(remote_pool) = remote_settlement_pool().await else {
+        panic!(
+            "AVALON_REMOTE_SETTLEMENT_DATABASE_URL not set — needed to confirm the \
+             remote-settlement node's own mirrored_entries table, independent of the \
+             authority's database"
+        );
+    };
+    let authority_pool = PgPoolOptions::new()
+        .connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"))
+        .await
+        .expect("failed to connect to the authority's Postgres");
+
+    let http = reqwest::Client::new();
+    let issuer = register_throwaway_game(&http, &remote_base).await;
+
+    // Committed on the real authority — not the remote-settlement node's
+    // own database, which never runs `chain.commit` locally while
+    // AVALON_SETTLEMENT_REMOTE_URL is configured.
+    let seq: i64 = wait_for_row(
+        async || {
+            sqlx::query("SELECT seq FROM ledger_entries WHERE issuer = $1")
+                .bind(&issuer)
+                .fetch_optional(&authority_pool)
+                .await
+                .expect("query failed")
+                .map(|row| row.try_get("seq").expect("seq column"))
+        },
+        "entry never appeared in the authority's ledger_entries — is the remote-settlement \
+         node's outbox worker running, and AVALON_SETTLEMENT_REMOTE_URL/AVALON_SETTLEMENT_SUBMIT_KEY \
+         configured correctly on it?",
+    )
+    .await;
+
+    // Independently re-verified and stored by this node's own
+    // mirror-watcher — not merely visible because the write handler
+    // itself already touched the local indexer (see this ticket's own
+    // discussion of why identity/profile writes are a poor test fixture:
+    // registering a game does not self-apply to any indexer projection,
+    // so this row can only appear via backfill).
+    let mirrored_seq: i64 = wait_for_row(
+        async || {
+            sqlx::query("SELECT seq FROM mirrored_entries WHERE network_id = (SELECT network_id FROM chain_genesis LIMIT 1) AND seq = $1")
+                .bind(seq)
+                .fetch_optional(&remote_pool)
+                .await
+                .expect("query failed")
+                .map(|row| row.try_get("seq").expect("seq column"))
+        },
+        "entry never appeared in the remote-settlement node's own mirrored_entries — is its \
+         mirror-watcher (AVALON_MIRROR_PEERS) running and pointed at the authority?",
+    )
+    .await;
+    assert_eq!(mirrored_seq, seq);
+}

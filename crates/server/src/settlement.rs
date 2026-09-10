@@ -32,8 +32,10 @@
 
 use avalon_chain::merkle;
 use avalon_chain::sth::SignedTreeHead;
-use avalon_chain::LedgerEntryView;
+use avalon_chain::{LedgerEntryView, SettlementProvider};
+use avalon_protocol::events::{Commitment, EventBatch};
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -344,4 +346,45 @@ pub async fn list_entries(
         .list_entries_since(query.since_seq, limit)
         .await?;
     Ok(Json(entries.into_iter().map(Into::into).collect()))
+}
+
+/// `POST /ledger/submit` — issue #313's node-to-node write endpoint: a
+/// remote-settlement node's `outbox::run_worker` posts each drained batch
+/// here instead of calling `chain.commit` against its own pool, and this
+/// handler runs the exact same `chain.commit` call the local outbox worker
+/// already runs for itself. This is privileged (unlike every other endpoint
+/// in this module): it lets an authenticated caller get arbitrary events
+/// committed to the authoritative log, so it is deliberately **not**
+/// public/unauthenticated like the read endpoints above.
+///
+/// **Auth: a shared-secret bearer token (`AVALON_SETTLEMENT_SUBMIT_KEY`).**
+/// Nothing more specific for trusted node-to-node calls already existed in
+/// this codebase to reuse (every other authenticated route here checks a
+/// player's own session or a game's own registered credential, neither of
+/// which fits "one operator's own two nodes talking to each other"), and
+/// the ticket left the exact mechanism open with this as its suggested
+/// default. If this node has no `AVALON_SETTLEMENT_SUBMIT_KEY` configured
+/// at all, every request is refused — an operator who never turns this on
+/// gets an endpoint that exists but accepts nothing, never one that's
+/// silently open.
+pub async fn submit_ledger_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(batch): Json<EventBatch>,
+) -> Result<Json<Commitment>, AppError> {
+    let expected = state
+        .settlement_submit_key
+        .as_deref()
+        .ok_or(AppError::Unauthorized)?;
+    let provided = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(AppError::Unauthorized)?;
+    if provided != expected {
+        return Err(AppError::Unauthorized);
+    }
+
+    let commitment = state.chain.commit(&batch).await?;
+    Ok(Json(commitment))
 }

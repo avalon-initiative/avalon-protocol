@@ -73,6 +73,9 @@ use std::time::Duration;
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
 use avalon_chain::sth::{self, SignedTreeHead};
 use avalon_chain::{merkle, PostgresSettlementProvider};
+use avalon_indexer::postgres::PostgresIndexer;
+use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::ids::GlobalId;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -133,6 +136,7 @@ impl MirrorWatcherConfig {
 pub async fn run_worker(
     pool: PgPool,
     chain: PostgresSettlementProvider,
+    indexer: PostgresIndexer,
     config: MirrorWatcherConfig,
 ) {
     let verify_key = match sth::load_verify_key_from_env() {
@@ -189,7 +193,9 @@ pub async fn run_worker(
         // pick a corroborated tree head and backfill against every peer
         // that agreed on it.
         for (network_id, observations) in &verified_by_network {
-            if let Err(err) = backfill_network(&client, &pool, network_id, observations).await {
+            if let Err(err) =
+                backfill_network(&client, &pool, &indexer, network_id, observations).await
+            {
                 eprintln!("mirror-watcher: {network_id}: {err}");
             }
         }
@@ -359,6 +365,7 @@ async fn check_equivocation(
 async fn backfill_network(
     client: &reqwest::Client,
     pool: &PgPool,
+    indexer: &PostgresIndexer,
     network_id: &str,
     observations: &[(String, SignedTreeHead)],
 ) -> Result<(), MirrorWatcherError> {
@@ -398,7 +405,7 @@ async fn backfill_network(
         .expect("target_tree_size/target_root_hash were derived from this exact list");
 
     let candidate_peers: Vec<String> = agreeing_peers.iter().map(|p| p.to_string()).collect();
-    backfill(client, pool, &candidate_peers, &target_sth).await
+    backfill(client, pool, indexer, &candidate_peers, &target_sth).await
 }
 
 /// Fetches and independently verifies every entry between what's already
@@ -417,9 +424,18 @@ async fn backfill_network(
 /// invariant this ticket calls out explicitly: never trust unverified
 /// content from a peer, and a partial-but-unverifiable backfill is worse
 /// than simply retrying next tick.
+///
+/// Issue #313: once an entry's inclusion is verified, it's decoded into the
+/// same `ProtocolEvent` shape `outbox::drain_once` builds and applied to
+/// this node's own local `PostgresIndexer` — in the same transaction as the
+/// `mirrored_entries` write, so a remote-settlement node's local reads are
+/// fed *only* by content this node independently verified itself, never by
+/// trusting a peer's response or (for the write side) `POST
+/// /ledger/submit`'s request body.
 async fn backfill(
     client: &reqwest::Client,
     pool: &PgPool,
+    indexer: &PostgresIndexer,
     candidate_peers: &[String],
     sth: &SignedTreeHead,
 ) -> Result<(), MirrorWatcherError> {
@@ -549,33 +565,81 @@ async fn backfill(
                 });
             }
 
-            mirror::insert_mirrored_entry(
-                pool,
-                &mirror::MirroredEntry {
-                    source_url: used_peer.clone(),
-                    network_id: sth.network_id.clone(),
-                    seq: entry.seq,
-                    event_id: entry.event_id,
-                    kind: entry.kind,
-                    issuer: entry.issuer,
-                    subject: entry.subject,
-                    payload: entry.payload,
-                    event_timestamp: entry.event_timestamp,
-                    version: entry.version,
-                    prev_hash: entry.prev_hash,
-                    entry_hash: entry.entry_hash,
-                    batch_id: entry.batch_id,
-                    verified_tree_size: sth.tree_size,
-                },
-            )
-            .await?;
+            let mirrored_entry = mirror::MirroredEntry {
+                source_url: used_peer.clone(),
+                network_id: sth.network_id.clone(),
+                seq: entry.seq,
+                event_id: entry.event_id,
+                kind: entry.kind,
+                issuer: entry.issuer,
+                subject: entry.subject,
+                payload: entry.payload,
+                event_timestamp: entry.event_timestamp,
+                version: entry.version,
+                prev_hash: entry.prev_hash,
+                entry_hash: entry.entry_hash,
+                batch_id: entry.batch_id,
+                verified_tree_size: sth.tree_size,
+            };
+            let protocol_event = protocol_event_from_mirrored(&mirrored_entry);
 
-            progress.last_seq = entry.seq;
+            // Same transaction: the `mirrored_entries` write and this
+            // node's own local-indexer projection either land together or
+            // not at all, matching the outbox's own atomicity invariant
+            // (#71) for the write side.
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+            mirror::insert_mirrored_entry(&mut *tx, &mirrored_entry).await?;
+            if let Some(event) = &protocol_event {
+                indexer
+                    .apply_in_tx(&mut tx, event)
+                    .await
+                    .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+            } else {
+                eprintln!(
+                    "mirror-watcher: {}: seq={} could not be decoded into a ProtocolEvent (pruned payload or malformed issuer/subject) — mirrored, but not applied to the local indexer",
+                    sth.network_id, mirrored_entry.seq
+                );
+            }
+            tx.commit()
+                .await
+                .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
+
+            progress.last_seq = mirrored_entry.seq;
             progress.verified_count += 1;
         }
     }
 
     Ok(())
+}
+
+/// Decodes a verified `MirroredEntry` into the same `ProtocolEvent` shape
+/// `outbox::drain_once` builds from `protocol_outbox` rows — issue #313.
+/// `None` for a pruned payload (issue #208 retention — the entry is still
+/// mirrored, just not applicable to the indexer) or an `issuer`/`subject`
+/// that isn't a well-formed `GlobalId`, which should never happen for a
+/// genuine ledger entry but is handled as a skip, not a panic, since this is
+/// peer-derived content.
+fn protocol_event_from_mirrored(entry: &mirror::MirroredEntry) -> Option<ProtocolEvent> {
+    Some(ProtocolEvent {
+        id: entry.event_id,
+        kind: entry.kind.clone(),
+        issuer: global_id_from_str(&entry.issuer)?,
+        subject: global_id_from_str(&entry.subject)?,
+        payload: entry.payload.clone()?,
+        timestamp: entry.event_timestamp,
+        version: u32::try_from(entry.version).ok()?,
+    })
+}
+
+/// `GlobalId` derives `Deserialize` as a transparent newtype over `String`,
+/// so this is the same round trip a `ProtocolEvent`'s `issuer`/`subject`
+/// field already goes through in every other JSON boundary in this crate —
+/// there is no public raw-string constructor on `GlobalId` itself.
+fn global_id_from_str(raw: &str) -> Option<GlobalId> {
+    serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
 fn decode_proof_nodes(hex_nodes: &[String]) -> Result<Vec<[u8; 32]>, MirrorWatcherError> {
@@ -751,5 +815,46 @@ mod tests {
 
         assert_eq!(winning_root, "aa");
         assert_eq!(winners.len(), 3);
+    }
+
+    fn sample_mirrored_entry() -> mirror::MirroredEntry {
+        mirror::MirroredEntry {
+            source_url: "http://peer".to_string(),
+            network_id: "avalon-test".to_string(),
+            seq: 1,
+            event_id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
+            subject: "identity:11111111-1111-1111-1111-111111111111:self:created".to_string(),
+            payload: Some(serde_json::json!({"display_name": "test"})),
+            event_timestamp: OffsetDateTime::UNIX_EPOCH,
+            version: 1,
+            prev_hash: "aa".repeat(32),
+            entry_hash: "bb".repeat(32),
+            batch_id: Uuid::new_v4(),
+            verified_tree_size: 1,
+        }
+    }
+
+    #[test]
+    fn decodes_a_verified_mirrored_entry_into_the_same_protocol_event_shape_the_outbox_builds() {
+        let entry = sample_mirrored_entry();
+        let event = protocol_event_from_mirrored(&entry).expect("well-formed entry decodes");
+
+        assert_eq!(event.id, entry.event_id);
+        assert_eq!(event.kind, entry.kind);
+        assert_eq!(event.issuer.as_str(), entry.issuer);
+        assert_eq!(event.subject.as_str(), entry.subject);
+        assert_eq!(event.payload, entry.payload.unwrap());
+        assert_eq!(event.timestamp, entry.event_timestamp);
+        assert_eq!(event.version, entry.version as u32);
+    }
+
+    #[test]
+    fn a_pruned_payload_decodes_to_none_rather_than_a_fabricated_event() {
+        let mut entry = sample_mirrored_entry();
+        entry.payload = None;
+
+        assert!(protocol_event_from_mirrored(&entry).is_none());
     }
 }

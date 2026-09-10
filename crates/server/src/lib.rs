@@ -358,6 +358,9 @@ pub fn router(state: AppState) -> Router {
         // hold real ledger content, not just verify STHs — same public,
         // unauthenticated posture as the rest of this block.
         .route("/ledger/entries", get(settlement::list_entries))
+        // Issue #313: node-to-node, bearer-authenticated — the one write
+        // route in this block, unlike everything else above it.
+        .route("/ledger/submit", post(settlement::submit_ledger_batch))
         .with_state(state)
         .layer(cors_layer_from_env())
 }
