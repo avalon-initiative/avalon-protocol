@@ -59,6 +59,8 @@ async fn registering_a_game_returns_the_game_and_its_credential() {
     assert_eq!(body["name"].as_str().unwrap(), game.body["name"]);
     assert_eq!(body["developer"].as_str().unwrap(), game.body["developer"]);
     assert_eq!(body["status"].as_str().unwrap(), "active");
+    // #282: omitted category defaults to "game".
+    assert_eq!(body["category"].as_str().unwrap(), "game");
     assert_eq!(body["requested_capabilities"].as_array().unwrap().len(), 2);
     let credential = &body["credential"];
     assert_eq!(
@@ -66,6 +68,52 @@ async fn registering_a_game_returns_the_game_and_its_credential() {
         body["id"].as_str().unwrap()
     );
     assert!(!credential["key_id"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore]
+async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_game() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let mut game = unique_game();
+    game.body["category"] = serde_json::json!("app");
+
+    let register = http
+        .post(format!("{base}/games"))
+        .json(&game.body)
+        .send()
+        .await
+        .expect("register game failed — is `make start` running?");
+    assert!(register.status().is_success(), "{:?}", register.status());
+    let registered: serde_json::Value = register.json().await.unwrap();
+    assert_eq!(registered["category"].as_str().unwrap(), "app");
+
+    let slug = game.body["slug"].as_str().unwrap();
+    let get = http
+        .get(format!("{base}/games/{slug}"))
+        .send()
+        .await
+        .unwrap();
+    assert!(get.status().is_success());
+    let found: serde_json::Value = get.json().await.unwrap();
+    assert_eq!(found["category"].as_str().unwrap(), "app");
+}
+
+#[tokio::test]
+#[ignore]
+async fn registering_with_an_unrecognized_category_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let mut game = unique_game();
+    game.body["category"] = serde_json::json!("bogus");
+
+    let response = http
+        .post(format!("{base}/games"))
+        .json(&game.body)
+        .send()
+        .await
+        .expect("register game failed — is `make start` running?");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

@@ -27,6 +27,18 @@ Avalon Game Registry
 Identity, keys, and status come from [games and issuers](./games-and-issuers.md).
 Everything else is a projection built by the [indexer](./query-and-indexing.md).
 
+## Beyond games: integrator category (#282, decision #275)
+
+Games are the first and primary integrator, not the only one long-term:
+websites and other non-game applications can register too. `category`
+(`IntegratorCategory`: `game` / `app` / `service`) is an additive field on
+registration — it does not rename `GameId`, `Issuer::Game`, the `games`
+table, or any `game.*` event kind, which stay the permanent durable
+vocabulary per #275. A registrant that omits `category` is a `game`, so
+every existing registration and caller is unaffected. The Hub's directory
+(below) reflects this with category tabs; only `Games` has real
+registrants today.
+
 ## Derive, don't trust
 
 ```text
@@ -142,8 +154,9 @@ the [visibility](./privacy.md) rules that apply to those identities.
 ## Today in the repo
 
 - `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
-  registered_at }`, `GameRegistration`, `GameCredential`. No status, keys,
-  capabilities-supported, or metrics.
+  registered_at, category }`, `GameRegistration`, `GameCredential`.
+  `category` (`IntegratorCategory`, #282) defaults to `Game`. No
+  capabilities-supported or metrics.
 - `crates/indexer/src/lib.rs` — the `Indexer` trait, dispatched by
   `crates/indexer/src/postgres.rs::PostgresIndexer`, to one projection
   module per read model under `crates/indexer/src/projections/`. Schema
@@ -180,11 +193,19 @@ the [visibility](./privacy.md) rules that apply to those identities.
   to fetch a field it doesn't show. Milestone-1 stand-in over the `games`
   table, not #42's real indexer read model, same pragmatic call
   `discover_guilds` already made for guilds.
+- **Hub directory generalized to "Connected Apps" (#282)**: the Hub nav
+  entry and route moved from `/games` to `/integrations`
+  (`apps/hub/src/router/index.ts`); `/games` and `/games/:slug` still
+  resolve, as redirects, so existing deep links don't 404.
+  `GameDirectory.vue` gained category tabs (Games / Apps / Services)
+  filtering the fetched list client-side by `category`; only `Games` has
+  real registrants today, so the other tabs render correctly empty rather
+  than being hidden.
 - **Hub game directory + per-game profile page (#270, first slice of
   #90)**: `apps/hub/src/views/GameDirectory.vue` lists `GET /games`
   results with a search box and name/newest sort toggle — no
   "recommended" ordering, matching #89's invariant. `GameProfile.vue`
-  (`/games/:slug`) renders `GET /games/{slug}`'s public fields plus `GET
+  (`/integrations/:slug`, `/games/:slug` redirects) renders `GET /games/{slug}`'s public fields plus `GET
   /games/{slug}/registry`'s five metrics via `AvalonMetricTile` — value,
   definition, and class label together, never a bare number. A
   non-`active` `status` renders as a visibly distinct badge
@@ -233,6 +254,11 @@ the [visibility](./privacy.md) rules that apply to those identities.
 - [#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) —
   first buildable Hub slice on #90: `GET /games`, the game directory, and
   the per-game profile page reading #261's metrics, described above.
+- [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275) —
+  decision: additive `category` field, no durable rename.
+- [#282](https://github.com/LunarVagabond/avalon-protocol/issues/282) —
+  implementation of #275: `category` on registration, the generic Hub
+  nav/route, and category tabs, described above.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic
   this ticket and the rest of the registry work sit under.
 - [#96](https://github.com/LunarVagabond/avalon-protocol/issues/96) —

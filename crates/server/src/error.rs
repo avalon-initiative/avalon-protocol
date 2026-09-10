@@ -153,6 +153,8 @@ pub enum AppError {
     GameSlugTaken,
     #[error("unsupported or invalid initial signing key")]
     InvalidGameKey,
+    #[error("category must be one of game, app, service")]
+    InvalidGameCategory,
     #[error("game not found")]
     GameNotFound,
     #[error("invalid games list query: sort must be one of newest, name")]
@@ -344,7 +346,9 @@ impl IntoResponse for AppError {
             | AppError::InvalidResourceKind
             | AppError::InvalidPermission => StatusCode::BAD_REQUEST,
             AppError::PermissionOverrideNotFound => StatusCode::NOT_FOUND,
-            AppError::InvalidGameSlug | AppError::InvalidGameKey => StatusCode::BAD_REQUEST,
+            AppError::InvalidGameSlug
+            | AppError::InvalidGameKey
+            | AppError::InvalidGameCategory => StatusCode::BAD_REQUEST,
             AppError::GameSlugTaken => StatusCode::CONFLICT,
             AppError::GameNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidGamesListQuery => StatusCode::BAD_REQUEST,

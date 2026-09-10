@@ -64,7 +64,12 @@ onUnmounted(() => {
 
 const navItems = computed<AvalonNavItem[]>(() => [
   { label: 'Home', to: '/home', icon: 'home', active: route.path === '/home' },
-  { label: 'Games', to: '/games', icon: 'games', active: route.path.startsWith('/games') },
+  {
+    label: 'Connected Apps',
+    to: '/integrations',
+    icon: 'games',
+    active: route.path.startsWith('/integrations') || route.path.startsWith('/games'),
+  },
   { label: 'Guilds', to: '/guilds', icon: 'guilds', active: route.path.startsWith('/guilds') },
   { label: 'Friends', to: '/friends', icon: 'friends', active: route.path === '/friends' },
   { label: 'Chat', to: '/chat', icon: 'chat', active: false, disabled: true },

@@ -11,7 +11,7 @@ function testRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/games', component: GameDirectory },
-      { path: '/games/:slug', component: GameDirectory },
+      { path: '/games/:slug', name: 'integration-profile', component: GameDirectory },
     ],
   })
 }
@@ -32,6 +32,7 @@ describe('GameDirectory', () => {
             developer: 'Ashen Studios',
             registered_at: '2026-01-12T00:00:00Z',
             status: 'active',
+            category: 'game',
           },
           {
             id: 'g2',
@@ -40,6 +41,7 @@ describe('GameDirectory', () => {
             developer: 'Lunar Vagabond',
             registered_at: '2026-02-01T00:00:00Z',
             status: 'suspended',
+            category: 'game',
           },
         ],
         next_cursor: null,
@@ -72,5 +74,39 @@ describe('GameDirectory', () => {
     const wrapper = mount(GameDirectory, { global: { plugins: [router] } })
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.text()).toContain('No games match'))
+  })
+
+  it('renders the Apps/Services tabs as empty rather than hiding them', async () => {
+    mockFetchByPath({
+      '/games': {
+        games: [
+          {
+            id: 'g1',
+            slug: 'ashen-realms',
+            name: 'Ashen Realms',
+            developer: 'Ashen Studios',
+            registered_at: '2026-01-12T00:00:00Z',
+            status: 'active',
+            category: 'game',
+          },
+        ],
+        next_cursor: null,
+      },
+    })
+
+    const router = testRouter()
+    router.push('/games')
+    await router.isReady()
+    const wrapper = mount(GameDirectory, { global: { plugins: [router] } })
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
+
+    const tabs = wrapper.findAll('[role="tab"]')
+    expect(tabs.map((t) => t.text())).toEqual(['Games', 'Apps', 'Services'])
+
+    await tabs[1].trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Ashen Realms')
+    expect(wrapper.text()).toContain('No apps match')
   })
 })
