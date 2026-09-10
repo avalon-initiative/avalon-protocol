@@ -60,7 +60,8 @@ Protocol Event
               Batching                  (EventBatch; #38)
                   |
                   v
-          Commitment / Merkle Root      (batch_root today; Merkle root is #40)
+          Commitment / Merkle Root      (batch_root plus a real RFC 6962 Merkle
+                                          root/STH now, #40 decided, #210)
                   |
                   v
               Settlement                (SettlementProvider; Avalon's own chain, #79/#93)
@@ -125,10 +126,15 @@ milestone-1 stand-in until actor signatures exist.
 | `issuer.suspended` / `.reinstated` / `.revoked` / `.deprecated` | network or issuer → issuer | reason, effective at | issuer status | operator (audited) or issuer |
 | `friend.requested` / `.accepted` / `.removed` | identity → identity | the two identities, actor | friendships | acting identity's key — decided promised-durable; see [social-graph.md](./social-graph.md) |
 | `guild.created` | identity → guild | name, tag, description, founder | guilds | founder key |
-| `guild.role_defined` | identity → guild | name_index, name, permissions, description, badge (icon, color), actor | role definitions | acting member's key |
+| `guild.updated` | guild → guild | changed fields (motd, banner, links, recruiting, join_policy, ...) | guilds | acting officer's key |
+| `guild.role_defined` / `.role_deleted` | identity → guild | name_index, name, permissions, description, badge (icon, color), actor | role definitions | acting member's key |
 | `guild.member_added` / `.member_removed` | guild → identity | role, actor | rosters, history | acting member's key |
 | `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
+| `guild.owner_transferred` | guild → identity | old owner, new owner, actor | guilds | acting owner's key |
 | `guild.game_associated` | guild → game | guild, game | associations | guild officer key |
+| `guild.favorite_games_updated` | guild → guild | favorited game ids, actor | favorites | acting officer's key |
+| `guild.channel_created` / `.channel_renamed` / `.channel_archived` | guild → channel | channel id, name, actor | channels | acting officer's key |
+| `game_schema.published` | game → schema | game id, version, `.proto` source, superseded_by | schema discovery (#255) | game key |
 | `achievement.defined` | game → achievement id | name, description, schema | definitions | game key |
 | `achievement.definition_updated` | game → achievement id | name, description, schema, version | definitions | game key |
 | `achievement.definition_retired` | game → achievement id | achievement id | definitions | game key |
@@ -274,8 +280,23 @@ the record — [`./revocation.md`](./revocation.md).
   most acutely necessary here, since `identity.recovery_requested` is
   authored by a caller who by definition has no session, let alone a
   signing key, for the identity being recovered.
+- An eighth emitter: `crates/server/src/guilds.rs` writes `guild.created`,
+  `guild.updated`, `guild.role_defined`/`.role_deleted`, `guild.member_added`/
+  `.member_removed`, `guild.role_changed`, `guild.owner_transferred`,
+  `guild.game_associated`, and `guild.favorite_games_updated`, each enqueued
+  into `protocol_outbox` in the same transaction as the `guilds`/
+  `guild_members`/`guild_roles` row change it accompanies.
+- A ninth emitter: `crates/server/src/channels.rs` writes
+  `guild.channel_created`, `.channel_renamed`, and `.channel_archived`,
+  same outbox pattern.
+- A tenth emitter: `crates/server/src/game_schemas.rs` (#255) writes
+  `game_schema.published`, consumed by
+  `crates/indexer/src/projections/game_schemas.rs` for schema-version
+  discovery (see [game-registry.md](./game-registry.md)).
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`
-  plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`); the
+  plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`),
+  `0024_signed_tree_heads/up.sql` (#210 — Merkle root + Signed Tree Heads),
+  and `0027_ledger_payload_retention/up.sql` (retention tiering); the
   content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
   `timestamp`, `version` (`crates/chain/src/postgres.rs`). Every event lands
   in `protocol_outbox` (#71) and is committed as part of whatever
@@ -295,4 +316,9 @@ the record — [`./revocation.md`](./revocation.md).
   commit atomically with the projection change
 - #86 profile events; #73 identity signs its own events
 - [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) revocation
-  entry shape
+  entry shape (decided; implementation #85)
+- [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) —
+  guardian-based recovery event kinds (`identity.recovery_*`,
+  `identity.recovered`), described above.
+- [#210](https://github.com/LunarVagabond/avalon-protocol/issues/210) —
+  Merkle root / Signed Tree Head implementation (decided by #40).
