@@ -56,6 +56,18 @@ async fn seed_identity_session(pool: &PgPool, display_name: &str) -> (Uuid, Stri
     (identity_id, token)
 }
 
+/// Issue #269: conversation creation now requires an existing relationship
+/// between every participant, so these tests need one seeded first.
+async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
+    let (a, b) = if x < y { (x, y) } else { (y, x) };
+    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+        .bind(a)
+        .bind(b)
+        .execute(pool)
+        .await
+        .expect("failed to seed friendship");
+}
+
 fn client() -> AvalonClient {
     AvalonClient::new(AvalonConfig {
         server_url: server_url(),
@@ -73,6 +85,7 @@ async fn dm_then_send_then_messages_round_trips_across_two_sessions() {
         seed_identity_session(&pool, &format!("sdk-conv-alice-{}", Uuid::new_v4())).await;
     let (bob_id, bob_token) =
         seed_identity_session(&pool, &format!("sdk-conv-bob-{}", Uuid::new_v4())).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     let alice = client
         .authenticate(&alice_token)
@@ -157,12 +170,13 @@ async fn a_non_participant_reading_another_pairs_conversation_is_rejected() {
     let pool = test_pool().await;
     let client = client();
 
-    let (_alice_id, alice_token) =
+    let (alice_id, alice_token) =
         seed_identity_session(&pool, &format!("sdk-conv-a-{}", Uuid::new_v4())).await;
     let (bob_id, _bob_token) =
         seed_identity_session(&pool, &format!("sdk-conv-b-{}", Uuid::new_v4())).await;
     let (_mallory_id, mallory_token) =
         seed_identity_session(&pool, &format!("sdk-conv-m-{}", Uuid::new_v4())).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     let alice = client
         .authenticate(&alice_token)
