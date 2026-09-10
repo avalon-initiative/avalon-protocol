@@ -157,7 +157,7 @@ Postgres as the backend:
   { tree_size, root_hash, network_id, timestamp, signing_key_id, signature
   }` is produced per batch commit, in the same transaction, Ed25519,
   covering exactly this settlement-operator key domain (distinct from
-  issuer keys, #80, and player keys, #73 — three separate lifecycles, per
+  issuer keys, #80, and identity keys, #73 — three separate lifecycles, per
   #39's own original scoping).
 - **Mirror sync stays minimal, no witness quorum required yet.** With one
   settlement operator today, the simplest viable protocol suffices: expose
@@ -289,6 +289,83 @@ implemented, see "Today in the repo" below.
     sourced from `transparency-dev/merkle`, an independent brute-force
     tree-walk cross-check for inclusion proofs, and exhaustive
     single-node-tamper negative tests for both proof types.
+- **Mirror-watcher, implemented (#299, closing out #40's "any mirror that
+  independently observes and stores every STH it sees" design).** Two new
+  pieces, both additive — nothing above this bullet changes:
+  - **`GET /ledger/entries?since_seq={n}&limit={m}`**
+    (`crates/server/src/settlement.rs::list_entries`,
+    `PostgresSettlementProvider::list_entries_since`) — the bulk-content
+    read #211 didn't cover (`entry_hashes_up_to` only ever returned bare
+    hashes for Merkle computation). Public, unauthenticated, same posture
+    as every other endpoint in this module; returns full entry content in
+    `seq` order, capped at 1000 rows per request. **Not itself a verified
+    read** — no hash-chain/content recomputation happens here (a windowed
+    query can't validate a page boundary's `prev_hash` against a
+    predecessor it wasn't asked to fetch); a caller that needs to trust
+    this content must independently verify each entry via `GET
+    /ledger/proof/inclusion` before accepting it.
+  - **The mirror-watcher itself**
+    (`crates/server/src/mirror_watcher.rs`) — a background task spawned
+    from `avalon-server`'s `main.rs` when `AVALON_MIRROR_PEERS` is set
+    (same "only spawn what's configured" pattern the retention worker
+    uses), polling every configured peer (default 30s,
+    `AVALON_MIRROR_POLL_INTERVAL_SECS`) for its latest STH. Chose
+    in-process over a separate `avalon mirror-watch` CLI subcommand
+    because `avalon` today is a short-lived diagnostic tool, not a daemon,
+    and this needs the same `PgPool`/migrations `avalon-server` already
+    has — see the module's own doc comment for the full reasoning. The
+    POC's "2 Settlement nodes" topology is two `avalon-server` deployments,
+    each against its own Postgres; a "mirror" is just one of them started
+    with `AVALON_MIRROR_PEERS` pointed at the other.
+  - Each observed STH is signature-verified (`sth::verify_tree_head`,
+    reused as-is — never reimplemented) before anything is trusted or
+    stored, then recorded in a new `observed_sths` table
+    (`crates/server/db/migrations/0041_mirror_observations`) — separate
+    from `signed_tree_heads`, which only ever holds STHs *this* node
+    itself produced as a Settlement authority.
+  - **Equivocation detection** (`avalon_chain::mirror::detect_equivocation`,
+    deliberately a pure, I/O-free function so the actual security property
+    is directly unit-testable without a database): every newly observed
+    STH is compared against every other observation at the same
+    `network_id`/`tree_size` — from other peers, and from this node's own
+    signed history if it has one (source tag `self:signed-history`). A
+    `root_hash` mismatch is durably recorded in `equivocation_findings`
+    *and* logged at what would be error level if this repo had structured
+    logging (issue #265, tracked separately) — both, not just one. This
+    ticket owns **detection only**: there is no automatic "pick the
+    correct STH" resolution logic anywhere in this path, deliberately —
+    both STHs in an equivocation are validly signed, so there is no
+    automatic correct answer; resolving a real equivocation is a human
+    incident-response procedure, tracked as its own separate follow-up.
+  - **Multi-peer by design.** `AVALON_MIRROR_PEERS` accepts more than one
+    URL, and every configured peer is actually watched every tick, not
+    just the first one that answers — one unreachable/misbehaving peer
+    never stops the others. Peers are then grouped by `network_id` and
+    handed to `mirror_watcher::backfill_network`, which (a) refuses to
+    backfill a network past any `tree_size` with an already-recorded,
+    unresolved equivocation finding (the same detection-not-resolution
+    posture as above — no automatic pick between two disagreeing STHs),
+    and (b) picks the tree head **this tick's peers most widely agree
+    on** — a majority-corroboration gate, not "whichever peer answered
+    first" — before trusting it for backfill.
+  - **Backfill** (`mirror_watcher::backfill`) fetches entries since this
+    network's last verified `seq` (`avalon_chain::mirror::mirrored_progress`,
+    keyed on `network_id` — not per peer, deliberately: any configured
+    peer of the same network is an interchangeable source of the same
+    independently-verified content) from `GET /ledger/entries`, and for
+    each one, fetches and checks its inclusion proof
+    (`merkle::verify_inclusion_proof`) against the corroborated STH before
+    ever storing it in the new `mirrored_entries` table
+    (`UNIQUE (network_id, seq)`, also not per peer). Every request
+    round-robins across the peers that corroborated the chosen tree head —
+    if one is unreachable mid-backfill, the next candidate is tried before
+    giving up for that tick, so backfill fails over rather than stalling
+    on a single flaky peer. A restart is not a special case — backfill
+    just resumes from `mirrored_progress`'s last-verified `seq` on the
+    next tick, same as catching up from any other gap. Aborts the whole
+    pass (retried next tick) the moment every candidate peer's response
+    for a given entry fails to verify, rather than accepting a partial,
+    unverifiable backfill.
 - **Genesis and network identity (#173).** A singleton `chain_genesis` table
   commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
   `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —
@@ -362,8 +439,9 @@ implemented, see "Today in the repo" below.
   Settlement Ledger
 - #68, #70, #79, #186 decided (#93 partially superseded by #186); #40, #39
   decided (Merkle/STH structure, STH-only signing) — #210 (real Merkle root
-  + Signed Tree Heads) and #211 (mirror-facing proof/sync endpoints) both
-  implemented
+  + Signed Tree Heads), #211 (mirror-facing proof/sync endpoints), and #299
+  (mirror-watcher: STH observation, equivocation detection, entry
+  backfill) all implemented
 - #38 batching, #71 atomicity, #173 genesis/network identity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider

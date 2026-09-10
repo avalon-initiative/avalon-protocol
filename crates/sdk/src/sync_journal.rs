@@ -31,10 +31,10 @@
 //!
 //! The trade-off: no concurrent-writer story (one `FileJournal` per path,
 //! guarded by an internal mutex) and O(n) replay on open. Neither matters
-//! for a single game client's local journal. `SyncJournal` is a trait
-//! specifically so a game (or another SDK — C#, a future mobile binding)
-//! can swap in SQLite, platform storage, or anything else without the rest
-//! of the SDK caring.
+//! for a single integrator client's local journal. `SyncJournal` is a trait
+//! specifically so an integrator (or another SDK — C#, a future mobile
+//! binding) can swap in SQLite, platform storage, or anything else without
+//! the rest of the SDK caring.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -80,7 +80,7 @@ pub struct JournalEntry {
 /// each SDK (Rust, C#, future) can back it with whatever local storage is
 /// appropriate — [`FileJournal`] is one reference implementation, not the
 /// only one. Deliberately synchronous: append is meant to be a fast,
-/// always-available local operation a game never has to `.await` a network
+/// always-available local operation an integrator never has to `.await` a network
 /// round trip for (`docs/architecture/synchronization.md`).
 pub trait SyncJournal {
     /// Records `kind`/`payload` as a new pending entry and returns its
@@ -373,7 +373,10 @@ mod tests {
     use super::*;
 
     fn temp_journal_path(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("avalon-sync-journal-{label}-{}.jsonl", Uuid::new_v4()))
+        std::env::temp_dir().join(format!(
+            "avalon-sync-journal-{label}-{}.jsonl",
+            Uuid::new_v4()
+        ))
     }
 
     #[test]
@@ -392,7 +395,11 @@ mod tests {
         assert_ne!(id_a, id_b, "the journal must not deduplicate by payload");
 
         let pending = journal.pending().unwrap();
-        assert_eq!(pending.len(), 2, "both entries must be recorded, not merged");
+        assert_eq!(
+            pending.len(),
+            2,
+            "both entries must be recorded, not merged"
+        );
         assert!(pending.iter().any(|e| e.id == id_a));
         assert!(pending.iter().any(|e| e.id == id_b));
 
@@ -457,12 +464,12 @@ mod tests {
             // process death would leave on disk. There is no `close()` or
             // other shutdown method on `FileJournal` to call — dropping
             // `journal` here (end of scope, no flush/checkpoint logic
-            // exists anywhere in this type) is exactly what happens when a
-            // game process is killed: no extra cleanup ever runs.
+            // exists anywhere in this type) is exactly what happens when an
+            // integrator process is killed: no extra cleanup ever runs.
             (id_pending, id_submitted)
         };
 
-        // Reopen from the same path, as the next launch of the game would.
+        // Reopen from the same path, as the next launch of the integrator would.
         let recovered = FileJournal::open(&path).unwrap();
         let pending = recovered.pending().unwrap();
 
@@ -561,8 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_with_a_truncated_trailing_line_then_writing_again_does_not_corrupt_future_appends(
-    ) {
+    fn opening_with_a_truncated_trailing_line_then_writing_again_does_not_corrupt_future_appends() {
         // The critical regression case: after `open()` recovers from a
         // truncated tail, a *subsequent* append must not glue itself onto
         // the leftover garbage bytes. Without truncating the file back to

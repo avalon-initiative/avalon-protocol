@@ -23,7 +23,7 @@ and [still open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3A
 4. [What Avalon Protocol Is Not](#4-what-avalon-protocol-is-not)
 5. [The Architecture](#5-the-architecture)
 6. [Avalon Hub](#6-avalon-hub)
-7. [Persistent Player Identity](#7-persistent-player-identity)
+7. [Persistent Identity](#7-persistent-identity)
 8. [Achievements and History](#8-achievements-and-history)
 9. [Trust and Attestations](#9-trust-and-attestations)
 10. [Guilds and Social Identity](#10-guilds-and-social-identity)
@@ -56,9 +56,9 @@ and [still open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3A
 
 # 1. Executive Summary
 
-Avalon Protocol is an open protocol for connecting independent games through a persistent player identity and social layer.
+Avalon Protocol is an open protocol for connecting independent games through a persistent identity and social layer.
 
-A player should not have to become a completely different person every time they enter a new game.
+A user should not have to become a completely different person every time they enter a new game.
 
 Their identity can persist.
 
@@ -90,7 +90,7 @@ Avalon simply provides a standardized way for that world to participate in a lar
 
 Modern games treat identity as disposable.
 
-A player can have:
+A person can have:
 
 * A Steam identity
 * A game-specific account
@@ -110,7 +110,7 @@ The fundamental question Avalon asks is:
 
 The answer should not necessarily be the game itself.
 
-It should be the **player's identity and history.**
+It should be the **user's identity and history.**
 
 ---
 
@@ -120,7 +120,7 @@ Avalon Protocol is an open interoperability layer for games.
 
 It provides standardized concepts and services for:
 
-* Player identity
+* Identity
 * Profiles
 * Friends
 * Presence
@@ -173,7 +173,7 @@ Avalon consists of three conceptual layers.
 
 ## 5.1 Avalon Protocol
 
-The protocol defines the common language between players and games.
+The protocol defines the common language between identities and games.
 
 It defines concepts such as:
 
@@ -248,9 +248,9 @@ Avalon should have a **Hub**, but the Hub is not the product itself.
 
 It is the first convenient client for the protocol.
 
-The Hub provides a player's front door into the Avalon ecosystem.
+The Hub provides a user's front door into the Avalon ecosystem.
 
-A player could use it to:
+A user could use it to:
 
 * Create their Avalon identity
 * Manage their profile
@@ -264,7 +264,7 @@ A player could use it to:
 
 The Hub should eventually become optional.
 
-A player might interact with Avalon through:
+A user might interact with Avalon through:
 
 * A desktop Hub
 * A web application
@@ -277,15 +277,15 @@ The protocol matters more than any particular client.
 
 ---
 
-# 7. Persistent Player Identity
+# 7. Persistent Identity
 
-Avalon must distinguish between **Player Identity** and **Game Characters.**
+Avalon must distinguish between **Identity** and **Game Characters.**
 
-This is fundamental. Elsewhere in this document, "Avalon identity" and "player identity" refer to the same concept — the persistent identity, not any single game's character.
+This is fundamental: the persistent identity described here is what "Avalon identity" means everywhere else in this document, not any single game's character.
 
-A player has one Avalon identity.
+A person has one Avalon identity.
 
-That player may have:
+That identity may have:
 
 * Character A in Game A
 * Character B in Game B
@@ -301,7 +301,7 @@ Therefore:
 
 > **Avalon does not create one universal character.**
 
-It creates a persistent player identity capable of participating in many worlds.
+It creates a persistent identity capable of participating in many worlds.
 
 ---
 
@@ -309,7 +309,7 @@ It creates a persistent player identity capable of participating in many worlds.
 
 One of Avalon's most important concepts is persistent history.
 
-A game can issue an achievement or historical attestation to a player.
+A game can issue an achievement or historical attestation to an identity.
 
 Examples:
 
@@ -321,7 +321,7 @@ Examples:
 * Completed a difficult raid
 * Participated in a world-first event
 
-Avalon records that an issuer has made a claim about a player.
+Avalon records that an issuer has made a claim about an identity.
 
 It does **not** dictate what another game must do with that claim.
 
@@ -422,9 +422,9 @@ Games can optionally expose that guild inside their own interfaces.
 
 The same principle applies to friendships.
 
-A player should be able to maintain a persistent friends list across games.
+An identity should be able to maintain a persistent friends list across games.
 
-The player could see:
+That identity could see:
 
 > Alice — Online — Playing Game A
 
@@ -442,7 +442,7 @@ Permissions determine what is exposed.
 
 Communication belongs to the network layer.
 
-Guild chat should not need to disappear simply because a player leaves a game.
+Guild chat should not need to disappear simply because an identity leaves a game.
 
 For example:
 
@@ -465,7 +465,7 @@ This creates a powerful separation:
 
 Avalon must use explicit capabilities.
 
-A game should never automatically receive access to everything associated with a player's identity.
+A game should never automatically receive access to everything associated with an identity.
 
 Possible capabilities include:
 
@@ -486,11 +486,11 @@ wallet.read
 wallet.write
 ```
 
-A game requesting access to a player's guild membership should not automatically receive:
+A game requesting access to an identity's guild membership should not automatically receive:
 
 * Every friend
 * Every private message
-* Every game the player has played
+* Every game the identity has played
 * Wallet balances
 * Private profile information
 * Every achievement
@@ -539,7 +539,7 @@ When a durable settlement layer exists, it takes the shape of a public, append-o
 
 Federation solves the wrong problem here. It makes visibility conditional on which server a game happens to trust, which quietly recreates the walled gardens Avalon exists to avoid.
 
-Mining-based consensus also solves the wrong problem. It exists to let mutually distrusting parties agree on who writes next when they're contesting something scarce. Avalon's writes are already unambiguous — a game signs its own achievement issuance, a player signs their own identity claim. There is no scarce resource being contested.
+Mining-based consensus also solves the wrong problem. It exists to let mutually distrusting parties agree on who writes next when they're contesting something scarce. Avalon's writes are already unambiguous — a game signs its own achievement issuance, an identity signs its own claim. There is no scarce resource being contested.
 
 What Avalon actually needs is simpler than either: anyone can verify an entry without asking permission, and anyone can mirror the log without being trusted first. That is a transparency log, not a blockchain in the currency sense.
 
@@ -565,10 +565,10 @@ There are significant risks:
 
 Avalon should initially abstract economic functionality.
 
-A game developer should eventually be able to write something conceptually similar to:
+A developer should eventually be able to write something conceptually similar to:
 
 ```rust
-store.purchase(player, "premium_mount")
+store.purchase(identity, "premium_mount")
 ```
 
 without needing to understand:
@@ -618,9 +618,9 @@ A developer should not need to become a cryptographer or blockchain engineer.
 The ideal experience should look something like:
 
 ```rust
-let player = avalon.authenticate().await?;
+let identity = avalon.authenticate().await?;
 
-if player.has_achievement("dragon_slayer") {
+if identity.has_achievement("dragon_slayer") {
     unlock_title("Dragon Slayer");
 }
 ```
@@ -628,7 +628,7 @@ if player.has_achievement("dragon_slayer") {
 Or:
 
 ```rust
-player.issue_achievement("dragon_slayer").await?;
+identity.issue_achievement("dragon_slayer").await?;
 ```
 
 Under the hood, that call produces a signed attestation on the chain.
@@ -662,7 +662,7 @@ capabilities:
   wallet: false
 ```
 
-This allows players to understand what a game is requesting before connecting their identity.
+This allows users to understand what a game is requesting before connecting their identity.
 
 ---
 
@@ -735,7 +735,7 @@ The reference implementation is a Cargo workspace of six crates under `crates/`
 * **`avalon-chain`** — the settlement boundary (`SettlementProvider`) and its milestone-1 implementation: a hash-chained, append-only ledger. It does not need to be a blockchain today. It needs to behave like a verifiable log where it matters: tamper-evident, independently verifiable, mirrorable. See [architecture/settlement.md](../architecture/settlement.md).
 * **`avalon-indexer`** — the query layer. Consumes durable protocol events and maintains read models that can be rebuilt from history at any time. Kept separate from `avalon-chain` on purpose: settlement is not querying.
 * **`avalon-server`** — the network-facing service: identity, auth, social graph, guilds, presence, game registration, achievement verification. The one backend every client (the Hub, the mobile Hub, games via the SDK) talks to, and the thing a self-hosted operator actually runs.
-* **`avalon-sdk`** — the client library game developers depend on. A game never depends on `avalon-server` or `avalon-chain` directly.
+* **`avalon-sdk`** — the client library developers depend on. A game never depends on `avalon-server` or `avalon-chain` directly.
 * **`avalon-cli`** — local dev and operator tooling (the `avalon` binary): ledger inspection, game registration, diagnostics.
 
 Non-Rust SDKs and third-party network implementations only need `avalon-protocol`.
@@ -748,7 +748,7 @@ They should never be forced to pull in a full chain, indexer, or server implemen
 
 Guilds and friends are already cross-game concepts.
 
-That creates an obvious pain point: players will want to talk to their guild without a game open.
+That creates an obvious pain point: people will want to talk to their guild without a game open.
 
 Discord already proved the demand for this. Avalon should get ahead of it, not bolt it on later.
 
@@ -769,7 +769,7 @@ This is a client. Not a new layer.
 
 It uses the same permissioned capabilities as any other Avalon client.
 
-A player who never installs it loses nothing.
+A user who never installs it loses nothing.
 
 ---
 
@@ -923,7 +923,7 @@ Avalon combines several ideas that normally exist separately:
 
 ### Persistent identity
 
-The player remains the same person across worlds.
+You remain the same person across worlds.
 
 ### Persistent history
 
@@ -955,7 +955,7 @@ Your character in one game can remain unique to that game.
 
 Your character in another game can be completely different.
 
-But the player behind them remains the same.
+But you remain the same behind them.
 
 Your friends, guilds, history, achievements, reputation, and selected ownership travel with you.
 
@@ -967,9 +967,9 @@ Your friends, guilds, history, achievements, reputation, and selected ownership 
 
 Avalon connects games. It does not control them.
 
-### 2. Identity belongs to the player.
+### 2. Identity belongs to you.
 
-The player should not lose their Avalon identity because a game disappears.
+You should not lose your Avalon identity because a game disappears.
 
 ### 3. Interoperability is opt-in.
 
@@ -1087,7 +1087,7 @@ Avalon is successful if a developer can genuinely say:
 
 And the statement means something useful.
 
-A player should be able to:
+A user should be able to:
 
 1. Create one identity.
 2. Join multiple games.
@@ -1120,7 +1120,7 @@ the game says:
 
 You authenticate.
 
-The game can now recognize you as an existing player.
+The game can now recognize you as an existing user.
 
 It might say:
 
@@ -1150,7 +1150,7 @@ Avalon Protocol should not attempt to build the next giant MMO.
 
 It should build something more fundamental.
 
-An open layer that allows independent games to recognize the same players, communities, history, and eventually ownership without surrendering control of their worlds.
+An open layer that allows independent games to recognize the same users, communities, history, and eventually ownership without surrendering control of their worlds.
 
 Not one giant game.
 

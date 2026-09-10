@@ -2,7 +2,7 @@
 //! participation described in `docs/architecture/synchronization.md`. The
 //! journal (#110, `crate::sync_journal`) records intent locally; this module
 //! submits it once connectivity is available, safely retryable and honest
-//! about failures the game needs to know about.
+//! about failures the integrator needs to know about.
 //!
 //! ## Ordering
 //!
@@ -54,7 +54,7 @@
 //! `crates/server/src/error.rs`'s `AppError::Unauthorized` — as
 //! [`SubmitError::AuthenticationRequired`], not [`SubmitOutcome::Rejected`].
 //! A 401 means the *credential* is stale, not that the request is
-//! permanently invalid; a game that queues messages offline and later
+//! permanently invalid; an integrator that queues messages offline and later
 //! drains with an expired token must get the chance to retry after
 //! re-authenticating, not have every queued entry permanently discarded.
 //! It's deliberately its own [`SubmitError`] variant rather than folded
@@ -140,7 +140,9 @@ pub enum SubmitOutcome {
     /// The world moved on while this was pending, or the request is
     /// otherwise permanently invalid — reconciliation surfaces this as
     /// [`DrainOutcome::Rejected`], never retried.
-    Rejected { reason: String },
+    Rejected {
+        reason: String,
+    },
 }
 
 /// Why [`Transport::submit`] could not produce a [`SubmitOutcome`] this
@@ -179,7 +181,7 @@ pub trait Transport: Send + Sync {
 /// the module docs.
 ///
 /// Deliberately does *not* build its own `reqwest` request: routing through
-/// `Session`/`ConversationHandle` means this transport and a game calling
+/// `Session`/`ConversationHandle` means this transport and an integrator calling
 /// `Session::conversation(id).send()` directly share exactly one
 /// request-building path (see `conversations.rs`'s module doc comment) and
 /// therefore classify the same failure — e.g. a missing `messages.send`
@@ -187,7 +189,7 @@ pub trait Transport: Send + Sync {
 /// and the other only discovering the problem after a round trip.
 ///
 /// Built via [`crate::Session::submission_transport`], which borrows the
-/// session — a game never constructs this directly.
+/// session — an integrator never constructs this directly.
 pub struct HttpTransport<'a> {
     session: &'a Session,
 }
@@ -201,19 +203,20 @@ impl<'a> HttpTransport<'a> {
         &self,
         entry: &JournalEntry,
     ) -> Result<SubmitOutcome, SubmitError> {
-        let payload: ConversationMessagePayload = match serde_json::from_value(
-            entry.payload.clone(),
-        ) {
-            Ok(p) => p,
-            // A journal entry whose payload doesn't even parse can never
-            // succeed no matter how many times it's retried — terminal, not
-            // retryable, same as a server-side 4xx.
-            Err(e) => {
-                return Ok(SubmitOutcome::Rejected {
-                    reason: format!("malformed journal payload for {CONVERSATION_MESSAGE_KIND}: {e}"),
-                })
-            }
-        };
+        let payload: ConversationMessagePayload =
+            match serde_json::from_value(entry.payload.clone()) {
+                Ok(p) => p,
+                // A journal entry whose payload doesn't even parse can never
+                // succeed no matter how many times it's retried — terminal, not
+                // retryable, same as a server-side 4xx.
+                Err(e) => {
+                    return Ok(SubmitOutcome::Rejected {
+                        reason: format!(
+                            "malformed journal payload for {CONVERSATION_MESSAGE_KIND}: {e}"
+                        ),
+                    })
+                }
+            };
 
         let result = self
             .session
@@ -359,7 +362,9 @@ struct RetryState {
 pub enum DrainOutcome {
     Applied,
     /// Terminal — see the module docs. Never retried again.
-    Rejected { reason: String },
+    Rejected {
+        reason: String,
+    },
     /// Still pending: either backoff hasn't elapsed yet, this attempt just
     /// failed with a retryable error, or this transport doesn't (yet) know
     /// how to submit this entry's `kind`.
@@ -381,10 +386,10 @@ pub struct DrainReport {
 
 /// Drains a [`SyncJournal`], submitting each pending entry through a
 /// [`Transport`]. Deliberately owns no journal or transport itself — both
-/// are passed to [`drain`](SubmissionEngine::drain) each call, so a game can
-/// drive it from whatever loop/timer/reconnect-hook makes sense for it
-/// (`docs/architecture/synchronization.md`: draining never blocks
-/// gameplay). The only state this engine keeps across calls is in-memory
+/// are passed to [`drain`](SubmissionEngine::drain) each call, so an
+/// integrator can drive it from whatever loop/timer/reconnect-hook makes
+/// sense for it (`docs/architecture/synchronization.md`: draining never
+/// blocks gameplay). The only state this engine keeps across calls is in-memory
 /// backoff bookkeeping (per [`EntryId`]) — not persisted, so a process
 /// restart resets backoff, which is fine: a restart is itself as good a
 /// reason as any to try again immediately.
@@ -659,13 +664,15 @@ mod tests {
         let path = temp_journal_path("dedupe");
         let journal = FileJournal::open(&path).unwrap();
         let id = journal
-            .append(CONVERSATION_MESSAGE_KIND.to_string(), conversation_payload())
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
             .unwrap();
 
         let transport = DedupingTransport::new();
         let clock = FakeClock::new(OffsetDateTime::now_utc());
-        let mut engine =
-            SubmissionEngine::with_clock(BackoffPolicy::default(), clock);
+        let mut engine = SubmissionEngine::with_clock(BackoffPolicy::default(), clock);
 
         // First drain: the transport's first-ever call is scripted to look
         // like a dropped response (Retryable).
@@ -709,7 +716,10 @@ mod tests {
         let path = temp_journal_path("rejected");
         let journal = FileJournal::open(&path).unwrap();
         let id = journal
-            .append(CONVERSATION_MESSAGE_KIND.to_string(), conversation_payload())
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
             .unwrap();
 
         let transport = ScriptedTransport::new(vec![Ok(SubmitOutcome::Rejected {
@@ -749,7 +759,10 @@ mod tests {
         let path = temp_journal_path("auth-required");
         let journal = FileJournal::open(&path).unwrap();
         let id = journal
-            .append(CONVERSATION_MESSAGE_KIND.to_string(), conversation_payload())
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
             .unwrap();
 
         let transport = ScriptedTransport::new(vec![Err(SubmitError::AuthenticationRequired)]);
@@ -778,7 +791,10 @@ mod tests {
         let path = temp_journal_path("backoff");
         let journal = FileJournal::open(&path).unwrap();
         let id = journal
-            .append(CONVERSATION_MESSAGE_KIND.to_string(), conversation_payload())
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
             .unwrap();
 
         let backoff = BackoffPolicy {
@@ -809,7 +825,9 @@ mod tests {
             // Jump straight to (past) the scheduled retry so the next
             // drain() call actually attempts again instead of deferring on
             // the backoff window.
-            engine.clock.advance(scheduled - before + Duration::milliseconds(1));
+            engine
+                .clock
+                .advance(scheduled - before + Duration::milliseconds(1));
         }
 
         assert_eq!(*transport.call_count.lock().unwrap(), 5);
@@ -913,13 +931,19 @@ mod tests {
         // Two kinds, interleaved append order, to prove grouping+ordering
         // is by (kind, recorded_at) and not just append order.
         let a1 = journal
-            .append(CONVERSATION_MESSAGE_KIND.to_string(), conversation_payload())
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
             .unwrap();
         let b1 = journal
             .append("achievement.earned".to_string(), serde_json::json!({}))
             .unwrap();
         let a2 = journal
-            .append(CONVERSATION_MESSAGE_KIND.to_string(), conversation_payload())
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
             .unwrap();
 
         let transport = ScriptedTransport::new(vec![
@@ -984,9 +1008,8 @@ mod tests {
     fn a_404_on_this_endpoint_is_treated_as_already_applied() {
         // See the module docs' "A retried submission that lost the race and
         // was already pruned isn't a real rejection" section.
-        let result = classify_send_result(Err(SdkError::ServerError(
-            reqwest::StatusCode::NOT_FOUND,
-        )));
+        let result =
+            classify_send_result(Err(SdkError::ServerError(reqwest::StatusCode::NOT_FOUND)));
         assert!(matches!(result, Ok(SubmitOutcome::Applied)));
     }
 
@@ -1007,9 +1030,8 @@ mod tests {
 
     #[test]
     fn any_other_4xx_stays_a_terminal_rejection() {
-        let result = classify_send_result(Err(SdkError::ServerError(
-            reqwest::StatusCode::BAD_REQUEST,
-        )));
+        let result =
+            classify_send_result(Err(SdkError::ServerError(reqwest::StatusCode::BAD_REQUEST)));
         assert!(matches!(result, Ok(SubmitOutcome::Rejected { .. })));
     }
 

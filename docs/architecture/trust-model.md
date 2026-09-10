@@ -82,9 +82,9 @@ issuer, or something else. No default is imposed.
 ## Statistics inform; they never determine
 
 The [game registry](./game-registry.md) publishes derived facts — observed
-players, attestations issued, games that publicly recognize an issuer. A
+identities, attestations issued, games that publicly recognize an issuer. A
 consumer may write "accept game event results from issuers with at least N
-observed players and M recognizing games". That is the consumer's rule. Avalon
+observed identities and M recognizing games". That is the consumer's rule. Avalon
 never enforces "games above N are trusted", never publishes a composite game
 score, and never turns the recognition graph into a verdict. A ten-player game
 is not automatically malicious; a ten-million-player game is not automatically

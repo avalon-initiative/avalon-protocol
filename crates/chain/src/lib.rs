@@ -16,6 +16,14 @@
 //! `verify_*` counterparts) — the mirror-facing proof/sync endpoints that
 //! consume them live in `avalon-server`'s `settlement` module.
 //!
+//! [`mirror`] is issue #299's mirror-watcher storage and equivocation
+//! detection: a mirror observes STHs from peers over HTTP
+//! (`avalon-server`'s `mirror_watcher` module actually does the fetching),
+//! but the storage/comparison logic — "is this a genuinely new
+//! observation, and does it disagree with anything else this node has
+//! seen at the same tree_size" — lives here so it's testable without a
+//! network.
+//!
 //! [`retention`] is issue #208's node-tiered durable history retention,
 //! implementing #180's decision: separate from all of the above, it tiers
 //! how long a node keeps raw event *bodies* (`ledger_entries.payload`)
@@ -29,6 +37,7 @@
 //! game integration.
 
 pub mod merkle;
+pub mod mirror;
 mod postgres;
 pub mod retention;
 pub mod sth;

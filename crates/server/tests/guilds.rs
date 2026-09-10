@@ -1206,14 +1206,17 @@ async fn discover_card_includes_banner_and_icon() {
     let with_media = create_guild(&http, &base, &owner_token, "Media Guild").await;
     let with_media_id = with_media["id"].as_str().unwrap();
     set_recruiting(&http, &base, &owner_token, with_media_id, true).await;
-    let patch = auth(http.patch(format!("{base}/guilds/{with_media_id}")), &owner_token)
-        .json(&serde_json::json!({
-            "banner": "https://example.com/banner.png",
-            "icon": "https://example.com/icon.png",
-        }))
-        .send()
-        .await
-        .unwrap();
+    let patch = auth(
+        http.patch(format!("{base}/guilds/{with_media_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({
+        "banner": "https://example.com/banner.png",
+        "icon": "https://example.com/icon.png",
+    }))
+    .send()
+    .await
+    .unwrap();
     assert!(patch.status().is_success());
 
     let without_media = create_guild(&http, &base, &owner_token, "Plain Guild").await;
@@ -2285,7 +2288,10 @@ async fn my_join_request_returns_own_pending_request_or_none() {
         applicant_id.to_string()
     );
     assert_eq!(after_body["status"].as_str().unwrap(), "pending");
-    assert_eq!(after_body["message"].as_str().unwrap(), "would love to join!");
+    assert_eq!(
+        after_body["message"].as_str().unwrap(),
+        "would love to join!"
+    );
 }
 
 /// `GET .../join-requests/mine` never leaks another applicant's pending
@@ -2338,7 +2344,11 @@ async fn my_join_request_never_returns_another_identitys_request() {
     .send()
     .await
     .unwrap();
-    assert!(owner_mine.status().is_success(), "{:?}", owner_mine.status());
+    assert!(
+        owner_mine.status().is_success(),
+        "{:?}",
+        owner_mine.status()
+    );
     let owner_body: serde_json::Value = owner_mine.json().await.unwrap();
     assert!(owner_body.is_null());
 }

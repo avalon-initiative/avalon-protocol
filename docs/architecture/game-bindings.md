@@ -1,10 +1,10 @@
 # Game Profiles and Bindings
 
 **A binding says "this Avalon identity participates in this game" — nothing
-more.** Everything a game knows about the player beyond that (characters, race,
+more.** Everything a game knows about the identity beyond that (characters, race,
 class, level, appearance, progression, inventory) belongs to the game and lives
 in the game's own database. **Game authority is scoped to the game's own
-binding**: Game A can create and manage its profile of a player and issue its
+binding**: Game A can create and manage its profile of an identity and issue its
 own attestations; it cannot touch Game B's.
 
 Narrative: [`../stakeholders/Proposal.md` §19](../stakeholders/Proposal.md#19-identity-vs-game-data).
@@ -30,12 +30,12 @@ the binding or the identity id; Avalon stores none of their attributes.
 
 | Field | Meaning |
 |---|---|
-| `identity_id` | the player |
+| `identity_id` | the identity |
 | `game_id` | the game |
-| `established_at` | when the player consented |
-| `ended_at` | when the player (or the game) ended it, if ever |
+| `established_at` | when the identity consented |
+| `ended_at` | when the identity (or the game) ended it, if ever |
 
-- A binding is established by the **player**, through the consent flow, when
+- A binding is established by the **identity**, through the consent flow, when
   they first connect their identity to a game. A game cannot create one
   unilaterally.
 - Capability grants hang off the binding. No active binding, no grants; ending
@@ -72,9 +72,9 @@ game's own key). See [`./security-model.md`](./security-model.md) and
 A, observed through protocol activity — not a number the game reports about
 itself. See [`./game-registry.md`](./game-registry.md).
 
-## Scenario A — a player enters a second game
+## Scenario A — an identity enters a second game
 
-Player X has a binding to Game A. They connect to Game B. Game B sees an
+Identity X has a binding to Game A. They connect to Game B. Game B sees an
 identity with a display name, whatever capabilities X granted, and X's
 authentic attestations from Game A (which Game B may or may not recognize —
 [`./trust-model.md`](./trust-model.md)). Game B creates its own character for X
@@ -103,7 +103,7 @@ about Game B's unless X's permissions expose it.
   are projections — `game.binding_established`, `game.binding_ended`,
   `permission.granted`, `permission.revoked` are the durable history, and
   are network-attributed for now (the same milestone-1 stand-in
-  `game.registered` uses), not yet player-signed despite what the
+  `game.registered` uses), not yet identity-signed despite what the
   event-kind catalogue eventually intends.
 - `crates/sdk/src/lib.rs` — `authenticate()` now calls `GET /me/grants`
   (identified by `AvalonConfig::game_credential_key_id`) and populates

@@ -1,20 +1,20 @@
 # Identity
 
-**An Avalon identity is player-owned and game-independent.** It is the one
+**An Avalon identity is self-owned and game-independent.** It is the one
 thing that survives any single game, server, or database disappearing. A game
 never owns it, never defines it, and never gets to rewrite its history. Games
 establish their own scoped participation under it (see
 [`./game-bindings.md`](./game-bindings.md)); the identity itself stays the same
 across all of them.
 
-Narrative: [`../stakeholders/Proposal.md` §7](../stakeholders/Proposal.md#7-persistent-player-identity)
+Narrative: [`../stakeholders/Proposal.md` §7](../stakeholders/Proposal.md#7-persistent-identity)
 and [§19](../stakeholders/Proposal.md#19-identity-vs-game-data).
 
 ## The model
 
 ```text
 Avalon Identity
-    ├── Profile (player-controlled metadata)
+    ├── Profile (identity-controlled metadata)
     ├── Friends                       ./social-graph.md
     ├── Guild memberships             ./guilds.md
     ├── Achievements / attestations   ./achievements-and-attestations.md
@@ -25,22 +25,22 @@ Avalon Identity
 ```
 
 An identity is an opaque, stable handle (`IdentityId`, a UUID). It is never
-derived from a display name, a username, a wallet address, or anything a
-player might want to change later. Everything human-facing hangs off it as
+derived from a display name, a username, a wallet address, or anything its
+owner might want to change later. Everything human-facing hangs off it as
 profile data.
 
-## Player-controlled metadata is self-expression, not fact
+## Self-described metadata is self-expression, not fact
 
-The profile carries what a player chooses to say about themselves: display
-name, avatar, bio, favorite genres (drawn from a fixed, small vocabulary —
-`avalon_protocol::identity::Genre` — not free text, so it stays useful for
-matching/filtering later), and pronouns (issue #155). None of it is an
-authoritative game fact.
+The profile carries what an identity's owner chooses to say about themselves:
+display name, avatar, bio, favorite genres (drawn from a fixed, small
+vocabulary — `avalon_protocol::identity::Genre` — not free text, so it stays
+useful for matching/filtering later), and pronouns (issue #155). None of it is
+an authoritative game fact.
 
-A player writing "I am an Avion" in their bio does not make Avion a
+Someone writing "I am an Avion" in their bio does not make Avion a
 network-level race. A game can display that, interpret it, or ignore it. Facts
-about what a player *has done* come from issuer attestations with provenance
-(see [`./provenance.md`](./provenance.md)), never from the profile.
+about what an identity *has done* come from issuer attestations with
+provenance (see [`./provenance.md`](./provenance.md)), never from the profile.
 
 The profile is deliberately small. It is not where game-specific data lives —
 that boundary is the whole point of
@@ -123,7 +123,7 @@ is the cheap, near-term mitigation for the common single-device-loss case —
 it does nothing for someone who only ever registers one passkey and then
 loses it, which is exactly why it's a mitigation, not the full answer.
 Social recovery
-via an M-of-N set of trusted guardians — drawn from a player's own Avalon
+via an M-of-N set of trusted guardians — drawn from the identity's own Avalon
 friends, gated by a mandatory public time-delay so the real owner can veto a
 malicious attempt — is the real answer for losing every device at once
 ([#201](https://github.com/LunarVagabond/avalon-protocol/issues/201), done;
@@ -134,7 +134,7 @@ reintroduces exactly the shared-secret, centralized-trust surface #73 exists
 to eliminate, and would only ever ship as a clearly-labeled, separately
 opted-into weaker-security tier, never silently. Onboarding must still make
 the total-loss consequence of relying on a single passkey loud and explicit
-for a player who hasn't configured guardians, not a buried settings toggle
+for an identity owner who hasn't configured guardians, not a buried settings toggle
 discovered only after someone has already lost everything — that
 requirement holds regardless of what else has shipped. Separately open:
 migrating an existing username/password identity (none exist outside
@@ -153,7 +153,7 @@ keyed by identity id, unencrypted:
 
 - It sits in plaintext at rest, same exposure as any other `localStorage`
   value (readable by any script running on the origin).
-- The mnemonic itself is shown to the player exactly once, at creation
+- The mnemonic itself is shown to the user exactly once, at creation
   (`CreateIdentity.vue`), and is never stored anywhere — any device holding
   it can re-derive the identical key offline, with no server round-trip
   (`Profile.vue`'s "recover your signing key" section, shown when the
@@ -175,17 +175,17 @@ the revoked device's cooperation. Both `#134` and `#135` were decided
 together in [#122](https://github.com/LunarVagabond/avalon-protocol/issues/122),
 which is distinct from [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99):
 #99 covers a lost *passkey* (login credential), #122 covers the *signing
-key* (what authenticates a player's authored events) — recovering or
+key* (what authenticates an identity's authored events) — recovering or
 granting one never by itself authenticates a login. The WebAuthn passkey
 has no equivalent client-storage decision here: it never leaves the
 platform authenticator, already synced across devices by whatever passkey
-provider the player uses.
+provider the identity's owner uses.
 
 ### Social recovery via M-of-N guardians (#201)
 
 The real answer to losing every registered passkey at once — #200's
 multi-passkey registration only helps if a second device was registered
-*before* the loss. A player designates a set of guardians (drawn only from
+*before* the loss. An identity owner designates a set of guardians (drawn only from
 their current friends, issue #15's network-level primitive — the only pool
 this is allowed to draw from) and a threshold M-of-N. Configuring or
 changing that set (`PUT /me/recovery/guardians`) requires the identity's
@@ -198,7 +198,7 @@ check.
 Recovery itself is a four-stage state machine, one `recovery_requests` row
 per attempt:
 
-1. **Request.** From a new device with no valid session, a player names the
+1. **Request.** From a new device with no valid session, a caller names the
    identity to recover and completes a WebAuthn registration ceremony for
    that device (`POST /recovery/requests/start` then `/finish` — the same
    two-step shape `handlers::register_start`/`register_finish` and
@@ -282,7 +282,7 @@ future work). None of these affect the state machine or its invariants.
   anywhere in the system — including Avalon's own maintainers or any node
   operator — that ever holds, or could be compelled to produce, a mapping
   from a keypair back to a real person, because that mapping is never
-  created in the first place. A player who loses every passkey with no
+  created in the first place. An identity's owner who loses every passkey with no
   recovery configured loses the identity outright; nobody can "look it up"
   and reissue it. What Avalon identifies and makes portable is *online
   activity* — friendships, guild membership, achievements — never
@@ -392,9 +392,9 @@ future work). None of these affect the state machine or its invariants.
   reload it into a fresh virtual authenticator and drive a real login
   ceremony later, printing a session token — a dev/test convenience, not a
   pattern for real deployment. `avalon outbox-status`.
-- `crates/sdk/src/lib.rs` — `AvalonClient::authenticate()` exchanges a player
+- `crates/sdk/src/lib.rs` — `AvalonClient::authenticate()` exchanges an identity
   token for a game-scoped `Session`, unchanged by any of this — a game never
-  creates identities or logs a player in itself.
+  creates identities or logs an identity in itself.
 - `apps/hub/src/crypto/webauthn.ts` — the real browser WebAuthn ceremonies via
   `@simplewebauthn/browser`, verified field-for-field against
   `crates/server/src/handlers.rs`'s request/response shapes (both follow the

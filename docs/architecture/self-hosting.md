@@ -22,7 +22,7 @@ deciding which one they actually want.
 
 Both are "self-hosting" in casual conversation. Only the first one is part of
 the Avalon network. The second is deploying the software, not joining the
-protocol's community of games and players — same code, disconnected data.
+protocol's community of games and identities — same code, disconnected data.
 
 ## Why this is safe to offer, and exactly where the line is
 
@@ -76,7 +76,7 @@ public network:
 
 - Local dev, CI, and staging environments — every `avalon-dev-<name>`
   `network_id` in `.env.example` is already exactly this
-- An internal tooling/QA environment that should never touch real player data
+- An internal tooling/QA environment that should never touch real identity data
 - A studio piloting Avalon internally before committing to the public network
 - An organization with real regulatory, contractual, or air-gap constraints
   that make joining any shared network a non-starter

@@ -123,8 +123,8 @@ A hosted node is not protocol authority. The concrete guarantees:
   without detection — the log is hash-chained and, once
   [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) lands,
   signed and mirrorable.
-- A node **cannot act as a player**. Identity mutations are authorized by the
-  player's own key ([`./identity.md`](./identity.md),
+- A node **cannot act as an identity**. Identity mutations are authorized by the
+  identity's own key ([`./identity.md`](./identity.md),
   [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)).
 - Operator actions that do exist (suspending an issuer at the network level) are
   explicit, audited protocol events with their own trail — never silent edits.
@@ -138,7 +138,7 @@ order, store, index, serve, and mirror.
 Multiple operators is a goal. It is achieved by **mirroring one public,
 verifiable log** — the Certificate Transparency pattern
 ([#70](https://github.com/LunarVagabond/avalon-protocol/issues/70)) — not by
-federation. Under federation, whether Game B can see a player's identity would
+federation. Under federation, whether Game B can see an identity would
 depend on which servers Game B's server peers with; that recreates the walled
 gardens Avalon exists to remove. Under mirroring, a client does not pick "which
 server to trust": any mirror that misrepresents the log is detectable, because
@@ -149,7 +149,7 @@ that does not change this.
 
 ## Discovery
 
-A game developer should not need to know `postgres://...` or
+A developer should not need to know `postgres://...` or
 `http://node-37.example.com`. The SDK should eventually resolve a node itself:
 
 ```rust
@@ -168,7 +168,7 @@ instance both "self-host" the same code — they are not the same thing; see
 
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
-presence for players on that node lapses until their next heartbeat
+presence for identities on that node lapses until their next heartbeat
 ([`./presence.md`](./presence.md)); nothing a game had already verified becomes
 unverifiable.
 
@@ -177,7 +177,16 @@ unverifiable.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
-  one process. No mirror, no second node.
+  one process. There is still no distinct "mirror" binary/deployment
+  shape — a mirror is simply an `avalon-server` deployment with
+  `AVALON_MIRROR_PEERS` set, watching another deployment
+  ([#299](https://github.com/LunarVagabond/avalon-protocol/issues/299),
+  see [`settlement.md`](./settlement.md)'s "Mirror-watcher" section for the
+  actual observation/equivocation-detection/backfill mechanism). What #299
+  does *not* change: there is still no node-to-node discovery, capability
+  advertisement, or general node-to-node protocol beyond the specific
+  public HTTP read endpoints Settlement mirroring uses — the honesty note
+  in the next bullet still stands.
   **This is also why the retention-tier mechanism above cannot yet
   deliver #180's actual availability guarantee** — there is only one
   database for a hot-tier node's pruning to be gated against, not a
@@ -201,7 +210,9 @@ unverifiable.
 - #70 mirrors of a public log, not federation
 - #79 long-term settlement backend; #186 decided no blockchain/validator
   consensus (transparency log on Postgres instead, superseding part of #93);
-  #40 log design and mirror sync (validator/consensus design dropped)
+  #40 log design and mirror sync (validator/consensus design dropped) —
+  [#299](https://github.com/LunarVagabond/avalon-protocol/issues/299)
+  (implemented) is the actual mirror-watcher built against that design
 - #180 (decided) / [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)
   (implemented) — node-tiered durable history retention: retention-tier
   config, payload pruning, the settlement-state checkpoint. The

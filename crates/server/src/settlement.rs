@@ -32,10 +32,12 @@
 
 use avalon_chain::merkle;
 use avalon_chain::sth::SignedTreeHead;
+use avalon_chain::LedgerEntryView;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -257,4 +259,89 @@ pub async fn inclusion_proof(
         root_hash: hex::encode(root),
         proof: proof.into_iter().map(hex::encode).collect(),
     }))
+}
+
+/// A public maximum on `limit` for `GET /ledger/entries` — an
+/// unauthenticated bulk-read endpoint accepting an arbitrary `limit`
+/// straight from the query string would let any caller demand an
+/// unbounded response.
+const MAX_ENTRIES_LIMIT: i64 = 1000;
+const DEFAULT_ENTRIES_LIMIT: i64 = 500;
+
+#[derive(Deserialize)]
+pub struct EntriesQuery {
+    #[serde(default)]
+    pub since_seq: i64,
+    #[serde(default = "default_entries_limit")]
+    pub limit: i64,
+}
+
+fn default_entries_limit() -> i64 {
+    DEFAULT_ENTRIES_LIMIT
+}
+
+#[derive(Serialize)]
+pub struct LedgerEntryResponse {
+    pub seq: i64,
+    pub event_id: Uuid,
+    pub kind: String,
+    pub issuer: String,
+    pub subject: String,
+    /// `None` if this row's payload has been pruned (issue #208) — same
+    /// meaning as `avalon_chain::LedgerEntryView::payload_pruned`.
+    pub payload: Option<serde_json::Value>,
+    pub payload_pruned: bool,
+    pub version: i32,
+    #[serde(with = "time::serde::rfc3339")]
+    pub event_timestamp: OffsetDateTime,
+    pub prev_hash: String,
+    pub entry_hash: String,
+    pub batch_id: Uuid,
+}
+
+impl From<LedgerEntryView> for LedgerEntryResponse {
+    fn from(entry: LedgerEntryView) -> Self {
+        Self {
+            seq: entry.seq,
+            event_id: entry.event_id,
+            kind: entry.kind,
+            issuer: entry.issuer,
+            subject: entry.subject,
+            payload: entry.payload,
+            payload_pruned: entry.payload_pruned,
+            version: entry.version,
+            event_timestamp: entry.event_timestamp,
+            prev_hash: entry.prev_hash,
+            entry_hash: entry.entry_hash,
+            batch_id: entry.batch_id,
+        }
+    }
+}
+
+/// `GET /ledger/entries?since_seq={n}&limit={m}` — issue #299's bulk
+/// entries endpoint, the read path a mirror needs to hold real ledger
+/// content rather than only verify STHs. Public, unauthenticated, same
+/// rationale as every other endpoint in this module (see module docs).
+///
+/// Returns entries with `seq` strictly greater than `since_seq`, oldest
+/// first, capped at [`MAX_ENTRIES_LIMIT`] rows regardless of what `limit`
+/// asks for. **Not itself a verified read** — see
+/// [`avalon_chain::PostgresSettlementProvider::list_entries_since`]'s doc
+/// comment: a caller that needs to trust this content (a mirror
+/// backfilling) must independently verify each entry against a
+/// signature-checked STH via `GET /ledger/proof/inclusion` before
+/// accepting it.
+pub async fn list_entries(
+    State(state): State<AppState>,
+    Query(query): Query<EntriesQuery>,
+) -> Result<Json<Vec<LedgerEntryResponse>>, AppError> {
+    if query.since_seq < 0 || query.limit <= 0 {
+        return Err(AppError::InvalidEntriesQuery);
+    }
+    let limit = query.limit.min(MAX_ENTRIES_LIMIT);
+    let entries = state
+        .chain
+        .list_entries_since(query.since_seq, limit)
+        .await?;
+    Ok(Json(entries.into_iter().map(Into::into).collect()))
 }

@@ -29,7 +29,7 @@ rebuildable from those facts
 | sessions and login credentials | server-local tables, never the log |
 | caches, derived aggregates | recomputed by the indexer |
 
-Anything in the second table that is lost means, at worst, players appear
+Anything in the second table that is lost means, at worst, identities appear
 offline and have to log in again. Anything in the first table that cannot be
 rebuilt is a broken promise.
 

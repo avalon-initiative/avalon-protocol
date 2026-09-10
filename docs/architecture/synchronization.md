@@ -4,12 +4,12 @@
 required.** A game stays playable, and able to keep recording what its
 player is doing, when Avalon is unreachable — a genuinely offline
 single-player game, a handheld with no signal, bad rural internet, or a
-temporary Avalon outage. The SDK owns this complexity, not each game
+temporary Avalon outage. The SDK owns this complexity, not each
 developer.
 
 **The other half is equally load-bearing: an offline client-generated event
 must never carry the same trust guarantees as an authoritative online
-issuer, unless the protocol explicitly says otherwise.** A player who can
+issuer, unless the protocol explicitly says otherwise.** A user who can
 edit a local pending-events file must never turn that into an accepted,
 authoritative claim. Every offline-capable operation needs an explicit
 answer to what a receiving party actually gets to believe about it — the
@@ -43,7 +43,7 @@ The developer experience this is meant to produce:
 avalon.achievements().issue("dragon_slayer").await?;
 ```
 
-— one call, online or offline. The game developer never writes the branch
+— one call, online or offline. The developer never writes the branch
 themselves:
 
 ```rust
