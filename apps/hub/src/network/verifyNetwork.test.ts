@@ -37,6 +37,7 @@ function anchorFor(networkId: string, verifyKey: Uint8Array): TrustAnchorEntry {
     network_id: networkId,
     verify_key: bytesToHex(verifyKey),
     signing_key_id: 'settlement-operator-1',
+    environment: 'local-dev',
   }
 }
 

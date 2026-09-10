@@ -20,7 +20,11 @@ export interface TrustAnchorEntry {
   // is what matters for verification, so an entry can be published to pin
   // a key ahead of its deployment having a known public URL yet.
   server_url?: string
-  placeholder?: boolean
+  // Which tier this deployment is: 'local-dev' (no real deployment, a
+  // freely-generated key checked in to exercise the mechanism end to end —
+  // formerly the boolean `placeholder` flag), 'dev' (a real but non-production
+  // deployment), or 'prod' (a real mainnet deployment).
+  environment: 'local-dev' | 'dev' | 'prod'
   notes?: string
 }
 

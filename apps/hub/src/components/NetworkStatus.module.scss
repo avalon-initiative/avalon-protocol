@@ -104,11 +104,19 @@
   color: var(--av-color-text-muted);
 }
 
-.knownPlaceholder {
-  color: var(--av-color-warning);
-  border: 1px solid var(--av-color-warning);
+.knownEnvironment {
   border-radius: var(--av-radius-pill);
   padding: 0 var(--av-space-1);
+}
+
+.knownEnvironment.local-dev {
+  color: var(--av-color-warning);
+  border: 1px solid var(--av-color-warning);
+}
+
+.knownEnvironment.dev {
+  color: var(--av-color-text-muted);
+  border: 1px solid var(--av-color-border);
 }
 
 .refresh {

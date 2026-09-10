@@ -22,6 +22,7 @@ versioned, publicly-published trust-anchor list. Each entry:
 | `network_id` | The exact string a server sets `AVALON_NETWORK_ID` to and bakes into its ledger's genesis ([#173](https://github.com/LunarVagabond/avalon-protocol/issues/173)). |
 | `verify_key` | Hex-encoded Ed25519 public key — the public half of that network's settlement operator signing key (`AVALON_SETTLEMENT_VERIFY_KEY`, see `crates/chain/src/sth.rs` and `.env.example`). |
 | `signing_key_id` | Which key generation this is, matching `SignedTreeHead.signing_key_id` — informational; a rotated key gets a new entry (or a documented rotation), not a silent overwrite of this one. |
+| `environment` | Which tier this deployment is: `local-dev` (no real deployment — a freely-generated key checked in only to exercise the mechanism end to end), `dev` (a real but non-production deployment), or `prod` (a real mainnet deployment). The Hub only calls out non-`prod` entries in its UI. |
 
 Being a committed file in this repo *is* the integrity story: changing a
 trusted entry goes through the same PR review and git history as any other
@@ -39,13 +40,13 @@ table drifts from the JSON.
 Milestone 1 has no publicly deployed Avalon network — see the root
 `CLAUDE.md`/`.env.example`'s `AVALON_NETWORK_ID=avalon-dev-local` default.
 `trusted-networks.json` accordingly ships exactly one entry
-(`avalon-dev-local`), marked `"placeholder": true` with an explicit `notes`
-field explaining that its `verify_key` is a freely-generated key with no real
-server behind it — checked in so the mechanism (file → README → Hub
+(`avalon-dev-local`), marked `"environment": "local-dev"` with an explicit
+`notes` field explaining that its `verify_key` is a freely-generated key with
+no real server behind it — checked in so the mechanism (file → README → Hub
 verification) is exercised for real, not left as an unfilled stub. Adding a
 second, real network later is the same PR-reviewed edit: append an entry with
-the real `network_id` and that deployment's actual
-`AVALON_SETTLEMENT_VERIFY_KEY` hex, drop `placeholder`.
+the real `network_id`, that deployment's actual `AVALON_SETTLEMENT_VERIFY_KEY`
+hex, and `environment` set to `dev` or `prod` as appropriate.
 
 ## Hub enforcement
 
@@ -114,7 +115,7 @@ is about *trusting* one once found — related, not the same problem.
 
 ## Today in the repo
 
-- `docs/trusted-networks.json` — the canonical list (one placeholder
+- `docs/trusted-networks.json` — the canonical list (one `local-dev`
   `avalon-dev-local` entry, see above).
 - `apps/hub/src/network/` — trust-anchor loading, STH message
   reconstruction, and verification (`trustAnchors.ts`, `sthMessage.ts`,

@@ -97,7 +97,11 @@ function statusTone(): 'ok' | 'warn' | 'danger' | 'pending' {
           <li v-for="network in knownNetworks" :key="network.network_id" :class="styles.knownItem">
             <span :class="styles.knownLabel">{{ network.label }}</span>
             <span :class="styles.knownId">{{ network.network_id }}</span>
-            <span v-if="network.placeholder" :class="styles.knownPlaceholder">placeholder</span>
+            <span
+              v-if="network.environment !== 'prod'"
+              :class="[styles.knownEnvironment, styles[network.environment]]"
+              >{{ network.environment }}</span
+            >
           </li>
         </ul>
         <button type="button" :class="styles.refresh" @click="refresh">Re-check now</button>
