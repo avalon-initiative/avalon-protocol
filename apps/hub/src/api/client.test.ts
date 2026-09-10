@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   approveDeviceGrant,
+  approvePairing,
   createFriendRequest,
   declineOrWithdrawFriendRequest,
+  denyPairing,
   getMe,
   getMyHistory,
   getPresence,
@@ -328,6 +330,30 @@ describe('device grants (issue #135)', () => {
     await revokeDevice('token', 'key-1')
     const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(url).toContain('/me/devices/key-1/revoke')
+    expect(options.method).toBe('POST')
+  })
+})
+
+describe('device pairing (issue #307)', () => {
+  it('approvePairing POSTs the user_code to /auth/device/approve', async () => {
+    mockFetchOnce(200, { status: 'approved' })
+
+    await approvePairing('token', { user_code: 'ABCD2345' })
+
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/auth/device/approve')
+    expect(options.method).toBe('POST')
+    expect(JSON.parse(options.body)).toEqual({ user_code: 'ABCD2345' })
+    expect(options.headers.Authorization).toBe('Bearer token')
+  })
+
+  it('denyPairing POSTs the user_code to /auth/device/deny', async () => {
+    mockFetchOnce(200, { status: 'denied' })
+
+    await denyPairing('token', { user_code: 'ABCD2345' })
+
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toContain('/auth/device/deny')
     expect(options.method).toBe('POST')
   })
 })

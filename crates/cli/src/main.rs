@@ -13,9 +13,12 @@
 //! Available only when this binary is built with the default `dev-tools`
 //! Cargo feature (issue #173 — see `dev_tools.rs`'s own doc comment for the
 //! full rationale): `avalon create-identity`, `avalon login <identity_id>`
-//! (issue #115), `avalon register-game` (issue #29), and `avalon
+//! (issue #115), `avalon register-game` (issue #29), `avalon
 //! register-integrator` (issue #297's additive alias for the same command —
-//! both work identically, neither is deprecated). A build compiled with
+//! both work identically, neither is deprecated), and `avalon pair-device`
+//! (issue #307 — drives the `start`/`poll` side of cross-device pairing,
+//! standing in for a real WebAuthn-incapable client so that flow is
+//! testable without a real console/engine). A build compiled with
 //! `--no-default-features` doesn't merely refuse these commands at
 //! runtime — they, and every dependency only they need, are absent from the
 //! binary entirely. `issue-achievement` (per `docs/stakeholders/Proposal.md` §23's
@@ -48,6 +51,8 @@ async fn main() {
             };
             dev_tools::login(identity_id).await;
         }
+        #[cfg(feature = "dev-tools")]
+        Some("pair-device") => dev_tools::pair_device().await,
         Some("outbox-status") => outbox_status().await,
         Some("prune-ledger") => {
             let dry_run = args.any(|a| a == "--dry-run");
@@ -69,7 +74,7 @@ async fn main() {
             eprintln!(
                 "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]{}>",
                 if cfg!(feature = "dev-tools") {
-                    "|create-identity|login <identity_id>|register-game|register-integrator --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]"
+                    "|create-identity|login <identity_id>|register-game|register-integrator --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]|pair-device"
                 } else {
                     ""
                 }

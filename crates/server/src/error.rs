@@ -260,6 +260,10 @@ pub enum AppError {
     /// posture issue #97 established for friend requests and presence.
     #[error("not a participant in this conversation")]
     NotConversationParticipant,
+    #[error("device pairing not found, already resolved, or expired")]
+    DevicePairingNotFound,
+    #[error("failed to generate a unique pairing code, try again")]
+    DevicePairingCodeGenerationFailed,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -408,6 +412,8 @@ impl IntoResponse for AppError {
             // deliberately reused for the blocked-pair-on-send case too, so
             // the response never distinguishes the two.
             AppError::NotConversationParticipant => StatusCode::FORBIDDEN,
+            AppError::DevicePairingNotFound => StatusCode::NOT_FOUND,
+            AppError::DevicePairingCodeGenerationFailed => StatusCode::CONFLICT,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
                 StatusCode::BAD_REQUEST
             }

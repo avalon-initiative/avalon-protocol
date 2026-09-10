@@ -58,6 +58,7 @@ import type {
   RenamePasskeyRequest,
   RequestDeviceGrantRequest,
   ResolveHandleResponse,
+  ResolvePairingResponse,
   RoleResponse,
   RsvpRequest,
   RsvpResponse,
@@ -79,6 +80,7 @@ import type {
   UpdatePresenceRequest,
   UpdateProfileRequest,
   UpdateRoleRequest,
+  UserCodeRequest,
 } from './types'
 
 // Issue #232's network selector needs to switch which server the Hub talks
@@ -187,6 +189,24 @@ export function sessionStart(body: SessionStartRequest): Promise<SessionStartRes
 
 export function sessionFinish(body: SessionFinishRequest): Promise<SessionFinishResponse> {
   return request('/sessions/finish', { method: 'POST', body })
+}
+
+// Cross-device pairing (issue #307): bootstraps a session for a
+// WebAuthn-incapable client. `approvePairing`/`denyPairing` use the
+// player's existing authenticated Hub session — no new auth surface.
+
+export function approvePairing(
+  token: string,
+  body: UserCodeRequest,
+): Promise<ResolvePairingResponse> {
+  return request('/auth/device/approve', { method: 'POST', body, token })
+}
+
+export function denyPairing(
+  token: string,
+  body: UserCodeRequest,
+): Promise<ResolvePairingResponse> {
+  return request('/auth/device/deny', { method: 'POST', body, token })
 }
 
 export function getMe(token: string): Promise<ProfileResponse> {

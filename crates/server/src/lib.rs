@@ -5,6 +5,7 @@ pub mod blocks;
 pub mod channels;
 pub mod connections;
 pub mod conversations;
+pub mod device_pairing;
 pub mod devices;
 pub mod discovery;
 pub mod error;
@@ -76,6 +77,16 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/sessions/start", post(handlers::session_start))
         .route("/sessions/finish", post(handlers::session_finish))
+        // Issue #307: cross-device pairing, bootstrapping a session for a
+        // client with no WebAuthn surface at all — see
+        // `crate::device_pairing`'s module docs.
+        .route("/auth/device/start", post(device_pairing::start_pairing))
+        .route("/auth/device/poll", post(device_pairing::poll_pairing))
+        .route(
+            "/auth/device/approve",
+            post(device_pairing::approve_pairing),
+        )
+        .route("/auth/device/deny", post(device_pairing::deny_pairing))
         .route("/me", get(handlers::me).patch(handlers::update_profile))
         .route("/me/history", get(handlers::my_history))
         .route("/identities/profiles", get(handlers::list_profiles))
