@@ -82,10 +82,10 @@ so that gap remains until #86 lands.
 
 | Key | Held by | Compromise means | Response |
 |---|---|---|---|
-| player passkey (#73) | the player | attacker can log in as that identity | revoke/replace via a second registered passkey (#99, not built) — total loss if it was the only one |
+| player passkey (#73) | the player | attacker can log in as that identity | revoke via a second registered passkey (`POST /me/devices/:id/revoke`, #135) — total loss if it was the only one, recoverable via guardian-based recovery (#99, decided; #201) |
 | player event-signing key (#73) | the player | attacker can author events for that identity going forward | rotate from an authenticated session (not built); historical events signed by the old key stay valid, same principle as issuer keys below |
 | issuer key (#80) | the game | attacker can issue authentic-looking claims under that game | revoke key as of T; claims after T rejected, before T untouched |
-| log operator key (#39) | settlement operator | attacker can sign bogus log entries / tree heads | mirrors/witnesses detect divergence via gossiped signed tree heads — no validator set (#186) |
+| log operator key (#39, decided: Signed Tree Heads only, not per-entry) | settlement operator | attacker can sign bogus tree heads | mirrors/witnesses detect divergence via gossiped signed tree heads — no validator set (#186); implementation tracked by #210 |
 
 Keys are never shared across domains. The design for each is a separate open
 decision; they may share primitives (established signature schemes, existing
@@ -135,10 +135,12 @@ deployment blocker, not an optional hardening step.
 - **Persistent identity makes harassment persistent.** Blocking and
   cross-game moderation are open questions (Proposal §31–32) and interact with
   [`./privacy.md`](./privacy.md).
-- **Recovery is unsolved.** #73 is the only login mechanism and a lost
-  passkey (with no second one registered) is total, permanent loss of the
-  identity today — tracked as its own open decision,
-  [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99).
+- **Recovery is decided, not yet fully landed.** A lost passkey with no
+  second one registered was total, permanent loss of the identity;
+  [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) (decided)
+  settled a guardian-based M-of-N recovery design, implemented by
+  [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) — see
+  [identity.md](./identity.md) for the current mechanics.
 
 ## Today in the repo
 
@@ -152,13 +154,17 @@ deployment blocker, not an optional hardening step.
   verifies a WebAuthn ceremony and an Ed25519 event signature, both, before
   writing anything.
 - `crates/chain/src/postgres.rs` — hash-chained entries, content re-verified
-  on read; no signatures yet (#39).
+  on read; signed at the tree-head level, not per-entry (#39, decided;
+  #210, implementation).
 - Player passkeys and event-signing keys exist (#73). No issuer keys yet
   (#80/#84), no TLS (#72), no visibility scopes (#87).
 - `crates/server/src/authz.rs` (#28) — `Caller` / `require_capability`, built
   and exhaustively unit-tested (pure-logic matrix plus a live-Postgres
-  matrix gated `--ignored`), with no handler calling it yet — see this
-  file's own "Authorization" section above.
+  matrix gated `--ignored`). No longer unused: `presence.rs`'s
+  `update_game_presence` calls it to gate `presence.publish` (#16), and
+  `game_schemas.rs` reuses it too — every other game-calling-the-API
+  endpoint is still hypothetical and should reuse this rather than
+  hand-rolling a check.
 
 ## Decisions and tickets
 
@@ -168,10 +174,12 @@ deployment blocker, not an optional hardening step.
   before any non-local deployment.
 - [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) — player
   identity as a self-custodied keypair. Done.
-- [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) — open
-  decision: identity recovery when every passkey is lost.
-- [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) — log
-  signing scheme.
+- [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) —
+  decided: identity recovery when every passkey is lost (guardian-based
+  M-of-N), implementation #201.
+- [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) —
+  decided: log signing scheme (Signed Tree Heads only), implementation
+  #210.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) — issuer
   keys and lifecycle.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
