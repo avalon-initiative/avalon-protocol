@@ -22,6 +22,7 @@ use avalon_protocol::events::ProtocolEvent;
 
 pub mod postgres;
 pub mod projections;
+pub mod registry;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
