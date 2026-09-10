@@ -175,8 +175,9 @@ unverifiable.
 ## Today in the repo
 
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
-  running Gateway + Settlement (via `PostgresSettlementProvider`) in one
-  process. No indexer implementation, no realtime service, no mirror.
+  running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
+  (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
+  one process. No mirror, no second node.
   **This is also why the retention-tier mechanism above cannot yet
   deliver #180's actual availability guarantee** — there is only one
   database for a hot-tier node's pruning to be gated against, not a

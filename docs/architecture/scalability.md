@@ -81,9 +81,13 @@ lever, which is what the three verticals and the node roles exist to provide.
 ## Today in the repo
 
 - Nothing is load-tested. Milestone 1 is one `avalon-server` process, one
-  Postgres database, one ledger row per event, no batching
-  (`crates/chain/src/postgres.rs`), no indexer implementation, no realtime
-  service.
+  Postgres database. Batching (#38), a Merkle root, and Signed Tree Heads
+  are real (`crates/chain/src/postgres.rs`'s `ledger_batches`,
+  `crates/chain/src/merkle.rs`, `sth.rs`) — one ledger row per event, closed
+  over into batches rather than committed one at a time. `PostgresIndexer`
+  (#42) is a real indexer, and `presence.rs` runs a real WebSocket realtime
+  service — both still in-process with settlement, not split onto their own
+  nodes yet.
 - The trait boundaries (`SettlementProvider`, `Indexer`) are the only scaling
   affordances that exist; they are the right ones.
 
