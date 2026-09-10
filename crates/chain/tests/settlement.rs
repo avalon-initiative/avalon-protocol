@@ -20,7 +20,9 @@ use avalon_protocol::ids::GlobalId;
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
+use std::sync::OnceLock;
 use time::OffsetDateTime;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 async fn test_pool() -> PgPool {
@@ -30,6 +32,16 @@ async fn test_pool() -> PgPool {
         .connect(&database_url)
         .await
         .expect("failed to connect to Postgres — is it reachable?")
+}
+
+/// Serializes every test below that shares the real `ledger_entries` table
+/// (as opposed to `isolated_genesis_pool`'s own per-test schema) — several
+/// assertions read the whole table (a full-ledger Merkle root, `list_entries`,
+/// prune counts), so two of these running concurrently under cargo's default
+/// multi-threaded test runner corrupt each other's expectations.
+fn ledger_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn sample_event(kind: &str) -> ProtocolEvent {
@@ -59,6 +71,7 @@ fn sample_batch(event_count: usize) -> EventBatch {
 #[ignore]
 async fn commit_groups_events_under_one_batch() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
@@ -104,6 +117,7 @@ async fn commit_groups_events_under_one_batch() {
 #[ignore]
 async fn get_commitment_returns_committed_batch() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let batch = sample_batch(2);
@@ -121,6 +135,7 @@ async fn get_commitment_returns_committed_batch() {
 #[ignore]
 async fn get_commitment_of_unknown_batch_is_not_found() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let result = chain.get_commitment(Uuid::new_v4()).await;
@@ -131,6 +146,7 @@ async fn get_commitment_of_unknown_batch_is_not_found() {
 #[ignore]
 async fn verify_accepts_an_untampered_batch() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let batch = sample_batch(3);
@@ -147,6 +163,7 @@ async fn verify_accepts_an_untampered_batch() {
 #[ignore]
 async fn verify_detects_tampered_batch_root() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
@@ -177,6 +194,7 @@ async fn verify_detects_tampered_batch_root() {
 #[ignore]
 async fn list_entries_reports_chain_intact_across_batch_boundaries() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let first_batch = sample_batch(2);
@@ -206,6 +224,7 @@ async fn list_entries_reports_chain_intact_across_batch_boundaries() {
 #[ignore]
 async fn commit_of_an_empty_batch_is_rejected() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool, "avalon-test");
 
     let empty = EventBatch {
@@ -223,6 +242,7 @@ async fn commit_of_an_empty_batch_is_rejected() {
 #[ignore]
 async fn commit_produces_real_merkle_root_not_placeholder() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
@@ -283,6 +303,7 @@ async fn commit_produces_real_merkle_root_not_placeholder() {
 #[ignore]
 async fn verify_detects_entry_tampering_via_merkle_recomputation() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let first_batch = sample_batch(2);
@@ -447,6 +468,7 @@ async fn backdate_batch(pool: &PgPool, batch_id: Uuid, committed_at: OffsetDateT
 #[ignore]
 async fn prune_payloads_older_than_only_nulls_payload_of_entries_before_cutoff() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let old_batch = sample_batch(2);
@@ -514,6 +536,7 @@ async fn prune_payloads_older_than_only_nulls_payload_of_entries_before_cutoff()
 #[ignore]
 async fn prune_payloads_older_than_is_idempotent() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
@@ -546,6 +569,7 @@ async fn prune_payloads_older_than_is_idempotent() {
 #[ignore]
 async fn verify_still_succeeds_via_the_merkle_check_after_a_batchs_payloads_are_pruned() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(3);
@@ -592,6 +616,7 @@ async fn verify_still_succeeds_via_the_merkle_check_after_a_batchs_payloads_are_
 #[ignore]
 async fn verify_still_detects_tampering_in_a_batch_with_a_separately_pruned_entry() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(2);
@@ -642,6 +667,7 @@ async fn verify_still_detects_tampering_in_a_batch_with_a_separately_pruned_entr
 #[ignore]
 async fn prunable_entry_count_matches_what_pruning_actually_prunes() {
     let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
     let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
 
     let batch = sample_batch(4);
