@@ -7,13 +7,7 @@ import { generateTrustedNetworks } from './scripts/generate-trusted-networks.mjs
 // to avalon-server over HTTP/WebSocket at whatever AVALON_SERVER_URL points
 // to; there is no bundled backend here.
 
-// Issue #232 (`src/generated/trusted-networks.json`, gitignored, mirrors
-// docs/trusted-networks.json) needs to exist before `vue-tsc -b` type-checks
-// `src/network/trustAnchors.ts`'s import of it — `vue-tsc` runs ahead of
-// Vite in `npm run build`, so this config loading is too late for that path.
-// `package.json`'s `prebuild` script covers `build`; this call keeps `dev`
-// and `test` (which load this config directly, no separate typecheck step)
-// covered too.
+// Also called here (not just from package.json's prebuild) since dev/test load this config directly.
 generateTrustedNetworks()
 
 export default defineConfig({
