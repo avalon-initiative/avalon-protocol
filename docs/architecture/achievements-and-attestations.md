@@ -8,6 +8,10 @@ its provenance. **It never dictates what another game does with it.**
 Narrative: [`../stakeholders/Proposal.md` §8](../stakeholders/Proposal.md#8-achievements-and-history) and
 [§9](../stakeholders/Proposal.md#9-trust-and-attestations).
 
+The attestation mechanism itself is domain-agnostic — any issuer, game or
+otherwise, can assert a claim about an identity — and is illustrated below with
+gaming examples because gaming is Avalon's first live use case.
+
 ## Shape
 
 ```text

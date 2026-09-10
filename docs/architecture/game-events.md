@@ -10,6 +10,10 @@ brackets, live scores, matchmaking, spectator state — never enters the
 protocol; only the result crosses the boundary. This is one of the clearest
 demonstrations of what the network is for, and it needs no new primitive.
 
+The underlying mechanism (a durable, cross-integrator result as an
+attestation) is domain-agnostic; it is illustrated here with gaming examples
+because gaming is Avalon's first live use case.
+
 ## The flow
 
 A tournament is the easiest example to walk through, but the same shape

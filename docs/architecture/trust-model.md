@@ -10,6 +10,10 @@ This is the normative statement of
 [ADR #76](https://github.com/LunarVagabond/avalon-protocol/issues/76).
 Narrative: [`../stakeholders/Proposal.md` §9](../stakeholders/Proposal.md#9-trust-and-attestations).
 
+This trust model is domain-agnostic — it applies to any issuer and consumer of
+attestations, not only games — and is illustrated below with gaming examples
+because gaming is Avalon's first live use case.
+
 ## The three questions
 
 **Authentic** — did the claimed issuer actually issue this? Established by the
