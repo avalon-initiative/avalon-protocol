@@ -54,6 +54,19 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
     request.bearer_auth(token)
 }
 
+/// Presence reads default to friends-only visibility (`presence.rs`'s
+/// module doc comment) — needed by any test checking one identity's view
+/// of another's real presence.
+async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
+    let (a, b) = if x < y { (x, y) } else { (y, x) };
+    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+        .bind(a)
+        .bind(b)
+        .execute(pool)
+        .await
+        .expect("failed to seed friendship");
+}
+
 #[tokio::test]
 #[ignore]
 async fn a_friend_request_from_a_blocked_identity_fails_identically_to_a_nonexistent_identity() {
@@ -149,6 +162,7 @@ async fn a_block_hides_presence_in_both_directions() {
 
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
     let (bob_id, bob_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
 
     // Bob publishes Online presence.
     let publish = auth(http.put(format!("{base}/me/presence")), &bob_token)
