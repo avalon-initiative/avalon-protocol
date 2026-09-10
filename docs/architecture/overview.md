@@ -4,7 +4,7 @@ Avalon is an open interoperability protocol for independently operated games.
 **Avalon is the railroad between games, not a destination.** It owns the
 connective layer — identity, social graph, guilds, durable history, provenance —
 and nothing else. **Games remain sovereign over their own worlds**, and Avalon's
-job is to let those worlds recognize the same players and communities without
+job is to let those worlds recognize the same users and communities without
 surrendering control of anything inside them.
 
 This document is the map. Each topic has its own normative doc, listed in
@@ -15,7 +15,7 @@ version and is not repeated here.
 
 A shared, opt-in network that independent games can connect to for:
 
-- persistent player identity and game-scoped profiles
+- persistent identity and game-scoped profiles
 - friends, presence, and guilds (with guild chat)
 - achievements as verifiable attestations, with provenance and revocation
 - game and issuer registration, key lifecycle, and a game registry

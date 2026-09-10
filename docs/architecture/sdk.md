@@ -1,6 +1,6 @@
 # SDK
 
-**Avalon exposes protocol capabilities, not infrastructure.** A game developer
+**Avalon exposes protocol capabilities, not infrastructure.** A developer
 thinks in identity, guilds, achievements, presence, and game event verification —
 never in Postgres instances, chain RPCs, indexer shards, or node addresses.
 **Every capability-gated method checks its own required grant**; the SDK never
@@ -36,7 +36,7 @@ let avalon = Avalon::connect("postgres://...").await?;
 ```
 
 and not "which Postgres, which Redis, which chain RPC, which indexer, which
-region, which node". A developer should be able to say "I want player identity,
+region, which node". A developer should be able to say "I want identity,
 guilds, achievements, cross-game game event verification, and presence" and
 consume exactly those.
 
@@ -45,7 +45,7 @@ consume exactly those.
 | Concern | Hidden from the game |
 |---|---|
 | node discovery and selection | latency, proximity, capabilities, health |
-| authentication | player session exchange, game credential |
+| authentication | identity session exchange, game credential |
 | protocol version and capability negotiation | which node roles are reachable |
 | retries, failover, routing | a node disappearing (scenario K) |
 | realtime connections | presence transport |
@@ -73,7 +73,7 @@ is exactly the authority Avalon does not have.
 
 ## Capability checks per method
 
-A `Session` is scoped to the capabilities the player actually granted the game
+A `Session` is scoped to the capabilities the user actually granted the game
 under an active [binding](./game-bindings.md). `achievements()` requires
 `achievements.read`; `issue_achievement()` requires `achievements.issue`;
 `friends()` requires `friends.read`; and so on. A method with no grant
@@ -117,7 +117,7 @@ protocol and the domain model in `crates/protocol`; they never pull in
   friend's `Presence` only when `presence.read` is also granted, via one
   batched `presence_of` call. `Friend.display_name` is always `None` today —
   no endpoint resolves another identity's profile yet. `Session::update_presence(status)`
-  wraps `PUT /me/presence` (a player publishing their own status); it
+  wraps `PUT /me/presence` (a user publishing their own status); it
   deliberately isn't the game-authority `AvalonClient::publish_presence`
   this issue originally described, since that needs a game-credential/binding
   system (#26/#28/#83) that doesn't exist — see the module doc comment for
@@ -148,7 +148,7 @@ protocol and the domain model in `crates/protocol`; they never pull in
   the protocol type to put the merged `Presence`. `roster()`/`channels()`/
   `messages()` apply no visibility scoping (#87, same gap `presence_of`
   already has). Creating guilds, inviting, kicking, changing roles, and
-  managing channels are deliberately not on the SDK — player-authority-only
+  managing channels are deliberately not on the SDK — user-authority-only
   actions taken through the Hub.
 - `crates/sdk/src/conversations.rs` (#104) — `Session::conversations()`
   (`messages.read`, `GET /conversations`) and `Session::conversation(id)`, an
