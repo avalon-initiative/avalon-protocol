@@ -381,6 +381,19 @@ pub async fn list_messages(
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
     pub body: String,
+    /// The submitting client's journal `EntryId` (issue #110/#111), when
+    /// this request came from the SDK's deferred submission engine rather
+    /// than a direct online send. Optional — a message sent directly online
+    /// never sets this and never needs to dedupe against anything (see
+    /// migration `0037_conversation_message_idempotency`).
+    ///
+    /// A retried request after a dropped response carries the *same*
+    /// `client_entry_id` as the original attempt — that's the whole
+    /// mechanism: [`send_message`] treats a conflict on
+    /// `(conversation_id, client_entry_id)` as "already applied" and
+    /// returns the existing row instead of erroring or inserting a
+    /// duplicate.
+    pub client_entry_id: Option<Uuid>,
 }
 
 /// `POST /conversations/{id}/messages` — requires current participation,
@@ -388,6 +401,17 @@ pub struct SendMessageRequest {
 /// block check. See the module doc comment's "Blocking, enforced on both
 /// read and write" section for why the rejection is indistinguishable from
 /// a non-participant's, on both this endpoint and [`list_messages`].
+///
+/// **Idempotent when `client_entry_id` is set** (issue #111): inserts with
+/// `ON CONFLICT (conversation_id, client_entry_id) DO NOTHING` against the
+/// partial unique index from migration `0037_conversation_message_idempotency`
+/// and, if that hit an existing row instead of inserting a new one, looks
+/// the existing row up and returns it — the exact same "the unique
+/// constraint is what actually prevents duplicates, the query just
+/// discovers which case it's in" shape [`create_conversation`] already uses
+/// for `participants_key`. This is what lets the SDK's deferred submission
+/// engine retry a submission whose response was dropped without ever
+/// double-applying it.
 pub async fn send_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -400,17 +424,35 @@ pub async fn send_message(
 
     let message_id = Uuid::new_v4();
     let sent_at = OffsetDateTime::now_utc();
-    sqlx::query(
-        "INSERT INTO conversation_messages (id, conversation_id, author, body, sent_at) \
-         VALUES ($1, $2, $3, $4, $5)",
+    let inserted = sqlx::query(
+        "INSERT INTO conversation_messages (id, conversation_id, author, body, sent_at, client_entry_id) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (conversation_id, client_entry_id) WHERE client_entry_id IS NOT NULL DO NOTHING",
     )
     .bind(message_id)
     .bind(conversation_id)
     .bind(actor)
     .bind(&body.body)
     .bind(sent_at)
+    .bind(body.client_entry_id)
     .execute(&state.pool)
     .await?;
+
+    if inserted.rows_affected() == 0 {
+        // Only reachable when client_entry_id is Some — the conflict target
+        // above is a partial index that never matches a NULL client_entry_id,
+        // so a plain online send (no client_entry_id) always inserts.
+        // Someone (this same retry, or a concurrent one) already landed this
+        // exact (conversation_id, client_entry_id) pair — look it up and
+        // return it rather than erroring or creating a duplicate.
+        let client_entry_id = body
+            .client_entry_id
+            .expect("ON CONFLICT only fires when client_entry_id is Some");
+        let existing = find_message_by_client_entry_id(&state, conversation_id, client_entry_id)
+            .await?
+            .ok_or(AppError::MessageNotFound)?;
+        return Ok(Json(existing));
+    }
 
     prune_conversation(&state, conversation_id).await?;
 
@@ -421,6 +463,37 @@ pub async fn send_message(
         body: body.body,
         sent_at,
     }))
+}
+
+/// Looks up a message already recorded for `(conversation_id,
+/// client_entry_id)` — the read half of [`send_message`]'s idempotency
+/// check. `None` only when no submission for this entry id has landed yet;
+/// [`send_message`] only calls this after losing the `ON CONFLICT` race, so
+/// in that call site it should always find a row.
+async fn find_message_by_client_entry_id(
+    state: &AppState,
+    conversation_id: Uuid,
+    client_entry_id: Uuid,
+) -> Result<Option<MessageResponse>, AppError> {
+    let row = sqlx::query(
+        "SELECT id, conversation_id, author, body, sent_at FROM conversation_messages \
+         WHERE conversation_id = $1 AND client_entry_id = $2",
+    )
+    .bind(conversation_id)
+    .bind(client_entry_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    row.map(|row| {
+        Ok(MessageResponse {
+            id: row.try_get("id")?,
+            conversation_id: row.try_get("conversation_id")?,
+            author: row.try_get("author")?,
+            body: row.try_get("body")?,
+            sent_at: row.try_get("sent_at")?,
+        })
+    })
+    .transpose()
 }
 
 /// Keeps at most `message_cap()` newest messages in `conversation_id`

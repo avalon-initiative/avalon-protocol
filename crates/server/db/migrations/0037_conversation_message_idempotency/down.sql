@@ -1,0 +1,2 @@
+DROP INDEX conversation_messages_conversation_client_entry_idx;
+ALTER TABLE conversation_messages DROP COLUMN client_entry_id;

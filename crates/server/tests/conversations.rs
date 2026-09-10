@@ -290,3 +290,129 @@ async fn a_non_participant_cannot_read_or_post() {
     .expect("post request failed");
     assert_eq!(post_attempt.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// The idempotency half of issue #111's deferred submission engine: a
+/// `client_entry_id` on `POST /conversations/{id}/messages` lets a retried
+/// request after a dropped response avoid double-applying (migration
+/// `0037_conversation_message_idempotency`). This is the live, end-to-end
+/// form of that guarantee against the real endpoint and a real Postgres
+/// row count — `crates/sdk/src/submission.rs`'s
+/// `a_retried_submission_after_a_dropped_response_does_not_double_apply`
+/// test covers the engine's own retry/dedupe-threading logic without a live
+/// server; this test covers the other half, that the server itself actually
+/// prevents the duplicate.
+#[tokio::test]
+#[ignore]
+async fn retrying_a_send_with_the_same_client_entry_id_does_not_double_apply() {
+    let pool = test_pool().await;
+    let client = reqwest::Client::new();
+    let (_alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (bob_id, _bob_token) = seed_identity_session(&pool).await;
+
+    let created: serde_json::Value = auth(
+        client.post(format!("{}/conversations", server_url())),
+        &alice_token,
+    )
+    .json(&serde_json::json!({ "participants": [bob_id] }))
+    .send()
+    .await
+    .expect("create conversation request failed")
+    .json()
+    .await
+    .expect("expected JSON conversation body");
+    let conversation_id = created["id"].as_str().expect("expected id");
+
+    let client_entry_id = Uuid::new_v4();
+
+    // First attempt — as if the SDK's submission engine (crates/sdk/src/
+    // submission.rs) sent this and never saw the response (a dropped
+    // connection, a client crash before the response was read, ...).
+    let first: serde_json::Value = auth(
+        client.post(format!(
+            "{}/conversations/{conversation_id}/messages",
+            server_url()
+        )),
+        &alice_token,
+    )
+    .json(&serde_json::json!({
+        "body": "hey bob, are you there?",
+        "client_entry_id": client_entry_id,
+    }))
+    .send()
+    .await
+    .expect("first send request failed")
+    .json()
+    .await
+    .expect("expected JSON message body");
+
+    // Retry with the exact same client_entry_id, same as the submission
+    // engine would do on its next drain cycle for the still-pending entry.
+    let retried: serde_json::Value = auth(
+        client.post(format!(
+            "{}/conversations/{conversation_id}/messages",
+            server_url()
+        )),
+        &alice_token,
+    )
+    .json(&serde_json::json!({
+        "body": "hey bob, are you there?",
+        "client_entry_id": client_entry_id,
+    }))
+    .send()
+    .await
+    .expect("retried send request failed")
+    .json()
+    .await
+    .expect("expected JSON message body");
+
+    // Same message, not a new one.
+    assert_eq!(first["id"], retried["id"]);
+
+    // A third, genuinely distinct message (its own client_entry_id) must
+    // still go through normally — the dedupe key is per-entry, not a
+    // conversation-wide throttle.
+    let distinct: serde_json::Value = auth(
+        client.post(format!(
+            "{}/conversations/{conversation_id}/messages",
+            server_url()
+        )),
+        &alice_token,
+    )
+    .json(&serde_json::json!({
+        "body": "anyway, unrelated message",
+        "client_entry_id": Uuid::new_v4(),
+    }))
+    .send()
+    .await
+    .expect("distinct send request failed")
+    .json()
+    .await
+    .expect("expected JSON message body");
+    assert_ne!(distinct["id"], first["id"]);
+
+    // The authoritative check: exactly one row for the retried
+    // client_entry_id, straight from Postgres, not just the HTTP responses
+    // agreeing with each other.
+    let row_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversation_messages WHERE conversation_id = $1 AND client_entry_id = $2",
+    )
+    .bind(Uuid::parse_str(conversation_id).expect("conversation_id is a UUID"))
+    .bind(client_entry_id)
+    .fetch_one(&pool)
+    .await
+    .expect("row count query failed");
+    assert_eq!(
+        row_count, 1,
+        "exactly one resulting row for the retried client_entry_id"
+    );
+
+    // Two distinct messages total in the conversation (the retried one,
+    // counted once, plus the genuinely distinct one) — not three.
+    let total_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM conversation_messages WHERE conversation_id = $1")
+            .bind(Uuid::parse_str(conversation_id).expect("conversation_id is a UUID"))
+            .fetch_one(&pool)
+            .await
+            .expect("total row count query failed");
+    assert_eq!(total_count, 2);
+}

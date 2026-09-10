@@ -31,6 +31,15 @@
 //! is a plain, ungated local constructor that makes no request of its own;
 //! only the methods called through it touch the network.
 //!
+//! ## Shared with the deferred submission engine (#111)
+//!
+//! `crate::submission::HttpTransport` submits queued `chat.message` journal
+//! entries through [`Session::conversation`]/[`ConversationHandle::send_with_client_entry_id`]
+//! rather than building its own request — one request-building path, so a
+//! capability check (or any other classification) behaves the same whether
+//! a game calls [`ConversationHandle::send`] directly or drains a
+//! [`crate::sync_journal::SyncJournal`] through the submission engine.
+//!
 //! ## No conversation content is cached
 //!
 //! Every method here makes a fresh request; nothing is stored on
@@ -91,6 +100,14 @@ impl From<MessageResponse> for ConversationMessage {
 #[derive(Serialize)]
 struct SendMessageRequest<'a> {
     body: &'a str,
+    /// See `crates/server/src/conversations.rs::SendMessageRequest`'s own
+    /// doc comment — set only by
+    /// [`ConversationHandle::send_with_client_entry_id`], which the
+    /// submission engine (`crate::submission::HttpTransport`, issue #111)
+    /// uses so a retried submission dedupes server-side instead of posting
+    /// twice. A direct [`ConversationHandle::send`] call always sends
+    /// `None` here.
+    client_entry_id: Option<Uuid>,
 }
 
 /// Translates a non-success response from any `/conversations` endpoint.
@@ -227,6 +244,21 @@ impl ConversationHandle<'_> {
     /// comment for why a blocked send is indistinguishable from a
     /// never-was-a-participant one.
     pub async fn send(&self, body: &str) -> Result<ConversationMessage, SdkError> {
+        self.send_with_client_entry_id(body, None).await
+    }
+
+    /// Same request as [`Self::send`], with an optional idempotency key —
+    /// the one thing `crate::submission::HttpTransport` (issue #111) needs
+    /// beyond what a direct online send does. This is the single place that
+    /// builds a `POST /conversations/{id}/messages` request; both `send`
+    /// and the submission engine's transport route through it so a
+    /// capability check failure (or any other classification) behaves
+    /// identically regardless of which path a game used.
+    pub(crate) async fn send_with_client_entry_id(
+        &self,
+        body: &str,
+        client_entry_id: Option<Uuid>,
+    ) -> Result<ConversationMessage, SdkError> {
         self.session.require(Capability::MessagesSend)?;
 
         let response = self
@@ -237,7 +269,10 @@ impl ConversationHandle<'_> {
                 self.session.server_url, self.conversation_id
             ))
             .bearer_auth(&self.session.token)
-            .json(&SendMessageRequest { body })
+            .json(&SendMessageRequest {
+                body,
+                client_entry_id,
+            })
             .send()
             .await?;
         if !response.status().is_success() {
