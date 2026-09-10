@@ -149,11 +149,36 @@ the [visibility](./privacy.md) rules that apply to those identities.
   module per read model under `crates/indexer/src/projections/`. Schema
   discovery (`game_schemas.rs`, #255) is the first Game-Registry-facing
   projection; profiles/friendships/guild rosters/attestations are the
-  others, none of them registry-shaped yet.
-- No dedicated registry endpoint, no recognition-relationship event, no Hub
-  view — schema discovery (#255) is queryable today only via
+  others, most of them not registry-shaped.
+- **First slice of the metric table implemented (#261)**: `players`,
+  `total players ever`, `achievements issued`, `achievements revoked`, and
+  `unique achievement holders` — all `durable-derived` — are real. `players`
+  / `total players ever` come from `crates/indexer/src/projections/game_bindings.rs`
+  (its own `indexer_game_bindings` table, decoded from
+  `game.binding_established`/`game.binding_ended`, migration
+  `0035_indexer_game_bindings`). The three achievement metrics come from
+  `crates/indexer/src/projections/attestations.rs`, reading the existing
+  `indexer_attestations` table. `crates/indexer/src/registry.rs::compute_for_game`
+  composes both into a `GameRegistryMetrics` where every field is a
+  `{ value, definition, class }` triple, never a bare number, and returns
+  zeros (not an error) for a game with no activity. Exposed publicly and
+  unauthenticated at `GET /games/{slug}/registry`
+  (`crates/server/src/registry.rs`) — a separate endpoint from `GET
+  /games/{slug}` on purpose, so the class-label contract can't be
+  accidentally skipped by flattening metrics alongside plain registration
+  fields. Fixture-based unit tests per metric (no live Postgres) live
+  alongside each projection module.
+- Still open: the rest of the table above (achievement popularity,
+  cross-game players, recognizing games, guild-association metrics, game
+  event participation, key lifecycle/status/registration history),
+  recognition relationships (needs a new protocol event, #94), the
+  privacy/cohort-size floor ([#96](https://github.com/LunarVagabond/avalon-protocol/issues/96)),
+  and the public/external read surface
+  ([#95](https://github.com/LunarVagabond/avalon-protocol/issues/95)) that
+  #261's endpoint is not itself — no Hub view either. Schema discovery
+  (#255) is likewise still queryable only via
   `avalon_indexer::projections::game_schemas::list_for_game`, not yet
-  exposed over HTTP as part of a registry read surface.
+  folded into the registry endpoint.
 
 ## Decisions and tickets
 
@@ -175,3 +200,12 @@ the [visibility](./privacy.md) rules that apply to those identities.
   Decision: game-defined schema model, representation, and versioning
   strategy; left discovery surface to implementation, resolved by #255 as
   the registry read model, not a dedicated endpoint.
+- [#261](https://github.com/LunarVagabond/avalon-protocol/issues/261) —
+  first slice: the five binding/achievement `durable-derived` metrics and
+  `GET /games/{slug}/registry`, described above.
+- [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic
+  this ticket and the rest of the registry work sit under.
+- [#96](https://github.com/LunarVagabond/avalon-protocol/issues/96) —
+  privacy/cohort-size floor, not yet applied to #261's endpoint.
+- [#95](https://github.com/LunarVagabond/avalon-protocol/issues/95) — the
+  public/external read surface #261's endpoint feeds into, not yet built.

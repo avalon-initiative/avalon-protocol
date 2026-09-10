@@ -1,0 +1,2 @@
+DROP INDEX indexer_attestations_issuer_subject_idx;
+DROP INDEX indexer_attestations_issuer_revoked_at_idx;

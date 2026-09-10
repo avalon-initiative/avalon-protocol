@@ -19,6 +19,7 @@ pub mod outbox;
 pub mod passkeys;
 pub mod presence;
 pub mod recovery;
+pub mod registry;
 pub mod retention;
 pub mod settlement;
 pub mod state;
@@ -171,6 +172,7 @@ pub fn router(state: AppState) -> Router {
             post(games::create_game_challenge),
         )
         .route("/games/whoami", get(games::game_whoami))
+        .route("/games/{slug}/registry", get(registry::get_game_registry))
         .route(
             "/games/{slug}/achievements",
             get(achievements::list_achievement_definitions)

@@ -16,6 +16,7 @@
 
 pub mod attestations;
 pub mod friendships;
+pub mod game_bindings;
 pub mod game_schemas;
 pub mod guild_rosters;
 pub mod profiles;
