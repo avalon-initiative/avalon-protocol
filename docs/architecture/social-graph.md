@@ -1,45 +1,45 @@
 # Social Graph
 
-**A player's friends are a network-level relationship that persists across games.**
+**An identity's friends are a network-level relationship that persists across games.**
 Entering a new game never means rebuilding a friends list. **A game never
-automatically receives a player's social graph**; every read of it is gated by a
-capability the player granted to that game and by the visibility the player set.
+automatically receives an identity's social graph**; every read of it is gated by a
+capability the identity granted to that game and by the visibility the identity set.
 
 Narrative: [Proposal §11](../stakeholders/Proposal.md#11-universal-friends). The social layer
 as a whole (friends, guilds, presence, communication) is one of Avalon's main
-differentiators — what a player should not have to rebuild per game.
+differentiators — what an identity should not have to rebuild per game.
 
 ## What persists
 
 | Thing | Persists across games? | Where it lives |
 |---|---|---|
-| Friendship (identity A ↔ identity B) | **Yes — decided** | durable network relationship, owned by the network, not either player's current game |
+| Friendship (identity A ↔ identity B) | **Yes — decided** | durable network relationship, owned by the network, not either identity's current game |
 | Friend requests (pending state) | Yes, until resolved | server state; not promised-durable history |
 | Presence of a friend | Ephemeral | see [presence](./presence.md) |
 | Blocks / mutes | Yes | design open (below) |
 | A game's own in-world social features (party, LFG) | No | game-side |
 
 A friendship is symmetric: `Friendship { a, b, since }`. It references two
-[identities](./identity.md), never two game characters. A player sees the same
+[identities](./identity.md), never two game characters. An identity sees the same
 friends list from the Hub, from Game A, and from Game B — filtered by what each
 viewer is allowed to see.
 
 ## What a game sees
 
 Requesting `friends.read` does not hand a game the whole graph. It means: for the
-player who granted it, under an active [game binding](./game-bindings.md), the
-game may read the friends the player has chosen to expose to games. The game
+identity who granted it, under an active [game binding](./game-bindings.md), the
+game may read the friends the identity has chosen to expose to games. The game
 gets what it needs to say "your friend Alice is also here", not a dump of the
-player's relationships across every world they've visited.
+identity's relationships across every world they've visited.
 
-Reading `presence.read` is a separate capability. A game may know who a player's
+Reading `presence.read` is a separate capability. A game may know who an identity's
 friends are without knowing where they are, and vice versa.
 
 The read path composes three things, in this order:
 
-1. an active binding between the player and the game
+1. an active binding between the identity and the game
 2. an active `PermissionGrant` for the specific capability
-3. the [visibility](./privacy.md) scope the player set on the resource
+3. the [visibility](./privacy.md) scope the identity set on the resource
 
 None of them widens the others.
 
@@ -82,8 +82,8 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   `DELETE /friends/requests/{id}` (declines or withdraws, depending on which
   side calls it), `DELETE /friends/{identity_id}`, `GET /friends`,
   `GET /friends/requests`. There is no game-credential auth path in this repo
-  yet at all, so "a game cannot act on a player's behalf" holds by
-  construction — every route only ever accepts a player session token.
+  yet at all, so "a game cannot act on an identity's behalf" holds by
+  construction — every route only ever accepts an identity session token.
   `friend.requested`, `friend.accepted`, and `friend.removed` are enqueued
   through the outbox (`crates/server/src/outbox.rs`, #71) in the same
   transaction as the `friendships`/`friend_requests` row. Events are
@@ -102,14 +102,14 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   other route in this module. A display-name change keeps its existing
   discriminator unless the new pair collides, in which case a fresh one is
   generated so uniqueness holds without the handle churning on every rename.
-  Fuzzy/partial handle lookup is out of scope here — that's player discovery
+  Fuzzy/partial handle lookup is out of scope here — that's identity discovery
   ([#129](https://github.com/LunarVagabond/avalon-protocol/issues/129), decided:
-  two-tier. Private-by-default, always-on surfacing of players via mutual
+  two-tier. Private-by-default, always-on surfacing of identities via mutual
   friends ("friends of friends") and shared guild membership — never a name
   search, just relationships that already exist. Separately, a first-class,
-  easily reversible per-player toggle ("make me publicly searchable") that
-  opts a player into open name/handle search — off by default, matches only
-  opted-in players when on, and flips off just as easily as it flips on).
+  easily reversible per-identity toggle ("make me publicly searchable") that
+  opts an identity into open name/handle search — off by default, matches only
+  opted-in identities when on, and flips off just as easily as it flips on).
   Implementation tracked as
   [#204](https://github.com/LunarVagabond/avalon-protocol/issues/204)
   (scoped surfacing) and
@@ -133,8 +133,8 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   unchanged; this endpoint never creates or modifies a friendship.
 - `crates/server/src/discovery.rs` (#205) — `GET /identities/search?q=&limit=`,
   the opt-in half of #129's decided shape. Session-authenticated, matches
-  only identities with `discovery_preferences.discoverable = true` (a
-  player-controlled preference, off by default for every identity, no
+  only identities with `discovery_preferences.discoverable = true` (an
+  identity-controlled preference, off by default for every identity, no
   exceptions — same "one row per identity, created lazily on first
   toggle, absence means the default" shape
   `presence_preferences.hide_playing` (#16) already established, see
@@ -195,9 +195,9 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes for friends lists and presence.
 - [#129](https://github.com/LunarVagabond/avalon-protocol/issues/129) — decision:
-  player discovery is two-tier (scoped always-on + opt-in global search).
+  identity discovery is two-tier (scoped always-on + opt-in global search).
 - [#204](https://github.com/LunarVagabond/avalon-protocol/issues/204) — scoped
-  player discovery: friends-of-friends and mutual-guild surfacing (done).
+  identity discovery: friends-of-friends and mutual-guild surfacing (done).
 - [#205](https://github.com/LunarVagabond/avalon-protocol/issues/205) — opt-in
   global name/handle search toggle (done).
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) — ADR:

@@ -3,7 +3,7 @@
 **Realtime presence is ephemeral state. It never enters durable protocol history.**
 It is the third logical vertical of the network alongside settlement and
 query/indexing, and it is the one whose loss costs nothing: if presence storage
-disappears, players look offline until their next heartbeat. Decided in
+disappears, identities look offline until their next heartbeat. Decided in
 [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78).
 
 ## Two kinds of fact
@@ -36,7 +36,7 @@ Player X
     Server: NA-East
 ```
 
-Anything a player would want a friend or guildmate to know *right now*, and
+Anything a user would want a friend or guildmate to know *right now*, and
 nothing anyone needs to prove later.
 
 ## Rules
@@ -45,13 +45,13 @@ nothing anyone needs to prove later.
   and is never in [rebuild](./disaster-recovery.md) scope.
 - Presence may live in process memory, a cache, or a dedicated realtime service.
   It is not required to be in Postgres.
-- Presence is permissioned. A game publishing presence on a player's behalf
+- Presence is permissioned. A game publishing presence on an identity's behalf
   requires the game to hold `presence.publish` under an active
   [binding](./game-bindings.md); who else can see it is a
   [visibility](./privacy.md) setting (friends, guild, nobody) — friends-only
   by default.
-- A game publishes presence for its own players (it knows they're connected);
-  it cannot publish presence for players who are not bound to it.
+- A game publishes presence for identities bound to it (it knows they're
+  connected); it cannot publish presence for identities that are not bound to it.
 - Realtime population numbers ("players online in Game A") are labeled realtime
   wherever shown and never stored as durable metrics in the
   [game registry](./game-registry.md).
@@ -82,9 +82,9 @@ realtime connections is a separate axis from scaling history or queries
   `Presence { identity_id, status, playing: Option<GameId>, updated_at }`.
 - `crates/server/src/presence.rs` — an in-process `PresenceStore` (`Arc<RwLock<HashMap<...>>>`
   keyed by identity), never a migrated table, never touching the outbox or
-  `avalon-chain`. `PUT /me/presence` lets a player publish their own
+  `avalon-chain`. `PUT /me/presence` lets the caller publish their own
   `status`; they can never set `playing`. `PUT /presence/:identity_id` lets
-  a game publish presence on behalf of a player it's bound to —
+  a game publish presence on behalf of an identity it's bound to —
   authenticated via `crate::authz`'s `Caller`/`require_capability` (#28):
   the caller must resolve to `Caller::Game`, hold an active
   `presence.publish` grant under an active [binding](./game-bindings.md)
@@ -100,7 +100,7 @@ realtime connections is a separate axis from scaling history or queries
   implementation of `docs/architecture/privacy.md`'s proposed default for
   this one resource, **not** the full per-resource visibility-scope model
   #87 still owns (guild visibility, a private setting, etc.) — see that
-  file's own "Today in the repo" note. A player can independently opt
+  file's own "Today in the repo" note. An identity can independently opt
   `playing` out of ever being shown, regardless of any game's grant
   (`presence_preferences.hide_playing`, set via `PUT /me/presence`,
   `crates/server/db/migrations/0017_presence_preferences`) — deliberately
@@ -109,7 +109,7 @@ realtime connections is a separate axis from scaling history or queries
   within the TTL (120s by default, `AVALON_PRESENCE_TTL_SECS` overrides it
   for testing) reads as `Offline`, never a guess.
 - **Deferred, documented, not silently missing**: the full per-resource
-  visibility-scope model (friends/guild/private, per resource, player- and
+  visibility-scope model (friends/guild/private, per resource, identity- and
   guild-configurable) is #87's open decision — presence's friends-only
   default above is one literal instance of it, not the general mechanism.
 - `GET /ws/presence?token=…` (#136, transport chosen in #119) — a live push

@@ -9,11 +9,11 @@ privilege another authorized client couldn't have. Decided in
 
 ## The world outside the games
 
-The Hub is where a player interacts with the network itself, with no game open:
+The Hub is where a user interacts with the network itself, with no game open:
 
 - create and manage a persistent identity; connect keys or a wallet where that
   applies ([identity](./identity.md))
-- profile and player-controlled metadata
+- profile and identity-controlled metadata
 - friends and presence
 - guilds and guild chat
 - achievements, attestations, and history
@@ -35,7 +35,7 @@ construction: web, mobile, desktop, a Discord integration, a game's native UI, a
 third-party application. `apps/mobile-hub` is the first proof — the same UI in a
 Tauri shell for desktop and mobile, for guild chat and presence without a game
 running ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-game)).
-A player who never installs any Hub loses nothing at the protocol level.
+A user who never installs any Hub loses nothing at the protocol level.
 
 Rules that keep this true:
 
@@ -63,7 +63,7 @@ Your History
    Community MMO #47 · Verified
 ```
 
-All three are authentic. The player can feature, hide, filter, and sort. The Hub
+All three are authentic. The user can feature, hide, filter, and sort. The Hub
 never implies Avalon has judged one more prestigious than another, and a revoked
 claim shows as revoked with its history, not as a gap. See the
 [trust model](./trust-model.md) and [revocation](./revocation.md).
@@ -96,7 +96,7 @@ is visibly marked.
   `HubShell.vue` renders a fixed left sidebar on desktop (wordmark,
   `AvalonSidebarNav`, the caller's own presence at the bottom) that
   collapses to an `AvalonBottomNav` bar on mobile (≤768px), plus a top
-  header (a disabled search field — player discovery is #129, undecided — a
+  header (a disabled search field — identity discovery is #129, undecided — a
   notifications placeholder, and an `AvalonUserChip` with the caller's real
   avatar/name/handle linking to Profile), with `<RouterView />` swapping
   the page in place. Pages are nested child routes under a shared parent
@@ -108,7 +108,7 @@ is visibly marked.
   "Soon" tag rather than being hidden. Games (#270) is no longer one of
   them, same as Guilds (#24) before it. The shell also heartbeats
   `PUT /me/presence` (Online, every 60s, inside the server's 120s TTL) so
-  the player actually reads as online to their friends while the Hub is
+  the user actually reads as online to their friends while the Hub is
   open. Visual language: one dark theme via CSS custom properties in
   `packages/ui/src/styles/tokens.css` (+ `global.css`), imported once in
   `apps/hub/src/main.ts`; component styles reference tokens only. **A
@@ -123,7 +123,7 @@ is visibly marked.
   message cards arrive with those features.
 - **Read-only until Edit.** Nothing on a logged-in page is an open input by
   default: a value renders as a styled read-only display
-  (`AvalonEditableField`) and only becomes editable when the player
+  (`AvalonEditableField`) and only becomes editable when the user
   presses Edit — Enter, Save, or leaving the field commits (only if it
   changed), Escape/Cancel reverts. Actions that need input (add a friend,
   recover with a phrase) sit behind a button that reveals the form. Login
@@ -190,7 +190,7 @@ is visibly marked.
   a plain error rather than crashing. See
   [guilds](./guilds.md)'s "Today in the repo" for the two real gaps this
   surfaced (the `manage_channels` permission stub, and no endpoint to list
-  a player's own pending guild invites) rather than working around them
+  the caller's own pending guild invites) rather than working around them
   with a Hub-only endpoint. **Issue #57** completed this view rather than
   starting it over: a "Currently playing" card on `Guild.vue` groups the
   roster's merged presence by game (`apps/hub/src/api/guilds.ts`'s
@@ -228,7 +228,7 @@ is visibly marked.
   score/ranking element exists.
 - `Connections.vue` (`/connections`, #27/#83) — lists the caller's own
   `GameBinding`s with a revoke action. `ConnectGame.vue` (`/connect/:slug`,
-  #27) — the capability-consent flow a player lands on to authorize a game,
+  #27) — the capability-consent flow a user lands on to authorize a game,
   posting to `POST /games/{slug}/connect`.
 - `RecoverIdentity.vue` (`/recover-identity`, #201) — the guardian-based
   recovery flow's entry point for a device with no registered passkey; see

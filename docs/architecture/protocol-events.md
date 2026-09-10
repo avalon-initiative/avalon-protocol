@@ -80,7 +80,7 @@ not a durable fact anyone issues, indexes, or replays on its own.
 Every durable event must be able to be:
 
 - **signed** — by the actor asserting it (an issuer's key for attestations, the
-  player's key for identity and profile claims once
+  identity's key for identity and profile claims once
   [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) lands)
 - **verified** — signature against the key that was valid at `timestamp`
 - **indexed** — applied idempotently to a projection
@@ -115,7 +115,7 @@ milestone-1 stand-in until actor signatures exist.
 | `identity.recovered` | identity → identity | request id, new device label | identity keys | network (milestone-1 stand-in, #201, done) |
 | `profile.updated` | identity → identity | changed promised-durable fields (`display_name`, `discriminator`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`) | profiles | identity key |
 | `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
-| `game.binding_established` | identity → game | identity, game | bindings, registry players | identity key |
+| `game.binding_established` | identity → game | identity, game | bindings, registry identities | identity key |
 | `game.binding_ended` | identity → game | binding ref | bindings | identity key |
 | `permission.granted` | identity → game (per capability) | binding, capability | permission grants | identity key |
 | `permission.revoked` | identity → game (per capability) | binding, capability, reason | permission grants | identity key |
@@ -242,7 +242,7 @@ the record — [`./revocation.md`](./revocation.md).
   (`connect`, `DELETE /games/{slug}/grants/{capability}`, and every grant a
   `disconnect` revokes), all enqueued into `protocol_outbox` in the same
   transaction as the `bindings`/`permission_grants` row change they
-  accompany. `issuer` is `identity:<id>:self:<verb>` (the acting player);
+  accompany. `issuer` is `identity:<id>:self:<verb>` (the acting identity);
   `subject` is `game:<slug>:self:<verb>` for binding events and
   `game:<slug>:self:<capability>` for grant events. Network-attributed
   rather than identity-signed, same "network as signer" milestone-1

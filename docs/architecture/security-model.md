@@ -82,8 +82,8 @@ so that gap remains until #86 lands.
 
 | Key | Held by | Compromise means | Response |
 |---|---|---|---|
-| player passkey (#73) | the player | attacker can log in as that identity | revoke via a second registered passkey (`POST /me/devices/:id/revoke`, #135) — total loss if it was the only one, recoverable via guardian-based recovery (#99, decided; #201) |
-| player event-signing key (#73) | the player | attacker can author events for that identity going forward | rotate from an authenticated session (not built); historical events signed by the old key stay valid, same principle as issuer keys below |
+| identity passkey (#73) | the identity | attacker can log in as that identity | revoke via a second registered passkey (`POST /me/devices/:id/revoke`, #135) — total loss if it was the only one, recoverable via guardian-based recovery (#99, decided; #201) |
+| identity event-signing key (#73) | the identity | attacker can author events for that identity going forward | rotate from an authenticated session (not built); historical events signed by the old key stay valid, same principle as issuer keys below |
 | issuer key (#80) | the game | attacker can issue authentic-looking claims under that game | revoke key as of T; claims after T rejected, before T untouched |
 | log operator key (#39, decided: Signed Tree Heads only, not per-entry) | settlement operator | attacker can sign bogus tree heads | mirrors/witnesses detect divergence via gossiped signed tree heads — no validator set (#186); implementation tracked by #210 |
 
@@ -172,7 +172,7 @@ deployment blocker, not an optional hardening step.
   settlement is a public transparency log.
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) — TLS
   before any non-local deployment.
-- [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) — player
+- [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) —
   identity as a self-custodied keypair. Done.
 - [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) —
   decided: identity recovery when every passkey is lost (guardian-based

@@ -1,7 +1,7 @@
 # Scalability
 
-The stress model is deliberately large. **1,000 games × 100,000 players each =
-100,000,000 players.** That is **not** 100 million gameplay events per second
+The stress model is deliberately large. **1,000 games × 100,000 identities each =
+100,000,000 identities.** That is **not** 100 million gameplay events per second
 flowing through Avalon — gameplay stays game-side, always. The question is how
 many *durable* facts that population produces, how much history it accumulates,
 how many reads and connections it generates, and whether every part of the
@@ -25,7 +25,7 @@ week to rebuild an index is not scalable.
 | Durable event volume | how many protocol events per day, network-wide? | [`./settlement.md`](./settlement.md), #38 |
 | Batch size and commitment cadence | how many events per batch; how often is a commitment produced; what latency to "settled"? | #38, #40 |
 | Query volume | how many profile / friend / guild / registry reads per second? | [`./query-and-indexing.md`](./query-and-indexing.md) |
-| Realtime connections | how many players are connected at once; how does presence fan out to friends and guild rosters? | [`./presence.md`](./presence.md) |
+| Realtime connections | how many identities are connected at once; how does presence fan out to friends and guild rosters? | [`./presence.md`](./presence.md) |
 | Historical volume | how large is the log after 5 / 10 / 20 years? | #40 |
 | Rebuild time | how long to reconstruct every projection from genesis? | [`./disaster-recovery.md`](./disaster-recovery.md), #43 |
 | Node specialization | can settlement, indexing, realtime, and gateway scale separately? | [`./nodes.md`](./nodes.md) |
@@ -36,7 +36,7 @@ week to rebuild an index is not scalable.
 Every number below is an assumption to be replaced by data. The point is the
 shape, not the digits.
 
-- **Events.** Suppose an active player generates 1 durable event a day on
+- **Events.** Suppose an active identity generates 1 durable event a day on
   average (an achievement, a guild action, a binding) and 10% of the 100M are
   active daily: ~10M events/day, ~115/s. Bursty (a raid completes, a tournament
   ends) but nowhere near gameplay rates. A batch of 10,000 events committed every
@@ -48,7 +48,7 @@ shape, not the digits.
 - **Reads.** Reads dwarf writes by orders of magnitude and are entirely the
   indexer's problem; they never touch settlement. Indexers partition by domain
   (profiles, guilds, registry) or by shard before settlement ever needs to.
-- **Presence.** 10M concurrently online players is a fan-out problem for the
+- **Presence.** 10M concurrently online identities is a fan-out problem for the
   realtime vertical alone; nothing about it touches history. Losing a realtime
   node costs nothing durable.
 - **Rebuild.** If replay sustains 50,000 events/s on one indexer, ten years of
@@ -71,7 +71,7 @@ Asked of every design, with the intended answer:
   keep serving; commitments resume once the settlement operator does. No
   validator set to stall in the first place ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
 
-## Scenario L — 1,000 games, 100M players
+## Scenario L — 1,000 games, 100M identities
 
 Does Avalon avoid becoming a gameplay bottleneck? Yes by construction, as long
 as the hot/durable line holds. The parts that do scale with population — event

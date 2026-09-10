@@ -36,7 +36,7 @@ sibling of a `GuildChannel`: it exists between two or more identities
 directly, with no guild in between, and no game owns it. The same reasoning
 that makes a friendship ([social-graph.md](./social-graph.md)) and a guild
 ([guilds.md](./guilds.md)) network-level applies here — a conversation between
-two players is a fact about their relationship, not about whatever game either
+two identities is a fact about their relationship, not about whatever game either
 of them happened to be in when they started talking.
 
 The hot/cold split guild chat already established carries over unchanged:
@@ -112,8 +112,8 @@ the realtime vertical, not a store of its own.
 ## Avalon is not Discord
 
 Avalon's job is to make guild chat, DMs, and voice work the same way
-regardless of which game (if any) a player has open — not to build a
-destination players go to instead of the tools they already use. A future
+regardless of which game (if any) an identity has open — not to build a
+destination identities go to instead of the tools they already use. A future
 Discord bridge, mentioned as an example client in
 [guilds.md](./guilds.md#guild-chat-is-a-network-primitive), is exactly that:
 one more authorized client rendering the same network-owned channel, no

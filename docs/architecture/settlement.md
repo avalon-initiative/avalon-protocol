@@ -157,7 +157,7 @@ Postgres as the backend:
   { tree_size, root_hash, network_id, timestamp, signing_key_id, signature
   }` is produced per batch commit, in the same transaction, Ed25519,
   covering exactly this settlement-operator key domain (distinct from
-  issuer keys, #80, and player keys, #73 — three separate lifecycles, per
+  issuer keys, #80, and identity keys, #73 — three separate lifecycles, per
   #39's own original scoping).
 - **Mirror sync stays minimal, no witness quorum required yet.** With one
   settlement operator today, the simplest viable protocol suffices: expose

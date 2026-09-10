@@ -88,7 +88,7 @@ recording outside the game itself:
 
 - tournaments and championships (the running example above)
 - seasonal events and world-first races
-- guild competitions (a guild-level subject rather than a player)
+- guild competitions (a guild-level subject rather than an identity)
 - community events and world-wide campaigns
 - cross-game quests with a recorded completion
 - developer-sponsored events
