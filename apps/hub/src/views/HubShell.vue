@@ -32,6 +32,21 @@ const error = ref('')
 
 let heartbeatHandle: ReturnType<typeof setInterval> | undefined
 
+const GITHUB_PROFILE_URL = 'https://github.com/LunarVagabond'
+const GITHUB_REPO_URL = 'https://github.com/LunarVagabond/avalon-protocol'
+const GITHUB_ISSUES_URL = `${GITHUB_REPO_URL}/issues/new?template=bug_report.yml`
+const CONTRIBUTING_URL = `${GITHUB_REPO_URL}/blob/main/.github/CONTRIBUTING.md`
+
+// `__BUILD_REVISION__`/`__BUILD_IS_RELEASE__` come from vite.config.ts's
+// `define` — the exact tag when built from a release, a short commit hash otherwise.
+const buildRevision = __BUILD_REVISION__
+const revisionUrl =
+  buildRevision === 'unknown'
+    ? null
+    : __BUILD_IS_RELEASE__
+      ? `${GITHUB_REPO_URL}/releases/tag/${buildRevision}`
+      : `${GITHUB_REPO_URL}/commit/${buildRevision}`
+
 async function publishPresence() {
   if (!session.token) return
   try {
@@ -126,7 +141,34 @@ function onSelectNav(to: string) {
         </div>
       </main>
       <footer :class="styles.footer">
-        <span>Avalon Protocol — milestone 1</span>
+        <div :class="styles.footerLeft">
+          <a :class="styles.footerLink" :href="GITHUB_PROFILE_URL" target="_blank" rel="noopener noreferrer">
+            @LunarVagabond
+          </a>
+        </div>
+
+        <div :class="styles.footerCenter">
+          <a
+            v-if="revisionUrl"
+            :class="styles.footerRevision"
+            :href="revisionUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            AvalonHUB · {{ buildRevision }}
+          </a>
+          <span v-else :class="styles.footerRevision">AvalonHUB · {{ buildRevision }}</span>
+        </div>
+
+        <div :class="styles.footerRight">
+          <a :class="styles.footerLink" :href="GITHUB_ISSUES_URL" target="_blank" rel="noopener noreferrer">
+            Found a bug? Report it!
+          </a>
+          <span :class="styles.footerSep">|</span>
+          <a :class="styles.footerLink" :href="CONTRIBUTING_URL" target="_blank" rel="noopener noreferrer">
+            Contribute
+          </a>
+        </div>
       </footer>
     </div>
 

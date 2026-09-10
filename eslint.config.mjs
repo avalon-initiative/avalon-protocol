@@ -29,7 +29,13 @@ export default tseslint.config(
   {
     files: ['**/*.{js,mjs,cjs,ts,vue}'],
     languageOptions: {
-      globals: { ...globals.browser, ...globals.node },
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        // Footer build info injected by apps/hub/vite.config.ts's `define`.
+        __BUILD_REVISION__: 'readonly',
+        __BUILD_IS_RELEASE__: 'readonly',
+      },
       parserOptions: {
         parser: tseslint.parser,
       },

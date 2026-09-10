@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { execSync } from 'node:child_process'
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import { generateTrustedNetworks } from './scripts/generate-trusted-networks.mjs'
@@ -10,7 +11,36 @@ import { generateTrustedNetworks } from './scripts/generate-trusted-networks.mjs
 // Also called here (not just from package.json's prebuild) since dev/test load this config directly.
 generateTrustedNetworks()
 
+// Footer build info: the exact git tag when built from a release, otherwise
+// the short commit hash for dev/CI builds — mirrors mobile-hub's Tauri
+// `get_app_info` split between `releaseVersion` and `buildRevision`.
+function getBuildRevision(): { revision: string; isRelease: boolean } {
+  try {
+    const tag = execSync('git describe --tags --exact-match', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim()
+    return { revision: tag, isRelease: true }
+  } catch {
+    try {
+      const hash = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim()
+      return { revision: hash, isRelease: false }
+    } catch {
+      return { revision: 'unknown', isRelease: false }
+    }
+  }
+}
+
+const { revision: buildRevision, isRelease: buildIsRelease } = getBuildRevision()
+
 export default defineConfig({
+  define: {
+    __BUILD_REVISION__: JSON.stringify(buildRevision),
+    __BUILD_IS_RELEASE__: JSON.stringify(buildIsRelease),
+  },
   plugins: [vue()],
   css: {
     preprocessorOptions: {
