@@ -199,6 +199,8 @@ pub enum AppError {
     LedgerRangeNotCommitted,
     #[error("generated proof failed its own verification — refusing to return it")]
     ProofVerificationFailed,
+    #[error("invalid entries query: since_seq must be non-negative and limit must be a positive integer")]
+    InvalidEntriesQuery,
     #[error("a game may only create or change its own achievement definitions")]
     AchievementDefinitionForbidden,
     #[error("guardian set must be 1-10 distinct friends (excluding yourself), with threshold between 1 and the guardian count")]
@@ -427,6 +429,7 @@ impl IntoResponse for AppError {
             // `crate::settlement`). If it ever does, that's an internal bug
             // in proof generation, not a client-input problem.
             AppError::ProofVerificationFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::InvalidEntriesQuery => StatusCode::BAD_REQUEST,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
