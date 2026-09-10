@@ -24,8 +24,18 @@ function testRouter() {
       { path: '/friends', component: Home },
       { path: '/activity', component: Home },
       { path: '/profile', component: Home },
+      { path: '/connections', component: Home },
+      { path: '/guilds', component: Home },
+      { path: '/guilds/:id', name: 'guild', component: Home },
+      { path: '/guilds/:id/channels/:cid', name: 'guild-channel', component: Home },
+      { path: '/integrations/:slug', name: 'integration-profile', component: Home },
     ],
   })
+}
+
+const BASE_MOCKS = {
+  '/me/guilds': [],
+  '/me/connections': [],
 }
 
 beforeEach(() => {
@@ -37,7 +47,14 @@ beforeEach(() => {
 describe('Home', () => {
   it('welcomes the player by display name', async () => {
     useSessionStore().login('a-token')
-    mockFetchByPath({ '/me': profile, '/me/history': [], '/friends': [], '/friends/requests': [], '/presence': [] })
+    mockFetchByPath({
+      '/me': profile,
+      '/me/history': [],
+      '/friends': [],
+      '/friends/requests': [],
+      '/presence': [],
+      ...BASE_MOCKS,
+    })
 
     const router = testRouter()
     router.push('/')
@@ -48,7 +65,14 @@ describe('Home', () => {
 
   it('renders sensible empty states with no friends and no history', async () => {
     useSessionStore().login('a-token')
-    mockFetchByPath({ '/me': profile, '/me/history': [], '/friends': [], '/friends/requests': [], '/presence': [] })
+    mockFetchByPath({
+      '/me': profile,
+      '/me/history': [],
+      '/friends': [],
+      '/friends/requests': [],
+      '/presence': [],
+      ...BASE_MOCKS,
+    })
 
     const router = testRouter()
     router.push('/')
@@ -57,6 +81,9 @@ describe('Home', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('No activity yet'))
     expect(wrapper.text()).toContain('No friends online right now.')
     expect(wrapper.text()).toContain('Quick Actions')
+    expect(wrapper.text()).toContain("You haven't connected to any games yet.")
+    expect(wrapper.text()).toContain("You haven't joined a guild yet.")
+    expect(wrapper.text()).toContain('No guild messages yet.')
   })
 
   it('shows recent activity summaries and a View all link', async () => {
@@ -75,6 +102,7 @@ describe('Home', () => {
       '/friends': [],
       '/friends/requests': [],
       '/presence': [],
+      ...BASE_MOCKS,
     })
 
     const router = testRouter()
@@ -83,5 +111,61 @@ describe('Home', () => {
     const wrapper = mount(Home, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('You created your identity.'))
     expect(wrapper.text()).toContain('View all')
+  })
+
+  it('shows connected games, guilds, and their latest messages', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': profile,
+      '/me/history': [],
+      '/friends': [],
+      '/friends/requests': [],
+      '/presence': [],
+      '/me/connections': [
+        {
+          binding_id: 'bind-1',
+          game_id: 'game-1',
+          slug: 'echoes-of-aether',
+          name: 'Echoes of Aether',
+          established_at: '2026-09-01T00:00:00Z',
+          grants: [],
+        },
+      ],
+      '/me/guilds': [{ guild_id: 'guild-1', role_index: 0, joined_at: '2026-09-01T00:00:00Z' }],
+      '/guilds/guild-1': {
+        id: 'guild-1',
+        name: 'Celestial Forge',
+        tag: 'FORGE',
+        description: '',
+        owner: 'id-1',
+        created_at: '2026-09-01T00:00:00Z',
+        member_count: 42,
+        games: [],
+        join_policy: 'invite_only',
+        motd: null,
+        banner: null,
+        icon: null,
+        links: [],
+        recruiting: false,
+        game_breakdown_public: false,
+        favorite_games: [],
+      },
+      '/guilds/guild-1/channels': [
+        { id: 'chan-1', guild_id: 'guild-1', name: 'general', archived: false, created_at: '2026-09-01T00:00:00Z', announcement_only: false },
+      ],
+      '/guilds/guild-1/channels/chan-1/messages': [
+        { id: 'msg-1', channel_id: 'chan-1', author: 'id-2', body: "Let's run the dungeon tonight!", sent_at: new Date().toISOString() },
+      ],
+    })
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Home, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Echoes of Aether'))
+    expect(wrapper.text()).toContain('Celestial Forge')
+    expect(wrapper.text()).toContain('FORGE · 42 members')
+    await vi.waitFor(() => expect(wrapper.text()).toContain("Let's run the dungeon tonight!"))
+    expect(wrapper.text()).toContain('Featured Game')
   })
 })
