@@ -333,14 +333,14 @@ pub async fn revoke_passkey(
     // Row-locks every passkey of this identity for the duration of the
     // transaction, so a concurrent revoke of a different passkey from
     // another session can't both read "2 remaining" and both proceed
-    // unconfirmed, leaving zero.
-    let count_row = sqlx::query(
-        "SELECT COUNT(*) AS count FROM identity_keys WHERE identity_id = $1 FOR UPDATE",
-    )
-    .bind(identity_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let remaining_before_revoke: i64 = count_row.try_get("count")?;
+    // unconfirmed, leaving zero. `FOR UPDATE` can't be combined with an
+    // aggregate (`COUNT(*)`) — Postgres rejects that outright — so this
+    // fetches the locked rows themselves and counts them in Rust.
+    let locked_rows = sqlx::query("SELECT id FROM identity_keys WHERE identity_id = $1 FOR UPDATE")
+        .bind(identity_id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let remaining_before_revoke: i64 = locked_rows.len() as i64;
 
     guard_revoke_last_passkey(remaining_before_revoke, is_confirmed(&query))?;
 
