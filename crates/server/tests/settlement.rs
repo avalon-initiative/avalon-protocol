@@ -85,18 +85,35 @@ async fn wait_for_committed_seq(pool: &PgPool, issuer: &str) -> i64 {
     panic!("entry for issuer `{issuer}` never appeared in ledger_entries — is the outbox worker running?");
 }
 
-/// Polls `signed_tree_heads` for the smallest `tree_size >= at_least_seq`,
-/// up to ~30s — an STH is only produced once the *batch* containing
-/// `at_least_seq` has closed, which can be a moment after the row itself
-/// lands in `ledger_entries` (same transaction as the batch's own
-/// `ledger_batches` row, committed right after the loop that inserts
-/// entries — see `PostgresSettlementProvider::commit`).
-async fn wait_for_covering_sth(pool: &PgPool, at_least_seq: i64) -> i64 {
+/// This entry's rank among all committed entries, oldest first (1 =
+/// oldest) — `seq` is a real row identifier, not a dense position, so it
+/// can't be compared against `tree_size` (a leaf *count*) directly; `seq`
+/// can and does have gaps (see `crates/chain/src/postgres.rs`'s module doc
+/// comment). Same "count, don't subtract" approach the leaf-index
+/// computation below already uses, just 1-based instead of 0-based.
+async fn entry_rank(pool: &PgPool, seq: i64) -> i64 {
+    sqlx::query("SELECT COUNT(*) AS c FROM ledger_entries WHERE seq <= $1")
+        .bind(seq)
+        .fetch_one(pool)
+        .await
+        .expect("query failed")
+        .try_get("c")
+        .expect("c column")
+}
+
+/// Polls `signed_tree_heads` for the smallest `tree_size >= at_least_rank`
+/// (an entry's rank, from [`entry_rank`] — never a raw `seq`), up to ~30s —
+/// an STH is only produced once the *batch* containing this entry has
+/// closed, which can be a moment after the row itself lands in
+/// `ledger_entries` (same transaction as the batch's own `ledger_batches`
+/// row, committed right after the loop that inserts entries — see
+/// `PostgresSettlementProvider::commit`).
+async fn wait_for_covering_sth(pool: &PgPool, at_least_rank: i64) -> i64 {
     for _ in 0..15 {
         if let Some(row) = sqlx::query(
             "SELECT tree_size FROM signed_tree_heads WHERE tree_size >= $1 ORDER BY tree_size ASC LIMIT 1",
         )
-        .bind(at_least_seq)
+        .bind(at_least_rank)
         .fetch_optional(pool)
         .await
         .expect("query failed")
@@ -105,7 +122,7 @@ async fn wait_for_covering_sth(pool: &PgPool, at_least_seq: i64) -> i64 {
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    panic!("no signed_tree_heads row ever covered seq {at_least_seq}");
+    panic!("no signed_tree_heads row ever covered rank {at_least_rank}");
 }
 
 fn root_hash_bytes(hex_str: &str) -> [u8; 32] {
@@ -145,7 +162,8 @@ async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth()
 
     let issuer = register_throwaway_game(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
-    let tree_size = wait_for_covering_sth(&pool, seq).await;
+    let rank = entry_rank(&pool, seq).await;
+    let tree_size = wait_for_covering_sth(&pool, rank).await;
 
     // Fetch the STH covering this entry, over HTTP — exactly what a mirror
     // would do, not a DB read.
@@ -296,7 +314,8 @@ async fn tree_size_and_inclusion_proofs_stay_correct_across_a_seq_gap() {
         seq > burned_seq,
         "expected the new entry's seq ({seq}) to land after the burned one ({burned_seq})"
     );
-    let tree_size = wait_for_covering_sth(&pool, seq).await;
+    let rank = entry_rank(&pool, seq).await;
+    let tree_size = wait_for_covering_sth(&pool, rank).await;
 
     // The core assertion this fix guarantees: tree_size must equal the true
     // row count, never a raw seq value that the gap has inflated past it.
@@ -391,7 +410,8 @@ async fn consistency_proof_between_two_real_tree_sizes_verifies_client_side() {
 
     let issuer = register_throwaway_game(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
-    let second_tree_size = wait_for_covering_sth(&pool, seq).await;
+    let rank = entry_rank(&pool, seq).await;
+    let second_tree_size = wait_for_covering_sth(&pool, rank).await;
     assert!(second_tree_size >= first_tree_size);
 
     let first_sth: serde_json::Value = http
