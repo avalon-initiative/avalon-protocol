@@ -52,11 +52,16 @@ async fn test_pool() -> PgPool {
 type VirtualClient =
     Client<MemoryStore, MockUserValidationMethod, public_suffix::PublicSuffixList, ()>;
 
+/// Unlike `passkeys.rs`'s/`authenticate.rs`'s version of this helper, a
+/// virtual client here only ever drives one ceremony (`initiate_recovery`'s
+/// `.register()` for the recovering device) — the owner and guardians never
+/// touch WebAuthn at all (see `seed_identity_session`'s doc comment) — so
+/// `verified_user` expects exactly 1 `check_user` call, not 2.
 fn new_virtual_client() -> VirtualClient {
     let authenticator = Authenticator::new(
         Aaguid::new_empty(),
         MemoryStore::new(),
-        MockUserValidationMethod::verified_user(2),
+        MockUserValidationMethod::verified_user(1),
     );
     Client::new(authenticator).allows_insecure_localhost(true)
 }
@@ -535,9 +540,10 @@ async fn start_gives_no_distinguishable_signal_between_nonexistent_and_unconfigu
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (configured_owner, _configured_token) = seed_identity_session(&pool).await;
+    let (configured_owner, configured_token) = seed_identity_session(&pool).await;
     let (guardian_id, _guardian_token) = seed_identity_session(&pool).await;
     seed_friendship(&pool, configured_owner, guardian_id).await;
+    configure_guardians(&http, &base, &configured_token, &[guardian_id], 1).await;
     // Deliberately NOT calling configure_guardians for a second, real
     // identity — that one stays "exists but unconfigured".
     let (unconfigured_owner, _unconfigured_token) = seed_identity_session(&pool).await;
