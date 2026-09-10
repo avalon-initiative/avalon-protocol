@@ -36,12 +36,19 @@ const router = createRouter({
         { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue') },
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
-        // #282: generalized off /games; old paths redirect below.
-        { path: 'integrations', name: 'integrations', component: () => import('../views/GameDirectory.vue') },
+        // #282: generalized off /games; old paths redirect below. #273: public/unauthenticated,
+        // so requiresAuth: false overrides HubShell's inherited requiresAuth: true.
+        {
+          path: 'integrations',
+          name: 'integrations',
+          component: () => import('../views/GameDirectory.vue'),
+          meta: { requiresAuth: false },
+        },
         {
           path: 'integrations/:slug',
           name: 'integration-profile',
           component: () => import('../views/GameProfile.vue'),
+          meta: { requiresAuth: false },
         },
         { path: 'games', redirect: { name: 'integrations' } },
         { path: 'games/:slug', redirect: (to) => ({ name: 'integration-profile', params: to.params }) },
