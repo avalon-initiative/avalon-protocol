@@ -141,6 +141,13 @@ into a Hub-only or game-only corner.
   [#97](https://github.com/LunarVagabond/avalon-protocol/issues/97) already
   established for friend requests and presence, extended here to check every
   pair within a conversation's participant set, not just a fixed pair.
+- **Relationship gate on creation** ([#269](https://github.com/LunarVagabond/avalon-protocol/issues/269)):
+  `create_conversation` requires every named participant to already be a
+  friend or mutual guild member of the caller, reusing
+  `friends::friend_partners` and `discovery::mutual_guild_members`. This also
+  closes an identity-existence oracle the endpoint previously had — a
+  nonexistent id can't satisfy the relationship check either, so it's
+  rejected the same way as an existing-but-unrelated id, never distinguishably.
 - No voice module, session type, or transport of any kind exists.
 - No notification delivery mechanism exists; `avalon-server` has no
   websocket/push path yet (same gap noted in [presence.md](./presence.md)).
@@ -160,6 +167,10 @@ into a Hub-only or game-only corner.
   [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105) Hub
   direct-message UI. The remainder of the epic is backlog — not scheduled
   ahead of #14/#19.
+- [#269](https://github.com/LunarVagabond/avalon-protocol/issues/269) —
+  closed the identity-existence oracle and unsolicited-conversation gap in
+  #102's `create_conversation` by requiring an existing relationship
+  (friend or mutual guild member), described above.
 - [#103](https://github.com/LunarVagabond/avalon-protocol/issues/103) —
   decision: voice transport, signaling, and provider (closed/decided:
   deferred indefinitely). Tracked as
