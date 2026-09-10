@@ -412,7 +412,10 @@ impl RegisterGameArgs {
 }
 
 /// `avalon register-game` (issue #29) — registers a test game against #26's
-/// `POST /games`, generating a fresh Ed25519 signing keypair locally (the
+/// registration endpoint, sent to `POST /integrations` (#293's canonical
+/// alias for the same `POST /games` handler — a `register-integrator`
+/// command alias is a separate, lower-priority follow-up, not this),
+/// generating a fresh Ed25519 signing keypair locally (the
 /// only algorithm `crate::auth::verify_event_signature` on the server side
 /// can verify — see `crates/server/src/games.rs`). Only the public key is
 /// ever sent to the server; the private key is saved locally (mirroring
@@ -439,11 +442,11 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
     });
 
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrations"))
         .json(&request_body)
         .send()
         .await
-        .expect("POST /games request failed — is `make start` running?");
+        .expect("POST /integrations request failed — is `make start` running?");
 
     if response.status() == reqwest::StatusCode::CONFLICT {
         eprintln!(
@@ -465,14 +468,14 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
     let response_body: serde_json::Value = response
         .json()
         .await
-        .expect("POST /games response was not JSON");
+        .expect("POST /integrations response was not JSON");
     let game_id = response_body["id"]
         .as_str()
-        .expect("POST /games response missing id")
+        .expect("POST /integrations response missing id")
         .to_string();
     let key_id = response_body["credential"]["key_id"]
         .as_str()
-        .expect("POST /games response missing credential.key_id")
+        .expect("POST /integrations response missing credential.key_id")
         .to_string();
 
     // The game's signing key: nothing else lets this CLI reuse it later
@@ -552,10 +555,10 @@ async fn register_game_auth_sanity_check(
 
     let response = http
         .get(format!("{base}/games/whoami"))
-        .header("x-avalon-game-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
+        .header("x-avalon-integrator-key-id", key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(
-            "x-avalon-game-signature",
+            "x-avalon-integrator-signature",
             BASE64.encode(signature.to_bytes()),
         )
         .send()

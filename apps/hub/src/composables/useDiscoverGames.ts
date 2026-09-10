@@ -1,10 +1,11 @@
-// Game directory (issue #270): GET /games behind reactive filters (search
-// text, sort). Mirrors useDiscoverGuilds.ts's shape closely — server-side
-// filtering/sorting/pagination via the endpoint's own `next_cursor`
-// (crates/server/src/games.rs's keyset pagination — never re-derived or
-// re-sorted client-side, since only the server's `ORDER BY` matches its
-// own cursor comparison) — but GET /games is public and unauthenticated,
-// so unlike useDiscoverGuilds this needs no session token at all.
+// Game directory (issue #270): GET /integrations (#293's canonical alias
+// for GET /games) behind reactive filters (search text, sort). Mirrors
+// useDiscoverGuilds.ts's shape closely — server-side filtering/sorting/
+// pagination via the endpoint's own `next_cursor` (crates/server/src/games.rs's
+// keyset pagination — never re-derived or re-sorted client-side, since only
+// the server's `ORDER BY` matches its own cursor comparison) — but this
+// endpoint is public and unauthenticated, so unlike useDiscoverGuilds this
+// needs no session token at all.
 import { ref, watch } from 'vue'
 import * as api from '../api/client'
 import { buildGamesListQueryString } from '../api/games'

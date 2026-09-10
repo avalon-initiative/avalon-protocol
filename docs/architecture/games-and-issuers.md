@@ -137,18 +137,32 @@ Game A continues issuing under k2.
   shape as `webauthn_ceremonies`), signed by the game's registered key,
   verified via `auth::verify_event_signature`. Registering grants no
   capability — #27 owns the actual grant/consent logic.
+- **`/integrations` as the canonical public API path (#293)**: `POST
+  /integrations` dual-routes to the same registration handler as `POST
+  /games` (not a redirect — a `POST` redirect silently becomes a `GET` in
+  many clients); `GET /integrations`/`GET /integrations/{slug}` are
+  canonical, with `GET /games`/`GET /games/{slug}` kept working as real HTTP
+  redirects. The challenge-response auth headers gained generic
+  `x-avalon-integrator-key-id`/`x-avalon-integrator-challenge-id`/
+  `x-avalon-integrator-signature` equivalents alongside the original
+  `x-avalon-game-*` names — either is accepted from a caller; this repo's
+  own SDK/CLI send only the new name. Neither the `/games/{slug}/challenge`
+  and `/games/whoami` paths nor any JSON field were renamed by this pass.
 - `crates/protocol/src/achievements.rs` — `Issuer::Game(GameId)`; no status,
   no key set.
 - `crates/cli` — `avalon register-game --slug <slug> --name <name>
   --developer <dev> [--capability <cap>]... [--server <url>]` (#29): generates
-  a fresh Ed25519 keypair locally, calls `POST /games` with the public key,
-  saves the private key to `_running/keys/game-<slug>.signing-key` (mirroring
+  a fresh Ed25519 keypair locally, calls `POST /integrations` (#293's
+  canonical alias for `POST /games`) with the public key, saves the private
+  key to `_running/keys/game-<slug>.signing-key` (mirroring
   `create-identity`'s local-key persistence) and prints it once with a
   loss-of-key warning — the server only ever stores the public half. Also
   exercises the challenge-response round trip
-  (`POST /games/{slug}/challenge` → `GET /games/whoami`) once as a sanity
-  check. A slug collision (409) prints a clear message instead of a raw HTTP
-  error.
+  (`POST /games/{slug}/challenge` → `GET /games/whoami`, sending the
+  `x-avalon-integrator-*` header names) once as a sanity check. A slug
+  collision (409) prints a clear message instead of a raw HTTP error. The
+  command name itself is unchanged — a `register-integrator` alias is a
+  separate, lower-priority follow-up (#293's own scope note).
 
 ## Decisions and tickets
 
@@ -165,6 +179,10 @@ Game A continues issuing under k2.
   `GameId`/`Issuer::Game`/the `games` table/`game.*` event kinds.
 - [#282](https://github.com/LunarVagabond/avalon-protocol/issues/282) —
   implementation of #275, described above.
+- [#293](https://github.com/LunarVagabond/avalon-protocol/issues/293) —
+  `/integrations` as the canonical public API path, `/games` kept as a
+  compatibility path, generic `x-avalon-integrator-*` auth headers,
+  described above.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
   identity implementation (blocked by #80).
 - [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) — ledger
