@@ -23,4 +23,9 @@ pub struct AppState {
     /// In-process, per-node presence state (issue #16). Never persisted —
     /// see `crate::presence` module docs / ADR #78.
     pub presence: PresenceStore,
+    /// `AVALON_SETTLEMENT_SUBMIT_KEY` (issue #313) — the bearer credential
+    /// `POST /ledger/submit` requires. `None` means the endpoint refuses
+    /// every request rather than accepting an unauthenticated one; see
+    /// `crate::settlement::submit_ledger_batch`.
+    pub settlement_submit_key: Option<String>,
 }

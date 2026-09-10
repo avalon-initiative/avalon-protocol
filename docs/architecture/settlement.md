@@ -366,6 +366,34 @@ implemented, see "Today in the repo" below.
     pass (retried next tick) the moment every candidate peer's response
     for a given entry fails to verify, rather than accepting a partial,
     unverifiable backfill.
+  - **Feeds the local Indexer too, not just `mirrored_entries` (#313).**
+    Once an entry's inclusion is verified, `backfill` decodes it into the
+    same `ProtocolEvent` shape `outbox::drain_once` builds from
+    `protocol_outbox` rows, and applies it to this node's own
+    `PostgresIndexer` (`apply_in_tx`) in the same transaction as the
+    `mirrored_entries` insert. This is what lets a node with no Settlement
+    role of its own (`AVALON_SETTLEMENT_REMOTE_URL` set — see
+    [`nodes.md`](./nodes.md)) still serve real, independently-verified
+    reads from its own local Postgres, rather than either sharing another
+    node's database or trusting unverified peer content.
+- **`POST /ledger/submit`, node-to-node write endpoint (#313).** The one
+  write route in `settlement.rs` — every other endpoint in this section is
+  a public, unauthenticated read, deliberately (see "all four are public
+  reads" above); this one accepts an `EventBatch` and runs it
+  through the exact same `chain.commit` call the local outbox worker
+  already runs for itself, so it is privileged rather than public.
+  `outbox::run_worker` calls it instead of committing locally whenever
+  `AVALON_SETTLEMENT_REMOTE_URL` is configured — see
+  [`nodes.md`](./nodes.md) for the full read/write design. **Auth: a
+  shared-secret bearer token**, `AVALON_SETTLEMENT_SUBMIT_KEY`, checked
+  against the `Authorization: Bearer <key>` header
+  (`crates/server/src/settlement.rs::submit_ledger_batch`) — chosen because
+  nothing more specific for trusted node-to-node calls already existed in
+  this codebase to reuse (every other authenticated route checks a
+  player's session or a game's registered credential, neither of which
+  fits "one operator's own two nodes talking to each other"). A node with
+  no `AVALON_SETTLEMENT_SUBMIT_KEY` configured refuses every request to
+  this endpoint outright, rather than leaving it open.
 - **Genesis and network identity (#173).** A singleton `chain_genesis` table
   commits the ledger to a `network_id` (e.g. `avalon-mainnet-1` vs.
   `avalon-dev-<name>`, from the required `AVALON_NETWORK_ID` env var) —

@@ -21,9 +21,18 @@
 //! row). Rows are marked with the `batch_id` the commit actually produced,
 //! not left `NULL` — the column has been reserved for this since #71's
 //! `0003_outbox` migration.
+//!
+//! **Remote-submit mode (issue #313).** When `AVALON_SETTLEMENT_REMOTE_URL`
+//! is configured, a drain tick posts its `EventBatch` to `POST
+//! /ledger/submit` on the named remote Settlement authority instead of
+//! calling `chain.commit` against this node's own pool — the authority runs
+//! the exact same `chain.commit` call for it that it runs for its own local
+//! outbox, so there's still exactly one canonical committer. Unset (the
+//! default), this worker behaves exactly as it always has — see
+//! [`RemoteSubmitConfig::from_env`] and [`RemoteSubmitConfig::submit`].
 
-use avalon_chain::{PostgresSettlementProvider, SettlementProvider};
-use avalon_protocol::events::{EventBatch, ProtocolEvent};
+use avalon_chain::{PostgresSettlementProvider, SettlementError, SettlementProvider};
+use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -47,20 +56,90 @@ pub async fn enqueue(
 const DRAIN_BATCH_SIZE: i64 = 20;
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Drains pending outbox rows into `chain`, oldest first, forever. Spawned
-/// once at server startup (`main.rs`) as a background task in the same
-/// process — not a separate binary or deployment. Never returns; intended
-/// to be handed to `tokio::spawn`.
-pub async fn run_worker(pool: PgPool, chain: PostgresSettlementProvider) {
+/// Node-to-node config for posting drained batches to a remote Settlement
+/// authority instead of committing them locally — issue #313. Bundles the
+/// `reqwest::Client` alongside the target so `run_worker` only builds one.
+pub struct RemoteSubmitConfig {
+    client: reqwest::Client,
+    /// Base URL of the remote Settlement authority, no trailing slash.
+    url: String,
+    /// `AVALON_SETTLEMENT_SUBMIT_KEY` — sent as a bearer credential on every
+    /// submit. See `crate::settlement::submit_ledger_batch`'s doc comment
+    /// for why this is the chosen node-to-node auth mechanism.
+    submit_key: Option<String>,
+}
+
+impl RemoteSubmitConfig {
+    /// `AVALON_SETTLEMENT_REMOTE_URL` unset (the default) returns `None`,
+    /// leaving `run_worker` on its original local-commit path — this ticket
+    /// must be purely additive. `AVALON_SETTLEMENT_SUBMIT_KEY` is read here
+    /// too (sent as this node's own credential to the remote authority) but
+    /// is optional at the type level; an authority with no submit key of
+    /// its own configured refuses every submission regardless (see
+    /// `crate::settlement::submit_ledger_batch`), so an operator who forgets
+    /// it on one side simply gets every submission rejected, not silently
+    /// unauthenticated.
+    pub fn from_env() -> Option<Self> {
+        let url = std::env::var("AVALON_SETTLEMENT_REMOTE_URL").ok()?;
+        let url = url.trim().trim_end_matches('/').to_string();
+        if url.is_empty() {
+            return None;
+        }
+        let submit_key = std::env::var("AVALON_SETTLEMENT_SUBMIT_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+        Some(Self {
+            client: reqwest::Client::new(),
+            url,
+            submit_key,
+        })
+    }
+
+    async fn submit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+        let mut request = self
+            .client
+            .post(format!("{}/ledger/submit", self.url))
+            .json(batch);
+        if let Some(key) = &self.submit_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| SettlementError::Storage(format!("remote submit request failed: {e}")))?
+            .error_for_status()
+            .map_err(|e| {
+                SettlementError::Storage(format!("remote submit rejected by authority: {e}"))
+            })?;
+        response.json::<Commitment>().await.map_err(|e| {
+            SettlementError::Storage(format!("remote submit returned an unparseable body: {e}"))
+        })
+    }
+}
+
+/// Drains pending outbox rows, oldest first, forever — into `chain`
+/// directly, or (issue #313) into a remote Settlement authority named by
+/// `remote`. Spawned once at server startup (`main.rs`) as a background
+/// task in the same process — not a separate binary or deployment. Never
+/// returns; intended to be handed to `tokio::spawn`.
+pub async fn run_worker(
+    pool: PgPool,
+    chain: PostgresSettlementProvider,
+    remote: Option<RemoteSubmitConfig>,
+) {
     loop {
-        if let Err(err) = drain_once(&pool, &chain).await {
+        if let Err(err) = drain_once(&pool, &chain, remote.as_ref()).await {
             eprintln!("outbox worker: {err}");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
-async fn drain_once(pool: &PgPool, chain: &PostgresSettlementProvider) -> Result<(), sqlx::Error> {
+async fn drain_once(
+    pool: &PgPool,
+    chain: &PostgresSettlementProvider,
+    remote: Option<&RemoteSubmitConfig>,
+) -> Result<(), sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, event FROM protocol_outbox WHERE committed_at IS NULL ORDER BY enqueued_at LIMIT $1",
     )
@@ -113,7 +192,17 @@ async fn drain_once(pool: &PgPool, chain: &PostgresSettlementProvider) -> Result
     // was partially settled. Still logged, though — a `commit` that fails
     // every tick (e.g. a missing signing key) must not fail silently
     // forever; the pending rows alone don't say why they're stuck.
-    match chain.commit(&batch).await {
+    //
+    // Issue #313: `remote` is `None` on every deployment that hasn't set
+    // `AVALON_SETTLEMENT_REMOTE_URL` — `chain.commit` below is the exact
+    // same call this worker has always made. Never both: exactly one
+    // Settlement authority ever accepts writes for a network, so this is
+    // either-or, never a local-then-remote fallback.
+    let commit_result = match remote {
+        None => chain.commit(&batch).await,
+        Some(remote) => remote.submit(&batch).await,
+    };
+    match commit_result {
         Ok(commitment) => {
             for id in pending_ids {
                 sqlx::query(

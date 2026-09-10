@@ -318,10 +318,18 @@ pub struct MirroredEntry {
 /// STH before calling this — this function itself does not verify
 /// anything; see `avalon-server`'s mirror-watcher for the verification
 /// step.
-pub async fn insert_mirrored_entry(
-    pool: &PgPool,
+///
+/// Generic over `sqlx::PgExecutor` (a bare `&PgPool`, or `&mut **tx` for a
+/// transaction already in progress) so issue #313's local-indexer-apply
+/// step can share the exact transaction this write lands in, rather than
+/// committing this row and applying the projection separately.
+pub async fn insert_mirrored_entry<'e, E>(
+    executor: E,
     entry: &MirroredEntry,
-) -> Result<(), SettlementError> {
+) -> Result<(), SettlementError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     sqlx::query(
         r#"
         INSERT INTO mirrored_entries
@@ -344,7 +352,7 @@ pub async fn insert_mirrored_entry(
     .bind(&entry.entry_hash)
     .bind(entry.batch_id)
     .bind(entry.verified_tree_size)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
     Ok(())

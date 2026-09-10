@@ -68,6 +68,9 @@ async fn main() {
         indexer,
         webauthn,
         presence: avalon_server::presence::PresenceStore::from_env(),
+        settlement_submit_key: std::env::var("AVALON_SETTLEMENT_SUBMIT_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -90,8 +93,19 @@ async fn main() {
     }
 
     // Drains the identity/etc. outbox into the ledger at its own pace —
-    // see crates/server/src/outbox.rs (issue #71).
-    tokio::spawn(outbox::run_worker(pool.clone(), chain.clone()));
+    // see crates/server/src/outbox.rs (issue #71). `AVALON_SETTLEMENT_REMOTE_URL`
+    // (issue #313) switches this from committing locally to posting each
+    // batch to a remote Settlement authority; unset (the default), nothing
+    // changes.
+    let remote_submit = outbox::RemoteSubmitConfig::from_env();
+    if remote_submit.is_some() {
+        println!("avalon-server: outbox committing via remote Settlement authority (AVALON_SETTLEMENT_REMOTE_URL set)");
+    }
+    tokio::spawn(outbox::run_worker(
+        pool.clone(),
+        chain.clone(),
+        remote_submit,
+    ));
 
     // Hard-deletes guild message archive rows past their retention window —
     // see crates/server/src/guild_messages.rs (issue #253).
@@ -107,6 +121,7 @@ async fn main() {
         tokio::spawn(mirror_watcher::run_worker(
             pool.clone(),
             chain.clone(),
+            state.indexer.clone(),
             mirror_config,
         ));
     }
