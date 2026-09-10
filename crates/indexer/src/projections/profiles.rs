@@ -135,6 +135,14 @@ pub async fn apply(
     let genres_provided = write.favorite_genres.is_some();
     let favorite_genres = write.favorite_genres.clone().unwrap_or_default();
 
+    // `display_name`/`discriminator` are NOT NULL columns, but this write
+    // can carry neither (a `profile.updated` that only touched e.g. `bio`)
+    // — Postgres validates NOT NULL on the tentative INSERT row even when
+    // ON CONFLICT will redirect to the UPDATE branch below, so the VALUES
+    // clause can't pass NULL through directly the way avatar_url/bio/
+    // favorite_genres/pronouns do. COALESCE to '' there (never actually
+    // read back: the UPDATE branch's CASE ignores it and keeps
+    // profiles.display_name/discriminator whenever $2/$3 is NULL).
     sqlx::query(
         r#"
         INSERT INTO profiles (
@@ -142,14 +150,14 @@ pub async fn apply(
             bio, favorite_genres, pronouns
         )
         VALUES (
-            $1, $2, $3, CASE WHEN $5 THEN $4 ELSE NULL END,
+            $1, COALESCE($2, ''), COALESCE($3, ''), CASE WHEN $5 THEN $4 ELSE NULL END,
             CASE WHEN $7 THEN $6 ELSE NULL END,
             CASE WHEN $9 THEN $8 ELSE '{}' END,
             CASE WHEN $11 THEN $10 ELSE NULL END
         )
         ON CONFLICT (identity_id) DO UPDATE SET
-            display_name = COALESCE(EXCLUDED.display_name, profiles.display_name),
-            discriminator = COALESCE(EXCLUDED.discriminator, profiles.discriminator),
+            display_name = CASE WHEN $2 IS NOT NULL THEN EXCLUDED.display_name ELSE profiles.display_name END,
+            discriminator = CASE WHEN $3 IS NOT NULL THEN EXCLUDED.discriminator ELSE profiles.discriminator END,
             avatar_url = CASE WHEN $5 THEN EXCLUDED.avatar_url ELSE profiles.avatar_url END,
             bio = CASE WHEN $7 THEN EXCLUDED.bio ELSE profiles.bio END,
             favorite_genres = CASE WHEN $9 THEN EXCLUDED.favorite_genres ELSE profiles.favorite_genres END,
