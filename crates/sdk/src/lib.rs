@@ -14,6 +14,7 @@
 //! `docs/architecture/synchronization.md` — nothing in `AvalonClient`/
 //! `Session` writes to it yet; that's the deferred-submission engine, #111.
 
+pub mod conversations;
 pub mod guilds;
 pub mod social;
 pub mod sync_journal;
@@ -36,6 +37,16 @@ pub enum SdkError {
     ServerError(reqwest::StatusCode),
     #[error("presence websocket connection failed: {0}")]
     WebSocket(String),
+    /// The server rejected a conversation read or send with "not a
+    /// participant" (`crates/server/src/conversations.rs::require_unblocked_participant`).
+    /// The server deliberately returns this identical error whether the
+    /// caller was never a participant *or* is a blocked one (issue #97:
+    /// "never reveal you've been blocked, not even indirectly") — this
+    /// variant carries nothing beyond that fact on purpose. Do not add a
+    /// field to it that would let a caller distinguish the two cases; doing
+    /// so would defeat the server-side protection this type is mirroring.
+    #[error("not a participant in this conversation")]
+    NotConversationParticipant,
     #[error("not yet implemented")]
     NotImplemented,
 }
