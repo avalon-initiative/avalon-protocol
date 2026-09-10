@@ -9,7 +9,7 @@
 
 This is the narrative design document. The normative architecture reference —
 invariants, authority boundaries, what the code is held to — lives in
-[`architecture/`](architecture/README.md). Decisions are recorded as GitHub
+[`architecture/`](../architecture/README.md). Decisions are recorded as GitHub
 issues: [decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record)
 and [still open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen).
 
@@ -732,7 +732,7 @@ The reference implementation is a Cargo workspace of six crates under `crates/`
 (confirmed as the intended shape in [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69)):
 
 * **`avalon-protocol`** — the protocol itself. Pure types and traits: identity, game bindings, attestations, capabilities, guilds, events. No I/O, no storage, no network calls. New domains become modules here, not new crates.
-* **`avalon-chain`** — the settlement boundary (`SettlementProvider`) and its milestone-1 implementation: a hash-chained, append-only ledger. It does not need to be a blockchain today. It needs to behave like a verifiable log where it matters: tamper-evident, independently verifiable, mirrorable. See [architecture/settlement.md](architecture/settlement.md).
+* **`avalon-chain`** — the settlement boundary (`SettlementProvider`) and its milestone-1 implementation: a hash-chained, append-only ledger. It does not need to be a blockchain today. It needs to behave like a verifiable log where it matters: tamper-evident, independently verifiable, mirrorable. See [architecture/settlement.md](../architecture/settlement.md).
 * **`avalon-indexer`** — the query layer. Consumes durable protocol events and maintains read models that can be rebuilt from history at any time. Kept separate from `avalon-chain` on purpose: settlement is not querying.
 * **`avalon-server`** — the network-facing service: identity, auth, social graph, guilds, presence, game registration, achievement verification. The one backend every client (the Hub, the mobile Hub, games via the SDK) talks to, and the thing a self-hosted operator actually runs.
 * **`avalon-sdk`** — the client library game developers depend on. A game never depends on `avalon-server` or `avalon-chain` directly.
