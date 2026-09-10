@@ -156,7 +156,7 @@ the [visibility](./privacy.md) rules that apply to those identities.
   / `total players ever` come from `crates/indexer/src/projections/game_bindings.rs`
   (its own `indexer_game_bindings` table, decoded from
   `game.binding_established`/`game.binding_ended`, migration
-  `0035_indexer_game_bindings`). The three achievement metrics come from
+  `0039_indexer_game_bindings`). The three achievement metrics come from
   `crates/indexer/src/projections/attestations.rs`, reading the existing
   `indexer_attestations` table. `crates/indexer/src/registry.rs::compute_for_game`
   composes both into a `GameRegistryMetrics` where every field is a
