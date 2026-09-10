@@ -578,6 +578,56 @@ export interface GameResponse {
   requested_capabilities: string[]
 }
 
+// Issue #270's game directory board — a distinct, narrower shape than
+// GameResponse (no `requested_capabilities`, matching
+// crates/server/src/games.rs::GameSummary field-for-field), since a
+// directory card has no reason to fetch a field it doesn't show — same
+// reasoning DiscoverGuildSummary above already documents for guilds.
+export interface GameSummary {
+  id: string
+  slug: string
+  name: string
+  developer: string
+  registered_at: string
+  status: string
+}
+
+export interface ListGamesResponse {
+  games: GameSummary[]
+  // Present (non-null) only when another page exists — pass back as
+  // `cursor=` to fetch it.
+  next_cursor: string | null
+}
+
+// Query params for GET /games — all optional, mirrors
+// crates/server/src/games.rs::ListGamesQuery.
+export interface ListGamesParams {
+  q?: string
+  sort?: 'newest' | 'name'
+  limit?: number
+  cursor?: string
+}
+
+// One registry metric (issue #261), matching
+// crates/server/src/registry.rs::MetricResponse field-for-field — never
+// rendered as a bare `value` anywhere in the Hub (issue #270's own
+// invariant); see AvalonMetricTile in @avalon/ui.
+export interface MetricResponse {
+  value: number
+  definition: string
+  class: string
+}
+
+// GET /games/{slug}/registry's response (issue #261), matching
+// crates/server/src/registry.rs::GameRegistryResponse field-for-field.
+export interface GameRegistryResponse {
+  players: MetricResponse
+  total_players_ever: MetricResponse
+  achievements_issued: MetricResponse
+  achievements_revoked: MetricResponse
+  unique_achievement_holders: MetricResponse
+}
+
 export interface ConnectGameRequest {
   capabilities: string[]
 }

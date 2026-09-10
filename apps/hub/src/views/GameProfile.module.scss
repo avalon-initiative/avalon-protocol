@@ -1,0 +1,23 @@
+/* GameProfile.vue-specific styles (issue #270) — page.module.scss still
+   owns the shared header/error scaffolding. */
+.heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--av-space-3);
+}
+
+.statusBadge {
+  font-size: var(--av-text-xs);
+  font-weight: 600;
+  color: var(--av-color-danger);
+  background: var(--av-color-danger-soft);
+  border-radius: var(--av-radius-pill);
+  padding: 0.125rem 0.5rem;
+  text-transform: uppercase;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--av-space-3);
+}

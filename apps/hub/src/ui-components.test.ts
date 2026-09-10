@@ -21,8 +21,10 @@ import {
   AvalonForm,
   AvalonFriendRequestRow,
   AvalonFriendRow,
+  AvalonGameCard,
   AvalonGuildCard,
   AvalonGuildMemberRow,
+  AvalonMetricTile,
   AvalonModal,
   AvalonPresenceBadge,
   AvalonRoleBadge,
@@ -278,6 +280,63 @@ describe('AvalonGuildCard', () => {
 
     const withoutIcon = mount(AvalonGuildCard, { props: { name: 'A', tag: 'AA', memberCount: 1 } })
     expect(withoutIcon.find('img').exists()).toBe(false)
+  })
+})
+
+describe('AvalonGameCard', () => {
+  const baseProps = {
+    name: 'Ashen Realms',
+    slug: 'ashen-realms',
+    developer: 'Ashen Studios',
+    status: 'active',
+    registeredAt: 'Jan 12, 2026',
+  }
+
+  it('renders name, developer, and registration date', () => {
+    const wrapper = mount(AvalonGameCard, { props: baseProps })
+    expect(wrapper.text()).toContain('Ashen Realms')
+    expect(wrapper.text()).toContain('Ashen Studios')
+    expect(wrapper.text()).toContain('Jan 12, 2026')
+  })
+
+  it('emits select when clicked', async () => {
+    const wrapper = mount(AvalonGameCard, { props: baseProps })
+    await wrapper.trigger('click')
+    expect(wrapper.emitted('select')).toHaveLength(1)
+  })
+
+  it('shows no status badge for "active", a visible badge otherwise', () => {
+    const active = mount(AvalonGameCard, { props: baseProps })
+    expect(active.text()).not.toContain('active')
+
+    const suspended = mount(AvalonGameCard, { props: { ...baseProps, status: 'suspended' } })
+    expect(suspended.text()).toContain('suspended')
+
+    const revoked = mount(AvalonGameCard, { props: { ...baseProps, status: 'revoked' } })
+    expect(revoked.text()).toContain('revoked')
+  })
+})
+
+describe('AvalonMetricTile', () => {
+  const baseProps = {
+    label: 'Players',
+    value: 2481392,
+    definition: 'Distinct identities with an active GameBinding.',
+    metricClass: 'durable-derived',
+  }
+
+  it('renders the label, definition, and class alongside the value — never a bare number', () => {
+    const wrapper = mount(AvalonMetricTile, { props: baseProps })
+    expect(wrapper.text()).toContain('Players')
+    expect(wrapper.text()).toContain('Distinct identities with an active GameBinding.')
+    expect(wrapper.text()).toContain('durable-derived')
+    expect(wrapper.text()).toContain('2,481,392')
+  })
+
+  it('renders zero the same way as any other value, not blank or an error', () => {
+    const wrapper = mount(AvalonMetricTile, { props: { ...baseProps, value: 0 } })
+    expect(wrapper.text()).toContain('0')
+    expect(wrapper.text()).toContain('durable-derived')
   })
 })
 

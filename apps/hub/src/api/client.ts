@@ -26,6 +26,7 @@ import type {
   FriendRequestResponse,
   FriendshipResponse,
   GameBreakdownResponse,
+  GameRegistryResponse,
   GameResponse,
   GuardianRequestSummary,
   GuardianSettingsResponse,
@@ -36,6 +37,7 @@ import type {
   GuildResponse,
   HistoryEntryResponse,
   ListEventsQuery,
+  ListGamesResponse,
   MessageResponse,
   MyConnectionsResponse,
   MyGuildMembershipResponse,
@@ -803,6 +805,26 @@ export function listEventRsvps(
 
 export function getGame(token: string, slug: string): Promise<GameResponse> {
   return request(`/games/${slug}`, { token })
+}
+
+// Issue #270's game directory + profile page: GET /games and GET
+// /games/{slug} are both public and unauthenticated
+// (crates/server/src/games.rs), so unlike getGame above (always called
+// from an already-authenticated screen) these take no bearer token at
+// all — a logged-out visitor to the Hub could browse them exactly as-is
+// once routing allows that (not scoped here).
+export function listGames(queryString: string): Promise<ListGamesResponse> {
+  return request(`/games${queryString}`)
+}
+
+export function getGamePublic(slug: string): Promise<GameResponse> {
+  return request(`/games/${slug}`)
+}
+
+// Issue #261's registry-metrics endpoint — same public, unauthenticated
+// visibility as getGame/listGames.
+export function getGameRegistry(slug: string): Promise<GameRegistryResponse> {
+  return request(`/games/${slug}/registry`)
 }
 
 // Player-session only — a game credential never grants itself anything

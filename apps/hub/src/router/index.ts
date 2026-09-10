@@ -36,6 +36,8 @@ const router = createRouter({
         { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue') },
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
+        { path: 'games', name: 'games', component: () => import('../views/GameDirectory.vue') },
+        { path: 'games/:slug', name: 'game-profile', component: () => import('../views/GameProfile.vue') },
         { path: 'guilds', name: 'guilds', component: () => import('../views/Guilds.vue') },
         // Issue #241: the Channels tab lives inside Guild.vue itself now
         // (a persistent channel sidebar, no route hop to switch channels),

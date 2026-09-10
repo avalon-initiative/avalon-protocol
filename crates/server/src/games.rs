@@ -53,22 +53,43 @@
 //! game actually declared, and the Hub's consent view reads it to render
 //! the game's name/developer/requested capabilities.
 //!
+//! **`GET /games` ([`list_games`], issue #270).** Same public,
+//! unauthenticated visibility level as [`get_game`], cursor-paginated the
+//! same way `crates/server/src/guilds.rs::discover_guilds` already is for
+//! guilds (issue #154) — [`build_games_list_query`] mirrors
+//! `build_discover_query`'s split-out-for-unit-testing shape and keyset
+//! `(sort key, id) < / > (subquery for cursor id)` pagination exactly, just
+//! over `games` instead of `guilds`. Milestone-1 stand-in: a direct query,
+//! not yet a real indexer read model, same pragmatic call `discover_guilds`
+//! already made. Only `name`/`newest` sorts exist — no ranking, no score,
+//! matching #89's hard invariant that this ticket explicitly carries
+//! forward into the Hub's game directory. Returns each game's public
+//! fields only ([`GameSummary`]: id/slug/name/developer/registered_at/
+//! status) — no `requested_capabilities`, since a directory listing has no
+//! reason to fetch a field the card doesn't show (same reasoning
+//! `DiscoverGuildSummary` already documents).
+//!
 //! Deferred to #84: key rotation, multiple keys, revocation, issuer status
 //! transitions — this only ever records the first key and sets
-//! `status = active`.
+//! `status = active`. Today `GameStatus` only ever has the `Active`
+//! variant, so nothing in this repo can yet produce a `suspended`/
+//! `revoked`/`deprecated` row — the Hub still renders `status` as an
+//! opaque string (visibly distinct from `active`) rather than assuming the
+//! closed vocabulary `docs/architecture/game-registry.md` sketches, so it
+//! doesn't need to change again once #84 lands.
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::games::GameStatus;
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::permissions::Capability;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -79,6 +100,12 @@ use crate::state::AppState;
 
 const GAME_CHALLENGE_TTL_MINUTES: i64 = 5;
 const GAME_CHALLENGE_NONCE_BYTES: usize = 32;
+
+/// Default/maximum page size for `GET /games` (issue #270) — same
+/// "small default, capped maximum" shape
+/// `guilds::DEFAULT_DISCOVER_PAGE_SIZE`/`MAX_DISCOVER_PAGE_SIZE` already use.
+const DEFAULT_GAMES_LIST_PAGE_SIZE: i64 = 20;
+const MAX_GAMES_LIST_PAGE_SIZE: i64 = 100;
 
 const GAME_KEY_ID_HEADER: &str = "x-avalon-game-key-id";
 const GAME_CHALLENGE_ID_HEADER: &str = "x-avalon-game-challenge-id";
@@ -324,6 +351,150 @@ pub async fn get_game(
     }))
 }
 
+/// `sort=` values `GET /games` (issue #270) accepts — deliberately just
+/// these two, matching #89's "no ranking, no score" invariant: `newest`
+/// (default) and `name`, mirroring `guilds::DiscoverSort` minus the
+/// membership-derived `most_members` option games have no equivalent of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GamesListSort {
+    Newest,
+    Name,
+}
+
+impl GamesListSort {
+    fn parse(raw: Option<&str>) -> Result<GamesListSort, AppError> {
+        Ok(match raw {
+            None | Some("newest") => GamesListSort::Newest,
+            Some("name") => GamesListSort::Name,
+            Some(_) => return Err(AppError::InvalidGamesListQuery),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ListGamesQuery {
+    /// Free-text search over `name`/`slug`/`developer` (case-insensitive
+    /// substring) — same shape `guilds::DiscoverGuildsQuery::q` uses.
+    pub q: Option<String>,
+    /// `newest` (default) | `name`.
+    pub sort: Option<String>,
+    pub limit: Option<i64>,
+    /// The last game id from the previous page's results — same bare-id
+    /// cursor shape `guilds::DiscoverGuildsQuery::cursor` uses.
+    pub cursor: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+pub struct GameSummary {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub developer: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub registered_at: OffsetDateTime,
+    pub status: String,
+}
+
+#[derive(Serialize)]
+pub struct ListGamesResponse {
+    pub games: Vec<GameSummary>,
+    /// `Some(id)` when another page exists — pass it back as `cursor=` to
+    /// fetch it. `None` means this was the last page.
+    pub next_cursor: Option<Uuid>,
+}
+
+/// Builds the `GET /games` query — split out from [`list_games`] so the
+/// filter/sort/pagination logic can be unit-tested (via
+/// [`sqlx::QueryBuilder::sql`]) without a live Postgres connection, same
+/// pattern `guilds::build_discover_query` already established for #154.
+fn build_games_list_query(
+    query: &ListGamesQuery,
+    sort: GamesListSort,
+    limit: i64,
+) -> QueryBuilder<Postgres> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, slug, name, developer, registered_at, status FROM games WHERE 1 = 1",
+    );
+
+    if let Some(q) = query.q.as_ref().filter(|s| !s.trim().is_empty()) {
+        let like = format!("%{}%", crate::guilds::escape_like(q));
+        builder.push(" AND (name ILIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR slug ILIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR developer ILIKE ");
+        builder.push_bind(like);
+        builder.push(")");
+    }
+
+    if let Some(cursor_id) = query.cursor {
+        match sort {
+            GamesListSort::Newest => {
+                builder.push(
+                    " AND (registered_at, id) < (SELECT registered_at, id FROM games WHERE id = ",
+                );
+                builder.push_bind(cursor_id);
+                builder.push(")");
+            }
+            GamesListSort::Name => {
+                builder.push(" AND (name, id) > (SELECT name, id FROM games WHERE id = ");
+                builder.push_bind(cursor_id);
+                builder.push(")");
+            }
+        }
+    }
+
+    match sort {
+        GamesListSort::Newest => builder.push(" ORDER BY registered_at DESC, id DESC"),
+        GamesListSort::Name => builder.push(" ORDER BY name ASC, id ASC"),
+    };
+
+    // Fetch one extra row past the page size, purely to know whether a next
+    // page exists — trimmed back off before building the response, same
+    // convention `build_discover_query` uses.
+    builder.push(" LIMIT ");
+    builder.push_bind(limit + 1);
+
+    builder
+}
+
+/// `GET /games?q=&sort=&limit=&cursor=` (issue #270). Public, unauthenticated
+/// — same visibility level [`get_game`] already uses. See the module doc
+/// comment for the pagination/sort design.
+pub async fn list_games(
+    State(state): State<AppState>,
+    Query(query): Query<ListGamesQuery>,
+) -> Result<Json<ListGamesResponse>, AppError> {
+    let sort = GamesListSort::parse(query.sort.as_deref())?;
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_GAMES_LIST_PAGE_SIZE)
+        .clamp(1, MAX_GAMES_LIST_PAGE_SIZE);
+
+    let mut builder = build_games_list_query(&query, sort, limit);
+    let rows = builder.build().fetch_all(&state.pool).await?;
+    let has_more = rows.len() as i64 > limit;
+
+    let mut games = Vec::with_capacity(rows.len().min(limit as usize));
+    for row in rows.iter().take(limit as usize) {
+        games.push(GameSummary {
+            id: row.try_get("id")?,
+            slug: row.try_get("slug")?,
+            name: row.try_get("name")?,
+            developer: row.try_get("developer")?,
+            registered_at: row.try_get("registered_at")?,
+            status: row.try_get("status")?,
+        });
+    }
+    let next_cursor = if has_more {
+        games.last().map(|g| g.id)
+    } else {
+        None
+    };
+
+    Ok(Json(ListGamesResponse { games, next_cursor }))
+}
+
 #[derive(Serialize)]
 pub struct GameChallengeResponse {
     pub challenge_id: Uuid,
@@ -512,5 +683,117 @@ mod tests {
             b"a-different-nonce",
             &signature.to_bytes(),
         ));
+    }
+
+    // --- Issue #270: GET /games cursor pagination ---------------------
+    //
+    // Same SQL-string-based assertions `guilds::build_discover_query`'s own
+    // tests use — no live Postgres needed, just checking the query shape
+    // `QueryBuilder` produces.
+
+    fn empty_list_games_query() -> ListGamesQuery {
+        ListGamesQuery {
+            q: None,
+            sort: None,
+            limit: None,
+            cursor: None,
+        }
+    }
+
+    #[test]
+    fn sort_parse_defaults_to_newest_and_rejects_unknown_values() {
+        assert!(matches!(
+            GamesListSort::parse(None),
+            Ok(GamesListSort::Newest)
+        ));
+        assert!(matches!(
+            GamesListSort::parse(Some("newest")),
+            Ok(GamesListSort::Newest)
+        ));
+        assert!(matches!(
+            GamesListSort::parse(Some("name")),
+            Ok(GamesListSort::Name)
+        ));
+        assert!(matches!(
+            GamesListSort::parse(Some("most_players")),
+            Err(AppError::InvalidGamesListQuery)
+        ));
+    }
+
+    #[test]
+    fn select_list_includes_only_public_fields() {
+        let builder = build_games_list_query(&empty_list_games_query(), GamesListSort::Newest, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("id, slug, name, developer, registered_at, status"));
+        assert!(sql.contains("FROM games"));
+    }
+
+    #[test]
+    fn text_search_matches_name_slug_and_developer() {
+        let mut query = empty_list_games_query();
+        query.q = Some("ashen".to_string());
+        let builder = build_games_list_query(&query, GamesListSort::Newest, 20);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("name ILIKE"));
+        assert!(sql.contains("slug ILIKE"));
+        assert!(sql.contains("developer ILIKE"));
+    }
+
+    #[test]
+    fn blank_search_term_is_dropped_rather_than_matching_everything() {
+        let mut query = empty_list_games_query();
+        query.q = Some("   ".to_string());
+        let builder = build_games_list_query(&query, GamesListSort::Newest, 20);
+        assert!(!builder.sql().as_str().contains("ILIKE"));
+    }
+
+    #[test]
+    fn sort_selects_expected_order_by_clause() {
+        let query = empty_list_games_query();
+
+        let newest = build_games_list_query(&query, GamesListSort::Newest, 20);
+        assert!(newest
+            .sql()
+            .as_str()
+            .contains("ORDER BY registered_at DESC, id DESC"));
+
+        let name = build_games_list_query(&query, GamesListSort::Name, 20);
+        assert!(name.sql().as_str().contains("ORDER BY name ASC, id ASC"));
+    }
+
+    #[test]
+    fn cursor_adds_keyset_pagination_clause_matching_the_active_sort() {
+        let mut query = empty_list_games_query();
+        query.cursor = Some(Uuid::new_v4());
+
+        let newest = build_games_list_query(&query, GamesListSort::Newest, 20);
+        assert!(newest
+            .sql()
+            .as_str()
+            .contains("(registered_at, id) < (SELECT registered_at, id FROM games WHERE id ="));
+
+        let name = build_games_list_query(&query, GamesListSort::Name, 20);
+        assert!(name
+            .sql()
+            .as_str()
+            .contains("(name, id) > (SELECT name, id FROM games WHERE id ="));
+    }
+
+    #[test]
+    fn no_cursor_means_no_keyset_pagination_clause() {
+        let query = empty_list_games_query();
+        let builder = build_games_list_query(&query, GamesListSort::Newest, 20);
+        assert!(!builder.sql().as_str().contains("WHERE id ="));
+    }
+
+    #[test]
+    fn limit_fetches_one_extra_row_to_detect_a_next_page() {
+        let builder = build_games_list_query(&empty_list_games_query(), GamesListSort::Newest, 20);
+        // `push_bind` renders as a placeholder, not the literal value, so
+        // this only confirms a LIMIT clause is present — the "+1" behavior
+        // itself is exercised by the `#[ignore]`d integration test.
+        assert!(builder.sql().as_str().contains(" LIMIT "));
     }
 }

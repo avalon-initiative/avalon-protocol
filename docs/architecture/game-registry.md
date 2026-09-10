@@ -168,6 +168,31 @@ the [visibility](./privacy.md) rules that apply to those identities.
   accidentally skipped by flattening metrics alongside plain registration
   fields. Fixture-based unit tests per metric (no live Postgres) live
   alongside each projection module.
+- **`GET /games` — the Hub game directory's list endpoint (#270)**:
+  public, unauthenticated, cursor-paginated the same way `GET
+  /guilds/discover` already is (#154) — `crates/server/src/games.rs`'s
+  `build_games_list_query` mirrors `guilds.rs`'s `build_discover_query`
+  keyset-pagination shape exactly. `q=`/`sort=` (`newest` default | `name`,
+  no ranking/score option) /`limit=`/`cursor=`, returning each game's
+  public summary (id/slug/name/developer/registered_at/status) — the same
+  fields `GET /games/{slug}` exposes, just listed, with
+  `requested_capabilities` left off since a directory card has no reason
+  to fetch a field it doesn't show. Milestone-1 stand-in over the `games`
+  table, not #42's real indexer read model, same pragmatic call
+  `discover_guilds` already made for guilds.
+- **Hub game directory + per-game profile page (#270, first slice of
+  #90)**: `apps/hub/src/views/GameDirectory.vue` lists `GET /games`
+  results with a search box and name/newest sort toggle — no
+  "recommended" ordering, matching #89's invariant. `GameProfile.vue`
+  (`/games/:slug`) renders `GET /games/{slug}`'s public fields plus `GET
+  /games/{slug}/registry`'s five metrics via `AvalonMetricTile` — value,
+  definition, and class label together, never a bare number. A
+  non-`active` `status` renders as a visibly distinct badge
+  (`AvalonGameCard`/`GameProfile.vue`'s status badge) rather than reading
+  the same as `active`; no key-history UI is built here (blocked on the
+  still-open #80). `packages/ui`'s `AvalonGameCard` and `AvalonMetricTile`
+  are the new reusable components, in the existing
+  components/styles/stories split.
 - Still open: the rest of the table above (achievement popularity,
   cross-game players, recognizing games, guild-association metrics, game
   event participation, key lifecycle/status/registration history),
@@ -175,10 +200,12 @@ the [visibility](./privacy.md) rules that apply to those identities.
   privacy/cohort-size floor ([#96](https://github.com/LunarVagabond/avalon-protocol/issues/96)),
   and the public/external read surface
   ([#95](https://github.com/LunarVagabond/avalon-protocol/issues/95)) that
-  #261's endpoint is not itself — no Hub view either. Schema discovery
+  #261's endpoint is not itself. Schema discovery
   (#255) is likewise still queryable only via
   `avalon_indexer::projections::game_schemas::list_for_game`, not yet
-  folded into the registry endpoint.
+  folded into the registry endpoint. Issuer key history and recognition
+  relationships are still not rendered anywhere in the Hub — #270 is only
+  the first buildable slice of #90, not the full ticket.
 
 ## Decisions and tickets
 
@@ -203,6 +230,9 @@ the [visibility](./privacy.md) rules that apply to those identities.
 - [#261](https://github.com/LunarVagabond/avalon-protocol/issues/261) —
   first slice: the five binding/achievement `durable-derived` metrics and
   `GET /games/{slug}/registry`, described above.
+- [#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) —
+  first buildable Hub slice on #90: `GET /games`, the game directory, and
+  the per-game profile page reading #261's metrics, described above.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic
   this ticket and the rest of the registry work sit under.
 - [#96](https://github.com/LunarVagabond/avalon-protocol/issues/96) —

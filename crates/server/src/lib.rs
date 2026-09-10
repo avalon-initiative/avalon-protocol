@@ -174,7 +174,7 @@ pub fn router(state: AppState) -> Router {
             "/identities/{id}/recovery/status",
             get(recovery::identity_recovery_status),
         )
-        .route("/games", post(games::register_game))
+        .route("/games", post(games::register_game).get(games::list_games))
         .route("/games/{slug}", get(games::get_game))
         .route(
             "/games/{slug}/challenge",
