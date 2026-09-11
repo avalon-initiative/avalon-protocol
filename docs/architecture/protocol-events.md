@@ -140,6 +140,8 @@ milestone-1 stand-in until actor signatures exist.
 | `achievement.definition_retired` | game → achievement id | achievement id | definitions | game key |
 | `achievement.issued` | game → identity | achievement id, attestation id, evidence ref | attestations | issuer key |
 | `achievement.revoked` | game → attestation | attestation ref, reason code, reason | attestation status | issuer key |
+| `milestone.defined` / `.definition_updated` / `.definition_retired` | app/service → milestone id | same fields as the `achievement.*` row above | definitions | app/service key |
+| `milestone.issued` / `.revoked` | app/service → identity / attestation | same fields as `achievement.issued`/`.revoked` above | attestations | issuer key |
 | `attestation.superseded` | game → attestation | old ref, new ref | attestation status | issuer key |
 | `game_event.result_issued` | game → identity | `achievement.issued` with the game-event schema | attestations, registry | issuer key |
 | `recognition.published` | game → issuer | recognized claim types / scopes | recognition graph | game key |
@@ -249,18 +251,26 @@ the record — [`./revocation.md`](./revocation.md).
   stand-in as `game.registered` and the social-graph events — no general
   per-event signing ceremony exists yet, so claiming the catalogue's
   eventual "identity key" signer here would be false.
-- A sixth emitter: `crates/server/src/achievements.rs` (#31) writes
-  `achievement.defined` on `POST /games/{slug}/achievements`,
-  `achievement.definition_updated` on `PATCH /games/{slug}/achievements/{key}`
-  when name/description/schema actually change, and
-  `achievement.definition_retired` when that same endpoint retires a
-  definition — each enqueued into `protocol_outbox` in the same transaction
-  as the `achievement_definitions` row it accompanies. `issuer` is
-  `game:<slug>:self:<verb>` (`game_ref`); `subject` is the definition's own
-  `game:<slug>:achievement:<key>` `GlobalId`, matching the catalogue's
-  "game → achievement id" shape above. Network-attributed rather than
-  game-signed for the same reason `game.registered` is: no general per-event
-  signing ceremony exists yet beyond `identity.created`.
+- A sixth emitter: `crates/server/src/achievements.rs` (#31, generalized to
+  App/Service by #324/#325) writes `achievement.defined`/
+  `milestone.defined` on `POST /games/{slug}/achievements` /
+  `POST /integrations/{slug}/milestones`, `.definition_updated` on the
+  matching `PATCH` route when name/description/schema actually change, and
+  `.definition_retired` when that same endpoint retires a definition — each
+  enqueued into `protocol_outbox` in the same transaction as the
+  `achievement_definitions` row it accompanies (one shared table for both
+  claim vocabularies — see `achievements.rs`'s own module doc comment).
+  Which of the two event-kind prefixes gets used is derived from the
+  authenticated issuer's own registered category
+  (`IntegratorCategory::claim_kind`), never caller-chosen: `Game` issuers
+  get `achievement.*` exactly as #31 shipped, `App`/`Service` issuers get
+  `milestone.*`. `issuer` is `<namespace>:<slug>:self:<verb>`
+  (`games::issuer_ref`, generalizing `game_ref`); `subject` is the
+  definition's own `<namespace>:<slug>:<claim_kind>:<key>` `GlobalId`,
+  matching the catalogue's "issuer → claim id" shape above.
+  Network-attributed rather than issuer-signed for the same reason
+  `game.registered` is: no general per-event signing ceremony exists yet
+  beyond `identity.created`.
 - A seventh emitter: `crates/server/src/recovery.rs` (#201) writes
   `identity.recovery_configured` (guardian-set/threshold change),
   `identity.recovery_requested` (a new device completes the recovery

@@ -128,30 +128,44 @@ game-event schema, not a separate mechanism — see
   and `AttestationId`.
 - `crates/sdk/src/lib.rs` — `Session::achievements()` and
   `issue_achievement()` check the capability, then return `NotImplemented`.
-- `crates/server/src/achievements.rs` (#31) — `AchievementDefinition` CRUD:
-  `POST /games/{slug}/achievements` (create, 409 on a duplicate key for that
-  game), `PATCH /games/{slug}/achievements/{key}` (update name/description/
-  schema and bump `version`, and/or retire), `GET /games/{slug}/achievements`
-  (public listing). The write endpoints are game-credential-authenticated
-  (`games::authenticate_game`, #26's challenge-response scheme) and reject a
-  game acting under another game's slug with 403; the id is always
-  `game:<slug>:achievement:<key>` and is immutable. `achievement_definitions`
-  is a rebuildable projection, written into the outbox in the same
-  transaction as the row change (#71's pattern). No issuing yet (#32), no
-  signing.
+- `crates/server/src/achievements.rs` (#31, generalized to App/Service by
+  #324/#325) — claim-definition CRUD, one shared implementation for both
+  vocabularies (thin per-route wrappers over a shared core — see the
+  module's own doc comment): `POST /games/{slug}/achievements` /
+  `POST /integrations/{slug}/milestones` (create, 409 on a duplicate key
+  for that issuer), the matching `PATCH .../{key}` (update
+  name/description/schema and bump `version`, and/or retire), and the
+  matching `GET` (public listing). Write endpoints are
+  issuer-credential-authenticated (`games::authenticate_game`, #26's
+  challenge-response scheme) and reject an issuer acting under another
+  issuer's slug with 403 — and, new for #324/#325, reject an issuer whose
+  actual registered category doesn't match the route's claim vocabulary
+  (a `Game` hitting the milestones route, or an `App`/`Service` hitting
+  the achievements route), including on the `GET` list route, so a
+  category mismatch never silently serves one issuer's claims back
+  mislabeled through the other route. The id is always
+  `<namespace>:<slug>:<achievement|milestone>:<key>` and is immutable.
+  `achievement_definitions` is one shared rebuildable projection for both
+  vocabularies, written into the outbox in the same transaction as the row
+  change (#71's pattern). Covered by real live integration tests
+  (`crates/server/tests/achievements.rs`, `crates/server/tests/milestones.rs`),
+  the latter specifically exercising the category-enforcement behavior.
+  No issuing yet (#32), no signing.
 
 ## Decisions and tickets
 
 - [#324](https://github.com/LunarVagabond/avalon-protocol/issues/324) —
   decided: category-driven claim vocabulary (Achievement for
   `Issuer::Game`, Milestone for `Issuer::App`/`Issuer::Service`), same
-  mechanism throughout — described above. #31/#32's still-open
-  implementation should build this from day one, not retrofit it.
+  mechanism throughout — described above.
+- [#325](https://github.com/LunarVagabond/avalon-protocol/issues/325) —
+  implements #324: the Milestone CRUD slice for `Issuer::App`/
+  `Issuer::Service`, described above (`crates/server/src/achievements.rs`).
 - [#30](https://github.com/LunarVagabond/avalon-protocol/issues/30) — Epic:
   Achievements & Attestations.
 - [#31](https://github.com/LunarVagabond/avalon-protocol/issues/31) —
-  definition CRUD per game. Still needs its App/Service (Milestone)
-  equivalent per #324.
+  definition CRUD per game. Its App/Service (Milestone) equivalent is
+  #325, landed.
 - [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue an
   achievement → signed attestation.
 - [#33](https://github.com/LunarVagabond/avalon-protocol/issues/33) — verify

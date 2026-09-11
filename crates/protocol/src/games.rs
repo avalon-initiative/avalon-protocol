@@ -215,6 +215,24 @@ impl IntegratorCategory {
             _ => return None,
         })
     }
+
+    /// The claim-vocabulary word this category's issuers use for what #31
+    /// originally called "Achievement" (issue #324, decided): `Game`
+    /// issuers keep `"achievement"` exactly as-is — zero churn for what
+    /// already shipped — `App`/`Service` issuers share `"milestone"`, one
+    /// word for both rather than a third one per category, since an app
+    /// and a service don't need vocabulary different *from each other*,
+    /// only different from gaming's. Used both as the `GlobalId` "kind"
+    /// segment (`game:<slug>:achievement:<key>` vs.
+    /// `app:<slug>:milestone:<key>`) and as the event-kind prefix
+    /// (`achievement.defined` vs. `milestone.defined`) — see
+    /// `crates/server/src/achievements.rs`.
+    pub fn claim_kind(&self) -> &'static str {
+        match self {
+            IntegratorCategory::Game => "achievement",
+            IntegratorCategory::App | IntegratorCategory::Service => "milestone",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
