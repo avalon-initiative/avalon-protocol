@@ -79,12 +79,40 @@ history.
 
 ## Who authorizes key changes
 
-Adding, rotating, or revoking an issuer key is authorized by the issuer's own
-existing key (or a root key, depending on
-[#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)). A node
-operator cannot add a key to an issuer it does not control. Suspending or
-revoking an issuer at the network level is a separate operator action with its
-own explicit authorization and audit trail.
+**Decided ([#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)):
+a two-tier key role**, not a single self-service key. Every issuer has
+exactly one **root key**, established at registration, which is the only
+key that can author `issuer.key_added`/`issuer.key_revoked` — it governs the
+key *set*, never signs attestations itself in the common case. Zero or more
+**operational keys**, added/revoked by the root, sign the actual
+`achievement.issued`-style attestation events day to day; multiple
+concurrent operational keys (regions, environments, staged rotation) are
+ordinary.
+
+Registration still requires exactly one keypair, not two — the key a game
+registers with doubles as both its root key and its first operational key by
+default, so a first-time/solo registrant pays no extra friction. A studio
+that wants the isolation benefit (keep the root cold, only expose an
+operational key to CI) can get there later with a single `issuer.key_added`
+call, never a mandatory extra step at signup.
+
+The reason for the split, not a single self-service key: with one key
+authorized to both sign attestations *and* manage the key set, a leaked
+operational key (the realistic leak scenario — it's the one embedded in a
+build/CI pipeline) could also be used to revoke the legitimate developer's
+keys and register the attacker's own, hijacking the issuer outright. Root
+governance removes that race — the root revokes a leaked operational key the
+moment it's noticed, with no window where the leaked key could also seize
+key-set control. Root key loss/compromise itself is a known, honestly
+unsolved residual risk — the same shape as
+[#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) (identity
+recovery), not addressed by this decision.
+
+A node operator cannot add a key to an issuer it does not control, root or
+operational. Suspending or revoking an issuer at the network level is a
+separate operator action with its own explicit authorization and audit
+trail — that authorization model is left to #84's implementation, not fully
+specified by #80's decision.
 
 ## Three key domains, kept apart
 
@@ -99,13 +127,18 @@ lifecycle.
 
 ## Scenarios
 
-**E — Game A rotates its signing key.** `issuer.key_added(k2)`, then
-`issuer.key_revoked(k1, reason: rotated)`. A claim signed by k1 in 2027 verifies
-against k1's validity window and stays authentic.
+**E — Game A rotates its (operational) signing key.** Its root key authors
+`issuer.key_added(k2)`, then `issuer.key_revoked(k1, reason: rotated)`. A
+claim signed by k1 in 2027 verifies against k1's validity window and stays
+authentic.
 
-**F — Game A's key is compromised.** `issuer.key_revoked(k1, at: T)`. Claims
-signed by k1 before T remain authentic and valid; claims after T are rejected.
-Game A continues issuing under k2.
+**F — Game A's operational key is compromised.** The root key authors
+`issuer.key_revoked(k1, at: T)`. Claims signed by k1 before T remain
+authentic and valid; claims after T are rejected. Game A continues issuing
+under k2. The compromised key k1 was never itself capable of authorizing
+this revocation (or adding a replacement) — only the root key can, per #80's
+decided key-role split above — so there is no race against an attacker also
+holding k1.
 
 ## Today in the repo
 
@@ -177,7 +210,10 @@ Game A continues issuing under k2.
 - [#29](https://github.com/LunarVagabond/avalon-protocol/issues/29) —
   `avalon register-game`.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
-  decision, open: issuer signing keys and lifecycle.
+  decision, closed: issuer signing keys and lifecycle — two-tier root/
+  operational key roles, described above. Root key loss/compromise
+  recovery is an explicitly open residual risk, not resolved by this
+  decision.
 - [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275) —
   decision: additive `category` field (game/app/service), no rename of
   `GameId`/`Issuer::Game`/the `games` table/`game.*` event kinds.
@@ -188,7 +224,7 @@ Game A continues issuing under k2.
   compatibility path, generic `x-avalon-integrator-*` auth headers,
   described above.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
-  identity implementation (blocked by #80).
+  identity implementation, now unblocked by #80's decision above.
 - [#297](https://github.com/LunarVagabond/avalon-protocol/issues/297) —
   additive `Issuer::App`/`Issuer::Service` variants and the
   `register-integrator` CLI alias, described above.
