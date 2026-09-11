@@ -151,7 +151,22 @@ into a Hub-only or game-only corner.
 - No voice module, session type, or transport of any kind exists.
 - No notification delivery mechanism exists; `avalon-server` has no
   websocket/push path yet (same gap noted in [presence.md](./presence.md)).
-- No Hub UI for conversations yet — that's [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105).
+- **Hub UI ([#105](https://github.com/LunarVagabond/avalon-protocol/issues/105)),
+  landed**: `apps/hub/src/views/Messages.vue` — a conversation-list sidebar
+  next to the active thread, the same "swap selection in place, no remount"
+  shape [#241](https://github.com/LunarVagabond/avalon-protocol/issues/241)
+  set for Guild.vue's Channels tab. Reuses `AvalonChatMessage`/
+  `AvalonChatComposer` unmodified (both already wire-shape-agnostic —
+  neither carries a guild/channel field) — no new `packages/ui` component.
+  `useConversations`/`useConversationThread`
+  (`apps/hub/src/composables/`) mirror `useGuildChat.ts`'s
+  load-once-then-poll/cursor-pagination shape, minus everything
+  guild-specific (no roles/permissions, no delete — conversations have no
+  moderation-delete endpoint). Starting a conversation is a friend-row
+  action (`AvalonFriendRow`'s new `message` emit) rather than a separate
+  "new message" flow, per this ticket's own design note — `POST
+  /conversations`'s idempotent-on-participant-set behavior is what makes
+  "start or open" a single call.
 
 ## Decisions and tickets
 
@@ -165,8 +180,9 @@ into a Hub-only or game-only corner.
   [#104](https://github.com/LunarVagabond/avalon-protocol/issues/104) SDK
   conversation API,
   [#105](https://github.com/LunarVagabond/avalon-protocol/issues/105) Hub
-  direct-message UI. The remainder of the epic is backlog — not scheduled
-  ahead of #14/#19.
+  direct-message UI (landed — see "Today in the repo" above). The remainder
+  of the epic (voice, notifications) is backlog — not scheduled ahead of
+  #14/#19.
 - [#269](https://github.com/LunarVagabond/avalon-protocol/issues/269) —
   closed the identity-existence oracle and unsolicited-conversation gap in
   #102's `create_conversation` by requiring an existing relationship

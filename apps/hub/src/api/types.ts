@@ -591,6 +591,34 @@ export interface SendMessageRequest {
   body: string
 }
 
+// Direct/small-group conversations (issue #102/#105), matching
+// crates/server/src/conversations.rs field-for-field. Deliberately its own
+// shapes rather than reusing GuildResponse/MessageResponse above — a
+// conversation has no guild context, and its messages carry
+// `conversation_id`, not `channel_id`.
+
+export interface ConversationResponse {
+  id: string
+  participants: string[]
+}
+
+export interface CreateConversationRequest {
+  participants: string[]
+}
+
+export interface ConversationMessageResponse {
+  id: string
+  conversation_id: string
+  author: string
+  body: string
+  sent_at: string
+}
+
+export interface SendConversationMessageRequest {
+  body: string
+  client_entry_id?: string
+}
+
 // Game registration (#26) / binding + grant consent flow (#27, #83) wire
 // types, matching crates/server/src/games.rs and its #27 companion module
 // field-for-field. `requested_capabilities` is a declaration only — see

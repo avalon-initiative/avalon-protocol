@@ -87,7 +87,7 @@ const navItems = computed<AvalonNavItem[]>(() => [
   },
   { label: 'Guilds', to: '/guilds', icon: 'guilds', active: route.path.startsWith('/guilds') },
   { label: 'Friends', to: '/friends', icon: 'friends', active: route.path === '/friends' },
-  { label: 'Chat', to: '/chat', icon: 'chat', active: false, disabled: true },
+  { label: 'Messages', to: '/messages', icon: 'chat', active: route.path.startsWith('/messages') },
   { label: 'Discover', to: '/discover', icon: 'discover', active: false, disabled: true },
   { label: 'Profile', to: '/profile', icon: 'profile', active: route.path === '/profile' },
 ])

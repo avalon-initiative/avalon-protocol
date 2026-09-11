@@ -88,8 +88,16 @@ describe('AvalonFriendRow', () => {
     const wrapper = mount(AvalonFriendRow, {
       props: { identityId: 'id-1', status: 'Online' },
     })
-    await wrapper.find('button').trigger('click')
+    await wrapper.findAll('button').at(-1)?.trigger('click')
     expect(wrapper.emitted('remove')).toHaveLength(1)
+  })
+
+  it('emits message when the message button is clicked', async () => {
+    const wrapper = mount(AvalonFriendRow, {
+      props: { identityId: 'id-1', status: 'Online' },
+    })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('message')).toHaveLength(1)
   })
 })
 

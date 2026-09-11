@@ -64,6 +64,16 @@ const router = createRouter({
           name: 'guild-channel',
           component: () => import('../views/Guild.vue'),
         },
+        // Issue #105: same "persistent sidebar, no remount on selection"
+        // shape #241 set for guild channels — `conversation` renders the
+        // same component as `messages`, the :id param just pre-selects a
+        // conversation.
+        { path: 'messages', name: 'messages', component: () => import('../views/Messages.vue') },
+        {
+          path: 'messages/:id',
+          name: 'conversation',
+          component: () => import('../views/Messages.vue'),
+        },
         { path: 'connect/:slug', name: 'connect-game', component: () => import('../views/ConnectGame.vue') },
         { path: 'connections', name: 'connections', component: () => import('../views/Connections.vue') },
         // #307: cross-device pairing — matches `verification_uri`'s

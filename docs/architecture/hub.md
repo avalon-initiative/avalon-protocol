@@ -104,17 +104,17 @@ is visibly marked.
   `apps/hub/src/router/index.ts`) — URL-addressable and bookmarkable;
   `requiresAuth` is set once on the parent route and inherited by every
   child via `vue-router`'s meta-merging. Nav entries for features that
-  don't exist yet (Chat, Discover) render disabled with a
-  "Soon" tag rather than being hidden. Games (#270) is no longer one of
-  them, same as Guilds (#24) before it. The shell also heartbeats
-  `PUT /me/presence` (Online, every 60s, inside the server's 120s TTL) so
-  the user actually reads as online to their friends while the Hub is
-  open. Visual language: one dark theme via CSS custom properties in
+  don't exist yet (Discover) render disabled with a
+  "Soon" tag rather than being hidden. Games (#270) and Chat (#105) are no
+  longer among them, same as Guilds (#24) before them. The shell also
+  heartbeats `PUT /me/presence` (Online, every 60s, inside the server's
+  120s TTL) so the user actually reads as online to their friends while the
+  Hub is open. Visual language: one dark theme via CSS custom properties in
   `packages/ui/src/styles/tokens.css` (+ `global.css`), imported once in
   `apps/hub/src/main.ts`; component styles reference tokens only. **A
   future Hub feature adds a child route plus a nav entry in
-  `HubShell.vue`** — this is what #35 (achievements) and #105 (DMs) should
-  build against; #24 (guild view + chat) is now built this way.
+  `HubShell.vue`** — this is what #35 (achievements) should build against;
+  #24 (guild view + chat) and #105 (DMs) are now built this way.
 - `Home.vue` — the landing page after login: welcome header, Quick Actions
   (add a friend, set up this device, edit profile), Friends Online, and the
   six most recent entries from `GET /me/history` with a "View all" link to
@@ -154,6 +154,20 @@ is visibly marked.
   shareable form. One remaining scope cut, documented not silent: there is
   no "Playing &lt;game&gt;" label (no game registry exists, `Presence.playing`
   is always `null` in practice today).
+- `Messages.vue` (#105) — direct/small-group conversations
+  ([communication.md](./communication.md)): a conversation-list sidebar next
+  to the active thread, swapped in place on selection rather than remounted
+  — the same shape #241 set for Guild.vue's Channels tab, routed the same
+  way (`/messages` and `/messages/:id` render the same component, the param
+  just pre-selects). `useConversations`/`useConversationThread`
+  (`apps/hub/src/composables/`) mirror `useGuildChat.ts`'s
+  load-once-then-poll/cursor-pagination shape. Renders messages via
+  `AvalonChatMessage`/`AvalonChatComposer` unmodified — both were already
+  wire-shape-agnostic (no guild/channel field in their props), so no new
+  `packages/ui` component was needed. Starting a conversation is
+  `AvalonFriendRow`'s new `message` emit (`Friends.vue`), not a separate
+  "new message" flow — `POST /conversations`'s idempotent-on-participant-set
+  behavior means "start" and "open the existing one" are the same call.
 - `Activity.vue` (#121) — "what does the network know about me": the
   caller's own protocol events from `GET /me/history`
   (`crates/server/src/handlers.rs::my_history`), which reads the ledger
