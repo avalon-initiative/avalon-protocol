@@ -165,8 +165,16 @@ async fn list_equivocations(network_id_arg: Option<String>) {
             "┌─ tree_size {} ─────────────────────────────────────",
             f.tree_size
         );
-        println!("│ source_a:  {} → root {}", f.source_a, short_hash(&f.root_hash_a));
-        println!("│ source_b:  {} → root {}", f.source_b, short_hash(&f.root_hash_b));
+        println!(
+            "│ source_a:  {} → root {}",
+            f.source_a,
+            short_hash(&f.root_hash_a)
+        );
+        println!(
+            "│ source_b:  {} → root {}",
+            f.source_b,
+            short_hash(&f.root_hash_b)
+        );
         match (&f.resolved_at, &f.resolved_root_hash) {
             (Some(at), Some(root)) => println!(
                 "│ status:    ✓ resolved at {at} — legitimate root: {}",
@@ -218,10 +226,14 @@ async fn resolve_equivocation(raw_args: &[String]) {
         .await
         .expect("failed to connect to Postgres");
 
-    let resolved_count =
-        avalon_chain::mirror::resolve_equivocation(&pool, network_id, tree_size, legitimate_root_hash)
-            .await
-            .expect("failed to resolve equivocation finding(s)");
+    let resolved_count = avalon_chain::mirror::resolve_equivocation(
+        &pool,
+        network_id,
+        tree_size,
+        legitimate_root_hash,
+    )
+    .await
+    .expect("failed to resolve equivocation finding(s)");
     if resolved_count == 0 {
         println!(
             "no unresolved finding at network_id={network_id} tree_size={tree_size} — nothing to do \

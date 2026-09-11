@@ -167,6 +167,12 @@ pub enum AppError {
     GameKeyNotFound,
     #[error("game signature verification failed")]
     InvalidGameSignature,
+    #[error("this action requires the issuer's root key, not an operational key")]
+    IssuerKeyNotRoot,
+    #[error("key role must be one of root, operational")]
+    InvalidIssuerKeyRole,
+    #[error("issuer key not found, already revoked, or not owned by this game")]
+    IssuerKeyForbidden,
     #[error("requested capability was not declared by the game at registration")]
     CapabilityNotRequested,
     #[error("no active binding to this game")]
@@ -366,7 +372,10 @@ impl IntoResponse for AppError {
             AppError::GameChallengeNotFound
             | AppError::GameChallengeExpired
             | AppError::GameKeyNotFound
-            | AppError::InvalidGameSignature => StatusCode::UNAUTHORIZED,
+            | AppError::InvalidGameSignature
+            | AppError::IssuerKeyNotRoot => StatusCode::UNAUTHORIZED,
+            AppError::InvalidIssuerKeyRole => StatusCode::BAD_REQUEST,
+            AppError::IssuerKeyForbidden => StatusCode::FORBIDDEN,
             AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,
             AppError::BindingNotFound | AppError::GrantNotFound => StatusCode::NOT_FOUND,
             // Issue #28's guard: authenticated (as *some* game), but that

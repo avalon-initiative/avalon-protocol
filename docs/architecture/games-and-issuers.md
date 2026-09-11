@@ -143,11 +143,21 @@ holding k1.
 ## Today in the repo
 
 - `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
-  registered_at, status, category }` (`GameStatus`, currently just
-  `Active`; `category` is `IntegratorCategory` — `Game`/`App`/`Service`,
-  #282, defaults to `Game`), `GameRegistration { game,
-  requested_capabilities, initial_key }`, `IssuerKeyInfo { key_id,
-  algorithm, public_key }`, `GameCredential { game_id, key_id }`.
+  registered_at, status, category }` (`GameStatus`, now `Active`/
+  `Suspended`/`Revoked`/`Deprecated` — see #84 note below; `category` is
+  `IntegratorCategory` — `Game`/`App`/`Service`, #282, defaults to `Game`),
+  `GameRegistration { game, requested_capabilities, initial_key }`,
+  `IssuerKeyInfo { key_id, algorithm, public_key }` (the registration-time
+  wire shape), `GameCredential { game_id, key_id }`. **#84 (implementing
+  #80's decided two-tier key model)**: `KeyRole { Root, Operational }` and
+  `IssuerKey { key_id, algorithm, public_key, role, valid_from,
+  valid_until, revoked_at }` — the domain type an issuer's full key history
+  is made of — plus pure, I/O-free point-in-time resolvers
+  `resolve_valid_signing_key`/`resolve_valid_root_key` (an attestation's
+  signing key is valid if it resolves for the attestation's own
+  `issued_at`; a key-set change requires the authenticating key to resolve
+  as root specifically), unit-tested directly against scenarios E and F
+  above.
 - `crates/server/src/games.rs` (#26) — `POST /games` registers a game: slug
   (unique, lowercase `[a-z0-9-]`, 409 on collision — enforced with a unique
   index + `is_unique_violation()`, same pattern `guilds.rs::create_guild`
@@ -156,20 +166,45 @@ holding k1.
   outbox pattern. `category` (`game`/`app`/`service`, #282) is optional in
   the request body; omitted means `game`. Projection tables: `games`
   (migration `0040_game_category` added the `category` column, `NOT NULL
-  DEFAULT 'game'`), `game_requested_capabilities`, and a minimal
-  `issuer_keys` (`key_id,
-  game_id, algorithm, public_key, created_at`) shaped for #84 to extend
-  rather than replace — this only ever inserts the one key recorded at
-  registration. `game.registered`'s `issuer`/`subject` name the game itself
-  but the event is network-attributed, not game-signed — see the module doc
-  comment on why (the registrant's key isn't proven to control anything yet
-  at that point). `POST /games/{slug}/challenge` +
-  `authenticate_game`/`GET /games/whoami` implement the milestone-1
-  challenge-response stand-in this ticket's own text calls for pending #80:
-  a short-lived random nonce (`game_challenges`, same ephemeral-ceremony
-  shape as `webauthn_ceremonies`), signed by the game's registered key,
-  verified via `auth::verify_event_signature`. Registering grants no
-  capability — #27 owns the actual grant/consent logic.
+  DEFAULT 'game'`), `game_requested_capabilities`, and `issuer_keys`
+  (`key_id, game_id, algorithm, public_key, role, valid_until, revoked_at,
+  revoked_reason, created_at` — migration `0044_issuer_key_lifecycle`
+  extended the original registration-only shape per #84). The key recorded
+  at registration is always `role: root`, doubling as the issuer's first
+  operational key too, per #80's decided "zero extra friction at signup."
+  `game.registered`'s `issuer`/`subject` name the game itself but the event
+  is network-attributed, not game-signed — see the module doc comment on
+  why (the registrant's key isn't proven to control anything yet at that
+  point). `POST /games/{slug}/challenge` + `authenticate_game`/`GET
+  /games/whoami` implement the milestone-1 challenge-response stand-in
+  this ticket's own text calls for pending #80 (now decided; this scheme's
+  own future is separate from that decision): a short-lived random nonce
+  (`game_challenges`, same ephemeral-ceremony shape as
+  `webauthn_ceremonies`), signed by the game's registered key, verified via
+  `auth::verify_event_signature` — `authenticate_game` now also filters out
+  revoked/expired keys (#84), where it previously trusted any key ever
+  registered indefinitely. Registering grants no capability — #27 owns the
+  actual grant/consent logic.
+- **Key-set management (#84)**: `POST /games/{slug}/keys` (add) and `POST
+  /games/{slug}/keys/{key_id}/revoke`, both requiring
+  `authenticate_game_root` — the same challenge-response scheme as
+  `authenticate_game`, but additionally requiring the authenticating key to
+  resolve as a currently-valid **root** key for the named issuer
+  (`AppError::IssuerKeyNotRoot` if an otherwise-valid operational key
+  tries). Emit `issuer.key_added`/`issuer.key_revoked`. Revoking an
+  already-revoked or nonexistent key is a 403
+  (`AppError::IssuerKeyForbidden`), not a silent no-op — matching this
+  ticket's "surface a caller retrying against a key it no longer controls"
+  posture. Verified live against a real Postgres: adding an operational key
+  with root auth, confirming that key authenticates ordinary calls but is
+  rejected (401) for key management, root revoking it, the revoked key then
+  failing to authenticate *anything*, and a repeat revoke correctly
+  rejected rather than succeeding twice.
+- **Still deferred (#84's own explicit scope note)**: the network-level
+  authorization model for transitioning `GameStatus` into `Suspended`/
+  `Revoked`/`Deprecated` (the enum variants exist; nothing can set them
+  yet), and root-key loss/compromise recovery (#80's own honestly-flagged
+  residual risk, the same shape as #99).
 - **`/integrations` as the canonical public API path (#293)**: `POST
   /integrations` dual-routes to the same registration handler as `POST
   /games` (not a redirect — a `POST` redirect silently becomes a `GET` in

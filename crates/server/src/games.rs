@@ -84,20 +84,27 @@
 //! reason to fetch a field the card doesn't show (same reasoning
 //! `DiscoverGuildSummary` already documents).
 //!
-//! Deferred to #84: key rotation, multiple keys, revocation, issuer status
-//! transitions — this only ever records the first key and sets
-//! `status = active`. Today `GameStatus` only ever has the `Active`
-//! variant, so nothing in this repo can yet produce a `suspended`/
-//! `revoked`/`deprecated` row — the Hub still renders `status` as an
-//! opaque string (visibly distinct from `active`) rather than assuming the
-//! closed vocabulary `docs/architecture/game-registry.md` sketches, so it
-//! doesn't need to change again once #84 lands.
+//! **Key rotation and revocation (#84, implementing #80's decided two-tier
+//! root/operational key role)** — [`add_issuer_key`]/[`revoke_issuer_key`]
+//! below. Only a **root** key may authorize a key-set change; any
+//! non-revoked, non-expired key (root or operational) may still
+//! authenticate ordinary game-credentialed calls via [`authenticate_game`],
+//! since role only gates who may change the key *set*, never
+//! attestation-signing authority. Registration's own initial key is always
+//! recorded as `role: root` — see [`register_game`] — so it doubles as
+//! both the issuer's root key and its first operational key by default,
+//! matching #80's "zero extra friction at signup" requirement.
+//!
+//! Still deferred: `GameStatus`'s `Suspended`/`Revoked`/`Deprecated`
+//! variants exist (#84) but nothing in this repo can yet transition a game
+//! into them — the network-level authorization model for that is
+//! explicitly out of scope for #84, a separate follow-up.
 
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::games::{GameStatus, IntegratorCategory};
+use avalon_protocol::games::{GameStatus, IntegratorCategory, IssuerKey, KeyRole};
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::permissions::Capability;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -271,14 +278,19 @@ pub async fn register_game(
         .await?;
     }
 
+    // #80/#84: the key registered here is always `root` — it doubles as
+    // the issuer's root key and its first operational key by default (any
+    // non-revoked, non-expired key may sign attestations regardless of
+    // role; only key-*set* changes require root specifically).
     sqlx::query(
-        "INSERT INTO issuer_keys (key_id, game_id, algorithm, public_key, created_at) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO issuer_keys (key_id, game_id, algorithm, public_key, role, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(key_id)
     .bind(game_id)
     .bind(&body.initial_key.algorithm)
     .bind(&public_key_bytes)
+    .bind(KeyRole::Root.as_str())
     .bind(registered_at)
     .execute(&mut *tx)
     .await?;
@@ -616,21 +628,39 @@ fn header_value<'a>(
         .ok_or(AppError::InvalidGameSignature)
 }
 
-/// Verifies a game's server-to-server request via the challenge-response
-/// scheme this module's doc comment describes (the milestone-1 stand-in
-/// pending #80). Reads `key_id` / `challenge_id` / a base64 detached Ed25519
+fn issuer_key_from_row(row: &sqlx::postgres::PgRow) -> Result<IssuerKey, AppError> {
+    let role_raw: String = row.try_get("role")?;
+    Ok(IssuerKey {
+        key_id: row.try_get("key_id")?,
+        algorithm: row.try_get("algorithm")?,
+        public_key: row.try_get("public_key")?,
+        role: KeyRole::parse(&role_raw).unwrap_or(KeyRole::Operational),
+        valid_from: row.try_get("created_at")?,
+        valid_until: row.try_get("valid_until")?,
+        revoked_at: row.try_get("revoked_at")?,
+    })
+}
+
+/// Shared core of [`authenticate_game`]/[`authenticate_game_root`]: verifies
+/// a game's server-to-server request via the challenge-response scheme this
+/// module's doc comment describes (the milestone-1 stand-in pending #80 —
+/// now decided, this scheme's own future is a separate matter #84 doesn't
+/// touch). Reads `key_id` / `challenge_id` / a base64 detached Ed25519
 /// signature from fixed headers, consumes the matching `game_challenges` row
 /// with a single `DELETE ... RETURNING` — the same single-use pattern
 /// `handlers::register_finish` uses for `webauthn_ceremonies`, so a captured
 /// signature can't be replayed against a second request — checks its TTL,
 /// then verifies the signature against the stored public key for that
-/// `key_id` via [`verify_event_signature`]. Returns the authenticated
-/// game's id. `pub(crate)` so future game-authenticated endpoints (#27's
-/// capability grants, etc.) can reuse it.
-pub(crate) async fn authenticate_game(
+/// `key_id` via [`verify_event_signature`]. Returns the authenticated game's
+/// id and the full [`IssuerKey`] record that authenticated it, so callers
+/// can apply their own role/point-in-time check (#80/#84) — this function
+/// itself only proves "this request was signed by whichever key `key_id`
+/// names", nothing about whether that key is currently valid or what role
+/// it holds.
+async fn authenticate_game_key(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<Uuid, AppError> {
+) -> Result<(Uuid, IssuerKey), AppError> {
     let key_id: Uuid = header_value(headers, INTEGRATOR_KEY_ID_HEADER, GAME_KEY_ID_HEADER)?
         .parse()
         .map_err(|_| AppError::InvalidGameSignature)?;
@@ -663,20 +693,237 @@ pub(crate) async fn authenticate_game(
     let game_id: Uuid = challenge_row.try_get("game_id")?;
     let nonce: Vec<u8> = challenge_row.try_get("nonce")?;
 
-    let key_row =
-        sqlx::query("SELECT public_key FROM issuer_keys WHERE key_id = $1 AND game_id = $2")
-            .bind(key_id)
-            .bind(game_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::GameKeyNotFound)?;
-    let public_key: Vec<u8> = key_row.try_get("public_key")?;
+    let key_row = sqlx::query(
+        "SELECT key_id, algorithm, public_key, role, created_at, valid_until, revoked_at \
+         FROM issuer_keys WHERE key_id = $1 AND game_id = $2",
+    )
+    .bind(key_id)
+    .bind(game_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::GameKeyNotFound)?;
+    let issuer_key = issuer_key_from_row(&key_row)?;
 
-    if !verify_event_signature(&public_key, &nonce, &signature_bytes) {
+    if !verify_event_signature(&issuer_key.public_key, &nonce, &signature_bytes) {
         return Err(AppError::InvalidGameSignature);
     }
 
+    Ok((game_id, issuer_key))
+}
+
+/// Authenticates a game via any currently-valid key, root or operational
+/// (#80/#84 — role only gates key-*set* changes, never ordinary
+/// game-credentialed calls). Returns the authenticated game's id.
+/// `pub(crate)` so game-authenticated endpoints (#27's capability grants,
+/// achievement definitions, etc.) can reuse it.
+pub(crate) async fn authenticate_game(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Uuid, AppError> {
+    let (game_id, issuer_key) = authenticate_game_key(state, headers).await?;
+    if !issuer_key.is_valid_at(OffsetDateTime::now_utc()) {
+        return Err(AppError::GameKeyNotFound);
+    }
     Ok(game_id)
+}
+
+/// Authenticates a game via a currently-valid **root** key specifically
+/// (#80/#84) — what [`add_issuer_key`]/[`revoke_issuer_key`] require, since
+/// only a root key may authorize a key-set change. An otherwise-valid
+/// operational key fails this with the same [`AppError::IssuerKeyNotRoot`]
+/// a caller would see for a role it doesn't hold, not a generic auth
+/// failure, so a legitimate integration can tell the two apart while
+/// debugging.
+pub(crate) async fn authenticate_game_root(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Uuid, AppError> {
+    let (game_id, issuer_key) = authenticate_game_key(state, headers).await?;
+    let now = OffsetDateTime::now_utc();
+    if !issuer_key.is_valid_at(now) {
+        return Err(AppError::GameKeyNotFound);
+    }
+    if !issuer_key.authorizes_key_changes() {
+        return Err(AppError::IssuerKeyNotRoot);
+    }
+    Ok(game_id)
+}
+
+#[derive(Deserialize)]
+pub struct AddIssuerKeyRequest {
+    pub algorithm: String,
+    /// Standard-base64-encoded raw public key bytes, same shape
+    /// [`InitialKeyRequest`] uses at registration.
+    pub public_key: String,
+    /// `"root"` or `"operational"` — see `avalon_protocol::games::KeyRole`.
+    pub role: String,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub valid_until: Option<OffsetDateTime>,
+}
+
+#[derive(Serialize)]
+pub struct IssuerKeyResponse {
+    pub key_id: Uuid,
+    pub algorithm: String,
+    pub role: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub valid_from: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub valid_until: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub revoked_at: Option<OffsetDateTime>,
+}
+
+/// `POST /games/{slug}/keys` (#84, implementing #80's decided two-tier key
+/// model) — adds a new key to the issuer's key set. Requires the caller to
+/// authenticate as the named `slug` with a currently-valid **root** key
+/// ([`authenticate_game_root`]); an operational key, or a root key
+/// belonging to a different game, is rejected. Emits `issuer.key_added`.
+pub async fn add_issuer_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(body): Json<AddIssuerKeyRequest>,
+) -> Result<Json<IssuerKeyResponse>, AppError> {
+    let path_game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let caller_game_id = authenticate_game_root(&state, &headers).await?;
+    if caller_game_id != path_game_id {
+        return Err(AppError::IssuerKeyForbidden);
+    }
+
+    if body.algorithm != SUPPORTED_KEY_ALGORITHM {
+        return Err(AppError::InvalidGameKey);
+    }
+    let role = KeyRole::parse(&body.role).ok_or(AppError::InvalidIssuerKeyRole)?;
+    let public_key_bytes = BASE64
+        .decode(&body.public_key)
+        .map_err(|_| AppError::InvalidGameKey)?;
+
+    let key_id = Uuid::new_v4();
+    let valid_from = OffsetDateTime::now_utc();
+
+    let mut tx = state.pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO issuer_keys (key_id, game_id, algorithm, public_key, role, valid_until, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(key_id)
+    .bind(path_game_id)
+    .bind(&body.algorithm)
+    .bind(&public_key_bytes)
+    .bind(role.as_str())
+    .bind(body.valid_until)
+    .bind(valid_from)
+    .execute(&mut *tx)
+    .await?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "issuer.key_added".to_string(),
+        issuer: game_ref(&slug, "key_added"),
+        subject: game_ref(&slug, "key_added"),
+        payload: serde_json::json!({
+            "game_id": path_game_id,
+            "slug": slug,
+            "key_id": key_id,
+            "algorithm": body.algorithm,
+            "public_key": BASE64.encode(&public_key_bytes),
+            "role": role.as_str(),
+            "valid_until": body.valid_until,
+        }),
+        timestamp: valid_from,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(IssuerKeyResponse {
+        key_id,
+        algorithm: body.algorithm,
+        role: role.as_str().to_string(),
+        valid_from,
+        valid_until: body.valid_until,
+        revoked_at: None,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct RevokeIssuerKeyRequest {
+    pub reason: Option<String>,
+}
+
+/// `POST /games/{slug}/keys/{key_id}/revoke` (#84) — revokes a key in the
+/// issuer's key set (root or operational; a root key can revoke itself, the
+/// same "any key genuinely under your control" trust already implied by
+/// authenticating as root at all). Same root-key-of-the-named-issuer
+/// requirement as [`add_issuer_key`]. Revoking an already-revoked or
+/// nonexistent key returns [`AppError::IssuerKeyForbidden`] rather than
+/// silently succeeding — same posture `remove_friend`-style "no-op success"
+/// endpoints elsewhere in this repo deliberately don't take, since a caller
+/// retrying a revoke against a key it no longer controls is exactly the
+/// kind of thing worth surfacing, not swallowing. Emits `issuer.key_revoked`.
+pub async fn revoke_issuer_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, key_id)): Path<(String, Uuid)>,
+    Json(body): Json<RevokeIssuerKeyRequest>,
+) -> Result<Json<IssuerKeyResponse>, AppError> {
+    let path_game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let caller_game_id = authenticate_game_root(&state, &headers).await?;
+    if caller_game_id != path_game_id {
+        return Err(AppError::IssuerKeyForbidden);
+    }
+
+    let revoked_at = OffsetDateTime::now_utc();
+    let mut tx = state.pool.begin().await?;
+
+    let row = sqlx::query(
+        "UPDATE issuer_keys SET revoked_at = $1, revoked_reason = $2 \
+         WHERE key_id = $3 AND game_id = $4 AND revoked_at IS NULL \
+         RETURNING algorithm, role, created_at, valid_until",
+    )
+    .bind(revoked_at)
+    .bind(&body.reason)
+    .bind(key_id)
+    .bind(path_game_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::IssuerKeyForbidden)?;
+
+    let algorithm: String = row.try_get("algorithm")?;
+    let role: String = row.try_get("role")?;
+    let valid_from: OffsetDateTime = row.try_get("created_at")?;
+    let valid_until: Option<OffsetDateTime> = row.try_get("valid_until")?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "issuer.key_revoked".to_string(),
+        issuer: game_ref(&slug, "key_revoked"),
+        subject: game_ref(&slug, "key_revoked"),
+        payload: serde_json::json!({
+            "game_id": path_game_id,
+            "slug": slug,
+            "key_id": key_id,
+            "revoked_at": revoked_at,
+            "reason": body.reason,
+        }),
+        timestamp: revoked_at,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(IssuerKeyResponse {
+        key_id,
+        algorithm,
+        role,
+        valid_from,
+        valid_until,
+        revoked_at: Some(revoked_at),
+    }))
 }
 
 #[derive(Serialize)]
