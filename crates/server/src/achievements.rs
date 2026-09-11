@@ -76,19 +76,26 @@
 //! definition is a no-op that emits nothing, and a retired definition can
 //! still have its name/description/schema edited in the same call.
 
+use avalon_protocol::achievements::attestation_signing_bytes;
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::games::IntegratorCategory;
-use avalon_protocol::ids::GlobalId;
+use avalon_protocol::games::{resolve_valid_signing_key, IntegratorCategory};
+use avalon_protocol::ids::{GlobalId, IdentityId};
+use avalon_protocol::permissions::Capability;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::authz::{authenticate_caller, require_capability, Caller};
 use crate::error::AppError;
-use crate::games::{authenticate_game, fetch_game_category, fetch_game_id_by_slug, issuer_ref};
+use crate::games::{
+    authenticate_game, fetch_game_category, fetch_game_id_by_slug, fetch_issuer_keys, issuer_ref,
+};
 use crate::outbox;
 use crate::state::AppState;
 
@@ -120,6 +127,18 @@ impl ClaimRoute {
                     IntegratorCategory::App | IntegratorCategory::Service
                 )
             }
+        }
+    }
+
+    /// The capability a player must have granted before this route's
+    /// issuing endpoint may act on their behalf (issue #32/#28) — distinct
+    /// wire strings per route (`achievements.issue` vs `milestones.issue`,
+    /// #324) so a player's consent grant reads correctly for whichever
+    /// vocabulary the issuer actually uses.
+    fn issue_capability(self) -> Capability {
+        match self {
+            ClaimRoute::Achievements => Capability::AchievementsIssue,
+            ClaimRoute::Milestones => Capability::MilestonesIssue,
         }
     }
 }
@@ -574,6 +593,211 @@ pub async fn list_milestone_definitions(
     Path(slug): Path<String>,
 ) -> Result<Json<Vec<AchievementDefinitionResponse>>, AppError> {
     list_definitions(&state, &slug, ClaimRoute::Milestones).await
+}
+
+#[derive(Deserialize)]
+pub struct IssueAttestationRequest {
+    /// Which of the issuer's own keys signed this attestation — resolved
+    /// against that issuer's full key history at the moment of issuance
+    /// (#84's `resolve_valid_signing_key`), not assumed to be the key that
+    /// authenticated this HTTP request.
+    pub key_id: Uuid,
+    /// Standard-base64-encoded detached Ed25519 signature over
+    /// [`attestation_signing_bytes`].
+    pub signature: String,
+    /// An optional, unverified pointer to supporting evidence (a replay
+    /// id, a screenshot ref, whatever the issuer wants to attach) — carried
+    /// through into the emitted event's payload only; not itself part of
+    /// what's signed or stored as a column, since it's descriptive
+    /// metadata, not something verification depends on.
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct AttestationSignatureResponse {
+    pub key_id: Uuid,
+    pub algorithm: String,
+    pub bytes: String,
+}
+
+#[derive(Serialize)]
+pub struct AttestationResponse {
+    pub id: Uuid,
+    pub issuer: String,
+    pub subject: Uuid,
+    pub achievement: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub issued_at: OffsetDateTime,
+    pub proof: AttestationSignatureResponse,
+}
+
+/// Shared core of [`issue_achievement`]/[`issue_milestone`] (#32,
+/// implementing #80/#84's key model and #324's category-driven vocabulary
+/// over the same mechanism). See the module doc comment's "Auth" section
+/// for the two independent checks every issuance goes through: the calling
+/// game/app/service's own credential (who is this, on whose behalf), and
+/// the *player's* consent grant for the issue capability — neither
+/// substitutes for the other, and neither substitutes for the embedded
+/// signature check below, which is the one piece of proof that would still
+/// hold up even if the HTTP layer's own auth were somehow bypassed.
+async fn issue_attestation(
+    state: &AppState,
+    headers: &HeaderMap,
+    slug: &str,
+    key: String,
+    route: ClaimRoute,
+    body: IssueAttestationRequest,
+) -> Result<Json<AttestationResponse>, AppError> {
+    // Who's calling, and on whose behalf — never a player's own session;
+    // only a game/app/service issues attestations, per #32's own design.
+    let caller = authenticate_caller(state, headers).await?;
+    let Caller::Game {
+        game_id,
+        identity_id: subject_id,
+    } = caller
+    else {
+        return Err(AppError::Forbidden);
+    };
+
+    // The caller must be the exact issuer named by {slug} — same guard
+    // every other write endpoint in this module uses.
+    let path_game_id = fetch_game_id_by_slug(state, slug).await?;
+    if game_id != path_game_id {
+        return Err(AppError::AchievementDefinitionForbidden);
+    }
+
+    // The issuer's actual registered category must match this route's
+    // claim vocabulary (#324) — an App/Service can't issue "achievements"
+    // and a Game can't issue "milestones".
+    let category = fetch_game_category(state, game_id).await?;
+    if !route.allows(category) {
+        return Err(AppError::ClaimVocabularyMismatch);
+    }
+
+    // The *player*'s own consent: an active binding to this issuer plus an
+    // active grant for this route's issue capability (#28's guard, #32's
+    // own "game caller with achievements.issue for the subject player"
+    // requirement).
+    require_capability(&caller, route.issue_capability(), state).await?;
+
+    // The definition must exist and not be retired — no new issuances
+    // against a retired definition (#31's invariant, still enforced here).
+    let definition = fetch_definition(state, game_id, &key).await?;
+    if definition.retired_at.is_some() {
+        return Err(AppError::AttestationDefinitionRetired);
+    }
+
+    // The embedded signature: proof that one of the issuer's own keys —
+    // not the node operator, not merely "whichever key authenticated this
+    // HTTP request" — actually authorized this exact attestation. Resolved
+    // against the issuer's *entire* key history at the moment of issuance,
+    // so a since-rotated (but not-yet-revoked-at-the-time) key still works
+    // correctly under #84's point-in-time model.
+    let claim_kind = category.claim_kind();
+    let issuer_str = format!("{}:{}", category.as_str(), slug);
+    let signing_bytes = attestation_signing_bytes(
+        claim_kind,
+        &issuer_str,
+        IdentityId(subject_id),
+        &definition.id,
+    );
+    let signature_bytes = BASE64
+        .decode(&body.signature)
+        .map_err(|_| AppError::InvalidAttestationSignature)?;
+
+    let issuer_keys = fetch_issuer_keys(state, game_id).await?;
+    let now = OffsetDateTime::now_utc();
+    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
+        .ok_or(AppError::InvalidAttestationSignature)?;
+    if !crate::auth::verify_event_signature(
+        &signing_key.public_key,
+        &signing_bytes,
+        &signature_bytes,
+    ) {
+        return Err(AppError::InvalidAttestationSignature);
+    }
+
+    let attestation_id = Uuid::new_v4();
+    let mut tx = state.pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO achievement_attestations \
+         (id, game_id, issuer, subject, achievement, issued_at, proof_key_id, proof_algorithm, proof_bytes) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(attestation_id)
+    .bind(game_id)
+    .bind(&issuer_str)
+    .bind(subject_id)
+    .bind(&definition.id)
+    .bind(now)
+    .bind(body.key_id)
+    .bind(&signing_key.algorithm)
+    .bind(&signature_bytes)
+    .execute(&mut *tx)
+    .await?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: format!("{claim_kind}.issued"),
+        issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_issued")),
+        subject: issuer_ref(
+            "identity",
+            &subject_id.to_string(),
+            &format!("{claim_kind}_issued"),
+        ),
+        payload: serde_json::json!({
+            "id": attestation_id,
+            "issuer": issuer_str,
+            "subject": subject_id,
+            "achievement": definition.id,
+            "evidence": body.evidence,
+            "proof": {
+                "key_id": body.key_id,
+                "algorithm": signing_key.algorithm,
+                "bytes": body.signature,
+            },
+        }),
+        timestamp: now,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(AttestationResponse {
+        id: attestation_id,
+        issuer: issuer_str,
+        subject: subject_id,
+        achievement: definition.id,
+        issued_at: now,
+        proof: AttestationSignatureResponse {
+            key_id: body.key_id,
+            algorithm: signing_key.algorithm.clone(),
+            bytes: body.signature,
+        },
+    }))
+}
+
+/// `POST /games/{slug}/achievements/{key}/issue` (#32).
+pub async fn issue_achievement(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, key)): Path<(String, String)>,
+    Json(body): Json<IssueAttestationRequest>,
+) -> Result<Json<AttestationResponse>, AppError> {
+    issue_attestation(&state, &headers, &slug, key, ClaimRoute::Achievements, body).await
+}
+
+/// `POST /integrations/{slug}/milestones/{key}/issue` (#32/#324/#325).
+pub async fn issue_milestone(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, key)): Path<(String, String)>,
+    Json(body): Json<IssueAttestationRequest>,
+) -> Result<Json<AttestationResponse>, AppError> {
+    issue_attestation(&state, &headers, &slug, key, ClaimRoute::Milestones, body).await
 }
 
 /// A pure, DB-free projection of a definition's current state from its own

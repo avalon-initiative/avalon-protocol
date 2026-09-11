@@ -48,6 +48,12 @@ pub enum Capability {
     GuildsIssue,
     AchievementsRead,
     AchievementsIssue,
+    /// #324/#325: the Milestone equivalent of `AchievementsIssue`, for
+    /// `Issuer::App`/`Issuer::Service` — a distinct wire string so a
+    /// player's consent grant reads correctly for the issuer's own
+    /// vocabulary rather than granting something literally called
+    /// "achievements.issue" to a non-game integrator.
+    MilestonesIssue,
     AssetsRead,
     AssetsIssue,
     WalletRead,
@@ -75,6 +81,7 @@ impl Capability {
         Capability::GuildsIssue,
         Capability::AchievementsRead,
         Capability::AchievementsIssue,
+        Capability::MilestonesIssue,
         Capability::AssetsRead,
         Capability::AssetsIssue,
         Capability::WalletRead,
@@ -98,6 +105,7 @@ impl Capability {
             Capability::GuildsIssue => "guilds.issue",
             Capability::AchievementsRead => "achievements.read",
             Capability::AchievementsIssue => "achievements.issue",
+            Capability::MilestonesIssue => "milestones.issue",
             Capability::AssetsRead => "assets.read",
             Capability::AssetsIssue => "assets.issue",
             Capability::WalletRead => "wallet.read",
@@ -134,6 +142,7 @@ impl FromStr for Capability {
             "guilds.issue" => Capability::GuildsIssue,
             "achievements.read" => Capability::AchievementsRead,
             "achievements.issue" => Capability::AchievementsIssue,
+            "milestones.issue" => Capability::MilestonesIssue,
             "assets.read" => Capability::AssetsRead,
             "assets.issue" => Capability::AssetsIssue,
             "wallet.read" => Capability::WalletRead,
@@ -213,6 +222,7 @@ mod tests {
             (Capability::GuildsIssue, "guilds.issue"),
             (Capability::AchievementsRead, "achievements.read"),
             (Capability::AchievementsIssue, "achievements.issue"),
+            (Capability::MilestonesIssue, "milestones.issue"),
             (Capability::AssetsRead, "assets.read"),
             (Capability::AssetsIssue, "assets.issue"),
             (Capability::WalletRead, "wallet.read"),

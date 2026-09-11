@@ -78,11 +78,11 @@ async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIss
     let signature = issuer.signing_key.sign(&nonce);
 
     let mut headers = HeaderMap::new();
+    headers.insert("x-avalon-integrator-key-id", issuer.key_id.parse().unwrap());
     headers.insert(
-        "x-avalon-integrator-key-id",
-        issuer.key_id.parse().unwrap(),
+        "x-avalon-integrator-challenge-id",
+        challenge_id.parse().unwrap(),
     );
-    headers.insert("x-avalon-integrator-challenge-id", challenge_id.parse().unwrap());
     headers.insert(
         "x-avalon-integrator-signature",
         BASE64.encode(signature.to_bytes()).parse().unwrap(),
