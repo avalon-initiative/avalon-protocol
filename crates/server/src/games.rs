@@ -674,6 +674,26 @@ fn issuer_key_from_row(row: &sqlx::postgres::PgRow) -> Result<IssuerKey, AppErro
     })
 }
 
+/// Every key (any role, any status) this issuer has ever registered —
+/// exactly the "issuer's key set" #84's `resolve_valid_signing_key`/
+/// `resolve_valid_root_key` search over. `pub(crate)` so #32's attestation
+/// issuance can resolve which of an issuer's keys signed a given
+/// attestation, at that attestation's own point in time — not just
+/// whichever key happens to be valid right now.
+pub(crate) async fn fetch_issuer_keys(
+    state: &AppState,
+    game_id: Uuid,
+) -> Result<Vec<IssuerKey>, AppError> {
+    let rows = sqlx::query(
+        "SELECT key_id, algorithm, public_key, role, created_at, valid_until, revoked_at \
+         FROM issuer_keys WHERE game_id = $1",
+    )
+    .bind(game_id)
+    .fetch_all(&state.pool)
+    .await?;
+    rows.iter().map(issuer_key_from_row).collect()
+}
+
 /// Shared core of [`authenticate_game`]/[`authenticate_game_root`]: verifies
 /// a game's server-to-server request via the challenge-response scheme this
 /// module's doc comment describes (the milestone-1 stand-in pending #80 —

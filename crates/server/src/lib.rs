@@ -227,6 +227,13 @@ pub fn router(state: AppState) -> Router {
             "/games/{slug}/achievements/{key}",
             patch(achievements::update_achievement_definition),
         )
+        // #32: issuance — a signed AchievementAttestation, gated on the
+        // subject player's own achievements.issue grant (#28), not just
+        // the game's own credential.
+        .route(
+            "/games/{slug}/achievements/{key}/issue",
+            post(achievements::issue_achievement),
+        )
         // #324/#325: the same claim-definition mechanism, App/Service's
         // own vocabulary ("milestone", not "achievement") — under
         // `/integrations/{slug}/...` since it's explicitly not
@@ -239,6 +246,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/integrations/{slug}/milestones/{key}",
             patch(achievements::update_milestone_definition),
+        )
+        .route(
+            "/integrations/{slug}/milestones/{key}/issue",
+            post(achievements::issue_milestone),
         )
         .route(
             "/games/{slug}/schemas",

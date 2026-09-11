@@ -189,6 +189,12 @@ pub enum AppError {
     AchievementDefinitionNotFound,
     #[error("this issuer's registered category doesn't use this claim vocabulary (achievement vs. milestone) — see issue #324")]
     ClaimVocabularyMismatch,
+    #[error("cannot issue against a retired definition")]
+    AttestationDefinitionRetired,
+    #[error(
+        "attestation signature does not verify against any of the issuer's currently-valid keys"
+    )]
+    InvalidAttestationSignature,
     #[error(
         "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
     )]
@@ -398,6 +404,8 @@ impl IntoResponse for AppError {
             // as `AchievementDefinitionForbidden` just above — 403, not a
             // generic 400/401.
             AppError::ClaimVocabularyMismatch => StatusCode::FORBIDDEN,
+            AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
+            AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidGuardianSet => StatusCode::BAD_REQUEST,
             AppError::RecoveryNotConfigured => StatusCode::CONFLICT,

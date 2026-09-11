@@ -117,17 +117,64 @@ seasonal championships, community campaigns, ...) are attestations with a
 game-event schema, not a separate mechanism — see
 [`./game-events.md`](./game-events.md).
 
+## Issuance is signed, not merely authenticated (#32)
+
+Two independent proofs, doing different jobs, both required:
+
+1. **The HTTP-level challenge-response** (`games::authenticate_game`, #26)
+   proves "this request came from whoever holds this issuer's key" — the
+   same mechanism every other issuer-credentialed endpoint in this repo
+   uses.
+2. **A detached signature embedded in the request body** proves something
+   stronger and more durable: that the issuer's key specifically vouches
+   for *this exact attestation* — `attestation_signing_bytes(claim_kind,
+   issuer_ref, subject, achievement)` is what gets signed, resolved
+   against the issuer's full key history at the moment of issuance via
+   #84's `resolve_valid_signing_key` (a since-rotated-but-not-yet-revoked
+   key still verifies correctly). This is the proof that would still hold
+   up even if the HTTP layer's own auth were somehow bypassed — matching
+   #32's own invariant that the node operator can never produce a valid
+   attestation for an issuer it doesn't control.
+
+Issuing also requires the **subject player's own consent**: an active
+`GameBinding` plus an active grant for `achievements.issue` (Game) or
+`milestones.issue` (App/Service) — #28's `Caller`/`require_capability`
+guard, the same infrastructure `presence::update_game_presence` already
+uses. Neither proof substitutes for the other.
+
 ## Today in the repo
 
 - `crates/protocol/src/achievements.rs` — `AchievementDefinition`,
-  `Issuer::Game(GameId)`, `AchievementAttestation { id, issuer, subject,
-  achievement, issued_at, proof, revoked_at }`, `TrustRelationship`. The
-  `proof` bytes are opaque; no verification exists yet. `revoked_at` is a
-  mutable field on the record, which #85 replaces with revocation entries.
-- `crates/protocol/src/ids.rs` — `GlobalId::new(namespace, owner, kind, key)`
-  and `AttestationId`.
+  `Issuer::Game(GameId)`/`App`/`Service` (`Issuer::claim_kind()` — #324),
+  `Signature { key_id, algorithm, bytes }`, `AchievementAttestation { id,
+  issuer, subject, achievement, issued_at, proof: Signature }` — **no
+  `revoked_at`** (#32, per #81's decided revocation mechanics: a mutable
+  status field on durable history is exactly what #75's ADR forbids;
+  revocation is its own append-only entry, tracked as #85, not built yet),
+  `attestation_signing_bytes(claim_kind, issuer_ref, subject, achievement)`
+  — the canonical bytes an issuer's key signs, folding in `claim_kind` so a
+  signature can never be replayed across vocabularies. `TrustRelationship`
+  unchanged, still unscoped (#33).
+- `crates/protocol/src/ids.rs` — `GlobalId::new(namespace, owner, kind, key)`,
+  `AttestationId`, `IdentityId` (now `Display`-able, `"{subject}"` in the
+  signing bytes above).
 - `crates/sdk/src/lib.rs` — `Session::achievements()` and
-  `issue_achievement()` check the capability, then return `NotImplemented`.
+  `issue_achievement()` check the capability, then return `NotImplemented`
+  — still true; #32 landed the server endpoint, not the SDK client (#34).
+- `crates/server/src/achievements.rs` (#32) — `POST
+  /games/{slug}/achievements/{key}/issue` /
+  `POST /integrations/{slug}/milestones/{key}/issue`: verifies the caller
+  is a game/app/service (never a player session), that the subject player
+  has an active binding + grant for the route's issue capability, that the
+  definition exists and isn't retired, and that the embedded signature
+  verifies against one of the issuer's currently-valid keys — in that
+  order, any failure short-circuits before the next check runs. Stores the
+  attestation in `achievement_attestations` (migration
+  `0045_achievement_attestations`, no `revoked_at` column) and emits
+  `achievement.issued`/`milestone.issued` atomically (#71's pattern).
+  Verified live against a real Postgres, including the tampered-signature,
+  non-bound-subject, and retired-definition rejection paths
+  (`crates/server/tests/attestations.rs`).
 - `crates/server/src/achievements.rs` (#31, generalized to App/Service by
   #324/#325) — claim-definition CRUD, one shared implementation for both
   vocabularies (thin per-route wrappers over a shared core — see the
@@ -150,7 +197,7 @@ game-event schema, not a separate mechanism — see
   change (#71's pattern). Covered by real live integration tests
   (`crates/server/tests/achievements.rs`, `crates/server/tests/milestones.rs`),
   the latter specifically exercising the category-enforcement behavior.
-  No issuing yet (#32), no signing.
+  Issuing (signed attestations) is #32, described in its own section above.
 
 ## Decisions and tickets
 
@@ -166,8 +213,9 @@ game-event schema, not a separate mechanism — see
 - [#31](https://github.com/LunarVagabond/avalon-protocol/issues/31) —
   definition CRUD per game. Its App/Service (Milestone) equivalent is
   #325, landed.
-- [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue an
-  achievement → signed attestation.
+- [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue
+  an achievement/milestone → signed attestation, landed for both claim
+  vocabularies (#324). SDK client (#34) still returns `NotImplemented`.
 - [#33](https://github.com/LunarVagabond/avalon-protocol/issues/33) — verify
   attestation + trust relationships.
 - [#34](https://github.com/LunarVagabond/avalon-protocol/issues/34) — SDK

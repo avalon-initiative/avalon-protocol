@@ -271,6 +271,19 @@ the record — [`./revocation.md`](./revocation.md).
   Network-attributed rather than issuer-signed for the same reason
   `game.registered` is: no general per-event signing ceremony exists yet
   beyond `identity.created`.
+
+  **The same module's issuance path (#32) is different: genuinely
+  issuer-signed, not network-attributed.** `POST
+  /games/{slug}/achievements/{key}/issue` /
+  `POST /integrations/{slug}/milestones/{key}/issue` write
+  `achievement.issued`/`milestone.issued` — the payload's `proof` field
+  carries a real detached Ed25519 signature (verified server-side against
+  the issuer's own key set, #84's `resolve_valid_signing_key`, before the
+  event is ever built), the first event kind in this catalogue whose
+  signer is genuinely the issuer's key and not a "network as signer"
+  stand-in. `subject` is `identity:<id>:self:<claim_kind>_issued`
+  (`games::issuer_ref`, reused with the `"identity"` namespace). No
+  `revoked_at`/revocation path exists yet (#85).
 - A seventh emitter: `crates/server/src/recovery.rs` (#201) writes
   `identity.recovery_configured` (guardian-set/threshold change),
   `identity.recovery_requested` (a new device completes the recovery
