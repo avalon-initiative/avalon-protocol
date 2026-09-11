@@ -100,25 +100,73 @@ validity.
 
 ## Today in the repo
 
-- `crates/protocol/src/achievements.rs` — `TrustRelationship { truster,
-  trusted_issuer, established_at }`: one unscoped issuer-level bit. #33 grows
-  it into scoped policy.
-- `AchievementAttestation.proof` — opaque bytes; no verification exists, so
-  "authentic" cannot yet be computed. Depends on issuer keys (#80, #84).
-- `AchievementAttestation::is_valid(now)` — checks only `revoked_at`; the
-  full validity computation over history is #85.
-- `crates/sdk/src/lib.rs` — no verification surface yet.
+- **Authentic (#33, landed)** — `avalon_chain::attestations::verify_authenticity`
+  (new crate module, alongside `sth::verify_tree_head` — both do real
+  Ed25519 verification, which is why this lives in `chain`, not the
+  I/O-free `protocol` crate): resolves the signing key against the
+  issuer's full key history at `issued_at` (#84's
+  `resolve_valid_signing_key`) and checks the signature over
+  `attestation_signing_bytes`. Returns `Authentic { key_id }` /
+  `NotAuthentic { reason }`, never a bare bool. The same function backs
+  both the issuing endpoint's own check (#32) and the public read below —
+  never duplicated per call site. Unit-tested directly against scenarios
+  E and F's authenticity half (a claim stays authentic after its key is
+  later revoked; a claim "issued" after revocation is not authentic).
+- **Valid (#33, landed, honestly partial)** —
+  `avalon_protocol::achievements::validity(issuer_status)`: `Valid` iff
+  the issuer's current `GameStatus` is `Active`. This is deliberately
+  less than the full design above — no revocation/supersession check
+  (#85, not built), no point-in-time issuer-status history (nothing
+  records *when* a status changed, only what it is now), no schema/
+  version well-formedness check (nothing to check yet). Real, but a
+  strict subset of "is this attestation currently in force."
+- **Recognized (#33, landed)** — `TrustRelationship` gained `scopes: Vec<RecognitionScope>`
+  (`claim_kind`/`schema`/`min_version`/`issued_after`, `Some` narrows,
+  `None` matches anything; an empty `scopes` list is the unscoped case,
+  unchanged from before this ticket) and `recognize(policy, issuer,
+  claim_kind, schema, version, issued_at) -> Recognition`
+  (`Recognized`/`NotRecognized { reason }`) — pure, I/O-free, evaluated
+  entirely on the consumer's own side per this doc's own "recognition is
+  contextual" rule. Exhaustively unit-tested (unscoped-matches-everything,
+  wrong issuer, and each scoping dimension individually plus OR-combined
+  across multiple scopes).
+- `GET /attestations/{id}` (`crates/server/src/attestations.rs`, new
+  module) — public, unauthenticated. Rebuilds the stored attestation,
+  computes authenticity and validity fresh on every read (never cached,
+  never trusted from storage), and returns both plus a `history` array
+  (today: just the issuance point — forward-compatible shape for #85's
+  entries once they exist). **No `recognition` field, checked by an
+  integration test that specifically asserts its absence** — matching
+  this doc's own "recognition is the consumer's, never the server's,
+  computation" rule at the wire level, not just in code comments.
+  Verified live against a real Postgres, including scenario D (an
+  authentic, valid claim from an issuer the reader's own policy doesn't
+  name reads as `Authentic`/`Valid` from the endpoint, then
+  `NotRecognized` when evaluated against that reader's own policy
+  client-side) — `crates/server/tests/attestation_reads.rs`.
+- **Not built in this pass**: `PUT /games/{slug}/recognition` (publishing
+  a policy so #89's registry can show recognition relationships as
+  facts) — `recognize()` exists and is fully usable by any consumer
+  (SDK, a game's own code) today, just not yet exposed as a
+  server-stored, publicly-readable declaration. Tracked as a follow-up,
+  not silently dropped.
 
 ## Decisions and tickets
 
 - [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
   attestation trust model.
 - [#33](https://github.com/LunarVagabond/avalon-protocol/issues/33) — verify
-  attestation + scoped trust relationships.
+  attestation + scoped trust relationships. Landed for authenticity,
+  recognition, and a partial validity — see above.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
-  decision, open: issuer signing keys and lifecycle (the authenticity input).
+  decision, closed: issuer signing keys and lifecycle (the authenticity
+  input) — see [games-and-issuers.md](games-and-issuers.md). Implementation
+  #84, landed for root/operational key add/revoke; #85's own status-transition
+  authorization model still open.
 - [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
   decision, closed: revocation mechanics (the validity input) — see
-  [revocation.md](revocation.md). Implementation is #85, still open.
+  [revocation.md](revocation.md). Implementation is #85, still open —
+  `validity()`'s partial scope above is exactly what's blocked on it.
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry
-  read model, including recognition relationships.
+  read model, including recognition relationships — needs the deferred
+  `PUT /games/{slug}/recognition` above before it has anything to read.

@@ -1,4 +1,5 @@
 pub mod achievements;
+pub mod attestations;
 pub mod auth;
 pub mod authz;
 pub mod blocks;
@@ -251,6 +252,10 @@ pub fn router(state: AppState) -> Router {
             "/integrations/{slug}/milestones/{key}/issue",
             post(achievements::issue_milestone),
         )
+        // #33: public read — authenticity + validity, deliberately no
+        // recognition verdict (a consumer's own policy, never a server
+        // boolean — see attestations.rs's module doc comment).
+        .route("/attestations/{id}", get(attestations::get_attestation))
         .route(
             "/games/{slug}/schemas",
             get(game_schemas::list_schema_versions).post(game_schemas::publish_schema_version),

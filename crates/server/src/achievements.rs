@@ -76,10 +76,11 @@
 //! definition is a no-op that emits nothing, and a retired definition can
 //! still have its name/description/schema edited in the same call.
 
-use avalon_protocol::achievements::attestation_signing_bytes;
+use avalon_chain::attestations::{verify_authenticity, Authenticity};
+use avalon_protocol::achievements::{AchievementAttestation, Issuer, Signature};
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::games::{resolve_valid_signing_key, IntegratorCategory};
-use avalon_protocol::ids::{GlobalId, IdentityId};
+use avalon_protocol::ids::{AttestationId, GameId, GlobalId, IdentityId};
 use avalon_protocol::permissions::Capability;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -690,35 +691,49 @@ async fn issue_attestation(
 
     // The embedded signature: proof that one of the issuer's own keys —
     // not the node operator, not merely "whichever key authenticated this
-    // HTTP request" — actually authorized this exact attestation. Resolved
-    // against the issuer's *entire* key history at the moment of issuance,
-    // so a since-rotated (but not-yet-revoked-at-the-time) key still works
-    // correctly under #84's point-in-time model.
+    // HTTP request" — actually authorized this exact attestation. Verified
+    // via the same shared, reusable check (#33's `verify_authenticity`)
+    // that a future independent reader (`GET /attestations/{id}`) uses —
+    // never duplicated ad hoc per call site. Resolved against the issuer's
+    // *entire* key history at the moment of issuance, so a since-rotated
+    // (but not-yet-revoked-at-the-time) key still works correctly under
+    // #84's point-in-time model.
     let claim_kind = category.claim_kind();
     let issuer_str = format!("{}:{}", category.as_str(), slug);
-    let signing_bytes = attestation_signing_bytes(
-        claim_kind,
-        &issuer_str,
-        IdentityId(subject_id),
-        &definition.id,
-    );
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidAttestationSignature)?;
 
     let issuer_keys = fetch_issuer_keys(state, game_id).await?;
     let now = OffsetDateTime::now_utc();
-    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
-        .ok_or(AppError::InvalidAttestationSignature)?;
-    if !crate::auth::verify_event_signature(
-        &signing_key.public_key,
-        &signing_bytes,
-        &signature_bytes,
-    ) {
-        return Err(AppError::InvalidAttestationSignature);
-    }
-
     let attestation_id = Uuid::new_v4();
+    let issuer_enum = match category {
+        IntegratorCategory::Game => Issuer::Game(GameId(game_id)),
+        IntegratorCategory::App => Issuer::App(GameId(game_id)),
+        IntegratorCategory::Service => Issuer::Service(GameId(game_id)),
+    };
+    let candidate = AchievementAttestation {
+        id: AttestationId(attestation_id),
+        issuer: issuer_enum,
+        subject: IdentityId(subject_id),
+        achievement: definition_ref(category, slug, &key),
+        issued_at: now,
+        proof: Signature {
+            key_id: body.key_id.to_string(),
+            // The only algorithm registration accepts today (games::SUPPORTED_KEY_ALGORITHM);
+            // the resolved key's own algorithm is authoritative for storage below.
+            algorithm: "ed25519".to_string(),
+            bytes: signature_bytes,
+        },
+    };
+    let Authenticity::Authentic { .. } =
+        verify_authenticity(&candidate, claim_kind, &issuer_str, &issuer_keys)
+    else {
+        return Err(AppError::InvalidAttestationSignature);
+    };
+    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
+        .expect("verify_authenticity already resolved this key successfully");
+
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
@@ -734,7 +749,7 @@ async fn issue_attestation(
     .bind(now)
     .bind(body.key_id)
     .bind(&signing_key.algorithm)
-    .bind(&signature_bytes)
+    .bind(&candidate.proof.bytes)
     .execute(&mut *tx)
     .await?;
 
