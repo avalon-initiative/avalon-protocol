@@ -58,6 +58,13 @@ async fn main() {
             let dry_run = args.any(|a| a == "--dry-run");
             prune_ledger(dry_run).await;
         }
+        Some("list-equivocations") => {
+            list_equivocations(args.next()).await;
+        }
+        Some("resolve-equivocation") => {
+            let raw_args: Vec<String> = args.collect();
+            resolve_equivocation(&raw_args).await;
+        }
         #[cfg(feature = "dev-tools")]
         Some(cmd) if is_register_integrator_command(cmd) => {
             let raw_args: Vec<String> = args.collect();
@@ -72,7 +79,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-game|register-integrator --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]|pair-device"
                 } else {
@@ -111,6 +118,138 @@ async fn outbox_status() {
             "outbox: {} pending, oldest enqueued at {oldest}",
             status.pending_count
         ),
+    }
+}
+
+/// `avalon list-equivocations [network_id]` — issue #316, the read side of
+/// #300's decided equivocation response procedure. Defaults `network_id` to
+/// this node's own genesis network (read the same way `inspect-ledger`
+/// does) when not given, since most operators are asking "does *my*
+/// network have any open equivocation" rather than watching an arbitrary
+/// one. Shows every finding ever recorded, resolved or not — this is the
+/// history view; the mirror-watcher's own backfill gate only cares about
+/// unresolved ones.
+async fn list_equivocations(network_id_arg: Option<String>) {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres");
+
+    let network_id = match network_id_arg {
+        Some(id) => id,
+        None => PostgresSettlementProvider::read_genesis_network_id(&pool)
+            .await
+            .expect("failed to read genesis")
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "no genesis set on this node and no network_id given — usage: avalon list-equivocations [network_id]"
+                );
+                std::process::exit(1);
+            }),
+    };
+
+    let findings = avalon_chain::mirror::list_equivocations(&pool, &network_id)
+        .await
+        .expect("failed to read equivocation findings");
+
+    if findings.is_empty() {
+        println!("network_id: {network_id} — no equivocation ever recorded");
+        return;
+    }
+
+    println!("network_id: {network_id} — {} finding(s):", findings.len());
+    for f in &findings {
+        println!(
+            "┌─ tree_size {} ─────────────────────────────────────",
+            f.tree_size
+        );
+        println!("│ source_a:  {} → root {}", f.source_a, short_hash(&f.root_hash_a));
+        println!("│ source_b:  {} → root {}", f.source_b, short_hash(&f.root_hash_b));
+        match (&f.resolved_at, &f.resolved_root_hash) {
+            (Some(at), Some(root)) => println!(
+                "│ status:    ✓ resolved at {at} — legitimate root: {}",
+                short_hash(root)
+            ),
+            _ => println!(
+                "│ status:    ✗ UNRESOLVED — mirror-watcher refuses to backfill this network \
+                 past this point until this is resolved (see docs/maintainers/equivocation-response.md)"
+            ),
+        }
+        println!("└──────────────────────────────────────────────────────");
+    }
+}
+
+/// `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]`
+/// — issue #316, the write side of #300's decided equivocation response
+/// procedure. Records that an operator has completed the investigation
+/// playbook (`docs/maintainers/equivocation-response.md`) and determined
+/// which of the two disagreeing root hashes at `tree_size` was legitimate.
+///
+/// `--discard-mirrored` additionally drops any `mirrored_entries` this node
+/// already verified at or beyond `tree_size` (`avalon_chain::mirror::
+/// discard_mirrored_entries_from`) — pass it when this node's own mirrored
+/// history might include content from the losing branch, so the next
+/// mirror-watcher tick re-fetches and re-verifies from a clean point rather
+/// than resuming on top of potentially-wrong local state. Safe to omit (and
+/// re-run with it later) if unsure; it is not the default because a pure
+/// mirror that never actually advanced past `tree_size` has nothing to
+/// discard, and unconditionally deleting is needless churn for that
+/// (expected to be the more common) case.
+async fn resolve_equivocation(raw_args: &[String]) {
+    let discard_mirrored = raw_args.iter().any(|a| a == "--discard-mirrored");
+    let positional: Vec<&String> = raw_args.iter().filter(|a| !a.starts_with("--")).collect();
+    let [network_id, tree_size_raw, legitimate_root_hash] = positional[..] else {
+        eprintln!(
+            "usage: avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]"
+        );
+        std::process::exit(1);
+    };
+    let Ok(tree_size) = tree_size_raw.parse::<i64>() else {
+        eprintln!("tree_size must be an integer, got: {tree_size_raw}");
+        std::process::exit(1);
+    };
+
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres");
+
+    let resolved_count =
+        avalon_chain::mirror::resolve_equivocation(&pool, network_id, tree_size, legitimate_root_hash)
+            .await
+            .expect("failed to resolve equivocation finding(s)");
+    if resolved_count == 0 {
+        println!(
+            "no unresolved finding at network_id={network_id} tree_size={tree_size} — nothing to do \
+             (already resolved, or never existed)"
+        );
+        return;
+    }
+    println!(
+        "resolved {resolved_count} finding(s) at network_id={network_id} tree_size={tree_size}: \
+         legitimate root is {}",
+        short_hash(legitimate_root_hash)
+    );
+
+    if discard_mirrored {
+        let discarded =
+            avalon_chain::mirror::discard_mirrored_entries_from(&pool, network_id, tree_size)
+                .await
+                .expect("failed to discard mirrored entries");
+        println!(
+            "discarded {discarded} locally-mirrored entr(ies) verified at or beyond tree_size={tree_size} \
+             — the mirror-watcher will re-fetch and re-verify them from the now-resolved branch on its next tick"
+        );
+    } else {
+        println!(
+            "--discard-mirrored not passed — this node's own mirrored_entries beyond tree_size={tree_size} \
+             were left untouched; re-run with --discard-mirrored if this node's local history might include \
+             content from the losing branch"
+        );
     }
 }
 

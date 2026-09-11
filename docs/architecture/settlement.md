@@ -336,7 +336,18 @@ implemented, see "Today in the repo" below.
     correct STH" resolution logic anywhere in this path, deliberately —
     both STHs in an equivocation are validly signed, so there is no
     automatic correct answer; resolving a real equivocation is a human
-    incident-response procedure, tracked as its own separate follow-up.
+    incident-response procedure. #300 decided the POC-scoped response
+    procedure (an investigation playbook to rule out a benign cause first,
+    plus a mirror-recovery mechanism), implemented in #316 — see
+    `docs/maintainers/equivocation-response.md` for the operator-facing
+    runbook. `avalon_chain::mirror::resolve_equivocation` records which
+    root hash was determined legitimate (`equivocation_findings.resolved_at`/
+    `resolved_root_hash`), which is what `backfill_network`'s gate below
+    actually checks (`unresolved_equivocations`, not every finding ever
+    recorded). `avalon_chain::mirror::discard_mirrored_entries_from` is the
+    recovery half, for a mirror that may have already advanced past the
+    fork point on the losing branch. Full key-rotation procedure and real
+    alerting/paging remain open, tracked separately as #315.
   - **Multi-peer by design.** `AVALON_MIRROR_PEERS` accepts more than one
     URL, and every configured peer is actually watched every tick, not
     just the first one that answers — one unreachable/misbehaving peer
