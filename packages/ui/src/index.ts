@@ -31,6 +31,7 @@ export { default as AvalonRsvpControl } from './components/AvalonRsvpControl.vue
 export { default as AvalonRsvpRosterPanel } from './components/AvalonRsvpRosterPanel.vue'
 export { default as AvalonGameCard } from './components/AvalonGameCard.vue'
 export { default as AvalonMetricTile } from './components/AvalonMetricTile.vue'
+export { default as AvalonAchievementCard } from './components/AvalonAchievementCard.vue'
 export type { AvalonIconName } from './components/AvalonIcon.types'
 export type { AvalonNavItem } from './components/AvalonNav.types'
 export type { PresenceStatus } from './components/AvalonPresenceBadge.types'
@@ -47,3 +48,7 @@ export type {
 } from './components/AvalonRsvpRosterPanel.types'
 export type { AvalonGameCardProps } from './components/AvalonGameCard.types'
 export type { AvalonMetricTileProps } from './components/AvalonMetricTile.types'
+export type {
+  AvalonAchievementCardProps,
+  AvalonAchievementHistoryEntry,
+} from './components/AvalonAchievementCard.types'

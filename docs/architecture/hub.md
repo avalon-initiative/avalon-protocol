@@ -63,10 +63,12 @@ Your History
    Community MMO #47 · Verified
 ```
 
-All three are authentic. The user can feature, hide, filter, and sort. The Hub
-never implies Avalon has judged one more prestigious than another, and a revoked
-claim shows as revoked with its history, not as a gap. See the
-[trust model](./trust-model.md) and [revocation](./revocation.md).
+All three are authentic. The user can filter and sort (landed, #35); feature and
+hide are deferred (see "Today in the repo" — they depend on a visibility/
+preference store, #87, that doesn't exist yet). The Hub never implies Avalon has
+judged one more prestigious than another, and a revoked claim shows as revoked
+with its history, not as a gap. See the [trust model](./trust-model.md) and
+[revocation](./revocation.md).
 
 ## Hub and guilds
 
@@ -105,16 +107,34 @@ is visibly marked.
   `requiresAuth` is set once on the parent route and inherited by every
   child via `vue-router`'s meta-merging. Nav entries for features that
   don't exist yet (Discover) render disabled with a
-  "Soon" tag rather than being hidden. Games (#270) and Chat (#105) are no
-  longer among them, same as Guilds (#24) before them. The shell also
-  heartbeats `PUT /me/presence` (Online, every 60s, inside the server's
-  120s TTL) so the user actually reads as online to their friends while the
-  Hub is open. Visual language: one dark theme via CSS custom properties in
-  `packages/ui/src/styles/tokens.css` (+ `global.css`), imported once in
-  `apps/hub/src/main.ts`; component styles reference tokens only. **A
-  future Hub feature adds a child route plus a nav entry in
-  `HubShell.vue`** — this is what #35 (achievements) should build against;
-  #24 (guild view + chat) and #105 (DMs) are now built this way.
+  "Soon" tag rather than being hidden. Games (#270), Chat (#105), and
+  Achievements (#35) are no longer among them, same as Guilds (#24) before
+  them. The shell also heartbeats `PUT /me/presence` (Online, every 60s,
+  inside the server's 120s TTL) so the user actually reads as online to
+  their friends while the Hub is open. Visual language: one dark theme via
+  CSS custom properties in `packages/ui/src/styles/tokens.css` (+
+  `global.css`), imported once in `apps/hub/src/main.ts`; component styles
+  reference tokens only.
+- **`Achievements.vue` (#35, landed)** — reads `GET /me/achievements` (#34)
+  and merges in two things that endpoint doesn't itself carry: the
+  achievement/milestone's display name (`GET /games/{slug}/achievements` or
+  `GET /integrations/{slug}/milestones`, keyed by the claim's own GlobalId
+  ref) and the issuer's display name (`GET /integrations/{slug}`) — see
+  `apps/hub/src/api/achievements.ts`'s module doc comment. Each claim
+  renders via a new `packages/ui` component, `AvalonAchievementCard`:
+  achievement name, a clickable issuer chip (routes to the game's profile
+  page, #90), issued date, a `valid`/`invalid` badge with its reason
+  (never a score or star rating — ADR #77), and an expandable history list
+  that shows a revocation's date and reason alongside the original
+  issuance (#81/#85) rather than replacing it. Filter (by achievement/game
+  name, and by a specific issuer via a dropdown scoped to issuers the
+  caller actually has claims from) and sort (date/name/game) are both
+  client-side and unit-tested (`apps/hub/src/api/achievements.test.ts`).
+  **Not built in this pass**: feature/hide (blocked on #87's visibility
+  store — no protocol event or preference row exists yet to persist
+  either), and `PUT /games/{slug}/recognition`-backed recognition display
+  (trust-model.md's own tracked gap — this view shows authenticity/validity
+  only, per ADR #76).
 - `Home.vue` — the landing page after login: welcome header, Quick Actions
   (add a friend, set up this device, edit profile), Friends Online, and the
   six most recent entries from `GET /me/history` with a "View all" link to
