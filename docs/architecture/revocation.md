@@ -108,13 +108,50 @@ still open.
 
 ## Today in the repo
 
-- `crates/protocol/src/achievements.rs` — `revoked_at` field and
-  `is_valid(now)`, both slated for replacement.
-- `crates/protocol/src/permissions.rs` — `PermissionGrant.revoked_at` uses the
-  same mutable-field shape; grants are not promised-durable protocol history,
-  so this is a projection concern, but it should follow the same pattern #81
-  settled once #85 implements it.
-- No revocation events, endpoints, or issuer-status types exist.
+- **Individual revocation, landed (#85), scoped to exactly scenario C.**
+  `avalon_protocol::achievements::AttestationStatus { Active, Revoked }` —
+  computed by [`attestation_status_at`], never a mutable field on the
+  attestation (`revoked_at` was already removed from
+  `AchievementAttestation` by #32, ahead of this ticket). `validity()`
+  (#33) now takes the computed `AttestationStatus` alongside the issuer's
+  `GameStatus`. `POST /attestations/{id}/revoke`
+  (`crates/server/src/attestations.rs`) inserts an append-only row into a
+  brand-new `attestation_revocations` table — `achievement_attestations`
+  itself is never touched — requires the caller to authenticate as the
+  attestation's *original* issuer, and additionally verifies an embedded
+  signature over `revocation_signing_bytes` against that issuer's key
+  history at revocation time
+  (`avalon_chain::attestations::verify_signature`, the same generic core
+  `verify_authenticity` uses — one cryptographic check backing both
+  issuance and revocation, not two). Emits
+  `achievement.revoked`/`milestone.revoked`. `GET /attestations/{id}`'s
+  `history` array now shows both `issued` and (if applicable) `revoked`
+  entries with their reason. Verified live end to end, including
+  scenario C itself (`crates/server/tests/attestation_revocations.rs`):
+  before-revoke reads `valid`/1-entry history, after-revoke reads
+  `invalid`/2-entry history with the revocation's reason attached,
+  authenticity stays `authentic` throughout (revocation doesn't retroactively
+  un-sign anything) — plus double-revocation and wrong-issuer-revokes
+  rejection.
+- **Not built in this pass, honestly**: supersession and reinstatement.
+  Neither has a catalogued protocol event kind yet
+  (`docs/architecture/protocol-events.md` lists `achievement.revoked` and
+  `attestation.superseded`, but no attestation-level "reinstated" kind at
+  all), and neither is required by scenario C. `attestation_revocations`
+  is deliberately capped at one row per attestation
+  (`UNIQUE (attestation_id)`) precisely because there's no reinstatement
+  path to need more than one yet — lifting that constraint is what
+  building reinstatement will need to do.
+- Issuer-level suspend/revoke/reinstate/deprecate transitions (a separate
+  axis from attestation revocation) remain exactly where #84 left them:
+  the `GameStatus` variants exist and `validity()` already reads whichever
+  one is set, but nothing in this repo can transition an issuer into any
+  of them yet — that authorization model is still open, tracked
+  separately (see [games-and-issuers.md](games-and-issuers.md)).
+- `crates/protocol/src/permissions.rs` — `PermissionGrant.revoked_at` still
+  uses the mutable-field shape; grants are not promised-durable protocol
+  history (a projection concern, not covered by #81's ruling), left
+  untouched by this pass.
 
 ## Decisions and tickets
 
@@ -124,6 +161,10 @@ still open.
   decision, closed: revocation mechanics (revocation entries, supersession,
   reinstatement, issuer-status events), described above.
 - [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85) —
-  implementation: replace `revoked_at` with revocation entries.
+  implementation: replaced `revoked_at` with revocation entries for
+  individual attestations (landed, scenario C only — see above).
+  Supersession, reinstatement, and issuer-status transitions remain open
+  follow-up work, not solved by this pass.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
-  decision, open: issuer keys (scenario F).
+  decision, closed: issuer keys (scenario F) — see
+  [games-and-issuers.md](games-and-issuers.md).

@@ -126,6 +126,22 @@ pub fn attestation_signing_bytes(
     format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
+/// The exact bytes an issuer's key signs to authorize a revocation (issue
+/// #85, implementing #81's decided mechanics: revocation is a signed,
+/// appended entry — never a mutation of the original attestation).
+/// `attestation_id` folded in means a revocation signature can never be
+/// replayed against a different attestation; `reason_code` folded in means
+/// it can't be replayed with a different claimed reason either.
+pub fn revocation_signing_bytes(
+    claim_kind: &str,
+    issuer_ref: &str,
+    attestation_id: AttestationId,
+    reason_code: &str,
+) -> Vec<u8> {
+    format!("avalon:{claim_kind}.revoked:v1:{issuer_ref}:{attestation_id}:{reason_code}")
+        .into_bytes()
+}
+
 #[cfg(test)]
 mod issuer_tests {
     use super::*;
@@ -215,25 +231,68 @@ mod issuer_tests {
     }
 }
 
-/// "Is this attestation still good right now" (issue #33, ADR #76's second
-/// of three separate questions — authentic, valid, recognized — never
-/// merged into one boolean). Deliberately partial today, honestly, not
-/// silently: revocation/supersession is #85, not built yet, so this only
-/// checks the one thing that's actually real — the issuer's own current
+/// An attestation's point-in-time status (issue #85, implementing #81's
+/// decided mechanics) — never a mutable field on the attestation itself.
+/// Computed from whether a revocation entry exists and when it took
+/// effect, not read from a flag. Reinstatement (a later entry reversing a
+/// revocation, per #81's decision) and supersession are deliberately not
+/// built in this pass — no protocol event kind for either exists yet
+/// (`docs/architecture/protocol-events.md` catalogues `achievement.revoked`
+/// but no attestation-level "reinstated"/"superseded" kind), and neither
+/// is required by scenario C (`docs/architecture/revocation.md`), the one
+/// this ticket's acceptance criteria actually requires. Tracked as
+/// deferred follow-up, not silently assumed unnecessary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttestationStatus {
+    Active,
+    Revoked,
+}
+
+/// `revoked_at`, if `Some`, is when the attestation's (at most one, for
+/// now — see [`AttestationStatus`]'s own doc comment) revocation entry
+/// took effect. `Revoked` iff a revocation exists and `at` is at or after
+/// it — never before, so a claim's status *as of its own issuance* is
+/// always `Active` regardless of what happens to it later, matching
+/// scenario C's "the Hub shows both, and the flip happens exactly at the
+/// revocation timestamp" requirement.
+pub fn attestation_status_at(
+    revoked_at: Option<OffsetDateTime>,
+    at: OffsetDateTime,
+) -> AttestationStatus {
+    match revoked_at {
+        Some(revoked_at) if at >= revoked_at => AttestationStatus::Revoked,
+        _ => AttestationStatus::Active,
+    }
+}
+
+/// "Is this attestation still good right now" (issue #33/#85, ADR #76's
+/// second of three separate questions — authentic, valid, recognized —
+/// never merged into one boolean). Checks the attestation's own revocation
+/// status ([`attestation_status_at`], #85) and the issuer's current
 /// `GameStatus` (#84 catalogued `Suspended`/`Revoked`/`Deprecated`, but
-/// nothing can transition into them yet, so this always resolves `Valid`
-/// in practice until that lands too). No point-in-time issuer-status
-/// history exists either, so this checks status *now*, not "as of `at`" —
-/// a real gap against the ticket's original design, tracked rather than
-/// silently approximated.
+/// nothing can transition an issuer into them yet — no point-in-time
+/// issuer-status history exists either, so that half of this check is
+/// still "as of now", not "as of `at`"; the attestation-revocation half
+/// genuinely is point-in-time). Issuer-key-validity-at-issuance is a
+/// separate question, already covered by
+/// [`crate::games::IssuerKey::is_valid_at`]/`Authenticity`
+/// (`avalon_chain::attestations::verify_authenticity`), not repeated here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Validity {
     Valid,
     Invalid { reason: String },
 }
 
-pub fn validity(issuer_status: crate::games::GameStatus) -> Validity {
+pub fn validity(
+    issuer_status: crate::games::GameStatus,
+    attestation_status: AttestationStatus,
+) -> Validity {
     use crate::games::GameStatus;
+    if attestation_status == AttestationStatus::Revoked {
+        return Validity::Invalid {
+            reason: "attestation has been revoked".to_string(),
+        };
+    }
     match issuer_status {
         GameStatus::Active => Validity::Valid,
         GameStatus::Suspended => Validity::Invalid {
@@ -366,11 +425,66 @@ mod verification_tests {
     use uuid::Uuid;
 
     #[test]
-    fn validity_is_valid_only_for_an_active_issuer() {
-        assert_eq!(validity(GameStatus::Active), Validity::Valid);
-        assert_ne!(validity(GameStatus::Suspended), Validity::Valid);
-        assert_ne!(validity(GameStatus::Revoked), Validity::Valid);
-        assert_ne!(validity(GameStatus::Deprecated), Validity::Valid);
+    fn validity_is_valid_only_for_an_active_issuer_and_non_revoked_attestation() {
+        assert_eq!(
+            validity(GameStatus::Active, AttestationStatus::Active),
+            Validity::Valid
+        );
+        assert_ne!(
+            validity(GameStatus::Suspended, AttestationStatus::Active),
+            Validity::Valid
+        );
+        assert_ne!(
+            validity(GameStatus::Revoked, AttestationStatus::Active),
+            Validity::Valid
+        );
+        assert_ne!(
+            validity(GameStatus::Deprecated, AttestationStatus::Active),
+            Validity::Valid
+        );
+        // A revoked attestation is invalid even under an otherwise-active
+        // issuer.
+        assert_ne!(
+            validity(GameStatus::Active, AttestationStatus::Revoked),
+            Validity::Valid
+        );
+    }
+
+    /// Scenario C (`docs/architecture/revocation.md`): validity flips
+    /// exactly at the revocation timestamp, never before it.
+    #[test]
+    fn scenario_c_validity_flips_exactly_at_the_revocation_timestamp() {
+        let issued_at = OffsetDateTime::UNIX_EPOCH;
+        let revoked_at = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(10);
+
+        assert_eq!(
+            attestation_status_at(Some(revoked_at), issued_at),
+            AttestationStatus::Active,
+            "still active at the moment of issuance, long before revocation"
+        );
+        assert_eq!(
+            attestation_status_at(Some(revoked_at), revoked_at - time::Duration::seconds(1)),
+            AttestationStatus::Active,
+            "one second before the revocation timestamp: still active"
+        );
+        assert_eq!(
+            attestation_status_at(Some(revoked_at), revoked_at),
+            AttestationStatus::Revoked,
+            "at the exact revocation timestamp: already revoked"
+        );
+        assert_eq!(
+            attestation_status_at(Some(revoked_at), revoked_at + time::Duration::hours(100)),
+            AttestationStatus::Revoked,
+            "long after revocation: still revoked"
+        );
+    }
+
+    #[test]
+    fn an_attestation_with_no_revocation_is_always_active() {
+        assert_eq!(
+            attestation_status_at(None, OffsetDateTime::now_utc()),
+            AttestationStatus::Active
+        );
     }
 
     fn issuer_and_scope_fixture() -> (Issuer, GlobalId) {
