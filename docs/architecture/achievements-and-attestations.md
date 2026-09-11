@@ -12,6 +12,33 @@ The attestation mechanism itself is domain-agnostic — any issuer, game or
 otherwise, can assert a claim about an identity — and is illustrated below with
 gaming examples because gaming is Avalon's first live use case.
 
+**Vocabulary is category-driven, mechanism is not** (decided
+[#324](https://github.com/LunarVagabond/avalon-protocol/issues/324), amending
+[#290](https://github.com/LunarVagabond/avalon-protocol/issues/290)'s
+original "keep exactly as-is" ruling on this specific primitive). A
+`Issuer::Game` issuer's claims are **Achievements**, exactly as everything
+below describes — unchanged, permanent. A `Issuer::App`/`Issuer::Service`
+issuer's claims are **Milestones** — the same record shape
+(`id`/`issuer`/`name`/`description`/`schema`/`version` for a definition;
+`id`/`issuer`/`subject`/`<claim>`/`issued_at`/`proof`/`revoked_at` for an
+attestation), the same verification path, the same namespacing pattern
+(`app:<slug>:milestone:<key>` / `service:<slug>:milestone:<key>` instead of
+`game:<slug>:achievement:<key>`) — only the human-facing label and the
+`GlobalId` "kind" segment vary, derived from the issuer's own category so
+the label can never drift from what the issuer actually is. One shared term
+across both non-game categories, not a third word for services: a service
+issuer's "user completed onboarding" and an app issuer's "user hit their
+100th session" are the same kind of fact from Avalon's point of view.
+Cross-issuer reading (a game reading an app's claims, or vice versa) works
+by construction, not convention — a consumer verifies a claim without ever
+caring what it's called.
+
+An issuer that wants to attach a custom shape to its own claims (a
+`schema` reference) already can, for any category — see
+[game-space.md](./game-space.md)'s schema-publication mechanism (#181/#255),
+itself already category-agnostic despite its still-gaming-flavored name
+(tracked as a pending rename under #290, not re-decided here).
+
 ## Shape
 
 ```text
@@ -115,10 +142,16 @@ game-event schema, not a separate mechanism — see
 
 ## Decisions and tickets
 
+- [#324](https://github.com/LunarVagabond/avalon-protocol/issues/324) —
+  decided: category-driven claim vocabulary (Achievement for
+  `Issuer::Game`, Milestone for `Issuer::App`/`Issuer::Service`), same
+  mechanism throughout — described above. #31/#32's still-open
+  implementation should build this from day one, not retrofit it.
 - [#30](https://github.com/LunarVagabond/avalon-protocol/issues/30) — Epic:
   Achievements & Attestations.
 - [#31](https://github.com/LunarVagabond/avalon-protocol/issues/31) —
-  definition CRUD per game.
+  definition CRUD per game. Still needs its App/Service (Milestone)
+  equivalent per #324.
 - [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue an
   achievement → signed attestation.
 - [#33](https://github.com/LunarVagabond/avalon-protocol/issues/33) — verify
