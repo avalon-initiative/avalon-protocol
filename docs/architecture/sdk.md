@@ -103,14 +103,36 @@ protocol and the domain model in `crates/protocol`; they never pull in
 ## Today in the repo
 
 - `crates/sdk/src/lib.rs` — `AvalonClient::new(AvalonConfig { server_url,
-  game_credential_key_id })` and `authenticate(identity_token)` wired to a real
-  `avalon-server` (`GET /me`). `Session::require(capability)` is the per-method
-  check; `achievements()` and `issue_achievement()` check it, then return
-  `NotImplemented`. `granted` is always empty until grants exist —
-  `Session::grant_for_testing(capability)` (`#[doc(hidden)]`) is a temporary
-  escape hatch so integration tests can exercise capability-gated methods
-  against a real server before the grant system (#26–#28) exists; delete it
-  once `authenticate()` can populate `granted` for real.
+  game_credential_key_id, game_slug, signing_key })` and
+  `authenticate(identity_token)` wired to a real `avalon-server` (`GET /me`,
+  `GET /me/grants`). `Session::require(capability)` is the per-method check.
+  `game_slug`/`signing_key` are `Option`s: `None` for a read-only
+  integration, required by `issue_achievement`.
+  `Session::grant_for_testing(capability)` (`#[doc(hidden)]`, gated behind
+  the `test-util` feature) remains for tests that want a granted `Session`
+  without driving the full consent flow.
+- `crates/sdk/src/achievements.rs` (#34) — `Session::achievements()`
+  (`achievements.read`, `GET /me/achievements` — new, #34, listing the
+  identity's own full attestation history across every issuer) and
+  `Session::issue_achievement(key)` (`achievements.issue`, `POST
+  /games/{slug}/achievements/{key}/issue`) are both wired to a real server;
+  neither returns `NotImplemented` any more. `VerifiedAttestation` carries
+  `authenticity`/`validity`/`history` as the server computed them —
+  deliberately no `recognition` field, matching `GET /attestations/{id}`'s
+  (#33) own posture; a game wanting a recognition verdict filters through
+  its own policy. Issuing signs locally: `AvalonConfig::signing_key` never
+  leaves this process, only a detached signature does, and the same
+  challenge-response proof every other issuer-credentialed endpoint in this
+  repo uses (`POST /games/{slug}/challenge`) authenticates the HTTP call
+  itself. Milestones (`issue_milestone`/`milestones()`, the App/Service
+  equivalent) aren't wired up yet — same shape, not this ticket's scope.
+  Found and fixed a real pre-existing bug while live-verifying this: `GET
+  /me/grants` only ever read the deprecated `x-avalon-game-key-id` header,
+  silently ignoring the generalized `x-avalon-integrator-key-id` name the
+  SDK actually sends (per #293) — every grant this SDK ever fetched was
+  therefore invisible to `Session::require`, not just this ticket's new
+  methods (this was issue #322's real root cause too, closed alongside this
+  fix).
 - `crates/sdk/src/social.rs` (#17) — `Session::friends()` (`friends.read`),
   `presence()` and `presence_of(&[IdentityId])` (`presence.read`), wired to
   `GET /friends` and `GET /presence?ids=…` (#15/#16). `friends()` embeds each

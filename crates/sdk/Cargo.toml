@@ -18,6 +18,11 @@ uuid.workspace = true
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+# Achievements issuance (#34) signs attestations locally, in-process — the
+# server never sees this integrator's private key, only a detached
+# signature.
+ed25519-dalek.workspace = true
+base64.workspace = true
 
 [features]
 # Exposes Session::grant_for_testing, a capability-grant escape hatch that
@@ -29,8 +34,6 @@ test-util = []
 avalon-sdk = { path = ".", features = ["test-util"] }
 tokio.workspace = true
 sqlx.workspace = true
-base64.workspace = true
-ed25519-dalek.workspace = true
 rand.workspace = true
 passkey-types.workspace = true
 passkey-client.workspace = true

@@ -313,6 +313,9 @@ mod tests {
             // error in a way that's obviously not `CapabilityNotGranted`.
             server_url: "http://127.0.0.1:1".to_string(),
             token: "test-token".to_string(),
+            integrator_key_id: "test-key".to_string(),
+            game_slug: None,
+            signing_key: None,
         }
     }
 

@@ -156,6 +156,8 @@ async fn authenticate_against_a_real_server() {
     let client = AvalonClient::new(AvalonConfig {
         server_url: base,
         game_credential_key_id: "sdk-test".to_string(),
+        game_slug: None,
+        signing_key: None,
     });
     let session = client
         .authenticate(&token)
@@ -179,6 +181,8 @@ async fn authenticate_rejects_an_invalid_token() {
     let client = AvalonClient::new(AvalonConfig {
         server_url: server_url(),
         game_credential_key_id: "sdk-test".to_string(),
+        game_slug: None,
+        signing_key: None,
     });
 
     let result = client.authenticate("not-a-real-token").await;

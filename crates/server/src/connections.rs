@@ -465,7 +465,16 @@ pub async fn list_my_connections(
     Ok(Json(connections))
 }
 
+/// `x-avalon-game-key-id` is the original name; `x-avalon-integrator-key-id`
+/// is the generalized name every non-game integrator (and the SDK, #34)
+/// actually sends (#293) — same two-name posture `games.rs`'s
+/// `header_value` uses for its own auth headers. Found via a live #34 SDK
+/// test that failed with `CapabilityNotGranted` despite a real grant
+/// existing: this handler only ever read the old name, so `AvalonClient`'s
+/// `x-avalon-integrator-key-id` (the only one it has ever sent, per its own
+/// doc comment) was silently ignored, not merely deprioritized.
 const GAME_KEY_ID_HEADER: &str = "x-avalon-game-key-id";
+const INTEGRATOR_KEY_ID_HEADER: &str = "x-avalon-integrator-key-id";
 
 #[derive(Serialize)]
 pub struct MyGrantsResponse {
@@ -494,7 +503,8 @@ pub async fn my_grants(
 ) -> Result<Json<MyGrantsResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
     let key_id: Uuid = headers
-        .get(GAME_KEY_ID_HEADER)
+        .get(INTEGRATOR_KEY_ID_HEADER)
+        .or_else(|| headers.get(GAME_KEY_ID_HEADER))
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .ok_or(AppError::GameKeyNotFound)?;

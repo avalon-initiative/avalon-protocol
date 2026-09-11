@@ -65,6 +65,8 @@ fn client() -> AvalonClient {
     AvalonClient::new(AvalonConfig {
         server_url: server_url(),
         game_credential_key_id: "sdk-test".to_string(),
+        game_slug: None,
+        signing_key: None,
     })
 }
 
