@@ -90,6 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/device/deny", post(device_pairing::deny_pairing))
         .route("/me", get(handlers::me).patch(handlers::update_profile))
         .route("/me/history", get(handlers::my_history))
+        .route("/me/achievements", get(attestations::list_my_achievements))
         .route("/identities/profiles", get(handlers::list_profiles))
         .route("/me/presence", put(presence::update_my_presence))
         .route(

@@ -220,6 +220,8 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
     let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
         server_url: base.clone(),
         game_credential_key_id: key_id,
+        game_slug: None,
+        signing_key: None,
     });
     let session = client
         .authenticate(&token)

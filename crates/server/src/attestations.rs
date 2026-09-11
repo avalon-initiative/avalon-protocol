@@ -34,6 +34,7 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgRow;
 use sqlx::Row;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -145,6 +146,46 @@ pub async fn get_attestation(
     .await?
     .ok_or(AppError::AttestationNotFound)?;
 
+    Ok(Json(build_attestation_response(&state, row).await?))
+}
+
+/// `GET /me/achievements` (#34) — bearer-authenticated as the reading
+/// identity, returning that identity's own full attestation history
+/// (every issuer, active and revoked alike): the identity reading its own
+/// record, not a per-consumer trust question, so no additional
+/// authorization beyond "this is genuinely you" is needed — matching
+/// `GET /attestations/{id}`'s own "authenticity/validity are facts, never
+/// gated behind a specific issuer's permission" posture. Also the read
+/// path `crates/sdk/src/achievements.rs::Session::achievements` (#34) and
+/// the Hub's achievements view (#35) are designed against.
+pub async fn list_my_achievements(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AttestationReadResponse>>, AppError> {
+    let identity_id = crate::handlers::authenticate(&state, &headers).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, game_id, issuer, subject, achievement, issued_at, \
+                proof_key_id, proof_algorithm, proof_bytes \
+         FROM achievement_attestations \
+         WHERE subject = $1 ORDER BY issued_at DESC",
+    )
+    .bind(identity_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut attestations = Vec::with_capacity(rows.len());
+    for row in rows {
+        attestations.push(build_attestation_response(&state, row).await?);
+    }
+    Ok(Json(attestations))
+}
+
+async fn build_attestation_response(
+    state: &AppState,
+    row: PgRow,
+) -> Result<AttestationReadResponse, AppError> {
+    let id: Uuid = row.try_get("id")?;
     let game_id: Uuid = row.try_get("game_id")?;
     let issuer: String = row.try_get("issuer")?;
     let subject: Uuid = row.try_get("subject")?;
@@ -154,9 +195,9 @@ pub async fn get_attestation(
     let proof_algorithm: String = row.try_get("proof_algorithm")?;
     let proof_bytes: Vec<u8> = row.try_get("proof_bytes")?;
 
-    let category = fetch_game_category(&state, game_id).await?;
-    let status = fetch_game_status(&state, game_id).await?;
-    let issuer_keys = fetch_issuer_keys(&state, game_id).await?;
+    let category = fetch_game_category(state, game_id).await?;
+    let status = fetch_game_status(state, game_id).await?;
+    let issuer_keys = fetch_issuer_keys(state, game_id).await?;
 
     let attestation = avalon_protocol::achievements::AchievementAttestation {
         id: avalon_protocol::ids::AttestationId(id),
@@ -216,7 +257,7 @@ pub async fn get_attestation(
         });
     }
 
-    Ok(Json(AttestationReadResponse {
+    Ok(AttestationReadResponse {
         id,
         issuer,
         subject,
@@ -229,7 +270,7 @@ pub async fn get_attestation(
         authenticity: authenticity.into(),
         validity: validity.into(),
         history,
-    }))
+    })
 }
 
 #[derive(Deserialize)]

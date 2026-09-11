@@ -5,12 +5,11 @@
 //! `authenticate()` is wired to a real `avalon-server`: `GET /me` for
 //! identity/profile, `GET /me/grants` (issue #27) for this integrator's own
 //! active capability grants for the authenticating identity, identified via
-//! `AvalonConfig::game_credential_key_id`. Achievements still stub
-//! `NotImplemented` until that epic's endpoints exist. Friends/presence
-//! (issue #17, see `social`) and guild membership/roster/channels/chat
-//! (issue #23, see `guilds`) are wired to live endpoints rather than
-//! stubbed. `sync_journal` (issue #110) is the local durable-storage half
-//! of offline participation described in
+//! `AvalonConfig::game_credential_key_id`. Achievements (issue #34, see
+//! `achievements`) and friends/presence (issue #17, see `social`) and
+//! guild membership/roster/channels/chat (issue #23, see `guilds`) are all
+//! wired to live endpoints rather than stubbed. `sync_journal` (issue #110)
+//! is the local durable-storage half of offline participation described in
 //! `docs/architecture/synchronization.md`; `submission` (issue #111) is the
 //! drain/retry/reconciliation half. Neither is wired into `AvalonClient`'s
 //! or `Session`'s other methods yet — no method appends to the journal on
@@ -18,13 +17,13 @@
 //! itself and drives them explicitly; `Session::submission_transport`
 //! supplies the `Transport` the engine submits through.
 
+pub mod achievements;
 pub mod conversations;
 pub mod guilds;
 pub mod social;
 pub mod submission;
 pub mod sync_journal;
 
-use avalon_protocol::achievements::AchievementAttestation;
 use avalon_protocol::identity::{Identity, Profile};
 use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Capability;
@@ -54,11 +53,29 @@ pub enum SdkError {
     NotConversationParticipant,
     #[error("not yet implemented")]
     NotImplemented,
+    /// `Session::issue_achievement` (#34) needs this integrator's own slug
+    /// and signing key (`AvalonConfig::game_slug`/`signing_key`) to
+    /// authenticate the issuing request and sign the attestation locally —
+    /// neither is required for a read-only integration, so both are
+    /// `Option`s rather than mandatory config, and this is what's returned
+    /// when a caller reaches for issuance without having supplied them.
+    #[error("this integrator's game_slug/signing_key were not configured")]
+    MissingIssuerCredentials,
 }
 
 pub struct AvalonConfig {
     pub server_url: String,
     pub game_credential_key_id: String,
+    /// This integrator's own registered slug — required only by methods
+    /// that issue attestations on this integrator's own behalf
+    /// (`Session::issue_achievement`, #34). `None` for a read-only
+    /// integration.
+    pub game_slug: Option<String>,
+    /// This integrator's own 32-byte Ed25519 signing key seed, held only
+    /// in this process — the server never sees it, only a detached
+    /// signature (#34's design). `None` for a read-only integration;
+    /// required by `Session::issue_achievement`.
+    pub signing_key: Option<[u8; 32]>,
 }
 
 pub struct AvalonClient {
@@ -133,6 +150,9 @@ impl AvalonClient {
             http: self.http.clone(),
             server_url: self.config.server_url.clone(),
             token: identity_token.to_string(),
+            integrator_key_id: self.config.game_credential_key_id.clone(),
+            game_slug: self.config.game_slug.clone(),
+            signing_key: self.config.signing_key,
         })
     }
 
@@ -180,6 +200,15 @@ pub struct Session {
     /// `social::update_presence`) without the caller having to thread it
     /// through again.
     token: String,
+    /// This integrator's own registered key id
+    /// (`AvalonConfig::game_credential_key_id`) — the same value already
+    /// used for `GET /me/grants`, reused by `achievements::issue_achievement`
+    /// (#34) as the challenge-response and embedded-proof `key_id`.
+    integrator_key_id: String,
+    /// See `AvalonConfig::game_slug`.
+    game_slug: Option<String>,
+    /// See `AvalonConfig::signing_key`.
+    signing_key: Option<[u8; 32]>,
 }
 
 impl Session {
@@ -248,13 +277,19 @@ impl Session {
         &self.profile
     }
 
-    pub async fn achievements(&self) -> Result<Vec<AchievementAttestation>, SdkError> {
+    /// This identity's own attestation history — see `achievements`
+    /// module doc comment for why there's no `recognition` field (#34/#33).
+    pub async fn achievements(&self) -> Result<Vec<achievements::VerifiedAttestation>, SdkError> {
         self.require(Capability::AchievementsRead)?;
-        Err(SdkError::NotImplemented)
+        self.fetch_achievements().await
     }
 
-    pub async fn issue_achievement(&self, _achievement: &str) -> Result<(), SdkError> {
+    /// Issues `key` (an achievement defined by this integrator) to this
+    /// session's own identity, signed locally with
+    /// `AvalonConfig::signing_key` — see `achievements` module doc comment.
+    /// Returns the new attestation's id.
+    pub async fn issue_achievement(&self, key: &str) -> Result<uuid::Uuid, SdkError> {
         self.require(Capability::AchievementsIssue)?;
-        Err(SdkError::NotImplemented)
+        self.submit_achievement_issuance(key).await
     }
 }
