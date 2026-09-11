@@ -187,6 +187,8 @@ pub enum AppError {
     AchievementKeyTaken,
     #[error("achievement definition not found")]
     AchievementDefinitionNotFound,
+    #[error("this issuer's registered category doesn't use this claim vocabulary (achievement vs. milestone) — see issue #324")]
+    ClaimVocabularyMismatch,
     #[error(
         "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
     )]
@@ -389,6 +391,13 @@ impl IntoResponse for AppError {
             AppError::InvalidAchievementKey => StatusCode::BAD_REQUEST,
             AppError::AchievementKeyTaken => StatusCode::CONFLICT,
             AppError::AchievementDefinitionNotFound => StatusCode::NOT_FOUND,
+            // A route mismatch (a Game hitting the milestones route, or
+            // vice versa) is caught by checking the issuer's own real
+            // registered category, same "authenticated fine as *some*
+            // issuer, but not authorized for this specific action" shape
+            // as `AchievementDefinitionForbidden` just above — 403, not a
+            // generic 400/401.
+            AppError::ClaimVocabularyMismatch => StatusCode::FORBIDDEN,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidGuardianSet => StatusCode::BAD_REQUEST,
             AppError::RecoveryNotConfigured => StatusCode::CONFLICT,

@@ -227,6 +227,19 @@ pub fn router(state: AppState) -> Router {
             "/games/{slug}/achievements/{key}",
             patch(achievements::update_achievement_definition),
         )
+        // #324/#325: the same claim-definition mechanism, App/Service's
+        // own vocabulary ("milestone", not "achievement") — under
+        // `/integrations/{slug}/...` since it's explicitly not
+        // game-specific, unlike `/games/{slug}/achievements` above.
+        .route(
+            "/integrations/{slug}/milestones",
+            get(achievements::list_milestone_definitions)
+                .post(achievements::create_milestone_definition),
+        )
+        .route(
+            "/integrations/{slug}/milestones/{key}",
+            patch(achievements::update_milestone_definition),
+        )
         .route(
             "/games/{slug}/schemas",
             get(game_schemas::list_schema_versions).post(game_schemas::publish_schema_version),

@@ -153,7 +153,40 @@ const SUPPORTED_KEY_ALGORITHM: &str = "ed25519";
 /// `game:<slug>:self:<verb>` `GlobalId` shape for `game.binding_established`/
 /// `game.binding_ended` subjects, rather than reimplementing this format.
 pub(crate) fn game_ref(slug: &str, verb: &str) -> GlobalId {
-    GlobalId::new("game", slug, "self", verb)
+    issuer_ref("game", slug, verb)
+}
+
+/// Generic form of [`game_ref`] — `<namespace>:<slug>:self:<verb>` for any
+/// issuer category's namespace (`"game"`/`"app"`/`"service"`, matching
+/// `IntegratorCategory::as_str()`). `pub(crate)` so `achievements.rs` (#324)
+/// can mint the same shape for `App`/`Service` issuers, not just `Game`.
+pub(crate) fn issuer_ref(namespace: &str, slug: &str, verb: &str) -> GlobalId {
+    GlobalId::new(namespace, slug, "self", verb)
+}
+
+/// The category (`game`/`app`/`service`) a registered game/app/service was
+/// recorded under — what determines its claim vocabulary (#324:
+/// `IntegratorCategory::claim_kind`). `pub(crate)` so `achievements.rs` can
+/// reject a caller acting under the wrong claim-vocabulary route (an
+/// `Issuer::Game` hitting `/integrations/{slug}/milestones`, or vice versa)
+/// rather than silently accepting a mismatched label.
+pub(crate) async fn fetch_game_category(
+    state: &AppState,
+    game_id: Uuid,
+) -> Result<IntegratorCategory, AppError> {
+    let row = sqlx::query("SELECT category FROM games WHERE id = $1")
+        .bind(game_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::GameNotFound)?;
+    let category_raw: String = row.try_get("category")?;
+    // The column only ever gets written via `IntegratorCategory::as_str()`
+    // (see `register_game` above) — an unparseable value here would mean
+    // the write side and this read side have drifted, not a real runtime
+    // condition to design an error path around. Defaulting to `Game`
+    // (rather than panicking a live request) is safe precisely because
+    // this can't actually happen in practice.
+    Ok(IntegratorCategory::parse(&category_raw).unwrap_or(IntegratorCategory::Game))
 }
 
 /// Lowercase `[a-z0-9-]`, 2-64 characters. Deliberately rejects rather than

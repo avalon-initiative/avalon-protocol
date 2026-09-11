@@ -1,51 +1,83 @@
-//! `AchievementDefinition` CRUD per game (issue #31) — a game defines its
-//! achievements before it can issue them (#32).
+//! Claim-definition CRUD per issuer (issue #31 for `Game`, generalized to
+//! `App`/`Service` by #324/#325) — an issuer defines its achievements or
+//! milestones before it can issue them (#32).
 //!
-//! **Namespacing.** A definition's `GlobalId` is `game:<slug>:achievement:<key>`
-//! (`crates/protocol/src/ids.rs`), minted by [`definition_ref`] the same way
-//! `crates/server/src/games.rs`'s `game_ref` and `guilds.rs`'s `guild_ref`
-//! namespace their own events — `key` matches `[a-z0-9_]+`
-//! ([`validate_key`]), and the slug is always the caller's own, taken from
-//! its registration (#26), never the caller's choice. `id` is immutable once
-//! created; nothing in this module ever changes it.
+//! **Category-driven vocabulary (#324, decided).** One shared mechanism,
+//! one shared `achievement_definitions` table (the name predates #324 and
+//! is kept — renaming a table that already holds real rows for zero
+//! functional gain isn't worth the churn; see #324's own "same underlying
+//! record shape" reasoning), one shared row/response shape
+//! ([`AchievementDefinitionResponse`], whose field names were already
+//! fully generic before this generalization — nothing in it says
+//! "achievement"). What varies by the issuer's own registered category
+//! (`IntegratorCategory::claim_kind`) is purely the *label*: `Game` issuers
+//! keep `"achievement"` — `POST/PATCH/GET /games/{slug}/achievements`,
+//! `game:<slug>:achievement:<key>`, `achievement.defined`/etc., exactly as
+//! #31 shipped, zero churn — while `App`/`Service` issuers get
+//! `"milestone"` — `POST/PATCH/GET /integrations/{slug}/milestones`,
+//! `app:<slug>:milestone:<key>` or `service:<slug>:milestone:<key>`,
+//! `milestone.defined`/etc. [`create_achievement_definition`]/
+//! [`update_achievement_definition`]/[`list_achievement_definitions`] and
+//! their milestone-route siblings ([`create_milestone_definition`]/etc.)
+//! are thin, route-specific entry points over one shared core
+//! ([`create_definition`]/[`update_definition`]/[`list_definitions`]) —
+//! real shared code, not two parallel near-duplicate modules, per #325's
+//! own suggestion.
 //!
-//! **Auth.** All three endpoints are game-credential-authenticated
+//! **A route's claim vocabulary is never caller-asserted.** Hitting
+//! `/games/{slug}/achievements` for an issuer actually registered as
+//! `App`/`Service` (or `/integrations/{slug}/milestones` for a `Game`) is
+//! rejected ([`AppError::ClaimVocabularyMismatch`]) — the label is derived
+//! from the issuer's own real registered category
+//! (`games::fetch_game_category`), checked server-side, not trusted from
+//! which URL the caller happened to call.
+//!
+//! **Namespacing.** A definition's `GlobalId` is
+//! `<namespace>:<slug>:<claim_kind>:<key>` (`crates/protocol/src/ids.rs`),
+//! minted by [`definition_ref`] the same way `crates/server/src/games.rs`'s
+//! `game_ref`/`issuer_ref` and `guilds.rs`'s `guild_ref` namespace their own
+//! events — `key` matches `[a-z0-9_]+` ([`validate_key`]), and the slug is
+//! always the caller's own, taken from its registration (#26), never the
+//! caller's choice. `id` is immutable once created; nothing in this module
+//! ever changes it.
+//!
+//! **Auth.** All endpoints are game/app/service-credential-authenticated
 //! (`crate::games::authenticate_game`, the challenge-response scheme #26
-//! established), not a player session — defining an achievement is
-//! something a game does about its own catalogue, not something a player
-//! consents to. Unlike issuing (#32, gated behind the `achievements.issue`
-//! capability grant), *defining* needs nothing beyond the game proving its
-//! own identity: a game can always describe its own achievements, it just
-//! can't issue one to a player without that player's consent. The write
-//! endpoints additionally check that the authenticated game is the one
-//! named by the `{slug}` path segment — a game authenticated as itself can
-//! never create or change a definition under another game's slug
-//! (`AppError::AchievementDefinitionForbidden`, 403). `GET
-//! /games/{slug}/achievements` is public and unauthenticated, same
-//! visibility level `games::get_game` and `guilds::get_guild` already use.
+//! established), not a player session — defining a claim is something an
+//! issuer does about its own catalogue, not something a player consents
+//! to. Unlike issuing (#32, gated behind a capability grant), *defining*
+//! needs nothing beyond the issuer proving its own identity. The write
+//! endpoints additionally check that the authenticated issuer is the one
+//! named by the `{slug}` path segment — an issuer authenticated as itself
+//! can never create or change a definition under another issuer's slug
+//! (`AppError::AchievementDefinitionForbidden`, 403). The `GET` list
+//! endpoints are public and unauthenticated, same visibility level
+//! `games::get_game` and `guilds::get_guild` already use.
 //!
-//! **Durability.** `achievement_definitions` is a projection; `achievement.defined`,
-//! `achievement.definition_updated`, and `achievement.definition_retired`
-//! are the durable history, written into the outbox in the same transaction
-//! as the row insert/update, same pattern `friends.rs`/`guilds.rs`/`games.rs`
-//! already established for #71. `issuer` is `game:<slug>:self:<verb>`
-//! (mirroring `game_ref`); `subject` is the definition's own `GlobalId` —
-//! matching the event-kind catalogue's "game → achievement id" shape
+//! **Durability.** `achievement_definitions` is a projection; the
+//! `<claim_kind>.defined`/`.definition_updated`/`.definition_retired`
+//! family is the durable history, written into the outbox in the same
+//! transaction as the row insert/update, same pattern
+//! `friends.rs`/`guilds.rs`/`games.rs` already established for #71.
+//! `issuer` is `<namespace>:<slug>:self:<verb>` (mirroring
+//! `games::issuer_ref`); `subject` is the definition's own `GlobalId` —
+//! matching the event-kind catalogue's "issuer → claim id" shape
 //! (`docs/architecture/protocol-events.md`).
 //!
-//! **Update and retirement.** `PATCH /games/{slug}/achievements/{key}`
-//! updates `name`/`description`/`schema` and bumps `version`, emitting
-//! `achievement.definition_updated`; the id never changes. The same
+//! **Update and retirement.** `PATCH .../{key}` updates
+//! `name`/`description`/`schema` and bumps `version`, emitting
+//! `<claim_kind>.definition_updated`; the id never changes. The same
 //! endpoint also supports retiring a definition (`retired: true`) — no new
 //! issuances against it (#32 enforces that), but existing attestations are
 //! never touched and the row is never deleted, matching the ticket's "no
-//! delete endpoint" design. Retiring emits `achievement.definition_retired`
+//! delete endpoint" design. Retiring emits `<claim_kind>.definition_retired`
 //! instead of `.definition_updated` (a status change, not a definition
 //! change) and does not bump `version`; retiring an already-retired
 //! definition is a no-op that emits nothing, and a retired definition can
 //! still have its name/description/schema edited in the same call.
 
 use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::games::IntegratorCategory;
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -56,16 +88,63 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::games::{authenticate_game, fetch_game_id_by_slug, game_ref};
+use crate::games::{authenticate_game, fetch_game_category, fetch_game_id_by_slug, issuer_ref};
 use crate::outbox;
 use crate::state::AppState;
 
-/// `game:<slug>:achievement:<key>` — the definition's immutable, globally
-/// unique id. `pub(crate)` so a future issuing endpoint (#32) can build the
-/// same id to look up the definition an attestation points at, rather than
-/// reimplementing this format.
-pub(crate) fn definition_ref(slug: &str, key: &str) -> GlobalId {
-    GlobalId::new("game", slug, "achievement", key)
+/// `<category.as_str()>:<slug>:<category.claim_kind()>:<key>` — the
+/// definition's immutable, globally unique id. `pub(crate)` so a future
+/// issuing endpoint (#32) can build the same id to look up the definition
+/// an attestation points at, rather than reimplementing this format.
+pub(crate) fn definition_ref(category: IntegratorCategory, slug: &str, key: &str) -> GlobalId {
+    GlobalId::new(category.as_str(), slug, category.claim_kind(), key)
+}
+
+/// Which route a definition-CRUD call came in on — #324's category split.
+/// Not caller-asserted: [`authenticate_owning_issuer`] checks the
+/// authenticating issuer's *actual* registered category against this
+/// before allowing the call through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimRoute {
+    Achievements,
+    Milestones,
+}
+
+impl ClaimRoute {
+    fn allows(self, category: IntegratorCategory) -> bool {
+        match self {
+            ClaimRoute::Achievements => category == IntegratorCategory::Game,
+            ClaimRoute::Milestones => {
+                matches!(
+                    category,
+                    IntegratorCategory::App | IntegratorCategory::Service
+                )
+            }
+        }
+    }
+}
+
+/// Authenticates the calling issuer, checks it is the one named by `slug`,
+/// and checks its actual registered category belongs to `route` — the
+/// shared guard every write endpoint (achievement or milestone) uses.
+/// Returns the path slug's own `game_id` and category (already resolved,
+/// so callers don't fetch either twice).
+async fn authenticate_owning_issuer(
+    state: &AppState,
+    headers: &HeaderMap,
+    slug: &str,
+    route: ClaimRoute,
+) -> Result<(Uuid, IntegratorCategory), AppError> {
+    let path_game_id = fetch_game_id_by_slug(state, slug).await?;
+    let caller_game_id = authenticate_game(state, headers).await?;
+    if caller_game_id != path_game_id {
+        return Err(AppError::AchievementDefinitionForbidden);
+    }
+    let category = fetch_game_category(state, path_game_id).await?;
+    if !route.allows(category) {
+        return Err(AppError::ClaimVocabularyMismatch);
+    }
+    Ok((path_game_id, category))
 }
 
 /// Lowercase `[a-z0-9_]`, 2-128 characters — deliberately rejects rather
@@ -83,22 +162,6 @@ fn validate_key(key: &str) -> Result<(), AppError> {
         return Err(AppError::InvalidAchievementKey);
     }
     Ok(())
-}
-
-/// Authenticates the calling game and checks it is the one named by
-/// `slug` — the shared guard both write endpoints use. Returns the path
-/// slug's own `game_id` (already resolved, so callers don't do it twice).
-async fn authenticate_owning_game(
-    state: &AppState,
-    headers: &HeaderMap,
-    slug: &str,
-) -> Result<Uuid, AppError> {
-    let path_game_id = fetch_game_id_by_slug(state, slug).await?;
-    let caller_game_id = authenticate_game(state, headers).await?;
-    if caller_game_id != path_game_id {
-        return Err(AppError::AchievementDefinitionForbidden);
-    }
-    Ok(path_game_id)
 }
 
 struct DefinitionRow {
@@ -183,19 +246,24 @@ pub struct CreateAchievementDefinitionRequest {
     pub schema: Option<GlobalId>,
 }
 
-/// `POST /games/{slug}/achievements` — create. 409 on a duplicate key for
-/// this game; a different game defining the same key is a distinct id and
-/// always succeeds (namespacing's whole point).
-pub async fn create_achievement_definition(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(slug): Path<String>,
-    Json(body): Json<CreateAchievementDefinitionRequest>,
+/// Shared core of [`create_achievement_definition`]/
+/// [`create_milestone_definition`] (#324/#325) — 409 on a duplicate key for
+/// this issuer; a different issuer (or the same issuer under a different
+/// category — can't happen, category is fixed at registration) defining
+/// the same key is a distinct id and always succeeds (namespacing's whole
+/// point).
+async fn create_definition(
+    state: &AppState,
+    headers: &HeaderMap,
+    slug: &str,
+    route: ClaimRoute,
+    body: CreateAchievementDefinitionRequest,
 ) -> Result<Json<AchievementDefinitionResponse>, AppError> {
-    let game_id = authenticate_owning_game(&state, &headers, &slug).await?;
+    let (game_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
     validate_key(&body.key)?;
 
-    let id = definition_ref(&slug, &body.key);
+    let id = definition_ref(category, slug, &body.key);
+    let claim_kind = category.claim_kind();
     let schema_str = body.schema.as_ref().map(GlobalId::as_str);
     let now = OffsetDateTime::now_utc();
     const INITIAL_VERSION: i32 = 1;
@@ -226,8 +294,8 @@ pub async fn create_achievement_definition(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "achievement.defined".to_string(),
-        issuer: game_ref(&slug, "achievement_defined"),
+        kind: format!("{claim_kind}.defined"),
+        issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_defined")),
         subject: id.clone(),
         payload: serde_json::json!({
             "id": id.as_str(),
@@ -262,6 +330,26 @@ pub async fn create_achievement_definition(
     )))
 }
 
+/// `POST /games/{slug}/achievements`.
+pub async fn create_achievement_definition(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(body): Json<CreateAchievementDefinitionRequest>,
+) -> Result<Json<AchievementDefinitionResponse>, AppError> {
+    create_definition(&state, &headers, &slug, ClaimRoute::Achievements, body).await
+}
+
+/// `POST /integrations/{slug}/milestones` (#324/#325).
+pub async fn create_milestone_definition(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(body): Json<CreateAchievementDefinitionRequest>,
+) -> Result<Json<AchievementDefinitionResponse>, AppError> {
+    create_definition(&state, &headers, &slug, ClaimRoute::Milestones, body).await
+}
+
 #[derive(Deserialize)]
 pub struct UpdateAchievementDefinitionRequest {
     pub name: Option<String>,
@@ -273,16 +361,21 @@ pub struct UpdateAchievementDefinitionRequest {
     pub retired: Option<bool>,
 }
 
-/// `PATCH /games/{slug}/achievements/{key}` — updates name/description/schema
-/// (bumping `version`) and/or retires the definition. The id never changes.
-pub async fn update_achievement_definition(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((slug, key)): Path<(String, String)>,
-    Json(body): Json<UpdateAchievementDefinitionRequest>,
+/// Shared core of [`update_achievement_definition`]/
+/// [`update_milestone_definition`] (#324/#325) — updates
+/// name/description/schema (bumping `version`) and/or retires the
+/// definition. The id never changes.
+async fn update_definition(
+    state: &AppState,
+    headers: &HeaderMap,
+    slug: &str,
+    key: String,
+    route: ClaimRoute,
+    body: UpdateAchievementDefinitionRequest,
 ) -> Result<Json<AchievementDefinitionResponse>, AppError> {
-    let game_id = authenticate_owning_game(&state, &headers, &slug).await?;
-    let existing = fetch_definition(&state, game_id, &key).await?;
+    let (game_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
+    let claim_kind = category.claim_kind();
+    let existing = fetch_definition(state, game_id, &key).await?;
 
     let new_name = body.name.clone().unwrap_or_else(|| existing.name.clone());
     let new_description = body
@@ -331,9 +424,13 @@ pub async fn update_achievement_definition(
     if definition_changed {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "achievement.definition_updated".to_string(),
-            issuer: game_ref(&slug, "achievement_definition_updated"),
-            subject: GlobalId::new("game", &slug, "achievement", &key),
+            kind: format!("{claim_kind}.definition_updated"),
+            issuer: issuer_ref(
+                category.as_str(),
+                slug,
+                &format!("{claim_kind}_definition_updated"),
+            ),
+            subject: definition_ref(category, slug, &key),
             payload: serde_json::json!({
                 "id": existing.id,
                 "game_id": game_id,
@@ -353,9 +450,13 @@ pub async fn update_achievement_definition(
     if now_retiring {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "achievement.definition_retired".to_string(),
-            issuer: game_ref(&slug, "achievement_definition_retired"),
-            subject: GlobalId::new("game", &slug, "achievement", &key),
+            kind: format!("{claim_kind}.definition_retired"),
+            issuer: issuer_ref(
+                category.as_str(),
+                slug,
+                &format!("{claim_kind}_definition_retired"),
+            ),
+            subject: definition_ref(category, slug, &key),
             payload: serde_json::json!({
                 "id": existing.id,
                 "game_id": game_id,
@@ -386,16 +487,50 @@ pub async fn update_achievement_definition(
     )))
 }
 
-/// `GET /games/{slug}/achievements` — public listing (feeds the registry,
-/// #89). No auth required, same visibility level `games::get_game` and
-/// `guilds::get_guild` already use. Includes retired definitions (marked
-/// `retired: true`) rather than hiding them — a retired definition's past
-/// attestations are still real and still need somewhere to point.
-pub async fn list_achievement_definitions(
+/// `PATCH /games/{slug}/achievements/{key}`.
+pub async fn update_achievement_definition(
     State(state): State<AppState>,
-    Path(slug): Path<String>,
+    headers: HeaderMap,
+    Path((slug, key)): Path<(String, String)>,
+    Json(body): Json<UpdateAchievementDefinitionRequest>,
+) -> Result<Json<AchievementDefinitionResponse>, AppError> {
+    update_definition(&state, &headers, &slug, key, ClaimRoute::Achievements, body).await
+}
+
+/// `PATCH /integrations/{slug}/milestones/{key}` (#324/#325).
+pub async fn update_milestone_definition(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, key)): Path<(String, String)>,
+    Json(body): Json<UpdateAchievementDefinitionRequest>,
+) -> Result<Json<AchievementDefinitionResponse>, AppError> {
+    update_definition(&state, &headers, &slug, key, ClaimRoute::Milestones, body).await
+}
+
+/// Shared core of [`list_achievement_definitions`]/
+/// [`list_milestone_definitions`] (#324/#325) — public listing (feeds the
+/// registry, #89). No auth required, same visibility level
+/// `games::get_game` and `guilds::get_guild` already use. Includes retired
+/// definitions (marked `retired: true`) rather than hiding them — a
+/// retired definition's past attestations are still real and still need
+/// somewhere to point.
+async fn list_definitions(
+    state: &AppState,
+    slug: &str,
+    route: ClaimRoute,
 ) -> Result<Json<Vec<AchievementDefinitionResponse>>, AppError> {
-    let game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let game_id = fetch_game_id_by_slug(state, slug).await?;
+    // Every row under a given `game_id` is already the same claim kind by
+    // construction — the write-side route check means an issuer's category
+    // can never change after registration, so it can never accumulate rows
+    // under more than one claim vocabulary. This check exists for the read
+    // side specifically: without it, `/games/{app-slug}/achievements`
+    // would silently serve that app's real milestones back mislabeled as
+    // achievements, through the wrong URL's semantics.
+    let category = fetch_game_category(state, game_id).await?;
+    if !route.allows(category) {
+        return Err(AppError::ClaimVocabularyMismatch);
+    }
 
     let rows = sqlx::query(
         "SELECT id, key, name, description, schema, version, created_at, updated_at, retired_at \
@@ -423,6 +558,22 @@ pub async fn list_achievement_definitions(
         ));
     }
     Ok(Json(definitions))
+}
+
+/// `GET /games/{slug}/achievements`.
+pub async fn list_achievement_definitions(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<Vec<AchievementDefinitionResponse>>, AppError> {
+    list_definitions(&state, &slug, ClaimRoute::Achievements).await
+}
+
+/// `GET /integrations/{slug}/milestones` (#324/#325).
+pub async fn list_milestone_definitions(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<Vec<AchievementDefinitionResponse>>, AppError> {
+    list_definitions(&state, &slug, ClaimRoute::Milestones).await
 }
 
 /// A pure, DB-free projection of a definition's current state from its own
@@ -523,16 +674,44 @@ mod tests {
     }
 
     #[test]
-    fn definition_ref_namespaces_by_slug_and_key() {
-        let id = definition_ref("ashen-realms", "dragon_slayer");
+    fn definition_ref_namespaces_by_category_slug_and_key() {
+        let id = definition_ref(IntegratorCategory::Game, "ashen-realms", "dragon_slayer");
         assert_eq!(id.as_str(), "game:ashen-realms:achievement:dragon_slayer");
     }
 
     #[test]
     fn two_games_defining_the_same_key_produce_distinct_ids() {
-        let a = definition_ref("ashen-realms", "dragon_slayer");
-        let b = definition_ref("worldzero", "dragon_slayer");
+        let a = definition_ref(IntegratorCategory::Game, "ashen-realms", "dragon_slayer");
+        let b = definition_ref(IntegratorCategory::Game, "worldzero", "dragon_slayer");
         assert_ne!(a, b);
+    }
+
+    /// #324/#325: an App/Service issuer's definitions use "milestone", not
+    /// "achievement" — same key, same slug, a genuinely different id.
+    #[test]
+    fn app_and_service_issuers_get_the_milestone_vocabulary_not_achievement() {
+        let app_id = definition_ref(IntegratorCategory::App, "wallet-app", "onboarded");
+        assert_eq!(app_id.as_str(), "app:wallet-app:milestone:onboarded");
+
+        let service_id = definition_ref(IntegratorCategory::Service, "payments", "onboarded");
+        assert_eq!(service_id.as_str(), "service:payments:milestone:onboarded");
+
+        let game_id = definition_ref(IntegratorCategory::Game, "wallet-app", "onboarded");
+        assert_ne!(
+            app_id, game_id,
+            "different category, same slug/key: still distinct ids"
+        );
+    }
+
+    #[test]
+    fn claim_route_only_allows_its_own_categories() {
+        assert!(ClaimRoute::Achievements.allows(IntegratorCategory::Game));
+        assert!(!ClaimRoute::Achievements.allows(IntegratorCategory::App));
+        assert!(!ClaimRoute::Achievements.allows(IntegratorCategory::Service));
+
+        assert!(!ClaimRoute::Milestones.allows(IntegratorCategory::Game));
+        assert!(ClaimRoute::Milestones.allows(IntegratorCategory::App));
+        assert!(ClaimRoute::Milestones.allows(IntegratorCategory::Service));
     }
 
     fn defined_event(
@@ -544,8 +723,8 @@ mod tests {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "achievement.defined".to_string(),
-            issuer: game_ref("ashen-realms", "achievement_defined"),
-            subject: definition_ref("ashen-realms", "dragon_slayer"),
+            issuer: issuer_ref("game", "ashen-realms", "achievement_defined"),
+            subject: definition_ref(IntegratorCategory::Game, "ashen-realms", "dragon_slayer"),
             payload: serde_json::json!({
                 "name": name,
                 "description": description,
@@ -572,8 +751,8 @@ mod tests {
         ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "achievement.definition_retired".to_string(),
-            issuer: game_ref("ashen-realms", "achievement_definition_retired"),
-            subject: definition_ref("ashen-realms", "dragon_slayer"),
+            issuer: issuer_ref("game", "ashen-realms", "achievement_definition_retired"),
+            subject: definition_ref(IntegratorCategory::Game, "ashen-realms", "dragon_slayer"),
             payload: serde_json::json!({}),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
