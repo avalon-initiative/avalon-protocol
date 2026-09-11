@@ -293,6 +293,23 @@ the record — [`./revocation.md`](./revocation.md).
   `game_schema.published`, consumed by
   `crates/indexer/src/projections/game_schemas.rs` for schema-version
   discovery (see [game-registry.md](./game-registry.md)).
+- An eleventh emitter: `crates/server/src/games.rs` (#84, implementing
+  #80's decided two-tier key model) writes `issuer.key_added` on `POST
+  /games/{slug}/keys` and `issuer.key_revoked` on `POST
+  /games/{slug}/keys/{key_id}/revoke`, each enqueued into `protocol_outbox`
+  in the same transaction as the `issuer_keys` row it accompanies.
+  `issuer`/`subject` are both `game:<slug>:self:key_added`/`:key_revoked`
+  `GlobalId`s (`game_ref`), same network-attributed posture every emitter
+  but `identity.created`/`identity.signing_key_added` uses — the catalogue
+  above's "existing issuer key"/"issuer key" signer column describes the
+  HTTP-level challenge-response authentication both endpoints require
+  (`authenticate_game_root`, specifically a currently-valid **root** key
+  per #80's decision — an operational key cannot author either event, even
+  its own revocation), not a signature embedded in the event itself.
+  `issuer.key_expired` and the `issuer.suspended`/`.reinstated`/`.revoked`/
+  `.deprecated` family the catalogue also lists remain unimplemented — the
+  former has no expiry-sweep mechanism built, and the latter's
+  network-level authorization model is #84's own explicit deferred scope.
 - The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`
   plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`),
   `0024_signed_tree_heads/up.sql` (#210 — Merkle root + Signed Tree Heads),

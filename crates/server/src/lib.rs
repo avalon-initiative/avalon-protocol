@@ -207,6 +207,16 @@ pub fn router(state: AppState) -> Router {
             post(games::create_game_challenge),
         )
         .route("/games/whoami", get(games::game_whoami))
+        // #84 (implementing #80's decided two-tier key model): key-set
+        // management, both root-key-authenticated. Deliberately under
+        // `/games/{slug}/keys`, not `/integrations/{slug}/keys` — #293's
+        // generalized alias covers registration/read routes, not every
+        // future game-specific endpoint.
+        .route("/games/{slug}/keys", post(games::add_issuer_key))
+        .route(
+            "/games/{slug}/keys/{key_id}/revoke",
+            post(games::revoke_issuer_key),
+        )
         .route("/games/{slug}/registry", get(registry::get_game_registry))
         .route(
             "/games/{slug}/achievements",

@@ -276,7 +276,9 @@ pub async fn list_equivocations(
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-    rows.into_iter().map(equivocation_finding_from_row).collect()
+    rows.into_iter()
+        .map(equivocation_finding_from_row)
+        .collect()
 }
 
 /// Every *unresolved* equivocation recorded for `network_id` — what the
@@ -301,7 +303,9 @@ pub async fn unresolved_equivocations(
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-    rows.into_iter().map(equivocation_finding_from_row).collect()
+    rows.into_iter()
+        .map(equivocation_finding_from_row)
+        .collect()
 }
 
 /// Records an operator's investigation outcome for every unresolved
