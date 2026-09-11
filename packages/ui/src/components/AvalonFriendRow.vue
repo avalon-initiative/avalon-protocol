@@ -8,7 +8,7 @@ import AvalonPresenceBadge from './AvalonPresenceBadge.vue'
 import type { AvalonFriendRowProps } from './AvalonFriendRow.types'
 
 defineProps<AvalonFriendRowProps>()
-defineEmits<{ remove: [] }>()
+defineEmits<{ remove: []; message: [] }>()
 </script>
 
 <template>
@@ -16,6 +16,7 @@ defineEmits<{ remove: [] }>()
     <AvalonAvatar :src="avatarUrl" :name="displayName ?? identityId" size="md" />
     <span :class="styles.name">{{ displayName ?? identityId }}</span>
     <AvalonPresenceBadge :status="status" />
+    <button :class="styles.message" type="button" @click="$emit('message')">Message</button>
     <button :class="styles.remove" type="button" @click="$emit('remove')">Remove</button>
   </div>
 </template>

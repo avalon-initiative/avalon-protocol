@@ -10,7 +10,10 @@ import type {
   ChannelResponse,
   ConnectGameRequest,
   ConnectGameResponse,
+  ConversationMessageResponse,
+  ConversationResponse,
   CreateChannelRequest,
+  CreateConversationRequest,
   CreateEventRequest,
   CreateFriendRequestRequest,
   CreateGuildInviteRequest,
@@ -64,6 +67,7 @@ import type {
   RsvpResponse,
   RsvpRosterEntry,
   SearchIdentitiesResponse,
+  SendConversationMessageRequest,
   SendMessageRequest,
   SessionFinishRequest,
   SessionFinishResponse,
@@ -753,6 +757,51 @@ export function deleteMessage(
 ): Promise<{ deleted: boolean }> {
   return request(`/guilds/${guildId}/channels/${channelId}/messages/${messageId}`, {
     method: 'DELETE',
+    token,
+  })
+}
+
+// Direct/small-group conversations (issue #102/#105) —
+// crates/server/src/conversations.rs.
+
+export function listConversations(token: string): Promise<ConversationResponse[]> {
+  return request('/conversations', { token })
+}
+
+// Idempotent on the final (caller included) participant set — the server
+// returns the existing conversation rather than creating a duplicate, so
+// this is also how the Hub "opens or starts" a conversation from a
+// friend's row: just call it with that friend's id and navigate to
+// whatever id comes back.
+export function createConversation(
+  token: string,
+  body: CreateConversationRequest,
+): Promise<ConversationResponse> {
+  return request('/conversations', { method: 'POST', body, token })
+}
+
+export function listConversationMessages(
+  token: string,
+  conversationId: string,
+  options: { before?: string; limit?: number } = {},
+): Promise<ConversationMessageResponse[]> {
+  const params = new URLSearchParams()
+  if (options.before) params.set('before', options.before)
+  if (options.limit) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return request(`/conversations/${conversationId}/messages${query ? `?${query}` : ''}`, {
+    token,
+  })
+}
+
+export function sendConversationMessage(
+  token: string,
+  conversationId: string,
+  body: SendConversationMessageRequest,
+): Promise<ConversationMessageResponse> {
+  return request(`/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body,
     token,
   })
 }

@@ -4,6 +4,7 @@
 // view owns only the add/accept/decline/remove actions, plus the
 // "people you may know" suggestions section (issue #204).
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   AvalonButton,
   AvalonCard,
@@ -22,6 +23,7 @@ import { useSessionStore } from '../stores/session'
 import styles from './page.module.scss'
 
 const session = useSessionStore()
+const router = useRouter()
 const {
   loading,
   error,
@@ -167,6 +169,21 @@ async function onRemoveFriend(identityId: string) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
 }
+
+// Starts (or opens the existing) conversation with this friend and jumps
+// straight to it — POST /conversations is idempotent on the participant
+// set, so this is never a duplicate even if one already exists.
+async function onMessageFriend(identityId: string) {
+  if (!session.token) return
+  try {
+    const conversation = await api.createConversation(session.token, {
+      participants: [identityId],
+    })
+    router.push({ name: 'conversation', params: { id: conversation.id } })
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
 </script>
 
 <template>
@@ -187,6 +204,7 @@ async function onRemoveFriend(identityId: string) {
             :identity-id="friend.identityId"
             :display-name="friend.displayName"
             :status="friend.status"
+            @message="onMessageFriend(friend.identityId)"
             @remove="onRemoveFriend(friend.identityId)"
           />
         </AvalonCard>
@@ -199,6 +217,7 @@ async function onRemoveFriend(identityId: string) {
             :identity-id="friend.identityId"
             :display-name="friend.displayName"
             :status="friend.status"
+            @message="onMessageFriend(friend.identityId)"
             @remove="onRemoveFriend(friend.identityId)"
           />
         </AvalonCard>
