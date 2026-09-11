@@ -10,6 +10,30 @@ The part worth taking seriously is smaller and more specific:
 That idea is now old enough to be a cliché in fiction and young enough to still be
 unbuilt in practice. We have the tools to build it. Nobody has.
 
+## The internet was supposed to do this already
+
+The internet was built as a network to connect people to each other — that
+was the entire premise of TCP/IP, before a single website or app existed.
+Somewhere between "any computer can talk to any other computer" and today,
+identity and social connection never became protocol-level concepts the way
+addressing and routing did. Nobody standardized "who you are" or "who you
+know" the way everybody standardized "how a packet finds its destination."
+So every app, every platform, every game built its own private, incompatible
+answer to both questions on top of a network that was never given an open
+one — and the thing built to connect everyone ended up full of applications
+that each make you reconnect from scratch.
+
+That's not an abstract gap. It's the ordinary experience of using the
+internet: a different login for every service, a friends list that means
+nothing outside the app it lives in, a history and reputation you built by
+hand that evaporates the moment you leave. Avalon doesn't try to fix the
+whole internet — that's a much bigger claim than this project makes. It
+tries to prove, for one domain, what an open identity and social layer looks
+like when it's built as infrastructure instead of a product feature: the
+same identity, the same friends, the same earned history, portable across
+everything that chooses to plug into it — on the network of people the
+internet was supposed to be providing all along.
+
 ## What already exists
 
 It would be dishonest to pretend this space is empty. Pieces of this idea exist,

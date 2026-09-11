@@ -28,6 +28,15 @@ things a game is required to expose or trust blindly. A game stays fully soverei
 over its own world, economy, and rules; Avalon only provides the connective
 infrastructure between games, not a platform that owns them.
 
+The internet was built to connect people to each other. Identity and social
+connection never became part of that shared foundation the way addressing and
+routing did, so every app and platform built its own incompatible version on
+top instead — and the network built to connect everyone ended up full of
+places that each make you start over. Avalon is an attempt to put that layer
+where it always should have been: not owned by any one platform, and not
+rebuilt from scratch by every game that needs it. See
+[Why Avalon](docs/WhyAvalon.md) for the full argument.
+
 ## Why Avalon
 
 - **Identity is separate from characters.** One persistent identity, any number of
