@@ -36,6 +36,11 @@ const router = createRouter({
         { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue') },
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
+        {
+          path: 'achievements',
+          name: 'achievements',
+          component: () => import('../views/Achievements.vue'),
+        },
         // #282: generalized off /games; old paths redirect below. #273: public/unauthenticated,
         // so requiresAuth: false overrides HubShell's inherited requiresAuth: true.
         {

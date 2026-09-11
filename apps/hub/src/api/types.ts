@@ -804,3 +804,67 @@ export interface RsvpRosterEntry {
   status: RsvpStatusValue
   responded_at: string
 }
+
+// GET /me/achievements (issue #34/#35), matching
+// crates/server/src/attestations.rs's AttestationReadResponse and its
+// nested types field-for-field. `authenticity`/`validity` are internally
+// tagged on `status` (serde's `tag = "status", rename_all = "snake_case"`)
+// with the variant-specific field (`key_id`/`reason`) alongside it in the
+// same object.
+export interface AttestationAuthenticityResponse {
+  status: 'authentic' | 'not_authentic'
+  key_id?: string
+  reason?: string
+}
+
+export interface AttestationValidityResponse {
+  status: 'valid' | 'invalid'
+  reason?: string
+}
+
+export interface AttestationHistoryEntryResponse {
+  event: string
+  at: string
+  reason_code?: string
+  reason?: string
+}
+
+export interface AttestationProofResponse {
+  key_id: string
+  algorithm: string
+}
+
+export interface AttestationResponse {
+  id: string
+  issuer: string
+  subject: string
+  achievement: string
+  issued_at: string
+  proof: AttestationProofResponse
+  authenticity: AttestationAuthenticityResponse
+  validity: AttestationValidityResponse
+  history: AttestationHistoryEntryResponse[]
+  // Deliberately no `recognition` field — see
+  // crates/server/src/attestations.rs's own module doc comment (ADR #76:
+  // recognition is the consumer's own policy call, never the server's).
+}
+
+// GET /games/{slug}/achievements and GET /integrations/{slug}/milestones
+// (#31/#324/#325), matching crates/server/src/achievements.rs's
+// AchievementDefinitionResponse field-for-field. `id` is the definition's
+// GlobalId string ("game:<slug>:achievement:<key>" or the milestone
+// equivalent) — the same string AttestationResponse.achievement carries,
+// which is how achievements.ts resolves a display name for a claim.
+export interface AchievementDefinitionResponse {
+  id: string
+  game_id: string
+  key: string
+  name: string
+  description: string
+  schema?: string
+  version: number
+  created_at: string
+  updated_at: string
+  retired: boolean
+  retired_at?: string
+}

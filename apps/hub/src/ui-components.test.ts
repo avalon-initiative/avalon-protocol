@@ -7,6 +7,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import type { AvalonIconName } from '@avalon/ui'
 import {
+  AvalonAchievementCard,
   AvalonAvatar,
   AvalonBottomNav,
   AvalonCalendarMonth,
@@ -833,5 +834,75 @@ describe('AvalonModal', () => {
     const wrapper = mount(AvalonModal, { props: { title: 'Edit', open: true } })
     await wrapper.find('button[aria-label="Close"]').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+})
+
+describe('AvalonAchievementCard', () => {
+  const baseProps = {
+    achievementName: 'Dragon Slayer',
+    issuerName: 'Ashen Realms',
+    issuerSlug: 'ashen-realms',
+    issuedAt: 'Mar 14, 2027',
+    status: 'valid' as const,
+    history: [{ event: 'issued', at: 'Mar 14, 2027' }],
+  }
+
+  it('renders the achievement name, issuer, and issued date', () => {
+    const wrapper = mount(AvalonAchievementCard, { props: baseProps })
+    expect(wrapper.text()).toContain('Dragon Slayer')
+    expect(wrapper.text()).toContain('Ashen Realms')
+    expect(wrapper.text()).toContain('Mar 14, 2027')
+  })
+
+  it('emits view-issuer when the issuer chip is clicked', async () => {
+    const wrapper = mount(AvalonAchievementCard, { props: baseProps })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('view-issuer')).toHaveLength(1)
+  })
+
+  // Three same-named claims from three different issuers (a real scenario
+  // — nothing stops three games from each having their own "Dragon
+  // Slayer") must render as three distinct issuer chips, never merged or
+  // deduplicated by name (issue #35's own invariant).
+  it('renders distinct issuer chips for three same-named claims from different issuers', () => {
+    const issuers = ['Ashen Realms', 'Frostpeak', 'Ironclad Studios']
+    const wrappers = issuers.map((issuerName) =>
+      mount(AvalonAchievementCard, { props: { ...baseProps, issuerName } }),
+    )
+    wrappers.forEach((wrapper, index) => {
+      expect(wrapper.find('button').text()).toBe(issuers[index])
+    })
+  })
+
+  // A revoked claim keeps its issuance visible and shows the revocation
+  // alongside it once history is expanded — never an empty slot (#81/#85).
+  it('shows both dates for a revoked claim once history is expanded', async () => {
+    const wrapper = mount(AvalonAchievementCard, {
+      props: {
+        ...baseProps,
+        status: 'invalid',
+        invalidReason: 'attestation has been revoked',
+        history: [
+          { event: 'issued', at: 'Mar 14, 2027' },
+          { event: 'revoked', at: 'May 2, 2027', reasonCode: 'cheating_detected', reason: 'cheated' },
+        ],
+      },
+    })
+    expect(wrapper.text()).not.toContain('May 2, 2027')
+    const buttons = wrapper.findAll('button')
+    await buttons[buttons.length - 1].trigger('click')
+    expect(wrapper.text()).toContain('Mar 14, 2027')
+    expect(wrapper.text()).toContain('May 2, 2027')
+    expect(wrapper.text()).toContain('cheated')
+  })
+
+  // ADR #77: the Hub renders verification results, it never computes or
+  // displays trust/rank — no score, ranking, or leaderboard-style element
+  // should ever appear on this card.
+  it('never renders a score, rank, or leaderboard-style element', () => {
+    const wrapper = mount(AvalonAchievementCard, { props: baseProps })
+    expect(wrapper.find('[class*="score" i]').exists()).toBe(false)
+    expect(wrapper.find('[class*="rank" i]').exists()).toBe(false)
+    expect(wrapper.text().toLowerCase()).not.toMatch(/\bscore\b|\brank(ed|ing)?\b/)
   })
 })

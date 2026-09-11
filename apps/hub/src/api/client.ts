@@ -3,9 +3,11 @@
 // the typed functions below rather than touching fetch or the URL directly.
 import { AvalonApiError, messageForStatus } from './errors'
 import type {
+  AchievementDefinitionResponse,
   AddPasskeyFinishRequest,
   AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
+  AttestationResponse,
   CancelRecoveryRequest,
   ChannelResponse,
   ConnectGameRequest,
@@ -223,6 +225,25 @@ export function updateProfile(token: string, body: UpdateProfileRequest): Promis
 
 export function getMyHistory(token: string): Promise<HistoryEntryResponse[]> {
   return request('/me/history', { token })
+}
+
+// Issue #34/#35: the caller's own full attestation history across every
+// issuer (active and revoked alike) — see AttestationResponse's own doc
+// comment for why there's deliberately no recognition field here.
+export function getMyAchievements(token: string): Promise<AttestationResponse[]> {
+  return request('/me/achievements', { token })
+}
+
+// Public, unauthenticated (crates/server/src/achievements.rs) — used by
+// apps/hub/src/api/achievements.ts to resolve a claim's display name,
+// which AttestationResponse itself doesn't carry (only the definition's
+// GlobalId string).
+export function listAchievementDefinitions(slug: string): Promise<AchievementDefinitionResponse[]> {
+  return request(`/games/${slug}/achievements`)
+}
+
+export function listMilestoneDefinitions(slug: string): Promise<AchievementDefinitionResponse[]> {
+  return request(`/integrations/${slug}/milestones`)
 }
 
 export function listFriends(token: string): Promise<FriendshipResponse[]> {
