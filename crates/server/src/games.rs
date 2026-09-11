@@ -189,6 +189,24 @@ pub(crate) async fn fetch_game_category(
     Ok(IntegratorCategory::parse(&category_raw).unwrap_or(IntegratorCategory::Game))
 }
 
+/// The issuer's current `GameStatus` (issue #33's `Validity` check — see
+/// `avalon_protocol::achievements::validity`). Same "defaults to `Active`
+/// on an unparseable value rather than panicking a live request" posture
+/// as [`fetch_game_category`], for the same reason: the column only ever
+/// gets written via `GameStatus::as_str()`.
+pub(crate) async fn fetch_game_status(
+    state: &AppState,
+    game_id: Uuid,
+) -> Result<GameStatus, AppError> {
+    let row = sqlx::query("SELECT status FROM games WHERE id = $1")
+        .bind(game_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::GameNotFound)?;
+    let status_raw: String = row.try_get("status")?;
+    Ok(GameStatus::parse(&status_raw).unwrap_or(GameStatus::Active))
+}
+
 /// Lowercase `[a-z0-9-]`, 2-64 characters. Deliberately rejects rather than
 /// normalizes an out-of-charset slug (e.g. uppercase) — silently rewriting
 /// it would surprise a caller who submitted something else and would still

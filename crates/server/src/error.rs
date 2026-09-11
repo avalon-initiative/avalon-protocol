@@ -195,6 +195,8 @@ pub enum AppError {
         "attestation signature does not verify against any of the issuer's currently-valid keys"
     )]
     InvalidAttestationSignature,
+    #[error("attestation not found")]
+    AttestationNotFound,
     #[error(
         "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
     )]
@@ -406,6 +408,7 @@ impl IntoResponse for AppError {
             AppError::ClaimVocabularyMismatch => StatusCode::FORBIDDEN,
             AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
+            AppError::AttestationNotFound => StatusCode::NOT_FOUND,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidGuardianSet => StatusCode::BAD_REQUEST,
             AppError::RecoveryNotConfigured => StatusCode::CONFLICT,

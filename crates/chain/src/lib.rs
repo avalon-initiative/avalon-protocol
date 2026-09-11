@@ -36,6 +36,7 @@
 //! toward that design doesn't ripple into `protocol`, `server`, `sdk`, or any
 //! game integration.
 
+pub mod attestations;
 pub mod merkle;
 pub mod mirror;
 mod postgres;

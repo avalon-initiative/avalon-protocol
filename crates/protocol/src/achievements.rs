@@ -101,9 +101,10 @@ pub struct AchievementAttestation {
     pub subject: IdentityId,
     pub achievement: GlobalId,
     pub issued_at: OffsetDateTime,
-    /// Verified against the issuer's own key (`crate::auth::verify_event_signature`
-    /// server-side) before this attestation is ever stored — see
-    /// [`attestation_signing_bytes`] for exactly what's signed.
+    /// Verified against the issuer's own key
+    /// (`avalon_chain::attestations::verify_authenticity`, #33) before this
+    /// attestation is ever stored — see [`attestation_signing_bytes`] for
+    /// exactly what's signed.
     pub proof: Signature,
 }
 
@@ -214,11 +215,407 @@ mod issuer_tests {
     }
 }
 
+/// "Is this attestation still good right now" (issue #33, ADR #76's second
+/// of three separate questions — authentic, valid, recognized — never
+/// merged into one boolean). Deliberately partial today, honestly, not
+/// silently: revocation/supersession is #85, not built yet, so this only
+/// checks the one thing that's actually real — the issuer's own current
+/// `GameStatus` (#84 catalogued `Suspended`/`Revoked`/`Deprecated`, but
+/// nothing can transition into them yet, so this always resolves `Valid`
+/// in practice until that lands too). No point-in-time issuer-status
+/// history exists either, so this checks status *now*, not "as of `at`" —
+/// a real gap against the ticket's original design, tracked rather than
+/// silently approximated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Validity {
+    Valid,
+    Invalid { reason: String },
+}
+
+pub fn validity(issuer_status: crate::games::GameStatus) -> Validity {
+    use crate::games::GameStatus;
+    match issuer_status {
+        GameStatus::Active => Validity::Valid,
+        GameStatus::Suspended => Validity::Invalid {
+            reason: "issuer is currently suspended".to_string(),
+        },
+        GameStatus::Revoked => Validity::Invalid {
+            reason: "issuer has been revoked".to_string(),
+        },
+        GameStatus::Deprecated => Validity::Invalid {
+            reason: "issuer is deprecated".to_string(),
+        },
+    }
+}
+
+/// One condition under which a [`TrustRelationship`] recognizes a claim —
+/// every `Some` field narrows the match; `None` means "no restriction on
+/// this axis". An empty [`TrustRelationship::scopes`] list (no entries at
+/// all) means unscoped: every claim from `trusted_issuer` is recognized,
+/// which is different from a single all-`None` `RecognitionScope` (same
+/// practical effect, but the empty-list form is the canonical
+/// "unrestricted" representation — see [`recognize`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecognitionScope {
+    /// `"achievement"`/`"milestone"` ([`Issuer::claim_kind`]) — `None`
+    /// matches either.
+    pub claim_kind: Option<String>,
+    /// A specific schema a claim's definition must declare — `None`
+    /// matches any schema, including a claim with no schema at all.
+    pub schema: Option<GlobalId>,
+    /// Inclusive floor on the claim definition's `version` — `None` means
+    /// no floor.
+    pub min_version: Option<u32>,
+    /// Only claims issued at or after this instant — `None` means no
+    /// floor. Matches the ticket's own example: "Game A's achievements...
+    /// issued after 2027-01".
+    pub issued_after: Option<OffsetDateTime>,
+}
+
+impl RecognitionScope {
+    fn matches(
+        &self,
+        claim_kind: &str,
+        schema: Option<&GlobalId>,
+        version: u32,
+        issued_at: OffsetDateTime,
+    ) -> bool {
+        if let Some(want) = &self.claim_kind {
+            if want != claim_kind {
+                return false;
+            }
+        }
+        if let Some(want) = &self.schema {
+            if Some(want) != schema {
+                return false;
+            }
+        }
+        if let Some(min) = self.min_version {
+            if version < min {
+                return false;
+            }
+        }
+        if let Some(after) = self.issued_after {
+            if issued_at < after {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// One integrator's decision to trust another issuer's attestations,
-/// optionally scoped to specific achievements.
+/// optionally scoped (issue #33) to specific claim kinds/schemas/versions/
+/// time windows. `scopes.is_empty()` means unscoped — every claim from
+/// `trusted_issuer` is recognized, matching this type's original
+/// unscoped-only shape exactly (additive, not a breaking change).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustRelationship {
     pub truster: GameId,
     pub trusted_issuer: Issuer,
     pub established_at: OffsetDateTime,
+    #[serde(default)]
+    pub scopes: Vec<RecognitionScope>,
+}
+
+/// "Does *this consumer's own policy* recognize this claim" (issue #33,
+/// ADR #76's third question) — evaluated entirely on the consumer's side
+/// (SDK or the game's own code), never a boolean the server computes or
+/// returns. Deliberately separate from [`Validity`]/authenticity: a claim
+/// can be authentic and valid and still `NotRecognized` here, and the API
+/// must be able to express exactly that (this ticket's own invariant).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recognition {
+    Recognized,
+    NotRecognized { reason: String },
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn recognize(
+    policy: &TrustRelationship,
+    issuer: &Issuer,
+    claim_kind: &str,
+    schema: Option<&GlobalId>,
+    version: u32,
+    issued_at: OffsetDateTime,
+) -> Recognition {
+    if &policy.trusted_issuer != issuer {
+        return Recognition::NotRecognized {
+            reason: "no trust relationship with this issuer".to_string(),
+        };
+    }
+    if policy.scopes.is_empty()
+        || policy
+            .scopes
+            .iter()
+            .any(|s| s.matches(claim_kind, schema, version, issued_at))
+    {
+        Recognition::Recognized
+    } else {
+        Recognition::NotRecognized {
+            reason: "issuer is trusted, but this claim falls outside every recognized scope"
+                .to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+    use crate::games::GameStatus;
+    use uuid::Uuid;
+
+    #[test]
+    fn validity_is_valid_only_for_an_active_issuer() {
+        assert_eq!(validity(GameStatus::Active), Validity::Valid);
+        assert_ne!(validity(GameStatus::Suspended), Validity::Valid);
+        assert_ne!(validity(GameStatus::Revoked), Validity::Valid);
+        assert_ne!(validity(GameStatus::Deprecated), Validity::Valid);
+    }
+
+    fn issuer_and_scope_fixture() -> (Issuer, GlobalId) {
+        let issuer = Issuer::Game(GameId(Uuid::new_v4()));
+        let schema = GlobalId::new("game", "ashen-realms", "schema", "v1");
+        (issuer, schema)
+    }
+
+    #[test]
+    fn an_unscoped_relationship_recognizes_everything_from_the_trusted_issuer() {
+        let (issuer, schema) = issuer_and_scope_fixture();
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer.clone(),
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![],
+        };
+        assert_eq!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                Some(&schema),
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::Recognized
+        );
+    }
+
+    #[test]
+    fn a_different_issuer_is_never_recognized_regardless_of_scopes() {
+        let (issuer, _schema) = issuer_and_scope_fixture();
+        let other_issuer = Issuer::Game(GameId(Uuid::new_v4()));
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer,
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![],
+        };
+        assert_eq!(
+            recognize(
+                &policy,
+                &other_issuer,
+                "achievement",
+                None,
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::NotRecognized {
+                reason: "no trust relationship with this issuer".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn scoped_by_claim_kind_rejects_the_other_kind() {
+        let (issuer, _schema) = issuer_and_scope_fixture();
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer.clone(),
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![RecognitionScope {
+                claim_kind: Some("achievement".to_string()),
+                schema: None,
+                min_version: None,
+                issued_after: None,
+            }],
+        };
+        assert_eq!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                None,
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::Recognized
+        );
+        assert!(matches!(
+            recognize(
+                &policy,
+                &issuer,
+                "milestone",
+                None,
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::NotRecognized { .. }
+        ));
+    }
+
+    #[test]
+    fn scoped_by_schema_rejects_a_different_or_missing_schema() {
+        let (issuer, schema) = issuer_and_scope_fixture();
+        let other_schema = GlobalId::new("game", "ashen-realms", "schema", "v2");
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer.clone(),
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![RecognitionScope {
+                claim_kind: None,
+                schema: Some(schema.clone()),
+                min_version: None,
+                issued_after: None,
+            }],
+        };
+        assert_eq!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                Some(&schema),
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::Recognized
+        );
+        assert!(matches!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                Some(&other_schema),
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::NotRecognized { .. }
+        ));
+        assert!(matches!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                None,
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::NotRecognized { .. }
+        ));
+    }
+
+    #[test]
+    fn scoped_by_min_version_rejects_older_versions() {
+        let (issuer, _schema) = issuer_and_scope_fixture();
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer.clone(),
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![RecognitionScope {
+                claim_kind: None,
+                schema: None,
+                min_version: Some(3),
+                issued_after: None,
+            }],
+        };
+        assert!(matches!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                None,
+                2,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::NotRecognized { .. }
+        ));
+        assert_eq!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                None,
+                3,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::Recognized
+        );
+    }
+
+    #[test]
+    fn scoped_by_time_window_rejects_claims_issued_too_early() {
+        let (issuer, _schema) = issuer_and_scope_fixture();
+        let cutoff = OffsetDateTime::UNIX_EPOCH + time::Duration::days(365);
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer.clone(),
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![RecognitionScope {
+                claim_kind: None,
+                schema: None,
+                min_version: None,
+                issued_after: Some(cutoff),
+            }],
+        };
+        assert!(matches!(
+            recognize(
+                &policy,
+                &issuer,
+                "achievement",
+                None,
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::NotRecognized { .. }
+        ));
+        assert_eq!(
+            recognize(&policy, &issuer, "achievement", None, 1, cutoff),
+            Recognition::Recognized
+        );
+    }
+
+    #[test]
+    fn multiple_scopes_are_or_combined() {
+        let (issuer, _schema) = issuer_and_scope_fixture();
+        let policy = TrustRelationship {
+            truster: GameId(Uuid::new_v4()),
+            trusted_issuer: issuer.clone(),
+            established_at: OffsetDateTime::UNIX_EPOCH,
+            scopes: vec![
+                RecognitionScope {
+                    claim_kind: Some("achievement".to_string()),
+                    schema: None,
+                    min_version: None,
+                    issued_after: None,
+                },
+                RecognitionScope {
+                    claim_kind: Some("milestone".to_string()),
+                    schema: None,
+                    min_version: None,
+                    issued_after: None,
+                },
+            ],
+        };
+        assert_eq!(
+            recognize(
+                &policy,
+                &issuer,
+                "milestone",
+                None,
+                1,
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            Recognition::Recognized
+        );
+    }
 }
