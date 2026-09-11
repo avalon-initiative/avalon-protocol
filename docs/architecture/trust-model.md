@@ -112,14 +112,20 @@ validity.
   never duplicated per call site. Unit-tested directly against scenarios
   E and F's authenticity half (a claim stays authentic after its key is
   later revoked; a claim "issued" after revocation is not authentic).
-- **Valid (#33, landed, honestly partial)** —
-  `avalon_protocol::achievements::validity(issuer_status)`: `Valid` iff
-  the issuer's current `GameStatus` is `Active`. This is deliberately
-  less than the full design above — no revocation/supersession check
-  (#85, not built), no point-in-time issuer-status history (nothing
-  records *when* a status changed, only what it is now), no schema/
-  version well-formedness check (nothing to check yet). Real, but a
-  strict subset of "is this attestation currently in force."
+- **Valid (#33 + #85, landed, still honestly partial)** —
+  `avalon_protocol::achievements::validity(issuer_status, attestation_status)`
+  takes a second parameter as of #85: `Invalid` immediately if the
+  attestation's own `AttestationStatus` (computed by
+  `attestation_status_at(revoked_at, at)` — never a stored flag) is
+  `Revoked`, otherwise `Valid` iff the issuer's current `GameStatus` is
+  `Active`. Individual-attestation revocation (scenario C) is real now.
+  Still deliberately less than the full design above: no supersession
+  check (no protocol event kind exists yet for it), no point-in-time
+  issuer-status history (nothing records *when* a status changed, only
+  what it is now — so an issuer suspended today reads as suspended for
+  claims issued before the suspension too, not just after), no schema/
+  version well-formedness check. Real, but a strict subset of "is this
+  attestation currently in force."
 - **Recognized (#33, landed)** — `TrustRelationship` gained `scopes: Vec<RecognitionScope>`
   (`claim_kind`/`schema`/`min_version`/`issued_after`, `Some` narrows,
   `None` matches anything; an empty `scopes` list is the unscoped case,
@@ -133,9 +139,9 @@ validity.
 - `GET /attestations/{id}` (`crates/server/src/attestations.rs`, new
   module) — public, unauthenticated. Rebuilds the stored attestation,
   computes authenticity and validity fresh on every read (never cached,
-  never trusted from storage), and returns both plus a `history` array
-  (today: just the issuance point — forward-compatible shape for #85's
-  entries once they exist). **No `recognition` field, checked by an
+  never trusted from storage), and returns both plus a `history` array —
+  the issuance point, plus (as of #85) a `revoked` entry with its reason
+  once `POST /attestations/{id}/revoke` has been called. **No `recognition` field, checked by an
   integration test that specifically asserts its absence** — matching
   this doc's own "recognition is the consumer's, never the server's,
   computation" rule at the wire level, not just in code comments.
@@ -161,12 +167,14 @@ validity.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
   decision, closed: issuer signing keys and lifecycle (the authenticity
   input) — see [games-and-issuers.md](games-and-issuers.md). Implementation
-  #84, landed for root/operational key add/revoke; #85's own status-transition
-  authorization model still open.
+  #84, landed for root/operational key add/revoke; issuer-status-transition
+  (suspend/revoke/deprecate) authorization model still open.
 - [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
   decision, closed: revocation mechanics (the validity input) — see
-  [revocation.md](revocation.md). Implementation is #85, still open —
-  `validity()`'s partial scope above is exactly what's blocked on it.
+  [revocation.md](revocation.md). Implementation is #85, landed for
+  individual-attestation revocation (scenario C) — `validity()` now reads
+  it. Supersession and issuer-status transitions remain the open part of
+  `validity()`'s partial scope above.
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry
   read model, including recognition relationships — needs the deferred
   `PUT /games/{slug}/recognition` above before it has anything to read.

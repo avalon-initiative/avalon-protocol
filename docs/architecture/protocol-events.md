@@ -282,8 +282,22 @@ the record — [`./revocation.md`](./revocation.md).
   event is ever built), the first event kind in this catalogue whose
   signer is genuinely the issuer's key and not a "network as signer"
   stand-in. `subject` is `identity:<id>:self:<claim_kind>_issued`
-  (`games::issuer_ref`, reused with the `"identity"` namespace). No
-  `revoked_at`/revocation path exists yet (#85).
+  (`games::issuer_ref`, reused with the `"identity"` namespace).
+
+  **Revocation (#85, landed) follows the same posture.** `POST
+  /attestations/{id}/revoke` (`crates/server/src/attestations.rs`) writes
+  `achievement.revoked`/`milestone.revoked` with its own embedded
+  Ed25519 signature (over `revocation_signing_bytes`, verified the same
+  way as issuance — `avalon_chain::attestations::verify_signature`),
+  requires the caller to authenticate as the attestation's original
+  issuer, and appends the fact to a dedicated `attestation_revocations`
+  table rather than mutating `achievement_attestations`. `issuer` is
+  `game:<slug>:self:{claim_kind}_revoked`; `subject` is
+  `attestation:<id>:self:{claim_kind}_revoked`. Supersession
+  (`attestation.superseded`, listed in the catalogue above) and
+  attestation-level reinstatement (no event kind catalogued yet) remain
+  unbuilt — `attestation_revocations` is capped at one row per
+  attestation for exactly this reason.
 - A seventh emitter: `crates/server/src/recovery.rs` (#201) writes
   `identity.recovery_configured` (guardian-set/threshold change),
   `identity.recovery_requested` (a new device completes the recovery

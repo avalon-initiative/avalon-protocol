@@ -256,6 +256,12 @@ pub fn router(state: AppState) -> Router {
         // recognition verdict (a consumer's own policy, never a server
         // boolean — see attestations.rs's module doc comment).
         .route("/attestations/{id}", get(attestations::get_attestation))
+        // #85: revocation is a signed, appended entry, never a mutation of
+        // the original attestation — only the original issuer may revoke.
+        .route(
+            "/attestations/{id}/revoke",
+            post(attestations::revoke_attestation),
+        )
         .route(
             "/games/{slug}/schemas",
             get(game_schemas::list_schema_versions).post(game_schemas::publish_schema_version),

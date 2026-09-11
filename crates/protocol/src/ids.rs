@@ -30,6 +30,12 @@ pub struct GuildId(pub Uuid);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AttestationId(pub Uuid);
 
+impl fmt::Display for AttestationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A namespaced, human-readable identifier: `<namespace>:<owner>:<kind>:<key>`.
 ///
 /// Example: `game:ashen-realms:achievement:dragon_slayer`. Two different games

@@ -8,54 +8,54 @@
 //! [`verify_authenticity`] is the one function both the issuing endpoint
 //! (`crates/server/src/achievements.rs`, #32) and a future independent
 //! reader (`GET /attestations/{id}`) should call — the same signature
-//! check either way, never reimplemented at each call site.
+//! check either way, never reimplemented at each call site. [`verify_signature`]
+//! is its generic core, reused by revocation verification (#85) for the
+//! exact same reason — a different canonical byte shape
+//! ([`avalon_protocol::achievements::revocation_signing_bytes`]), the same
+//! "resolve the key at this point in time, then check the signature" logic.
 
 use avalon_protocol::achievements::{attestation_signing_bytes, AchievementAttestation};
 use avalon_protocol::games::{resolve_valid_signing_key, IssuerKey};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use time::OffsetDateTime;
+use uuid::Uuid;
 
-/// The result of checking whether `attestation`'s embedded signature was
-/// genuinely produced by one of `issuer_keys`, at the point in time the
-/// attestation claims to have been issued (#84's point-in-time key
-/// resolution — a since-rotated, not-yet-revoked-at-`issued_at` key still
-/// verifies correctly).
+/// The result of checking whether a signature was genuinely produced by
+/// one of an issuer's keys, at a given point in time (#84's point-in-time
+/// key resolution — a since-rotated, not-yet-revoked-at-that-time key
+/// still verifies correctly).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Authenticity {
     Authentic { key_id: String },
     NotAuthentic { reason: String },
 }
 
-/// Verifies `attestation` against `issuer_keys` (the issuer's full key
-/// history — see `crate::mirror`/`avalon-server`'s `fetch_issuer_keys` for
-/// where that comes from). `claim_kind` (`"achievement"`/`"milestone"`)
-/// and `issuer_ref` (`"<namespace>:<slug>"`) must match exactly what the
-/// issuer signed over ([`attestation_signing_bytes`]) — a caller checking
-/// the wrong claim kind or issuer string will correctly get
-/// `NotAuthentic`, not a false positive, since the signed bytes themselves
-/// would differ.
-pub fn verify_authenticity(
-    attestation: &AchievementAttestation,
-    claim_kind: &str,
-    issuer_ref: &str,
+/// The generic check: does `signature_bytes` verify against `key_id` (one
+/// of `issuer_keys`, resolved as valid at `at`) over `signing_bytes`?
+/// Every caller — attestation issuance/reads, attestation revocation — is
+/// responsible for building `signing_bytes` correctly for what it's
+/// actually checking (different canonical byte shapes for "issued" vs.
+/// "revoked", see `avalon_protocol::achievements`'s two `*_signing_bytes`
+/// functions); this function only does the cryptography, never assumes
+/// which action a signature was for.
+pub fn verify_signature(
+    key_id: &str,
+    signing_bytes: &[u8],
+    signature_bytes: &[u8],
+    at: OffsetDateTime,
     issuer_keys: &[IssuerKey],
 ) -> Authenticity {
-    let Ok(key_id) = attestation.proof.key_id.parse::<uuid::Uuid>() else {
+    let Ok(key_id_uuid) = key_id.parse::<Uuid>() else {
         return Authenticity::NotAuthentic {
-            reason: "proof.key_id is not a valid key id".to_string(),
+            reason: "key_id is not a valid key id".to_string(),
         };
     };
-    let Some(key) = resolve_valid_signing_key(issuer_keys, key_id, attestation.issued_at) else {
+    let Some(key) = resolve_valid_signing_key(issuer_keys, key_id_uuid, at) else {
         return Authenticity::NotAuthentic {
-            reason: "no key in the issuer's history resolves as valid at issued_at".to_string(),
+            reason: "no key in the issuer's history resolves as valid at this point in time"
+                .to_string(),
         };
     };
-
-    let signing_bytes = attestation_signing_bytes(
-        claim_kind,
-        issuer_ref,
-        attestation.subject,
-        attestation.achievement.as_str(),
-    );
 
     let Ok(key_array) = <[u8; 32]>::try_from(key.public_key.as_slice()) else {
         return Authenticity::NotAuthentic {
@@ -67,22 +67,53 @@ pub fn verify_authenticity(
             reason: "issuer key is malformed".to_string(),
         };
     };
-    let Ok(sig_array) = <[u8; 64]>::try_from(attestation.proof.bytes.as_slice()) else {
+    let Ok(sig_array) = <[u8; 64]>::try_from(signature_bytes) else {
         return Authenticity::NotAuthentic {
             reason: "signature is malformed".to_string(),
         };
     };
     let signature = Signature::from_bytes(&sig_array);
 
-    if verifying_key.verify(&signing_bytes, &signature).is_ok() {
+    if verifying_key.verify(signing_bytes, &signature).is_ok() {
         Authenticity::Authentic {
-            key_id: attestation.proof.key_id.clone(),
+            key_id: key_id.to_string(),
         }
     } else {
         Authenticity::NotAuthentic {
             reason: "signature does not verify against the resolved key".to_string(),
         }
     }
+}
+
+/// Verifies `attestation` against `issuer_keys` (the issuer's full key
+/// history — see `crate::mirror`/`avalon-server`'s `fetch_issuer_keys` for
+/// where that comes from). `claim_kind` (`"achievement"`/`"milestone"`)
+/// and `issuer_ref` (`"<namespace>:<slug>"`) must match exactly what the
+/// issuer signed over ([`attestation_signing_bytes`]) — a caller checking
+/// the wrong claim kind or issuer string will correctly get
+/// `NotAuthentic`, not a false positive, since the signed bytes themselves
+/// would differ. Thin wrapper over [`verify_signature`]: builds the
+/// issuance-specific canonical bytes and resolves the key at the
+/// attestation's own `issued_at`.
+pub fn verify_authenticity(
+    attestation: &AchievementAttestation,
+    claim_kind: &str,
+    issuer_ref: &str,
+    issuer_keys: &[IssuerKey],
+) -> Authenticity {
+    let signing_bytes = attestation_signing_bytes(
+        claim_kind,
+        issuer_ref,
+        attestation.subject,
+        attestation.achievement.as_str(),
+    );
+    verify_signature(
+        &attestation.proof.key_id,
+        &signing_bytes,
+        &attestation.proof.bytes,
+        attestation.issued_at,
+        issuer_keys,
+    )
 }
 
 #[cfg(test)]
@@ -302,6 +333,62 @@ mod tests {
 
         assert!(matches!(
             verify_authenticity(&attestation, "achievement", "game:ashen-realms", &keys),
+            Authenticity::NotAuthentic { .. }
+        ));
+    }
+
+    /// #85: revocation verification reuses the exact same [`verify_signature`]
+    /// core, just with revocation's own canonical bytes — proving the two
+    /// actions genuinely share the generic check rather than each hand-rolling
+    /// crypto.
+    #[test]
+    fn verify_signature_backs_revocation_verification_too() {
+        use avalon_protocol::achievements::revocation_signing_bytes;
+        use avalon_protocol::ids::AttestationId;
+
+        let signing_key = SigningKey::generate(&mut rand::rng());
+        let key_id = Uuid::new_v4();
+        let revoked_at = OffsetDateTime::now_utc();
+        let attestation_id = AttestationId(Uuid::new_v4());
+
+        let bytes = revocation_signing_bytes(
+            "achievement",
+            "game:ashen-realms",
+            attestation_id,
+            "issuer_error",
+        );
+        let signature = signing_key.sign(&bytes);
+        let keys = [issuer_key(&signing_key, key_id, OffsetDateTime::UNIX_EPOCH)];
+
+        assert_eq!(
+            verify_signature(
+                &key_id.to_string(),
+                &bytes,
+                &signature.to_bytes(),
+                revoked_at,
+                &keys,
+            ),
+            Authenticity::Authentic {
+                key_id: key_id.to_string()
+            }
+        );
+
+        // A different reason code produces different bytes, so a signature
+        // for one reason can't be replayed to claim a different one.
+        let other_bytes = revocation_signing_bytes(
+            "achievement",
+            "game:ashen-realms",
+            attestation_id,
+            "different_reason",
+        );
+        assert!(matches!(
+            verify_signature(
+                &key_id.to_string(),
+                &other_bytes,
+                &signature.to_bytes(),
+                revoked_at,
+                &keys,
+            ),
             Authenticity::NotAuthentic { .. }
         ));
     }

@@ -197,6 +197,10 @@ pub enum AppError {
     InvalidAttestationSignature,
     #[error("attestation not found")]
     AttestationNotFound,
+    #[error("only the issuer that issued this attestation may revoke it")]
+    AttestationRevocationForbidden,
+    #[error("this attestation has already been revoked")]
+    AttestationAlreadyRevoked,
     #[error(
         "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
     )]
@@ -409,6 +413,8 @@ impl IntoResponse for AppError {
             AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
             AppError::AttestationNotFound => StatusCode::NOT_FOUND,
+            AppError::AttestationRevocationForbidden => StatusCode::FORBIDDEN,
+            AppError::AttestationAlreadyRevoked => StatusCode::CONFLICT,
             AppError::AchievementDefinitionForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidGuardianSet => StatusCode::BAD_REQUEST,
             AppError::RecoveryNotConfigured => StatusCode::CONFLICT,
