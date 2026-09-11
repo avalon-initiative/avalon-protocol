@@ -1,5 +1,10 @@
 # Deploying avalon-server behind TLS
 
+For getting a node running in the first place, see
+[`hosting-quickstart.md`](hosting-quickstart.md) — this doc picks up from
+there, covering what changes once that node needs to be reachable from
+anywhere other than `127.0.0.1`.
+
 `avalon-server` speaks plain HTTP only — there is no native TLS listener in
 the Rust app, and that's deliberate (see [Decisions and tickets](#decisions-and-tickets)).
 On `localhost` that's a non-issue: loopback traffic never leaves the machine.

@@ -56,6 +56,12 @@ path from a clean clone — Postgres via `docker compose`, `make migrate`,
 running the server, creating an identity, and the Hub/Storybook/C# SDK
 setup, with what "it worked" looks like at each step.
 
+## Hosting a node
+
+See [`hosting-quickstart.md`](hosting-quickstart.md) for the fastest path to
+a running node — `make stack-up`, no Rust/Node toolchain needed, just
+Docker.
+
 ## Deploying beyond localhost
 
 See [`deployment.md`](deployment.md) for putting `avalon-server` behind TLS

@@ -118,6 +118,12 @@ on the public network" — that's a real gap, not a hidden feature; see
 - Whether a private instance or a mirror of the public network, any instance
   reachable beyond localhost must run behind TLS termination — see
   [`../maintainers/deployment.md`](../maintainers/deployment.md).
+- Standing up a single instance no longer requires a Rust toolchain —
+  `make stack-up` (issue #289, root `Dockerfile` + `docker-compose.yml`)
+  builds and runs `avalon-server` + Postgres from a fresh checkout,
+  generating a fresh `AVALON_SETTLEMENT_SIGNING_KEY`/`AVALON_NETWORK_ID`
+  into `.env` on first run rather than requiring either to be hand-set
+  first. See [`../maintainers/hosting-quickstart.md`](../maintainers/hosting-quickstart.md).
 
 ## Decisions and tickets
 
