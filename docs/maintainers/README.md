@@ -62,6 +62,11 @@ See [`deployment.md`](deployment.md) for putting `avalon-server` behind TLS
 (required before any non-local deployment) — recommended reverse-proxy
 setup, example configs, and which existing env vars need production values.
 
+If you're running a node that watches peers (`AVALON_MIRROR_PEERS` set) and
+its mirror-watcher reports equivocation, see
+[`equivocation-response.md`](equivocation-response.md) for the
+investigation and recovery steps.
+
 Quick reference once you've read that page:
 
 ```bash

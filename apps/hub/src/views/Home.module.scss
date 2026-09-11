@@ -172,8 +172,183 @@
   white-space: nowrap;
 }
 
+.featuredCard {
+  background: linear-gradient(
+    120deg,
+    var(--av-color-primary-soft) 0%,
+    var(--av-color-surface-raised) 60%
+  );
+}
+
+.featured {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-4);
+}
+
+.featuredIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  flex-shrink: 0;
+  border-radius: var(--av-radius-lg);
+  background: var(--av-color-primary-soft);
+  color: var(--av-color-primary-hover);
+}
+
+.featuredText {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.featuredLabel {
+  font-size: var(--av-text-lg);
+  font-weight: 700;
+}
+
+.featuredMeta {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+}
+
+.gameGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--av-space-2);
+}
+
+.gameTile {
+  display: flex;
+}
+
+.gameTileLink {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--av-space-2);
+  width: 100%;
+  padding: var(--av-space-4) var(--av-space-2);
+  border: 1px solid var(--av-color-border);
+  border-radius: var(--av-radius-md);
+  background: var(--av-color-surface-raised);
+  color: var(--av-color-text);
+  text-align: center;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+
+  &:hover {
+    border-color: var(--av-color-border-strong);
+    background: var(--av-color-surface-hover);
+  }
+}
+
+.gameTileIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--av-radius-md);
+  background: var(--av-color-primary-soft);
+  color: var(--av-color-primary-hover);
+}
+
+.gameTileName {
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.guildList,
+.messageList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+}
+
+.guildRow,
+.messageRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-3);
+  padding: var(--av-space-2);
+  border-radius: var(--av-radius-md);
+  color: var(--av-color-text);
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+  }
+}
+
+.guildIcon,
+.messageIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--av-color-accent-secondary);
+  color: var(--av-color-primary-text);
+  opacity: 0.85;
+}
+
+.guildText,
+.messageText {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.guildName,
+.messageGuild {
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+}
+
+.guildMeta {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+}
+
+.messageBody {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageTime {
+  flex-shrink: 0;
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+}
+
 @media (max-width: 960px) {
   .grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .featured {
+    flex-wrap: wrap;
+  }
+
+  .gameGrid {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   }
 }

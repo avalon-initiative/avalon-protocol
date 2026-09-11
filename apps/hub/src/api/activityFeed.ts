@@ -35,6 +35,47 @@ export function summarizeActivityEntry(entry: HistoryEntryResponse): string {
     }
     case 'identity.signing_key_revoked':
       return 'Device access revoked.'
+    // Guild events (#22/#24) — /me/history is issuer-filtered to the
+    // caller's own events only (see crates/server/src/handlers.rs::my_history),
+    // so every one of these is something the caller themselves did.
+    case 'guild.created': {
+      const name = stringField(entry.payload, 'name')
+      return name ? `You created the guild ${name}.` : 'You created a guild.'
+    }
+    case 'guild.updated': {
+      const name = stringField(entry.payload, 'name')
+      return name ? `You updated ${name}'s settings.` : 'You updated guild settings.'
+    }
+    case 'guild.role_defined': {
+      const name = stringField(entry.payload, 'name')
+      return name ? `You defined the role ${name}.` : 'You defined a guild role.'
+    }
+    case 'guild.role_deleted':
+      return 'You deleted a guild role.'
+    case 'guild.role_changed':
+      return "You changed a member's role."
+    case 'guild.owner_transferred':
+      return 'You transferred guild ownership.'
+    case 'guild.game_associated':
+      return 'You associated a game with your guild.'
+    case 'guild.member_added':
+      return 'You joined a guild.'
+    case 'guild.member_removed': {
+      const reason = stringField(entry.payload, 'reason')
+      return reason === 'removed' ? 'You removed a member from a guild.' : 'You left a guild.'
+    }
+    case 'guild.favorite_games_updated':
+      return "You updated your guild's favorite games."
+    case 'guild.channel_created': {
+      const name = stringField(entry.payload, 'name')
+      return name ? `You created the channel #${name}.` : 'You created a guild channel.'
+    }
+    case 'guild.channel_renamed': {
+      const name = stringField(entry.payload, 'name')
+      return name ? `You renamed a channel to #${name}.` : 'You renamed a guild channel.'
+    }
+    case 'guild.channel_archived':
+      return 'You archived a guild channel.'
     default:
       return entry.kind
   }

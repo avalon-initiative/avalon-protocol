@@ -370,7 +370,7 @@ async fn backfill_network(
     network_id: &str,
     observations: &[(String, SignedTreeHead)],
 ) -> Result<(), MirrorWatcherError> {
-    let equivocations = mirror::list_equivocations(pool, network_id).await?;
+    let equivocations = mirror::unresolved_equivocations(pool, network_id).await?;
     if !equivocations.is_empty() {
         eprintln!(
             "mirror-watcher: {network_id}: refusing to backfill — {} unresolved equivocation finding(s) recorded for this network; this needs human investigation before further backfill can be trusted",

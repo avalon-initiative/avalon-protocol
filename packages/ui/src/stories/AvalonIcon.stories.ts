@@ -16,8 +16,18 @@ export const AllIcons: Story = {
     components: { AvalonIcon },
     template: `
       <div style="display:flex;gap:16px;flex-wrap:wrap">
-        <AvalonIcon v-for="n in ['home','games','guilds','friends','chat','discover','profile','search','bell','plus','device','activity','logo']" :key="n" :name="n" :size="24" />
+        <AvalonIcon v-for="n in allIconNames" :key="n" :name="n" :size="24" />
       </div>
     `,
+    setup() {
+      const allIconNames = [
+        'home', 'games', 'guilds', 'friends', 'chat', 'discover', 'profile', 'search',
+        'bell', 'plus', 'device', 'activity', 'logo', 'alert', 'pencil', 'check', 'close',
+        'settings', 'voice', 'video', 'messages', 'calendar', 'achievements', 'library',
+        'wallet', 'more', 'community', 'faction', 'event', 'reward', 'leaderboards', 'map',
+        'join', 'leave', 'invite', 'share', 'bookmark', 'follow', 'muted', 'block',
+      ]
+      return { allIconNames }
+    },
   }),
 }

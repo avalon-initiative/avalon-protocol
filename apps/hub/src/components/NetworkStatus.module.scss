@@ -59,15 +59,20 @@
   font-weight: 600;
 }
 
-.panel {
+.section {
   display: flex;
   flex-direction: column;
-  gap: var(--av-space-2);
-  padding: var(--av-space-2);
-  border-radius: var(--av-radius-md);
-  border: 1px solid var(--av-color-border);
-  background: var(--av-color-surface);
+  gap: var(--av-space-1);
+  margin-top: var(--av-space-3);
+}
+
+.sectionHeading {
+  color: var(--av-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   font-size: var(--av-text-xs);
+  font-weight: 600;
+  margin: 0;
 }
 
 .detail {
@@ -76,13 +81,6 @@
 
 .detailDanger {
   color: var(--av-color-danger);
-}
-
-.knownHeading {
-  color: var(--av-color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: var(--av-text-xs);
 }
 
 .knownList {
@@ -106,11 +104,19 @@
   color: var(--av-color-text-muted);
 }
 
-.knownPlaceholder {
-  color: var(--av-color-warning);
-  border: 1px solid var(--av-color-warning);
+.knownEnvironment {
   border-radius: var(--av-radius-pill);
   padding: 0 var(--av-space-1);
+}
+
+.knownEnvironment.local-dev {
+  color: var(--av-color-warning);
+  border: 1px solid var(--av-color-warning);
+}
+
+.knownEnvironment.dev {
+  color: var(--av-color-text-muted);
+  border: 1px solid var(--av-color-border);
 }
 
 .refresh {
@@ -122,14 +128,6 @@
   padding: 0.125rem var(--av-space-2);
   font-size: var(--av-text-xs);
   cursor: pointer;
-}
-
-.switchHeading {
-  color: var(--av-color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: var(--av-text-xs);
-  margin-top: var(--av-space-2);
 }
 
 .switchList {

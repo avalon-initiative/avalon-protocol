@@ -92,5 +92,109 @@ withDefaults(defineProps<AvalonIconProps>(), {
     <template v-else-if="name === 'close'">
       <path d="M5.5 5.5 18.5 18.5M18.5 5.5 5.5 18.5" />
     </template>
+    <template v-else-if="name === 'settings'">
+      <circle cx="12" cy="12" r="3" />
+      <path
+        d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M17.8 6.2l-1.5 1.5M7.7 16.3l-1.5 1.5M17.8 17.8l-1.5-1.5M7.7 7.7 6.2 6.2"
+      />
+    </template>
+    <template v-else-if="name === 'voice'">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5A6.5 6.5 0 0 0 12 18a6.5 6.5 0 0 0 6.5-6.5" />
+      <path d="M12 18v3" />
+    </template>
+    <template v-else-if="name === 'video'">
+      <rect x="3" y="6.5" width="12" height="11" rx="2" />
+      <path d="M15 10.5 21 7v10l-6-3.5Z" />
+    </template>
+    <template v-else-if="name === 'messages'">
+      <rect x="3" y="5.5" width="18" height="13" rx="2" />
+      <path d="m4 7 8 6 8-6" />
+    </template>
+    <template v-else-if="name === 'calendar'">
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 9.5h17M8 3v3.5M16 3v3.5" />
+    </template>
+    <template v-else-if="name === 'achievements'">
+      <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z" />
+      <path d="M8 5.5H4.5v1.5A3 3 0 0 0 8 9.5M16 5.5h3.5V7A3 3 0 0 1 16 9.5" />
+      <path d="M12 13v3.5M9 20.5h6M10.2 16.5h3.6l0.4 4h-4.4l0.4-4Z" />
+    </template>
+    <template v-else-if="name === 'library'">
+      <path d="M5 4.5h9v16H5a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 5 4.5Z" />
+      <path d="M14 6l4.6 1.2-3.3 12.7L11 18.7" />
+    </template>
+    <template v-else-if="name === 'wallet'">
+      <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z" />
+      <path d="M14.5 12.5h4v3h-4a1.5 1.5 0 0 1 0-3Z" />
+    </template>
+    <template v-else-if="name === 'more'">
+      <circle cx="5.5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="18.5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    </template>
+    <template v-else-if="name === 'community'">
+      <circle cx="8" cy="8.5" r="3" />
+      <circle cx="16" cy="8.5" r="3" />
+      <path d="M2.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5M10.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" />
+    </template>
+    <template v-else-if="name === 'faction'">
+      <path d="M5 4.5h11l-1.6 3.5L16 11.5H5Z" />
+      <path d="M5 4.5v15" />
+    </template>
+    <template v-else-if="name === 'event'">
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 9.5h17M8 3v3.5M16 3v3.5" />
+      <path d="m9 14.5 2 2 4-4.5" />
+    </template>
+    <template v-else-if="name === 'reward'">
+      <path d="M7 4h10v5a5 5 0 0 1-10 0V4Z" />
+      <path d="M7 5.5H4a3 3 0 0 0 3 4M17 5.5h3a3 3 0 0 1-3 4" />
+      <path d="M12 14v3M9.5 20.5h5" />
+    </template>
+    <template v-else-if="name === 'leaderboards'">
+      <path d="M5 20.5V13M11 20.5V8M17 20.5v-6" />
+      <path d="M3.5 20.5h17" />
+    </template>
+    <template v-else-if="name === 'map'">
+      <path d="M9 4.5 15 6.5 21 4.5v14L15 20.5 9 18.5 3 20.5v-14Z" />
+      <path d="M9 4.5v14M15 6.5v14" />
+    </template>
+    <template v-else-if="name === 'join'">
+      <path d="M3.5 12h11M10.5 7l4 5-4 5" />
+      <path d="M18.5 5v14" />
+    </template>
+    <template v-else-if="name === 'leave'">
+      <path d="M20.5 12h-11M13.5 7l-4 5 4 5" />
+      <path d="M5.5 5v14" />
+    </template>
+    <template v-else-if="name === 'invite'">
+      <circle cx="9" cy="8.5" r="3.5" />
+      <path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" />
+      <path d="M17.5 8.5v5M15 11h5" />
+    </template>
+    <template v-else-if="name === 'share'">
+      <circle cx="18" cy="6" r="2.2" />
+      <circle cx="6" cy="12" r="2.2" />
+      <circle cx="18" cy="18" r="2.2" />
+      <path d="m8 10.8 8-3.6M8 13.2l8 3.6" />
+    </template>
+    <template v-else-if="name === 'bookmark'">
+      <path d="M6 4h12v16l-6-4-6 4Z" />
+    </template>
+    <template v-else-if="name === 'follow'">
+      <path
+        d="M12 20.2s-7.5-4.4-7.5-10a4.4 4.4 0 0 1 7.5-3.1A4.4 4.4 0 0 1 19.5 10.2c0 5.6-7.5 10-7.5 10Z"
+      />
+    </template>
+    <template v-else-if="name === 'muted'">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5A6.5 6.5 0 0 0 12 18a6.5 6.5 0 0 0 6.5-6.5" />
+      <path d="M12 18v3M3 3l18 18" />
+    </template>
+    <template v-else-if="name === 'block'">
+      <circle cx="12" cy="12" r="9" />
+      <path d="m5.6 5.6 12.8 12.8" />
+    </template>
   </svg>
 </template>

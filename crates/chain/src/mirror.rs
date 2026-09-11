@@ -87,6 +87,14 @@ impl ObservedSth {
 /// hashes disagree — cryptographic proof that whoever signed them (both
 /// observations verified against the same operator key, or this is not an
 /// equivocation at all) produced two different trees at the same size.
+///
+/// `resolved_at`/`resolved_root_hash` (issue #316, implementing #300's
+/// decided scope) record a human's after-the-fact investigation: `None`
+/// means still open (the mirror-watcher's equivocation gate keeps refusing
+/// to backfill this network); `Some` means an operator determined which of
+/// `root_hash_a`/`root_hash_b` was the legitimate tree, via
+/// [`resolve_equivocation`]. Both fields are always set together — there
+/// is no partial-resolution state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EquivocationFinding {
     pub network_id: String,
@@ -95,6 +103,8 @@ pub struct EquivocationFinding {
     pub root_hash_a: String,
     pub source_b: String,
     pub root_hash_b: String,
+    pub resolved_at: Option<OffsetDateTime>,
+    pub resolved_root_hash: Option<String>,
 }
 
 /// Compares `candidate` against every observation in `existing` at the
@@ -122,6 +132,8 @@ pub fn detect_equivocation(
             root_hash_a: e.root_hash.clone(),
             source_b: candidate.source_url.clone(),
             root_hash_b: candidate.root_hash.clone(),
+            resolved_at: None,
+            resolved_root_hash: None,
         })
         .collect()
 }
@@ -227,15 +239,33 @@ pub async fn record_equivocation(
     Ok(())
 }
 
+fn equivocation_finding_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<EquivocationFinding, SettlementError> {
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    Ok(EquivocationFinding {
+        network_id: row.try_get("network_id").map_err(get)?,
+        tree_size: row.try_get("tree_size").map_err(get)?,
+        source_a: row.try_get("source_a").map_err(get)?,
+        root_hash_a: row.try_get("root_hash_a").map_err(get)?,
+        source_b: row.try_get("source_b").map_err(get)?,
+        root_hash_b: row.try_get("root_hash_b").map_err(get)?,
+        resolved_at: row.try_get("resolved_at").map_err(get)?,
+        resolved_root_hash: row.try_get("resolved_root_hash").map_err(get)?,
+    })
+}
+
 /// Every equivocation this node has ever recorded for `network_id`, newest
-/// first.
+/// first — resolved and unresolved alike. Used for operator-facing history
+/// (`avalon list-equivocations`); [`unresolved_equivocations`] is what the
+/// mirror-watcher's own backfill gate checks.
 pub async fn list_equivocations(
     pool: &PgPool,
     network_id: &str,
 ) -> Result<Vec<EquivocationFinding>, SettlementError> {
     let rows = sqlx::query(
         r#"
-        SELECT network_id, tree_size, source_a, root_hash_a, source_b, root_hash_b
+        SELECT network_id, tree_size, source_a, root_hash_a, source_b, root_hash_b, resolved_at, resolved_root_hash
         FROM equivocation_findings
         WHERE network_id = $1
         ORDER BY detected_at DESC
@@ -246,19 +276,103 @@ pub async fn list_equivocations(
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
-    let mut findings = Vec::with_capacity(rows.len());
-    for row in rows {
-        let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
-        findings.push(EquivocationFinding {
-            network_id: row.try_get("network_id").map_err(get)?,
-            tree_size: row.try_get("tree_size").map_err(get)?,
-            source_a: row.try_get("source_a").map_err(get)?,
-            root_hash_a: row.try_get("root_hash_a").map_err(get)?,
-            source_b: row.try_get("source_b").map_err(get)?,
-            root_hash_b: row.try_get("root_hash_b").map_err(get)?,
-        });
-    }
-    Ok(findings)
+    rows.into_iter().map(equivocation_finding_from_row).collect()
+}
+
+/// Every *unresolved* equivocation recorded for `network_id` — what the
+/// mirror-watcher's backfill gate (`crate::mirror_watcher::backfill_network`
+/// in `avalon-server`) checks before extending this network's mirrored
+/// history. Empty means either no equivocation was ever detected, or every
+/// one that was has since been resolved via [`resolve_equivocation`].
+pub async fn unresolved_equivocations(
+    pool: &PgPool,
+    network_id: &str,
+) -> Result<Vec<EquivocationFinding>, SettlementError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT network_id, tree_size, source_a, root_hash_a, source_b, root_hash_b, resolved_at, resolved_root_hash
+        FROM equivocation_findings
+        WHERE network_id = $1 AND resolved_at IS NULL
+        ORDER BY detected_at DESC
+        "#,
+    )
+    .bind(network_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+    rows.into_iter().map(equivocation_finding_from_row).collect()
+}
+
+/// Records an operator's investigation outcome for every unresolved
+/// finding at `network_id`/`tree_size`: `legitimate_root_hash` is whichever
+/// of that finding's two disagreeing root hashes was determined genuine
+/// (per `docs/maintainers/equivocation-response.md`'s investigation
+/// playbook). This alone does not touch `mirrored_entries` — pair with
+/// [`discard_mirrored_entries_from`] to actually roll back any content this
+/// node already mirrored from the losing branch before backfill resumes.
+///
+/// Returns the number of findings marked resolved (0 if none were open at
+/// this `network_id`/`tree_size` — not an error, since re-resolving an
+/// already-resolved finding, or one that no longer exists, is a no-op
+/// rather than something worth failing a runbook step over).
+pub async fn resolve_equivocation(
+    pool: &PgPool,
+    network_id: &str,
+    tree_size: i64,
+    legitimate_root_hash: &str,
+) -> Result<u64, SettlementError> {
+    let result = sqlx::query(
+        r#"
+        UPDATE equivocation_findings
+        SET resolved_at = now(), resolved_root_hash = $3
+        WHERE network_id = $1 AND tree_size = $2 AND resolved_at IS NULL
+        "#,
+    )
+    .bind(network_id)
+    .bind(tree_size)
+    .bind(legitimate_root_hash)
+    .execute(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    Ok(result.rows_affected())
+}
+
+/// Discards every `mirrored_entries` row for `network_id` verified against
+/// a tree at or beyond `from_tree_size` — the recovery half of resolving an
+/// equivocation (issue #316). Once an operator has determined which branch
+/// at `from_tree_size` was legitimate ([`resolve_equivocation`]), any
+/// entries this node already mirrored using the *other* branch's tree must
+/// be discarded before the mirror-watcher resumes backfill, or later
+/// inclusion-proof verification against the now-trusted branch would be
+/// checked against content it never actually produced.
+///
+/// Deliberately coarse rather than surgical: this drops every entry
+/// verified at `verified_tree_size >= from_tree_size`, including any that
+/// happened to belong to the legitimate branch, not just the losing one —
+/// there is no local way to tell which of those already-mirrored rows came
+/// from which branch after the fact, since both were independently
+/// signature/inclusion-verified at the time. The mirror-watcher's own
+/// multi-peer backfill (issue #299) re-fetches and re-verifies everything
+/// dropped here from the now-resolved-legitimate branch on its next tick —
+/// re-verification, not data loss of anything the network itself considers
+/// canonical.
+///
+/// Returns the number of rows discarded.
+pub async fn discard_mirrored_entries_from(
+    pool: &PgPool,
+    network_id: &str,
+    from_tree_size: i64,
+) -> Result<u64, SettlementError> {
+    let result = sqlx::query(
+        "DELETE FROM mirrored_entries WHERE network_id = $1 AND verified_tree_size >= $2",
+    )
+    .bind(network_id)
+    .bind(from_tree_size)
+    .execute(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    Ok(result.rows_affected())
 }
 
 /// The highest `tree_size` this node has observed from `source_url` for

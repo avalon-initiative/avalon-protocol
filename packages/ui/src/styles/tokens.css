@@ -6,7 +6,7 @@
   color-scheme: dark;
 
   /* Surfaces */
-  --av-color-bg: #0a0e1f;
+  --av-color-bg: #0b1220;
   --av-color-bg-gradient: radial-gradient(1200px 600px at 20% -10%, #1a2352 0%, transparent 60%),
     radial-gradient(900px 500px at 110% 10%, #1b1f4d 0%, transparent 55%);
   --av-color-surface: #121833;
@@ -16,19 +16,21 @@
   --av-color-border-strong: #34407a;
   /* The page background at 80% — for sticky chrome that blurs what scrolls
      under it (the shell header). */
-  --av-color-bg-translucent: rgba(10, 14, 31, 0.8);
+  --av-color-bg-translucent: rgba(11, 18, 32, 0.8);
 
-  /* Accent */
-  --av-color-primary: #5b6cff;
-  --av-color-primary-hover: #7484ff;
-  --av-color-primary-soft: rgba(91, 108, 255, 0.16);
+  /* Accent — matches the published brand palette (.vscode/mocks/IconMock.png). */
+  --av-color-primary: #4f88ff;
+  --av-color-primary-hover: #6d9dff;
+  --av-color-primary-soft: rgba(79, 136, 255, 0.16);
   --av-color-primary-text: #ffffff;
-  --av-color-accent-secondary: #8e5bff;
+  --av-color-accent-secondary: #885cf6;
+  --av-color-accent-tertiary: #22d3ee;
+  --av-color-accent-tertiary-soft: rgba(34, 211, 238, 0.16);
 
   /* Text */
   --av-color-text: #e8ebf7;
   --av-color-text-secondary: #a3abcc;
-  --av-color-text-muted: #6d769c;
+  --av-color-text-muted: #94a3b8;
 
   /* Status */
   --av-color-success: #2ecc71;

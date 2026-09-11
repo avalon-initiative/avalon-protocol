@@ -5,6 +5,7 @@
 // any real page does, via `@avalon/ui`.
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import type { AvalonIconName } from '@avalon/ui'
 import {
   AvalonAvatar,
   AvalonBottomNav,
@@ -24,6 +25,7 @@ import {
   AvalonGameCard,
   AvalonGuildCard,
   AvalonGuildMemberRow,
+  AvalonIcon,
   AvalonMetricTile,
   AvalonModal,
   AvalonPresenceBadge,
@@ -35,6 +37,23 @@ import {
   AvalonUserChip,
   AvalonWarningBanner,
 } from '@avalon/ui'
+
+const ALL_ICON_NAMES: AvalonIconName[] = [
+  'home', 'games', 'guilds', 'friends', 'chat', 'discover', 'profile', 'search',
+  'bell', 'plus', 'device', 'activity', 'logo', 'alert', 'pencil', 'check', 'close',
+  'settings', 'voice', 'video', 'messages', 'calendar', 'achievements', 'library',
+  'wallet', 'more', 'community', 'faction', 'event', 'reward', 'leaderboards', 'map',
+  'join', 'leave', 'invite', 'share', 'bookmark', 'follow', 'muted', 'block',
+]
+
+describe('AvalonIcon', () => {
+  it.each(ALL_ICON_NAMES)('renders a non-empty svg for %s', (name) => {
+    const wrapper = mount(AvalonIcon, { props: { name } })
+    const svg = wrapper.find('svg')
+    expect(svg.exists()).toBe(true)
+    expect(svg.element.children.length).toBeGreaterThan(0)
+  })
+})
 
 describe('AvalonPresenceBadge', () => {
   it.each(['Online', 'Away', 'Offline'] as const)('renders the %s status', (status) => {
