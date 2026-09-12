@@ -1,5 +1,6 @@
 .bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--av-space-4);
   margin-bottom: var(--av-space-3);
@@ -15,6 +16,7 @@
   gap: var(--av-space-2);
   font-family: inherit;
   flex: 1;
+  min-width: 8rem;
 }
 
 .label {

@@ -1,7 +1,12 @@
+// avatar + name + role badge + presence badge + up to two action buttons
+// is more than fits on one line once name/role/presence go beyond a
+// couple characters at phone width — wraps rather than overflowing the
+// roster list horizontally.
 .row {
   display: flex;
   align-items: center;
-  gap: var(--av-space-3);
+  flex-wrap: wrap;
+  gap: var(--av-space-3) var(--av-space-2);
   padding: var(--av-space-2) 0;
 }
 
