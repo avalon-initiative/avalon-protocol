@@ -918,4 +918,123 @@ mod tests {
 
         assert!(protocol_event_from_mirrored(&entry).is_none());
     }
+
+    async fn live_test_pool() -> PgPool {
+        dotenvy::dotenv().ok();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        sqlx::postgres::PgPoolOptions::new()
+            .connect(&database_url)
+            .await
+            .expect("failed to connect to Postgres — is it reachable?")
+    }
+
+    /// The equivocation gate ([`backfill_network`]'s first check, issue
+    /// #316) against real Postgres: a network with an unresolved finding
+    /// must not have anything written to `mirrored_entries`, even when
+    /// handed a well-formed, internally-consistent observation set that
+    /// would otherwise corroborate cleanly. This is the "mirror stops
+    /// trusting/serving the affected key's current head" acceptance
+    /// criterion — exercised directly against the real gate function, not a
+    /// re-implementation of its logic.
+    #[tokio::test]
+    #[ignore]
+    async fn backfill_network_refuses_to_proceed_while_an_equivocation_is_unresolved() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let client = reqwest::Client::new();
+        let network_id = format!("avalon-test-gate-{}", Uuid::new_v4());
+
+        mirror::record_equivocation(
+            &pool,
+            &mirror::EquivocationFinding {
+                network_id: network_id.clone(),
+                tree_size: 10,
+                source_a: "peer-a".to_string(),
+                root_hash_a: "aa".repeat(32),
+                source_b: "peer-b".to_string(),
+                root_hash_b: "bb".repeat(32),
+                resolved_at: None,
+                resolved_root_hash: None,
+            },
+        )
+        .await
+        .expect("record_equivocation failed");
+
+        // A single, internally-consistent observation — if the gate were
+        // not checked first, this would corroborate trivially (one peer
+        // "agreeing" with itself) and backfill would proceed.
+        let observations = vec![(
+            "peer-a".to_string(),
+            SignedTreeHead {
+                tree_size: 10,
+                root_hash: "aa".repeat(32),
+                network_id: network_id.clone(),
+                signing_key_id: "test-key".to_string(),
+                signature: "sig".to_string(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        )];
+
+        backfill_network(&client, &pool, &indexer, &network_id, &observations)
+            .await
+            .expect("backfill_network should return Ok(()) rather than error when gated");
+
+        let progress = mirror::mirrored_progress(&pool, &network_id)
+            .await
+            .expect("mirrored_progress failed");
+        assert_eq!(
+            progress.verified_count, 0,
+            "backfill must not write anything while the network has an unresolved equivocation"
+        );
+    }
+
+    /// Once the finding is resolved, the gate clears and `backfill_network`
+    /// proceeds again (calling into real backfill logic, which will attempt
+    /// real HTTP requests to the peer URL and fail gracefully — the point
+    /// here is only that it gets *past* the gate, not that it completes a
+    /// backfill against an unreachable peer).
+    #[tokio::test]
+    #[ignore]
+    async fn backfill_network_proceeds_again_once_the_finding_is_resolved() {
+        let pool = live_test_pool().await;
+        let indexer = PostgresIndexer::new(pool.clone());
+        let client = reqwest::Client::new();
+        let network_id = format!("avalon-test-gate-cleared-{}", Uuid::new_v4());
+
+        mirror::record_equivocation(
+            &pool,
+            &mirror::EquivocationFinding {
+                network_id: network_id.clone(),
+                tree_size: 10,
+                source_a: "peer-a".to_string(),
+                root_hash_a: "aa".repeat(32),
+                source_b: "peer-b".to_string(),
+                root_hash_b: "bb".repeat(32),
+                resolved_at: None,
+                resolved_root_hash: None,
+            },
+        )
+        .await
+        .expect("record_equivocation failed");
+
+        mirror::resolve_equivocation(&pool, &network_id, 10, &"aa".repeat(32))
+            .await
+            .expect("resolve_equivocation failed");
+
+        let unresolved = mirror::unresolved_equivocations(&pool, &network_id)
+            .await
+            .expect("unresolved_equivocations failed");
+        assert!(
+            unresolved.is_empty(),
+            "gate should be clear after resolution"
+        );
+
+        // With no observations at all, backfill_network takes its "no
+        // agreement" early return — still proves it got past the
+        // equivocation gate (which would otherwise have returned first with
+        // a distinct log line) without needing a reachable peer.
+        let observations: Vec<(String, SignedTreeHead)> = Vec::new();
+        let result = backfill_network(&client, &pool, &indexer, &network_id, &observations).await;
+        assert!(result.is_ok());
+    }
 }
