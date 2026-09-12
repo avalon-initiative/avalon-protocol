@@ -59,6 +59,27 @@ export interface SessionFinishResponse {
   expires_at: string
 }
 
+// Issue #155's closed genre vocabulary, matching
+// crates/protocol/src/identity.rs::Genre::ALL field-for-field (`as_str`'s
+// snake_case wire form). Kept as a plain string union rather than derived
+// from anywhere else — the Hub has no runtime dependency on the protocol
+// crate — but the two lists must be changed together.
+export type Genre =
+  | 'action'
+  | 'adventure'
+  | 'rpg'
+  | 'strategy'
+  | 'simulation'
+  | 'puzzle'
+  | 'racing'
+  | 'sports'
+  | 'horror'
+  | 'sandbox'
+  | 'mmo'
+  | 'shooter'
+  | 'platformer'
+  | 'party'
+
 export interface ProfileResponse {
   identity_id: string
   identity_created_at: string
@@ -67,6 +88,13 @@ export interface ProfileResponse {
   // `display_name#discriminator` (issue #128) — the short handle players
   // share with each other instead of a raw identity id.
   handle: string
+  // Issue #155's small, player-optional self-description fields — same
+  // public exposure level as display_name/avatar_url above (GET /me only;
+  // deliberately withheld from batch/public profile lookups server-side,
+  // see crates/server/src/handlers.rs).
+  bio: string | null
+  favorite_genres: Genre[]
+  pronouns: string | null
   // Issue #205's opt-in global search toggle — true means this identity
   // currently matches GET /identities/search. Off by default for every
   // identity; drives the "you are currently publicly searchable" indicator
@@ -77,6 +105,14 @@ export interface ProfileResponse {
 export interface UpdateProfileRequest {
   display_name?: string
   avatar_url?: string
+  // Three-state fields (issue #155): omitted leaves the existing value
+  // untouched, "" clears it, a non-empty string validates then sets it —
+  // same convention avatar_url already uses.
+  bio?: string
+  pronouns?: string
+  // Two states, not three: omitted (untouched) or a full replacement list,
+  // including [] to clear it.
+  favorite_genres?: Genre[]
   // Issue #205. Omitted leaves the existing preference untouched.
   discoverable?: boolean
 }

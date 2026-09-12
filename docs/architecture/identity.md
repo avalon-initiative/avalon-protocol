@@ -361,6 +361,19 @@ future work). None of these affect the state machine or its invariants.
   level it had before #155 rather than silently widening what any stranger
   can bulk-collect. Exposing those fields there, if ever wanted, is a
   scoping decision for its own ticket.
+- `apps/hub/src/views/Profile.vue` (#277) — surfaces and edits
+  `bio`/`favorite_genres`/`pronouns` on the player's own profile, closing
+  the gap #155 left open: the server has supported all three fields since
+  #155, but the Hub's own type layer (`apps/hub/src/api/types.ts`) never
+  declared them and `Profile.vue` never rendered them, so they were only
+  ever reachable by calling `PATCH /me` directly. Bio/pronouns reuse the
+  same per-field `AvalonEditableField` save pattern `display_name`/
+  `avatar_url` already use; `favorite_genres` is a fixed checkbox picker
+  over the closed `Genre` vocabulary (capped at 5 client-side, matching
+  `MAX_FAVORITE_GENRES`) with its own explicit Save, mirroring the
+  recovery-guardians picker on the same page. Own-profile view only — per
+  `list_profiles`'s note just above, these three fields stay deliberately
+  absent from any other identity's profile view.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never

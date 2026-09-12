@@ -26,6 +26,7 @@ import {
 import type {
   DeviceGrantResponse,
   DeviceResponse,
+  Genre,
   GuardianRequestSummary,
   PasskeyResponse,
   RecoveryRequestResponse,
@@ -62,6 +63,35 @@ const identityId = ref('')
 const loading = ref(true)
 const error = ref('')
 
+// Issue #155's self-description fields — the server has supported these
+// since #155, but nothing in the Hub read or wrote them until #277.
+const bio = ref('')
+const pronouns = ref('')
+
+// Issue #155's closed genre vocabulary (crates/protocol/src/identity.rs's
+// Genre::ALL) — a fixed picker, not free text, same "small controlled
+// vocabulary" reasoning the server enforces on write.
+const GENRE_OPTIONS: { value: Genre; label: string }[] = [
+  { value: 'action', label: 'Action' },
+  { value: 'adventure', label: 'Adventure' },
+  { value: 'rpg', label: 'RPG' },
+  { value: 'strategy', label: 'Strategy' },
+  { value: 'simulation', label: 'Simulation' },
+  { value: 'puzzle', label: 'Puzzle' },
+  { value: 'racing', label: 'Racing' },
+  { value: 'sports', label: 'Sports' },
+  { value: 'horror', label: 'Horror' },
+  { value: 'sandbox', label: 'Sandbox' },
+  { value: 'mmo', label: 'MMO' },
+  { value: 'shooter', label: 'Shooter' },
+  { value: 'platformer', label: 'Platformer' },
+  { value: 'party', label: 'Party' },
+]
+const MAX_FAVORITE_GENRES = 5
+const selectedGenres = ref<Set<Genre>>(new Set())
+const savingGenres = ref(false)
+const genresError = ref('')
+
 // Issue #205's opt-in global search toggle — off by default. A
 // first-class control on this page (not tucked into a settings submenu),
 // with `discoverable` doubling as its own "you are currently publicly
@@ -87,6 +117,9 @@ onMounted(async () => {
     avatarUrl.value = profile.avatar_url ?? ''
     handle.value = profile.handle
     identityId.value = profile.identity_id
+    bio.value = profile.bio ?? ''
+    pronouns.value = profile.pronouns ?? ''
+    selectedGenres.value = new Set(profile.favorite_genres)
     discoverable.value = profile.discoverable
     hasSigningKey.value = loadSigningKey(profile.identity_id) !== null
     if (hasSigningKey.value) {
@@ -124,7 +157,7 @@ async function onLogout() {
 // Each profile field saves on its own — PATCH /me takes any subset, and
 // the display name and avatar are independently promised-durable (#86),
 // so one edit is one change, one event.
-type ProfileField = 'display_name' | 'avatar_url'
+type ProfileField = 'display_name' | 'avatar_url' | 'bio' | 'pronouns'
 const savingField = ref<ProfileField | ''>('')
 const fieldErrors = ref<Partial<Record<ProfileField, string>>>({})
 
@@ -137,6 +170,8 @@ async function saveProfileField(field: ProfileField, value: string) {
     displayName.value = profile.display_name
     avatarUrl.value = profile.avatar_url ?? ''
     handle.value = profile.handle
+    bio.value = profile.bio ?? ''
+    pronouns.value = profile.pronouns ?? ''
   } catch (e) {
     fieldErrors.value = {
       ...fieldErrors.value,
@@ -144,6 +179,36 @@ async function saveProfileField(field: ProfileField, value: string) {
     }
   } finally {
     savingField.value = ''
+  }
+}
+
+// favorite_genres saves as one explicit action (not per-field like the
+// text fields above) since it's a multi-select list, not a single value —
+// same "toggle checkboxes, then press Save" shape the recovery-guardians
+// picker below already uses.
+function onToggleGenre(genre: Genre) {
+  const next = new Set(selectedGenres.value)
+  if (next.has(genre)) {
+    next.delete(genre)
+  } else if (next.size < MAX_FAVORITE_GENRES) {
+    next.add(genre)
+  }
+  selectedGenres.value = next
+}
+
+async function onSaveGenres() {
+  if (!session.token) return
+  genresError.value = ''
+  savingGenres.value = true
+  try {
+    const profile = await api.updateProfile(session.token, {
+      favorite_genres: [...selectedGenres.value],
+    })
+    selectedGenres.value = new Set(profile.favorite_genres)
+  } catch (e) {
+    genresError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingGenres.value = false
   }
 }
 
@@ -658,6 +723,50 @@ async function onCancelGuardianRequest(requestId: string) {
               :error="fieldErrors.avatar_url"
               @save="saveProfileField('avatar_url', $event)"
             />
+            <AvalonEditableField
+              label="Bio"
+              :value="bio"
+              empty-text="No bio"
+              placeholder="Say something about yourself…"
+              :saving="savingField === 'bio'"
+              :error="fieldErrors.bio"
+              @save="saveProfileField('bio', $event)"
+            />
+            <AvalonEditableField
+              label="Pronouns"
+              :value="pronouns"
+              empty-text="No pronouns set"
+              placeholder="they/them"
+              :saving="savingField === 'pronouns'"
+              :error="fieldErrors.pronouns"
+              @save="saveProfileField('pronouns', $event)"
+            />
+          </div>
+
+          <div :class="styles.stack">
+            <h3 :class="styles.subheading">Favorite genres</h3>
+            <p :class="styles.listDetail">Pick up to {{ MAX_FAVORITE_GENRES }}.</p>
+            <p v-if="genresError" :class="page.error">{{ genresError }}</p>
+            <ul :class="styles.list">
+              <li v-for="genre in GENRE_OPTIONS" :key="genre.value" :class="styles.guardianRow">
+                <input
+                  type="checkbox"
+                  :id="`genre-${genre.value}`"
+                  :checked="selectedGenres.has(genre.value)"
+                  :disabled="!selectedGenres.has(genre.value) && selectedGenres.size >= MAX_FAVORITE_GENRES"
+                  @change="onToggleGenre(genre.value)"
+                />
+                <label :for="`genre-${genre.value}`">{{ genre.label }}</label>
+              </li>
+            </ul>
+            <div :class="styles.actions">
+              <AvalonButton
+                :label="savingGenres ? 'Saving…' : 'Save favorite genres'"
+                variant="primary"
+                :disabled="savingGenres"
+                @click="onSaveGenres"
+              />
+            </div>
           </div>
         </AvalonCard>
 
