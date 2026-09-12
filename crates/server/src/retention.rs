@@ -29,13 +29,14 @@ pub async fn run_worker(chain: PostgresSettlementProvider, config: RetentionConf
     loop {
         match prune_once(&chain, &config).await {
             Ok(Some(report)) if report.pruned_count > 0 => {
-                println!(
-                    "retention worker: pruned {} entries' payloads (cutoff: {})",
-                    report.pruned_count, report.cutoff
+                tracing::info!(
+                    pruned_count = report.pruned_count,
+                    cutoff = %report.cutoff,
+                    "retention worker: pruned entries' payloads"
                 );
             }
             Ok(_) => {}
-            Err(err) => eprintln!("retention worker: {err}"),
+            Err(err) => tracing::error!("retention worker: {err}"),
         }
         tokio::time::sleep(PRUNE_INTERVAL).await;
     }

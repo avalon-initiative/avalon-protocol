@@ -33,6 +33,7 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use state::AppState;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 
 /// The Hub (and any other browser client) is a different origin than
 /// `avalon-server` by construction (issue #77 — Hub is a client, never
@@ -411,5 +412,11 @@ pub fn router(state: AppState) -> Router {
         // route in this block, unlike everything else above it.
         .route("/ledger/submit", post(settlement::submit_ledger_batch))
         .with_state(state)
+        // Issue #265: every HTTP request gets a tracing span
+        // (method/path/status/latency), and any `tracing::info!`/`error!`
+        // call made while handling it is automatically correlated to that
+        // span — this is what makes request-scoped log correlation work
+        // without hand-threading a request id through every handler.
+        .layer(TraceLayer::new_for_http())
         .layer(cors_layer_from_env())
 }

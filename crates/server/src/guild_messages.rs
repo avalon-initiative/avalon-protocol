@@ -409,10 +409,13 @@ pub async fn run_archive_expiry_worker(state: AppState) {
     loop {
         match expire_archive(&state).await {
             Ok(count) if count > 0 => {
-                println!("guild message archive: hard-deleted {count} rows past retention window");
+                tracing::info!(
+                    count,
+                    "guild message archive: hard-deleted rows past retention window"
+                );
             }
             Ok(_) => {}
-            Err(err) => eprintln!("guild message archive expiry worker: {err}"),
+            Err(err) => tracing::error!("guild message archive expiry worker: {err}"),
         }
         tokio::time::sleep(ARCHIVE_EXPIRY_INTERVAL).await;
     }

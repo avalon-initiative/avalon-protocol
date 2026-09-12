@@ -143,7 +143,7 @@ pub async fn run_worker(
     let verify_key = match sth::load_verify_key_from_env() {
         Ok(key) => key,
         Err(err) => {
-            eprintln!(
+            tracing::error!(
                 "mirror-watcher: cannot start, failed to load AVALON_SETTLEMENT_VERIFY_KEY: {err}"
             );
             return;
@@ -151,7 +151,7 @@ pub async fn run_worker(
     };
     let client = reqwest::Client::new();
 
-    println!(
+    tracing::info!(
         "mirror-watcher: watching {} peer(s) every {:?}: {}",
         config.peers.len(),
         config.poll_interval,
@@ -175,7 +175,7 @@ pub async fn run_worker(
                             if is_new {
                                 if let Err(err) = check_equivocation(&pool, &chain, &observed).await
                                 {
-                                    eprintln!("mirror-watcher: {peer}: {err}");
+                                    tracing::error!("mirror-watcher: {peer}: {err}");
                                 }
                             }
                             verified_by_network
@@ -183,10 +183,10 @@ pub async fn run_worker(
                                 .or_default()
                                 .push((peer.clone(), sth));
                         }
-                        Err(err) => eprintln!("mirror-watcher: {peer}: {err}"),
+                        Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
                     }
                 }
-                Err(err) => eprintln!("mirror-watcher: {peer}: {err}"),
+                Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
             }
         }
 
@@ -197,7 +197,7 @@ pub async fn run_worker(
             if let Err(err) =
                 backfill_network(&client, &pool, &indexer, network_id, observations).await
             {
-                eprintln!("mirror-watcher: {network_id}: {err}");
+                tracing::error!("mirror-watcher: {network_id}: {err}");
             }
         }
 
@@ -282,7 +282,7 @@ async fn fetch_and_verify_sth(
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
     let sth = fetch_latest_sth(client, peer).await?;
     if !sth::verify_tree_head(verify_key, &sth) {
-        eprintln!(
+        tracing::error!(
             "mirror-watcher: {peer}: STH signature verification FAILED for tree_size={} — not storing, not trusting",
             sth.tree_size
         );
@@ -372,7 +372,7 @@ async fn backfill_network(
 ) -> Result<(), MirrorWatcherError> {
     let equivocations = mirror::unresolved_equivocations(pool, network_id).await?;
     if !equivocations.is_empty() {
-        eprintln!(
+        tracing::error!(
             "mirror-watcher: {network_id}: refusing to backfill — {} unresolved equivocation finding(s) recorded for this network; this needs human investigation before further backfill can be trusted",
             equivocations.len()
         );
@@ -392,7 +392,7 @@ async fn backfill_network(
         return Ok(());
     };
     if agreeing_peers.len() > 1 {
-        println!(
+        tracing::info!(
             "mirror-watcher: {network_id}: tree_size={target_tree_size} corroborated by {} of {} polled peer(s)",
             agreeing_peers.len(),
             observations.len()
@@ -474,7 +474,7 @@ async fn backfill(
         {
             Ok(result) => result,
             Err(MirrorWatcherError::AllPeersFailed) => {
-                eprintln!(
+                tracing::error!(
                         "mirror-watcher: {}: every candidate peer failed to serve entries since_seq={} — retrying next tick",
                         sth.network_id, progress.last_seq
                     );
@@ -516,7 +516,7 @@ async fn backfill(
             {
                 Ok(dto) => dto,
                 Err(MirrorWatcherError::AllPeersFailed) => {
-                    eprintln!(
+                    tracing::error!(
                         "mirror-watcher: {}: every candidate peer failed to serve an inclusion proof for seq={} — retrying next tick",
                         sth.network_id, entry.seq
                     );
@@ -526,14 +526,14 @@ async fn backfill(
             };
 
             if proof_dto.root_hash != sth.root_hash {
-                eprintln!(
+                tracing::error!(
                     "mirror-watcher: {}: inclusion-proof root_hash for seq={} did not match the already-verified/corroborated STH root_hash at tree_size={} — aborting backfill this tick",
                     sth.network_id, entry.seq, sth.tree_size
                 );
                 return Err(MirrorWatcherError::RootHashMismatch);
             }
             if proof_dto.leaf_hash != entry.entry_hash {
-                eprintln!(
+                tracing::error!(
                     "mirror-watcher: {} (via {used_peer}): inclusion-proof leaf_hash for seq={} did not match the entry content fetched from GET /ledger/entries — aborting backfill this tick",
                     sth.network_id, entry.seq
                 );
@@ -556,7 +556,7 @@ async fn backfill(
                 &root,
             );
             if !verified {
-                eprintln!(
+                tracing::error!(
                     "mirror-watcher: {}: inclusion proof did NOT verify for seq={} (leaf_index={leaf_index}) against tree_size={} — refusing to accept, aborting backfill this tick",
                     sth.network_id, entry.seq, sth.tree_size
                 );
@@ -620,14 +620,14 @@ async fn backfill(
                             .rollback()
                             .await
                             .map_err(|e| avalon_chain::SettlementError::Storage(e.to_string()))?;
-                        eprintln!(
+                        tracing::error!(
                             "mirror-watcher: {}: seq={} verified and mirrored, but the local indexer projection failed ({err}) — likely a core row this replay-only node never independently created; entry is stored, indexer state for it is incomplete",
                             sth.network_id, mirrored_entry.seq
                         );
                     }
                 }
             } else {
-                eprintln!(
+                tracing::error!(
                     "mirror-watcher: {}: seq={} could not be decoded into a ProtocolEvent (pruned payload or malformed issuer/subject) — mirrored, but not applied to the local indexer",
                     sth.network_id, mirrored_entry.seq
                 );
@@ -737,7 +737,7 @@ async fn fetch_entries_from_any(
                 return Ok((entries, peer.clone()));
             }
             Err(err) => {
-                eprintln!("mirror-watcher: {peer}: GET /ledger/entries failed, trying next candidate peer: {err}");
+                tracing::error!("mirror-watcher: {peer}: GET /ledger/entries failed, trying next candidate peer: {err}");
             }
         }
     }
@@ -762,7 +762,7 @@ async fn fetch_inclusion_proof_from_any(
                 return Ok(dto);
             }
             Err(err) => {
-                eprintln!("mirror-watcher: {peer}: GET /ledger/proof/inclusion failed, trying next candidate peer: {err}");
+                tracing::error!("mirror-watcher: {peer}: GET /ledger/proof/inclusion failed, trying next candidate peer: {err}");
             }
         }
     }
