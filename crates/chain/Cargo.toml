@@ -18,8 +18,8 @@ sqlx.workspace = true
 sha2 = "0.11"
 hex.workspace = true
 ed25519-dalek.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 dotenvy.workspace = true
-tokio.workspace = true
 rand.workspace = true
