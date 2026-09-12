@@ -371,10 +371,20 @@ is visibly marked.
   rather than both becoming illegibly narrow. Everything else in this pass
   (`AvalonChannelList`, `AvalonChatMessage`, `AvalonChatComposer`,
   `AvalonEventCard`, `AvalonRsvpControl`, `AvalonRsvpRosterPanel`,
-  `AvalonMetricTile`) already held up, same as the first pass. Still
-  unaudited: `AvalonAchievementCard` (deliberately skipped — concurrent
-  work on its icons) and anything not reachable from the mock's named
-  screens.
+  `AvalonMetricTile`) already held up, same as the first pass.
+
+  A third pass closed out the rest of the library:
+  `AvalonCapabilityConsentRow`, `AvalonCalendarMonth`, `AvalonSuggestionRow`,
+  `AvalonUserChip`, `AvalonRoleBadge`, `AvalonModal` (already fine, no
+  change), and `AvalonDateTimeField` — which had one more real bug of its
+  own kind: its date/time picker `.popover` was a fixed `26rem` (416px),
+  `position: absolute`, with no ceiling, so on any viewport narrower than
+  that (plus the field's own left offset) it ran off the edge of the
+  screen with no way to reach the rest of it. Capped it with `max-width:
+  calc(100vw - 2 * var(--av-space-4))` so it shrinks to fit instead.
+  That's every `packages/ui` component now audited except
+  `AvalonAchievementCard` (deliberately skipped — concurrent work on its
+  icons, #332).
 - The server surface the Hub calls today: `POST /identities/register/start`
   + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me`,
   `GET /friends`, `GET|POST /friends/requests`,
