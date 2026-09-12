@@ -119,19 +119,26 @@ async fn a_game_with_no_activity_returns_zeros_for_every_labeled_metric() {
             metric["definition"].as_str().is_some_and(|s| !s.is_empty()),
             "{field} must carry a non-empty definition"
         );
+        // Issue #96: zero is never coarsened — "nobody" identifies no one,
+        // so a game with no activity yet still reads as an exact 0, not a
+        // withheld/"fewer than" value.
+        assert_eq!(metric["exact"], true, "{field} should be exact at zero");
     }
 }
 
 /// One identity binds to the game (`POST /games/{slug}/connect`, a real
 /// `game.binding_established` event through the real indexer path) and two
 /// attestations are seeded directly into `indexer_attestations` (one
-/// later revoked) for a second identity. `players`/`total_players_ever`
-/// both read 1 (one bound identity); `achievements_issued` reads 2,
-/// `achievements_revoked` reads 1, `unique_achievement_holders` reads 1
-/// (the revoked attestation's subject holds nothing valid).
+/// later revoked) for a second identity — every resulting cohort here
+/// (1 player, 2 issued, 1 revoked, 1 unique holder) sits below the
+/// server's default minimum-cohort floor (issue #96,
+/// `avalon_indexer::registry::DEFAULT_MIN_COHORT` = 5 unless
+/// `AVALON_REGISTRY_MIN_COHORT` overrides it), so every metric here comes
+/// back coarsened to the floor itself with `exact: false` — never the real
+/// sub-floor count.
 #[tokio::test]
 #[ignore]
-async fn a_game_with_binding_and_attestation_activity_returns_correct_counts() {
+async fn a_game_with_activity_below_the_floor_reports_coarsened_not_exact_counts() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
@@ -189,9 +196,62 @@ async fn a_game_with_binding_and_attestation_activity_returns_correct_counts() {
         .await
         .unwrap();
 
-    assert_eq!(body["players"]["value"], 1);
-    assert_eq!(body["total_players_ever"]["value"], 1);
-    assert_eq!(body["achievements_issued"]["value"], 2);
-    assert_eq!(body["achievements_revoked"]["value"], 1);
-    assert_eq!(body["unique_achievement_holders"]["value"], 1);
+    for field in [
+        "players",
+        "total_players_ever",
+        "achievements_issued",
+        "achievements_revoked",
+        "unique_achievement_holders",
+    ] {
+        let metric = &body[field];
+        assert_eq!(
+            metric["exact"], false,
+            "{field} should be coarsened, not exact"
+        );
+        assert!(
+            metric["value"].as_i64().unwrap() > 0,
+            "{field}'s coarsened value should still be a positive floor, not 0"
+        );
+    }
+}
+
+/// Five distinct identities bind to the game — a cohort exactly at the
+/// server's default minimum-cohort floor (issue #96,
+/// `avalon_indexer::registry::DEFAULT_MIN_COHORT` = 5) — so `players`/
+/// `total_players_ever` come back as the real, exact count rather than
+/// coarsened. Proves the floor is a lower bound on what's ever withheld,
+/// not a blanket rounding applied to every metric regardless of size.
+#[tokio::test]
+#[ignore]
+async fn a_game_with_activity_at_the_floor_reports_exact_counts() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (slug, _) = register_unique_game(&http, &base).await;
+
+    for _ in 0..5 {
+        let (_, token) = seed_identity_session(&pool).await;
+        let connect = http
+            .post(format!("{base}/games/{slug}/connect"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "capabilities": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert!(connect.status().is_success(), "{:?}", connect.status());
+    }
+
+    let body: serde_json::Value = http
+        .get(format!("{base}/games/{slug}/registry"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["players"]["value"], 5);
+    assert_eq!(body["players"]["exact"], true);
+    assert_eq!(body["total_players_ever"]["value"], 5);
+    assert_eq!(body["total_players_ever"]["exact"], true);
 }

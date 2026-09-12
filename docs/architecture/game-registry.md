@@ -151,6 +151,16 @@ The registry publishes aggregates ("2,481,392 unique players"), never
 per-identity lists. Which identities are bound to a game is visible only under
 the [visibility](./privacy.md) rules that apply to those identities.
 
+**A minimum cohort size (#96).** An aggregate that's small enough stops
+being anonymous — `unique_achievement_holders: 1` on an obscure
+achievement identifies one specific real person as surely as a name
+would, even though no name ever appears in the response. Every metric
+below a configurable floor (`AVALON_REGISTRY_MIN_COHORT`, default 5) is
+coarsened to the floor itself, marked `exact: false`, rather than
+returned as the real sub-floor count — see [privacy.md](./privacy.md)
+and [Today in the repo](#today-in-the-repo) below for where this is
+enforced.
+
 ## Today in the repo
 
 - `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
@@ -181,6 +191,18 @@ the [visibility](./privacy.md) rules that apply to those identities.
   accidentally skipped by flattening metrics alongside plain registration
   fields. Fixture-based unit tests per metric (no live Postgres) live
   alongside each projection module.
+- **Minimum cohort size (#96)**: `crates/indexer/src/registry.rs`'s
+  `coarsen` is the single enforcement point every metric in
+  `compute_for_game` passes through before `Metric`/`MetricResponse` ever
+  leave the process — a raw count at or above `min_cohort()`
+  (`AVALON_REGISTRY_MIN_COHORT` env var, default `DEFAULT_MIN_COHORT` = 5)
+  ships exactly with `exact: true`; a nonzero count below it is replaced
+  with the floor itself and `exact: false`. `0` is never coarsened. There
+  is exactly one caller today (`GET /games/{slug}/registry`, no filter
+  params), so no live filter-chain-narrows-a-cohort path exists yet to
+  exploit — `coarsen` checks the final computed count regardless of how it
+  was produced, so a future filtered query composes into the same
+  enforcement point rather than needing its own.
 - **`GET /integrations` — the Hub game directory's list endpoint (#270,
   canonical path per #293)**: public, unauthenticated, cursor-paginated the
   same way `GET /guilds/discover` already is (#154) —
