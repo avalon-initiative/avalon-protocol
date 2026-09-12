@@ -135,12 +135,27 @@ is visibly marked.
   either), and `PUT /games/{slug}/recognition`-backed recognition display
   (trust-model.md's own tracked gap — this view shows authenticity/validity
   only, per ADR #76).
-- `Home.vue` — the landing page after login: welcome header, Quick Actions
-  (add a friend, set up this device, edit profile), Friends Online, and the
-  six most recent entries from `GET /me/history` with a "View all" link to
-  `/activity`. Friends + live presence loading is shared with `Friends.vue`
-  through `apps/hub/src/composables/useFriendsPresence.ts`. Game/guild/
-  message cards arrive with those features.
+- `Home.vue` (#148, all six mock sections landed for #312) — the landing page
+  after login: welcome header, "Recently Connected" (the most recently
+  connected app/game — `GameBindingResponse` has no last-played/session data,
+  so that's the only honest ordering available, not a curated pick), "Your
+  Apps & Games" (a name/icon grid of every connected binding), Quick Actions
+  (add a friend, set up this device, edit profile), Friends Online, Guilds (a
+  compact panel of the caller's guilds with member counts), Latest Messages
+  (each guild's most recent message from its first non-archived channel —
+  not a full cross-channel merge, which `Guild.vue`'s own channel list
+  already covers), and the six most recent entries from `GET /me/history`
+  with a "View all" link to `/activity`. All four of the newer sections
+  reuse `apps/hub/src/api/games.ts`/`guilds.ts`/`guildChat.ts` as they
+  already existed for `GameDirectory.vue`/`Guilds.vue`/guild chat — no new
+  endpoints. Every section has its own empty state with a next action
+  (Explore Games / Find a Guild / Find friends), and
+  `summarizeActivityEntry` covers all twelve `guild.*` event kinds the
+  server emits so Recent Activity doesn't fall back to a raw event-kind
+  string for guild events. Friends + live presence loading is shared with
+  `Friends.vue` through `apps/hub/src/composables/useFriendsPresence.ts`;
+  Latest Messages' per-guild lookup lives in
+  `apps/hub/src/composables/useLatestGuildMessages.ts`.
 - **Read-only until Edit.** Nothing on a logged-in page is an open input by
   default: a value renders as a styled read-only display
   (`AvalonEditableField`) and only becomes editable when the user
