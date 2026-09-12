@@ -38,14 +38,14 @@ pub fn empty_root() -> [u8; 32] {
     Sha256::digest([]).into()
 }
 
-fn leaf_hash(data: &[u8]) -> [u8; 32] {
+pub(crate) fn leaf_hash(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update([LEAF_HASH_PREFIX]);
     hasher.update(data);
     hasher.finalize().into()
 }
 
-fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update([NODE_HASH_PREFIX]);
     hasher.update(left);
@@ -56,7 +56,7 @@ fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
 /// The largest power of two strictly less than `n` (`n` must be >= 2) —
 /// RFC 6962's left/right split point for an interior node covering `n`
 /// leaves (§2.1: "k is the largest power of two smaller than n").
-fn split_point(n: usize) -> usize {
+pub(crate) fn split_point(n: usize) -> usize {
     debug_assert!(n >= 2, "split_point is only defined for n >= 2");
     1usize << (usize::BITS - 1 - (n - 1).leading_zeros())
 }

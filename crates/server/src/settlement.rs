@@ -143,21 +143,25 @@ pub async fn consistency_proof(
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
-    let leaves = state.chain.entry_hashes_up_to(second).await?;
     let second_usize = second as usize;
     let first_usize = first as usize;
 
     let first_root = if first == 0 {
         merkle::empty_root()
     } else {
-        merkle::mth_of_hex_hashes(&leaves[..first_usize])
-            .map_err(avalon_chain::SettlementError::Storage)?
+        state
+            .chain
+            .root_at(first)
+            .await?
+            .ok_or(AppError::LedgerRangeNotCommitted)?
     };
-    let second_root =
-        merkle::mth_of_hex_hashes(&leaves).map_err(avalon_chain::SettlementError::Storage)?;
+    let second_root = state
+        .chain
+        .root_at(second)
+        .await?
+        .ok_or(AppError::LedgerRangeNotCommitted)?;
 
-    let proof = merkle::consistency_proof_of_hex_hashes(first_usize, &leaves)
-        .map_err(avalon_chain::SettlementError::Storage)?;
+    let proof = state.chain.consistency_proof(first, second).await?;
 
     // Never return a proof that doesn't actually check out (this module's
     // own headline invariant) — re-verify with the standalone RFC 6962
@@ -236,18 +240,18 @@ pub async fn inclusion_proof(
         // above, not a fabricated/truncated proof.
         return Err(AppError::InvalidProofQuery);
     }
-    let leaf_index = leaf_index as usize;
     let tree_size_usize = tree_size as usize;
 
-    let leaves = state.chain.entry_hashes_up_to(tree_size).await?;
-    let leaf_hash_hex = leaves[leaf_index].clone();
+    let (leaf_hash_hex, proof) = state.chain.inclusion_proof(leaf_index, tree_size).await?;
     let leaf_bytes = hex::decode(&leaf_hash_hex)
         .map_err(|e: hex::FromHexError| avalon_chain::SettlementError::Storage(e.to_string()))?;
+    let leaf_index = leaf_index as usize;
 
-    let root =
-        merkle::mth_of_hex_hashes(&leaves).map_err(avalon_chain::SettlementError::Storage)?;
-    let proof = merkle::inclusion_proof_of_hex_hashes(leaf_index, &leaves)
-        .map_err(avalon_chain::SettlementError::Storage)?;
+    let root = state
+        .chain
+        .root_at(tree_size)
+        .await?
+        .ok_or(AppError::LedgerRangeNotCommitted)?;
 
     // Same self-verification invariant as `consistency_proof` above.
     if !merkle::verify_inclusion_proof(&leaf_bytes, leaf_index, tree_size_usize, &proof, &root) {
