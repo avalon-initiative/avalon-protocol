@@ -79,6 +79,15 @@ exactly why what goes *into* it is limited to promised-durable facts and never
 includes presence, credentials, or anything an identity did not choose to make
 durable.
 
+An aggregate small enough stops being anonymous — a count of 1 identifies a
+specific person as surely as a name would (issue #96). Every registry metric
+below a configurable minimum cohort size (`AVALON_REGISTRY_MIN_COHORT`,
+default 5) is coarsened to the floor itself and marked inexact rather than
+returned as the real sub-floor count; zero is never coarsened, since
+"nobody" identifies no one. Enforced once, centrally, in
+`avalon_indexer::registry` — see
+[game-registry.md](./game-registry.md#privacy).
+
 ## Today in the repo
 
 - `crates/protocol/src/permissions.rs` — `Capability` and `PermissionGrant`

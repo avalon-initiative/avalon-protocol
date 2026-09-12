@@ -24,6 +24,13 @@
 //! means nothing happened yet" posture the rest of this crate's read
 //! endpoints use (`AppError::GameNotFound` is still returned for a slug
 //! that doesn't exist at all, same as `games::get_game`).
+//!
+//! **Minimum cohort size (issue #96).** A raw count under
+//! `avalon_indexer::registry`'s configured floor is coarsened to the floor
+//! itself with `exact: false` before it ever reaches this handler — see
+//! that module's own doc comment for the enforcement point. This handler
+//! only ever forwards `Metric`'s already-coarsened fields; it never sees
+//! or could accidentally leak the real sub-floor count.
 
 use avalon_indexer::registry::{compute_for_game, Metric};
 use axum::extract::{Path, State};
@@ -39,6 +46,12 @@ pub struct MetricResponse {
     pub value: i64,
     pub definition: &'static str,
     pub class: &'static str,
+    /// Issue #96's minimum-cohort-size floor: `false` means `value` is the
+    /// configured floor, not the real count — the real count is only known
+    /// to be somewhere in `1..value`. A caller must render this as "fewer
+    /// than `value`", never as an exact number, whenever `exact` is
+    /// `false`.
+    pub exact: bool,
 }
 
 impl From<Metric> for MetricResponse {
@@ -47,6 +60,7 @@ impl From<Metric> for MetricResponse {
             value: metric.value,
             definition: metric.definition,
             class: metric.class,
+            exact: metric.exact,
         }
     }
 }
