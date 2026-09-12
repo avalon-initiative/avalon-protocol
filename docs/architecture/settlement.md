@@ -173,11 +173,11 @@ Postgres as the backend:
   *if* Avalon ever runs more than one independent settlement operator —
   not needed, and not built, while there's only one.
 - **Storage stays exactly what ADR #186 already decided**: Merkle proofs
-  computed on demand from `ledger_entries.entry_hash`, ordered by `seq`, in
-  Postgres — no embedded engine, no per-node full copy. An incremental
-  frontier/proof-cache table is a valid future optimization if proof
-  computation cost ever matters at scale; it doesn't change this decision's
-  wire format and isn't required to close it.
+  computed from `ledger_entries.entry_hash`, ordered by `seq` — no embedded
+  engine, no per-node full copy in Postgres. #349 added an in-memory
+  incremental tree (see "Today in the repo") so that computation is O(log n)
+  instead of from-scratch every call; it doesn't change this decision's wire
+  format.
 
 Implementation tracked as
 [#210](https://github.com/LunarVagabond/avalon-protocol/issues/210)
@@ -224,25 +224,35 @@ implemented, see "Today in the repo" below.
   verification needs only `AVALON_SETTLEMENT_VERIFY_KEY` (see
   `.env.example`). `Commitment.proof` now carries this Merkle root rather
   than the old chain-tip value.
-- **Leaf-hash caching mitigation, not a full fix.** `commit` originally
-  re-fetched every `entry_hash` in the ledger on every single write, and
-  `entry_hashes_up_to` (the read side `GET /ledger/proof/inclusion` calls)
-  did the same on every single proof request — both O(n) in total ledger
-  size per call, so total cost over the ledger's life was O(n^2). Found via
-  a live `make test-live` run against a dev ledger that had grown to
-  ~6,000 entries: writes were visibly slowing down, and a full mirror
-  backfill (one proof request per entry) was taking minutes instead of
-  seconds. `PostgresSettlementProvider::leaf_cache` (an in-memory,
-  monotonically-growing cache of the committed leaf-hash prefix, safe
-  because `ledger_entries` is genuinely append-only) now lets both paths
-  reuse already-known hashes instead of re-fetching, with a correctness
-  fallback to the original full re-fetch whenever the cache can't be
-  trusted (e.g. right after process start). This does **not** fix the
-  underlying complexity of proof/root generation itself — `crate::merkle`
-  still recomputes the whole RFC 6962 tree from raw leaves on every call,
-  O(n) CPU per proof, not O(log n) — a real incremental/persisted Merkle
-  tree (Trillian-style) is tracked as its own carefully-scoped follow-up:
-  [#349](https://github.com/LunarVagabond/avalon-protocol/issues/349).
+- **Incremental Merkle tree, O(log n) commit and proof-serving (#349).**
+  `commit` and `entry_hashes_up_to` used to re-fetch every `entry_hash` on
+  every call (fixed by `leaf_cache`, an earlier same-night mitigation), but
+  `crate::merkle`'s `mth`/`path` still recomputed the whole RFC 6962 tree
+  from raw leaves every time — O(n) CPU per proof, O(n^2) total over the
+  ledger's life. Found via a live `make test-live` run against a ~6,000-entry
+  dev ledger: a full mirror backfill (one proof request per entry) took
+  minutes. `crate::incremental_merkle::IncrementalMerkleTree` replaces that
+  from-scratch recomputation with the standard Certificate-Transparency
+  "compact range" construction: every completed perfect-subtree hash is
+  kept, keyed by `(level, index)`; appending a leaf updates O(log n) of
+  them, and any root or proof up to a previously-committed `tree_size` is
+  reconstructed by combining O(log n) already-known node hashes rather than
+  rehashing every leaf. Every root/proof this produces is required to be
+  byte-identical to `crate::merkle`'s from-scratch output — enforced by an
+  exhaustive equivalence test sweeping every tree size and index.
+  `PostgresSettlementProvider::leaf_cache` now holds this tree alongside
+  the leaf-hash prefix (`commit`, `root_at`, `inclusion_proof`,
+  `consistency_proof` all read/extend it together), preserving the same
+  sole-writer-assumed, correctness-first fallback posture as before: any
+  time the cache can't be proven caught up, it's rebuilt from a full
+  Postgres re-fetch rather than trusting a possibly-stale tree.
+  **Design call: rebuilt in memory, not persisted in Postgres.** The tree
+  is a derived cache over `ledger_entries.entry_hash` (already durable),
+  not new authoritative state, so a process restart just pays one O(n)
+  rebuild rather than risking a second persisted structure drifting from
+  the truth — a real cost at very large ledger sizes, and a valid future
+  optimization (a persisted `(level, index) -> hash` node table, avoiding
+  replay entirely) if startup latency ever becomes the bottleneck instead.
 - `get_commitment` reads `ledger_batches` by `batch_id`. `verify` runs two
   independent checks, both must pass: it still replays the sequential hash
   chain across a batch's own entries' stored content (unchanged from #38 in
@@ -514,3 +524,5 @@ implemented, see "Today in the repo" below.
   publish and pin trusted network identities (the settlement operator's key
   pinned to `network_id`, enforced client-side) — see
   [`network-trust-anchors.md`](./network-trust-anchors.md)
+- [#349](https://github.com/LunarVagabond/avalon-protocol/issues/349) —
+  incremental Merkle tree, O(log n) commit and proof-serving — implemented

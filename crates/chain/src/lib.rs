@@ -37,6 +37,7 @@
 //! game integration.
 
 pub mod attestations;
+pub mod incremental_merkle;
 pub mod merkle;
 pub mod mirror;
 mod postgres;
