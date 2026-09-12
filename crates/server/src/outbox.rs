@@ -129,7 +129,7 @@ pub async fn run_worker(
 ) {
     loop {
         if let Err(err) = drain_once(&pool, &chain, remote.as_ref()).await {
-            eprintln!("outbox worker: {err}");
+            tracing::error!("outbox worker: {err}");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -165,7 +165,7 @@ async fn drain_once(
             // starving every legitimate row behind it once there are more
             // than DRAIN_BATCH_SIZE pending. Losing one malformed event this
             // way is a far smaller failure than wedging the whole queue.
-            eprintln!("outbox worker: dropping unparseable row {id}");
+            tracing::error!(%id, "outbox worker: dropping unparseable row");
             sqlx::query("UPDATE protocol_outbox SET committed_at = now() WHERE id = $1")
                 .bind(id)
                 .execute(pool)
@@ -215,7 +215,7 @@ async fn drain_once(
             }
         }
         Err(err) => {
-            eprintln!("outbox worker: chain.commit failed, batch left pending: {err}");
+            tracing::error!("outbox worker: chain.commit failed, batch left pending: {err}");
         }
     }
 

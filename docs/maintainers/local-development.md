@@ -171,3 +171,19 @@ Everything `make start` produces lives under `_running/` at the repo root
 `_running/logs/avalon-server.log`. `make clean` removes it along with Rust
 build artifacts; `make clean-all` also removes `node_modules`, JS build
 output, and the C# `bin`/`obj` directories.
+
+`avalon-server` logs via `tracing` (issue #265) — every line in
+`_running/logs/avalon-server.log` (or stdout/stderr if you run the binary
+directly) goes through it, including each HTTP request's own
+method/path/status/latency span. Two env vars control it, both read at
+startup (no rebuild needed to change either):
+
+- `RUST_LOG` — standard `tracing-subscriber` env-filter syntax, e.g.
+  `RUST_LOG=debug` or `RUST_LOG=avalon_server=debug,tower_http=info` to
+  raise this crate's own verbosity without drowning in dependency noise.
+  Defaults to `info` for `avalon_server` and `info` for `tower_http`'s
+  request spans if unset.
+- `AVALON_LOG_FORMAT=json` — switches from the default human-readable
+  (colored, dev-friendly) format to one JSON object per line, the shape a
+  log aggregator (Grafana/Loki, etc.) expects. Leave unset for local
+  development; set it in any deployment that ships logs somewhere.

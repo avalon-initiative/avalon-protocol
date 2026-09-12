@@ -124,6 +124,13 @@ on the public network" — that's a real gap, not a hidden feature; see
   generating a fresh `AVALON_SETTLEMENT_SIGNING_KEY`/`AVALON_NETWORK_ID`
   into `.env` on first run rather than requiring either to be hand-set
   first. See [`../maintainers/hosting-quickstart.md`](../maintainers/hosting-quickstart.md).
+- Structured logging (issue #265): `avalon-server` logs via `tracing`, with
+  an HTTP request span (method/path/status/latency) per request via
+  `tower-http`'s `TraceLayer`. `RUST_LOG` (standard env-filter syntax)
+  controls level without a rebuild; `AVALON_LOG_FORMAT=json` switches from
+  the human-readable dev format to one JSON object per line, the shape a
+  self-hoster's log aggregator (Grafana/Loki, etc.) expects. See
+  [`../maintainers/local-development.md`](../maintainers/local-development.md#logs-and-run-state).
 
 ## Decisions and tickets
 
