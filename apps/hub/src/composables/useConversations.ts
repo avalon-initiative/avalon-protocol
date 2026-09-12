@@ -44,7 +44,13 @@ export function useConversations() {
     if (!session.token) return
     try {
       if (!selfId.value) {
-        selfId.value = (await api.getMe(session.token)).identity_id
+        const me = await api.getMe(session.token)
+        selfId.value = me.identity_id
+        // Own messages never go through resolveParticipantNames (it only
+        // ever resolves *other* participants), so seed this directly —
+        // otherwise the caller's own name never appears in their own
+        // conversations, only the other side's.
+        participantNames.value = { ...participantNames.value, [me.identity_id]: me.handle }
       }
       conversations.value = await api.listConversations(session.token)
       await resolveParticipantNames(conversations.value)
