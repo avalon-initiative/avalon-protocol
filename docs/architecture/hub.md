@@ -308,6 +308,29 @@ is visibly marked.
   working Storybook config of its own yet — components are tested from
   `apps/hub/src/ui-components.test.ts`, which already has a working vitest
   setup and consumes them the same way the app does.
+- **Responsive is CSS-only, in the component's own files — never a
+  mobile-only fork** (#61's invariant, generalized library-wide by #310).
+  `HubShell.vue` already collapses sidebar → `AvalonBottomNav` and hides the
+  header search/footer at `768px` (`apps/hub/src/views/HubShell.module.scss`);
+  `Home.vue`'s grid and `GameProfile.vue`'s metrics grid have their own
+  breakpoints. #310's audit covered every `packages/ui` component the mock's
+  Home/Login/CreateIdentity/Profile/Friends/`NetworkStatus` screens actually
+  use (`AvalonAuthCard`, `AvalonForm`, `AvalonTextField`, `AvalonButton`,
+  `AvalonCard`, `AvalonEditableField`, `AvalonFriendRow`,
+  `AvalonFriendRequestRow`, `AvalonSuggestionRow`, `AvalonAvatar`,
+  `AvalonPresenceBadge`, `AvalonWarningBanner`, `AvalonModal`, `AvalonIcon`):
+  every one already holds up at phone width without a breakpoint of its own,
+  because the library was already built on `flex-wrap`, `min-width: 0` on
+  flex children, `text-overflow: ellipsis` on names/labels, `flex-shrink: 0`
+  on icons, and relative (`rem`/`%`) sizing throughout rather than fixed
+  pixel widths — so no component in that set needed a media query, a new
+  prop/variant, or a compact-viewport story (the design's "only then add an
+  explicit variant" case never triggered). Verified by reading every
+  audited component's `.module.scss`, not by screenshot — this sandbox has
+  no headless browser to render one. `AvalonSidebarNav`/`AvalonBottomNav`
+  themselves are desktop/mobile counterparts by design (`HubShell.vue`
+  swaps between them), not something either needs to also flex into the
+  other's role.
 - The server surface the Hub calls today: `POST /identities/register/start`
   + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me`,
   `GET /friends`, `GET|POST /friends/requests`,
