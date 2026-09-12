@@ -331,6 +331,36 @@ is visibly marked.
   themselves are desktop/mobile counterparts by design (`HubShell.vue`
   swaps between them), not something either needs to also flex into the
   other's role.
+
+  A second #310 pass audited the guild (`AvalonGuildCard`,
+  `AvalonGuildMemberRow`, `AvalonChannelList`, `AvalonChatMessage`,
+  `AvalonChatComposer`), event (`AvalonEventCard`, `AvalonRsvpControl`,
+  `AvalonRsvpRosterPanel`), and game-directory (`AvalonGameCard`,
+  `AvalonMetricTile`, `AvalonFilterBar`, `AvalonConnectionCard`) components
+  the same way, and this time found real gaps, all the same shape: a
+  truncating `.name` (`AvalonGuildCard`, `AvalonGameCard`,
+  `AvalonConnectionCard`) sitting in a `min-width: 0` flex row next to a
+  `flex-shrink: 0` sibling (a status badge, a slug) but missing `min-width:
+  0` on itself — without it a flex item's default `min-width: auto` floors
+  it at its own content width, so `text-overflow: ellipsis` never actually
+  triggers and a long guild/game name pushes the badge/slug out and
+  overflows the card at phone width. Fixed by adding `min-width: 0` to each
+  `.name`. Two more real ones: `AvalonGuildMemberRow`'s row (avatar + name +
+  role badge + presence badge + up to two action buttons) had no
+  `flex-wrap`, so at phone width there's more fixed-size content than fits
+  one line even after the name collapses — now wraps instead of
+  overflowing. `AvalonFilterBar`'s two `flex: 1` fields (search + sort) had
+  no floor, so a narrow container could squeeze a `<select>`/`<input>`
+  below its own usable width before ever triggering the intrinsic-content
+  overflow browsers apply to form controls — now `flex-wrap` on the bar
+  plus `min-width: 8rem` per field lets the sort field wrap to its own line
+  rather than both becoming illegibly narrow. Everything else in this pass
+  (`AvalonChannelList`, `AvalonChatMessage`, `AvalonChatComposer`,
+  `AvalonEventCard`, `AvalonRsvpControl`, `AvalonRsvpRosterPanel`,
+  `AvalonMetricTile`) already held up, same as the first pass. Still
+  unaudited: `AvalonAchievementCard` (deliberately skipped — concurrent
+  work on its icons) and anything not reachable from the mock's named
+  screens.
 - The server surface the Hub calls today: `POST /identities/register/start`
   + `/finish`, `POST /sessions/start` + `/finish`, `GET|PATCH /me`,
   `GET /friends`, `GET|POST /friends/requests`,

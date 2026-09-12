@@ -16,6 +16,7 @@
 }
 
 .name {
+  min-width: 0;
   font-size: var(--av-text-md);
   font-weight: 600;
   overflow: hidden;
