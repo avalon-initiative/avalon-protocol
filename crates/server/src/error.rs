@@ -125,6 +125,8 @@ pub enum AppError {
     ChannelNotFound,
     #[error("channel name must be 1-100 characters")]
     InvalidChannelName,
+    #[error("channel topic must be 200 characters or fewer")]
+    InvalidChannelTopic,
     #[error("guild channel is archived")]
     ChannelArchived,
     #[error("message body must be non-empty and 4000 characters or fewer")]
@@ -366,7 +368,9 @@ impl IntoResponse for AppError {
             // check on a leave/remove/role-change mutation (#21).
             AppError::NotGuildMember => StatusCode::FORBIDDEN,
             AppError::ChannelNotFound | AppError::MessageNotFound => StatusCode::NOT_FOUND,
-            AppError::InvalidChannelName | AppError::MessageTooLong => StatusCode::BAD_REQUEST,
+            AppError::InvalidChannelName
+            | AppError::InvalidChannelTopic
+            | AppError::MessageTooLong => StatusCode::BAD_REQUEST,
             AppError::ChannelArchived => StatusCode::CONFLICT,
             AppError::GuildEventNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidEventTitle

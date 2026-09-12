@@ -203,4 +203,61 @@
    open the panel. */
 .eventCardClickable {
   cursor: pointer;
+  border-radius: var(--av-radius-md);
+  transition:
+    background-color 0.1s ease,
+    border-color 0.1s ease;
+
+  &:hover {
+    background-color: var(--av-color-surface-hover);
+  }
+}
+
+/* Issue #276: MOTD moved out of the Overview tab's About card into a
+   persistent banner above the tab bar, so it actually functions as a
+   message-of-the-day (visible regardless of which tab is active) instead
+   of a buried Overview-tab detail. */
+.motdBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--av-space-2);
+  padding: var(--av-space-3);
+  margin-bottom: var(--av-space-3);
+  background: var(--av-color-surface-hover);
+  border: 1px solid var(--av-color-border);
+  border-radius: var(--av-radius-md);
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text);
+}
+
+.motdBannerLabel {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--av-color-text-secondary);
+}
+
+/* Issue #276: channel topic, shown in the channel header near the
+   retention notice so the header has more substance than just the name. */
+.channelTopic {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+}
+
+.channelSettingsRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+  padding: var(--av-space-2) 0;
+}
+
+.announcementRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--av-space-2);
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text);
+
+  code {
+    font-size: var(--av-text-xs);
+  }
 }

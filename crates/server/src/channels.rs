@@ -54,6 +54,12 @@ use crate::state::AppState;
 
 const CHANNEL_NAME_MAX_CHARS: usize = 100;
 
+/// Cap on `GuildChannel.topic` (issue #276) — short prose, same order of
+/// magnitude as `MAX_ROLE_DESCRIPTION_LEN` in `crate::guilds` rather than
+/// `Guild::motd`'s longer cap, since a channel topic is meant to be a
+/// single line, not a paragraph.
+const CHANNEL_TOPIC_MAX_CHARS: usize = 200;
+
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
@@ -148,6 +154,19 @@ fn validate_channel_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Same "empty means clear, over-cap is an error" convention
+/// `crate::guilds::validate_guild_motd` uses for `Guild::motd`.
+fn validate_channel_topic(topic: &str) -> Result<Option<String>, AppError> {
+    let trimmed = topic.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > CHANNEL_TOPIC_MAX_CHARS {
+        return Err(AppError::InvalidChannelTopic);
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 pub(crate) struct ChannelRow {
     pub id: Uuid,
     pub guild_id: Uuid,
@@ -155,6 +174,7 @@ pub(crate) struct ChannelRow {
     pub archived_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub announcement_only: bool,
+    pub topic: Option<String>,
 }
 
 /// Fetches a channel, 404ing if it doesn't exist or doesn't belong to
@@ -166,7 +186,7 @@ pub(crate) async fn fetch_channel(
     channel_id: Uuid,
 ) -> Result<ChannelRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, guild_id, name, archived_at, created_at, announcement_only FROM guild_channels \
+        "SELECT id, guild_id, name, archived_at, created_at, announcement_only, topic FROM guild_channels \
          WHERE id = $1 AND guild_id = $2",
     )
     .bind(channel_id)
@@ -181,6 +201,7 @@ pub(crate) async fn fetch_channel(
         archived_at: row.try_get("archived_at")?,
         created_at: row.try_get("created_at")?,
         announcement_only: row.try_get("announcement_only")?,
+        topic: row.try_get("topic")?,
     })
 }
 
@@ -193,6 +214,7 @@ pub struct ChannelResponse {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     pub announcement_only: bool,
+    pub topic: Option<String>,
 }
 
 impl From<ChannelRow> for ChannelResponse {
@@ -204,6 +226,7 @@ impl From<ChannelRow> for ChannelResponse {
             archived: row.archived_at.is_some(),
             created_at: row.created_at,
             announcement_only: row.announcement_only,
+            topic: row.topic,
         }
     }
 }
@@ -220,7 +243,7 @@ pub async fn list_channels(
     require_member(&state, guild_id, actor).await?;
 
     let rows = sqlx::query(
-        "SELECT id, guild_id, name, archived_at, created_at, announcement_only FROM guild_channels \
+        "SELECT id, guild_id, name, archived_at, created_at, announcement_only, topic FROM guild_channels \
          WHERE guild_id = $1 ORDER BY created_at",
     )
     .bind(guild_id)
@@ -236,6 +259,7 @@ pub async fn list_channels(
             archived_at: row.try_get("archived_at")?,
             created_at: row.try_get("created_at")?,
             announcement_only: row.try_get("announcement_only")?,
+            topic: row.try_get("topic")?,
         }));
     }
     Ok(Json(channels))
@@ -297,6 +321,7 @@ pub async fn create_channel(
         archived: false,
         created_at,
         announcement_only: false,
+        topic: None,
     }))
 }
 
@@ -307,9 +332,14 @@ pub struct UpdateChannelRequest {
     /// partial-update convention `UpdateRoleRequest` uses.
     #[serde(default)]
     pub announcement_only: Option<bool>,
+    /// Issue #276. `None` leaves the existing value untouched; `Some("")`
+    /// (after trimming) clears it — same three-state convention
+    /// `crate::guilds::UpdateGuildRequest::motd` already uses.
+    #[serde(default)]
+    pub topic: Option<String>,
 }
 
-/// `PATCH /guilds/{id}/channels/{cid}` — rename and/or toggle
+/// `PATCH /guilds/{id}/channels/{cid}` — rename, retopic, and/or toggle
 /// announcement-only. Requires `manage_channels` (resource-aware, issue
 /// #250). Renaming/retoggling an archived channel is allowed (it's still
 /// the same durable channel, just not accepting new posts).
@@ -326,15 +356,20 @@ pub async fn update_channel(
 
     let new_name = body.name.trim().to_string();
     let announcement_only = body.announcement_only.unwrap_or(channel.announcement_only);
+    let new_topic = match &body.topic {
+        Some(raw) => validate_channel_topic(raw)?,
+        None => channel.topic.clone(),
+    };
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
-        "UPDATE guild_channels SET name = $3, announcement_only = $4 WHERE id = $1 AND guild_id = $2",
+        "UPDATE guild_channels SET name = $3, announcement_only = $4, topic = $5 WHERE id = $1 AND guild_id = $2",
     )
     .bind(channel_id)
     .bind(guild_id)
     .bind(&new_name)
     .bind(announcement_only)
+    .bind(&new_topic)
     .execute(&mut *tx)
     .await?;
 
@@ -348,6 +383,7 @@ pub async fn update_channel(
             "channel_id": channel_id,
             "name": new_name,
             "announcement_only": announcement_only,
+            "topic": new_topic,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -364,6 +400,7 @@ pub async fn update_channel(
         archived: channel.archived_at.is_some(),
         created_at: channel.created_at,
         announcement_only,
+        topic: new_topic,
     }))
 }
 
@@ -415,6 +452,7 @@ pub async fn archive_channel(
         archived: true,
         created_at: channel.created_at,
         announcement_only: channel.announcement_only,
+        topic: channel.topic,
     }))
 }
 
@@ -432,6 +470,18 @@ mod tests {
         assert!(validate_channel_name("   ").is_err());
         assert!(validate_channel_name(&"a".repeat(CHANNEL_NAME_MAX_CHARS + 1)).is_err());
         assert!(validate_channel_name(&"a".repeat(CHANNEL_NAME_MAX_CHARS)).is_ok());
+    }
+
+    #[test]
+    fn validate_channel_topic_normalizes_blank_to_none_and_rejects_overlong() {
+        assert_eq!(validate_channel_topic("").unwrap(), None);
+        assert_eq!(validate_channel_topic("   ").unwrap(), None);
+        assert_eq!(
+            validate_channel_topic("  patch notes & raid planning  ").unwrap(),
+            Some("patch notes & raid planning".to_string())
+        );
+        assert!(validate_channel_topic(&"a".repeat(CHANNEL_TOPIC_MAX_CHARS + 1)).is_err());
+        assert!(validate_channel_topic(&"a".repeat(CHANNEL_TOPIC_MAX_CHARS)).is_ok());
     }
 
     #[test]

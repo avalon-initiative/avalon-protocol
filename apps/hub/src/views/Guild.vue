@@ -231,6 +231,56 @@ function onMessageScroll(event: Event) {
   }
 }
 
+// --- Channel topic + announcement-only (issue #276) -----------------------
+// Both live on the active channel itself now, next to its name/messages —
+// previously the announcement-only toggle was buried inside
+// ChannelPermissionOverrides.vue's role x permission grid, a strange home
+// for a simple per-channel setting. `activeChannel` (from useGuildChat) is
+// patched in place from each PATCH response rather than waiting on a
+// reload, since useGuildChat only refetches channel metadata when
+// guildId/channelId themselves change (#241), not on demand.
+const savingChannelTopic = ref(false)
+const channelTopicError = ref('')
+
+async function onSaveChannelTopic(value: string) {
+  if (!session.token || !activeChannel.value) return
+  channelTopicError.value = ''
+  savingChannelTopic.value = true
+  try {
+    const updated = await api.updateChannel(session.token, guildId.value, activeChannel.value.id, {
+      name: activeChannel.value.name,
+      topic: value,
+    })
+    activeChannel.value = updated
+    await refresh()
+  } catch (e) {
+    channelTopicError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingChannelTopic.value = false
+  }
+}
+
+const togglingAnnouncementOnly = ref(false)
+const announcementOnlyError = ref('')
+
+async function onToggleAnnouncementOnly() {
+  if (!session.token || !activeChannel.value) return
+  announcementOnlyError.value = ''
+  togglingAnnouncementOnly.value = true
+  try {
+    const updated = await api.updateChannel(session.token, guildId.value, activeChannel.value.id, {
+      name: activeChannel.value.name,
+      announcement_only: !activeChannel.value.announcement_only,
+    })
+    activeChannel.value = updated
+    await refresh()
+  } catch (e) {
+    announcementOnlyError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    togglingAnnouncementOnly.value = false
+  }
+}
+
 // --- Game affinity breakdown (issue #206, implementing decision #160) -----
 // Aggregated from real GameBinding (#83) data only — never a manager-added
 // association (that's #20's superseded associate_game flow below). A
@@ -1001,6 +1051,15 @@ const {
       </div>
     </header>
 
+    <!-- Issue #276: MOTD moved here from the Overview tab's About card so
+         it's visible near the top of the guild page regardless of which
+         tab is active — an MOTD nobody navigates to see isn't functioning
+         as one. -->
+    <div v-if="guild.motd" :class="local.motdBanner">
+      <span :class="local.motdBannerLabel">MOTD</span>
+      <span>{{ guild.motd }}</span>
+    </div>
+
     <AvalonModal
       title="Edit guild info"
       :open="showEditGuildInfo"
@@ -1036,13 +1095,13 @@ const {
       </button>
     </div>
 
-    <!-- Overview: header info already above, plus MOTD/banner/links, game
-         affinity, favorite games, associated games, and guild history —
-         all read-only here; editing lives in Settings. -->
+    <!-- Overview: header info already above (MOTD is now its own banner
+         above the tab bar, issue #276), plus links, game affinity, favorite
+         games, associated games, and guild history — all read-only here;
+         editing lives in Settings. -->
     <div v-if="activeTab === 'overview'" :class="styles.grid">
       <div :class="styles.mainColumn">
-        <AvalonCard v-if="guild.motd || guildLinks.length > 0" title="About">
-          <p v-if="guild.motd" :class="styles.subtitle">{{ guild.motd }}</p>
+        <AvalonCard v-if="guildLinks.length > 0" title="About">
           <p v-for="link in guildLinks" :key="link.url" :class="styles.empty">
             <a :href="link.url" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>
           </p>
@@ -1392,6 +1451,42 @@ const {
             <p v-if="activeChannel?.archived" :class="styles.subtitle">
               This channel is archived — history is readable, but new messages can't be sent.
             </p>
+
+            <!-- Channel topic (issue #276): read-only for anyone who can't
+                 manage channels, inline-editable (AvalonEditableField, same
+                 component Settings uses for the guild's own MOTD/banner/icon)
+                 for whoever can. -->
+            <AvalonEditableField
+              v-if="activeChannel && canManageChannels"
+              label="Topic"
+              :value="activeChannel.topic ?? ''"
+              empty-text="No topic set"
+              placeholder="What's this channel for?"
+              :saving="savingChannelTopic"
+              :error="channelTopicError"
+              @save="onSaveChannelTopic"
+            />
+            <p v-else-if="activeChannel?.topic" :class="local.channelTopic">{{ activeChannel.topic }}</p>
+
+            <!-- Announcement-only (issue #250, relocated by #276 out of
+                 ChannelPermissionOverrides.vue's role x permission grid —
+                 a channel manager expects to find this next to the
+                 channel's own settings, not buried in a permissions
+                 matrix). -->
+            <label v-if="activeChannel && canManageChannels" :class="local.announcementRow">
+              <input
+                type="checkbox"
+                :checked="activeChannel.announcement_only"
+                :disabled="togglingAnnouncementOnly"
+                @change="onToggleAnnouncementOnly"
+              />
+              <span
+                >Announcement-only — only roles allowed <code>channel_post</code> here (or granted
+                it below) may post</span
+              >
+            </label>
+            <p v-if="announcementOnlyError" :class="styles.error">{{ announcementOnlyError }}</p>
+
             <p :class="styles.empty">
               Message history is subject to the server's retention policy, not permanent.
             </p>
@@ -1423,19 +1518,19 @@ const {
             />
           </AvalonCard>
 
-          <!-- Per-resource permission overrides (issue #250): announcement-only
-               toggle plus per-role channel_post/manage_channels overrides for
-               the active channel. Visible to anyone who can manage channels
-               and/or roles — server re-checks each action independently. -->
+          <!-- Per-resource permission overrides (issue #250): per-role
+               channel_post/manage_channels overrides for the active channel
+               — the announcement-only toggle moved above (issue #276) so
+               this stays focused purely on the role x permission grid.
+               Visible to anyone who can manage roles — server re-checks
+               each action independently. -->
           <ChannelPermissionOverrides
-            v-if="activeChannel && (canManageChannels || canManageRoles)"
+            v-if="activeChannel && canManageRoles"
             :token="session.token ?? ''"
             :guild-id="guildId"
             :channel="activeChannel"
             :roles="roles"
             :can-manage-roles="canManageRoles"
-            :can-manage-channels="canManageChannels"
-            @updated="refresh"
           />
         </template>
       </div>

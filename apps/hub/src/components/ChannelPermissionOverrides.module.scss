@@ -7,18 +7,6 @@
   border-radius: var(--av-radius-md);
 }
 
-.announcementRow {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--av-space-2);
-  font-size: var(--av-text-sm);
-  color: var(--av-color-text);
-
-  code {
-    font-size: var(--av-text-xs);
-  }
-}
-
 .hint {
   font-size: var(--av-text-xs);
   color: var(--av-color-text-muted);

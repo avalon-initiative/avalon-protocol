@@ -206,6 +206,9 @@ struct ChannelResponse {
     // (`#[serde(default)]`) rather than failing to deserialize.
     #[serde(default)]
     announcement_only: bool,
+    // Issue #276. Defaults to `None` for servers predating the field.
+    #[serde(default)]
+    topic: Option<String>,
 }
 
 impl From<ChannelResponse> for GuildChannel {
@@ -215,6 +218,7 @@ impl From<ChannelResponse> for GuildChannel {
             guild_id: GuildId(response.guild_id),
             name: response.name,
             announcement_only: response.announcement_only,
+            topic: response.topic,
         }
     }
 }

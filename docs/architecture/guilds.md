@@ -211,8 +211,12 @@ with Game A becomes historical.
   `DELETE /guilds/{id}/permission-overrides/{override_id}` (all
   `manage_roles`-gated) are the CRUD surface; Hub's Channels tab
   (`ChannelPermissionOverrides.vue`) uses them to expose per-role
-  overrides for the active channel, alongside its announcement-only
-  toggle. `manage_guild`/`manage_roles`/`manage_members` stay guild-wide
+  overrides for the active channel. The announcement-only toggle used to
+  live in that same component (a strange home for a simple per-channel
+  setting); issue #276 moved it to sit with the channel's own
+  name/topic in the channel header instead, leaving
+  `ChannelPermissionOverrides.vue` focused purely on the role x
+  permission grid. `manage_guild`/`manage_roles`/`manage_members` stay guild-wide
   only — they have no per-instance resource to scope to — so every
   endpoint gated on one of those three keeps using the original flat
   `has_guild_permission` check; only channel/event endpoints with an
@@ -247,6 +251,19 @@ with Game A becomes historical.
   override on that channel (or, if it ever wants a role to post
   everywhere, by adding `channel_post` to that role's base list on the
   Roles tab instead).
+- **Channel topics (issue #276).** `GuildChannel.topic`
+  (`guild_channels.topic`, default `NULL`) is a short, capped (200
+  characters, `crate::channels::CHANNEL_TOPIC_MAX_CHARS`) line describing
+  what a channel is for — the Discord/Slack/Zoom-style affordance the
+  guild page's channel header was missing. Same "no value"/normalize-blank
+  convention as `Guild::motd`: `None`/unset means no topic, an empty
+  string is never stored. Editable via `PATCH .../channels/{cid}`
+  alongside a rename, gated the same `manage_channels` (resource-aware)
+  check as everything else in `crates/server/src/channels.rs`. Also the
+  occasion for moving the guild's MOTD (issue #153) out of the Overview
+  tab's About card and into its own persistent banner above the tab bar
+  (`Guild.vue`) — an MOTD nobody navigates to see wasn't actually
+  functioning as one.
 - **Role descriptions and badges (issue #152).** A guild role now carries a
   `description` (free text, capped at 200 characters) and a `badge` — a
   small, fixed visual identity, not a free-form upload: an icon id from a
