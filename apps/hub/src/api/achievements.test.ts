@@ -61,16 +61,47 @@ describe('mergeAchievement', () => {
     const merged = mergeAchievement(
       attestation(),
       new Map([['ashen-realms', 'Ashen Realms']]),
-      new Map([['game:ashen-realms:achievement:dragon_slayer', 'Dragon Slayer']]),
+      new Map([
+        [
+          'game:ashen-realms:achievement:dragon_slayer',
+          { name: 'Dragon Slayer', icon: 'sword', iconUrl: undefined },
+        ],
+      ]),
     )
     expect(merged.issuerName).toBe('Ashen Realms')
     expect(merged.achievementName).toBe('Dragon Slayer')
+    expect(merged.achievementIcon).toBe('sword')
   })
 
-  it('leaves names undefined when the maps have no entry', () => {
+  it('leaves names and icon undefined when the maps have no entry', () => {
     const merged = mergeAchievement(attestation())
     expect(merged.issuerName).toBeUndefined()
     expect(merged.achievementName).toBeUndefined()
+    expect(merged.achievementIcon).toBeUndefined()
+    expect(merged.achievementIconUrl).toBeUndefined()
+  })
+
+  it('prefers iconUrl over icon and drops an icon key outside the built-in set', () => {
+    const withUrl = mergeAchievement(
+      attestation(),
+      new Map(),
+      new Map([
+        [
+          'game:ashen-realms:achievement:dragon_slayer',
+          { name: 'Dragon Slayer', icon: 'trophy', iconUrl: 'https://cdn.example.com/icon.png' },
+        ],
+      ]),
+    )
+    expect(withUrl.achievementIconUrl).toBe('https://cdn.example.com/icon.png')
+
+    const bogusIcon = mergeAchievement(
+      attestation(),
+      new Map(),
+      new Map([
+        ['game:ashen-realms:achievement:dragon_slayer', { name: 'Dragon Slayer', icon: 'not_real' }],
+      ]),
+    )
+    expect(bogusIcon.achievementIcon).toBeUndefined()
   })
 
   it('carries the full history and validity/invalid reason through unchanged', () => {

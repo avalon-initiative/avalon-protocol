@@ -8,6 +8,7 @@
 // client-side presentation, never a protocol event or server computation
 // — matching ADR #77's "the Hub renders verification results, it never
 // computes trust or rank" rule.
+import type { AchievementIconName } from '@avalon/ui'
 import * as api from './client'
 import type { AttestationHistoryEntryResponse, AttestationResponse } from './types'
 
@@ -42,6 +43,20 @@ function mergeHistoryEntry(entry: AttestationHistoryEntryResponse): AchievementH
   return { event: entry.event, at: entry.at, reasonCode: entry.reason_code, reason: entry.reason }
 }
 
+// #332's fixed built-in set — kept in sync with packages/ui's own
+// AchievementIconName. A definition's `icon` string is only ever trusted
+// as one of these; anything else (shouldn't happen, since the server
+// validates it, but a stale/foreign client could still send garbage) falls
+// back to `undefined` so AvalonAchievementCard's own 'trophy' default
+// applies instead of passing through an unrecognized icon name.
+const BUILTIN_ICON_NAMES: ReadonlySet<string> = new Set(['trophy', 'star', 'shield', 'sword'])
+
+function asAchievementIconName(icon: string | undefined): AchievementIconName | undefined {
+  return icon !== undefined && BUILTIN_ICON_NAMES.has(icon)
+    ? (icon as AchievementIconName)
+    : undefined
+}
+
 export interface Achievement {
   id: string
   achievementRef: string
@@ -49,6 +64,11 @@ export interface Achievement {
   // lookup failed) — the UI falls back to the ref's bare key rather than
   // assuming a name exists.
   achievementName?: string
+  // Both undefined only if the definition itself couldn't be resolved —
+  // AvalonAchievementCard's own 'trophy' default applies in that case too,
+  // same as an unresolved achievementName falls back to the bare ref.
+  achievementIcon?: AchievementIconName
+  achievementIconUrl?: string
   issuerSlug: string
   // Undefined only if the issuer's own profile couldn't be resolved (a
   // deleted/unreachable issuer, or the lookup itself failed) — the UI
@@ -62,16 +82,25 @@ export interface Achievement {
 
 // Pure merge, testable without any network call — mirrors
 // apps/hub/src/api/friends.ts's mergeFriend shape.
+export interface AchievementDefinitionSummary {
+  name: string
+  icon: string
+  iconUrl?: string
+}
+
 export function mergeAchievement(
   attestation: AttestationResponse,
   issuerNameBySlug: Map<string, string> = new Map(),
-  achievementNameByRef: Map<string, string> = new Map(),
+  achievementByRef: Map<string, AchievementDefinitionSummary> = new Map(),
 ): Achievement {
   const issuerSlug = parseIssuerSlug(attestation.issuer) ?? attestation.issuer
+  const definition = achievementByRef.get(attestation.achievement)
   return {
     id: attestation.id,
     achievementRef: attestation.achievement,
-    achievementName: achievementNameByRef.get(attestation.achievement),
+    achievementName: definition?.name,
+    achievementIcon: asAchievementIconName(definition?.icon),
+    achievementIconUrl: definition?.iconUrl,
     issuerSlug,
     issuerName: issuerNameBySlug.get(issuerSlug),
     issuedAt: attestation.issued_at,
@@ -112,10 +141,14 @@ export async function listMyAchievements(token: string): Promise<Achievement[]> 
     if (game) issuerNameBySlug.set(issuerSlugs[index], game.name)
   })
 
-  const achievementNameByRef = new Map<string, string>()
-  definitionLists.flat().forEach((def) => achievementNameByRef.set(def.id, def.name))
+  const achievementByRef = new Map<string, AchievementDefinitionSummary>()
+  definitionLists
+    .flat()
+    .forEach((def) =>
+      achievementByRef.set(def.id, { name: def.name, icon: def.icon, iconUrl: def.icon_url }),
+    )
 
-  return attestations.map((a) => mergeAchievement(a, issuerNameBySlug, achievementNameByRef))
+  return attestations.map((a) => mergeAchievement(a, issuerNameBySlug, achievementByRef))
 }
 
 export type AchievementSort = 'date' | 'name' | 'game'

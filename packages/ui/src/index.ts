@@ -49,6 +49,7 @@ export type {
 export type { AvalonGameCardProps } from './components/AvalonGameCard.types'
 export type { AvalonMetricTileProps } from './components/AvalonMetricTile.types'
 export type {
+  AchievementIconName,
   AvalonAchievementCardProps,
   AvalonAchievementHistoryEntry,
 } from './components/AvalonAchievementCard.types'

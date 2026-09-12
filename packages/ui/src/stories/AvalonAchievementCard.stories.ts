@@ -33,3 +33,13 @@ export const Revoked: Story = {
 export const InvalidIssuer: Story = {
   args: { status: 'invalid', invalidReason: 'issuer has been revoked' },
 }
+
+export const BuiltInIcon: Story = {
+  args: { icon: 'sword' },
+}
+
+export const CustomIconUrl: Story = {
+  args: {
+    iconUrl: 'https://placehold.co/56x56/png',
+  },
+}

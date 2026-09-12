@@ -107,6 +107,8 @@ function onViewIssuer(slug: string) {
             v-for="achievement in visibleAchievements"
             :key="achievement.id"
             :achievement-name="achievement.achievementName ?? achievement.achievementRef"
+            :icon="achievement.achievementIcon"
+            :icon-url="achievement.achievementIconUrl"
             :issuer-name="achievement.issuerName ?? achievement.issuerSlug"
             :issuer-slug="achievement.issuerSlug"
             :issued-at="formatActivityTimestamp(achievement.issuedAt)"

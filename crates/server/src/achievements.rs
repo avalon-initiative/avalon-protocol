@@ -97,8 +97,48 @@ use crate::error::AppError;
 use crate::games::{
     authenticate_game, fetch_game_category, fetch_game_id_by_slug, fetch_issuer_keys, issuer_ref,
 };
+use crate::handlers::is_http_url;
 use crate::outbox;
 use crate::state::AppState;
+
+/// The built-in icon set shipped with `packages/ui` (issue #332) — a key
+/// into `AchievementIconName` on the frontend
+/// (`packages/ui/src/components/AvalonAchievementCard.types.ts`), generic
+/// enough to cover games/apps/services alike. Kept as a small, fixed list
+/// here (not a caller-extensible enum) so a bogus `icon` value can never
+/// silently render as a blank/broken slot in the Hub.
+const BUILTIN_ICONS: &[&str] = &["trophy", "star", "shield", "sword"];
+
+/// A definition with neither `icon` nor `icon_url` set still renders
+/// *something* (issue #332's invariant) — this is what every reader falls
+/// back to.
+const DEFAULT_ICON: &str = "trophy";
+
+/// Maximum length for `icon_url`, mirroring `handlers::MAX_AVATAR_URL_LEN`
+/// (same class of integrator-hosted-image field, same cap).
+const MAX_ICON_URL_LEN: usize = 2048;
+
+/// `None`/absent is always fine (falls back to [`DEFAULT_ICON`] at read
+/// time); a non-`None` value must be one of [`BUILTIN_ICONS`].
+fn validate_icon(icon: Option<&str>) -> Result<(), AppError> {
+    match icon {
+        None => Ok(()),
+        Some(icon) if BUILTIN_ICONS.contains(&icon) => Ok(()),
+        Some(_) => Err(AppError::InvalidAchievementIcon),
+    }
+}
+
+/// `None`/absent is always fine; a non-`None` value must be an `http`/
+/// `https` URL within the length cap — same "the server records, it
+/// doesn't vouch for content" posture `handlers::validate_avatar_url`
+/// already takes toward integrator-supplied strings.
+fn validate_icon_url(icon_url: Option<&str>) -> Result<(), AppError> {
+    match icon_url {
+        None => Ok(()),
+        Some(url) if is_http_url(url, MAX_ICON_URL_LEN) => Ok(()),
+        Some(_) => Err(AppError::InvalidAchievementIconUrl),
+    }
+}
 
 /// `<category.as_str()>:<slug>:<category.claim_kind()>:<key>` — the
 /// definition's immutable, globally unique id. `pub(crate)` so a future
@@ -190,6 +230,8 @@ struct DefinitionRow {
     name: String,
     description: String,
     schema: Option<String>,
+    icon: Option<String>,
+    icon_url: Option<String>,
     version: i32,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
@@ -202,7 +244,8 @@ async fn fetch_definition(
     key: &str,
 ) -> Result<DefinitionRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, key, name, description, schema, version, created_at, updated_at, retired_at \
+        "SELECT id, key, name, description, schema, icon, icon_url, version, created_at, \
+         updated_at, retired_at \
          FROM achievement_definitions WHERE game_id = $1 AND key = $2",
     )
     .bind(game_id)
@@ -216,6 +259,8 @@ async fn fetch_definition(
         name: row.try_get("name")?,
         description: row.try_get("description")?,
         schema: row.try_get("schema")?,
+        icon: row.try_get("icon")?,
+        icon_url: row.try_get("icon_url")?,
         version: row.try_get("version")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -231,6 +276,14 @@ pub struct AchievementDefinitionResponse {
     pub name: String,
     pub description: String,
     pub schema: Option<String>,
+    /// Always populated — falls back to [`DEFAULT_ICON`] when the
+    /// definition has neither `icon` nor `icon_url` set, so every reader
+    /// (the Hub's `AvalonAchievementCard`) always has *something* to
+    /// render (issue #332's invariant), never a blank slot.
+    pub icon: String,
+    /// When present, takes precedence over `icon` on the client — never a
+    /// silent fallback to the default just because both happen to be set.
+    pub icon_url: Option<String>,
     pub version: i32,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -249,6 +302,8 @@ fn definition_response(game_id: Uuid, row: DefinitionRow) -> AchievementDefiniti
         name: row.name,
         description: row.description,
         schema: row.schema,
+        icon: row.icon.unwrap_or_else(|| DEFAULT_ICON.to_string()),
+        icon_url: row.icon_url,
         version: row.version,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -264,6 +319,14 @@ pub struct CreateAchievementDefinitionRequest {
     pub description: String,
     #[serde(default)]
     pub schema: Option<GlobalId>,
+    /// One of [`BUILTIN_ICONS`]; omitted/`null` falls back to
+    /// [`DEFAULT_ICON`] at read time (issue #332).
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// An integrator-hosted image URL, taking precedence over `icon` when
+    /// present. `http`/`https` only.
+    #[serde(default)]
+    pub icon_url: Option<String>,
 }
 
 /// Shared core of [`create_achievement_definition`]/
@@ -281,6 +344,8 @@ async fn create_definition(
 ) -> Result<Json<AchievementDefinitionResponse>, AppError> {
     let (game_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
     validate_key(&body.key)?;
+    validate_icon(body.icon.as_deref())?;
+    validate_icon_url(body.icon_url.as_deref())?;
 
     let id = definition_ref(category, slug, &body.key);
     let claim_kind = category.claim_kind();
@@ -292,8 +357,8 @@ async fn create_definition(
 
     let inserted = sqlx::query(
         "INSERT INTO achievement_definitions \
-         (id, game_id, key, name, description, schema, version, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)",
+         (id, game_id, key, name, description, schema, icon, icon_url, version, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",
     )
     .bind(id.as_str())
     .bind(game_id)
@@ -301,6 +366,8 @@ async fn create_definition(
     .bind(&body.name)
     .bind(&body.description)
     .bind(schema_str)
+    .bind(&body.icon)
+    .bind(&body.icon_url)
     .bind(INITIAL_VERSION)
     .bind(now)
     .execute(&mut *tx)
@@ -325,6 +392,8 @@ async fn create_definition(
             "name": body.name,
             "description": body.description,
             "schema": schema_str,
+            "icon": body.icon,
+            "icon_url": body.icon_url,
             "version": INITIAL_VERSION,
         }),
         timestamp: now,
@@ -342,6 +411,8 @@ async fn create_definition(
             name: body.name,
             description: body.description,
             schema: schema_str.map(str::to_string),
+            icon: body.icon,
+            icon_url: body.icon_url,
             version: INITIAL_VERSION,
             created_at: now,
             updated_at: now,
@@ -375,6 +446,14 @@ pub struct UpdateAchievementDefinitionRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub schema: Option<GlobalId>,
+    /// One of [`BUILTIN_ICONS`], `Some(None)`-style clearing is not
+    /// supported (omit the field to leave it untouched, same "absent means
+    /// untouched" convention every other field here already uses).
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// An integrator-hosted image URL; `http`/`https` only.
+    #[serde(default)]
+    pub icon_url: Option<String>,
     /// Set to `true` to retire the definition (see module doc comment).
     /// Never used to un-retire — retirement is one-way.
     #[serde(default)]
@@ -394,6 +473,8 @@ async fn update_definition(
     body: UpdateAchievementDefinitionRequest,
 ) -> Result<Json<AchievementDefinitionResponse>, AppError> {
     let (game_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
+    validate_icon(body.icon.as_deref())?;
+    validate_icon_url(body.icon_url.as_deref())?;
     let claim_kind = category.claim_kind();
     let existing = fetch_definition(state, game_id, &key).await?;
 
@@ -407,8 +488,13 @@ async fn update_definition(
         .as_ref()
         .map(|s| s.as_str().to_string())
         .or_else(|| existing.schema.clone());
-    let definition_changed =
-        body.name.is_some() || body.description.is_some() || body.schema.is_some();
+    let new_icon = body.icon.clone().or_else(|| existing.icon.clone());
+    let new_icon_url = body.icon_url.clone().or_else(|| existing.icon_url.clone());
+    let definition_changed = body.name.is_some()
+        || body.description.is_some()
+        || body.schema.is_some()
+        || body.icon.is_some()
+        || body.icon_url.is_some();
     let now_retiring = body.retired == Some(true) && existing.retired_at.is_none();
 
     let now = OffsetDateTime::now_utc();
@@ -427,7 +513,8 @@ async fn update_definition(
 
     sqlx::query(
         "UPDATE achievement_definitions \
-         SET name = $3, description = $4, schema = $5, version = $6, updated_at = $7, retired_at = $8 \
+         SET name = $3, description = $4, schema = $5, icon = $6, icon_url = $7, version = $8, \
+         updated_at = $9, retired_at = $10 \
          WHERE game_id = $1 AND key = $2",
     )
     .bind(game_id)
@@ -435,6 +522,8 @@ async fn update_definition(
     .bind(&new_name)
     .bind(&new_description)
     .bind(&new_schema)
+    .bind(&new_icon)
+    .bind(&new_icon_url)
     .bind(new_version)
     .bind(now)
     .bind(new_retired_at)
@@ -459,6 +548,8 @@ async fn update_definition(
                 "name": new_name,
                 "description": new_description,
                 "schema": new_schema,
+                "icon": new_icon,
+                "icon_url": new_icon_url,
                 "version": new_version,
             }),
             timestamp: now,
@@ -499,6 +590,8 @@ async fn update_definition(
             name: new_name,
             description: new_description,
             schema: new_schema,
+            icon: new_icon,
+            icon_url: new_icon_url,
             version: new_version,
             created_at: existing.created_at,
             updated_at: now,
@@ -553,7 +646,8 @@ async fn list_definitions(
     }
 
     let rows = sqlx::query(
-        "SELECT id, key, name, description, schema, version, created_at, updated_at, retired_at \
+        "SELECT id, key, name, description, schema, icon, icon_url, version, created_at, \
+         updated_at, retired_at \
          FROM achievement_definitions WHERE game_id = $1 ORDER BY created_at",
     )
     .bind(game_id)
@@ -570,6 +664,8 @@ async fn list_definitions(
                 name: row.try_get("name")?,
                 description: row.try_get("description")?,
                 schema: row.try_get("schema")?,
+                icon: row.try_get("icon")?,
+                icon_url: row.try_get("icon_url")?,
                 version: row.try_get("version")?,
                 created_at: row.try_get("created_at")?,
                 updated_at: row.try_get("updated_at")?,
@@ -940,6 +1036,35 @@ mod tests {
             app_id, game_id,
             "different category, same slug/key: still distinct ids"
         );
+    }
+
+    #[test]
+    fn validate_icon_accepts_none_and_builtin_keys() {
+        assert!(validate_icon(None).is_ok());
+        assert!(validate_icon(Some("trophy")).is_ok());
+        assert!(validate_icon(Some("star")).is_ok());
+        assert!(validate_icon(Some("shield")).is_ok());
+        assert!(validate_icon(Some("sword")).is_ok());
+    }
+
+    #[test]
+    fn validate_icon_rejects_unknown_keys() {
+        assert!(validate_icon(Some("dragon")).is_err());
+        assert!(validate_icon(Some("")).is_err());
+    }
+
+    #[test]
+    fn validate_icon_url_accepts_none_and_http_urls() {
+        assert!(validate_icon_url(None).is_ok());
+        assert!(validate_icon_url(Some("https://cdn.example.com/icon.png")).is_ok());
+        assert!(validate_icon_url(Some("http://example.com/icon.png")).is_ok());
+    }
+
+    #[test]
+    fn validate_icon_url_rejects_non_http_schemes() {
+        assert!(validate_icon_url(Some("ftp://example.com/icon.png")).is_err());
+        assert!(validate_icon_url(Some("javascript:alert(1)")).is_err());
+        assert!(validate_icon_url(Some("not a url")).is_err());
     }
 
     #[test]

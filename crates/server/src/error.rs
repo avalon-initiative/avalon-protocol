@@ -189,6 +189,10 @@ pub enum AppError {
     AchievementDefinitionNotFound,
     #[error("this issuer's registered category doesn't use this claim vocabulary (achievement vs. milestone) — see issue #324")]
     ClaimVocabularyMismatch,
+    #[error("icon must be one of the built-in icon keys (trophy, star, shield, sword)")]
+    InvalidAchievementIcon,
+    #[error("icon_url must be an absolute http or https URL")]
+    InvalidAchievementIconUrl,
     #[error("cannot issue against a retired definition")]
     AttestationDefinitionRetired,
     #[error(
@@ -410,6 +414,9 @@ impl IntoResponse for AppError {
             // as `AchievementDefinitionForbidden` just above — 403, not a
             // generic 400/401.
             AppError::ClaimVocabularyMismatch => StatusCode::FORBIDDEN,
+            AppError::InvalidAchievementIcon | AppError::InvalidAchievementIconUrl => {
+                StatusCode::BAD_REQUEST
+            }
             AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
             AppError::AttestationNotFound => StatusCode::NOT_FOUND,

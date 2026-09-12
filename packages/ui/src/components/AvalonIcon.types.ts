@@ -44,6 +44,15 @@ export type AvalonIconName =
   | 'follow'
   | 'muted'
   | 'block'
+  // Achievement/milestone icons (issue #332) — the built-in set an
+  // AvalonAchievementCard falls back to when a definition has no
+  // integrator-hosted `icon_url`. See AchievementIconName in
+  // AvalonAchievementCard.types.ts, which mirrors this same fixed-key
+  // pattern for that narrower set.
+  | 'trophy'
+  | 'star'
+  | 'shield'
+  | 'sword'
 
 export interface AvalonIconProps {
   name: AvalonIconName
