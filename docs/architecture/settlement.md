@@ -224,6 +224,25 @@ implemented, see "Today in the repo" below.
   verification needs only `AVALON_SETTLEMENT_VERIFY_KEY` (see
   `.env.example`). `Commitment.proof` now carries this Merkle root rather
   than the old chain-tip value.
+- **Leaf-hash caching mitigation, not a full fix.** `commit` originally
+  re-fetched every `entry_hash` in the ledger on every single write, and
+  `entry_hashes_up_to` (the read side `GET /ledger/proof/inclusion` calls)
+  did the same on every single proof request — both O(n) in total ledger
+  size per call, so total cost over the ledger's life was O(n^2). Found via
+  a live `make test-live` run against a dev ledger that had grown to
+  ~6,000 entries: writes were visibly slowing down, and a full mirror
+  backfill (one proof request per entry) was taking minutes instead of
+  seconds. `PostgresSettlementProvider::leaf_cache` (an in-memory,
+  monotonically-growing cache of the committed leaf-hash prefix, safe
+  because `ledger_entries` is genuinely append-only) now lets both paths
+  reuse already-known hashes instead of re-fetching, with a correctness
+  fallback to the original full re-fetch whenever the cache can't be
+  trusted (e.g. right after process start). This does **not** fix the
+  underlying complexity of proof/root generation itself — `crate::merkle`
+  still recomputes the whole RFC 6962 tree from raw leaves on every call,
+  O(n) CPU per proof, not O(log n) — a real incremental/persisted Merkle
+  tree (Trillian-style) is tracked as its own carefully-scoped follow-up:
+  [#349](https://github.com/LunarVagabond/avalon-protocol/issues/349).
 - `get_commitment` reads `ledger_batches` by `batch_id`. `verify` runs two
   independent checks, both must pass: it still replays the sequential hash
   chain across a batch's own entries' stored content (unchanged from #38 in

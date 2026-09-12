@@ -229,6 +229,20 @@ pub enum GenesisError {
 pub struct PostgresSettlementProvider {
     pool: PgPool,
     network_id: String,
+    /// In-memory cache of the committed leaf-hash prefix, oldest-first —
+    /// backs [`Self::entry_hashes_up_to`]. Safe to cache indefinitely
+    /// because `ledger_entries` (the *authority's* table this struct reads,
+    /// distinct from a mirror's separate `mirrored_entries` — see
+    /// `crate::mirror`) is genuinely append-only: nothing in this codebase
+    /// ever updates or deletes a committed row, so a cached prefix never
+    /// goes stale, only grows. `Arc<RwLock<_>>` rather than a plain field
+    /// because `Self` is `Clone`d per request (see `AppState`) and every
+    /// clone must observe the same cache. Without this, every single
+    /// `GET /ledger/proof/inclusion` request re-fetched the entire leaf set
+    /// from Postgres from scratch — fine at dev-ledger scale, O(n) per
+    /// request and O(n^2) for a client walking every entry, which is
+    /// exactly what a real mirror backfill does (see `tests/mirror_watcher.rs`).
+    leaf_cache: std::sync::Arc<tokio::sync::RwLock<Vec<String>>>,
 }
 
 impl PostgresSettlementProvider {
@@ -242,6 +256,7 @@ impl PostgresSettlementProvider {
         Self {
             pool,
             network_id: network_id.into(),
+            leaf_cache: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         }
     }
 
@@ -289,6 +304,7 @@ impl PostgresSettlementProvider {
                 Ok(Self {
                     pool,
                     network_id: expected_network_id.to_string(),
+                    leaf_cache: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
                 })
             }
             Some(stored) if stored == expected_network_id => {
@@ -298,6 +314,7 @@ impl PostgresSettlementProvider {
                 Ok(Self {
                     pool,
                     network_id: stored,
+                    leaf_cache: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
                 })
             }
             Some(stored) => Err(GenesisError::Mismatch {
@@ -623,17 +640,40 @@ impl PostgresSettlementProvider {
     /// guarantees exactly `tree_size` rows whenever that many exist,
     /// regardless of what the underlying `seq` values happen to be.
     pub async fn entry_hashes_up_to(&self, tree_size: i64) -> Result<Vec<String>, SettlementError> {
+        // Fast path: the cached prefix already covers this tree_size (the
+        // common case — proof-serving and mirror backfill both request the
+        // same, or a shrinking, tree_size repeatedly). No DB round-trip.
+        {
+            let cached = self.leaf_cache.read().await;
+            if cached.len() as i64 >= tree_size {
+                return Ok(cached[..tree_size as usize].to_vec());
+            }
+        }
+
+        // Slow path: fetch the full prefix and grow the cache. Holds the
+        // write lock across the query so concurrent callers past the fast
+        // path above don't all fetch redundantly — the first one in pays
+        // for the rest.
+        let mut cached = self.leaf_cache.write().await;
+        if cached.len() as i64 >= tree_size {
+            return Ok(cached[..tree_size as usize].to_vec());
+        }
         let rows = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq ASC LIMIT $1")
             .bind(tree_size)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
-        rows.into_iter()
+        let hashes = rows
+            .into_iter()
             .map(|row| {
                 row.try_get::<String, _>("entry_hash")
                     .map_err(|e| SettlementError::Storage(e.to_string()))
             })
-            .collect()
+            .collect::<Result<Vec<String>, SettlementError>>()?;
+        if hashes.len() > cached.len() {
+            *cached = hashes.clone();
+        }
+        Ok(hashes)
     }
 
     /// How many entries have been committed so far — the true `tree_size`
@@ -881,6 +921,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         // settlement unit; `ledger_entries_batch_id_fkey` is deferred to the
         // end of this transaction, so it's fine that `ledger_batches` doesn't
         // have this row yet.
+        let mut batch_hashes: Vec<String> = Vec::with_capacity(batch.events.len());
         for event in &batch.events {
             let entry_hash = hash_event(&self.network_id, &prev_hash, event);
             let row = sqlx::query(
@@ -911,29 +952,56 @@ impl SettlementProvider for PostgresSettlementProvider {
             first_seq.get_or_insert(seq);
             last_seq = seq;
 
+            batch_hashes.push(entry_hash.clone());
             prev_hash = entry_hash;
         }
         let first_seq = first_seq.expect("checked batch.events is non-empty above");
 
         // batch_root is now the real RFC 6962 Merkle Tree Hash of the whole
-        // ledger — not just this batch's own entries. `seq <= last_seq`
-        // here is safe as a "give me every row" filter specifically because
-        // `last_seq` was just set to the highest `seq` this (the only)
-        // writer has ever seen, in the same transaction — nothing in the
-        // table can exceed it, gap or no gap. Read back every entry_hash,
-        // in the same transaction so the read is consistent with what was
-        // just inserted above.
-        let leaf_rows =
-            sqlx::query("SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC")
-                .bind(last_seq)
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(|e| SettlementError::Storage(e.to_string()))?;
-        let leaf_hashes: Vec<String> = leaf_rows
-            .into_iter()
-            .map(|row| row.try_get::<String, _>("entry_hash"))
-            .collect::<Result<_, _>>()
+        // ledger — not just this batch's own entries. Historically this
+        // re-fetched *every* row in `ledger_entries` on *every* commit to
+        // build that tree, making each commit cost O(total ledger size) and
+        // the ledger's total write cost O(n^2) — catastrophic well before
+        // any real production scale (see `Self::leaf_cache`'s doc comment
+        // for the matching read-path issue). Fast path: if `leaf_cache`'s
+        // cached prefix already covers everything committed before this
+        // batch (the overwhelmingly common case — this process is the
+        // ledger's sole writer, so nothing else can have appended between
+        // our last cache update and now), this batch's own `batch_hashes`
+        // (already computed above, no query needed) extend it directly —
+        // O(batch size), not O(ledger size). Falls back to the original
+        // full re-fetch (and self-heals the cache from it) whenever that
+        // assumption doesn't hold, e.g. right after process start before
+        // the cache has ever been populated — always correct, just not
+        // always fast.
+        let mut cached = self.leaf_cache.write().await;
+        let previous_committed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ledger_entries")
+            .fetch_one(&mut *tx)
+            .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let previous_committed = previous_committed - batch_hashes.len() as i64;
+        let leaf_hashes: Vec<String> = if cached.len() as i64 == previous_committed {
+            cached.extend(batch_hashes.iter().cloned());
+            cached.clone()
+        } else {
+            let leaf_rows = sqlx::query(
+                "SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC",
+            )
+            .bind(last_seq)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+            let fetched: Vec<String> = leaf_rows
+                .into_iter()
+                .map(|row| row.try_get::<String, _>("entry_hash"))
+                .collect::<Result<_, _>>()
+                .map_err(|e| SettlementError::Storage(e.to_string()))?;
+            if fetched.len() > cached.len() {
+                *cached = fetched.clone();
+            }
+            fetched
+        };
+        drop(cached);
         // The *count* of real rows just fetched — never `last_seq` itself.
         // `seq` can have gaps (module doc comment), so once one exists
         // `last_seq` overstates how many leaves actually went into the
