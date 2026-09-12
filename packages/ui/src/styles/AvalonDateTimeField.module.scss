@@ -88,7 +88,12 @@
   left: 0;
   z-index: 50;
   margin-top: var(--av-space-2);
+  // A fixed 26rem (416px) overflows the viewport itself once the
+  // viewport is narrower than that plus the field's own left offset -
+  // clamp to whatever room is actually left rather than running off
+  // screen with no way to reach the rest of it (issue #310).
   width: 26rem;
+  max-width: calc(100vw - 2 * var(--av-space-4));
   background: var(--av-color-surface);
   border: 1px solid var(--av-color-border);
   border-radius: var(--av-radius-lg);
