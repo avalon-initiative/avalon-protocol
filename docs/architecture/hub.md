@@ -255,11 +255,20 @@ is visibly marked.
   Games has real registrants today. Both public, unauthenticated reads —
   no session token required, matching the endpoints' own visibility (#273).
   `status` renders through a badge that's visibly distinct whenever it
-  isn't `"active"`; no key-history UI (blocked on the still-open #80). No
-  ranking, no score, no "recommended" ordering anywhere in either view,
-  per #89's invariant — `apps/hub/src/views/GameDirectory.test.ts` and
-  `GameProfile.test.ts` assert every metric's label renders and that no
-  score/ranking element exists.
+  isn't `"active"`. No ranking, no score, no "recommended" ordering
+  anywhere in either view, per #89's invariant —
+  `apps/hub/src/views/GameDirectory.test.ts` and `GameProfile.test.ts`
+  assert every metric's label renders and that no score/ranking element
+  exists. `GameProfile.vue` also renders `GET /games/{slug}/keys`'s
+  full issuer key history (#90, #80/#84 now decided/closed) — every key
+  ever registered, root or operational, with its revoked status — and,
+  only when the viewer is logged in, a "Your access" section reusing
+  `AvalonConnectionCard`/`revokeGrant`/`disconnectGame` exactly as
+  `Connections.vue` does, scoped to just this game's binding. Recognition
+  relationships (which other issuers recognize this one) remain unbuilt —
+  no server-side concept of that exists yet; recognition today is scoped
+  per-attestation (#33), not a game-level relationship graph — tracked as
+  the one open item left on #90.
 - `Connections.vue` (`/connections`, #27/#83) — lists the caller's own
   `GameBinding`s with a revoke action. `ConnectGame.vue` (`/connect/:slug`,
   #27) — the capability-consent flow a user lands on to authorize a game,

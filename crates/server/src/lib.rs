@@ -214,7 +214,10 @@ pub fn router(state: AppState) -> Router {
         // `/games/{slug}/keys`, not `/integrations/{slug}/keys` — #293's
         // generalized alias covers registration/read routes, not every
         // future game-specific endpoint.
-        .route("/games/{slug}/keys", post(games::add_issuer_key))
+        .route(
+            "/games/{slug}/keys",
+            post(games::add_issuer_key).get(games::list_issuer_keys),
+        )
         .route(
             "/games/{slug}/keys/{key_id}/revoke",
             post(games::revoke_issuer_key),

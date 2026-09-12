@@ -32,6 +32,7 @@ import type {
   FriendshipResponse,
   GameBreakdownResponse,
   GameRegistryResponse,
+  IssuerKeyResponse,
   GameResponse,
   GuardianRequestSummary,
   GuardianSettingsResponse,
@@ -917,6 +918,13 @@ export function getGamePublic(slug: string): Promise<GameResponse> {
 // visibility as getGame/listGames.
 export function getGameRegistry(slug: string): Promise<GameRegistryResponse> {
   return request(`/games/${slug}/registry`)
+}
+
+// Issue #90's game profile page: an issuer's full key history, root and
+// operational, valid and revoked. Same public/unauthenticated visibility
+// as getGamePublic/getGameRegistry above.
+export function listIssuerKeys(slug: string): Promise<IssuerKeyResponse[]> {
+  return request(`/games/${slug}/keys`)
 }
 
 // Player-session only — a game credential never grants itself anything

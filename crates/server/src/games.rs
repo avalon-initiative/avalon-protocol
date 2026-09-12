@@ -712,6 +712,34 @@ pub(crate) async fn fetch_issuer_keys(
     rows.iter().map(issuer_key_from_row).collect()
 }
 
+/// `GET /games/{slug}/keys` (#90) — public, unauthenticated: an issuer's
+/// full key history (any role, any status), the read side of
+/// [`add_issuer_key`]/[`revoke_issuer_key`]. Public keys are already public
+/// by definition, and #90's design calls for the Hub to show a game's "key
+/// history and status" on its profile page — nothing here is sensitive the
+/// way the game's own root-key-authenticated endpoints are. Ordered oldest
+/// first so a viewer reads it as a timeline.
+pub async fn list_issuer_keys(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<Vec<IssuerKeyResponse>>, AppError> {
+    let game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let mut keys = fetch_issuer_keys(&state, game_id).await?;
+    keys.sort_by_key(|k| k.valid_from);
+    Ok(Json(
+        keys.into_iter()
+            .map(|k| IssuerKeyResponse {
+                key_id: k.key_id,
+                algorithm: k.algorithm,
+                role: k.role.as_str().to_string(),
+                valid_from: k.valid_from,
+                valid_until: k.valid_until,
+                revoked_at: k.revoked_at,
+            })
+            .collect(),
+    ))
+}
+
 /// Shared core of [`authenticate_game`]/[`authenticate_game_root`]: verifies
 /// a game's server-to-server request via the challenge-response scheme this
 /// module's doc comment describes (the milestone-1 stand-in pending #80 —
