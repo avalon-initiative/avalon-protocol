@@ -146,6 +146,131 @@ async fn seed_membership_and_guild(
     create_guild_with_general_channel(http, base, owner_token).await
 }
 
+/// Issue #276: a channel's `topic` round-trips through `PATCH
+/// .../channels/{cid}` — settable, clearable (empty string normalizes to
+/// `null`, matching `Guild::motd`'s convention), and rejected when over the
+/// server's length cap, without disturbing the channel's other fields
+/// (`name`/`announcement_only`) already at their existing values.
+#[tokio::test]
+#[ignore]
+async fn channel_topic_round_trips_and_normalizes_blank_to_null() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
+
+    // Freshly created channels have no topic.
+    let channels: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/channels")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let general = channels
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == channel_id)
+        .unwrap();
+    assert!(general["topic"].is_null());
+
+    // Set a topic.
+    let updated: serde_json::Value = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "general", "topic": "patch notes & raid planning" }))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(updated["topic"], "patch notes & raid planning");
+    assert_eq!(updated["name"], "general");
+    assert_eq!(updated["announcement_only"], false);
+
+    // Over the length cap is rejected, and leaves the existing topic alone.
+    let too_long = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "general", "topic": "a".repeat(201) }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(too_long.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let unchanged: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/channels")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let general_after = unchanged
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == channel_id)
+        .unwrap();
+    assert_eq!(general_after["topic"], "patch notes & raid planning");
+
+    // Clearing (empty string) normalizes to null.
+    let cleared: serde_json::Value = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "general", "topic": "" }))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(cleared["topic"].is_null());
+
+    // Omitting `topic` entirely leaves whatever was already there untouched
+    // (a rename with no `topic` key at all, not an implicit clear).
+    let renamed: serde_json::Value = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "general", "topic": "back again" }))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(renamed["topic"], "back again");
+
+    let rename_only: serde_json::Value = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "general-renamed" }))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(rename_only["name"], "general-renamed");
+    assert_eq!(
+        rename_only["topic"], "back again",
+        "a rename with no `topic` key must leave the existing topic untouched"
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn a_member_can_send_and_list_messages_in_order() {

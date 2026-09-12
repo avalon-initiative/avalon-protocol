@@ -581,6 +581,9 @@ export interface ChannelResponse {
   // (resolved per-channel via the override layer below) instead of plain
   // membership.
   announcement_only: boolean
+  // Issue #276: a short line describing what the channel is for, shown in
+  // the channel header. `null`/unset means no topic.
+  topic: string | null
 }
 
 export interface CreateChannelRequest {
@@ -591,6 +594,9 @@ export interface UpdateChannelRequest {
   name: string
   // Issue #250. Omitted leaves the existing value untouched.
   announcement_only?: boolean
+  // Issue #276. Omitted leaves the existing value untouched; an empty
+  // string clears it.
+  topic?: string
 }
 
 // Per-resource guild permission overrides (issue #250), matching

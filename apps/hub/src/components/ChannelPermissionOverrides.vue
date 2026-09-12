@@ -8,11 +8,11 @@
 // an explicit deny always beats a base grant, an explicit grant always
 // beats a base absence.
 //
-// Also carries the announcement-only toggle (this ticket's end-to-end
-// channel-organization feature): when set, `channel_post` becomes required
-// to post in this channel, gated the same "any current member may post"
-// default everywhere else — the override rows below are how a role earns
-// (or loses) that ability for this specific channel.
+// The announcement-only toggle used to live here too, but issue #276
+// relocated it to sit with the channel's own settings in Guild.vue (a
+// simple per-channel setting was a strange fit for a manage-roles-oriented
+// permissions matrix) — this component is now purely the role x permission
+// grid.
 //
 // Convention: no <style> block, styling in the co-located .module.scss;
 // script stays glue over the api client plus local load/error state.
@@ -26,15 +26,11 @@ const props = defineProps<{
   guildId: string
   channel: ChannelResponse
   roles: RoleResponse[]
-  // manage_roles: required to read/write overrides. manage_channels:
-  // required to toggle announcement_only. A caller with only one of the
-  // two still sees the panel, with the part they can't use disabled and
-  // any attempt surfaced as a plain server-rejected error, not hidden.
+  // Required to read/write overrides — the parent only renders this panel
+  // once this is true, but it's still threaded through as a prop since
+  // loadOverrides below re-checks it.
   canManageRoles: boolean
-  canManageChannels: boolean
 }>()
-
-const emit = defineEmits<{ updated: [] }>()
 
 type OverrideState = 'inherit' | 'allow' | 'deny'
 
@@ -47,7 +43,6 @@ const OVERRIDE_PERMISSIONS = ['channel_post', 'manage_channels'] as const
 const overrides = ref<PermissionOverrideResponse[]>([])
 const loading = ref(false)
 const error = ref('')
-const togglingAnnouncement = ref(false)
 const pendingKey = ref('')
 
 const nonOwnerRoles = computed(() => props.roles.filter((r) => r.name_index !== 0))
@@ -80,22 +75,6 @@ function stateFor(roleIndex: number, permission: string): OverrideState {
   const existing = overrideFor(roleIndex, permission)
   if (!existing) return 'inherit'
   return existing.allow ? 'allow' : 'deny'
-}
-
-async function onToggleAnnouncementOnly() {
-  togglingAnnouncement.value = true
-  error.value = ''
-  try {
-    await api.updateChannel(props.token, props.guildId, props.channel.id, {
-      name: props.channel.name,
-      announcement_only: !props.channel.announcement_only,
-    })
-    emit('updated')
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Something went wrong.'
-  } finally {
-    togglingAnnouncement.value = false
-  }
 }
 
 async function onSetState(roleIndex: number, permission: string, state: OverrideState) {
@@ -131,19 +110,6 @@ function onSelectChange(roleIndex: number, permission: string, event: Event) {
 
 <template>
   <div :class="styles.panel">
-    <label :class="styles.announcementRow">
-      <input
-        type="checkbox"
-        :checked="channel.announcement_only"
-        :disabled="!canManageChannels || togglingAnnouncement"
-        @change="onToggleAnnouncementOnly"
-      />
-      <span
-        >Announcement-only — only roles allowed <code>channel_post</code> here (or granted it
-        below) may post</span
-      >
-    </label>
-
     <p v-if="error" :class="styles.error">{{ error }}</p>
 
     <p v-if="!canManageRoles" :class="styles.hint">

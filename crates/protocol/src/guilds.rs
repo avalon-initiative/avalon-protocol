@@ -381,6 +381,12 @@ pub struct GuildChannel {
     /// `false` (the default) keeps today's behavior: any current guild
     /// member may post.
     pub announcement_only: bool,
+    /// Short line describing what this channel is for (issue #276),
+    /// rendered in the channel header — same "no value" convention as
+    /// `Guild::motd`/`Guild::banner`: `None` means unset, an empty string
+    /// is never stored (normalized to `None` server-side on the way in).
+    /// Editable by whoever can manage the channel, same gate as a rename.
+    pub topic: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
