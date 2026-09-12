@@ -254,7 +254,21 @@ is visibly marked.
   open and undecided, and nothing here simulates scopes it hasn't defined.
 - `apps/mobile-hub/` — the same scaffold in a Tauri shell; `src-tauri/` is its
   own Cargo package, not a workspace member. Not wired to the identity flow
-  yet (#60).
+  yet (#60). `src-tauri/icons/` is generated from `src-tauri/app-icon.svg`
+  (issue #311, `tauri icon apps/mobile-hub/src-tauri/app-icon.svg -o
+  apps/mobile-hub/src-tauri/icons`) — the real Avalon mark (a six-facet gem
+  in the brand palette, matching `.vscode/mocks/IconMock.png`'s "Mark
+  (Standalone)"), not the solid-color placeholder the Tauri build-fix
+  commit generated before any branding existed. `apps/hub/public/favicon.svg`
+  is the same mark, linked from `apps/hub/index.html`. `AvalonIcon`'s
+  `logo` glyph (`packages/ui/src/components/AvalonIcon.vue`, used at 22px
+  for `HubShell.vue`'s sidebar brand mark) is a solid diamond silhouette
+  matching the mock's "Monochrome" app-icon variant — filled rather than
+  stroked, unlike every other glyph in that component, since it's a brand
+  mark, not a line icon. Not yet done, and not this ticket's job: achievement
+  /rank badges (star, rare, epic, legendary, …) get their own component per
+  #311's design rather than being forced through `AvalonIcon`'s
+  single-color `currentColor` model — tracked on the concurrent #332.
 - `GameDirectory.vue` / `GameProfile.vue` (#270, first buildable slice of
   #90) — `/integrations` (a search box + name/newest sort over `GET /games`,
   `apps/hub/src/composables/useDiscoverGames.ts`, same server-side
