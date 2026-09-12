@@ -74,8 +74,12 @@ withDefaults(defineProps<AvalonIconProps>(), {
       <path d="M3 12h4l2.5-6 4 12 2.5-6H21" />
     </template>
     <template v-else-if="name === 'logo'">
-      <path d="M12 2.5 3.5 20h4.2l1.7-3.8h5.2L16.3 20h4.2L12 2.5Z" />
-      <path d="M10.6 13.2h2.8L12 9.9l-1.4 3.3Z" fill="currentColor" stroke="none" />
+      <!-- The real mark (#311, `.vscode/mocks/IconMock.png`'s "Monochrome"
+           app-icon variant), replacing this glyph's pre-mock placeholder
+           shape - a solid diamond silhouette, filled rather than stroked
+           like every other icon here, matching the faceted gem used in
+           apps/mobile-hub/src-tauri/app-icon.svg and apps/hub/public/favicon.svg. -->
+      <path d="M12 2 20.5 9 12 22 3.5 9 12 2Z" fill="currentColor" stroke="none" />
     </template>
     <template v-else-if="name === 'alert'">
       <path d="M12 3.5 2 20.5h20L12 3.5Z" />
