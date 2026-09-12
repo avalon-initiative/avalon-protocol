@@ -8,6 +8,7 @@
 // to an empty slot.
 import { ref } from 'vue'
 import styles from '../styles/AvalonAchievementCard.module.scss'
+import AvalonIcon from './AvalonIcon.vue'
 import type { AvalonAchievementCardProps } from './AvalonAchievementCard.types'
 
 defineProps<AvalonAchievementCardProps>()
@@ -22,6 +23,8 @@ const historyOpen = ref(false)
 <template>
   <div :class="styles.card">
     <div :class="styles.heading">
+      <img v-if="iconUrl" :src="iconUrl" alt="" :class="styles.icon" />
+      <AvalonIcon v-else :name="icon ?? 'trophy'" :size="28" />
       <span :class="styles.name">{{ achievementName }}</span>
       <span :class="[styles.statusBadge, styles[status]]">{{ status }}</span>
     </div>

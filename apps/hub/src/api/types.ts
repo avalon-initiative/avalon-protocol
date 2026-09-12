@@ -874,6 +874,10 @@ export interface AchievementDefinitionResponse {
   name: string
   description: string
   schema?: string
+  // Always populated server-side (falls back to the hardcoded default,
+  // "trophy", when the definition has neither field set — issue #332).
+  icon: string
+  icon_url?: string
   version: number
   created_at: string
   updated_at: string

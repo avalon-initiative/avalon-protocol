@@ -332,3 +332,126 @@ async fn retiring_a_definition_marks_it_retired_without_deleting_it() {
     assert_eq!(list.len(), 1, "retiring never deletes the definition");
     assert_eq!(list[0]["retired"], true);
 }
+
+#[tokio::test]
+#[ignore]
+async fn a_definition_with_neither_icon_field_set_still_gets_a_default_icon() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let game = register_game(&http, &base).await;
+
+    let create_body = serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+    });
+    let headers = game_auth_headers(&http, &base, &game).await;
+    let response = http
+        .post(format!("{base}/games/{}/achievements", game.slug))
+        .headers(headers)
+        .json(&create_body)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let def: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(def["icon"], "trophy");
+    assert_eq!(def["icon_url"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+#[ignore]
+async fn icon_url_takes_precedence_and_round_trips_through_create_and_update() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let game = register_game(&http, &base).await;
+
+    let create_body = serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+        "icon": "sword",
+        "icon_url": "https://cdn.example.com/dragon-slayer.png",
+    });
+    let headers = game_auth_headers(&http, &base, &game).await;
+    let response = http
+        .post(format!("{base}/games/{}/achievements", game.slug))
+        .headers(headers)
+        .json(&create_body)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let def: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(def["icon"], "sword");
+    assert_eq!(def["icon_url"], "https://cdn.example.com/dragon-slayer.png");
+
+    let headers = game_auth_headers(&http, &base, &game).await;
+    let update_response = http
+        .patch(format!(
+            "{base}/games/{}/achievements/dragon_slayer",
+            game.slug
+        ))
+        .headers(headers)
+        .json(&serde_json::json!({ "icon": "shield" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(update_response.status().is_success());
+    let updated: serde_json::Value = update_response.json().await.unwrap();
+    assert_eq!(updated["icon"], "shield");
+    // icon_url was left untouched by the update (field omitted).
+    assert_eq!(
+        updated["icon_url"],
+        "https://cdn.example.com/dragon-slayer.png"
+    );
+    assert_eq!(updated["version"], 2, "changing icon bumps version");
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_non_http_icon_url_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let game = register_game(&http, &base).await;
+
+    let create_body = serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+        "icon_url": "javascript:alert(1)",
+    });
+    let headers = game_auth_headers(&http, &base, &game).await;
+    let response = http
+        .post(format!("{base}/games/{}/achievements", game.slug))
+        .headers(headers)
+        .json(&create_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_unknown_icon_key_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let game = register_game(&http, &base).await;
+
+    let create_body = serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+        "icon": "not_a_real_icon",
+    });
+    let headers = game_auth_headers(&http, &base, &game).await;
+    let response = http
+        .post(format!("{base}/games/{}/achievements", game.slug))
+        .headers(headers)
+        .json(&create_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}

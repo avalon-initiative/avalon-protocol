@@ -11,13 +11,21 @@
 .heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--av-space-2);
+}
+
+.icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--av-radius-md);
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .name {
   font-size: var(--av-text-md);
   font-weight: 600;
+  flex: 1;
 }
 
 .statusBadge {

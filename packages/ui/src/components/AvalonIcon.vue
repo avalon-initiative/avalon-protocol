@@ -196,5 +196,20 @@ withDefaults(defineProps<AvalonIconProps>(), {
       <circle cx="12" cy="12" r="9" />
       <path d="m5.6 5.6 12.8 12.8" />
     </template>
+    <template v-else-if="name === 'trophy'">
+      <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z" />
+      <path d="M8 5.5H4.5v1.5A3 3 0 0 0 8 9.5M16 5.5h3.5V7A3 3 0 0 1 16 9.5" />
+      <path d="M12 13v3.5M9 20.5h6M10.2 16.5h3.6l0.4 4h-4.4l0.4-4Z" />
+    </template>
+    <template v-else-if="name === 'star'">
+      <path d="M12 3.5 14.6 9.2 20.8 9.9 16.2 14 17.5 20.2 12 17 6.5 20.2 7.8 14 3.2 9.9 9.4 9.2Z" />
+    </template>
+    <template v-else-if="name === 'shield'">
+      <path d="M12 3 4.5 6v5.5c0 4.6 3.2 8 7.5 9.5 4.3-1.5 7.5-4.9 7.5-9.5V6L12 3Z" />
+    </template>
+    <template v-else-if="name === 'sword'">
+      <path d="m6 18 9.5-9.5M13.5 4.5l6 6-2.5 2.5-6-6Z" />
+      <path d="M4 20l2.5-1 0.5-2.5-2 0.5Z" />
+    </template>
   </svg>
 </template>

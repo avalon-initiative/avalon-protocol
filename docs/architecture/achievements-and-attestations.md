@@ -97,13 +97,29 @@ results separately so a game can *display* claims it doesn't *recognize*.
 
 A game defines its achievements before it issues them. An
 `AchievementDefinition` carries the namespaced id, the issuer, a name, a
-description, an optional `schema` reference, and a `version`. Definitions are
+description, an optional `schema` reference, a `version`, and an optional
+visual identity (`icon`/`icon_url`, #332). Definitions are
 durable (`achievement.defined`) so the registry and the Hub can render an
 issued attestation even after the game is gone. `version` is bumped by
 `achievement.definition_updated`; the id never changes, so a consumer can
 notice a definition evolved without losing track of what it is. A definition
 can be retired (`achievement.definition_retired`) — no new issuances against
 it — without deleting it or touching any attestation already issued.
+
+### Icons (#332)
+
+A definition gets a visual identity without every integrator needing to host
+anything: `icon` is a key into a small, fixed built-in icon set shipped with
+`packages/ui` (`trophy`/`star`/`shield`/`sword` — generic enough to cover
+games/apps/services alike), and `icon_url` is an integrator-hosted image that
+takes precedence over `icon` when present. Both are optional; a definition
+with neither set still renders the hardcoded default (`trophy`) rather than a
+blank slot — the server, not the client, owns that fallback, so every reader
+(the Hub, a future third-party consumer) sees the same default without
+reimplementing the choice. `icon_url` is stored as-is and validated only for
+an `http`/`https` scheme, never fetched or re-hosted — the same
+"the server records, it doesn't vouch for content" posture `avatar_url`
+already has in this schema.
 
 ## Lifecycle
 
@@ -198,6 +214,17 @@ uses. Neither proof substitutes for the other.
   (`crates/server/tests/achievements.rs`, `crates/server/tests/milestones.rs`),
   the latter specifically exercising the category-enforcement behavior.
   Issuing (signed attestations) is #32, described in its own section above.
+- `achievement_definitions` (migration `0047_achievement_definition_icons`,
+  #332) — `icon`/`icon_url`, both optional. `create`/`update` validate
+  `icon` against the fixed built-in set and `icon_url` against an
+  `http`/`https` scheme (`achievements::validate_icon`/`validate_icon_url`,
+  reusing `handlers::is_http_url`); `AchievementDefinitionResponse.icon`
+  always comes back populated (falls back to the hardcoded default,
+  `trophy`, when the row has neither field set) while `icon_url` stays
+  `Option`. `packages/ui`'s `AvalonAchievementCard` (#35) renders the
+  built-in icon or an `<img>` for `icon_url` when present. Verified live,
+  including the default-fallback and rejected-input paths
+  (`crates/server/tests/achievements.rs`).
 
 ## Decisions and tickets
 
@@ -222,6 +249,9 @@ uses. Neither proof substitutes for the other.
   methods wired to a real server.
 - [#35](https://github.com/LunarVagabond/avalon-protocol/issues/35) — Hub
   achievements list.
+- [#332](https://github.com/LunarVagabond/avalon-protocol/issues/332) —
+  default icon set + dev-hosted `icon_url` override, landed, described
+  above.
 - [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
   attestation trust model.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
