@@ -286,3 +286,68 @@ async fn a_games_root_key_cannot_manage_a_different_games_keys() {
     .unwrap();
     assert_eq!(attempt.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+/// `GET /games/{slug}/keys` (#90): public, no auth required, shows every
+/// key an issuer has ever registered — root and operational, valid and
+/// revoked — as a timeline.
+#[tokio::test]
+#[ignore]
+async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let game = register_game(&http).await;
+
+    let operational_key = SigningKey::generate(&mut rand::rng());
+    let headers =
+        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
+            .await;
+    let add = with_headers(
+        http.post(format!("{base}/games/{}/keys", game.slug)),
+        &headers,
+    )
+    .json(&serde_json::json!({
+        "algorithm": "ed25519",
+        "public_key": BASE64.encode(operational_key.verifying_key().as_bytes()),
+        "role": "operational",
+    }))
+    .send()
+    .await
+    .unwrap();
+    let op_key_id = add.json::<Value>().await.unwrap()["key_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let headers =
+        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
+            .await;
+    with_headers(
+        http.post(format!(
+            "{base}/games/{}/keys/{}/revoke",
+            game.slug, op_key_id
+        )),
+        &headers,
+    )
+    .json(&serde_json::json!({ "reason": "test" }))
+    .send()
+    .await
+    .unwrap();
+
+    // No auth headers at all — this is a plain, unauthenticated GET.
+    let history: Vec<Value> = http
+        .get(format!("{base}/games/{}/keys", game.slug))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(history.len(), 2, "{history:?}");
+    assert_eq!(history[0]["key_id"], game.root_key_id);
+    assert_eq!(history[0]["role"], "root");
+    assert!(history[0]["revoked_at"].is_null());
+    assert_eq!(history[1]["key_id"], op_key_id);
+    assert_eq!(history[1]["role"], "operational");
+    assert!(history[1]["revoked_at"].is_string());
+}

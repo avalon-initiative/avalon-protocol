@@ -689,6 +689,18 @@ export interface GameRegistryResponse {
   unique_achievement_holders: MetricResponse
 }
 
+// GET /games/{slug}/keys's response (issue #90): an issuer's full key
+// history, oldest first — public and unauthenticated, matching
+// crates/server/src/games.rs::IssuerKeyResponse field-for-field.
+export interface IssuerKeyResponse {
+  key_id: string
+  algorithm: string
+  role: 'root' | 'operational'
+  valid_from: string
+  valid_until: string | null
+  revoked_at: string | null
+}
+
 export interface ConnectGameRequest {
   capabilities: string[]
 }

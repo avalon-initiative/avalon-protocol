@@ -2,11 +2,17 @@
 // definition/class label (never a bare number), a suspended/revoked
 // status renders visibly distinct from active, and no score/ranking
 // element exists anywhere on the page.
+import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import GameProfile from './GameProfile.vue'
 import { mockFetchByPath } from '../testing/fakes'
+
+beforeEach(() => {
+  localStorage.clear()
+  setActivePinia(createPinia())
+})
 
 function testRouter() {
   return createRouter({
@@ -40,6 +46,7 @@ async function mountProfile(gameOverrides: Record<string, unknown> = {}) {
       ...gameOverrides,
     },
     '/games/ashen-realms/registry': registryResponse,
+    '/games/ashen-realms/keys': [],
   })
 
   const router = testRouter()
@@ -81,5 +88,46 @@ describe('GameProfile', () => {
     const suspended = await mountProfile({ status: 'suspended' })
     expect(suspended.find('[class*="statusBadge"]').exists()).toBe(true)
     expect(suspended.text()).toContain('suspended')
+  })
+
+  it('shows issuer key history including revoked keys', async () => {
+    mockFetchByPath({
+      '/integrations/ashen-realms': {
+        id: 'g1',
+        slug: 'ashen-realms',
+        name: 'Ashen Realms',
+        developer: 'Ashen Studios',
+        registered_at: '2026-01-12T00:00:00Z',
+        status: 'active',
+        requested_capabilities: [],
+      },
+      '/games/ashen-realms/registry': registryResponse,
+      '/games/ashen-realms/keys': [
+        { key_id: 'k1', algorithm: 'ed25519', role: 'root', valid_from: '2026-01-12T00:00:00Z', valid_until: null, revoked_at: null },
+        {
+          key_id: 'k2',
+          algorithm: 'ed25519',
+          role: 'operational',
+          valid_from: '2026-02-01T00:00:00Z',
+          valid_until: null,
+          revoked_at: '2026-03-01T00:00:00Z',
+        },
+      ],
+    })
+    const router = testRouter()
+    router.push('/games/ashen-realms')
+    await router.isReady()
+    const wrapper = mount(GameProfile, { global: { plugins: [router] } })
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
+
+    expect(wrapper.text()).toContain('root')
+    expect(wrapper.text()).toContain('operational')
+    expect(wrapper.text()).toContain('Revoked')
+  })
+
+  it('does not show "Your access" for a logged-out visitor', async () => {
+    const wrapper = await mountProfile()
+    expect(wrapper.text()).not.toContain('Your access')
   })
 })

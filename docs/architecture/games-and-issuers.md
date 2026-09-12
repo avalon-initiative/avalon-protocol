@@ -200,6 +200,13 @@ holding k1.
   rejected (401) for key management, root revoking it, the revoked key then
   failing to authenticate *anything*, and a repeat revoke correctly
   rejected rather than succeeding twice.
+- **`GET /games/{slug}/keys` (#90)**: the read side of the above — public,
+  unauthenticated, returns every key this issuer has ever registered (any
+  role, any status), oldest first. Didn't exist before this ticket; #90's
+  Hub game-profile page needed a way to actually show the "key history and
+  status" its own design calls for. Verified live: root key plus one
+  added-then-revoked operational key, fetched with no auth headers at all,
+  both entries present with the revoked one's `revoked_at` set.
 - **Still deferred (#84's own explicit scope note)**: the network-level
   authorization model for transitioning `GameStatus` into `Suspended`/
   `Revoked`/`Deprecated` (the enum variants exist; nothing can set them
