@@ -2,6 +2,9 @@
 
 A protocol event is a durable fact Avalon considers part of its history. **Not
 every game action is a protocol event; ordinary gameplay never becomes one.**
+See [`./worked-ledger-example.md`](./worked-ledger-example.md) for one
+hypothetical player's ledger rendered as real, ordered JSON instances of the
+catalogue below, alongside what never appears on it.
 **Events are the canonical record — every table is a projection of them**
 ([#75](https://github.com/LunarVagabond/avalon-protocol/issues/75)), and
 **history is append-only: a correction is a new event, never an edit.**
