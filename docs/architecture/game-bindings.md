@@ -23,8 +23,17 @@ Avalon Identity X
 
 Avalon holds the two bindings. It does not know what an Avion or a Sea Lion is,
 and it never will unless a game explicitly promotes a fact into durable history
-as an attestation. The character rows are keyed on the game's side, referencing
-the binding or the identity id; Avalon stores none of their attributes.
+as an attestation, **or explicitly publishes it as instance data against a
+schema it published itself** (Game Space's data-exposure mechanism, #255/#384,
+decided #381) — subject to that schema's own declared visibility. Absent one
+of those two explicit acts, the character rows stay keyed on the game's side,
+referencing the binding or the identity id; Avalon stores none of their
+attributes. Publishing instance data is deliberately narrow in spirit even
+though it's technically unrestricted in shape: small, portable, fun-to-carry
+flavor data (a character's name, level, race, class, titles), never a
+character's full mechanical state (inventory, skills, stats used for game
+balance) — see [`./identity-aggregate-view.md`](./identity-aggregate-view.md)
+for a full worked example and the visibility rules.
 
 ## What a binding is
 
@@ -54,9 +63,13 @@ Game A
         establish a Game A profile for a consenting identity
         manage its own game-side character data
         issue Game A attestations about that identity
+        read whatever Game B has explicitly published (attestations,
+            or instance data Game B opted into being visible, #381)
 
     cannot:
-        read or write Game B's profile of the same identity
+        read or write Game B's own internal, unpublished profile of the
+            same identity
+        write to Game B's published data under any circumstance
         issue attestations under Game B's issuer identity
         alter the identity itself, its friends, or its guild history
 ```
