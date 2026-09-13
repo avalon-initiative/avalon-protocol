@@ -175,22 +175,24 @@ enforced.
   others, most of them not registry-shaped.
 - **First slice of the metric table implemented (#261)**: `players`,
   `total players ever`, `achievements issued`, `achievements revoked`, and
-  `unique achievement holders` — all `durable-derived` — are real. `players`
-  / `total players ever` come from `crates/indexer/src/projections/game_bindings.rs`
-  (its own `indexer_game_bindings` table, decoded from
+  `unique achievement holders` — all `durable-derived` — are real.
+  `players`/`total players ever` come from
+  `crates/indexer/src/projections/game_bindings.rs` (its own
+  `indexer_game_bindings` table, decoded from
   `game.binding_established`/`game.binding_ended`, migration
   `0039_indexer_game_bindings`). The three achievement metrics come from
   `crates/indexer/src/projections/attestations.rs`, reading the existing
-  `indexer_attestations` table. `crates/indexer/src/registry.rs::compute_for_game`
-  composes both into a `GameRegistryMetrics` where every field is a
-  `{ value, definition, class }` triple, never a bare number, and returns
-  zeros (not an error) for a game with no activity. Exposed publicly and
-  unauthenticated at `GET /games/{slug}/registry`
-  (`crates/server/src/registry.rs`) — a separate endpoint from `GET
-  /integrations/{slug}` on purpose, so the class-label contract can't be
-  accidentally skipped by flattening metrics alongside plain registration
-  fields. Fixture-based unit tests per metric (no live Postgres) live
-  alongside each projection module.
+  `indexer_attestations` table.
+
+  `crates/indexer/src/registry.rs::compute_for_game` composes both into a
+  `GameRegistryMetrics` where every field is a `{ value, definition, class }`
+  triple, never a bare number, and returns zeros (not an error) for a game
+  with no activity. It's exposed publicly and unauthenticated at
+  `GET /games/{slug}/registry` (`crates/server/src/registry.rs`) — a separate
+  endpoint from `GET /integrations/{slug}` on purpose, so the class-label
+  contract can't be accidentally skipped by flattening metrics alongside
+  plain registration fields. Fixture-based unit tests per metric (no live
+  Postgres) live alongside each projection module.
 - **Minimum cohort size (#96)**: `crates/indexer/src/registry.rs`'s
   `coarsen` is the single enforcement point every metric in
   `compute_for_game` passes through before `Metric`/`MetricResponse` ever
@@ -226,20 +228,21 @@ enforced.
   than being hidden.
 - **Server public API generalized: `/integrations` canonical, `/games`
   compatibility path (#293)**: `crates/server/src/games.rs`/`lib.rs` route
-  `GET /integrations`/`GET /integrations/{slug}` as the canonical reads,
-  with `GET /games`/`GET /games/{slug}` kept working as real HTTP redirects
+  `GET /integrations`/`GET /integrations/{slug}` as the canonical reads, with
+  `GET /games`/`GET /games/{slug}` kept working as real HTTP redirects
   (`redirect_list_games`/`redirect_get_game`) to the new paths, preserving
-  the query string. `POST /integrations` and `POST /games` (registration)
-  both dual-route to the same `register_game` handler rather than one
-  redirecting to the other — a redirect would silently turn the `POST` into
-  a `GET` in many clients. The `x-avalon-game-key-id`/
-  `x-avalon-game-challenge-id`/`x-avalon-game-signature` auth headers on the
-  challenge-response flow (below) gained generic
-  `x-avalon-integrator-*` equivalents; either name is accepted from a
-  caller, and this repo's own SDK/CLI/Hub send only the new name. No JSON
-  field was renamed. The Hub's API client (`apps/hub/src/api/client.ts`)
-  now calls `/integrations`/`/integrations/{slug}` directly rather than the
-  compatibility path.
+  the query string.
+
+  `POST /integrations` and `POST /games` (registration) both dual-route to
+  the same `register_game` handler rather than one redirecting to the
+  other — a redirect would silently turn the `POST` into a `GET` in many
+  clients. The `x-avalon-game-key-id`/`x-avalon-game-challenge-id`/
+  `x-avalon-game-signature` auth headers on the challenge-response flow
+  (below) gained generic `x-avalon-integrator-*` equivalents; either name is
+  accepted from a caller, and this repo's own SDK/CLI/Hub send only the new
+  name. No JSON field was renamed. The Hub's API client
+  (`apps/hub/src/api/client.ts`) now calls `/integrations`/`/integrations/{slug}`
+  directly rather than the compatibility path.
 - **Hub game directory + per-game profile page (#270, first slice of
   #90)**: `apps/hub/src/views/GameDirectory.vue` lists `GET /integrations`
   results with a search box and name/newest sort toggle — no

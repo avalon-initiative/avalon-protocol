@@ -269,17 +269,16 @@ guarantee is actually needed, following the same discipline
   versions remains unbuilt. Data exposure (this section's own gap) is now
   built, per #384.
 - **`proto_source` is now actually parsed** (#384's amendment to #181's
-  original "protobuf IDL, stored opaque" decision) — `crate::proto_schema`
+  original "protobuf IDL, stored opaque" decision). `crate::proto_schema`
   (`crates/server/src/proto_schema.rs`) parses it at publish time with
-  `protobuf-parse`'s pure-Rust parser (no `protoc` binary, since this
-  parses untrusted third-party text at request time) into a
-  `FileDescriptorProto`, then builds a `MessageDescriptor` via `protobuf`'s
-  reflection support. A schema must declare **exactly one top-level
-  `message`** — that message is the schema's root type; zero or multiple is
-  rejected with `AppError::InvalidProtoSchema`, never guessed at. The
-  *validated* instance JSON is still stored/served as plain JSONB
-  afterward — the protobuf machinery is a write-time validation gate, not a
-  new storage/wire format.
+  `protobuf-parse`'s pure-Rust parser — no `protoc` binary, since this parses
+  untrusted third-party text at request time — into a `FileDescriptorProto`,
+  then builds a `MessageDescriptor` via `protobuf`'s reflection support. A
+  schema must declare **exactly one top-level `message`**, which becomes the
+  schema's root type; zero or multiple is rejected with
+  `AppError::InvalidProtoSchema`, never guessed at. The *validated* instance
+  JSON is still stored/served as plain JSONB afterward — the protobuf
+  machinery is a write-time validation gate, not a new storage/wire format.
 - **Schema-level and field-level visibility** (`default_visibility`:
   `"public"`/`"private"`, `field_visibility`: field name ->
   `"public"`/`"private"`, overriding the default for that field in either
@@ -291,20 +290,23 @@ guarantee is actually needed, following the same discipline
   time (`proto_schema::validate_field_visibility_keys`); a nonexistent
   field name is rejected, not silently accepted.
 - **Instance-data publication**: `POST
-  /games/{slug}/schemas/{version}/data` (`crates/server/src/game_data.rs`)
-  — a new `game_data.published` event kind, `game_data_instances` +
+  /games/{slug}/schemas/{version}/data` (`crates/server/src/game_data.rs`) —
+  a new `game_data.published` event kind, with `game_data_instances` +
   `indexer_game_data_instances` tables mirroring the
   `game_schemas`/`indexer_game_schemas` pairing exactly (append-only,
-  `superseded_by` lineage, no PATCH). Write auth: `authenticate_owning_game`
-  (the caller must *be* `{slug}`, same guard `publish_schema_version` uses)
-  plus an active binding from the subject identity to that game
+  `superseded_by` lineage, no PATCH).
+
+  Write auth needs three things together: `authenticate_owning_game` (the
+  caller must *be* `{slug}`, same guard `publish_schema_version` uses); an
+  active binding from the subject identity to that game
   (`authz::has_active_binding`, mirroring `achievements::issue_attestation`'s
-  "the player's own consent" pattern) plus the resolved schema's own
-  `game_id` matching the caller. The submitted `instance` JSON is validated
-  against the schema's parsed root message via `protobuf-json-mapping`
-  (`proto_schema::validate_instance_json`) — unknown fields, wrong types,
-  and (for a proto2-style schema) missing `required` fields are all
-  rejected with `AppError::InstanceSchemaMismatch`, never stored.
+  "the player's own consent" pattern); and the resolved schema's own
+  `game_id` matching the caller. The submitted `instance` JSON is then
+  validated against the schema's parsed root message via
+  `protobuf-json-mapping` (`proto_schema::validate_instance_json`) — unknown
+  fields, wrong types, and (for a proto2-style schema) missing `required`
+  fields are all rejected with `AppError::InstanceSchemaMismatch`, never
+  stored.
 - **Read**: `GET /identities/{id}/game-data`
   (`game_data::get_identity_game_data`) — public, unauthenticated, same
   posture `GET /attestations/{id}` already has (#381's whole point).

@@ -68,22 +68,26 @@ anything Avalon promises to preserve must be reconstructable from protocol
 history, and every change to it must emit a protocol event in the same unit of
 work as the projection change. For identity state:
 
+Unless a row says otherwise, every optional field below shares one
+convention: `null` in the `profile.updated` payload means the field was
+explicitly cleared, and an absent key means it was untouched.
+
 | State | Promised durable? | Canonical record | Notes |
 |---|---|---|---|
 | identity exists, `created_at` | yes | `identity.created` | self-signed, see below |
 | `display_name` | yes | `identity.created` (initial), `profile.updated` (changes) | emitted in the same transaction as the `profiles` row, via the outbox |
 | handle discriminator | yes | `identity.created` (initial), `profile.updated` (on rename) | server-chosen, so it's carried in the event — a rebuild must land on the same `name#1234` |
-| `avatar_url` | yes | `profile.updated` | `null` in the payload means explicitly cleared; absent means untouched |
-| `bio` | yes | `profile.updated` | free text, capped at 500 characters; `null` means explicitly cleared, absent means untouched (#155) |
+| `avatar_url` | yes | `profile.updated` | — |
+| `bio` | yes | `profile.updated` | free text, capped at 500 characters (#155) |
 | `favorite_genres` | yes | `profile.updated` | fixed, small controlled vocabulary (`Genre`), capped at 5 entries; unknown values rejected, not dropped; a present key always fully replaces the list, including to `[]` (#155) |
-| `pronouns` | yes | `profile.updated` | free text, capped at 40 characters; `null` means explicitly cleared, absent means untouched (#155) |
-| `banner_url` | yes | `profile.updated` | same shape/validation as `avatar_url`, a separate image slot; `null` means explicitly cleared, absent means untouched (#372) |
-| `status` | yes | `profile.updated` | free text, capped at 100 characters; `null` means explicitly cleared, absent means untouched (#372) |
+| `pronouns` | yes | `profile.updated` | free text, capped at 40 characters (#155) |
+| `banner_url` | yes | `profile.updated` | same shape/validation as `avatar_url`, a separate image slot (#372) |
+| `status` | yes | `profile.updated` | free text, capped at 100 characters (#372) |
 | `links` | yes | `profile.updated` | up to 5 self-reported URLs, each capped at 200 characters and required to parse as an `http`/`https` URL; a present key always fully replaces the list, including to `[]` (#372) |
-| `timezone` | yes | `profile.updated` | free text, capped at 64 characters; NOT validated against the real IANA time zone database (no such crate in this workspace today) — a documented gap; `null` means explicitly cleared, absent means untouched (#372) |
-| `theme_color` | yes | `profile.updated` | must match `^#[0-9a-fA-F]{6}$`; `null` means explicitly cleared, absent means untouched (#372) |
-| `location` | yes | `profile.updated` | free text, capped at 100 characters, self-described only — never IP-derived or geocoded; `null` means explicitly cleared, absent means untouched (#372) |
-| `main_guild` | yes | `profile.updated` | a pointer to one of this identity's own current guild memberships (no ticket — see below); must name a guild the identity is currently a member of, checked server-side against `guild_members`; `null` means explicitly cleared, absent means untouched; also cleared automatically, in the same transaction, if the identity leaves the guild it points at |
+| `timezone` | yes | `profile.updated` | free text, capped at 64 characters; NOT validated against the real IANA time zone database (no such crate in this workspace today) — a documented gap (#372) |
+| `theme_color` | yes | `profile.updated` | must match `^#[0-9a-fA-F]{6}$` (#372) |
+| `location` | yes | `profile.updated` | free text, capped at 100 characters, self-described only — never IP-derived or geocoded (#372) |
+| `main_guild` | yes | `profile.updated` | a pointer to one of this identity's own current guild memberships (no ticket — see below); must name a guild the identity is currently a member of, checked server-side against `guild_members`; also cleared automatically, in the same transaction, if the identity leaves the guild it points at |
 | future title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
 | WebAuthn passkey(s) | operational state, not an event | — | `identity_keys` table; see below |
 | event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
@@ -248,17 +252,18 @@ provider the identity's owner uses.
 
 ### Social recovery via M-of-N guardians (#201)
 
-The real answer to losing every registered passkey at once — #200's
+This is the real answer to losing every registered passkey at once — #200's
 multi-passkey registration only helps if a second device was registered
-*before* the loss. An identity owner designates a set of guardians (drawn only from
-their current friends, issue #15's network-level primitive — the only pool
-this is allowed to draw from) and a threshold M-of-N. Configuring or
-changing that set (`PUT /me/recovery/guardians`) requires the identity's
-*current* session, same as every other session-gated route in this crate —
-never reachable by an attacker who has compromised only a not-yet-valid new
-device, which is what makes "changing the guardian set requires the current
-set of valid credentials" true by construction rather than by a special-case
-check.
+*before* the loss. An identity owner designates a set of guardians, drawn
+only from their current friends (issue #15's network-level primitive — the
+only pool this is allowed to draw from), plus a threshold M-of-N.
+
+Configuring or changing that guardian set (`PUT /me/recovery/guardians`)
+requires the identity's *current* session, same as every other session-gated
+route in this crate. An attacker who has compromised only a not-yet-valid new
+device can never reach it. That's what makes "changing the guardian set
+requires the current set of valid credentials" true by construction, not by
+a special-case check.
 
 Recovery itself is a four-stage state machine, one `recovery_requests` row
 per attempt:
@@ -270,16 +275,18 @@ per attempt:
    `passkeys::register_start`/`register_finish` already use). This is the
    one deliberate exception to "every route requires a session" in this
    crate, since the entire premise is that the caller has none for the
-   identity in question. It is not an open door: the identity id must be
-   real, the identity must actually have guardians configured (an
-   unconfigured identity can never satisfy any M, so there is nothing to
-   spam toward), at most one *active* request may exist per identity at a
-   time (a partial unique index on `recovery_requests`, not an
-   application-level check-then-act), and a rolling 24-hour window caps how
-   many requests may be initiated against a single identity regardless of
-   outcome. The new device's passkey is captured but not yet a valid
-   credential — it sits in `recovery_requests.pending_passkey_data` until
-   the request actually finalizes.
+   identity in question.
+
+   It's not an open door, though — several checks bound it: the identity id
+   must be real; the identity must actually have guardians configured (an
+   unconfigured identity can never satisfy any M, so there's nothing to spam
+   toward); at most one *active* request may exist per identity at a time (a
+   partial unique index on `recovery_requests`, not an application-level
+   check-then-act); and a rolling 24-hour window caps how many requests may
+   be initiated against a single identity regardless of outcome. The new
+   device's passkey is captured but not yet a valid credential — it sits in
+   `recovery_requests.pending_passkey_data` until the request actually
+   finalizes.
 2. **Approval.** Each guardian independently approves
    (`POST /recovery/requests/:id/approve`), gated on currently — not
    historically — being one of the identity's guardians. Once approvals

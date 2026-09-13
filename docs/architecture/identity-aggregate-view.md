@@ -97,72 +97,22 @@ way regardless of which category it belongs to, distinguished only by its
 }
 ```
 
-`banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` landed
-via issue #372. `main_guild` and `effective_main_guild` landed with no
-ticket — `main_guild` is `Profile`'s own stored field (`null` unless
-explicitly set); `effective_main_guild` isn't a `Profile` field at all,
-it's computed at read time (falling back to the earliest-joined guild
-membership when `main_guild` is unset) and only ever appears in a response
-shape, never in storage or in a `profile.updated` payload — see
+`banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` landed via
+issue #372. `main_guild` and `effective_main_guild` landed with no ticket.
+`main_guild` is `Profile`'s own stored field (`null` unless explicitly set).
+`effective_main_guild` isn't a `Profile` field at all — it's computed at read
+time, falling back to the earliest-joined guild membership when `main_guild`
+is unset, and it only ever appears in a response shape, never in storage or
+in a `profile.updated` payload. See
 [`./identity.md`](./identity.md#what-is-promised-durable). If this doc and
 the actual code ever disagree, the code is right and this doc is stale —
 same discipline `worked-ledger-example.md` holds itself to.
 
-Real field provenance, so this doc can be checked against source directly:
-`identity`/`profile` from `avalon_protocol::identity::{Identity, Profile}`
-(`profile.main_guild` is `Profile::main_guild` itself;
-`profile.effective_main_guild` is not a `Profile` field — it's
-`crates/server/src/handlers.rs`'s read-time fallback to the earliest
-`GuildMember.joined_at` when `main_guild` is unset);
-`guilds` entries from `avalon_protocol::guilds::GuildMember { guild_id,
-identity_id, role, joined_at }`; `friends` derived from
-`avalon_protocol::social::Friendship { a, b, since }`; `integrations[].binding`
-from `avalon_protocol::games::GameBinding { identity_id, game_id,
-established_at, ended_at }`; `integrations[].attestations` from
-`avalon_protocol::achievements::AchievementAttestation { id, issuer,
-subject, achievement, issued_at, proof }`; `integrations[].type` from
-`avalon_protocol::games::IntegratorCategory`.
-
 ## Field reference
 
-**Layer 1** — `avalon_protocol::identity::{Identity, Profile}`,
-`avalon_protocol::guilds::GuildMember`, `avalon_protocol::social::Friendship`:
-
-| Field | Type | Used for |
-|---|---|---|
-| `identity.id` | `IdentityId` (UUID) | The stable, opaque handle everything else hangs off. Never derived from a name/username — see `identity.md`'s "The model." |
-| `identity.created_at` | timestamp | When the identity came into existence (`identity.created`). |
-| `profile.display_name` | string | Human-facing name; combined with `discriminator` to form the `handle` shown elsewhere. |
-| `discriminator` (→ `handle`) | string | Server-chosen, disambiguates same-named identities (`name#1234`); derived into `handle`, never stored/read as its own top-level field by consumers. |
-| `profile.avatar_url` | `Option<string>` | Self-chosen profile image. Validated as a well-formed `http`/`https` URL server-side (`is_http_url`). |
-| `profile.banner_url` | `Option<string>` (#372) | A second image slot for a profile page header — same validation as `avatar_url`. |
-| `profile.bio` | `Option<string>` | Free-text self-description, capped at 500 chars. |
-| `profile.status` | `Option<string>` (#372) | A short tagline, distinct from and shorter-capped than `bio`. |
-| `profile.pronouns` | `Option<string>` (#155) | Free text, capped at 40 chars. |
-| `profile.favorite_genres` | `Vec<Genre>` (#155) | A fixed, small controlled vocabulary — kept useful for matching/filtering, not free text. |
-| `profile.links` | `Vec<string>` (#372) | Up to 5 self-reported URLs, each validated as `http`/`https`. |
-| `profile.timezone` | `Option<string>` (#372) | Self-reported only — useful for guild event scheduling. **Not** validated against the real IANA tz database yet (documented gap). |
-| `profile.theme_color` | `Option<string>` (#372) | A self-chosen 6-digit hex accent color. Purely cosmetic self-expression. |
-| `profile.location` | `Option<string>` (#372) | Free text only, e.g. "Pacific Northwest." **Never** IP-derived or geocoded — load-bearing constraint, not a suggestion. |
-| `profile.main_guild` | `Option<GuildId>` | A self-chosen pointer to one of the identity's own guild memberships, so an integrator has one easy guild to build around instead of every simultaneous membership. Must reference a guild the identity is actually a member of; clears automatically if that membership ends. |
-| `guilds[]` | `GuildMember { guild_id, role, joined_at }` | Every guild membership this identity currently holds, with its role in each. |
-| `friends[]` | derived from `Friendship { a, b, since }` | The identity's accepted friend connections (symmetric — either side can be `a` or `b`). |
-
-**Layer 2** — one entry per integrator binding, `avalon_protocol::games::{GameBinding, IntegratorCategory}`, `avalon_protocol::achievements::AchievementAttestation`:
-
-| Field | Type | Used for |
-|---|---|---|
-| `type` | `IntegratorCategory` (game/app/service) | Which category this integrator registered as — a label, not a different mechanism; see #282/#275. |
-| `integrator_id` | string/slug | Which game/app/service this entry describes. |
-| `binding.established_at` | timestamp | When the identity opted into this integrator (consent-driven, identity-initiated — `game-bindings.md`). |
-| `binding.ended_at` | `Option<timestamp>` | When the binding ended, if ever — history stays intact either way. |
-| `attestations[].achievement` | `GlobalId` | Which claim (`game:<slug>:achievement:<key>` or `app|service:<slug>:milestone:<key>`) this attestation is about — see #324's category-driven vocabulary decision. |
-| `attestations[].issued_at` | timestamp | When the issuing integrator signed this claim. |
-| `attestations[].issuer_key_id` | string | Which of the issuer's operational keys signed it (#80/#84's two-tier model) — lets a compromised key be pinpointed/revoked without implicating the whole integrator. |
-| `published_schemas[]` | `game_schema.published` payload (#255) | An integrator's own declared shape for its custom data (e.g. `Character`) — schema only, real and built. |
-| *(instance data, e.g. `characters`)* | *decided (#381), built (#384)* | Actual per-player instance data against a published schema, read via `GET /identities/{id}/game-data` — `characters` is one example; a schema can declare any shape. Public by default once published, with a schema-level `private` opt-out and a bidirectional field-level override (#381), enforced server-side before a caller ever sees the data. See "A made-up game's full shape" above and `game-space.md`. |
-
-**Not layer 1 or layer 2 at all**: presence (`status`, "last seen," current game/server) is a third, deliberately ephemeral tier — never a `ProtocolEvent`, never in this document's scope. See [`./presence.md`](./presence.md); do not add presence fields here even though they describe "this identity, right now" in a colloquial sense.
+The field-by-field table — every field's real Rust type and what it's for,
+for both layers — lives in its own file so it doesn't crowd out the rest of
+this document: [`./identity-aggregate-view-fields.md`](./identity-aggregate-view-fields.md).
 
 ## A made-up game's full shape, illustrated
 
@@ -278,47 +228,46 @@ touching the integrator's identity itself. See
 [`./games-and-issuers.md`](./games-and-issuers.md) for the full key
 lifecycle.
 
-`docs/architecture/security-model.md`'s "Who controls what" table states
-the isolation this document's `integrations` array depends on, plainly:
+This document's `integrations` array depends on a clean write boundary
+between integrators, and between an integrator and layer 1. See
+[`./security-model.md`](./security-model.md#who-controls-what)'s "Who
+controls what" table for the full statement of that boundary.
 
-| Actor | Controls | Cannot |
-|---|---|---|
-| Game/App/Service | its own bindings, its own attestations under its own issuer key | touch another integrator's profile/bindings; issue under another issuer's identity; alter the identity itself, its friends, or its guild history |
-| Avalon infrastructure | transport, indexing, settlement, discovery, verification | fabricate an issuer claim; fabricate an identity; silently become the owner of user or integrator data |
+Concretely: **Avalon's own server code never authors an `integrations`
+entry's content, and no integrator can write into another integrator's
+entry.** Every `integrations[].attestations[]` row exists only because the
+named integrator's own key signed it. A node hosting the network can relay,
+store, and index that signature — but it cannot produce one on the
+integrator's behalf, and it cannot let Integrator A's key author a claim
+that verifies as Integrator B's.
 
-Concretely: **Avalon's own server code never authors an `integrations` entry's
-content, and no integrator can write into another integrator's entry.**
-Every `integrations[].attestations[]` row exists only because the named
-integrator's own key signed it; a node hosting the network can relay,
-store, and index that signature, but cannot produce one on the
-integrator's behalf, and cannot let Integrator A's key author a claim that
-verifies as Integrator B's. This is enforced independently of any single
-node's honesty — every durable entry is hash-chained and Merkle-committed
-into a Signed Tree Head (see [`./settlement.md`](./settlement.md)), so any
-SDK or mirror can verify authenticity for itself rather than trusting
-whichever node happened to answer the request. Authenticity, validity, and
-recognition are then kept as three separate questions, never collapsed
-into one boolean (ADR #76, see [`./trust-model.md`](./trust-model.md)) —
-"this attestation is genuinely signed by Ashen Realms" is a different,
-independently-checkable question from "is it still valid" or "does a given
+This holds independently of any single node's honesty: every durable entry
+is hash-chained and Merkle-committed into a Signed Tree Head (see
+[`./settlement.md`](./settlement.md)), so any SDK or mirror can verify
+authenticity for itself rather than trusting whichever node happened to
+answer the request. Authenticity, validity, and recognition are also kept as
+three separate questions, never collapsed into one boolean (ADR #76, see
+[`./trust-model.md`](./trust-model.md)). "This attestation is genuinely
+signed by Ashen Realms" is a different, independently-checkable question
+from "is it still valid," which is different again from "does a given
 consumer choose to recognize Ashen Realms as a trustworthy source at all."
 
-This is also why `layer_1` (identity, profile, friends, guilds) is
-structurally off-limits to every integrator: nothing in the durable event
+This is also why layer 1 (identity, profile, friends, guilds) is
+structurally off-limits to every integrator. Nothing in the durable event
 catalogue lets a game/app/service author an `identity.created` or
 `profile.updated` event, or a `friend.accepted`/`guild.*` event, under
-anyone's issuer key but the identity's own signing key (for
+anyone's issuer key. Only the identity's own signing key (for
 identity/profile) or the relevant player-session actions (for
-friends/guilds) — there is no code path that accepts one, by construction,
-not by a check that could be bypassed.
+friends/guilds) can. There's no code path that accepts one from anywhere
+else — by construction, not by a check that could be bypassed.
 
 ### Read access is not one uniform rule
 
 Write isolation above is absolute and already true everywhere in layer 2.
-**Read access is not** — it's easy to assume "any integrator can read any
-other integrator's block space, only write is restricted" as the mirror
-image of write isolation, but that's not what's actually built, and one
-piece of it is a genuinely open question rather than a settled "yes":
+Read access is not. It's easy to assume "any integrator can read any other
+integrator's block space, only write is restricted," as the mirror image of
+write isolation — but that's not what's actually built, and one piece of it
+is a genuinely open question rather than a settled "yes":
 
 - **A single attestation, if you already know its id, is fully public
   today with zero permission check.** `GET /attestations/{id}`
@@ -421,22 +370,17 @@ cited example at that point rather than a speculative one now.
 
 ## Decisions and tickets
 
-Epic #67 (identity vs. game data boundary, the ADR this whole document
-illustrates), #75 (durable history / promised-durable fields), #76
-(authenticity/validity/recognition kept separate), #80/#84 (two-tier
-issuer key model), #282/#275 (`IntegratorCategory`, unifying game/app/
-service), #83 (game bindings), #31/#32/#33/#84/#85 (achievement
-issuance/authenticity/revocation), #87 (visibility/preference store — the
-real candidate for a future Hub block-space example), #372 (the
-`banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` profile
-fields); `main_guild`/`effective_main_guild` landed with no ticket. #255
-(`game_schema.published`, the real half of "A made-up game's full shape"
-above), #377 (`GET /me/achievements` pagination/filtering, the real gap
-behind the "won't zillions of achievements bog this down" question this
-document's `attestations` shape prompted), #295 (per-claim attestation
-visibility — open, the genuine gap behind "Read access is not one uniform
-rule" above), #381 (decided — integrator-published custom schema instance
-data defaults to network-readable, with a schema-level and bidirectional
-field-level override; amended `game-bindings.md` accordingly), #384
-(implementation, in progress as of this writing — real protobuf
-parsing/validation, not opaque storage, per that ticket's own amendment).
+- **Epic #67** — identity vs. game data boundary, the ADR this whole document illustrates.
+- **#75** — durable history / promised-durable fields.
+- **#76** — authenticity, validity, and recognition kept as separate questions.
+- **#80 / #84** — the two-tier issuer key model.
+- **#282 / #275** — `IntegratorCategory`, unifying game/app/service.
+- **#83** — game bindings.
+- **#31 / #32 / #33 / #84 / #85** — achievement issuance, authenticity, and revocation.
+- **#87** — visibility/preference store; the real candidate for a future Hub block-space example.
+- **#372** — the `banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` profile fields. (`main_guild`/`effective_main_guild` landed with no ticket.)
+- **#255** — `game_schema.published`, the real half of "A made-up game's full shape" above.
+- **#377** — `GET /me/achievements` pagination/filtering; the real gap behind this document's "won't zillions of achievements bog this down" question.
+- **#295** — per-claim attestation visibility. Open; the genuine gap behind "Read access is not one uniform rule" above.
+- **#381** — decided: integrator-published custom schema instance data defaults to network-readable, with a schema-level and bidirectional field-level override. Amended `game-bindings.md` accordingly.
+- **#384** — implementation of #381, in progress as of this writing: real protobuf parsing/validation, not opaque storage.
