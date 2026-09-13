@@ -68,7 +68,7 @@ way regardless of which category it belongs to, distinguished only by its
     {"guild_id": "g-1", "role": "officer", "joined_at": "2027-02-01T00:00:00Z"}
   ],
   "friends": ["a1b2c3d4-...-000002", "a1b2c3d4-...-000003"],
-  "layer_2": [
+  "integrations": [
     {
       "type": "game",
       "integrator_id": "ashen-realms",
@@ -116,11 +116,11 @@ Real field provenance, so this doc can be checked against source directly:
 `GuildMember.joined_at` when `main_guild` is unset);
 `guilds` entries from `avalon_protocol::guilds::GuildMember { guild_id,
 identity_id, role, joined_at }`; `friends` derived from
-`avalon_protocol::social::Friendship { a, b, since }`; `layer_2[].binding`
+`avalon_protocol::social::Friendship { a, b, since }`; `integrations[].binding`
 from `avalon_protocol::games::GameBinding { identity_id, game_id,
-established_at, ended_at }`; `layer_2[].attestations` from
+established_at, ended_at }`; `integrations[].attestations` from
 `avalon_protocol::achievements::AchievementAttestation { id, issuer,
-subject, achievement, issued_at, proof }`; `layer_2[].type` from
+subject, achievement, issued_at, proof }`; `integrations[].type` from
 `avalon_protocol::games::IntegratorCategory`.
 
 ## Field reference
@@ -166,7 +166,7 @@ subject, achievement, issued_at, proof }`; `layer_2[].type` from
 
 ## A made-up game's full shape, illustrated
 
-The `layer_2` example above is deliberately minimal. Here is one entry
+The `integrations` example above is deliberately minimal. Here is one entry
 fleshed all the way out for a hypothetical game, **"Emberfall Online"**, to
 make the two genuinely different mechanisms layer 2 contains impossible to
 confuse: canonical attestations (real, built, uniform across every
@@ -279,16 +279,16 @@ touching the integrator's identity itself. See
 lifecycle.
 
 `docs/architecture/security-model.md`'s "Who controls what" table states
-the isolation this document's `layer_2` array depends on, plainly:
+the isolation this document's `integrations` array depends on, plainly:
 
 | Actor | Controls | Cannot |
 |---|---|---|
 | Game/App/Service | its own bindings, its own attestations under its own issuer key | touch another integrator's profile/bindings; issue under another issuer's identity; alter the identity itself, its friends, or its guild history |
 | Avalon infrastructure | transport, indexing, settlement, discovery, verification | fabricate an issuer claim; fabricate an identity; silently become the owner of user or integrator data |
 
-Concretely: **Avalon's own server code never authors a `layer_2` entry's
+Concretely: **Avalon's own server code never authors an `integrations` entry's
 content, and no integrator can write into another integrator's entry.**
-Every `layer_2[].attestations[]` row exists only because the named
+Every `integrations[].attestations[]` row exists only because the named
 integrator's own key signed it; a node hosting the network can relay,
 store, and index that signature, but cannot produce one on the
 integrator's behalf, and cannot let Integrator A's key author a claim that
@@ -369,7 +369,7 @@ reachable through Avalon at all and stays that way.
 The Hub (`apps/hub`) is a first-party **client**, not (yet) a registered
 integrator. It reads and writes layer 1 the same way any authenticated
 player session does — it has no issuer key of its own, and nothing in this
-document's `layer_2` array represents Hub data, because the Hub has not
+document's `integrations` array represents Hub data, because the Hub has not
 published anything under its own issuer identity (the way Ashen Realms
 publishes `game_schema.published` — see
 [`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-games-own-custom-fact-looks-like-in-the-same-ledger)
