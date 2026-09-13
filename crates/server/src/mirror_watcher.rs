@@ -283,8 +283,10 @@ async fn fetch_and_verify_sth(
     let sth = fetch_latest_sth(client, peer).await?;
     if !sth::verify_tree_head(verify_key, &sth) {
         tracing::error!(
-            "mirror-watcher: {peer}: STH signature verification FAILED for tree_size={} — not storing, not trusting",
-            sth.tree_size
+            event = "sth_signature_invalid",
+            peer = %peer,
+            tree_size = sth.tree_size,
+            "STH signature verification failed — not storing, not trusting",
         );
         return Err(MirrorWatcherError::InvalidSignature);
     }
@@ -373,8 +375,10 @@ async fn backfill_network(
     let equivocations = mirror::unresolved_equivocations(pool, network_id).await?;
     if !equivocations.is_empty() {
         tracing::error!(
-            "mirror-watcher: {network_id}: refusing to backfill — {} unresolved equivocation finding(s) recorded for this network; this needs human investigation before further backfill can be trusted",
-            equivocations.len()
+            event = "equivocation_backfill_blocked",
+            network_id = %network_id,
+            unresolved_findings = equivocations.len(),
+            "refusing to backfill — unresolved equivocation finding(s) recorded for this network; needs human investigation before further backfill can be trusted",
         );
         return Ok(());
     }

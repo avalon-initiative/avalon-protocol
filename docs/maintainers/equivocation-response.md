@@ -105,10 +105,19 @@ since the equivocation gate stops backfill the same tick detection fires),
 
 ## What this does not cover
 
-- **Alerting.** Nothing pages a human today; `avalon list-equivocations`
-  and the mirror-watcher's own log output are the only way to notice a
-  finding right now. Tracked in #315, depends on #265 (structured
-  logging).
+- **Built-in paging.** Nothing in this repo pages a human today;
+  `avalon list-equivocations` and the mirror-watcher's own log output are
+  the only way to notice a finding directly from `avalon-server` itself.
+  What detection and resolution *do* emit is a structured, stable
+  `event` field (`equivocation_detected` / `equivocation_resolved`, plus
+  `equivocation_backfill_blocked` for the backfill gate and
+  `sth_signature_invalid` for a bad peer signature) on their `tracing`
+  log lines — see
+  [`local-development.md`](local-development.md#structured-fields-not-just-message-text).
+  With `AVALON_LOG_FORMAT=json` those are real JSON keys a hoster can
+  forward to their own log aggregator and alert on directly (#315 —
+  deliberately scoped to making the signal forwardable, not to shipping a
+  paging integration).
 - **Automated rotation.** [`key-rotation.md`](key-rotation.md) is a written
   manual procedure, not automation — nothing here rotates a key for you.
 - **Automatic resolution.** Deliberately never built — see "Trust model:
