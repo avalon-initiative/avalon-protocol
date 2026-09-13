@@ -25,7 +25,7 @@ pub mod submission;
 pub mod sync_journal;
 
 use avalon_protocol::identity::{Identity, Profile};
-use avalon_protocol::ids::IdentityId;
+use avalon_protocol::ids::{GuildId, IdentityId};
 use avalon_protocol::permissions::Capability;
 use serde::Deserialize;
 
@@ -99,6 +99,7 @@ struct MeResponse {
     timezone: Option<String>,
     theme_color: Option<String>,
     location: Option<String>,
+    main_guild: Option<uuid::Uuid>,
 }
 
 impl AvalonClient {
@@ -157,6 +158,7 @@ impl AvalonClient {
                 timezone: body.timezone,
                 theme_color: body.theme_color,
                 location: body.location,
+                main_guild: body.main_guild.map(GuildId),
             },
             granted,
             http: self.http.clone(),

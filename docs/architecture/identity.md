@@ -41,6 +41,17 @@ self-reported timezone, an accent color, and a free-text location (issue
 self-described text only ("Pacific Northwest," say), never IP-derived or
 geocoded; nothing in this protocol infers where a player physically is.
 
+It also carries `main_guild` (no ticket): a self-chosen pointer to one of the
+identity's own current guild memberships, so an integrator building a
+guild-chat-style UI has one guild to default to instead of having to support
+arbitrarily-many simultaneous memberships — see
+[`./guilds.md`](./guilds.md#a-players-main-guild). Unlike the fields above,
+setting it is checked against a real fact (current membership), not just
+validated for shape; and unlike every other field here, `null` doesn't mean
+"no guild" — a caller wanting a default in that case reads
+`GET /me`'s `effective_main_guild`, computed at read time as the earliest
+guild membership joined, never written back into `main_guild` itself.
+
 Someone writing "I am an Avion" in their bio does not make Avion a
 network-level race. A game can display that, interpret it, or ignore it. Facts
 about what an identity *has done* come from issuer attestations with
@@ -72,6 +83,7 @@ work as the projection change. For identity state:
 | `timezone` | yes | `profile.updated` | free text, capped at 64 characters; NOT validated against the real IANA time zone database (no such crate in this workspace today) — a documented gap; `null` means explicitly cleared, absent means untouched (#372) |
 | `theme_color` | yes | `profile.updated` | must match `^#[0-9a-fA-F]{6}$`; `null` means explicitly cleared, absent means untouched (#372) |
 | `location` | yes | `profile.updated` | free text, capped at 100 characters, self-described only — never IP-derived or geocoded; `null` means explicitly cleared, absent means untouched (#372) |
+| `main_guild` | yes | `profile.updated` | a pointer to one of this identity's own current guild memberships (no ticket — see below); must name a guild the identity is currently a member of, checked server-side against `guild_members`; `null` means explicitly cleared, absent means untouched; also cleared automatically, in the same transaction, if the identity leaves the guild it points at |
 | future title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
 | WebAuthn passkey(s) | operational state, not an event | — | `identity_keys` table; see below |
 | event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
@@ -348,9 +360,11 @@ future work). None of these affect the state machine or its invariants.
 
 - `crates/protocol/src/identity.rs` — `Identity { id, created_at }` and
   `Profile { identity_id, display_name, avatar_url, bio, favorite_genres,
-  pronouns, banner_url, status, links, timezone, theme_color, location }`
+  pronouns, banner_url, status, links, timezone, theme_color, location,
+  main_guild }`
   (`bio`/`favorite_genres`/`pronouns` added by #155; `banner_url`/`status`/
-  `links`/`timezone`/`theme_color`/`location` added by #372), plus the
+  `links`/`timezone`/`theme_color`/`location` added by #372; `main_guild`
+  added with no ticket), plus the
   `Genre` enum `favorite_genres` draws its fixed vocabulary from. No
   reference to any character schema, and no reference to WebAuthn/Ed25519
   either — those stay server-side implementation detail, by design.

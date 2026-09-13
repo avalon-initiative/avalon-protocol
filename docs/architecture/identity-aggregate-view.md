@@ -60,7 +60,9 @@ way regardless of which category it belongs to, distinguished only by its
     "links": ["https://..."],
     "timezone": "America/Los_Angeles",
     "theme_color": "#7c3aed",
-    "location": "Pacific Northwest"
+    "location": "Pacific Northwest",
+    "main_guild": "g-1",
+    "effective_main_guild": "g-1"
   },
   "guilds": [
     {"guild_id": "g-1", "role": "officer", "joined_at": "2027-02-01T00:00:00Z"}
@@ -96,12 +98,22 @@ way regardless of which category it belongs to, distinguished only by its
 ```
 
 `banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` landed
-via issue #372. If this doc and the actual code ever disagree, the code is
-right and this doc is stale — same discipline `worked-ledger-example.md`
-holds itself to.
+via issue #372. `main_guild` and `effective_main_guild` landed with no
+ticket — `main_guild` is `Profile`'s own stored field (`null` unless
+explicitly set); `effective_main_guild` isn't a `Profile` field at all,
+it's computed at read time (falling back to the earliest-joined guild
+membership when `main_guild` is unset) and only ever appears in a response
+shape, never in storage or in a `profile.updated` payload — see
+[`./identity.md`](./identity.md#what-is-promised-durable). If this doc and
+the actual code ever disagree, the code is right and this doc is stale —
+same discipline `worked-ledger-example.md` holds itself to.
 
 Real field provenance, so this doc can be checked against source directly:
-`identity`/`profile` from `avalon_protocol::identity::{Identity, Profile}`;
+`identity`/`profile` from `avalon_protocol::identity::{Identity, Profile}`
+(`profile.main_guild` is `Profile::main_guild` itself;
+`profile.effective_main_guild` is not a `Profile` field — it's
+`crates/server/src/handlers.rs`'s read-time fallback to the earliest
+`GuildMember.joined_at` when `main_guild` is unset);
 `guilds` entries from `avalon_protocol::guilds::GuildMember { guild_id,
 identity_id, role, joined_at }`; `friends` derived from
 `avalon_protocol::social::Friendship { a, b, since }`; `layer_2[].binding`
@@ -132,7 +144,7 @@ subject, achievement, issued_at, proof }`; `layer_2[].type` from
 | `profile.timezone` | `Option<string>` (#372) | Self-reported only — useful for guild event scheduling. **Not** validated against the real IANA tz database yet (documented gap). |
 | `profile.theme_color` | `Option<string>` (#372) | A self-chosen 6-digit hex accent color. Purely cosmetic self-expression. |
 | `profile.location` | `Option<string>` (#372) | Free text only, e.g. "Pacific Northwest." **Never** IP-derived or geocoded — load-bearing constraint, not a suggestion. |
-| `profile.main_guild` | `Option<GuildId>` | *Pending, in review as of this writing.* A self-chosen pointer to one of the identity's own guild memberships, so an integrator has one easy guild to build around instead of every simultaneous membership. Must reference a guild the identity is actually a member of; clears automatically if that membership ends. |
+| `profile.main_guild` | `Option<GuildId>` | A self-chosen pointer to one of the identity's own guild memberships, so an integrator has one easy guild to build around instead of every simultaneous membership. Must reference a guild the identity is actually a member of; clears automatically if that membership ends. |
 | `guilds[]` | `GuildMember { guild_id, role, joined_at }` | Every guild membership this identity currently holds, with its role in each. |
 | `friends[]` | derived from `Friendship { a, b, since }` | The identity's accepted friend connections (symmetric — either side can be `a` or `b`). |
 
@@ -366,7 +378,10 @@ cited example at that point rather than a speculative one now.
 - The layer-1 types cited above (`Identity`, `Profile`, `Friendship`,
   `GuildMember`) are real and implemented; see each type's own module in
   `crates/protocol/src`. `Profile`'s `banner_url`/`status`/`links`/
-  `timezone`/`theme_color`/`location` fields landed via #372.
+  `timezone`/`theme_color`/`location` fields landed via #372; `main_guild`
+  landed with no ticket. `effective_main_guild` is a response-only field
+  (`crates/server/src/handlers.rs::ProfileResponse`), not part of `Profile`
+  itself.
 - `IntegratorCategory` (issue #282/#275) is real, implemented, additive —
   defaults to `Game` for any caller that omits it.
 - `GameBinding` and `AchievementAttestation` are real and implemented
@@ -398,14 +413,14 @@ service), #83 (game bindings), #31/#32/#33/#84/#85 (achievement
 issuance/authenticity/revocation), #87 (visibility/preference store — the
 real candidate for a future Hub block-space example), #372 (the
 `banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` profile
-fields), #255 (`game_schema.published`, the real half of "A made-up game's
-full shape" above), #377 (`GET /me/achievements` pagination/filtering,
-the real gap behind the "won't zillions of achievements bog this down"
-question this document's `attestations` shape prompted), #295 (per-claim
-attestation visibility — open, the genuine gap behind "Read access is not
-one uniform rule" above), #381 (decided — integrator-published custom
-schema instance data defaults to network-readable, with a schema-level
-and bidirectional field-level override; amended `game-bindings.md`
-accordingly), #384 (implementation, in progress as of this writing —
-real protobuf parsing/validation, not opaque storage, per that ticket's
-own amendment).
+fields); `main_guild`/`effective_main_guild` landed with no ticket. #255
+(`game_schema.published`, the real half of "A made-up game's full shape"
+above), #377 (`GET /me/achievements` pagination/filtering, the real gap
+behind the "won't zillions of achievements bog this down" question this
+document's `attestations` shape prompted), #295 (per-claim attestation
+visibility — open, the genuine gap behind "Read access is not one uniform
+rule" above), #381 (decided — integrator-published custom schema instance
+data defaults to network-readable, with a schema-level and bidirectional
+field-level override; amended `game-bindings.md` accordingly), #384
+(implementation, in progress as of this writing — real protobuf
+parsing/validation, not opaque storage, per that ticket's own amendment).

@@ -61,6 +61,8 @@ pub enum AppError {
     InvalidThemeColor,
     #[error("location must be 100 characters or fewer")]
     InvalidLocation,
+    #[error("main_guild must be a valid guild id")]
+    InvalidMainGuild,
     #[error("cannot block yourself")]
     SelfBlock,
     #[error("already blocked")]
@@ -342,7 +344,8 @@ impl IntoResponse for AppError {
             | AppError::InvalidLink
             | AppError::InvalidTimezone
             | AppError::InvalidThemeColor
-            | AppError::InvalidLocation => StatusCode::BAD_REQUEST,
+            | AppError::InvalidLocation
+            | AppError::InvalidMainGuild => StatusCode::BAD_REQUEST,
             AppError::SelfBlock => StatusCode::BAD_REQUEST,
             AppError::AlreadyBlocked => StatusCode::CONFLICT,
             AppError::BlockNotFound => StatusCode::NOT_FOUND,

@@ -47,6 +47,12 @@ pub struct ProfileWrite {
     pub timezone: Option<Option<String>>,
     pub theme_color: Option<Option<String>>,
     pub location: Option<Option<String>>,
+    /// A self-chosen pointer to one of the identity's own current guild
+    /// memberships (no ticket — see
+    /// `avalon_protocol::identity::Profile::main_guild`'s doc comment).
+    /// Same three-state shape as `bio`/`banner_url`/etc.: `None` untouched,
+    /// `Some(None)` explicitly cleared, `Some(Some(id))` set.
+    pub main_guild: Option<Option<Uuid>>,
 }
 
 /// The identity id embedded in an `identity:<id>:self:<verb>`-shaped
@@ -83,6 +89,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 timezone: None,
                 theme_color: None,
                 location: None,
+                main_guild: None,
             })
         }
         "profile.updated" => {
@@ -154,6 +161,16 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 .payload
                 .get("location")
                 .map(|v| v.as_str().map(str::to_string));
+            // Same "`.get` distinguishes absent from explicit null"
+            // reasoning as `avatar_url`/`bio` above, plus a UUID parse — the
+            // writer (`handlers::profile_updated_payload`) only ever emits a
+            // well-formed guild id string or `null`, so an unparseable
+            // value here would mean data corruption, not a client error;
+            // treated as "clear" rather than failing decode.
+            let main_guild = event
+                .payload
+                .get("main_guild")
+                .map(|v| v.as_str().and_then(|s| s.parse().ok()));
             Some(ProfileWrite {
                 identity_id,
                 display_name,
@@ -168,6 +185,7 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 timezone,
                 theme_color,
                 location,
+                main_guild,
             })
         }
         _ => None,
@@ -198,6 +216,8 @@ pub async fn apply(
     let theme_color = write.theme_color.clone().flatten();
     let location_provided = write.location.is_some();
     let location = write.location.clone().flatten();
+    let main_guild_provided = write.main_guild.is_some();
+    let main_guild = write.main_guild.flatten();
 
     // `display_name`/`discriminator` are NOT NULL columns, but this write
     // can carry neither (a `profile.updated` that only touched e.g. `bio`)
@@ -212,7 +232,7 @@ pub async fn apply(
         INSERT INTO profiles (
             identity_id, display_name, discriminator, avatar_url,
             bio, favorite_genres, pronouns, banner_url, status, links,
-            timezone, theme_color, location
+            timezone, theme_color, location, main_guild
         )
         VALUES (
             $1, COALESCE($2, ''), COALESCE($3, ''), CASE WHEN $5 THEN $4 ELSE NULL END,
@@ -224,7 +244,8 @@ pub async fn apply(
             CASE WHEN $17 THEN $16 ELSE '{}' END,
             CASE WHEN $19 THEN $18 ELSE NULL END,
             CASE WHEN $21 THEN $20 ELSE NULL END,
-            CASE WHEN $23 THEN $22 ELSE NULL END
+            CASE WHEN $23 THEN $22 ELSE NULL END,
+            CASE WHEN $25 THEN $24 ELSE NULL END
         )
         ON CONFLICT (identity_id) DO UPDATE SET
             display_name = CASE WHEN $2 IS NOT NULL THEN EXCLUDED.display_name ELSE profiles.display_name END,
@@ -238,7 +259,8 @@ pub async fn apply(
             links = CASE WHEN $17 THEN EXCLUDED.links ELSE profiles.links END,
             timezone = CASE WHEN $19 THEN EXCLUDED.timezone ELSE profiles.timezone END,
             theme_color = CASE WHEN $21 THEN EXCLUDED.theme_color ELSE profiles.theme_color END,
-            location = CASE WHEN $23 THEN EXCLUDED.location ELSE profiles.location END
+            location = CASE WHEN $23 THEN EXCLUDED.location ELSE profiles.location END,
+            main_guild = CASE WHEN $25 THEN EXCLUDED.main_guild ELSE profiles.main_guild END
         "#,
     )
     .bind(write.identity_id)
@@ -264,6 +286,8 @@ pub async fn apply(
     .bind(theme_color_provided)
     .bind(&location)
     .bind(location_provided)
+    .bind(main_guild)
+    .bind(main_guild_provided)
     .execute(&mut **tx)
     .await?;
 
@@ -421,6 +445,34 @@ mod tests {
         let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hi" }));
         let write = decode(&event).unwrap();
         assert_eq!(write.favorite_genres, None);
+    }
+
+    #[test]
+    fn decodes_a_cleared_main_guild() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(identity_id, serde_json::json!({ "main_guild": null }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.main_guild, Some(None));
+    }
+
+    #[test]
+    fn decodes_a_set_main_guild() {
+        let identity_id = Uuid::new_v4();
+        let guild_id = Uuid::new_v4();
+        let event = profile_updated_event(
+            identity_id,
+            serde_json::json!({ "main_guild": guild_id.to_string() }),
+        );
+        let write = decode(&event).unwrap();
+        assert_eq!(write.main_guild, Some(Some(guild_id)));
+    }
+
+    #[test]
+    fn untouched_main_guild_decodes_to_none() {
+        let identity_id = Uuid::new_v4();
+        let event = profile_updated_event(identity_id, serde_json::json!({ "bio": "hi" }));
+        let write = decode(&event).unwrap();
+        assert_eq!(write.main_guild, None);
     }
 
     #[test]

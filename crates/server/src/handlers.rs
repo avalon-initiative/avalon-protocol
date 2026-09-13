@@ -529,6 +529,19 @@ pub struct ProfileResponse {
     /// Self-described only — never IP-derived or geocoded. See
     /// `avalon_protocol::identity::Profile::location`'s doc comment.
     pub location: Option<String>,
+    /// A self-chosen pointer to one of this identity's own current guild
+    /// memberships (no ticket — see
+    /// `avalon_protocol::identity::Profile::main_guild`'s doc comment).
+    /// `None` means "not explicitly set," not "no guild" — see
+    /// `effective_main_guild` below for the resolved value a UI should
+    /// actually build around.
+    pub main_guild: Option<Uuid>,
+    /// `main_guild` if explicitly set, otherwise the guild this identity
+    /// joined earliest (by `guild_members.joined_at`), computed at read
+    /// time and never stored — `None` only when the identity has no guild
+    /// memberships at all. This, not `main_guild`, is what an integrator
+    /// building a single-guild UI should read.
+    pub effective_main_guild: Option<Uuid>,
     /// Issue #205's opt-in global search toggle — `true` means this
     /// identity currently matches `GET /identities/search`. Surfaced here
     /// (rather than requiring a separate read) so the Hub's "you are
@@ -541,11 +554,13 @@ pub struct ProfileResponse {
 fn profile_row_to_response(
     identity_id: Uuid,
     row: &sqlx::postgres::PgRow,
+    effective_main_guild: Option<Uuid>,
 ) -> Result<ProfileResponse, AppError> {
     let display_name: String = row.try_get("display_name")?;
     let discriminator: String = row.try_get("discriminator")?;
     let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
     let links: Vec<String> = row.try_get("links")?;
+    let main_guild: Option<Uuid> = row.try_get("main_guild")?;
     Ok(ProfileResponse {
         identity_id,
         identity_created_at: row.try_get("created_at")?,
@@ -568,8 +583,35 @@ fn profile_row_to_response(
         timezone: row.try_get("timezone")?,
         theme_color: row.try_get("theme_color")?,
         location: row.try_get("location")?,
+        main_guild,
+        effective_main_guild,
         discoverable: row.try_get("discoverable")?,
     })
+}
+
+/// The guild `identity_id` joined earliest (by `guild_members.joined_at`),
+/// or `None` if it has no memberships — the read-time default
+/// `ProfileResponse::effective_main_guild` falls back to when
+/// `Profile::main_guild` itself is unset. Deliberately not written into
+/// `profiles.main_guild` (see that field's doc comment): computed fresh on
+/// every read via any executor (the shared pool for a plain `GET /me`, or
+/// an open transaction for `update_profile`'s own read-after-write), so it
+/// always reflects the true earliest membership even as guilds are joined
+/// or left.
+async fn earliest_joined_guild<'e, E>(
+    executor: E,
+    identity_id: Uuid,
+) -> Result<Option<Uuid>, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let guild_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT guild_id FROM guild_members WHERE identity_id = $1 ORDER BY joined_at ASC LIMIT 1",
+    )
+    .bind(identity_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(guild_id)
 }
 
 /// `profiles` LEFT JOINed against `discovery_preferences` — a row there
@@ -581,7 +623,7 @@ fn profile_row_to_response(
 const PROFILE_SELECT: &str = r#"
     SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
            p.favorite_genres, p.pronouns, p.banner_url, p.status, p.links,
-           p.timezone, p.theme_color, p.location, i.created_at,
+           p.timezone, p.theme_color, p.location, p.main_guild, i.created_at,
            COALESCE(dp.discoverable, false) AS discoverable
     FROM profiles p
     JOIN identities i ON i.id = p.identity_id
@@ -599,8 +641,17 @@ pub async fn me(
         .bind(identity_id)
         .fetch_one(&state.pool)
         .await?;
+    let main_guild: Option<Uuid> = row.try_get("main_guild")?;
+    let effective_main_guild = match main_guild {
+        Some(guild_id) => Some(guild_id),
+        None => earliest_joined_guild(&state.pool, identity_id).await?,
+    };
 
-    Ok(Json(profile_row_to_response(identity_id, &row)?))
+    Ok(Json(profile_row_to_response(
+        identity_id,
+        &row,
+        effective_main_guild,
+    )?))
 }
 
 const PROFILE_LOOKUP_MAX_IDS: usize = 100;
@@ -775,6 +826,13 @@ pub struct UpdateProfileRequest {
     /// Three states, same as `bio`. Self-described free text only — never
     /// IP-derived or geocoded.
     pub location: Option<String>,
+    /// Three states, same as `bio`: omitted (untouched), `""` (clear to
+    /// `NULL`), or a guild id string. Unlike every other three-state field
+    /// here, a non-empty value also needs a database check — it must name
+    /// a guild `identity_id` is currently a member of (`AppError::NotGuildMember`
+    /// otherwise) — so its validation lives in `validate_main_guild` rather
+    /// than one of the pure `validate_*` functions above.
+    pub main_guild: Option<String>,
     /// Issue #205's opt-in global search toggle. Two states, not three
     /// (there's no "clear" state for a plain boolean): `None` leaves the
     /// existing preference untouched, `Some(bool)` sets it. Off by
@@ -956,6 +1014,36 @@ fn validate_location(location: &str) -> Result<Option<String>, AppError> {
     Ok(Some(location.to_string()))
 }
 
+/// Same empty-string-means-clear convention as [`validate_avatar_url`], but
+/// a non-empty value needs a database round trip on top of the parse: it
+/// must be a well-formed guild id (`AppError::InvalidMainGuild` otherwise)
+/// naming a guild `identity_id` is currently a member of
+/// (`AppError::NotGuildMember` otherwise) — checked against `guild_members`
+/// directly rather than through `crates/server/src/guilds.rs`, since this
+/// is a plain membership fact, not anything permission-gated. Not one of
+/// the pure `validate_*` functions above for that reason.
+async fn validate_main_guild(
+    pool: &sqlx::PgPool,
+    identity_id: Uuid,
+    main_guild: &str,
+) -> Result<Option<Uuid>, AppError> {
+    if main_guild.is_empty() {
+        return Ok(None);
+    }
+    let guild_id: Uuid = main_guild.parse().map_err(|_| AppError::InvalidMainGuild)?;
+    let is_member: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2)",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .fetch_one(pool)
+    .await?;
+    if !is_member {
+        return Err(AppError::NotGuildMember);
+    }
+    Ok(Some(guild_id))
+}
+
 /// A display-name change can collide with someone else's existing handle
 /// (same name, same discriminator) — the discriminator itself never changes
 /// on its own, but if the *new* name collides under it, a fresh one has to
@@ -999,7 +1087,7 @@ async fn discriminator_for_rename(
 /// states: absent (untouched) or present (the new, complete list, including
 /// `[]` to clear it).
 #[allow(clippy::too_many_arguments)]
-fn profile_updated_payload(
+pub(crate) fn profile_updated_payload(
     display_name: Option<&str>,
     discriminator: Option<&str>,
     avatar_url: Option<Option<&str>>,
@@ -1012,6 +1100,7 @@ fn profile_updated_payload(
     timezone: Option<Option<&str>>,
     theme_color: Option<Option<&str>>,
     location: Option<Option<&str>>,
+    main_guild: Option<Option<Uuid>>,
 ) -> serde_json::Value {
     let mut payload = serde_json::Map::new();
     if let Some(name) = display_name {
@@ -1075,6 +1164,14 @@ fn profile_updated_payload(
         payload.insert(
             "location".into(),
             location.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(main_guild) = main_guild {
+        payload.insert(
+            "main_guild".into(),
+            main_guild.map_or(serde_json::Value::Null, |guild_id| {
+                guild_id.to_string().into()
+            }),
         );
     }
     serde_json::Value::Object(payload)
@@ -1158,6 +1255,12 @@ pub async fn update_profile(
         None => None,
     };
 
+    let main_guild_provided = body.main_guild.is_some();
+    let main_guild = match &body.main_guild {
+        Some(raw) => validate_main_guild(&state.pool, identity_id, raw).await?,
+        None => None,
+    };
+
     // `discoverable` (#205) is deliberately handled outside the
     // transaction below, the same way `presence::update_my_presence`
     // handles `hide_playing`: it's a player preference, not durable
@@ -1194,7 +1297,8 @@ pub async fn update_profile(
         || links_provided
         || timezone_provided
         || theme_color_provided
-        || location_provided)
+        || location_provided
+        || main_guild_provided)
         .then(|| ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "profile.updated".to_string(),
@@ -1223,6 +1327,7 @@ pub async fn update_profile(
                 timezone_provided.then_some(timezone.as_deref()),
                 theme_color_provided.then_some(theme_color.as_deref()),
                 location_provided.then_some(location.as_deref()),
+                main_guild_provided.then_some(main_guild),
             ),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
@@ -1244,10 +1349,19 @@ pub async fn update_profile(
         .bind(identity_id)
         .fetch_one(&mut *tx)
         .await?;
+    let row_main_guild: Option<Uuid> = row.try_get("main_guild")?;
+    let effective_main_guild = match row_main_guild {
+        Some(guild_id) => Some(guild_id),
+        None => earliest_joined_guild(&mut *tx, identity_id).await?,
+    };
 
     tx.commit().await?;
 
-    Ok(Json(profile_row_to_response(identity_id, &row)?))
+    Ok(Json(profile_row_to_response(
+        identity_id,
+        &row,
+        effective_main_guild,
+    )?))
 }
 
 #[cfg(test)]
@@ -1330,6 +1444,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(
             payload,
@@ -1356,6 +1471,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(cleared, serde_json::json!({ "avatar_url": null }));
 
@@ -1363,6 +1479,7 @@ mod tests {
             None,
             None,
             Some(Some("https://example.com/a.png")),
+            None,
             None,
             None,
             None,
@@ -1381,6 +1498,7 @@ mod tests {
         let untouched = profile_updated_payload(
             Some("nova"),
             Some("4821"),
+            None,
             None,
             None,
             None,
@@ -1410,6 +1528,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(cleared, serde_json::json!({ "bio": null }));
 
@@ -1426,11 +1545,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(set, serde_json::json!({ "bio": "hello" }));
 
         let untouched = profile_updated_payload(
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
         );
         assert!(untouched.get("bio").is_none());
     }
@@ -1443,6 +1563,7 @@ mod tests {
             None,
             None,
             Some(&[Genre::Rpg, Genre::Puzzle]),
+            None,
             None,
             None,
             None,
@@ -1472,6 +1593,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(payload, serde_json::json!({ "favorite_genres": [] }));
     }
@@ -1491,6 +1613,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(cleared, serde_json::json!({ "banner_url": null }));
 
@@ -1502,6 +1625,7 @@ mod tests {
             None,
             None,
             Some(Some("https://example.com/b.png")),
+            None,
             None,
             None,
             None,
@@ -1530,6 +1654,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(
             payload,
@@ -1552,6 +1677,7 @@ mod tests {
             None,
             None,
             Some(None),
+            None,
         );
         assert_eq!(cleared, serde_json::json!({ "location": null }));
 
@@ -1568,6 +1694,7 @@ mod tests {
             None,
             None,
             Some(Some("Pacific Northwest")),
+            None,
         );
         assert_eq!(set, serde_json::json!({ "location": "Pacific Northwest" }));
     }

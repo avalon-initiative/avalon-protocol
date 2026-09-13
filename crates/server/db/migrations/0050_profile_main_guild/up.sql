@@ -1,0 +1,14 @@
+-- A player's self-chosen main guild (avalon_protocol::identity::Profile.main_guild):
+-- a pointer to one of their own current guild memberships, so an integrator
+-- building a guild-chat-style UI has a single guild to default to instead of
+-- supporting arbitrarily-many simultaneous memberships.
+--
+-- `ON DELETE SET NULL`, not `ON DELETE CASCADE` like every other
+-- `guilds(id)` foreign key in this schema (guild_roles, guild_members,
+-- guild_channels, ...) — those all cascade because they're rows *owned by*
+-- the guild itself. `profiles.main_guild` is the opposite direction: an
+-- external reference *to* a guild, so a guild ever being hard-deleted must
+-- clear this pointer, never take the identity's whole profile down with it.
+-- No guild hard-delete path exists in this codebase today, but the column
+-- should never be able to dangle if one is added later.
+ALTER TABLE profiles ADD COLUMN main_guild UUID REFERENCES guilds(id) ON DELETE SET NULL;

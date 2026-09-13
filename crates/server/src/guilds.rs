@@ -1976,6 +1976,50 @@ pub async fn leave_guild(
         return Err(AppError::NotGuildMember);
     }
 
+    // A `main_guild` (no ticket — see `Profile::main_guild`'s doc comment)
+    // must never dangle: if it currently points at the guild being left,
+    // clear it back to `None` here, in the same transaction as the
+    // membership removal, via the normal `profile.updated` event/outbox/
+    // indexer path rather than a bespoke `UPDATE profiles` — `profiles` is
+    // a rebuildable projection (issue #42) and must only ever change
+    // through that path.
+    let current_main_guild: Option<Uuid> =
+        sqlx::query_scalar("SELECT main_guild FROM profiles WHERE identity_id = $1")
+            .bind(actor)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
+    if current_main_guild == Some(guild_id) {
+        let clear_main_guild_event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "profile.updated".to_string(),
+            issuer: identity_ref(actor, "profile_updated"),
+            subject: identity_ref(actor, "profile_updated"),
+            payload: crate::handlers::profile_updated_payload(
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(None),
+            ),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+        };
+        state
+            .indexer
+            .apply_in_tx(&mut tx, &clear_main_guild_event)
+            .await?;
+        outbox::enqueue(&mut tx, &clear_main_guild_event).await?;
+    }
+
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "guild.member_removed".to_string(),

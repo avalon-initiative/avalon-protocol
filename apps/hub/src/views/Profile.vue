@@ -32,6 +32,7 @@ import type {
   RecoveryRequestResponse,
 } from '../api/types'
 import { listFriendsWithPresence, type Friend } from '../api/friends'
+import { useMyGuilds } from '../composables/useMyGuilds'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
@@ -74,6 +75,21 @@ const status = ref('')
 const timezone = ref('')
 const themeColor = ref('')
 const location = ref('')
+
+// A self-chosen pointer to one of this identity's own current guild
+// memberships (no ticket — see identity::Profile::main_guild's doc
+// comment). `mainGuild` is the raw, explicit value (empty means unset);
+// `effectiveMainGuild` is what the server actually resolves it to (falling
+// back to the earliest-joined membership) and is display-only — there's no
+// way to "save" a default, only to explicitly pick a guild or clear back
+// to it. The dropdown is populated from the same `useMyGuilds` composable
+// the Guilds.vue landing page already uses, not a fresh fetch — it must
+// only ever offer guilds this identity is actually a member of.
+const { guilds: myGuilds } = useMyGuilds()
+const mainGuild = ref('')
+const effectiveMainGuild = ref('')
+const savingMainGuild = ref(false)
+const mainGuildError = ref('')
 
 // `links` is a small fixed-size list (issue #372), same "saves as one
 // explicit action" shape favorite_genres already uses below rather than a
@@ -140,6 +156,8 @@ onMounted(async () => {
     timezone.value = profile.timezone ?? ''
     themeColor.value = profile.theme_color ?? ''
     location.value = profile.location ?? ''
+    mainGuild.value = profile.main_guild ?? ''
+    effectiveMainGuild.value = profile.effective_main_guild ?? ''
     links.value = profile.links?.length ? [...profile.links] : ['']
     selectedGenres.value = new Set(profile.favorite_genres)
     discoverable.value = profile.discoverable
@@ -245,6 +263,28 @@ async function onSaveGenres() {
     genresError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     savingGenres.value = false
+  }
+}
+
+// `main_guild` saves as its own explicit action, same shape as
+// onSaveGenres — a select-from-a-list field, not a free-text one, so it
+// doesn't go through AvalonEditableField's text-input pattern.
+const effectiveMainGuildName = computed(
+  () => myGuilds.value.find((g) => g.id === effectiveMainGuild.value)?.name ?? null,
+)
+
+async function onSaveMainGuild() {
+  if (!session.token) return
+  mainGuildError.value = ''
+  savingMainGuild.value = true
+  try {
+    const profile = await api.updateProfile(session.token, { main_guild: mainGuild.value })
+    mainGuild.value = profile.main_guild ?? ''
+    effectiveMainGuild.value = profile.effective_main_guild ?? ''
+  } catch (e) {
+    mainGuildError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingMainGuild.value = false
   }
 }
 
@@ -847,6 +887,29 @@ async function onCancelGuardianRequest(requestId: string) {
               :error="fieldErrors.location"
               @save="saveProfileField('location', $event)"
             />
+          </div>
+
+          <div :class="styles.stack">
+            <h3 :class="styles.subheading">Main guild</h3>
+            <p :class="styles.listDetail">
+              Pick one of your own guilds to build around, or leave unset to default to the guild
+              you joined earliest<span v-if="effectiveMainGuildName"> ({{ effectiveMainGuildName }})</span>.
+            </p>
+            <p v-if="mainGuildError" :class="page.error">{{ mainGuildError }}</p>
+            <select v-model="mainGuild" :class="styles.linkInput">
+              <option value="">No main guild set</option>
+              <option v-for="guild in myGuilds" :key="guild.id" :value="guild.id">
+                {{ guild.name }}
+              </option>
+            </select>
+            <div :class="styles.actions">
+              <AvalonButton
+                :label="savingMainGuild ? 'Saving…' : 'Save main guild'"
+                variant="primary"
+                :disabled="savingMainGuild"
+                @click="onSaveMainGuild"
+              />
+            </div>
           </div>
 
           <div :class="styles.stack">
