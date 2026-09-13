@@ -185,5 +185,21 @@ startup (no rebuild needed to change either):
   request spans if unset.
 - `AVALON_LOG_FORMAT=json` — switches from the default human-readable
   (colored, dev-friendly) format to one JSON object per line, the shape a
-  log aggregator (Grafana/Loki, etc.) expects. Leave unset for local
-  development; set it in any deployment that ships logs somewhere.
+  log aggregator (Grafana/Loki, Datadog, CloudWatch, etc.) expects. Leave
+  unset for local development; set it in any deployment that ships logs
+  somewhere.
+
+### Structured fields, not just message text
+
+Log lines for events worth alerting on (equivocation detection being the
+sharpest example — see
+[`equivocation-response.md`](equivocation-response.md)) carry their own
+data as `tracing` fields (`network_id`, `tree_size`, `event`, ...), not
+folded into the message string — with `AVALON_LOG_FORMAT=json`, those
+become real top-level JSON keys, not something an aggregator has to regex
+out of prose. A stable `event` field (e.g. `event = "equivocation_detected"`)
+is the intended thing to alert on — the message text next to it is free to
+get reworded later without breaking an alert rule built against the field.
+This repo doesn't ship any alerting/paging integration itself (#315,
+deliberately out of scope) — the fields exist so a hoster who forwards
+`avalon-server`'s logs to their own aggregator can build one there.

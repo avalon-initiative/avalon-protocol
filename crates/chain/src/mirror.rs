@@ -24,14 +24,25 @@
 //!   calls it.
 //!
 //! **Surfacing mechanism** (this ticket's own open implementation call,
-//! decided here): both a durable row in `equivocation_findings` *and* an
-//! `eprintln!` at what would be error level if this repo had structured
-//! logging (issue #265, tracked separately as still-open work) — never
-//! only one or the other. The durable row is what a human or monitoring
-//! system checks after the fact / queries programmatically; the log line
-//! is what an operator watching the process's own output sees the moment
-//! it happens. Belt and suspenders, matching how `outbox::drain_once`
-//! already handles its own "this must never fail silently forever" case.
+//! decided here): both a durable row in `equivocation_findings` *and* a
+//! structured `tracing::error!` — never only one or the other. The durable
+//! row is what a human or monitoring system checks after the fact / queries
+//! programmatically; the log line is what an operator watching the
+//! process's own output (or a log aggregator it forwards to, once #265's
+//! JSON format is in play) sees the moment it happens. Belt and suspenders,
+//! matching how `outbox::drain_once` already handles its own "this must
+//! never fail silently forever" case.
+//!
+//! The log line carries a stable `event` field (`"equivocation_detected"` /
+//! `"equivocation_resolved"`) alongside `network_id`/`tree_size`/the two
+//! disputed sources and root hashes as their own structured fields, not
+//! folded into the message text — so a hoster forwarding
+//! `avalon-server`'s JSON-formatted logs (`AVALON_LOG_FORMAT=json`) to
+//! their own aggregator can alert on `event = "equivocation_detected"`
+//! directly, without parsing message strings that are free to reword later.
+//! No alerting/paging integration ships in this repo itself (issue
+//! #315) — this is the structured signal an operator's own alerting
+//! wires up against.
 
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -206,20 +217,23 @@ fn observed_sth_from_row(row: sqlx::postgres::PgRow) -> Result<ObservedSth, Sett
 }
 
 /// Durably records `finding` in `equivocation_findings` and emits a loud,
-/// error-level-equivalent log line — see module docs for why this ticket
-/// does both rather than picking one surfacing mechanism.
+/// structured `tracing::error!` — see module docs for why this ticket does
+/// both rather than picking one surfacing mechanism, and for why the log
+/// line's fields (not just its message) are the part a hoster's own
+/// alerting should key off of.
 pub async fn record_equivocation(
     pool: &PgPool,
     finding: &EquivocationFinding,
 ) -> Result<(), SettlementError> {
-    eprintln!(
-        "EQUIVOCATION DETECTED: network_id={} tree_size={} source_a={} root_hash_a={} source_b={} root_hash_b={} — the same operator has signed two different trees at the same size",
-        finding.network_id,
-        finding.tree_size,
-        finding.source_a,
-        finding.root_hash_a,
-        finding.source_b,
-        finding.root_hash_b,
+    tracing::error!(
+        event = "equivocation_detected",
+        network_id = %finding.network_id,
+        tree_size = finding.tree_size,
+        source_a = %finding.source_a,
+        root_hash_a = %finding.root_hash_a,
+        source_b = %finding.source_b,
+        root_hash_b = %finding.root_hash_b,
+        "equivocation detected: the same operator has signed two different trees at the same size",
     );
     sqlx::query(
         r#"
@@ -339,7 +353,16 @@ pub async fn resolve_equivocation(
     .execute(pool)
     .await
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
-    Ok(result.rows_affected())
+    let rows_affected = result.rows_affected();
+    tracing::info!(
+        event = "equivocation_resolved",
+        network_id = %network_id,
+        tree_size,
+        legitimate_root_hash = %legitimate_root_hash,
+        findings_resolved = rows_affected,
+        "equivocation finding(s) marked resolved",
+    );
+    Ok(rows_affected)
 }
 
 /// Discards every `mirrored_entries` row for `network_id` verified against

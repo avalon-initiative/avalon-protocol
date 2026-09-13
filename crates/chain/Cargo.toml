@@ -19,6 +19,7 @@ sha2 = "0.11"
 hex.workspace = true
 ed25519-dalek.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 dotenvy.workspace = true
