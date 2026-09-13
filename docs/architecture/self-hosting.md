@@ -128,9 +128,9 @@ on the public network" — that's a real gap, not a hidden feature; see
   floor (issue #352), not an oversight — a dedicated secrets backend was
   weighed and rejected as the default because it would fork `make
   stack-up`'s single zero-manual-steps bring-up path per OS/platform.
-  Permission hardening on the generated file (#354) and a documented
-  rotation procedure (#355) are the two concrete follow-ups that decision
-  left open.
+  `make stack-up` now `chmod`s the generated `.env` to `600` (#354), and
+  [`../maintainers/key-rotation.md`](../maintainers/key-rotation.md)
+  documents the rotation procedure that decision left open (#315).
 - Structured logging (issue #265): `avalon-server` logs via `tracing`, with
   an HTTP request span (method/path/status/latency) per request via
   `tower-http`'s `TraceLayer`. `RUST_LOG` (standard env-filter syntax)

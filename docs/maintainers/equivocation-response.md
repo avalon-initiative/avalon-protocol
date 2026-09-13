@@ -3,8 +3,9 @@
 What to do when this node's mirror-watcher reports equivocation — two
 different signed tree heads (STHs) for the same network and `tree_size`,
 from the same operator key. Scope decided in issue #300, implemented in
-#316: an investigation playbook plus a mirror-recovery mechanism. Full key
-rotation procedure and real alerting/paging are explicitly **not** covered
+#316: an investigation playbook plus a mirror-recovery mechanism. Key
+rotation itself is covered in [`key-rotation.md`](key-rotation.md); real
+alerting/paging for equivocation detection specifically is **not** covered
 here yet — tracked separately in #315.
 
 ## Background
@@ -62,11 +63,8 @@ symptom — check these first, in order, before assuming key compromise:
    candidate. Do not attempt automatic resolution — this is a human
    trust judgment, matching Certificate Transparency's own precedent (see
    `docs/architecture/settlement.md`). Escalate to whoever holds the
-   operator/validator signing key for this network. Full key-rotation
-   procedure for this case is tracked separately (#315) and not yet
-   written — until it lands, treat a confirmed compromise as an incident
-   requiring manual, ad hoc key replacement and a fresh `AVALON_NETWORK_ID`
-   genesis if trust in the network cannot otherwise be re-established.
+   operator/validator signing key for this network, then follow the
+   emergency path in [`key-rotation.md`](key-rotation.md).
 
 ## Step 3: resolve the finding
 
@@ -111,8 +109,8 @@ since the equivocation gate stops backfill the same tick detection fires),
   and the mirror-watcher's own log output are the only way to notice a
   finding right now. Tracked in #315, depends on #265 (structured
   logging).
-- **Key rotation.** If step 2 concludes a key is actually compromised,
-  there is no automated or written rotation procedure yet — see #315.
+- **Automated rotation.** [`key-rotation.md`](key-rotation.md) is a written
+  manual procedure, not automation — nothing here rotates a key for you.
 - **Automatic resolution.** Deliberately never built — see "Trust model:
   why no witness quorum" in issue #301 and `docs/architecture/settlement.md`
   for why this stays a human decision.
