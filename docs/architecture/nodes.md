@@ -172,6 +172,50 @@ presence for identities on that node lapses until their next heartbeat
 ([`./presence.md`](./presence.md)); nothing a game had already verified becomes
 unverifiable.
 
+## Version rollout
+
+Decided in #308. No party can force any operator to upgrade — self-hosting
+with no central gatekeeper is deliberate, not a gap — so this has to work
+with permanent version skew across the network as a constraint, not design
+around it away. Three separate axes, conflating them is the actual failure
+mode: **event-schema version** (payload shape per event kind — #82's
+already-decided additive-only policy), **wire/API version** (HTTP endpoint
+shapes, mirror-sync DTOs), and **settlement/crypto version** (hash
+algorithm, signature scheme, STH/Merkle format — the one axis where mixed
+versions on the *same* `network_id` genuinely isn't safe).
+
+**Standing rule for the wire/API axis, effective now**: additive-only,
+forever-compatible — generalizing #82's payload policy and what #293
+(`/games` → `/integrations`) and #297 (additive `register-integrator`
+alias) already practiced without naming it. Never remove, rename, or
+repurpose a field or endpoint outright; add alongside and deprecate slowly.
+This is a code-review discipline expectation starting now, not gated on
+any further ticket.
+
+**Cross-cutting invariant, applies to every future piece of this**: a
+node's self-reported version is an operational signal, never an
+authoritative one. The same reasoning #40/#299 already apply to a single
+signed STH (never trusted without corroboration) applies here — trusting
+an unsigned, self-asserted version claim opens real attack surface (a bad
+actor claiming false incompatibility to isolate a legitimate peer, or
+manufacturing fake upgrade urgency). Any future negotiation/staleness
+mechanism must be built on this from the start, not retrofitted.
+
+Concrete node-to-node version awareness (mirror-watcher wire format
+carrying a real version field, decode failures becoming a clear
+"incompatible" signal instead of a raw panic, node status/health surfacing
+version and peer-observed staleness) is tracked as #368. Opt-in auto-update
+for self-hosted nodes — the further step of a node acting on a newer
+version's existence, not just reporting it — is real, separate scope
+gated on a release-signing mechanism that doesn't exist yet, and is
+deliberately left open as #369 rather than decided here. Capability-based
+request forwarding (an outdated node relaying to a peer that can handle a
+request) was considered and rejected for now — it adds a real trust hop
+with no accountability story yet; revisit once real operational experience
+with version skew exists. A hard-fork escape hatch (a new `network_id`,
+old network keeps running unchanged) is reserved, undesigned, for the
+genuinely-incompatible-crypto-change case none of the above can cover.
+
 ## Today in the repo
 
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
