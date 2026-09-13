@@ -9,32 +9,56 @@ import styles from './Landing.module.scss'
 const audiences = [
   {
     icon: 'friends' as const,
+    accent: 'primary' as const,
     label: 'For players',
     body: 'Bring your identity, friends, and guilds with you. Log in the same way everywhere, and keep the people and history you’ve built even after a game moves on.',
   },
   {
     icon: 'library' as const,
+    accent: 'secondary' as const,
     label: 'For developers',
     body: 'Plug your game into an identity, social, and achievement layer you didn’t have to build yourself — without handing over control of your world.',
   },
   {
     icon: 'community' as const,
+    accent: 'tertiary' as const,
     label: 'For communities',
     body: 'Give your guild a home that outlasts any one game — membership, roles, and chat that travel with the community, not with a server that could disappear.',
   },
   {
     icon: 'settings' as const,
+    accent: 'primary' as const,
     label: 'For operators',
     body: 'Run and support the infrastructure the network settles on — nodes that keep the shared history durable and verifiable for everyone connected to it.',
+  },
+]
+
+const steps = [
+  {
+    icon: 'profile' as const,
+    label: 'Create your identity',
+    body: 'One self-custodied keypair — a passkey to log in, a signing key that’s yours alone.',
+  },
+  {
+    icon: 'games' as const,
+    label: 'Connect it everywhere',
+    body: 'Any game or app on the network recognizes the same you, with your consent.',
+  },
+  {
+    icon: 'achievements' as const,
+    label: 'Keep what you build',
+    body: 'Friends, guilds, and achievements persist — even if a world shuts down.',
   },
 ]
 </script>
 
 <template>
   <div :class="styles.page">
+    <div :class="styles.bgGlow" aria-hidden="true" />
+
     <header :class="styles.nav">
       <div :class="styles.brand">
-        <span :class="styles.brandMark"><AvalonIcon name="logo" :size="24" /></span>
+        <span :class="styles.brandMark"><AvalonIcon name="logo" :size="22" /></span>
         <span :class="styles.brandName">AVALON</span>
       </div>
       <div :class="styles.navActions">
@@ -44,20 +68,78 @@ const audiences = [
     </header>
 
     <section :class="styles.hero">
-      <h1 :class="styles.headline">One identity. Every world you play in.</h1>
-      <p :class="styles.subhead">
-        Avalon is an open network for players, games, and communities. Your identity, friends, guilds,
-        and achievements don’t belong to any single game — they move with you, so a world can end
-        without taking your community down with it.
-      </p>
-      <div :class="styles.heroActions">
-        <RouterLink to="/create-identity"><AvalonButton label="Create your identity" /></RouterLink>
-        <RouterLink to="/login" :class="styles.secondaryLink">Already have an identity? Log in</RouterLink>
+      <div :class="styles.heroText">
+        <span :class="styles.eyebrow">An open network for players, games, and communities</span>
+        <h1 :class="styles.headline">One identity.<br />Every world you play in.</h1>
+        <p :class="styles.subhead">
+          Your identity, friends, guilds, and achievements don’t belong to any single game —
+          they move with you, so a world can end without taking your community down with it.
+        </p>
+        <div :class="styles.heroActions">
+          <RouterLink to="/create-identity"><AvalonButton label="Create your identity" /></RouterLink>
+          <RouterLink to="/login" :class="styles.secondaryLink">Already have an identity? Log in</RouterLink>
+        </div>
+      </div>
+
+      <div :class="styles.heroVisual" aria-hidden="true">
+        <svg
+          :class="styles.constellation"
+          viewBox="0 0 600 600"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <g :class="styles.edges" stroke-width="1.4">
+            <line x1="300" y1="300" x2="150" y2="120" />
+            <line x1="300" y1="300" x2="420" y2="90" />
+            <line x1="300" y1="300" x2="480" y2="260" />
+            <line x1="300" y1="300" x2="380" y2="420" />
+            <line x1="300" y1="300" x2="180" y2="430" />
+            <line x1="300" y1="300" x2="90" y2="280" />
+            <line x1="150" y1="120" x2="260" y2="160" />
+            <line x1="420" y1="90" x2="350" y2="200" />
+            <line x1="480" y1="260" x2="420" y2="340" />
+            <line x1="380" y1="420" x2="240" y2="380" />
+            <line x1="180" y1="430" x2="60" y2="400" />
+            <line x1="90" y1="280" x2="130" y2="200" />
+            <line x1="260" y1="160" x2="350" y2="200" />
+            <line x1="130" y1="200" x2="150" y2="120" />
+            <line x1="520" y1="150" x2="420" y2="90" />
+          </g>
+          <g :class="styles.nodes">
+            <circle :class="styles.nodePrimary" cx="300" cy="300" r="11" style="--i: 0" />
+            <circle :class="styles.nodeSecondary" cx="150" cy="120" r="6" style="--i: 1" />
+            <circle :class="styles.nodeTertiary" cx="420" cy="90" r="5" style="--i: 2" />
+            <circle :class="styles.nodePrimary" cx="480" cy="260" r="7" style="--i: 3" />
+            <circle :class="styles.nodeSecondary" cx="380" cy="420" r="6" style="--i: 4" />
+            <circle :class="styles.nodeTertiary" cx="180" cy="430" r="5" style="--i: 5" />
+            <circle :class="styles.nodePrimary" cx="90" cy="280" r="6" style="--i: 6" />
+            <circle :class="styles.nodeTertiary" cx="260" cy="160" r="4" style="--i: 7" />
+            <circle :class="styles.nodeSecondary" cx="350" cy="200" r="4" style="--i: 8" />
+            <circle :class="styles.nodePrimary" cx="240" cy="380" r="4" style="--i: 9" />
+            <circle :class="styles.nodeTertiary" cx="420" cy="340" r="4" style="--i: 10" />
+            <circle :class="styles.nodeSecondary" cx="130" cy="200" r="4" style="--i: 11" />
+            <circle :class="styles.nodePrimary" cx="520" cy="150" r="4" style="--i: 12" />
+            <circle :class="styles.nodeSecondary" cx="60" cy="400" r="4" style="--i: 13" />
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section :class="styles.steps">
+      <div v-for="(s, i) in steps" :key="s.label" :class="styles.step">
+        <div :class="styles.stepNumber">{{ i + 1 }}</div>
+        <div :class="styles.stepIcon"><AvalonIcon :name="s.icon" :size="20" /></div>
+        <h3 :class="styles.stepLabel">{{ s.label }}</h3>
+        <p :class="styles.stepBody">{{ s.body }}</p>
       </div>
     </section>
 
     <section :class="styles.audiences">
-      <AvalonCard v-for="a in audiences" :key="a.label" :class="styles.audienceCard">
+      <AvalonCard
+        v-for="a in audiences"
+        :key="a.label"
+        :class="[styles.audienceCard, styles[a.accent]]"
+      >
         <div :class="styles.audienceIcon"><AvalonIcon :name="a.icon" :size="22" /></div>
         <h3 :class="styles.audienceLabel">{{ a.label }}</h3>
         <p :class="styles.audienceBody">{{ a.body }}</p>
@@ -65,7 +147,11 @@ const audiences = [
     </section>
 
     <footer :class="styles.footer">
-      <p>One network. Many worlds.</p>
+      <div :class="styles.footerBrand">
+        <span :class="styles.brandMark"><AvalonIcon name="logo" :size="18" /></span>
+        <span :class="styles.brandName">AVALON</span>
+      </div>
+      <p :class="styles.footerTagline">One network. Many worlds.</p>
     </footer>
   </div>
 </template>
