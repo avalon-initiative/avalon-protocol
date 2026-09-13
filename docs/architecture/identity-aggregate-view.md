@@ -148,7 +148,7 @@ subject, achievement, issued_at, proof }`; `layer_2[].type` from
 | `attestations[].issued_at` | timestamp | When the issuing integrator signed this claim. |
 | `attestations[].issuer_key_id` | string | Which of the issuer's operational keys signed it (#80/#84's two-tier model) — lets a compromised key be pinpointed/revoked without implicating the whole integrator. |
 | `published_schemas[]` | `game_schema.published` payload (#255) | An integrator's own declared shape for its custom data (e.g. `Character`) — schema only, real and built. |
-| `custom_data` | *illustrative, not built* | The target shape for actual per-player instance data against a published schema — see "A made-up game's full shape" above and `game-space.md`. |
+| *(instance data, e.g. `characters`)* | *illustrative, not built* | The target shape for actual per-player instance data against a published schema — `characters` is one example; a schema can declare any shape. See "A made-up game's full shape" above, `game-space.md`, and #381 (whether this defaults to network-readable once published — open). |
 
 **Not layer 1 or layer 2 at all**: presence (`status`, "last seen," current game/server) is a third, deliberately ephemeral tier — never a `ProtocolEvent`, never in this document's scope. See [`./presence.md`](./presence.md); do not add presence fields here even though they describe "this identity, right now" in a colloquial sense.
 
@@ -185,21 +185,21 @@ integrator) versus an integrator's own custom-shaped data (partially real
     {
       "id": "game:emberfall-online:schema:character:v1",
       "version": 1,
-      "proto_source": "message Character { uint32 level = 1; string class = 2; repeated string skills = 3; }"
+      "proto_source": "message Character { string name = 1; uint32 level = 2; string race = 3; string class = 4; repeated string titles = 5; }"
     }
   ],
-  "custom_data": {
+  "characters": {
     "_status": "ILLUSTRATIVE — NOT BUILDABLE TODAY, see below",
     "schema": "game:emberfall-online:schema:character:v1",
-    "instance": {
-      "level": 42,
-      "class": "Ranger",
-      "skills": ["Longshot", "Camouflage", "Rapid Fire"],
-      "inventory": [
-        {"item": "Ashwood Bow", "rarity": "epic"},
-        {"item": "Cloak of Whispers", "rarity": "rare"}
-      ]
-    }
+    "instances": [
+      {
+        "name": "Vesryn",
+        "level": 42,
+        "race": "Half-Elf",
+        "class": "Ranger",
+        "titles": ["Dungeon Master", "First Blood"]
+      }
+    ]
   }
 }
 ```
@@ -219,20 +219,22 @@ Three distinct pieces, three different rules:
   this is genuinely integrator-custom, by design, because nothing outside
   Emberfall Online is expected to know what a "Character" means for this
   specific game.
-- **`custom_data`** — **illustrative only.** This is what an actual
-  `Character` *instance* (Nova's real level, class, inventory) would look
-  like if Game Space's data-exposure half existed. It does not exist today
-  — [`./game-space.md`](./game-space.md)'s own "Schema vs. data exposure"
-  section states this plainly: schema publication is built, publishing
-  real per-player instance data against that schema is not. Nothing in
-  this repo accepts a payload shaped like `custom_data` today. It's shown
-  here so the *target* shape — schema-defined, per-integrator, sitting
-  clearly apart from the canonical `attestations` array — is unambiguous
-  once that work happens, not so a reader assumes it already works. Its
-  read-access model isn't decided either, for the same reason — but see
-  "Read access is not one uniform rule" below for the closest existing
-  precedent (profile-style custom data is closed to other integrators by
-  default today).
+- **`characters`** — **illustrative only.** This is what actual `Character`
+  *instances* (Nova's real characters, per the schema Emberfall Online
+  published above) would look like if Game Space's data-exposure half
+  existed. It does not exist today — [`./game-space.md`](./game-space.md)'s
+  own "Schema vs. data exposure" section states this plainly: schema
+  publication is built, publishing real per-player instance data against
+  that schema is not. Nothing in this repo accepts a payload shaped like
+  this today. Deliberately narrow by design, not by current limitation:
+  the intent is small, portable, *fun-to-carry-across-games* flavor data
+  — name, level, race, class, titles — never a character's full mechanical
+  state (inventory, skills, stats used for game balance). That heavier,
+  genuinely game-critical data has no reason to ever leave a game's own
+  database; publishing it here would be a design mistake even once this
+  mechanism exists, not just noise. Its read-access model is a real,
+  substantive open question — see "Read access is not one uniform rule"
+  below, which now covers this specifically.
 
 ## Why layer 2 is safe to let anyone write into, and why it can't leak into layer 1
 
@@ -307,15 +309,19 @@ piece of it is a genuinely open question rather than a settled "yes":
   override"). Do not assume attestation visibility is wide open by
   default; it's explicitly still being decided.
 - **An integrator's own custom, non-attestation data about a player is
-  closed to other integrators by default, full stop.** This is already
-  decided, not open: `docs/architecture/game-bindings.md`'s "Scoped
-  authority" table states plainly that a game "cannot: read or write
-  Game B's profile of the same identity." Read symmetry with write
-  isolation does not hold here — the default is closed on both axes, and
-  any future cross-integrator read of this kind of data (the still-
-  unbuilt `custom_data` mechanism above) would need its own explicit
-  permission design, not an assumption that it inherits attestation-style
-  openness.
+  closed to other integrators by default today.** `docs/architecture/game-bindings.md`'s
+  "Scoped authority" table states plainly that a game "cannot: read or
+  write Game B's profile of the same identity," and its own prose goes
+  further: "Avalon stores none of \[a character's] attributes... unless a
+  game explicitly promotes a fact into durable history as an attestation."
+  Whether an integrator *explicitly publishing* instance data against its
+  own schema (`game_schema.published`, #255 — the still-unbuilt
+  "characters"-style mechanism illustrated above) should be treated as a
+  second, deliberate opt-in path to network-readability — the same shape
+  of opt-in publishing already grants for attestations — is a real,
+  open question, tracked as #381. Until that's decided, treat this kind
+  of data as closed by default, matching the stated rule as it exists
+  today; don't assume it inherits attestation-style openness.
 
 So: write isolation is a hard invariant everywhere in layer 2. Read access
 varies by *what* the data is — a known attestation id is public, browsing
@@ -360,9 +366,11 @@ cited example at that point rather than a speculative one now.
   unpaginated and unfiltered today — a real gap for an identity with a
   large attestation history, tracked as #377, not yet fixed.
 - `game_schema.published` (issue #255) is real — an integrator can publish
-  its own custom data *shape*. Actual per-player instance data against
-  that shape (the `custom_data` example above) is not built — see
-  [`./game-space.md`](./game-space.md)'s "Schema vs. data exposure."
+  its own custom data *shape*, of any kind it wants (`characters` above is
+  one example, not a fixed concept). Actual per-player instance data
+  against a published schema is not built — see
+  [`./game-space.md`](./game-space.md)'s "Schema vs. data exposure." Its
+  default read-access model, once built, is an open decision — #381.
 - No endpoint or indexer projection assembles the full aggregate shape
   above in one response today — see the intro's caveat. Building one (a
   real "full identity view" read) is unscoped, open work, not tracked as
@@ -386,4 +394,8 @@ full shape" above), #377 (`GET /me/achievements` pagination/filtering,
 the real gap behind the "won't zillions of achievements bog this down"
 question this document's `attestations` shape prompted), #295 (per-claim
 attestation visibility — open, the genuine gap behind "Read access is not
-one uniform rule" above).
+one uniform rule" above), #381 (decision, open — whether integrator-
+published custom schema instance data should default to
+network-readable once published, the tension between this document's
+illustrative "characters" example and `game-bindings.md`'s current
+"Avalon stores none of their attributes" stance).
