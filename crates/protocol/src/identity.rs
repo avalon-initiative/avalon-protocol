@@ -44,8 +44,10 @@ pub struct Profile {
     /// Free text, capped server-side at [`MAX_PRONOUNS_LEN`] characters.
     pub pronouns: Option<String>,
     /// A second image slot, separate from `avatar_url`, for the Hub profile
-    /// page header (issue #372). Same shape and same (effectively no)
-    /// server-side validation as `avatar_url` today.
+    /// page header (issue #372). Same shape and same server-side validation
+    /// as `avatar_url` (a well-formed `http`/`https` URL — see
+    /// `crates/server/src/handlers.rs`'s `is_http_url`), reused directly
+    /// rather than duplicated.
     pub banner_url: Option<String>,
     /// A short free-text tagline, capped server-side at [`MAX_STATUS_LEN`]
     /// characters — distinct from and shorter-capped than `bio`.
