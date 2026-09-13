@@ -124,6 +124,13 @@ on the public network" — that's a real gap, not a hidden feature; see
   generating a fresh `AVALON_SETTLEMENT_SIGNING_KEY`/`AVALON_NETWORK_ID`
   into `.env` on first run rather than requiring either to be hand-set
   first. See [`../maintainers/hosting-quickstart.md`](../maintainers/hosting-quickstart.md).
+- Plain `.env` storage for `AVALON_SETTLEMENT_SIGNING_KEY` is a decided
+  floor (issue #352), not an oversight — a dedicated secrets backend was
+  weighed and rejected as the default because it would fork `make
+  stack-up`'s single zero-manual-steps bring-up path per OS/platform.
+  Permission hardening on the generated file (#354) and a documented
+  rotation procedure (#355) are the two concrete follow-ups that decision
+  left open.
 - Structured logging (issue #265): `avalon-server` logs via `tracing`, with
   an HTTP request span (method/path/status/latency) per request via
   `tower-http`'s `TraceLayer`. `RUST_LOG` (standard env-filter syntax)

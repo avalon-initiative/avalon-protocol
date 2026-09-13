@@ -68,6 +68,14 @@ file still exists. Back it up somewhere safe — losing the signing key means
 losing the ability to extend this node's ledger under its existing history.
 Never commit `.env` or share the signing key value.
 
+Plain `.env` storage is the accepted floor for a single-operator deployment
+at this project's current scale — see
+[issue #352](https://github.com/LunarVagabond/avalon-protocol/issues/352)
+for the reasoning. A local, filesystem-level `.env` is a weaker guarantee
+than a real secrets store; restrict its permissions (owner read/write only)
+and keep any backup copy under the same restriction rather than treating it
+as an ordinary config file.
+
 ## If something goes wrong
 
 `make stack-logs` is the first thing to check — `avalon-server` logs its own
