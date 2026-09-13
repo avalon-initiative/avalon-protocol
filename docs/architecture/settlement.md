@@ -186,6 +186,32 @@ Implementation tracked as
 (mirror-facing proof/sync endpoints), both under epic #36 — both now
 implemented, see "Today in the repo" below.
 
+## Bounding ledger growth
+
+Standing rule, decided in #306: **high-frequency ephemeral data never
+touches the settlement ledger, full stop.** Chat (`guild_messages.rs`) and
+DM conversation content (`conversations.rs`) already follow this — neither
+calls `outbox::enqueue`, each enforced by a dedicated grep-based test
+(`crates/server/tests/guild_messages_no_ledger.rs`,
+`crates/server/tests/conversations_no_ledger.rs`) rather than left as an
+unenforced convention. Any new feature considering a write to the durable
+ledger should default to this same question first: is this paced by real,
+human-scale actions (identity, friendship, guild membership, achievements —
+what the ledger already carries), or is it machine-speed/high-cardinality
+data that belongs in the indexer's rebuildable projections instead? When
+it's the latter, add the same grep-test enforcement other ledger-adjacent
+modules already use rather than trusting review alone to catch it later.
+
+This bounds *new* unbounded growth from careless design choices. It does
+not bound the two things #306 identified as genuinely open regardless of
+this rule: how many events one issuer can write about one subject
+(#365 — a write-time abuse-floor quota) and making a subject's own history
+cheap to sync selectively without replaying the whole ledger (#364). Both
+are real, organic-use costs this rule doesn't touch. A structural bound on
+long-run per-subject growth for legitimate, ongoing use (log
+compaction/checkpointing) was considered and deliberately deferred — see
+#366 — real design work, not needed at this project's current scale.
+
 ## Today in the repo
 
 `crates/chain/src/postgres.rs` — `PostgresSettlementProvider`, real and in use:
@@ -526,3 +552,10 @@ implemented, see "Today in the repo" below.
   [`network-trust-anchors.md`](./network-trust-anchors.md)
 - [#349](https://github.com/LunarVagabond/avalon-protocol/issues/349) —
   incremental Merkle tree, O(log n) commit and proof-serving — implemented
+- [#306](https://github.com/LunarVagabond/avalon-protocol/issues/306)
+  decided (bounding ledger growth — see the section above): the
+  ledger-vs-indexer split is now a standing rule (#306's "option D"), not
+  just precedent; #364 (subject-scoped selective sync) and #365
+  (per-issuer-subject write quota) implement the near-term pieces; #366
+  (log compaction/checkpointing for long-run organic growth) is
+  deliberately deferred, still open
