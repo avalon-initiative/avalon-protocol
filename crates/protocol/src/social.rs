@@ -28,10 +28,16 @@ pub struct FriendRequest {
     pub requested_at: OffsetDateTime,
 }
 
+/// `Online` is live/automatic: it reflects heartbeat/TTL state and can't be
+/// "stuck" on. `Away`, `DoNotDisturb`, and `Offline` are sticky manual
+/// overrides when set explicitly via `PUT /me/presence` — they persist
+/// (ignoring TTL expiry) until the caller explicitly sets `Online` again.
+/// See `crates/server/src/presence.rs::PresenceStore::get`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresenceStatus {
     Online,
     Away,
+    DoNotDisturb,
     Offline,
 }
 

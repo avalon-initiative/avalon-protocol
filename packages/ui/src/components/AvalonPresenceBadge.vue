@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 import styles from '../styles/AvalonPresenceBadge.module.scss'
+import { PRESENCE_STATUS_LABELS } from './AvalonPresenceBadge.types'
 import type { AvalonPresenceBadgeProps } from './AvalonPresenceBadge.types'
 
-defineProps<AvalonPresenceBadgeProps>()
+const props = defineProps<AvalonPresenceBadgeProps>()
 </script>
 
 <template>
   <span :class="styles.badge">
     <span :class="[styles.dot, styles[status]]" />
-    {{ status }}
+    {{ PRESENCE_STATUS_LABELS[props.status] }}
   </span>
 </template>
