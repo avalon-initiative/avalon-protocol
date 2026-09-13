@@ -1,0 +1,136 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-10);
+  padding: var(--av-space-6) var(--av-space-6) var(--av-space-10);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--av-space-4);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-3);
+}
+
+.brandMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--av-radius-lg);
+  background: var(--av-color-primary-soft);
+  color: var(--av-color-primary-hover);
+}
+
+.brandName {
+  font-size: var(--av-text-md);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+}
+
+.navActions {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-5);
+}
+
+.navLink {
+  color: var(--av-color-text-secondary);
+  font-weight: 600;
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--av-space-5);
+  text-align: center;
+  padding: var(--av-space-8) var(--av-space-4);
+}
+
+.headline {
+  font-size: clamp(2rem, 4vw, calc(var(--av-text-2xl) * 1.6));
+  max-width: 40rem;
+}
+
+.subhead {
+  color: var(--av-color-text-secondary);
+  max-width: 38rem;
+  font-size: var(--av-text-md);
+}
+
+.heroActions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--av-space-3);
+  margin-top: var(--av-space-2);
+}
+
+.secondaryLink {
+  color: var(--av-color-text-secondary);
+  font-size: var(--av-text-sm);
+}
+
+.audiences {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--av-space-5);
+}
+
+.audienceCard {
+  align-items: flex-start;
+}
+
+.audienceIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--av-radius-md);
+  background: var(--av-color-primary-soft);
+  color: var(--av-color-primary-hover);
+}
+
+.audienceLabel {
+  font-size: var(--av-text-md);
+  font-weight: 600;
+}
+
+.audienceBody {
+  color: var(--av-color-text-secondary);
+  font-size: var(--av-text-sm);
+}
+
+.footer {
+  text-align: center;
+  color: var(--av-color-text-muted);
+  font-size: var(--av-text-sm);
+}
+
+@media (max-width: 960px) {
+  .audiences {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .nav {
+    flex-wrap: wrap;
+  }
+
+  .audiences {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
