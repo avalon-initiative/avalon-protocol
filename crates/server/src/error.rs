@@ -285,6 +285,14 @@ pub enum AppError {
     GameSchemaNotFound,
     #[error("a game may only publish schemas attributed to its own id")]
     GameSchemaForbidden,
+    #[error("invalid proto schema: {detail}")]
+    InvalidProtoSchema { detail: String },
+    #[error("instance does not conform to its schema: {detail}")]
+    InstanceSchemaMismatch { detail: String },
+    #[error("game data instance not found")]
+    GameDataInstanceNotFound,
+    #[error("a game may only publish instance data against its own published schemas")]
+    GameDataSchemaOwnershipMismatch,
     #[error(
         "participants must include yourself plus at least one other distinct existing identity"
     )]
@@ -473,6 +481,12 @@ impl IntoResponse for AppError {
             // the `{slug}` path segment — never allowed to publish a
             // schema attributed to another game's id.
             AppError::GameSchemaForbidden => StatusCode::FORBIDDEN,
+            AppError::InvalidProtoSchema { .. } => StatusCode::BAD_REQUEST,
+            AppError::InstanceSchemaMismatch { .. } => StatusCode::BAD_REQUEST,
+            AppError::GameDataInstanceNotFound => StatusCode::NOT_FOUND,
+            // Same "authenticated fine as *some* game, but not allowed to
+            // make this specific claim" shape as `GameSchemaForbidden`.
+            AppError::GameDataSchemaOwnershipMismatch => StatusCode::FORBIDDEN,
             AppError::InvalidConversationParticipants => StatusCode::BAD_REQUEST,
             // Same status as `NotGuildMember`: an authorization fact, not a
             // missing resource, and — per this variant's own doc comment —

@@ -160,7 +160,7 @@ subject, achievement, issued_at, proof }`; `layer_2[].type` from
 | `attestations[].issued_at` | timestamp | When the issuing integrator signed this claim. |
 | `attestations[].issuer_key_id` | string | Which of the issuer's operational keys signed it (#80/#84's two-tier model) — lets a compromised key be pinpointed/revoked without implicating the whole integrator. |
 | `published_schemas[]` | `game_schema.published` payload (#255) | An integrator's own declared shape for its custom data (e.g. `Character`) — schema only, real and built. |
-| *(instance data, e.g. `characters`)* | *decided (#381), building now (#384)* | The target shape for actual per-player instance data against a published schema — `characters` is one example; a schema can declare any shape. Public by default once published, with a schema-level `private` opt-out and a bidirectional field-level override (#381). See "A made-up game's full shape" above and `game-space.md`. |
+| *(instance data, e.g. `characters`)* | *decided (#381), built (#384)* | Actual per-player instance data against a published schema, read via `GET /identities/{id}/game-data` — `characters` is one example; a schema can declare any shape. Public by default once published, with a schema-level `private` opt-out and a bidirectional field-level override (#381), enforced server-side before a caller ever sees the data. See "A made-up game's full shape" above and `game-space.md`. |
 
 **Not layer 1 or layer 2 at all**: presence (`status`, "last seen," current game/server) is a third, deliberately ephemeral tier — never a `ProtocolEvent`, never in this document's scope. See [`./presence.md`](./presence.md); do not add presence fields here even though they describe "this identity, right now" in a colloquial sense.
 
@@ -203,20 +203,31 @@ integrator) versus an integrator's own custom-shaped data (partially real
     }
   ],
   "characters": {
-    "_status": "BEING BUILT NOW — #384, decided #381; not yet merged as of this writing",
-    "schema": "game:emberfall-online:schema:character:v1",
+    "_status": "BUILT — #384, decided #381; GET /identities/{id}/game-data",
     "instances": [
       {
-        "name": "Vesryn",
-        "level": 42,
-        "race": "Half-Elf",
-        "class": "Ranger",
-        "titles": ["Dungeon Master", "First Blood"]
+        "schema": "game:emberfall-online:schema:character:v1",
+        "game_id": "11111111-1111-1111-1111-111111111111",
+        "published_at": "2027-06-01T14:35:00Z",
+        "fields": {
+          "name": "Vesryn",
+          "level": 42,
+          "class": "Ranger"
+        }
       }
     ]
   }
 }
 ```
+
+Note what's missing from `fields` above: `race` and `titles` were part of the
+`Character` instance Emberfall Online actually published (`name`, `level`,
+`race`, `class`, `titles` — matching the schema's five fields), but the
+schema's `default_visibility: "private"` plus a `field_visibility` override
+naming only `name`/`level`/`class` as `"public"` means the read endpoint
+drops `race` and `titles` from the response entirely — not null, not
+present-but-redacted, just absent, per the bidirectional visibility rule in
+`crate::game_data::resolve_visible_fields`.
 
 Three distinct pieces, three different rules:
 
@@ -237,19 +248,21 @@ Three distinct pieces, three different rules:
   (real protobuf, not stored opaquely), not just accepted as an opaque
   string, so a malformed schema is rejected cleanly rather than silently
   stored.
-- **`characters`** — **decided (#381), being built now (#384), not yet
-  merged as of this writing.** This is what actual `Character`
-  *instances* (Nova's real characters, per the schema Emberfall Online
-  published above) look like once Game Space's data-exposure half exists.
-  Deliberately narrow by design, not by limitation: the intent is small,
-  portable, *fun-to-carry-across-games* flavor data — name, level, race,
-  class, titles — never a character's full mechanical state (inventory,
-  skills, stats used for game balance). That heavier, genuinely
-  game-critical data has no reason to ever leave a game's own database;
-  publishing it here would be a design mistake even once this mechanism
-  exists, not just noise. Its read-access model is decided, not open: see
-  "Read access is not one uniform rule" below, which now states the real
-  policy rather than flagging an open question.
+- **`characters`** — **decided (#381) and built (#384).** This is what
+  `GET /identities/{id}/game-data` actually returns: every current
+  (non-superseded) instance published about Nova, across every
+  game/schema, each already filtered to only the fields that instance's
+  schema currently makes visible — the caller never sees the full raw
+  instance and never has to apply the visibility rule itself. Deliberately
+  narrow by design, not by limitation: the intent is small, portable,
+  *fun-to-carry-across-games* flavor data — name, level, race, class,
+  titles — never a character's full mechanical state (inventory, skills,
+  stats used for game balance). That heavier, genuinely game-critical data
+  has no reason to ever leave a game's own database; publishing it here
+  would be a design mistake even once this mechanism exists, not just
+  noise. Its read-access model is decided and built: see "Read access is
+  not one uniform rule" below, which now states the real policy rather
+  than flagging an open question.
 
 ## Why layer 2 is safe to let anyone write into, and why it can't leak into layer 1
 
@@ -325,7 +338,7 @@ piece of it is a genuinely open question rather than a settled "yes":
   default; it's explicitly still being decided.
 - **An integrator's own custom, non-attestation data about a player,
   explicitly published as schema instance data, defaults to
-  network-readable — decided in #381, building now as #384.** A game
+  network-readable — decided in #381, built in #384.** A game
   publishing instance data against its own schema is the same shape of
   deliberate opt-in that already governs attestations, so it inherits the
   same default: public unless the publishing integrator says otherwise.
@@ -346,7 +359,8 @@ So: write isolation is a hard invariant everywhere in layer 2. Read access
 varies by *what* the data is — a known attestation id is public, browsing
 a subject's full attestation set is undecided (#295), and an integrator's
 explicitly-published schema instance data defaults to public with a
-schema/field-level opt-out (#381/#384) — the only remaining closed-by-
+schema/field-level opt-out, enforced by `GET /identities/{id}/game-data`
+(#381/#384) — the only remaining closed-by-
 default case is a game's own *unpublished* internal data, which was never
 reachable through Avalon at all and stays that way.
 
@@ -391,9 +405,11 @@ cited example at that point rather than a speculative one now.
   large attestation history, tracked as #377, not yet fixed.
 - `game_schema.published` (issue #255) is real — an integrator can publish
   its own custom data *shape*, of any kind it wants (`characters` above is
-  one example, not a fixed concept). Actual per-player instance data
-  against a published schema, and its visibility model, is decided
-  (#381) and being built now (#384) — not yet merged as of this writing.
+  one example, not a fixed concept), and (as of #384) that `.proto` text is
+  actually parsed/validated, not stored opaque. Actual per-player instance
+  data against a published schema (`game_data.published`), its visibility
+  model, and the read endpoint (`GET /identities/{id}/game-data`) are real
+  and built (#384, decided by #381).
   See [`./game-space.md`](./game-space.md)'s "Schema vs. data exposure."
 - No endpoint or indexer projection assembles the full aggregate shape
   above in one response today — see the intro's caveat. Building one (a

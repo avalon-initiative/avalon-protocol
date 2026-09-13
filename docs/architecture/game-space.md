@@ -71,6 +71,12 @@ requires a game to expose its full model to participate.
 
 ## Schema vs. data exposure — do not conflate these
 
+**Built as of #384** (decided by #381): schema publication and instance-data
+publication are two separate write paths with independent authorization, and
+data exposure defaults to network-readable the same way attestations already
+do — publishing is the opt-in. See "Today in the repo" below for the actual
+mechanism.
+
 ```text
 Schema publication  =  "Here is how our data is structured."
 Data exposure        =  "Here are the instances we choose to expose."
@@ -146,16 +152,20 @@ schema reference is what makes the payload interpretable — the same relationsh
 document** — only schema representation, storage, and versioning (below)
 are — see [Decisions and tickets](#decisions-and-tickets).
 
-## Representation and versioning (decided by #181, built by #255)
+## Representation and versioning (decided by #181, built by #255, parsing added by #384)
 
 A published game schema is protobuf IDL (`.proto`) — mature
-field-numbering/evolution rules, broad developer familiarity — stored as
-opaque source text. Avalon never parses or compiles it; it only stores,
-versions, and serves it back verbatim. This keeps the actual network
+field-numbering/evolution rules, broad developer familiarity. It is stored,
+versioned, and served back verbatim, exactly as submitted (`proto_source`
+itself is never rewritten or re-encoded). #181 originally specified this
+text as opaque to Avalon; #384's amendment revised that — Avalon now
+actually parses it (pure-Rust, no `protoc` binary) to resolve its root
+message, both to validate `field_visibility`'s field names for real and to
+validate submitted instance data against it. This keeps the actual network
 surface JSON-only (per [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)'s
-protocol-event-payload policy): protobuf's canonical JSON mapping is the
-bridge a future validation ticket would use, not a reason to make Avalon's
-API gRPC or binary-protobuf-on-the-wire.
+protocol-event-payload policy): protobuf's canonical JSON mapping
+(`protobuf-json-mapping`) is the bridge #384 actually uses, not a reason to
+make Avalon's API gRPC or binary-protobuf-on-the-wire.
 
 Version identity is a monotonic `version: u32` per game — the same
 precedent `AchievementDefinition.version` already established — plus an
@@ -238,10 +248,11 @@ guarantee is actually needed, following the same discipline
 - Does not imply that using Avalon makes a character portable — portability of
   any kind stays opt-in and per-entity, per
   [`./future-layers.md`](./future-layers.md).
-- Does not validate exposed data against a published schema, or parse/compile
-  `.proto` IDL — schema text is stored and served back opaque. Both remain
-  open, deferred to follow-up tickets under #182 (see
-  [Representation and versioning](#representation-and-versioning-decided-by-181-built-by-255)).
+- Does validate exposed data against a published schema, and does parse
+  `.proto` IDL to do so — see #384 in [Representation and
+  versioning](#representation-and-versioning-decided-by-181-built-by-255-parsing-added-by-384).
+  Compiling to a language binding (codegen) is still out of scope; parsing
+  here is only ever for structural validation.
 - Does not extend `GameBinding` or the achievement `schema` field to carry
   general game data; both stay exactly as narrowly scoped as they are today.
 
@@ -254,8 +265,65 @@ guarantee is actually needed, following the same discipline
   `AchievementDefinition.schema`/`version` precedent
   ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)),
   generalized from a bare reference field to the schema description itself.
-  No `GameSpace`, `Mapping`, or `Entity` type exists yet — data exposure and
-  mapping remain unbuilt.
+  No `GameSpace`/`Mapping`/`Entity` type exists yet — mapping between schema
+  versions remains unbuilt. Data exposure (this section's own gap) is now
+  built, per #384.
+- **`proto_source` is now actually parsed** (#384's amendment to #181's
+  original "protobuf IDL, stored opaque" decision) — `crate::proto_schema`
+  (`crates/server/src/proto_schema.rs`) parses it at publish time with
+  `protobuf-parse`'s pure-Rust parser (no `protoc` binary, since this
+  parses untrusted third-party text at request time) into a
+  `FileDescriptorProto`, then builds a `MessageDescriptor` via `protobuf`'s
+  reflection support. A schema must declare **exactly one top-level
+  `message`** — that message is the schema's root type; zero or multiple is
+  rejected with `AppError::InvalidProtoSchema`, never guessed at. The
+  *validated* instance JSON is still stored/served as plain JSONB
+  afterward — the protobuf machinery is a write-time validation gate, not a
+  new storage/wire format.
+- **Schema-level and field-level visibility** (`default_visibility`:
+  `"public"`/`"private"`, `field_visibility`: field name ->
+  `"public"`/`"private"`, overriding the default for that field in either
+  direction) live on `game_schemas`/`indexer_game_schemas`
+  (`crates/server/db/migrations/0051_game_data_visibility`). Both default
+  to fully open (`"public"`, `{}`) — a schema published before #384 landed
+  keeps behaving exactly as it did before. `field_visibility`'s keys are
+  validated against the parsed root message's real field names at publish
+  time (`proto_schema::validate_field_visibility_keys`); a nonexistent
+  field name is rejected, not silently accepted.
+- **Instance-data publication**: `POST
+  /games/{slug}/schemas/{version}/data` (`crates/server/src/game_data.rs`)
+  — a new `game_data.published` event kind, `game_data_instances` +
+  `indexer_game_data_instances` tables mirroring the
+  `game_schemas`/`indexer_game_schemas` pairing exactly (append-only,
+  `superseded_by` lineage, no PATCH). Write auth: `authenticate_owning_game`
+  (the caller must *be* `{slug}`, same guard `publish_schema_version` uses)
+  plus an active binding from the subject identity to that game
+  (`authz::has_active_binding`, mirroring `achievements::issue_attestation`'s
+  "the player's own consent" pattern) plus the resolved schema's own
+  `game_id` matching the caller. The submitted `instance` JSON is validated
+  against the schema's parsed root message via `protobuf-json-mapping`
+  (`proto_schema::validate_instance_json`) — unknown fields, wrong types,
+  and (for a proto2-style schema) missing `required` fields are all
+  rejected with `AppError::InstanceSchemaMismatch`, never stored.
+- **Read**: `GET /identities/{id}/game-data`
+  (`game_data::get_identity_game_data`) — public, unauthenticated, same
+  posture `GET /attestations/{id}` already has (#381's whole point).
+  Reads the indexer's own projection
+  (`avalon_indexer::projections::game_data_instances`), never raw
+  ledger/outbox data, and applies the bidirectional visibility rule
+  (`game_data::resolve_visible_fields`, a pure function unit-tested
+  directly) per instance: a field is included iff `default_visibility` is
+  `"public"` and the field isn't marked `"private"`, or `default_visibility`
+  is `"private"` and the field is marked `"public"`. Only literal top-level
+  JSON key matching — no nested-field visibility in this pass (documented
+  limitation, not silently attempted).
+- **In-process parse cache.** `proto_schema` caches each schema's parsed
+  root message (keyed by schema id, which is permanently immutable once
+  published) so repeated instance-data writes against the same schema
+  version don't re-run the `.proto` parser on every request — parsing
+  happens once at publish time (`proto_schema::cache_root_message`, called
+  right after a successful `publish_schema_version`) and, thereafter, at
+  most once per server process per schema (`parse_root_message_cached`).
 - `GlobalId::new(namespace, owner, kind, key)`
   (`crates/protocol/src/ids.rs`) namespaces a version as
   `game:<slug>:schema:<version>`, minted by
@@ -277,8 +345,9 @@ guarantee is actually needed, following the same discipline
   events — not a mechanism for versioning a game's data model. Schema
   versioning follows the same discipline without #82 itself being widened
   to cover it.
-- Mapping between schema versions and server-side validation of exposed
-  data against a schema are still unbuilt — see #182's remaining tickets.
+- Mapping between schema versions is still unbuilt — see #182's remaining
+  tickets. Server-side validation of exposed data against a schema is now
+  built (#384, above).
 
 ## Decisions and tickets
 
@@ -288,12 +357,23 @@ guarantee is actually needed, following the same discipline
 - [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) —
   Decision: game-defined schema model, representation, and versioning
   strategy. Decided 2026-09-09: protobuf IDL as the description format,
-  stored opaque; version identity/lineage and discovery surface left to
-  implementation.
+  originally stored opaque; #384's amendment revised this to real parsing —
+  see below.
 - [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) —
   Game Schema Publication: the first implementation ticket under #182,
   building publication, immutability/lineage, and registry discovery per
   #181's decision.
+- [#381](https://github.com/LunarVagabond/avalon-protocol/issues/381) —
+  Decision: data exposure defaults to network-readable once an integrator
+  publishes instance data against its own published schema, with a
+  schema-level opt-out and a bidirectional field-level override.
+- [#384](https://github.com/LunarVagabond/avalon-protocol/issues/384) —
+  Game Space data exposure: builds #381's decision — schema visibility
+  metadata, real instance-data publication (`game_data.published`), the
+  visibility-enforcing read endpoint, and (its own amendment) real
+  protobuf parsing/validation of both `proto_source` and submitted
+  instances, replacing #181's original "stored opaque, never parsed"
+  stance for schema text specifically.
 - [#182](https://github.com/LunarVagabond/avalon-protocol/issues/182) — Epic:
   Game Space & Schema Publication, gated on #181.
 - [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) — ADR:

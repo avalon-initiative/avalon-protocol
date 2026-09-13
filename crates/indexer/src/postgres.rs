@@ -22,7 +22,8 @@ use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::projections::{
-    attestations, friendships, game_bindings, game_schemas, guild_rosters, profiles,
+    attestations, friendships, game_bindings, game_data_instances, game_schemas, guild_rosters,
+    profiles,
 };
 use crate::{IndexError, Indexer};
 
@@ -87,6 +88,11 @@ impl PostgresIndexer {
             "game.binding_established" | "game.binding_ended" => {
                 if let Some(write) = game_bindings::decode(event) {
                     game_bindings::apply(tx, &write).await?;
+                }
+            }
+            "game_data.published" => {
+                if let Some(write) = game_data_instances::decode(event) {
+                    game_data_instances::apply(tx, &write).await?;
                 }
             }
             other => {

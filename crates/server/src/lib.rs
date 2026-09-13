@@ -11,6 +11,7 @@ pub mod devices;
 pub mod discovery;
 pub mod error;
 pub mod friends;
+pub mod game_data;
 pub mod game_schemas;
 pub mod games;
 pub mod guild_events;
@@ -22,6 +23,7 @@ pub mod mirror_watcher;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
+pub mod proto_schema;
 pub mod recovery;
 pub mod registry;
 pub mod retention;
@@ -274,6 +276,17 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/games/{slug}/schemas/{version}",
             get(game_schemas::get_schema_version),
+        )
+        // #384 (implementing #381's decided policy): real instance data
+        // against a published schema, and the read endpoint that enforces
+        // the schema's (and any per-field override's) visibility.
+        .route(
+            "/games/{slug}/schemas/{version}/data",
+            post(game_data::publish_instance),
+        )
+        .route(
+            "/identities/{id}/game-data",
+            get(game_data::get_identity_game_data),
         )
         .route(
             "/games/{slug}/connect",

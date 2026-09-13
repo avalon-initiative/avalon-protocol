@@ -47,3 +47,14 @@ passkey-authenticator = { version = "0.5", features = ["testable"] }
 # itself — naming the full virtual-client type in an integration test (see
 # crates/server/tests/passkeys.rs) needs this as a direct dependency too.
 public-suffix = "0.1"
+# rust-protobuf project, version-aligned (issue #384's amendment): parses
+# untrusted `.proto` source text at runtime (no `protoc` binary dependency)
+# and builds/reads dynamic messages against the resulting descriptor.
+protobuf = "3.7.2"
+protobuf-parse = "3.7.2"
+protobuf-json-mapping = "3.7.2"
+# `protobuf_parse::Parser`'s only public API reads `.proto` source from a
+# filesystem path (its in-memory `ProtoPathResolver` trait is crate-private,
+# not usable from a dependent crate) — a scoped, auto-cleaned temp file per
+# parse request is the plumbing for that, not a new persistent artifact.
+tempfile = "3"

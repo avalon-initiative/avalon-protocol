@@ -87,8 +87,14 @@ async fn game_auth_headers(http: &reqwest::Client, base: &str, game: &Registered
     headers
 }
 
-const PROTO_V1: &str = "message Character { uint32 level = 1; uint64 xp = 2; }";
-const PROTO_V2: &str = "message Character { uint32 level = 1; uint64 xp = 2; string title = 3; }";
+// Valid proto3 syntax as of #384: `proto_source` is now actually parsed
+// (`crate::proto_schema`), not stored opaquely, so these fixtures must be
+// real, parseable `.proto` text — unlike before #384, where any non-empty
+// string was accepted.
+const PROTO_V1: &str =
+    "syntax = \"proto3\"; message Character { uint32 level = 1; uint64 xp = 2; }";
+const PROTO_V2: &str =
+    "syntax = \"proto3\"; message Character { uint32 level = 1; uint64 xp = 2; string title = 3; }";
 
 #[tokio::test]
 #[ignore]
