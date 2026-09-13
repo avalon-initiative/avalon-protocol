@@ -31,6 +31,10 @@ hex.workspace = true
 reqwest.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+protobuf.workspace = true
+protobuf-parse.workspace = true
+protobuf-json-mapping.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -239,6 +239,25 @@ async fn fetch_grant(
     Ok(row.map(|_| GrantFacts { active: true }))
 }
 
+/// Whether an active `bindings` row exists for `(identity_id, game_id)`,
+/// with no specific capability grant required — the player-consent check
+/// `game_data::publish_instance` (#384) uses, matching
+/// `issue_attestation`'s "an active binding to this issuer" language but
+/// without a capability grant on top (#384 doesn't define one; publishing
+/// instance data about a bound player is closer to schema/achievement
+/// *definition* than to acting on a player's other resources). Reuses
+/// [`fetch_binding`] rather than a second hand-rolled query, same posture
+/// this module's own doc comment insists on for every other binding check.
+pub(crate) async fn has_active_binding(
+    state: &AppState,
+    identity_id: Uuid,
+    game_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(fetch_binding(state, identity_id, game_id)
+        .await?
+        .is_some_and(|(_, facts)| facts.bound_game_id == game_id && facts.active))
+}
+
 /// The guard: does `caller` have `capability`? `capability` is mandatory
 /// (not `Option`, no default) so a call site can never accidentally check
 /// nothing — see module doc comment. `Caller::Player` always passes

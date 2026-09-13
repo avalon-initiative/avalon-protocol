@@ -29,6 +29,12 @@ pub struct GameSchemaPublished {
     /// The immediately-prior version's id, if this publication supersedes
     /// one — `None` for a game's first published version.
     pub supersedes: Option<String>,
+    /// `"public"`/`"private"` (#384/#381) — absent on an event emitted
+    /// before #384 landed, in which case this defaults to `"public"`,
+    /// preserving that publication's original fully-open behavior.
+    pub default_visibility: String,
+    /// Field name -> `"public"`/`"private"`; empty for a pre-#384 event.
+    pub field_visibility: serde_json::Value,
 }
 
 pub fn decode(event: &ProtocolEvent) -> Option<GameSchemaPublished> {
@@ -44,6 +50,17 @@ pub fn decode(event: &ProtocolEvent) -> Option<GameSchemaPublished> {
         .get("supersedes")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let default_visibility = event
+        .payload
+        .get("default_visibility")
+        .and_then(|v| v.as_str())
+        .unwrap_or("public")
+        .to_string();
+    let field_visibility = event
+        .payload
+        .get("field_visibility")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     Some(GameSchemaPublished {
         id,
         game_id,
@@ -51,6 +68,8 @@ pub fn decode(event: &ProtocolEvent) -> Option<GameSchemaPublished> {
         proto_source,
         published_at: event.timestamp,
         supersedes,
+        default_visibility,
+        field_visibility,
     })
 }
 
@@ -60,19 +79,24 @@ pub async fn apply(
 ) -> Result<(), IndexError> {
     sqlx::query(
         "INSERT INTO indexer_game_schemas \
-         (id, game_id, version, proto_source, published_at, superseded_by) \
-         VALUES ($1, $2, $3, $4, $5, NULL) \
+         (id, game_id, version, proto_source, published_at, superseded_by, \
+          default_visibility, field_visibility) \
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7) \
          ON CONFLICT (id) DO UPDATE SET \
              game_id = EXCLUDED.game_id, \
              version = EXCLUDED.version, \
              proto_source = EXCLUDED.proto_source, \
-             published_at = EXCLUDED.published_at",
+             published_at = EXCLUDED.published_at, \
+             default_visibility = EXCLUDED.default_visibility, \
+             field_visibility = EXCLUDED.field_visibility",
     )
     .bind(&write.id)
     .bind(write.game_id)
     .bind(write.version as i32)
     .bind(&write.proto_source)
     .bind(write.published_at)
+    .bind(&write.default_visibility)
+    .bind(&write.field_visibility)
     .execute(&mut **tx)
     .await?;
 
@@ -85,6 +109,39 @@ pub async fn apply(
     }
 
     Ok(())
+}
+
+/// Visibility metadata for one schema, as recorded by the indexer's own
+/// projection — what `game_data`'s read endpoint (#384) resolves per
+/// instance to apply the bidirectional visibility rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaVisibility {
+    pub game_id: Uuid,
+    pub default_visibility: String,
+    pub field_visibility: serde_json::Value,
+}
+
+/// One schema's visibility metadata by id, `None` if never published (or
+/// not yet reflected in this projection).
+pub async fn get_visibility(
+    pool: &PgPool,
+    schema_id: &str,
+) -> Result<Option<SchemaVisibility>, IndexError> {
+    let row = sqlx::query(
+        "SELECT game_id, default_visibility, field_visibility \
+         FROM indexer_game_schemas WHERE id = $1",
+    )
+    .bind(schema_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(SchemaVisibility {
+        game_id: row.try_get("game_id")?,
+        default_visibility: row.try_get("default_visibility")?,
+        field_visibility: row.try_get("field_visibility")?,
+    }))
 }
 
 /// One row of the registry's discovery surface — a game's published schema
@@ -169,8 +226,51 @@ mod tests {
                 proto_source: "message Character { uint32 level = 1; }".to_string(),
                 published_at: source_event.timestamp,
                 supersedes: None,
+                default_visibility: "public".to_string(),
+                field_visibility: serde_json::json!({}),
             }
         );
+    }
+
+    #[test]
+    fn decodes_visibility_metadata_when_present() {
+        let game_id = Uuid::new_v4();
+        let source_event = event(
+            "game_schema.published",
+            serde_json::json!({
+                "id": "game:ashen-realms:schema:1",
+                "game_id": game_id,
+                "version": 1,
+                "proto_source": "message Character { uint32 level = 1; }",
+                "supersedes": null,
+                "default_visibility": "private",
+                "field_visibility": { "level": "public" },
+            }),
+        );
+        let write = decode(&source_event).unwrap();
+        assert_eq!(write.default_visibility, "private");
+        assert_eq!(
+            write.field_visibility,
+            serde_json::json!({ "level": "public" })
+        );
+    }
+
+    #[test]
+    fn decoding_a_pre_384_event_defaults_to_fully_open_visibility() {
+        let game_id = Uuid::new_v4();
+        let source_event = event(
+            "game_schema.published",
+            serde_json::json!({
+                "id": "game:ashen-realms:schema:1",
+                "game_id": game_id,
+                "version": 1,
+                "proto_source": "message Character { uint32 level = 1; }",
+                "supersedes": null,
+            }),
+        );
+        let write = decode(&source_event).unwrap();
+        assert_eq!(write.default_visibility, "public");
+        assert_eq!(write.field_visibility, serde_json::json!({}));
     }
 
     #[test]

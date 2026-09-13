@@ -49,6 +49,8 @@
 //! `achievements::list_achievement_definitions` already use — nothing
 //! about a published schema is sensitive.
 
+use std::collections::BTreeMap;
+
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
@@ -62,7 +64,18 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::games::{authenticate_game, fetch_game_id_by_slug, game_ref};
 use crate::outbox;
+use crate::proto_schema;
 use crate::state::AppState;
+
+/// `"public"` | `"private"` — the fixed vocabulary both
+/// `default_visibility` and each `field_visibility` value are restricted
+/// to (#384/#381). Not an enum serialized directly from the request body:
+/// kept as validated strings so the stored JSONB and the wire request
+/// shape match byte-for-byte, same choice this module already makes for
+/// `proto_source`.
+fn is_valid_visibility(value: &str) -> bool {
+    matches!(value, "public" | "private")
+}
 
 /// `game:<slug>:schema:<version>` — a published version's immutable,
 /// globally unique id. `pub(crate)` so this module's own tests (and any
@@ -95,6 +108,8 @@ struct SchemaVersionRow {
     proto_source: String,
     published_at: OffsetDateTime,
     superseded_by: Option<String>,
+    default_visibility: String,
+    field_visibility: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -106,9 +121,13 @@ pub struct GameSchemaVersionResponse {
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
     pub superseded_by: Option<String>,
+    pub default_visibility: String,
+    pub field_visibility: BTreeMap<String, String>,
 }
 
 fn version_response(game_id: Uuid, row: SchemaVersionRow) -> GameSchemaVersionResponse {
+    let field_visibility: BTreeMap<String, String> =
+        serde_json::from_value(row.field_visibility).unwrap_or_default();
     GameSchemaVersionResponse {
         id: row.id,
         game_id,
@@ -116,14 +135,34 @@ fn version_response(game_id: Uuid, row: SchemaVersionRow) -> GameSchemaVersionRe
         proto_source: row.proto_source,
         published_at: row.published_at,
         superseded_by: row.superseded_by,
+        default_visibility: row.default_visibility,
+        field_visibility,
     }
 }
 
 #[derive(Deserialize)]
 pub struct PublishGameSchemaVersionRequest {
-    /// Raw `.proto` source text, stored opaque — never parsed or compiled
-    /// here (#181's decision; out of scope for #255).
+    /// Raw `.proto` source text — parsed for real as of #384 (see
+    /// `crate::proto_schema`), no longer stored opaque. Must declare
+    /// exactly one top-level `message`, which becomes this schema's root
+    /// type for both `field_visibility` validation here and instance
+    /// validation in `crate::game_data`.
     pub proto_source: String,
+    /// `"public"` (default) or `"private"` — #381's schema-level opt-out.
+    /// Omitted entirely by a pre-#384 publisher, which keeps today's
+    /// fully-open behavior.
+    #[serde(default = "default_visibility_public")]
+    pub default_visibility: String,
+    /// Field name -> `"public"`/`"private"`, overriding `default_visibility`
+    /// for that field specifically, in either direction (#381). Every key
+    /// must name a real field of the parsed root message — see
+    /// `proto_schema::validate_field_visibility_keys`.
+    #[serde(default)]
+    pub field_visibility: BTreeMap<String, String>,
+}
+
+fn default_visibility_public() -> String {
+    "public".to_string()
 }
 
 /// `POST /games/{slug}/schemas` — publish the next version. Always an
@@ -138,6 +177,33 @@ pub async fn publish_schema_version(
     if body.proto_source.trim().is_empty() {
         return Err(AppError::InvalidGameSchema);
     }
+    if !is_valid_visibility(&body.default_visibility) {
+        return Err(AppError::InvalidProtoSchema {
+            detail: format!(
+                "default_visibility must be \"public\" or \"private\", got \"{}\"",
+                body.default_visibility
+            ),
+        });
+    }
+    for value in body.field_visibility.values() {
+        if !is_valid_visibility(value) {
+            return Err(AppError::InvalidProtoSchema {
+                detail: format!(
+                    "field_visibility values must be \"public\" or \"private\", got \"{value}\""
+                ),
+            });
+        }
+    }
+
+    // Real parsing, per #384's amendment: reject cleanly (never panic) on
+    // malformed source, on zero/multiple top-level messages, and on a
+    // `field_visibility` key that isn't a real field of the resolved root
+    // message.
+    let root_message = proto_schema::parse_root_message(&body.proto_source)?;
+    proto_schema::validate_field_visibility_keys(&root_message, &body.field_visibility)?;
+
+    let field_visibility_json = serde_json::to_value(&body.field_visibility)
+        .expect("BTreeMap<String, String> is always representable as a JSON object");
 
     let mut tx = state.pool.begin().await?;
 
@@ -169,14 +235,18 @@ pub async fn publish_schema_version(
     let previous_id = previous_version.map(|v| schema_ref(&slug, v));
 
     sqlx::query(
-        "INSERT INTO game_schemas (id, game_id, version, proto_source, published_at, superseded_by) \
-         VALUES ($1, $2, $3, $4, $5, NULL)",
+        "INSERT INTO game_schemas \
+         (id, game_id, version, proto_source, published_at, superseded_by, \
+          default_visibility, field_visibility) \
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)",
     )
     .bind(id.as_str())
     .bind(game_id)
     .bind(new_version as i32)
     .bind(&body.proto_source)
     .bind(now)
+    .bind(&body.default_visibility)
+    .bind(&field_visibility_json)
     .execute(&mut *tx)
     .await?;
 
@@ -200,13 +270,29 @@ pub async fn publish_schema_version(
             "version": new_version,
             "proto_source": body.proto_source,
             "supersedes": previous_id.as_ref().map(GlobalId::as_str),
+            "default_visibility": body.default_visibility,
+            "field_visibility": field_visibility_json,
         }),
         timestamp: now,
         version: 1,
     };
     outbox::enqueue(&mut tx, &event).await?;
 
+    // `indexer_game_schemas` is a projection (issue #42): populated by the
+    // indexer applying `event` in this same transaction, not by a direct
+    // `INSERT` here — same "read model updates commit atomically with the
+    // write it derives from" posture `handlers::register_finish` already
+    // established. This is what makes `game_data`'s visibility-aware read
+    // endpoint (#384) see a schema's visibility metadata immediately,
+    // rather than only after some separate replay pass.
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
+
     tx.commit().await?;
+
+    // Warms `proto_schema`'s in-process root-message cache immediately —
+    // parsing happens here, once, rather than being deferred to (and
+    // repeated across) this schema's first instance-data write.
+    proto_schema::cache_root_message(id.as_str(), root_message);
 
     Ok(Json(version_response(
         game_id,
@@ -216,6 +302,8 @@ pub async fn publish_schema_version(
             proto_source: body.proto_source,
             published_at: now,
             superseded_by: None,
+            default_visibility: body.default_visibility,
+            field_visibility: field_visibility_json,
         },
     )))
 }
@@ -230,7 +318,8 @@ pub async fn list_schema_versions(
     let game_id = fetch_game_id_by_slug(&state, &slug).await?;
 
     let rows = sqlx::query(
-        "SELECT id, version, proto_source, published_at, superseded_by \
+        "SELECT id, version, proto_source, published_at, superseded_by, \
+                default_visibility, field_visibility \
          FROM game_schemas WHERE game_id = $1 ORDER BY version",
     )
     .bind(game_id)
@@ -247,6 +336,8 @@ pub async fn list_schema_versions(
                 proto_source: row.try_get("proto_source")?,
                 published_at: row.try_get("published_at")?,
                 superseded_by: row.try_get("superseded_by")?,
+                default_visibility: row.try_get("default_visibility")?,
+                field_visibility: row.try_get("field_visibility")?,
             },
         ));
     }
@@ -264,7 +355,8 @@ pub async fn get_schema_version(
     let game_id = fetch_game_id_by_slug(&state, &slug).await?;
 
     let row = sqlx::query(
-        "SELECT id, version, proto_source, published_at, superseded_by \
+        "SELECT id, version, proto_source, published_at, superseded_by, \
+                default_visibility, field_visibility \
          FROM game_schemas WHERE game_id = $1 AND version = $2",
     )
     .bind(game_id)
@@ -281,8 +373,39 @@ pub async fn get_schema_version(
             proto_source: row.try_get("proto_source")?,
             published_at: row.try_get("published_at")?,
             superseded_by: row.try_get("superseded_by")?,
+            default_visibility: row.try_get("default_visibility")?,
+            field_visibility: row.try_get("field_visibility")?,
         },
     )))
+}
+
+/// Fetches one schema version's owning game + `proto_source` directly —
+/// used by [`crate::game_data::publish_instance`] to check schema
+/// ownership and re-parse the root message for instance validation.
+/// Visibility metadata for the *read* side comes from the indexer's own
+/// projection instead (`avalon_indexer::projections::game_schemas::get_visibility`),
+/// matching this crate's settlement-vs-querying split. `pub(crate)` rather
+/// than duplicating this query.
+pub(crate) struct SchemaForInstanceOps {
+    pub game_id: Uuid,
+    pub proto_source: String,
+}
+
+pub(crate) async fn fetch_schema_by_id(
+    state: &AppState,
+    schema_id: &str,
+) -> Result<Option<SchemaForInstanceOps>, AppError> {
+    let row = sqlx::query("SELECT game_id, proto_source FROM game_schemas WHERE id = $1")
+        .bind(schema_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(SchemaForInstanceOps {
+        game_id: row.try_get("game_id")?,
+        proto_source: row.try_get("proto_source")?,
+    }))
 }
 
 #[cfg(test)]
