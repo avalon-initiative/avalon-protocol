@@ -146,6 +146,18 @@ Both are useful. The history is reconstructable from
 [indexer](./query-and-indexing.md). Nothing about a guild that Avalon promises to
 preserve lives only in a mutable row — see [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75).
 
+## A player's main guild
+
+A player may belong to several guilds at once, but an integrator building a
+guild-chat-style UI often wants just one to build around rather than
+supporting arbitrarily-many simultaneous memberships in its own interface.
+`main_guild` (no ticket) is a self-chosen pointer to one of a player's own
+current memberships, living on the identity's profile, not on the guild —
+see [`./identity.md`](./identity.md#what-is-promised-durable) for the full
+spec (validation, three-state PATCH semantics, the earliest-joined default
+when unset). It never affects guild-side data: no guild is ever "the" main
+guild, only a player's own pointer at one of their memberships.
+
 ## Analytics phrasing
 
 Never describe network guilds as belonging to a game.

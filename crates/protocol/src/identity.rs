@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::IdentityId;
+use crate::ids::{GuildId, IdentityId};
 
 /// The persistent, network-level player identity.
 ///
@@ -72,6 +72,22 @@ pub struct Profile {
     /// IP-derived or geocoded. This is load-bearing per issue #372: a future
     /// contributor must not silently add geolocation here.
     pub location: Option<String>,
+    /// A self-chosen pointer to one of this identity's own current guild
+    /// memberships (not scoped to any game/app/service category — a guild
+    /// itself isn't category-scoped, see `GuildGameAssociation` in
+    /// `crates/protocol/src/guilds.rs`), so an integrator building a
+    /// guild-chat-style UI has one guild to default to instead of having to
+    /// support arbitrarily-many simultaneous memberships. Server-side
+    /// (`crates/server/src/handlers.rs`) validates on every write that this
+    /// names a guild the identity is *currently* a member of, and
+    /// `crates/server/src/guilds.rs::leave_guild` clears it back to `None`
+    /// in the same transaction if the identity leaves the guild it points
+    /// at — this field must never dangle. `None` means "not explicitly
+    /// set," not "no guild" — a caller wanting a default in that case
+    /// computes one at read time (earliest-joined guild membership) rather
+    /// than this field ever being written to reflect that default; see
+    /// `crates/server/src/handlers.rs`'s `ProfileResponse::effective_main_guild`.
+    pub main_guild: Option<GuildId>,
 }
 
 /// Server-side cap on `Profile::bio`'s length, in characters.

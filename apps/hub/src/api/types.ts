@@ -104,6 +104,17 @@ export interface ProfileResponse {
   theme_color: string | null
   // Self-described free text only — never IP-derived or geocoded.
   location: string | null
+  // A self-chosen pointer to one of this identity's own current guild
+  // memberships (no ticket — see
+  // avalon_protocol::identity::Profile::main_guild's doc comment). `null`
+  // means "not explicitly set," not "no guild" — see effective_main_guild
+  // below for the resolved value to actually build a single-guild UI
+  // around.
+  main_guild: string | null
+  // main_guild if explicitly set, otherwise the guild this identity joined
+  // earliest, computed server-side at read time and never stored. `null`
+  // only when the identity has no guild memberships at all.
+  effective_main_guild: string | null
   // Issue #205's opt-in global search toggle — true means this identity
   // currently matches GET /identities/search. Off by default for every
   // identity; drives the "you are currently publicly searchable" indicator
@@ -132,6 +143,11 @@ export interface UpdateProfileRequest {
   timezone?: string
   theme_color?: string
   location?: string
+  // Three states, same as bio: omitted (untouched), "" (clear), or a guild
+  // id the caller must currently be a member of — rejected otherwise, not
+  // silently ignored. Not free text; the Hub only ever sends an id from
+  // the caller's own GET /me/guilds list.
+  main_guild?: string
   // Issue #205. Omitted leaves the existing preference untouched.
   discoverable?: boolean
 }

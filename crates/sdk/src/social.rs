@@ -311,6 +311,7 @@ mod tests {
                 timezone: None,
                 theme_color: None,
                 location: None,
+                main_guild: None,
             },
             granted: granted.into_iter().map(Capability::from).collect(),
             http: reqwest::Client::new(),
