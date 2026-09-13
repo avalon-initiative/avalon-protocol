@@ -193,18 +193,45 @@ This is a code-review discipline expectation starting now, not gated on
 any further ticket.
 
 **Cross-cutting invariant, applies to every future piece of this**: a
-node's self-reported version is an operational signal, never an
-authoritative one. The same reasoning #40/#299 already apply to a single
-signed STH (never trusted without corroboration) applies here — trusting
-an unsigned, self-asserted version claim opens real attack surface (a bad
-actor claiming false incompatibility to isolate a legitimate peer, or
-manufacturing fake upgrade urgency). Any future negotiation/staleness
-mechanism must be built on this from the start, not retrofitted.
+version claim is never trusted for anything *cryptographic* or used to
+grant elevated trust/capability — it stays a compatibility/availability
+signal. This is why it's still safe to *gate network membership* on a
+version claim (below): the worst case of a forged claim is a
+self-inflicted availability change (wrongly excluded, or wrongly not
+excluded, from gossip), never elevated trust or bypassed verification —
+every actual settlement operation stays independently, cryptographically
+verified regardless of what version either side claims. The same
+reasoning #40/#299 already apply to a single signed STH (never trusted
+without corroboration) applies here too.
 
-Concrete node-to-node version awareness (mirror-watcher wire format
-carrying a real version field, decode failures becoming a clear
-"incompatible" signal instead of a raw panic, node status/health surfacing
-version and peer-observed staleness) is tracked as #368. Opt-in auto-update
+Concrete node-to-node version awareness, tracked as #368:
+
+- The mirror-watcher's wire format carries a real version field; a decode
+  failure from a version mismatch becomes a clear "incompatible" log
+  signal instead of a raw panic.
+- **The version a node reports is a compile-time constant**
+  (`PROTOCOL_VERSION`), never a runtime-settable env var — closes the
+  trivial "just set a config value" spoofing path. Stated honestly: this
+  is not cryptographic non-forgeability — a forked, recompiled binary can
+  still hardcode a fake constant. Genuine non-forgeability against a
+  deliberately modified binary needs #369's signed release manifest; this
+  only removes the no-recompile-required spoofing path.
+- **A minimum-supported-version floor is baked into the binary as the
+  real baseline** (`MIN_SUPPORTED_PEER_VERSION`, released alongside
+  `PROTOCOL_VERSION`), not left as an operator-configurable default — a
+  peer below it is excluded from this node's peer table/gossip entirely.
+  An `AVALON_MIN_PEER_VERSION` env var can only raise the effective floor
+  further above that baseline, never lower it — otherwise an operator (or
+  a compromised `.env`) could disable enforcement entirely by setting a
+  permissive value. Exclusion is reversible: a peer that upgrades starts
+  reporting a passing version and is naturally re-admitted on its next
+  announce/gossip cycle, no manual unban step. Raising the binary's own
+  baked-in floor over time happens via a real, changelog-visible release,
+  never a silent default bump.
+- Node status/health output surfaces this node's own version and, when
+  known via peer gossip, a staleness flag.
+
+Opt-in auto-update
 for self-hosted nodes — the further step of a node acting on a newer
 version's existence, not just reporting it — is real, separate scope
 gated on a release-signing mechanism that doesn't exist yet, and is
