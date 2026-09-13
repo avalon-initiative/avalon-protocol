@@ -7,14 +7,16 @@
   padding: var(--av-space-6) var(--av-space-6) var(--av-space-10);
   max-width: 1200px;
   margin: 0 auto;
-  overflow: hidden;
 }
 
 /* Layered radial glow behind the whole page — richer than a flat background,
-   anchored to the hero so it reads as "coming from" the constellation. */
+   anchored to the hero so it reads as "coming from" the constellation.
+   Inset flush with .page's own bounds (not a negative bleed) specifically so
+   nothing here ever needs `overflow: hidden` on `.page` — that would create
+   a new scroll container and silently break the sticky nav below. */
 .bgGlow {
   position: absolute;
-  inset: -10% -10% auto -10%;
+  inset: 0 0 auto 0;
   height: 900px;
   z-index: -1;
   pointer-events: none;
