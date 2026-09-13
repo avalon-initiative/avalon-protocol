@@ -26,7 +26,9 @@ That's it for a first-time, single-node bring-up. What it does:
    a fresh `AVALON_SETTLEMENT_SIGNING_KEY` (required; there is no fallback —
    this is the key your node signs its ledger's tree heads with) and a
    `AVALON_NETWORK_ID` unique to this deployment. Every other value gets a
-   safe, working default for a single local node.
+   safe, working default for a single local node. The generated `.env` is
+   `chmod`ed to owner read/write only (`600`) — not world-readable at
+   whatever the shell's umask happened to leave it.
 2. **Starts Postgres** (`docker compose ... up -d postgres`) and waits for
    it to report healthy.
 3. **Runs migrations** (`docker compose ... run --rm migrate`) — a one-shot
@@ -66,15 +68,17 @@ make stack-down   # stop everything this started
 into `.env`, and never regenerated on a later `make stack-up` as long as that
 file still exists. Back it up somewhere safe — losing the signing key means
 losing the ability to extend this node's ledger under its existing history.
-Never commit `.env` or share the signing key value.
+Never commit `.env` or share the signing key value. Need to replace this key
+later — routine hygiene or a suspected compromise? See
+[`key-rotation.md`](key-rotation.md).
 
 Plain `.env` storage is the accepted floor for a single-operator deployment
 at this project's current scale — see
 [issue #352](https://github.com/LunarVagabond/avalon-protocol/issues/352)
 for the reasoning. A local, filesystem-level `.env` is a weaker guarantee
-than a real secrets store; restrict its permissions (owner read/write only)
-and keep any backup copy under the same restriction rather than treating it
-as an ordinary config file.
+than a real secrets store; keep any backup copy of it under the same `600`
+permissions `make stack-up` sets, rather than treating it as an ordinary
+config file.
 
 ## If something goes wrong
 
