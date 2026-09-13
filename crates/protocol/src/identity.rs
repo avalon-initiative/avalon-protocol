@@ -43,6 +43,33 @@ pub struct Profile {
     pub favorite_genres: Vec<Genre>,
     /// Free text, capped server-side at [`MAX_PRONOUNS_LEN`] characters.
     pub pronouns: Option<String>,
+    /// A second image slot, separate from `avatar_url`, for the Hub profile
+    /// page header (issue #372). Same shape and same (effectively no)
+    /// server-side validation as `avatar_url` today.
+    pub banner_url: Option<String>,
+    /// A short free-text tagline, capped server-side at [`MAX_STATUS_LEN`]
+    /// characters — distinct from and shorter-capped than `bio`.
+    pub status: Option<String>,
+    /// A small fixed-size list of self-reported URLs, capped server-side at
+    /// [`MAX_LINKS`] entries, each capped at [`MAX_LINK_LEN`] characters and
+    /// required to parse as an `http`/`https` URL. Two-state like
+    /// `favorite_genres`: omitted (untouched) or `Some(list)`, which always
+    /// fully replaces the stored list, including `Some(vec![])` to clear it.
+    pub links: Vec<String>,
+    /// Self-reported free text, capped server-side at [`MAX_TIMEZONE_LEN`]
+    /// characters. NOT validated against the real IANA time zone database —
+    /// no such crate exists in this workspace today (issue #372); this is a
+    /// documented, deliberate gap, not a silently-pretended correctness
+    /// guarantee.
+    pub timezone: Option<String>,
+    /// A self-chosen accent color, validated server-side as a 6-digit hex
+    /// color (`#rrggbb`). Purely cosmetic.
+    pub theme_color: Option<String>,
+    /// Free text, capped server-side at [`MAX_LOCATION_LEN`] characters.
+    /// Self-described only — e.g. "Pacific Northwest" — and MUST NEVER be
+    /// IP-derived or geocoded. This is load-bearing per issue #372: a future
+    /// contributor must not silently add geolocation here.
+    pub location: Option<String>,
 }
 
 /// Server-side cap on `Profile::bio`'s length, in characters.
@@ -53,6 +80,23 @@ pub const MAX_FAVORITE_GENRES: usize = 5;
 
 /// Server-side cap on `Profile::pronouns`'s length, in characters.
 pub const MAX_PRONOUNS_LEN: usize = 40;
+
+/// Server-side cap on `Profile::status`'s length, in characters.
+pub const MAX_STATUS_LEN: usize = 100;
+
+/// Server-side cap on how many entries `Profile::links` may carry.
+pub const MAX_LINKS: usize = 5;
+
+/// Server-side cap on each `Profile::links` entry's length, in characters.
+pub const MAX_LINK_LEN: usize = 200;
+
+/// Server-side cap on `Profile::timezone`'s length, in characters. See the
+/// field's own doc comment: this is a length check only, not real IANA time
+/// zone validation.
+pub const MAX_TIMEZONE_LEN: usize = 64;
+
+/// Server-side cap on `Profile::location`'s length, in characters.
+pub const MAX_LOCATION_LEN: usize = 100;
 
 /// The fixed, small controlled vocabulary `Profile::favorite_genres` draws
 /// from (issue #155). Deliberately closed rather than free text — a bad

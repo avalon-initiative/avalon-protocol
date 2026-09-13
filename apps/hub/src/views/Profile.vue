@@ -68,6 +68,22 @@ const error = ref('')
 const bio = ref('')
 const pronouns = ref('')
 
+// Issue #372's expanded self-description fields.
+const bannerUrl = ref('')
+const status = ref('')
+const timezone = ref('')
+const themeColor = ref('')
+const location = ref('')
+
+// `links` is a small fixed-size list (issue #372), same "saves as one
+// explicit action" shape favorite_genres already uses below rather than a
+// per-field save — up to MAX_LINKS text inputs, blank slots trimmed out on
+// save.
+const MAX_LINKS = 5
+const links = ref<string[]>([])
+const savingLinks = ref(false)
+const linksError = ref('')
+
 // Issue #155's closed genre vocabulary (crates/protocol/src/identity.rs's
 // Genre::ALL) — a fixed picker, not free text, same "small controlled
 // vocabulary" reasoning the server enforces on write.
@@ -119,6 +135,12 @@ onMounted(async () => {
     identityId.value = profile.identity_id
     bio.value = profile.bio ?? ''
     pronouns.value = profile.pronouns ?? ''
+    bannerUrl.value = profile.banner_url ?? ''
+    status.value = profile.status ?? ''
+    timezone.value = profile.timezone ?? ''
+    themeColor.value = profile.theme_color ?? ''
+    location.value = profile.location ?? ''
+    links.value = profile.links?.length ? [...profile.links] : ['']
     selectedGenres.value = new Set(profile.favorite_genres)
     discoverable.value = profile.discoverable
     hasSigningKey.value = loadSigningKey(profile.identity_id) !== null
@@ -157,7 +179,16 @@ async function onLogout() {
 // Each profile field saves on its own — PATCH /me takes any subset, and
 // the display name and avatar are independently promised-durable (#86),
 // so one edit is one change, one event.
-type ProfileField = 'display_name' | 'avatar_url' | 'bio' | 'pronouns'
+type ProfileField =
+  | 'display_name'
+  | 'avatar_url'
+  | 'bio'
+  | 'pronouns'
+  | 'banner_url'
+  | 'status'
+  | 'timezone'
+  | 'theme_color'
+  | 'location'
 const savingField = ref<ProfileField | ''>('')
 const fieldErrors = ref<Partial<Record<ProfileField, string>>>({})
 
@@ -172,6 +203,11 @@ async function saveProfileField(field: ProfileField, value: string) {
     handle.value = profile.handle
     bio.value = profile.bio ?? ''
     pronouns.value = profile.pronouns ?? ''
+    bannerUrl.value = profile.banner_url ?? ''
+    status.value = profile.status ?? ''
+    timezone.value = profile.timezone ?? ''
+    themeColor.value = profile.theme_color ?? ''
+    location.value = profile.location ?? ''
   } catch (e) {
     fieldErrors.value = {
       ...fieldErrors.value,
@@ -209,6 +245,31 @@ async function onSaveGenres() {
     genresError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     savingGenres.value = false
+  }
+}
+
+function onLinkInput(index: number, value: string) {
+  const next = [...links.value]
+  next[index] = value
+  links.value = next
+}
+
+function onAddLinkSlot() {
+  if (links.value.length < MAX_LINKS) links.value = [...links.value, '']
+}
+
+async function onSaveLinks() {
+  if (!session.token) return
+  linksError.value = ''
+  savingLinks.value = true
+  try {
+    const trimmed = links.value.map((l) => l.trim()).filter((l) => l.length > 0)
+    const profile = await api.updateProfile(session.token, { links: trimmed })
+    links.value = profile.links?.length ? [...profile.links] : ['']
+  } catch (e) {
+    linksError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingLinks.value = false
   }
 }
 
@@ -741,6 +802,82 @@ async function onCancelGuardianRequest(requestId: string) {
               :error="fieldErrors.pronouns"
               @save="saveProfileField('pronouns', $event)"
             />
+            <AvalonEditableField
+              label="Banner URL"
+              :value="bannerUrl"
+              empty-text="No banner"
+              placeholder="https://…"
+              :saving="savingField === 'banner_url'"
+              :error="fieldErrors.banner_url"
+              @save="saveProfileField('banner_url', $event)"
+            />
+            <AvalonEditableField
+              label="Status"
+              :value="status"
+              empty-text="No status set"
+              placeholder="What are you up to?"
+              :saving="savingField === 'status'"
+              :error="fieldErrors.status"
+              @save="saveProfileField('status', $event)"
+            />
+            <AvalonEditableField
+              label="Timezone"
+              :value="timezone"
+              empty-text="No timezone set"
+              placeholder="America/New_York"
+              :saving="savingField === 'timezone'"
+              :error="fieldErrors.timezone"
+              @save="saveProfileField('timezone', $event)"
+            />
+            <AvalonEditableField
+              label="Theme color"
+              :value="themeColor"
+              empty-text="No theme color set"
+              placeholder="#a1b2c3"
+              :saving="savingField === 'theme_color'"
+              :error="fieldErrors.theme_color"
+              @save="saveProfileField('theme_color', $event)"
+            />
+            <AvalonEditableField
+              label="Location"
+              :value="location"
+              empty-text="No location set"
+              placeholder="Pacific Northwest"
+              :saving="savingField === 'location'"
+              :error="fieldErrors.location"
+              @save="saveProfileField('location', $event)"
+            />
+          </div>
+
+          <div :class="styles.stack">
+            <h3 :class="styles.subheading">Links</h3>
+            <p :class="styles.listDetail">Up to {{ MAX_LINKS }} URLs (http/https).</p>
+            <p v-if="linksError" :class="page.error">{{ linksError }}</p>
+            <ul :class="styles.list">
+              <li v-for="(link, index) in links" :key="index" :class="styles.guardianRow">
+                <input
+                  type="url"
+                  :value="link"
+                  placeholder="https://…"
+                  :class="styles.linkInput"
+                  @input="onLinkInput(index, ($event.target as HTMLInputElement).value)"
+                />
+              </li>
+            </ul>
+            <div :class="styles.actions">
+              <AvalonButton
+                v-if="links.length < MAX_LINKS"
+                label="Add another link"
+                variant="secondary"
+                @click="onAddLinkSlot"
+              />
+              <AvalonButton
+                :label="savingLinks ? 'Saving…' : 'Save links'"
+                variant="primary"
+                :disabled="savingLinks"
+                @click="onSaveLinks"
+              />
+            </div>
           </div>
 
           <div :class="styles.stack">

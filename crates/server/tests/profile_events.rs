@@ -238,6 +238,107 @@ async fn a_self_description_update_round_trips_through_get_me() {
 
 #[tokio::test]
 #[ignore]
+async fn expanded_profile_fields_round_trip_through_get_me() {
+    // Issue #372: banner_url/status/links/timezone/theme_color/location
+    // follow the same durable/three-state (two-state for links) contract
+    // #155 already established for bio/favorite_genres/pronouns.
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_identity_id, token) = seed_identity_session(&pool).await;
+
+    let update = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "banner_url": "https://example.com/banner.png",
+            "status": "raiding tonight",
+            "links": ["https://example.com", "https://example.org"],
+            "timezone": "America/New_York",
+            "theme_color": "#a1b2c3",
+            "location": "Pacific Northwest",
+        }))
+        .send()
+        .await
+        .expect("update request failed — is `make start` running?");
+    assert!(update.status().is_success(), "{:?}", update.status());
+
+    let me: serde_json::Value = http
+        .get(format!("{base}/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(me["banner_url"], "https://example.com/banner.png");
+    assert_eq!(me["status"], "raiding tonight");
+    assert_eq!(
+        me["links"],
+        serde_json::json!(["https://example.com", "https://example.org"])
+    );
+    assert_eq!(me["timezone"], "America/New_York");
+    assert_eq!(me["theme_color"], "#a1b2c3");
+    assert_eq!(me["location"], "Pacific Northwest");
+
+    // Clearing (empty string / empty list) round-trips to `None`/empty too.
+    let clear = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "banner_url": "",
+            "status": "",
+            "links": [],
+            "timezone": "",
+            "theme_color": "",
+            "location": "",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(clear.status().is_success(), "{:?}", clear.status());
+
+    let me_after_clear: serde_json::Value = http
+        .get(format!("{base}/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(me_after_clear["banner_url"].is_null());
+    assert!(me_after_clear["status"].is_null());
+    assert_eq!(me_after_clear["links"], serde_json::json!([]));
+    assert!(me_after_clear["timezone"].is_null());
+    assert!(me_after_clear["theme_color"].is_null());
+    assert!(me_after_clear["location"].is_null());
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_invalid_theme_color_is_rejected_not_silently_dropped() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_identity_id, token) = seed_identity_session(&pool).await;
+
+    let update = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "theme_color": "not-a-color" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(update.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore]
 async fn an_unknown_genre_is_rejected_not_silently_dropped() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
