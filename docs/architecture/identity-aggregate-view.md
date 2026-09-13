@@ -52,17 +52,15 @@ way regardless of which category it belongs to, distinguished only by its
   "profile": {
     "display_name": "LV",
     "avatar_url": "https://...",
+    "banner_url": "https://...",
     "bio": "Full-time dragon slayer.",
+    "status": "Raiding tonight",
     "pronouns": "she/her",
     "favorite_genres": ["rpg", "mmo"],
-    "_pending_372": {
-      "banner_url": "https://...",
-      "status": "Raiding tonight",
-      "links": ["https://..."],
-      "timezone": "America/Los_Angeles",
-      "theme_color": "#7c3aed",
-      "location": "Pacific Northwest"
-    }
+    "links": ["https://..."],
+    "timezone": "America/Los_Angeles",
+    "theme_color": "#7c3aed",
+    "location": "Pacific Northwest"
   },
   "guilds": [
     {"guild_id": "g-1", "role": "officer", "joined_at": "2027-02-01T00:00:00Z"}
@@ -97,11 +95,10 @@ way regardless of which category it belongs to, distinguished only by its
 }
 ```
 
-`_pending_372` marks fields not yet landed as of this writing (issue #372)
-— remove that wrapper once merged and fold them directly into `profile`,
-matching every sibling field's shape. If this note and the actual code
-ever disagree, the code is right and this doc is stale — same discipline
-`worked-ledger-example.md` holds itself to.
+`banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` landed
+via issue #372. If this doc and the actual code ever disagree, the code is
+right and this doc is stale — same discipline `worked-ledger-example.md`
+holds itself to.
 
 Real field provenance, so this doc can be checked against source directly:
 `identity`/`profile` from `avalon_protocol::identity::{Identity, Profile}`;
@@ -174,9 +171,9 @@ publishes `game_schema.published` — see
 for that pattern).
 
 **As of this writing, there is no Hub-exclusive "block space" to publish**
-— every field the Hub currently manages (profile, friends, guilds, the
-fields landing via #372) is layer-1, portable, identity-owned data, not
-something scoped to the Hub itself. The real candidate for genuine
+— every field the Hub currently manages (profile, friends, guilds,
+including the fields #372 added) is layer-1, portable, identity-owned
+data, not something scoped to the Hub itself. The real candidate for genuine
 Hub-local data is issue #87 (visibility/preference store, open, not
 built): a per-player UI preference — which fields are hidden on this
 player's own profile view, feature flags, display settings — that has no
@@ -189,7 +186,8 @@ cited example at that point rather than a speculative one now.
 
 - The layer-1 types cited above (`Identity`, `Profile`, `Friendship`,
   `GuildMember`) are real and implemented; see each type's own module in
-  `crates/protocol/src`.
+  `crates/protocol/src`. `Profile`'s `banner_url`/`status`/`links`/
+  `timezone`/`theme_color`/`location` fields landed via #372.
 - `IntegratorCategory` (issue #282/#275) is real, implemented, additive —
   defaults to `Game` for any caller that omits it.
 - `GameBinding` and `AchievementAttestation` are real and implemented
@@ -210,5 +208,6 @@ illustrates), #75 (durable history / promised-durable fields), #76
 issuer key model), #282/#275 (`IntegratorCategory`, unifying game/app/
 service), #83 (game bindings), #31/#32/#33/#84/#85 (achievement
 issuance/authenticity/revocation), #87 (visibility/preference store — the
-real candidate for a future Hub block-space example), #372 (the pending
-profile fields marked `_pending_372` above).
+real candidate for a future Hub block-space example), #372 (the
+`banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` profile
+fields).
