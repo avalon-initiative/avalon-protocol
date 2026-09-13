@@ -49,6 +49,18 @@ pub enum AppError {
     InvalidGenre,
     #[error("favorite_genres may contain at most 5 entries")]
     TooManyFavoriteGenres,
+    #[error("status must be 100 characters or fewer")]
+    InvalidStatus,
+    #[error("links may contain at most 5 entries")]
+    TooManyLinks,
+    #[error("each links entry must be an http(s) URL of 200 characters or fewer")]
+    InvalidLink,
+    #[error("timezone must be 1-64 characters")]
+    InvalidTimezone,
+    #[error("theme_color must be a 6-digit hex color, e.g. #a1b2c3")]
+    InvalidThemeColor,
+    #[error("location must be 100 characters or fewer")]
+    InvalidLocation,
     #[error("cannot block yourself")]
     SelfBlock,
     #[error("already blocked")]
@@ -324,7 +336,13 @@ impl IntoResponse for AppError {
             | AppError::InvalidBio
             | AppError::InvalidPronouns
             | AppError::InvalidGenre
-            | AppError::TooManyFavoriteGenres => StatusCode::BAD_REQUEST,
+            | AppError::TooManyFavoriteGenres
+            | AppError::InvalidStatus
+            | AppError::TooManyLinks
+            | AppError::InvalidLink
+            | AppError::InvalidTimezone
+            | AppError::InvalidThemeColor
+            | AppError::InvalidLocation => StatusCode::BAD_REQUEST,
             AppError::SelfBlock => StatusCode::BAD_REQUEST,
             AppError::AlreadyBlocked => StatusCode::CONFLICT,
             AppError::BlockNotFound => StatusCode::NOT_FOUND,

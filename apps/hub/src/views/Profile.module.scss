@@ -175,3 +175,15 @@
   color: inherit;
   font: inherit;
 }
+
+// Issue #372's links list — one URL input per slot, up to MAX_LINKS.
+.linkInput {
+  flex: 1;
+  min-width: 0;
+  padding: var(--av-space-1) var(--av-space-2);
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: inherit;
+  font: inherit;
+}

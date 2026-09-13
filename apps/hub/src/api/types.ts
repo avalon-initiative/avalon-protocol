@@ -95,6 +95,15 @@ export interface ProfileResponse {
   bio: string | null
   favorite_genres: Genre[]
   pronouns: string | null
+  // Issue #372's expanded self-description fields — same public exposure
+  // level and durability contract as bio/favorite_genres/pronouns above.
+  banner_url: string | null
+  status: string | null
+  links: string[]
+  timezone: string | null
+  theme_color: string | null
+  // Self-described free text only — never IP-derived or geocoded.
+  location: string | null
   // Issue #205's opt-in global search toggle — true means this identity
   // currently matches GET /identities/search. Off by default for every
   // identity; drives the "you are currently publicly searchable" indicator
@@ -113,6 +122,16 @@ export interface UpdateProfileRequest {
   // Two states, not three: omitted (untouched) or a full replacement list,
   // including [] to clear it.
   favorite_genres?: Genre[]
+  // Issue #372's expanded self-description fields. banner_url/status/
+  // timezone/theme_color/location are three-state, same convention as
+  // UpdateProfileRequest.bio). links: omit to leave untouched, any array
+  // (including []) always fully replaces the stored list.
+  banner_url?: string
+  status?: string
+  links?: string[]
+  timezone?: string
+  theme_color?: string
+  location?: string
   // Issue #205. Omitted leaves the existing preference untouched.
   discoverable?: boolean
 }

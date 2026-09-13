@@ -34,8 +34,12 @@ profile data.
 The profile carries what an identity's owner chooses to say about themselves:
 display name, avatar, bio, favorite genres (drawn from a fixed, small
 vocabulary — `avalon_protocol::identity::Genre` — not free text, so it stays
-useful for matching/filtering later), and pronouns (issue #155). None of it is
-an authoritative game fact.
+useful for matching/filtering later), and pronouns (issue #155), plus a
+banner image, a short status line, a small list of self-reported links, a
+self-reported timezone, an accent color, and a free-text location (issue
+#372). None of it is an authoritative game fact — `location` in particular is
+self-described text only ("Pacific Northwest," say), never IP-derived or
+geocoded; nothing in this protocol infers where a player physically is.
 
 Someone writing "I am an Avion" in their bio does not make Avion a
 network-level race. A game can display that, interpret it, or ignore it. Facts
@@ -62,6 +66,12 @@ work as the projection change. For identity state:
 | `bio` | yes | `profile.updated` | free text, capped at 500 characters; `null` means explicitly cleared, absent means untouched (#155) |
 | `favorite_genres` | yes | `profile.updated` | fixed, small controlled vocabulary (`Genre`), capped at 5 entries; unknown values rejected, not dropped; a present key always fully replaces the list, including to `[]` (#155) |
 | `pronouns` | yes | `profile.updated` | free text, capped at 40 characters; `null` means explicitly cleared, absent means untouched (#155) |
+| `banner_url` | yes | `profile.updated` | same shape/validation as `avatar_url`, a separate image slot; `null` means explicitly cleared, absent means untouched (#372) |
+| `status` | yes | `profile.updated` | free text, capped at 100 characters; `null` means explicitly cleared, absent means untouched (#372) |
+| `links` | yes | `profile.updated` | up to 5 self-reported URLs, each capped at 200 characters and required to parse as an `http`/`https` URL; a present key always fully replaces the list, including to `[]` (#372) |
+| `timezone` | yes | `profile.updated` | free text, capped at 64 characters; NOT validated against the real IANA time zone database (no such crate in this workspace today) — a documented gap; `null` means explicitly cleared, absent means untouched (#372) |
+| `theme_color` | yes | `profile.updated` | must match `^#[0-9a-fA-F]{6}$`; `null` means explicitly cleared, absent means untouched (#372) |
+| `location` | yes | `profile.updated` | free text, capped at 100 characters, self-described only — never IP-derived or geocoded; `null` means explicitly cleared, absent means untouched (#372) |
 | future title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
 | WebAuthn passkey(s) | operational state, not an event | — | `identity_keys` table; see below |
 | event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
@@ -338,10 +348,15 @@ future work). None of these affect the state machine or its invariants.
 
 - `crates/protocol/src/identity.rs` — `Identity { id, created_at }` and
   `Profile { identity_id, display_name, avatar_url, bio, favorite_genres,
-  pronouns }` (the last three added by #155), plus the `Genre` enum
-  `favorite_genres` draws its fixed vocabulary from. No reference to any
-  character schema, and no reference to WebAuthn/Ed25519 either — those stay
-  server-side implementation detail, by design.
+  pronouns, banner_url, status, links, timezone, theme_color, location }`
+  (`bio`/`favorite_genres`/`pronouns` added by #155; `banner_url`/`status`/
+  `links`/`timezone`/`theme_color`/`location` added by #372), plus the
+  `Genre` enum `favorite_genres` draws its fixed vocabulary from. No
+  reference to any character schema, and no reference to WebAuthn/Ed25519
+  either — those stay server-side implementation detail, by design.
+  `location` is self-described free text only, deliberately never IP-derived
+  or geocoded — see the field's own doc comment before adding anything that
+  would make it so.
 - `crates/protocol/src/ids.rs` — `IdentityId(Uuid)`.
 - `crates/server/src/handlers.rs` — `register_start`/`register_finish`,
   `session_start`/`session_finish`, `me`, `update_profile`, working end-to-end

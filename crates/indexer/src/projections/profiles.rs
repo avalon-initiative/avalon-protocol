@@ -38,6 +38,15 @@ pub struct ProfileWrite {
     pub bio: Option<Option<String>>,
     pub favorite_genres: Option<Vec<String>>,
     pub pronouns: Option<Option<String>>,
+    /// Expanded self-described fields (issue #372) — same three-state
+    /// (`banner_url`/`status`/`timezone`/`theme_color`/`location`) or
+    /// two-state (`links`) semantics as their #155 counterparts above.
+    pub banner_url: Option<Option<String>>,
+    pub status: Option<Option<String>>,
+    pub links: Option<Vec<String>>,
+    pub timezone: Option<Option<String>>,
+    pub theme_color: Option<Option<String>>,
+    pub location: Option<Option<String>>,
 }
 
 /// The identity id embedded in an `identity:<id>:self:<verb>`-shaped
@@ -68,6 +77,12 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 bio: None,
                 favorite_genres: None,
                 pronouns: None,
+                banner_url: None,
+                status: None,
+                links: None,
+                timezone: None,
+                theme_color: None,
+                location: None,
             })
         }
         "profile.updated" => {
@@ -108,6 +123,37 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                     })
                     .unwrap_or_default()
             });
+            let banner_url = event
+                .payload
+                .get("banner_url")
+                .map(|v| v.as_str().map(str::to_string));
+            let status = event
+                .payload
+                .get("status")
+                .map(|v| v.as_str().map(str::to_string));
+            // `links` always fully replaces when present, same as
+            // `favorite_genres` — no per-entry clear state.
+            let links = event.payload.get("links").map(|v| {
+                v.as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|l| l.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            let timezone = event
+                .payload
+                .get("timezone")
+                .map(|v| v.as_str().map(str::to_string));
+            let theme_color = event
+                .payload
+                .get("theme_color")
+                .map(|v| v.as_str().map(str::to_string));
+            let location = event
+                .payload
+                .get("location")
+                .map(|v| v.as_str().map(str::to_string));
             Some(ProfileWrite {
                 identity_id,
                 display_name,
@@ -116,6 +162,12 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
                 bio,
                 favorite_genres,
                 pronouns,
+                banner_url,
+                status,
+                links,
+                timezone,
+                theme_color,
+                location,
             })
         }
         _ => None,
@@ -134,6 +186,18 @@ pub async fn apply(
     let pronouns = write.pronouns.clone().flatten();
     let genres_provided = write.favorite_genres.is_some();
     let favorite_genres = write.favorite_genres.clone().unwrap_or_default();
+    let banner_url_provided = write.banner_url.is_some();
+    let banner_url = write.banner_url.clone().flatten();
+    let status_provided = write.status.is_some();
+    let status = write.status.clone().flatten();
+    let links_provided = write.links.is_some();
+    let links = write.links.clone().unwrap_or_default();
+    let timezone_provided = write.timezone.is_some();
+    let timezone = write.timezone.clone().flatten();
+    let theme_color_provided = write.theme_color.is_some();
+    let theme_color = write.theme_color.clone().flatten();
+    let location_provided = write.location.is_some();
+    let location = write.location.clone().flatten();
 
     // `display_name`/`discriminator` are NOT NULL columns, but this write
     // can carry neither (a `profile.updated` that only touched e.g. `bio`)
@@ -147,13 +211,20 @@ pub async fn apply(
         r#"
         INSERT INTO profiles (
             identity_id, display_name, discriminator, avatar_url,
-            bio, favorite_genres, pronouns
+            bio, favorite_genres, pronouns, banner_url, status, links,
+            timezone, theme_color, location
         )
         VALUES (
             $1, COALESCE($2, ''), COALESCE($3, ''), CASE WHEN $5 THEN $4 ELSE NULL END,
             CASE WHEN $7 THEN $6 ELSE NULL END,
             CASE WHEN $9 THEN $8 ELSE '{}' END,
-            CASE WHEN $11 THEN $10 ELSE NULL END
+            CASE WHEN $11 THEN $10 ELSE NULL END,
+            CASE WHEN $13 THEN $12 ELSE NULL END,
+            CASE WHEN $15 THEN $14 ELSE NULL END,
+            CASE WHEN $17 THEN $16 ELSE '{}' END,
+            CASE WHEN $19 THEN $18 ELSE NULL END,
+            CASE WHEN $21 THEN $20 ELSE NULL END,
+            CASE WHEN $23 THEN $22 ELSE NULL END
         )
         ON CONFLICT (identity_id) DO UPDATE SET
             display_name = CASE WHEN $2 IS NOT NULL THEN EXCLUDED.display_name ELSE profiles.display_name END,
@@ -161,7 +232,13 @@ pub async fn apply(
             avatar_url = CASE WHEN $5 THEN EXCLUDED.avatar_url ELSE profiles.avatar_url END,
             bio = CASE WHEN $7 THEN EXCLUDED.bio ELSE profiles.bio END,
             favorite_genres = CASE WHEN $9 THEN EXCLUDED.favorite_genres ELSE profiles.favorite_genres END,
-            pronouns = CASE WHEN $11 THEN EXCLUDED.pronouns ELSE profiles.pronouns END
+            pronouns = CASE WHEN $11 THEN EXCLUDED.pronouns ELSE profiles.pronouns END,
+            banner_url = CASE WHEN $13 THEN EXCLUDED.banner_url ELSE profiles.banner_url END,
+            status = CASE WHEN $15 THEN EXCLUDED.status ELSE profiles.status END,
+            links = CASE WHEN $17 THEN EXCLUDED.links ELSE profiles.links END,
+            timezone = CASE WHEN $19 THEN EXCLUDED.timezone ELSE profiles.timezone END,
+            theme_color = CASE WHEN $21 THEN EXCLUDED.theme_color ELSE profiles.theme_color END,
+            location = CASE WHEN $23 THEN EXCLUDED.location ELSE profiles.location END
         "#,
     )
     .bind(write.identity_id)
@@ -175,6 +252,18 @@ pub async fn apply(
     .bind(genres_provided)
     .bind(&pronouns)
     .bind(pronouns_provided)
+    .bind(&banner_url)
+    .bind(banner_url_provided)
+    .bind(&status)
+    .bind(status_provided)
+    .bind(&links)
+    .bind(links_provided)
+    .bind(&timezone)
+    .bind(timezone_provided)
+    .bind(&theme_color)
+    .bind(theme_color_provided)
+    .bind(&location)
+    .bind(location_provided)
     .execute(&mut **tx)
     .await?;
 

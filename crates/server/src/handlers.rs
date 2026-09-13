@@ -16,7 +16,10 @@
 //! database on every machine that so much as runs `cargo check`.
 
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::identity::{Genre, MAX_BIO_LEN, MAX_FAVORITE_GENRES, MAX_PRONOUNS_LEN};
+use avalon_protocol::identity::{
+    Genre, MAX_BIO_LEN, MAX_FAVORITE_GENRES, MAX_LINKS, MAX_LINK_LEN, MAX_LOCATION_LEN,
+    MAX_PRONOUNS_LEN, MAX_STATUS_LEN, MAX_TIMEZONE_LEN,
+};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -515,6 +518,17 @@ pub struct ProfileResponse {
     pub bio: Option<String>,
     pub favorite_genres: Vec<Genre>,
     pub pronouns: Option<String>,
+    /// Expanded self-described fields (issue #372) — same promised-durable
+    /// tier and same public exposure level as `bio`/`favorite_genres`/
+    /// `pronouns` above.
+    pub banner_url: Option<String>,
+    pub status: Option<String>,
+    pub links: Vec<String>,
+    pub timezone: Option<String>,
+    pub theme_color: Option<String>,
+    /// Self-described only — never IP-derived or geocoded. See
+    /// `avalon_protocol::identity::Profile::location`'s doc comment.
+    pub location: Option<String>,
     /// Issue #205's opt-in global search toggle — `true` means this
     /// identity currently matches `GET /identities/search`. Surfaced here
     /// (rather than requiring a separate read) so the Hub's "you are
@@ -531,6 +545,7 @@ fn profile_row_to_response(
     let display_name: String = row.try_get("display_name")?;
     let discriminator: String = row.try_get("discriminator")?;
     let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
+    let links: Vec<String> = row.try_get("links")?;
     Ok(ProfileResponse {
         identity_id,
         identity_created_at: row.try_get("created_at")?,
@@ -547,6 +562,12 @@ fn profile_row_to_response(
             .filter_map(|g| Genre::parse(g))
             .collect(),
         pronouns: row.try_get("pronouns")?,
+        banner_url: row.try_get("banner_url")?,
+        status: row.try_get("status")?,
+        links,
+        timezone: row.try_get("timezone")?,
+        theme_color: row.try_get("theme_color")?,
+        location: row.try_get("location")?,
         discoverable: row.try_get("discoverable")?,
     })
 }
@@ -559,7 +580,8 @@ fn profile_row_to_response(
 /// [`update_profile`] so the two reads can never drift.
 const PROFILE_SELECT: &str = r#"
     SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
-           p.favorite_genres, p.pronouns, i.created_at,
+           p.favorite_genres, p.pronouns, p.banner_url, p.status, p.links,
+           p.timezone, p.theme_color, p.location, i.created_at,
            COALESCE(dp.discoverable, false) AS discoverable
     FROM profiles p
     JOIN identities i ON i.id = p.identity_id
@@ -596,11 +618,12 @@ pub struct ProfilesQuery {
 /// `display_name`/`avatar_url` already are: the least-sensitive public-face
 /// fields. This endpoint has no further visibility gating (any session can
 /// batch-resolve arbitrary identity ids), so `bio`/`favorite_genres`/
-/// `pronouns` (#155) are deliberately withheld here even though they're
-/// unauthenticated-readable on one's own `GET /me` — batch stranger lookup
-/// is a materially wider exposure than a single self-disclosed profile
-/// view, and widening it is a scoping decision for its own ticket, not a
-/// side effect of adding the columns.
+/// `pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/
+/// `theme_color`/`location` (#372) are deliberately withheld here even
+/// though they're unauthenticated-readable on one's own `GET /me` — batch
+/// stranger lookup is a materially wider exposure than a single
+/// self-disclosed profile view, and widening it is a scoping decision for
+/// its own ticket, not a side effect of adding the columns.
 #[derive(Serialize)]
 pub struct PublicProfileResponse {
     pub identity_id: Uuid,
@@ -731,6 +754,27 @@ pub struct UpdateProfileRequest {
     pub favorite_genres: Option<Vec<String>>,
     /// Three states, same as `bio`.
     pub pronouns: Option<String>,
+    /// Three states, same as `avatar_url` — a second image slot, separate
+    /// from the avatar, for the Hub profile page header (issue #372).
+    pub banner_url: Option<String>,
+    /// Three states, same as `bio`, capped at
+    /// [`avalon_protocol::identity::MAX_STATUS_LEN`].
+    pub status: Option<String>,
+    /// Two states, not three: omitted (untouched) or `Some(list)`, which
+    /// always fully replaces the stored list — including `Some(vec![])` to
+    /// clear it. Same shape as `favorite_genres`, but each entry is a
+    /// free-form URL rather than a fixed vocabulary value (issue #372).
+    pub links: Option<Vec<String>>,
+    /// Three states, same as `bio`. Length-checked only, not validated
+    /// against the real IANA time zone database — see
+    /// `avalon_protocol::identity::Profile::timezone`'s doc comment.
+    pub timezone: Option<String>,
+    /// Three states, same as `bio`. Must match `^#[0-9a-fA-F]{6}$` when
+    /// non-empty.
+    pub theme_color: Option<String>,
+    /// Three states, same as `bio`. Self-described free text only — never
+    /// IP-derived or geocoded.
+    pub location: Option<String>,
     /// Issue #205's opt-in global search toggle. Two states, not three
     /// (there's no "clear" state for a plain boolean): `None` leaves the
     /// existing preference untouched, `Some(bool)` sets it. Off by
@@ -835,6 +879,83 @@ fn validate_favorite_genres(genres: &[String]) -> Result<Vec<Genre>, AppError> {
     Ok(parsed)
 }
 
+/// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
+/// non-empty value must be within [`MAX_STATUS_LEN`] characters or the
+/// request is rejected — never silently truncated.
+fn validate_status(status: &str) -> Result<Option<String>, AppError> {
+    if status.is_empty() {
+        return Ok(None);
+    }
+    if status.chars().count() > MAX_STATUS_LEN {
+        return Err(AppError::InvalidStatus);
+    }
+    Ok(Some(status.to_string()))
+}
+
+/// `links` is two-state like `favorite_genres`, not three: no per-entry
+/// clearing, `Some(list)` (including `Some(vec![])`) always fully replaces
+/// the stored list. Each entry must be a non-empty `http`/`https` URL within
+/// [`MAX_LINK_LEN`] characters, and the whole list is capped at [`MAX_LINKS`]
+/// entries — an invalid entry rejects the whole request rather than being
+/// silently dropped, same reasoning `validate_favorite_genres` uses.
+fn validate_links(links: &[String]) -> Result<Vec<String>, AppError> {
+    if links.len() > MAX_LINKS {
+        return Err(AppError::TooManyLinks);
+    }
+    let mut parsed = Vec::with_capacity(links.len());
+    for raw in links {
+        if !is_http_url(raw, MAX_LINK_LEN) {
+            return Err(AppError::InvalidLink);
+        }
+        parsed.push(raw.clone());
+    }
+    Ok(parsed)
+}
+
+/// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
+/// non-empty value must be within [`MAX_TIMEZONE_LEN`] characters. This is a
+/// length check only — NOT validated against the real IANA time zone
+/// database, since no such crate exists in this workspace today (issue
+/// #372); a known, documented gap, not silently pretended-correct.
+fn validate_timezone(timezone: &str) -> Result<Option<String>, AppError> {
+    if timezone.is_empty() {
+        return Ok(None);
+    }
+    if timezone.chars().count() > MAX_TIMEZONE_LEN {
+        return Err(AppError::InvalidTimezone);
+    }
+    Ok(Some(timezone.to_string()))
+}
+
+/// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
+/// non-empty value must match `^#[0-9a-fA-F]{6}$` exactly.
+fn validate_theme_color(theme_color: &str) -> Result<Option<String>, AppError> {
+    if theme_color.is_empty() {
+        return Ok(None);
+    }
+    let is_valid_hex_color = theme_color.len() == 7
+        && theme_color.starts_with('#')
+        && theme_color[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !is_valid_hex_color {
+        return Err(AppError::InvalidThemeColor);
+    }
+    Ok(Some(theme_color.to_string()))
+}
+
+/// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
+/// non-empty value must be within [`MAX_LOCATION_LEN`] characters. Free text
+/// only — this function never derives a value from an IP address or any
+/// other signal; it only validates what the caller already typed.
+fn validate_location(location: &str) -> Result<Option<String>, AppError> {
+    if location.is_empty() {
+        return Ok(None);
+    }
+    if location.chars().count() > MAX_LOCATION_LEN {
+        return Err(AppError::InvalidLocation);
+    }
+    Ok(Some(location.to_string()))
+}
+
 /// A display-name change can collide with someone else's existing handle
 /// (same name, same discriminator) — the discriminator itself never changes
 /// on its own, but if the *new* name collides under it, a fresh one has to
@@ -877,6 +998,7 @@ async fn discriminator_for_rename(
 /// distinction `update_profile` itself makes. `favorite_genres` has only two
 /// states: absent (untouched) or present (the new, complete list, including
 /// `[]` to clear it).
+#[allow(clippy::too_many_arguments)]
 fn profile_updated_payload(
     display_name: Option<&str>,
     discriminator: Option<&str>,
@@ -884,6 +1006,12 @@ fn profile_updated_payload(
     bio: Option<Option<&str>>,
     favorite_genres: Option<&[Genre]>,
     pronouns: Option<Option<&str>>,
+    banner_url: Option<Option<&str>>,
+    status: Option<Option<&str>>,
+    links: Option<&[String]>,
+    timezone: Option<Option<&str>>,
+    theme_color: Option<Option<&str>>,
+    location: Option<Option<&str>>,
 ) -> serde_json::Value {
     let mut payload = serde_json::Map::new();
     if let Some(name) = display_name {
@@ -914,6 +1042,39 @@ fn profile_updated_payload(
         payload.insert(
             "pronouns".into(),
             pronouns.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(banner_url) = banner_url {
+        payload.insert(
+            "banner_url".into(),
+            banner_url.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(status) = status {
+        payload.insert(
+            "status".into(),
+            status.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(links) = links {
+        payload.insert("links".into(), links.to_vec().into());
+    }
+    if let Some(timezone) = timezone {
+        payload.insert(
+            "timezone".into(),
+            timezone.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(theme_color) = theme_color {
+        payload.insert(
+            "theme_color".into(),
+            theme_color.map_or(serde_json::Value::Null, Into::into),
+        );
+    }
+    if let Some(location) = location {
+        payload.insert(
+            "location".into(),
+            location.map_or(serde_json::Value::Null, Into::into),
         );
     }
     serde_json::Value::Object(payload)
@@ -961,6 +1122,42 @@ pub async fn update_profile(
         None => Vec::new(),
     };
 
+    let banner_url_provided = body.banner_url.is_some();
+    let banner_url = match &body.banner_url {
+        Some(raw) => validate_avatar_url(raw)?,
+        None => None,
+    };
+
+    let status_provided = body.status.is_some();
+    let status = match &body.status {
+        Some(raw) => validate_status(raw)?,
+        None => None,
+    };
+
+    let links_provided = body.links.is_some();
+    let links = match &body.links {
+        Some(raw) => validate_links(raw)?,
+        None => Vec::new(),
+    };
+
+    let timezone_provided = body.timezone.is_some();
+    let timezone = match &body.timezone {
+        Some(raw) => validate_timezone(raw)?,
+        None => None,
+    };
+
+    let theme_color_provided = body.theme_color.is_some();
+    let theme_color = match &body.theme_color {
+        Some(raw) => validate_theme_color(raw)?,
+        None => None,
+    };
+
+    let location_provided = body.location.is_some();
+    let location = match &body.location {
+        Some(raw) => validate_location(raw)?,
+        None => None,
+    };
+
     // `discoverable` (#205) is deliberately handled outside the
     // transaction below, the same way `presence::update_my_presence`
     // handles `hide_playing`: it's a player preference, not durable
@@ -991,7 +1188,13 @@ pub async fn update_profile(
         || avatar_url_provided
         || bio_provided
         || favorite_genres_provided
-        || pronouns_provided)
+        || pronouns_provided
+        || banner_url_provided
+        || status_provided
+        || links_provided
+        || timezone_provided
+        || theme_color_provided
+        || location_provided)
         .then(|| ProtocolEvent {
             id: Uuid::new_v4(),
             kind: "profile.updated".to_string(),
@@ -1014,6 +1217,12 @@ pub async fn update_profile(
                 bio_provided.then_some(bio.as_deref()),
                 favorite_genres_provided.then_some(favorite_genres.as_slice()),
                 pronouns_provided.then_some(pronouns.as_deref()),
+                banner_url_provided.then_some(banner_url.as_deref()),
+                status_provided.then_some(status.as_deref()),
+                links_provided.then_some(links.as_slice()),
+                timezone_provided.then_some(timezone.as_deref()),
+                theme_color_provided.then_some(theme_color.as_deref()),
+                location_provided.then_some(location.as_deref()),
             ),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
@@ -1108,7 +1317,20 @@ mod tests {
 
     #[test]
     fn profile_updated_payload_carries_only_the_changed_fields() {
-        let payload = profile_updated_payload(Some("nova"), Some("4821"), None, None, None, None);
+        let payload = profile_updated_payload(
+            Some("nova"),
+            Some("4821"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(
             payload,
             serde_json::json!({ "display_name": "nova", "discriminator": "4821" })
@@ -1121,7 +1343,20 @@ mod tests {
 
     #[test]
     fn profile_updated_payload_distinguishes_a_cleared_avatar_from_an_untouched_one() {
-        let cleared = profile_updated_payload(None, None, Some(None), None, None, None);
+        let cleared = profile_updated_payload(
+            None,
+            None,
+            Some(None),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(cleared, serde_json::json!({ "avatar_url": null }));
 
         let set = profile_updated_payload(
@@ -1131,25 +1366,72 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(
             set,
             serde_json::json!({ "avatar_url": "https://example.com/a.png" })
         );
 
-        let untouched = profile_updated_payload(Some("nova"), Some("4821"), None, None, None, None);
+        let untouched = profile_updated_payload(
+            Some("nova"),
+            Some("4821"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(untouched.get("avatar_url").is_none());
     }
 
     #[test]
     fn profile_updated_payload_distinguishes_a_cleared_bio_from_an_untouched_one() {
-        let cleared = profile_updated_payload(None, None, None, Some(None), None, None);
+        let cleared = profile_updated_payload(
+            None,
+            None,
+            None,
+            Some(None),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(cleared, serde_json::json!({ "bio": null }));
 
-        let set = profile_updated_payload(None, None, None, Some(Some("hello")), None, None);
+        let set = profile_updated_payload(
+            None,
+            None,
+            None,
+            Some(Some("hello")),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(set, serde_json::json!({ "bio": "hello" }));
 
-        let untouched = profile_updated_payload(None, None, None, None, None, None);
+        let untouched = profile_updated_payload(
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        );
         assert!(untouched.get("bio").is_none());
     }
 
@@ -1162,6 +1444,12 @@ mod tests {
             None,
             Some(&[Genre::Rpg, Genre::Puzzle]),
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         assert_eq!(
             payload,
@@ -1171,8 +1459,117 @@ mod tests {
 
     #[test]
     fn profile_updated_payload_carries_an_empty_favorite_genres_clear() {
-        let payload = profile_updated_payload(None, None, None, None, Some(&[]), None);
+        let payload = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            Some(&[]),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(payload, serde_json::json!({ "favorite_genres": [] }));
+    }
+
+    #[test]
+    fn profile_updated_payload_distinguishes_a_cleared_banner_from_an_untouched_one() {
+        let cleared = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(None),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(cleared, serde_json::json!({ "banner_url": null }));
+
+        let set = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some("https://example.com/b.png")),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            set,
+            serde_json::json!({ "banner_url": "https://example.com/b.png" })
+        );
+    }
+
+    #[test]
+    fn profile_updated_payload_carries_links_as_a_full_replace() {
+        let links = vec!["https://example.com".to_string()];
+        let payload = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(links.as_slice()),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            payload,
+            serde_json::json!({ "links": ["https://example.com"] })
+        );
+    }
+
+    #[test]
+    fn profile_updated_payload_distinguishes_a_cleared_location_from_an_untouched_one() {
+        let cleared = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(None),
+        );
+        assert_eq!(cleared, serde_json::json!({ "location": null }));
+
+        let set = profile_updated_payload(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Some("Pacific Northwest")),
+        );
+        assert_eq!(set, serde_json::json!({ "location": "Pacific Northwest" }));
     }
 
     #[test]
@@ -1259,5 +1656,156 @@ mod tests {
     fn validate_favorite_genres_deduplicates_repeats() {
         let genres = validate_favorite_genres(&["rpg".to_string(), "rpg".to_string()]).unwrap();
         assert_eq!(genres, vec![Genre::Rpg]);
+    }
+
+    #[test]
+    fn validate_status_treats_empty_string_as_clear_not_an_error() {
+        assert_eq!(validate_status("").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_status_rejects_an_over_length_value() {
+        let overlong = "a".repeat(MAX_STATUS_LEN + 1);
+        assert!(matches!(
+            validate_status(&overlong),
+            Err(AppError::InvalidStatus)
+        ));
+    }
+
+    #[test]
+    fn validate_status_accepts_a_value_within_the_cap() {
+        assert_eq!(
+            validate_status("raiding tonight").unwrap(),
+            Some("raiding tonight".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_links_accepts_valid_urls() {
+        let links = validate_links(&[
+            "https://example.com".to_string(),
+            "http://example.org/x".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(
+            links,
+            vec![
+                "https://example.com".to_string(),
+                "http://example.org/x".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_links_empty_list_stays_empty_without_error() {
+        assert_eq!(validate_links(&[]).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn validate_links_rejects_too_many_entries() {
+        let too_many: Vec<String> = (0..MAX_LINKS + 1)
+            .map(|i| format!("https://example.com/{i}"))
+            .collect();
+        assert!(matches!(
+            validate_links(&too_many),
+            Err(AppError::TooManyLinks)
+        ));
+    }
+
+    #[test]
+    fn validate_links_rejects_a_non_url_entry() {
+        assert!(matches!(
+            validate_links(&["not a url".to_string()]),
+            Err(AppError::InvalidLink)
+        ));
+    }
+
+    #[test]
+    fn validate_links_rejects_a_javascript_scheme() {
+        assert!(matches!(
+            validate_links(&["javascript:alert(1)".to_string()]),
+            Err(AppError::InvalidLink)
+        ));
+    }
+
+    #[test]
+    fn validate_timezone_treats_empty_string_as_clear_not_an_error() {
+        assert_eq!(validate_timezone("").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_timezone_accepts_a_value_within_the_cap() {
+        assert_eq!(
+            validate_timezone("America/New_York").unwrap(),
+            Some("America/New_York".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_timezone_rejects_an_over_length_value() {
+        let overlong = "a".repeat(MAX_TIMEZONE_LEN + 1);
+        assert!(matches!(
+            validate_timezone(&overlong),
+            Err(AppError::InvalidTimezone)
+        ));
+    }
+
+    #[test]
+    fn validate_theme_color_treats_empty_string_as_clear_not_an_error() {
+        assert_eq!(validate_theme_color("").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_theme_color_accepts_a_valid_hex_color() {
+        assert_eq!(
+            validate_theme_color("#a1b2c3").unwrap(),
+            Some("#a1b2c3".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_theme_color_rejects_a_missing_hash() {
+        assert!(matches!(
+            validate_theme_color("a1b2c3"),
+            Err(AppError::InvalidThemeColor)
+        ));
+    }
+
+    #[test]
+    fn validate_theme_color_rejects_wrong_length() {
+        assert!(matches!(
+            validate_theme_color("#a1b2c"),
+            Err(AppError::InvalidThemeColor)
+        ));
+    }
+
+    #[test]
+    fn validate_theme_color_rejects_non_hex_characters() {
+        assert!(matches!(
+            validate_theme_color("#zzzzzz"),
+            Err(AppError::InvalidThemeColor)
+        ));
+    }
+
+    #[test]
+    fn validate_location_treats_empty_string_as_clear_not_an_error() {
+        assert_eq!(validate_location("").unwrap(), None);
+    }
+
+    #[test]
+    fn validate_location_accepts_a_value_within_the_cap() {
+        assert_eq!(
+            validate_location("Pacific Northwest").unwrap(),
+            Some("Pacific Northwest".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_location_rejects_an_over_length_value() {
+        let overlong = "a".repeat(MAX_LOCATION_LEN + 1);
+        assert!(matches!(
+            validate_location(&overlong),
+            Err(AppError::InvalidLocation)
+        ));
     }
 }

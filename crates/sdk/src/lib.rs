@@ -93,6 +93,12 @@ struct MeResponse {
     bio: Option<String>,
     favorite_genres: Vec<avalon_protocol::identity::Genre>,
     pronouns: Option<String>,
+    banner_url: Option<String>,
+    status: Option<String>,
+    links: Vec<String>,
+    timezone: Option<String>,
+    theme_color: Option<String>,
+    location: Option<String>,
 }
 
 impl AvalonClient {
@@ -145,6 +151,12 @@ impl AvalonClient {
                 bio: body.bio,
                 favorite_genres: body.favorite_genres,
                 pronouns: body.pronouns,
+                banner_url: body.banner_url,
+                status: body.status,
+                links: body.links,
+                timezone: body.timezone,
+                theme_color: body.theme_color,
+                location: body.location,
             },
             granted,
             http: self.http.clone(),

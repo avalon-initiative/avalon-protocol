@@ -20,6 +20,12 @@ const baseProfile = {
   bio: 'Full-time dragon slayer.',
   pronouns: 'she/her',
   favorite_genres: ['rpg', 'strategy'],
+  banner_url: null,
+  status: 'Raiding tonight.',
+  links: ['https://example.com'],
+  timezone: 'America/New_York',
+  theme_color: '#a1b2c3',
+  location: 'Pacific Northwest',
   discoverable: false,
 }
 
@@ -68,6 +74,50 @@ describe('Profile self-description fields (issue #277)', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('No bio'))
     expect(wrapper.text()).toContain('No pronouns set')
+  })
+
+  it('renders the expanded self-description fields from GET /me (issue #372)', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({ '/me': baseProfile, '/me/passkeys': [] })
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Profile, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Raiding tonight.'))
+    expect(wrapper.text()).toContain('America/New_York')
+    expect(wrapper.text()).toContain('#a1b2c3')
+    expect(wrapper.text()).toContain('Pacific Northwest')
+    const linkInput = wrapper.find('input[type="url"]')
+    expect((linkInput.element as HTMLInputElement).value).toBe('https://example.com')
+  })
+
+  it('shows empty-state text when the expanded fields are unset (issue #372)', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': {
+        ...baseProfile,
+        banner_url: null,
+        status: null,
+        links: [],
+        timezone: null,
+        theme_color: null,
+        location: null,
+      },
+      '/me/passkeys': [],
+    })
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Profile, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('No banner'))
+    expect(wrapper.text()).toContain('No status set')
+    expect(wrapper.text()).toContain('No timezone set')
+    expect(wrapper.text()).toContain('No theme color set')
+    expect(wrapper.text()).toContain('No location set')
   })
 
   /**
@@ -120,6 +170,50 @@ describe('Profile self-description fields (issue #277)', () => {
     await saveButton!.trigger('click')
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('Updated bio.'))
+  })
+
+  it('saving the status field reflects the server response (issue #372)', async () => {
+    mockMeSequence([baseProfile, { ...baseProfile, status: 'Offline for the weekend.' }])
+    useSessionStore().login('a-token')
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Profile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Raiding tonight.'))
+
+    const statusField = wrapper
+      .findAllComponents(AvalonEditableField)
+      .find((f) => f.props('label') === 'Status')
+    expect(statusField).toBeTruthy()
+    await statusField!.find('button').trigger('click') // "Edit"
+    const input = statusField!.find('input[type="text"]')
+    await input.setValue('Offline for the weekend.')
+    const saveButton = statusField!.findAll('button').find((b) => b.text() === 'Save')
+    await saveButton!.trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Offline for the weekend.'))
+  })
+
+  it('saving links reflects the server response (issue #372)', async () => {
+    mockMeSequence([baseProfile, { ...baseProfile, links: ['https://example.org'] }])
+    useSessionStore().login('a-token')
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Profile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Links'))
+
+    const linkInput = wrapper.find('input[type="url"]')
+    await linkInput.setValue('https://example.org')
+    const saveButton = wrapper.findAll('button').find((b) => b.text().includes('Save links'))
+    await saveButton!.trigger('click')
+
+    await vi.waitFor(() => {
+      const updated = wrapper.find('input[type="url"]')
+      expect((updated.element as HTMLInputElement).value).toBe('https://example.org')
+    })
   })
 
   it('toggling and saving favorite genres reflects the server response', async () => {
