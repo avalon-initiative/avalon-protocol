@@ -33,6 +33,23 @@ const audiences = [
   },
 ]
 
+const whatIsThis = [
+  {
+    icon: 'discover' as const,
+    kicker: 'network',
+    label: 'An open protocol',
+    body: 'Avalon is the connective layer — identity, social graph, guilds, achievements — not a platform that owns your world. Your game stays sovereign over its rules, economy, and world state; Avalon is the shared layer underneath it, the way OAuth or Steam Cloud sit under an app without being the app.',
+    snippet: 'game.connect(avalon)',
+  },
+  {
+    icon: 'device' as const,
+    kicker: 'infrastructure',
+    label: 'Self-hosted, your call',
+    body: 'Run the reference server yourself — as more infrastructure mirroring the shared public network, or as a fully private, disconnected instance rooted under your own network id for internal use, dev, or air-gapped environments. The two are cryptographically incapable of being confused with each other.',
+    snippet: 'AVALON_NETWORK_ID=your-own',
+  },
+]
+
 const steps = [
   {
     icon: 'profile' as const,
@@ -122,6 +139,22 @@ const steps = [
             <circle :class="styles.nodeSecondary" cx="60" cy="400" r="4" style="--i: 13" />
           </g>
         </svg>
+      </div>
+    </section>
+
+    <section :class="styles.whatIsThis">
+      <div :class="styles.whatIsThisIntro">
+        <span :class="styles.eyebrow">What is this?</span>
+        <h2 :class="styles.whatIsThisHeadline">A protocol you integrate into, not a platform you join.</h2>
+      </div>
+      <div :class="styles.whatIsThisGrid">
+        <article v-for="w in whatIsThis" :key="w.label" :class="styles.whatIsThisCard">
+          <div :class="styles.whatIsThisIcon"><AvalonIcon :name="w.icon" :size="22" /></div>
+          <span :class="styles.whatIsThisKicker">{{ w.kicker }}</span>
+          <h3 :class="styles.whatIsThisLabel">{{ w.label }}</h3>
+          <p :class="styles.whatIsThisBody">{{ w.body }}</p>
+          <code :class="styles.whatIsThisSnippet">{{ w.snippet }}</code>
+        </article>
       </div>
     </section>
 

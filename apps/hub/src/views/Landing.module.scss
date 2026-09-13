@@ -181,6 +181,97 @@
   color: var(--av-color-accent-tertiary);
 }
 
+.whatIsThis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-6);
+  padding: var(--av-space-6) var(--av-space-4);
+}
+
+.whatIsThisIntro {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--av-space-3);
+  max-width: 36rem;
+}
+
+.whatIsThisHeadline {
+  font-size: var(--av-text-xl);
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.whatIsThisGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--av-space-5);
+}
+
+.whatIsThisCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--av-space-3);
+  padding: var(--av-space-6);
+  border-radius: var(--av-radius-lg);
+  border: 1px solid var(--av-color-border);
+  background: linear-gradient(160deg, var(--av-color-surface-raised), var(--av-color-surface));
+  overflow: hidden;
+}
+
+.whatIsThisCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(280px 180px at 100% 0%, var(--av-color-accent-tertiary-soft), transparent 70%);
+  pointer-events: none;
+}
+
+.whatIsThisIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--av-radius-md);
+  background: linear-gradient(135deg, var(--av-color-primary-soft), transparent);
+  color: var(--av-color-primary-hover);
+  box-shadow: 0 0 0 1px var(--av-color-primary-soft) inset;
+}
+
+.whatIsThisKicker {
+  font-family: var(--av-font-mono, ui-monospace, 'SFMono-Regular', Menlo, monospace);
+  font-size: var(--av-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--av-color-accent-tertiary);
+}
+
+.whatIsThisLabel {
+  font-size: var(--av-text-md);
+  font-weight: 600;
+}
+
+.whatIsThisBody {
+  color: var(--av-color-text-secondary);
+  font-size: var(--av-text-sm);
+}
+
+.whatIsThisSnippet {
+  display: inline-block;
+  margin-top: auto;
+  padding: var(--av-space-2) var(--av-space-3);
+  border-radius: var(--av-radius-md);
+  background: var(--av-color-bg);
+  border: 1px solid var(--av-color-border-strong);
+  color: var(--av-color-primary-hover);
+  font-family: var(--av-font-mono, ui-monospace, 'SFMono-Regular', Menlo, monospace);
+  font-size: var(--av-text-xs);
+}
+
 .steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -337,9 +428,20 @@
   .audiences {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .whatIsThisIntro {
+    align-items: center;
+    text-align: center;
+    max-width: none;
+    margin: 0 auto;
+  }
 }
 
 @media (max-width: 600px) {
+  .whatIsThisGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .nav {
     flex-wrap: wrap;
     border-radius: var(--av-radius-lg);
@@ -365,8 +467,16 @@
   .heroText,
   .heroVisual,
   .step,
+  .whatIsThisCard,
   .audienceCard {
     animation: fadeInUp 640ms ease both;
+  }
+
+  .whatIsThisCard:nth-child(1) {
+    animation-delay: 120ms;
+  }
+  .whatIsThisCard:nth-child(2) {
+    animation-delay: 220ms;
   }
 
   .heroVisual {
@@ -397,12 +507,26 @@
   }
 
   .nodes circle {
-    animation: nodePulse 3.6s ease-in-out infinite;
+    animation: nodePulse 2.4s ease-in-out infinite, nodeDrift 6s ease-in-out infinite;
     animation-delay: calc(var(--i, 0) * 180ms);
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .edges line {
+    animation: edgeFlicker 4.8s ease-in-out infinite;
+  }
+
+  .edges line:nth-child(odd) {
+    animation-delay: 0.3s;
+  }
+
+  .edges line:nth-child(3n) {
+    animation-delay: 0.9s;
   }
 
   .constellation {
-    animation: drift 9s ease-in-out infinite;
+    animation: drift 6s ease-in-out infinite;
   }
 }
 
@@ -420,19 +544,51 @@
 @keyframes nodePulse {
   0%,
   100% {
-    opacity: 0.65;
+    opacity: 0.45;
+    transform: scale(0.85);
   }
   50% {
     opacity: 1;
+    transform: scale(1.35);
+  }
+}
+
+@keyframes nodeDrift {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  25% {
+    translate: 6px -8px;
+  }
+  50% {
+    translate: -5px 5px;
+  }
+  75% {
+    translate: 4px 7px;
+  }
+}
+
+@keyframes edgeFlicker {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.85;
   }
 }
 
 @keyframes drift {
   0%,
+  50%,
   100% {
-    transform: translate(0, 0);
+    transform: translate(0, 0) rotate(0deg);
   }
-  50% {
-    transform: translate(0, -6px);
+  20% {
+    transform: translate(4px, -14px) rotate(0.6deg);
+  }
+  70% {
+    transform: translate(-6px, 8px) rotate(-0.8deg);
   }
 }
