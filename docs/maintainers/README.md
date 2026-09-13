@@ -71,7 +71,9 @@ setup, example configs, and which existing env vars need production values.
 If you're running a node that watches peers (`AVALON_MIRROR_PEERS` set) and
 its mirror-watcher reports equivocation, see
 [`equivocation-response.md`](equivocation-response.md) for the
-investigation and recovery steps.
+investigation and recovery steps. See
+[`key-rotation.md`](key-rotation.md) for rotating the settlement signing
+key itself, routine or emergency.
 
 Quick reference once you've read that page:
 
