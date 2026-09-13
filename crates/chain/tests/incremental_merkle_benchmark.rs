@@ -47,19 +47,37 @@ async fn commit_n(chain: &PostgresSettlementProvider, n: usize) {
     }
 }
 
+/// How many leaf indices to sample per measurement — bounded regardless of
+/// `tree_size` so this test's runtime depends only on this constant, never
+/// on how large an already-existing ledger happens to be (issue #358: this
+/// used to iterate every leaf in `0..tree_size`, so against a long-lived
+/// dev database with thousands of pre-existing entries it scaled with the
+/// *entire* accumulated ledger rather than the ~1000 entries the test
+/// itself commits, and only got slower every time it ran).
+const PROOF_SAMPLE_SIZE: i64 = 50;
+
+/// Evenly-spaced leaf indices across `0..tree_size`, at most
+/// `PROOF_SAMPLE_SIZE` of them — a representative sample of proof cost at
+/// this tree size without visiting every leaf.
+fn sample_leaf_indices(tree_size: i64) -> Vec<i64> {
+    let step = (tree_size / PROOF_SAMPLE_SIZE).max(1);
+    (0..tree_size).step_by(step as usize).collect()
+}
+
 /// Average per-leaf inclusion-proof time at `tree_size`, sampled across
-/// every leaf index — all served from the in-memory incremental tree this
-/// same process already built via `commit_n`, so this isolates algorithmic
-/// cost from network/DB round-trip noise.
+/// [`sample_leaf_indices`] — all served from the in-memory incremental tree
+/// this same process already built via `commit_n`, so this isolates
+/// algorithmic cost from network/DB round-trip noise.
 async fn avg_inclusion_proof_micros(chain: &PostgresSettlementProvider, tree_size: i64) -> f64 {
+    let samples = sample_leaf_indices(tree_size);
     let start = Instant::now();
-    for leaf_index in 0..tree_size {
+    for leaf_index in &samples {
         chain
-            .inclusion_proof(leaf_index, tree_size)
+            .inclusion_proof(*leaf_index, tree_size)
             .await
             .expect("proof should succeed");
     }
-    start.elapsed().as_micros() as f64 / tree_size as f64
+    start.elapsed().as_micros() as f64 / samples.len() as f64
 }
 
 /// The old from-scratch approach this ticket replaced: same per-leaf
@@ -74,12 +92,13 @@ async fn avg_old_style_inclusion_proof_micros(
         .entry_hashes_up_to(tree_size)
         .await
         .expect("entry_hashes_up_to should work");
+    let samples = sample_leaf_indices(tree_size);
     let start = Instant::now();
-    for leaf_index in 0..tree_size as usize {
-        let _proof = merkle::inclusion_proof_of_hex_hashes(leaf_index, &leaves)
+    for leaf_index in &samples {
+        let _proof = merkle::inclusion_proof_of_hex_hashes(*leaf_index as usize, &leaves)
             .expect("proof should succeed");
     }
-    start.elapsed().as_micros() as f64 / tree_size as f64
+    start.elapsed().as_micros() as f64 / samples.len() as f64
 }
 
 /// Issue #349's core regression guard: growing the ledger 10x must not
@@ -118,12 +137,21 @@ async fn inclusion_proof_cost_does_not_scale_linearly_with_ledger_size() {
          {old_large_avg:.2}µs @ tree_size={large_size} ({old_ratio:.2}x proof-cost growth)"
     );
 
-    // A true O(n) recomputation would show ~10x growth here (matching the
-    // 10x growth in ledger size). O(log n) should show barely any. A
-    // generous 5x threshold still clearly distinguishes the two while
-    // leaving headroom for machine noise on tiny microsecond timings.
+    // Compared against `old_ratio` measured in this same run (issue #358),
+    // rather than a fixed absolute threshold: against a long-lived dev
+    // database, `small_size`/`large_size` are dominated by a pre-existing
+    // `baseline` and aren't reliably ~10x apart in absolute tree size, so a
+    // fixed "ratio < 5.0" silently loses its ability to catch a real O(n)
+    // regression once ambient ledger size dwarfs the ~1000 entries this
+    // test commits — a genuine O(n) implementation's `ratio` would shrink
+    // right along with it. `old_ratio` is measured against the exact same
+    // `small_size`/`large_size` in the exact same run, so it always tracks
+    // whatever the real size ratio happens to be; the incremental tree's
+    // O(log n) cost should stay flat regardless, so `ratio` should always
+    // land well under `old_ratio` even when neither is anywhere near 10x.
     assert!(
-        ratio < 5.0,
-        "per-proof cost grew {ratio:.2}x for a 10x ledger size increase — regression toward O(n)"
+        ratio < (old_ratio / 2.0).max(1.5),
+        "per-proof cost grew {ratio:.2}x while the old from-scratch approach grew \
+         {old_ratio:.2}x over the same tree-size increase — regression toward O(n)"
     );
 }
