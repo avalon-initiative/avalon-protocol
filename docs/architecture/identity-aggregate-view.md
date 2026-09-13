@@ -111,6 +111,84 @@ established_at, ended_at }`; `layer_2[].attestations` from
 subject, achievement, issued_at, proof }`; `layer_2[].type` from
 `avalon_protocol::games::IntegratorCategory`.
 
+## A made-up game's full shape, illustrated
+
+The `layer_2` example above is deliberately minimal. Here is one entry
+fleshed all the way out for a hypothetical game, **"Emberfall Online"**, to
+make the two genuinely different mechanisms layer 2 contains impossible to
+confuse: canonical attestations (real, built, uniform across every
+integrator) versus an integrator's own custom-shaped data (partially real
+— schema publication exists; actual instance data does not, yet).
+
+```json
+{
+  "type": "game",
+  "integrator_id": "emberfall-online",
+  "binding": {
+    "established_at": "2027-06-01T14:00:00Z",
+    "ended_at": null
+  },
+  "attestations": [
+    {
+      "achievement": "game:emberfall-online:achievement:first-blood",
+      "issued_at": "2027-06-01T14:32:00Z",
+      "issuer_key_id": "emberfall-op-1"
+    },
+    {
+      "achievement": "game:emberfall-online:achievement:dungeon-master",
+      "issued_at": "2027-07-15T09:10:00Z",
+      "issuer_key_id": "emberfall-op-1"
+    }
+  ],
+  "published_schemas": [
+    {
+      "id": "game:emberfall-online:schema:character:v1",
+      "version": 1,
+      "proto_source": "message Character { uint32 level = 1; string class = 2; repeated string skills = 3; }"
+    }
+  ],
+  "custom_data": {
+    "_status": "ILLUSTRATIVE — NOT BUILDABLE TODAY, see below",
+    "schema": "game:emberfall-online:schema:character:v1",
+    "instance": {
+      "level": 42,
+      "class": "Ranger",
+      "skills": ["Longshot", "Camouflage", "Rapid Fire"],
+      "inventory": [
+        {"item": "Ashwood Bow", "rarity": "epic"},
+        {"item": "Cloak of Whispers", "rarity": "rare"}
+      ]
+    }
+  }
+}
+```
+
+Three distinct pieces, three different rules:
+
+- **`attestations`** — real, built, and the only one of the three that is
+  *canonical across every integrator*. Emberfall Online cannot invent its
+  own shape for these; every entry is a `GlobalId` +
+  `AchievementAttestation`, identical in structure to any other game's,
+  app's, or service's attestations. This is what makes a generic "show me
+  this player's achievements from anywhere" view possible at all.
+- **`published_schemas`** — real, built (`game_schema.published`, issue
+  #255; see
+  [`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-games-own-custom-fact-looks-like-in-the-same-ledger)).
+  Emberfall Online *can* define its own arbitrary `Character` shape here —
+  this is genuinely integrator-custom, by design, because nothing outside
+  Emberfall Online is expected to know what a "Character" means for this
+  specific game.
+- **`custom_data`** — **illustrative only.** This is what an actual
+  `Character` *instance* (Nova's real level, class, inventory) would look
+  like if Game Space's data-exposure half existed. It does not exist today
+  — [`./game-space.md`](./game-space.md)'s own "Schema vs. data exposure"
+  section states this plainly: schema publication is built, publishing
+  real per-player instance data against that schema is not. Nothing in
+  this repo accepts a payload shaped like `custom_data` today. It's shown
+  here so the *target* shape — schema-defined, per-integrator, sitting
+  clearly apart from the canonical `attestations` array — is unambiguous
+  once that work happens, not so a reader assumes it already works.
+
 ## Why layer 2 is safe to let anyone write into, and why it can't leak into layer 1
 
 Every attestation an integrator issues is signed by **that integrator's
@@ -192,6 +270,13 @@ cited example at that point rather than a speculative one now.
   defaults to `Game` for any caller that omits it.
 - `GameBinding` and `AchievementAttestation` are real and implemented
   (issues #83, #31/#32/#33/#84/#85).
+- `GET /me/achievements` (`crates/server/src/attestations.rs`) is real but
+  unpaginated and unfiltered today — a real gap for an identity with a
+  large attestation history, tracked as #377, not yet fixed.
+- `game_schema.published` (issue #255) is real — an integrator can publish
+  its own custom data *shape*. Actual per-player instance data against
+  that shape (the `custom_data` example above) is not built — see
+  [`./game-space.md`](./game-space.md)'s "Schema vs. data exposure."
 - No endpoint or indexer projection assembles the full aggregate shape
   above in one response today — see the intro's caveat. Building one (a
   real "full identity view" read) is unscoped, open work, not tracked as
@@ -210,4 +295,7 @@ service), #83 (game bindings), #31/#32/#33/#84/#85 (achievement
 issuance/authenticity/revocation), #87 (visibility/preference store — the
 real candidate for a future Hub block-space example), #372 (the
 `banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` profile
-fields).
+fields), #255 (`game_schema.published`, the real half of "A made-up game's
+full shape" above), #377 (`GET /me/achievements` pagination/filtering,
+the real gap behind the "won't zillions of achievements bog this down"
+question this document's `attestations` shape prompted).
