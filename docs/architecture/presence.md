@@ -22,7 +22,7 @@ architecture keeps them apart at every layer — see
 
 | Field | Example |
 |---|---|
-| status | online / away / offline |
+| status | online / away / do not disturb / offline |
 | current game | Ashen Realms |
 | current server / region | NA-East |
 | activity | "in a raid", free-form, game-supplied |
@@ -58,6 +58,17 @@ nothing anyone needs to prove later.
 - What *is* durable about presence-adjacent activity — a binding being
   established, an achievement being earned — is its own protocol event, never
   inferred from heartbeats.
+- `status` has four values: `online`, `away`, `do_not_disturb`, `offline`.
+  `online` is the only one tracked automatically — a live entry within the
+  heartbeat TTL reads `online`, an entry that's gone stale reads `offline`.
+  The other three are **sticky manual overrides**, Discord-style: once a
+  caller explicitly publishes `away`, `do_not_disturb`, or `offline` via
+  `PUT /me/presence`, that status is reported on every subsequent read
+  regardless of TTL expiry or continued heartbeat activity — it does not
+  silently flip back to `online` on its own, and it survives a reconnect
+  (though not a server restart, since presence is entirely in-memory; see
+  "Deployment" below). The only way to clear an override is to explicitly
+  publish `online` again, which immediately resumes automatic TTL tracking.
 
 ## What presence powers
 
@@ -78,7 +89,7 @@ realtime connections is a separate axis from scaling history or queries
 
 ## Today in the repo
 
-- `crates/protocol/src/social.rs` — `PresenceStatus { Online, Away, Offline }` and
+- `crates/protocol/src/social.rs` — `PresenceStatus { Online, Away, DoNotDisturb, Offline }` and
   `Presence { identity_id, status, playing: Option<GameId>, updated_at }`.
 - `crates/server/src/presence.rs` — an in-process `PresenceStore` (`Arc<RwLock<HashMap<...>>>`
   keyed by identity), never a migrated table, never touching the outbox or
@@ -107,7 +118,16 @@ realtime connections is a separate axis from scaling history or queries
   a durable Postgres row, not part of the ephemeral store, since it's a
   standing preference rather than a realtime fact. An entry not refreshed
   within the TTL (120s by default, `AVALON_PRESENCE_TTL_SECS` overrides it
-  for testing) reads as `Offline`, never a guess.
+  for testing) reads as `Offline`, never a guess — **unless** its last
+  explicitly-published status was `Away`, `DoNotDisturb`, or `Offline`
+  itself, in which case it's a sticky manual override and keeps reading as
+  that status past the TTL, until explicitly set back to `Online`
+  (`PresenceStore::get`'s own doc comment has the full mechanism). Sticky
+  overrides live in the same in-memory `PresenceStore` as everything else
+  here, not `presence_preferences` — a reconnect never touches this store
+  (only a server restart clears it), so in-memory already satisfies
+  "survives reconnect"; the accepted tradeoff is that, like all presence
+  state, an override is lost on server restart.
 - **Deferred, documented, not silently missing**: the full per-resource
   visibility-scope model (friends/guild/private, per resource, identity- and
   guild-configurable) is #87's open decision — presence's friends-only

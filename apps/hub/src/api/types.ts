@@ -345,7 +345,7 @@ export interface GuardianRequestSummary {
   already_approved: boolean
 }
 
-export type PresenceStatus = 'Online' | 'Away' | 'Offline'
+export type PresenceStatus = 'Online' | 'Away' | 'DoNotDisturb' | 'Offline'
 
 export interface UpdatePresenceRequest {
   status: PresenceStatus

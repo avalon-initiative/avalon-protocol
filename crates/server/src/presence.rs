@@ -32,6 +32,24 @@
 //! visibility, a private setting, etc.) — seeing the friends-only rule
 //! land nowhere else in this file is expected, not an oversight.
 //!
+//! **Sticky manual overrides.** `Online` is the only status this store
+//! computes automatically from heartbeat/TTL state. `Away`, `DoNotDisturb`,
+//! and `Offline`, once explicitly published via `PUT /me/presence` (or the
+//! game-side `PUT /presence/:identity_id`), stick — they're reported as-is
+//! on every subsequent read regardless of TTL expiry, surviving reconnects
+//! and continued heartbeats, until the caller explicitly publishes `Online`
+//! again, which immediately resumes live TTL tracking. See
+//! [`PresenceStore::get`] for the mechanism. Deliberately kept in the same
+//! in-memory `PresenceStore` as everything else in this file, not a
+//! `presence_preferences` row: a reconnect doesn't touch this store (it's
+//! only ever cleared by a server restart, same as live presence itself),
+//! so in-memory already satisfies "sticky across reconnect" — the tradeoff
+//! is that, like all `PresenceStore` state, a sticky override is lost on
+//! server restart (an identity resumes automatic tracking rather than
+//! coming back "stuck" in the status it had before), which matches this
+//! store's existing everything-resets-on-restart posture rather than
+//! adding a durable exception to it.
+//!
 //! **Player opt-out.** Independent of any game's capability grant, a
 //! player can opt out of `playing` being shown at all
 //! (`presence_preferences.hide_playing`, set via `PUT /me/presence`) —
@@ -162,20 +180,43 @@ impl PresenceStore {
         now
     }
 
-    /// A missing or stale entry reads as `Offline` with no invented history
-    /// — never a guess at when the identity was last actually seen.
+    /// A missing entry reads as `Offline` with no invented history — never
+    /// a guess at when the identity was last actually seen.
+    ///
+    /// A present entry is either live or a sticky manual override, decided
+    /// by its own last explicitly-set `status` — no separate override
+    /// flag/column: `Online` is the one status this store ever computes
+    /// automatically, so "last explicit status was `Online`" is exactly
+    /// "let TTL govern this entry" and anything else is exactly "an
+    /// override is active". Concretely: `Online` past `self.ttl` since its
+    /// last publish expires to `Offline`, same as always. `Away`,
+    /// `DoNotDisturb`, and `Offline`, once explicitly set via
+    /// `PresenceStore::set`, are reported as-is regardless of `seen_at` —
+    /// they stay stuck until a caller explicitly `set`s `Online` again,
+    /// which immediately resumes live TTL tracking. This is the Discord-
+    /// style "sticky manual override" behavior; see
+    /// `avalon_protocol::social::PresenceStatus`'s doc comment.
     fn get(&self, identity_id: Uuid) -> PresenceView {
         let entries = self.entries.read().expect("presence lock poisoned");
-        let fresh = entries
-            .get(&identity_id)
-            .filter(|entry| entry.seen_at.elapsed() < self.ttl);
-        match fresh {
-            Some(entry) => PresenceView {
-                identity_id,
-                status: entry.status,
-                playing: entry.playing,
-                updated_at: entry.updated_at,
-            },
+        match entries.get(&identity_id) {
+            Some(entry) => {
+                let expired = entry.seen_at.elapsed() >= self.ttl;
+                if expired && entry.status == PresenceStatus::Online {
+                    PresenceView {
+                        identity_id,
+                        status: PresenceStatus::Offline,
+                        playing: None,
+                        updated_at: OffsetDateTime::now_utc(),
+                    }
+                } else {
+                    PresenceView {
+                        identity_id,
+                        status: entry.status,
+                        playing: entry.playing,
+                        updated_at: entry.updated_at,
+                    }
+                }
+            }
             None => PresenceView {
                 identity_id,
                 status: PresenceStatus::Offline,
@@ -597,6 +638,61 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         let view = store.get(id);
         assert_eq!(view.status, PresenceStatus::Offline);
+    }
+
+    #[test]
+    fn sticky_away_survives_ttl_expiry() {
+        let store = PresenceStore::with_ttl(Duration::from_millis(10));
+        let id = Uuid::new_v4();
+        store.set(id, PresenceStatus::Away, None);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(store.get(id).status, PresenceStatus::Away);
+    }
+
+    #[test]
+    fn sticky_do_not_disturb_survives_ttl_expiry() {
+        let store = PresenceStore::with_ttl(Duration::from_millis(10));
+        let id = Uuid::new_v4();
+        store.set(id, PresenceStatus::DoNotDisturb, None);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(store.get(id).status, PresenceStatus::DoNotDisturb);
+    }
+
+    #[test]
+    fn sticky_offline_survives_ttl_expiry_and_is_distinguishable_from_a_missing_entry() {
+        // Both a missing entry and an expired sticky `Offline` entry read as
+        // `Offline` — the test is really about the entry not panicking/
+        // erroring and the status staying `Offline`, not a new observable
+        // difference (there isn't one on the wire), but this locks in that
+        // an explicit sticky `Offline` takes the same code path as `Away`/
+        // `DoNotDisturb` rather than accidentally hitting the TTL-expiry
+        // branch (which would still yield `Offline` here, coincidentally —
+        // see the `updated_at`-based test below for the real distinction).
+        let store = PresenceStore::with_ttl(Duration::from_millis(10));
+        let id = Uuid::new_v4();
+        store.set(id, PresenceStatus::Offline, None);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(store.get(id).status, PresenceStatus::Offline);
+    }
+
+    #[test]
+    fn sticky_override_preserves_its_own_updated_at_instead_of_now() {
+        let store = PresenceStore::with_ttl(Duration::from_millis(10));
+        let id = Uuid::new_v4();
+        let set_at = store.set(id, PresenceStatus::Away, None);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(store.get(id).updated_at, set_at);
+    }
+
+    #[test]
+    fn explicit_online_after_a_sticky_override_clears_it_and_resumes_ttl_tracking() {
+        let store = PresenceStore::with_ttl(Duration::from_millis(10));
+        let id = Uuid::new_v4();
+        store.set(id, PresenceStatus::DoNotDisturb, None);
+        store.set(id, PresenceStatus::Online, None);
+        assert_eq!(store.get(id).status, PresenceStatus::Online);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(store.get(id).status, PresenceStatus::Offline);
     }
 
     #[test]

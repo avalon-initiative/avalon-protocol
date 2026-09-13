@@ -12,4 +12,5 @@ type Story = StoryObj<typeof AvalonPresenceBadge>
 
 export const Online: Story = { args: { status: 'Online' } }
 export const Away: Story = { args: { status: 'Away' } }
+export const DoNotDisturb: Story = { args: { status: 'DoNotDisturb' } }
 export const Offline: Story = { args: { status: 'Offline' } }

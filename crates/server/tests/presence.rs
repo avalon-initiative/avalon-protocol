@@ -194,6 +194,124 @@ async fn stale_presence_expires_to_offline() {
     assert_eq!(read[0]["status"], "Offline");
 }
 
+/// Sticky manual overrides (`Away`/`DoNotDisturb`/`Offline`) must survive
+/// past the TTL that would otherwise expire a plain `Online` publish to
+/// `Offline` — see `crates/server/src/presence.rs::PresenceStore::get`.
+/// Needs a short `AVALON_PRESENCE_TTL_SECS` for the same reason
+/// `stale_presence_expires_to_offline` does.
+async fn assert_status_sticks_past_ttl(status: &str) {
+    let Ok(ttl) = std::env::var("AVALON_PRESENCE_TTL_SECS") else {
+        eprintln!(
+            "skipping: set AVALON_PRESENCE_TTL_SECS (e.g. 1) before `make start` to run this test"
+        );
+        return;
+    };
+    let ttl_secs: u64 = ttl
+        .parse()
+        .expect("AVALON_PRESENCE_TTL_SECS must be a number");
+
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
+
+    auth(http.put(format!("{base}/me/presence")), &alice_token)
+        .json(&serde_json::json!({ "status": status }))
+        .send()
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_secs(ttl_secs + 1)).await;
+
+    let read: serde_json::Value = auth(
+        http.get(format!("{base}/presence?ids={alice_id}")),
+        &alice_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(read[0]["status"], status);
+}
+
+#[tokio::test]
+#[ignore]
+async fn sticky_away_survives_past_the_ttl() {
+    assert_status_sticks_past_ttl("Away").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn sticky_do_not_disturb_survives_past_the_ttl() {
+    assert_status_sticks_past_ttl("DoNotDisturb").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn sticky_offline_survives_past_the_ttl() {
+    assert_status_sticks_past_ttl("Offline").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn explicitly_setting_online_clears_a_sticky_override_and_resumes_ttl_tracking() {
+    let Ok(ttl) = std::env::var("AVALON_PRESENCE_TTL_SECS") else {
+        eprintln!(
+            "skipping: set AVALON_PRESENCE_TTL_SECS (e.g. 1) before `make start` to run this test"
+        );
+        return;
+    };
+    let ttl_secs: u64 = ttl
+        .parse()
+        .expect("AVALON_PRESENCE_TTL_SECS must be a number");
+
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (alice_id, alice_token) = seed_identity_session(&pool).await;
+
+    auth(http.put(format!("{base}/me/presence")), &alice_token)
+        .json(&serde_json::json!({ "status": "DoNotDisturb" }))
+        .send()
+        .await
+        .unwrap();
+
+    // Clearing the override: explicitly back to Online.
+    auth(http.put(format!("{base}/me/presence")), &alice_token)
+        .json(&serde_json::json!({ "status": "Online" }))
+        .send()
+        .await
+        .unwrap();
+
+    let read: serde_json::Value = auth(
+        http.get(format!("{base}/presence?ids={alice_id}")),
+        &alice_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(read[0]["status"], "Online");
+
+    // Now automatic TTL tracking governs it again.
+    tokio::time::sleep(std::time::Duration::from_secs(ttl_secs + 1)).await;
+    let read: serde_json::Value = auth(
+        http.get(format!("{base}/presence?ids={alice_id}")),
+        &alice_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(read[0]["status"], "Offline");
+}
+
 /// Registers a fresh game via the real `POST /games` endpoint declaring
 /// `presence.publish` — same pattern
 /// `crates/server/tests/connections.rs::register_unique_game` uses.
