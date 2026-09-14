@@ -62,7 +62,7 @@ function openIntegrator(slug: string) {
       </div>
 
       <AvalonFilterBar
-        label="Search by name, slug, or developer"
+        label="Search by name, slug, or owner"
         placeholder="Ashen Realms"
         :query="discover.query.value"
         :sort-options="sortOptions"
@@ -79,7 +79,7 @@ function openIntegrator(slug: string) {
         :key="integrator.id"
         :name="integrator.name"
         :slug="integrator.slug"
-        :developer="integrator.developer"
+        :owner-name="integrator.owner_name"
         :status="integrator.status"
         :registered-at="formatRegisteredAt(integrator.registered_at)"
         @select="openIntegrator(integrator.slug)"

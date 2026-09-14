@@ -1,6 +1,6 @@
 //! Integrator registration and server-to-server integrator authentication (issue #26).
 //!
-//! Backs `crates/protocol/src/integrators.rs`'s `Integrator` / `IntegratorRegistration` /
+//! Backs `crates/protocol/src/integrations.rs`'s `Integrator` / `IntegratorRegistration` /
 //! `IntegratorCredential` types. `POST /integrations` is how an integrator first becomes known
 //! to Avalon — nothing before this ticket lets one register at all.
 //! Registering never grants access by itself (see this module's own
@@ -50,24 +50,24 @@
 //! generally) is still an open decision in this repo, so this implements a
 //! simple challenge-response as a milestone-1 stand-in pending that
 //! decision, plainly documented as such rather than silently downgraded to
-//! something permanent-looking: `POST /integrators/{slug}/challenge` issues a
+//! something permanent-looking: `POST /integrations/{slug}/challenge` issues a
 //! short-lived random nonce (same ephemeral-ceremony shape
 //! `handlers.rs`'s `webauthn_ceremonies` table/TTL uses, minus any WebAuthn
 //! involvement), and [`authenticate_integrator`] verifies a detached Ed25519
 //! signature over that nonce against the key recorded for the claimed
 //! `key_id`, reusing `crate::auth::verify_event_signature` rather than
-//! reimplementing signature verification. `GET /integrators/whoami` exists only to
+//! reimplementing signature verification. `GET /integrations/whoami` exists only to
 //! prove this extractor works end to end; `crate::connections` (#27) owns
 //! the real capability-bearing endpoints that use it.
 //!
-//! `GET /integrators/{slug}` ([`get_integrator`]) is a public, unauthenticated read of
+//! `GET /integrations/{slug}` ([`get_integrator`]) is a public, unauthenticated read of
 //! an integrator's registration — no credential fields, unlike the one-time
 //! [`IntegratorResponse`] `register_integrator` itself returns. `crate::connections`
 //! reads it to validate a user's approved capabilities against what the
 //! integrator actually declared, and the Hub's consent view reads it to render
 //! the integrator's name/developer/requested capabilities.
 //!
-//! **`GET /integrators` ([`list_integrators`], issue #270).** Same public,
+//! **`GET /integrations` ([`list_integrators`], issue #270).** Same public,
 //! unauthenticated visibility level as [`get_integrator`], cursor-paginated the
 //! same way `crates/server/src/guilds.rs::discover_guilds` already is for
 //! guilds (issue #154) — [`build_integrators_list_query`] mirrors
@@ -122,7 +122,7 @@ use crate::state::AppState;
 const GAME_CHALLENGE_TTL_MINUTES: i64 = 5;
 const GAME_CHALLENGE_NONCE_BYTES: usize = 32;
 
-/// Default/maximum page size for `GET /integrators` (issue #270) — same
+/// Default/maximum page size for `GET /integrations` (issue #270) — same
 /// "small default, capped maximum" shape
 /// `guilds::DEFAULT_DISCOVER_PAGE_SIZE`/`MAX_DISCOVER_PAGE_SIZE` already use.
 const DEFAULT_GAMES_LIST_PAGE_SIZE: i64 = 20;
@@ -415,7 +415,7 @@ pub struct IntegratorPublicResponse {
 /// A public read of an integrator's registration — no credential fields, unlike
 /// [`IntegratorResponse`] (which only `register_integrator` itself ever returns, to the
 /// registrant, once). This is what the Hub's consent view (#27) and
-/// `connections.rs`'s `POST /integrators/{slug}/connect` (to validate approved
+/// `connections.rs`'s `POST /integrations/{slug}/connect` (to validate approved
 /// capabilities against what the integrator actually declared) both read; same
 /// visibility level `crates/server/src/guilds.rs`'s `get_guild` uses — no
 /// auth required, nothing here is sensitive.
@@ -455,7 +455,7 @@ pub async fn get_integrator(
     }))
 }
 
-/// `sort=` values `GET /integrators` (issue #270) accepts — deliberately just
+/// `sort=` values `GET /integrations` (issue #270) accepts — deliberately just
 /// these two, matching #89's "no ranking, no score" invariant: `newest`
 /// (default) and `name`, mirroring `guilds::DiscoverSort` minus the
 /// membership-derived `most_members` option integrators have no equivalent of.
@@ -508,7 +508,7 @@ pub struct ListIntegratorsResponse {
     pub next_cursor: Option<Uuid>,
 }
 
-/// Builds the `GET /integrators` query — split out from [`list_integrators`] so the
+/// Builds the `GET /integrations` query — split out from [`list_integrators`] so the
 /// filter/sort/pagination logic can be unit-tested (via
 /// [`sqlx::QueryBuilder::sql`]) without a live Postgres connection, same
 /// pattern `guilds::build_discover_query` already established for #154.
@@ -563,7 +563,7 @@ fn build_integrators_list_query(
     builder
 }
 
-/// `GET /integrators?q=&sort=&limit=&cursor=` (issue #270). Public, unauthenticated
+/// `GET /integrations?q=&sort=&limit=&cursor=` (issue #270). Public, unauthenticated
 /// — same visibility level [`get_integrator`] already uses. See the module doc
 /// comment for the pagination/sort design.
 pub async fn list_integrators(
@@ -686,7 +686,7 @@ pub(crate) async fn fetch_issuer_keys(
     rows.iter().map(issuer_key_from_row).collect()
 }
 
-/// `GET /integrators/{slug}/keys` (#90) — public, unauthenticated: an issuer's
+/// `GET /integrations/{slug}/keys` (#90) — public, unauthenticated: an issuer's
 /// full key history (any role, any status), the read side of
 /// [`add_issuer_key`]/[`revoke_issuer_key`]. Public keys are already public
 /// by definition, and #90's design calls for the Hub to show an integrator's "key
@@ -839,7 +839,7 @@ pub struct IssuerKeyResponse {
     pub revoked_at: Option<OffsetDateTime>,
 }
 
-/// `POST /integrators/{slug}/keys` (#84, implementing #80's decided two-tier key
+/// `POST /integrations/{slug}/keys` (#84, implementing #80's decided two-tier key
 /// model) — adds a new key to the issuer's key set. Requires the caller to
 /// authenticate as the named `slug` with a currently-valid **root** key
 /// ([`authenticate_integrator_root`]); an operational key, or a root key
@@ -919,7 +919,7 @@ pub struct RevokeIssuerKeyRequest {
     pub reason: Option<String>,
 }
 
-/// `POST /integrators/{slug}/keys/{key_id}/revoke` (#84) — revokes a key in the
+/// `POST /integrations/{slug}/keys/{key_id}/revoke` (#84) — revokes a key in the
 /// issuer's key set (root or operational; a root key can revoke itself, the
 /// same "any key genuinely under your control" trust already implied by
 /// authenticating as root at all). Same root-key-of-the-named-issuer
@@ -1011,7 +1011,7 @@ pub async fn integrator_whoami(
 mod tests {
     //! No live Postgres reachable here — pure-logic checks only. The
     //! endpoint-level flows (register, slug collision, challenge-response
-    //! round-trip) are covered by `crates/server/tests/integrators.rs`, gated
+    //! round-trip) are covered by `crates/server/tests/integrations.rs`, gated
     //! `--ignored`.
 
     use ed25519_dalek::{Signer, SigningKey};
@@ -1080,7 +1080,7 @@ mod tests {
         ));
     }
 
-    // --- Issue #270: GET /integrators cursor pagination ---------------------
+    // --- Issue #270: GET /integrations cursor pagination ---------------------
     //
     // Same SQL-string-based assertions `guilds::build_discover_query`'s own
     // tests use — no live Postgres needed, just checking the query shape

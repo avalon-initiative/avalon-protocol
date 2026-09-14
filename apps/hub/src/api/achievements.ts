@@ -23,7 +23,7 @@ export function parseIssuerSlug(issuer: string): string | null {
 // "<namespace>:<slug>:<achievement|milestone>:<key>"
 // (crates/server/src/achievements.rs::definition_ref). `namespace` says
 // which listing endpoint carries this definition's name: `integrator` ->
-// GET /integrators/{slug}/achievements, `app`/`service` ->
+// GET /integrations/{slug}/achievements, `app`/`service` ->
 // GET /integrations/{slug}/milestones.
 export function parseAchievementRef(
   ref: string,

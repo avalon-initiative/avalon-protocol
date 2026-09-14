@@ -6,7 +6,7 @@
 //! Integrators integrate against this service through `avalon-sdk`, not directly.
 //!
 //! Milestone 1, Epic: Identity & Player Profile — identity/auth endpoints
-//! only. Social/guilds/achievements/integrators come with their own epics.
+//! only. Social/guilds/achievements/integrations come with their own epics.
 
 use std::path::Path;
 use std::sync::Arc;

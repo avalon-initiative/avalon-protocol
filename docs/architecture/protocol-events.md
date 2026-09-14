@@ -1,7 +1,7 @@
 # Protocol Events
 
 A protocol event is a durable fact Avalon considers part of its history. **Not
-every game action is a protocol event; ordinary gameplay never becomes one.**
+every integrator action is a protocol event; ordinary gameplay never becomes one.**
 See [`./worked-ledger-example.md`](./worked-ledger-example.md) for one
 hypothetical user's ledger rendered as real, ordered JSON instances of the
 catalogue below, alongside what never appears on it.
@@ -11,17 +11,17 @@ catalogue below, alongside what never appears on it.
 
 ## Hot gameplay vs durable events
 
-| Stays game-side (never an event) | May enter durable history |
+| Stays integrator-side (never an event) | May enter durable history |
 |---|---|
 | movement, combat, physics, AI | achievement issued / revoked |
-| HP, XP ticks, NPC state, player position | game event result |
+| HP, XP ticks, NPC state, player position | integrator event result |
 | matchmaking, ordinary chat | guild created, membership / role changed |
-| game-specific inventory and economy | game registered, binding established |
+| game-specific inventory and economy | integrator registered, binding established |
 | typing indicators, connection state, presence | issuer registered, key rotated, suspended |
 | | attestation issued / superseded, ownership transferred |
 
 The test is the one in [`./overview.md`](./overview.md): would this fact matter
-outside the game that produced it, and does Avalon promise to preserve it? If
+outside the integrator that produced it, and does Avalon promise to preserve it? If
 either answer is no, it is not a protocol event. Presence in particular is never
 one ([`./presence.md`](./presence.md)).
 
@@ -108,7 +108,7 @@ finalizes; until then it's proposed, not normative.
 
 Two conventions worth knowing before you open that table: `issuer` and
 `subject` are `GlobalId`s (`crates/protocol/src/ids.rs`), namespaced so two
-games' `dragon_slayer` never collide (see
+integrators' `dragon_slayer` never collide (see
 [`./provenance.md`](./provenance.md)); and each kind has exactly one payload
 schema per version.
 
@@ -123,7 +123,7 @@ History may outlive every current maintainer. Therefore:
 - An unknown kind is preserved and skipped by an indexer that does not
   understand it; it is never dropped from the log.
 - Attestations additionally carry an issuer-declared schema reference so a
-  consumer can recognize "game event result, schema v1" independently of the
+  consumer can recognize "integrator event result, schema v1" independently of the
   issuer's naming or which kind of event (tournament, seasonal championship,
   community campaign, ...) produced it.
 
@@ -184,17 +184,17 @@ where an emitter is genuinely signed, it's called out explicitly.
   Ed25519 key, verified the same way as `identity.created`) and
   `identity.signing_key_revoked` when a key is revoked
   (network-attributed).
-- **`crates/server/src/games.rs`** (#26) — `game.registered` on
-  `POST /games`. `issuer`/`subject` are both `game:<slug>:self:registered`
-  (`game_ref`). Network-attributed rather than game-key-signed — nothing has
+- **`crates/server/src/integrations.rs`** (#26) — `game.registered` on
+  `POST /integrations`. `issuer`/`subject` are both `game:<slug>:self:registered`
+  (`integrator_ref`). Network-attributed rather than integrator-key-signed — nothing has
   verified the registrant controls the submitted key yet at the point this
   event is built, so a real signature claim would be false. Payload:
-  `game_id`, `slug`, `name`, `developer`, `requested_capabilities`, and the
+  `integrator_id`, `slug`, `name`, `developer`, `requested_capabilities`, and the
   initial key's id/algorithm/public key.
 - **`crates/server/src/connections.rs`** (#27/#83) — `game.binding_established`
-  (only on the first `POST /games/{slug}/connect` for a given identity/game
+  (only on the first `POST /integrations/{slug}/connect` for a given identity/integrator
   pair; reconnecting emits nothing), `game.binding_ended`
-  (`DELETE /games/{slug}/connect`), and one `permission.granted`/
+  (`DELETE /integrations/{slug}/connect`), and one `permission.granted`/
   `permission.revoked` per capability. `issuer` is the acting identity;
   `subject` is `game:<slug>:self:<verb>` for binding events and
   `game:<slug>:self:<capability>` for grant events. Network-attributed.
@@ -209,7 +209,7 @@ where an emitter is genuinely signed, it's called out explicitly.
     Network-attributed, same reason as `game.registered`.
   - **Issuance (#32) is genuinely issuer-signed, not network-attributed** —
     the first event kind in this catalogue where that's true.
-    `POST /games/{slug}/achievements/{key}/issue` and its milestone
+    `POST /integrations/{slug}/achievements/{key}/issue` and its milestone
     equivalent write `achievement.issued`/`milestone.issued` with a real
     detached Ed25519 signature in the payload's `proof` field, verified
     server-side against the issuer's own key set (#84's
@@ -237,13 +237,13 @@ where an emitter is genuinely signed, it's called out explicitly.
   `guild.game_associated`, `guild.favorite_games_updated`.
 - **`crates/server/src/channels.rs`** — `guild.channel_created`,
   `.channel_renamed`, `.channel_archived`.
-- **`crates/server/src/game_schemas.rs`** (#255) — `game_schema.published`,
-  consumed by `crates/indexer/src/projections/game_schemas.rs` for
-  schema-version discovery (see [game-registry.md](./game-registry.md)).
-- **`crates/server/src/games.rs`** (#84, implementing #80's two-tier key
-  model) — `issuer.key_added` (`POST /games/{slug}/keys`) and
-  `issuer.key_revoked` (`POST /games/{slug}/keys/{key_id}/revoke`). Both
-  require a currently-valid **root** key (`authenticate_game_root`) — an
+- **`crates/server/src/integrator_schemas.rs`** (#255) — `game_schema.published`,
+  consumed by `crates/indexer/src/projections/integrator_schemas.rs` for
+  schema-version discovery (see [registry.md](./registry.md)).
+- **`crates/server/src/integrations.rs`** (#84, implementing #80's two-tier key
+  model) — `issuer.key_added` (`POST /integrations/{slug}/keys`) and
+  `issuer.key_revoked` (`POST /integrations/{slug}/keys/{key_id}/revoke`). Both
+  require a currently-valid **root** key (`authenticate_integrator_root`) — an
   operational key can't author either event, even its own revocation.
   `issuer.key_expired` and the `issuer.suspended`/`.reinstated`/`.revoked`/
   `.deprecated` family remain unimplemented: no expiry-sweep mechanism

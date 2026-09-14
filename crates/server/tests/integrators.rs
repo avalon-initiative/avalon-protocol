@@ -47,7 +47,7 @@ async fn registering_a_integrator_returns_the_integrator_and_its_credential() {
     let integrator = unique_integrator();
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -82,7 +82,7 @@ async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_in
     integrator.body["category"] = serde_json::json!("app");
 
     let register = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -93,7 +93,7 @@ async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_in
 
     let slug = integrator.body["slug"].as_str().unwrap();
     let get = http
-        .get(format!("{base}/integrators/{slug}"))
+        .get(format!("{base}/integrations/{slug}"))
         .send()
         .await
         .unwrap();
@@ -111,7 +111,7 @@ async fn registering_with_an_unrecognized_category_is_rejected() {
     integrator.body["category"] = serde_json::json!("bogus");
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -127,7 +127,7 @@ async fn a_second_registration_with_the_same_slug_conflicts() {
     let integrator = unique_integrator();
 
     let first = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -140,7 +140,7 @@ async fn a_second_registration_with_the_same_slug_conflicts() {
     let mut second_body = integrator.body.clone();
     second_body["owner_name"] = serde_json::json!("A Different Studio");
     let second = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&second_body)
         .send()
         .await
@@ -157,7 +157,7 @@ async fn an_uppercase_slug_is_rejected() {
     integrator.body["slug"] = serde_json::json!("Not-Lowercase");
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -173,7 +173,7 @@ async fn the_challenge_response_auth_flow_round_trips() {
     let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -184,7 +184,7 @@ async fn the_challenge_response_auth_flow_round_trips() {
     let key_id = registered["credential"]["key_id"].as_str().unwrap();
 
     let challenge = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap();
@@ -196,7 +196,7 @@ async fn the_challenge_response_auth_flow_round_trips() {
     let signature = integrator.signing_key.sign(&nonce);
 
     let whoami = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(
@@ -222,7 +222,7 @@ async fn a_challenge_cannot_be_replayed() {
     let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -232,7 +232,7 @@ async fn a_challenge_cannot_be_replayed() {
     let key_id = registered["credential"]["key_id"].as_str().unwrap();
 
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -244,7 +244,7 @@ async fn a_challenge_cannot_be_replayed() {
     let signature_b64 = BASE64.encode(integrator.signing_key.sign(&nonce).to_bytes());
 
     let first = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)
@@ -256,7 +256,7 @@ async fn a_challenge_cannot_be_replayed() {
     // The same (challenge_id, signature) pair a second time — the
     // challenge row was already consumed by the first request.
     let second = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)
@@ -274,7 +274,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -284,7 +284,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     let key_id = registered["credential"]["key_id"].as_str().unwrap();
 
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -300,7 +300,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     let signature_b64 = BASE64.encode(wrong_key.sign(&nonce).to_bytes());
 
     let response = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)
@@ -310,7 +310,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
-// --- Issue #270: GET /integrators list + directory read path -------------------
+// --- Issue #270: GET /integrations list + directory read path -------------------
 
 #[tokio::test]
 #[ignore]
@@ -320,7 +320,7 @@ async fn listing_integrators_finds_a_freshly_registered_integrator_by_name_searc
     let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -330,9 +330,9 @@ async fn listing_integrators_finds_a_freshly_registered_integrator_by_name_searc
     let slug = registered["slug"].as_str().unwrap();
     let name = registered["name"].as_str().unwrap();
 
-    // No auth header at all — GET /integrators is public and unauthenticated.
+    // No auth header at all — GET /integrations is public and unauthenticated.
     let response = http
-        .get(format!("{base}/integrators"))
+        .get(format!("{base}/integrations"))
         .query(&[("q", name), ("sort", "name")])
         .send()
         .await
@@ -362,7 +362,7 @@ async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
 
     for _ in 0..3 {
         let integrator = unique_integrator();
-        http.post(format!("{base}/integrators"))
+        http.post(format!("{base}/integrations"))
             .json(&integrator.body)
             .send()
             .await
@@ -370,7 +370,7 @@ async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
     }
 
     let first_page: serde_json::Value = http
-        .get(format!("{base}/integrators"))
+        .get(format!("{base}/integrations"))
         .query(&[("sort", "newest"), ("limit", "1")])
         .send()
         .await
@@ -387,7 +387,7 @@ async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
     );
 
     let second_page: serde_json::Value = http
-        .get(format!("{base}/integrators"))
+        .get(format!("{base}/integrations"))
         .query(&[
             ("sort", "newest"),
             ("limit", "1"),
@@ -406,10 +406,10 @@ async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
     assert_ne!(first_integrators[0]["id"], second_integrators[0]["id"]);
 }
 
-// --- Issue #293: `/integrations` as the canonical path, `/integrators` as a ----
+// --- Issue #293: `/integrations` as the canonical path, `/integrations` as a ----
 // --- compatibility redirect/dual-route, either auth header name works. --
 //
-// The tests above all still hit `/integrators` unmodified, proving old-path
+// The tests above all still hit `/integrations` unmodified, proving old-path
 // backward compat. These hit `/integrations` directly.
 
 #[tokio::test]
@@ -447,7 +447,7 @@ async fn get_integrators_slug_redirects_to_integrations_slug() {
     let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&integrator.body)
         .send()
         .await
@@ -456,7 +456,7 @@ async fn get_integrators_slug_redirects_to_integrations_slug() {
     let slug = registered["slug"].as_str().unwrap();
 
     let response = http
-        .get(format!("{base}/integrators/{slug}"))
+        .get(format!("{base}/integrations/{slug}"))
         .send()
         .await
         .unwrap();
@@ -484,7 +484,7 @@ async fn get_integrators_redirects_to_integrations_preserving_query_string() {
     let base = server_url();
 
     let response = http
-        .get(format!("{base}/integrators"))
+        .get(format!("{base}/integrations"))
         .query(&[("q", "ashen"), ("sort", "name")])
         .send()
         .await
@@ -550,7 +550,7 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
 
     // New `x-avalon-integrator-*` header names, same challenge-response flow.
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -562,7 +562,7 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
     let signature_b64 = BASE64.encode(integrator.signing_key.sign(&nonce).to_bytes());
 
     let whoami = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)
@@ -579,7 +579,7 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
     // Mixed old/new header names on a second round trip — either name is
     // accepted independently of the others.
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -591,7 +591,7 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
     let signature_b64 = BASE64.encode(integrator.signing_key.sign(&nonce).to_bytes());
 
     let mixed = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)

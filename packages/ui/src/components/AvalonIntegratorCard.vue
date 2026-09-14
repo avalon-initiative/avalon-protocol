@@ -22,7 +22,7 @@ const isActive = computed(() => props.status === 'active')
       <span :class="styles.name">{{ name }}</span>
       <span v-if="!isActive" :class="styles.statusBadge">{{ status }}</span>
     </div>
-    <p :class="styles.developer">{{ developer }}</p>
+    <p :class="styles.ownerName">{{ ownerName }}</p>
     <span :class="styles.registeredAt">Registered {{ registeredAt }}</span>
   </button>
 </template>

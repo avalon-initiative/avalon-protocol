@@ -1,8 +1,8 @@
 # Revocation
 
 **Revocation adds history; it never erases it.** An attestation that was issued
-and later revoked leaves two facts in durable history — "Game A issued it" and
-"Game A later revoked it" — and both stay visible forever. The same applies at
+and later revoked leaves two facts in durable history — "Integrator A issued it" and
+"Integrator A later revoked it" — and both stay visible forever. The same applies at
 the issuer level: suspending or revoking an issuer is an appended entry, not a
 deletion of everything it ever signed.
 
@@ -13,11 +13,11 @@ and the durable-history rule in
 ## Individual revocation
 
 ```text
-achievement.issued          (Game A, key k1, 2027-03-14)
+achievement.issued          (Integrator A, key k1, 2027-03-14)
     Dragon Slayer → User X
         │
         ▼
-achievement.revoked         (Game A, key k1, 2027-05-02)
+achievement.revoked         (Integrator A, key k1, 2027-05-02)
     references the attestation above
     reason_code: cheating_detected
     reason:      "…"
@@ -42,7 +42,7 @@ issuer.suspended   (network, 2027-06-01)   →  issuer.reinstated (2027-06-20)
 issuer.revoked     (network, 2028-01-10)
 ```
 
-Neither event deletes historical claims. A consuming game reads the timestamps
+Neither event deletes historical claims. A consuming integrator reads the timestamps
 and applies its own policy — reject new claims and honor historical ones,
 reject everything, or something in between
 ([`./trust-model.md`](./trust-model.md)). The network records; it does not
@@ -63,7 +63,7 @@ valid(attestation, history, at) =
 
 "Valid at issuance" and "valid now" are different questions with different
 answers, and both must be answerable — see
-[`./games-and-issuers.md`](./games-and-issuers.md) for the key half.
+[`./issuers.md`](./issuers.md) for the key half.
 
 ## What is being replaced
 
@@ -84,11 +84,11 @@ with its own audit trail — see
 
 ## Scenarios
 
-**C — Game A revokes Dragon Slayer.** History shows issued + revoked. The
-Hub shows both. Game B's validity check flips at the revocation timestamp.
+**C — Integrator A revokes Dragon Slayer.** History shows issued + revoked. The
+Hub shows both. Integrator B's validity check flips at the revocation timestamp.
 Rebuilding the projection from history reproduces the same status.
 
-**F — Game A's signing key is compromised.** Game A (or the network, per
+**F — Integrator A's signing key is compromised.** Integrator A (or the network, per
 #80) revokes the key as of time T. Claims signed at T−1 stay authentic and
 valid; claims signed at T+1 are rejected. Nothing historical is destroyed.
 
@@ -114,7 +114,7 @@ still open.
   attestation (`revoked_at` was already removed from
   `AchievementAttestation` by #32, ahead of this ticket). `validity()`
   (#33) now takes the computed `AttestationStatus` alongside the issuer's
-  `GameStatus`. `POST /attestations/{id}/revoke`
+  `IntegratorStatus`. `POST /attestations/{id}/revoke`
   (`crates/server/src/attestations.rs`) inserts an append-only row into a
   brand-new `attestation_revocations` table — `achievement_attestations`
   itself is never touched — requires the caller to authenticate as the
@@ -144,10 +144,10 @@ still open.
   building reinstatement will need to do.
 - Issuer-level suspend/revoke/reinstate/deprecate transitions (a separate
   axis from attestation revocation) remain exactly where #84 left them:
-  the `GameStatus` variants exist and `validity()` already reads whichever
+  the `IntegratorStatus` variants exist and `validity()` already reads whichever
   one is set, but nothing in this repo can transition an issuer into any
   of them yet — that authorization model is still open, tracked
-  separately (see [games-and-issuers.md](games-and-issuers.md)).
+  separately (see [issuers.md](issuers.md)).
 - `crates/protocol/src/permissions.rs` — `PermissionGrant.revoked_at` still
   uses the mutable-field shape; grants are not promised-durable protocol
   history (a projection concern, not covered by #81's ruling), left
@@ -167,4 +167,4 @@ still open.
   follow-up work, not solved by this pass.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
   decision, closed: issuer keys (scenario F) — see
-  [games-and-issuers.md](games-and-issuers.md).
+  [issuers.md](issuers.md).

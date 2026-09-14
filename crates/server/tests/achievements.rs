@@ -4,7 +4,7 @@
 //! sandbox per `.claude/CLAUDE.md` (no reachable Postgres here); written but
 //! not run against a live database.
 //!
-//! Mirrors `crates/server/tests/integrators.rs`'s own pattern for the
+//! Mirrors `crates/server/tests/integrations.rs`'s own pattern for the
 //! challenge-response integrator-auth flow: each integrator-authenticated request needs
 //! its own fresh, single-use challenge, so [`integrator_auth_headers`] mints one
 //! per call rather than caching headers across requests.
@@ -42,7 +42,7 @@ async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIn
     });
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -70,7 +70,7 @@ async fn integrator_auth_headers(
     integrator: &RegisteredIntegrator,
 ) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -114,7 +114,7 @@ async fn two_integrators_defining_the_same_key_both_succeed_with_distinct_ids() 
     let headers_a = integrator_auth_headers(&http, &base, &integrator_a).await;
     let response_a = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator_a.slug
         ))
         .headers(headers_a)
@@ -132,7 +132,7 @@ async fn two_integrators_defining_the_same_key_both_succeed_with_distinct_ids() 
     let headers_b = integrator_auth_headers(&http, &base, &integrator_b).await;
     let response_b = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator_b.slug
         ))
         .headers(headers_b)
@@ -175,7 +175,7 @@ async fn defining_a_duplicate_key_for_the_same_integrator_conflicts() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let first = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -188,7 +188,7 @@ async fn defining_a_duplicate_key_for_the_same_integrator_conflicts() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let second = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -217,7 +217,7 @@ async fn a_integrator_defining_under_another_slug_is_forbidden() {
     let headers = integrator_auth_headers(&http, &base, &integrator_a).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator_b.slug
         ))
         .headers(headers)
@@ -243,7 +243,7 @@ async fn updating_a_definition_bumps_version_and_leaves_the_id_unchanged() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let created: serde_json::Value = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -262,7 +262,7 @@ async fn updating_a_definition_bumps_version_and_leaves_the_id_unchanged() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let updated_response = http
         .patch(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer",
+            "{base}/integrations/{}/achievements/dragon_slayer",
             integrator.slug
         ))
         .headers(headers)
@@ -295,7 +295,7 @@ async fn listing_a_integrators_achievements_is_public_and_unauthenticated() {
     });
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     http.post(format!(
-        "{base}/integrators/{}/achievements",
+        "{base}/integrations/{}/achievements",
         integrator.slug
     ))
     .headers(headers)
@@ -307,7 +307,7 @@ async fn listing_a_integrators_achievements_is_public_and_unauthenticated() {
     // No auth headers at all — this is a public read.
     let list_response = http
         .get(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .send()
@@ -334,7 +334,7 @@ async fn retiring_a_definition_marks_it_retired_without_deleting_it() {
     });
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     http.post(format!(
-        "{base}/integrators/{}/achievements",
+        "{base}/integrations/{}/achievements",
         integrator.slug
     ))
     .headers(headers)
@@ -346,7 +346,7 @@ async fn retiring_a_definition_marks_it_retired_without_deleting_it() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let retire_response = http
         .patch(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer",
+            "{base}/integrations/{}/achievements/dragon_slayer",
             integrator.slug
         ))
         .headers(headers)
@@ -362,7 +362,7 @@ async fn retiring_a_definition_marks_it_retired_without_deleting_it() {
 
     let list_response = http
         .get(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .send()
@@ -388,7 +388,7 @@ async fn a_definition_with_neither_icon_field_set_still_gets_a_default_icon() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -419,7 +419,7 @@ async fn icon_url_takes_precedence_and_round_trips_through_create_and_update() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -435,7 +435,7 @@ async fn icon_url_takes_precedence_and_round_trips_through_create_and_update() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let update_response = http
         .patch(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer",
+            "{base}/integrations/{}/achievements/dragon_slayer",
             integrator.slug
         ))
         .headers(headers)
@@ -470,7 +470,7 @@ async fn a_non_http_icon_url_is_rejected() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -497,7 +497,7 @@ async fn an_unknown_icon_key_is_rejected() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)

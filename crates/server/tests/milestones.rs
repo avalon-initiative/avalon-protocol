@@ -66,7 +66,7 @@ async fn register_issuer(http: &reqwest::Client, base: &str, category: &str) -> 
 /// challenge every call, since one is single-use.
 async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIssuer) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", issuer.slug))
+        .post(format!("{base}/integrations/{}/challenge", issuer.slug))
         .send()
         .await
         .unwrap()
@@ -153,7 +153,7 @@ async fn an_app_cannot_create_an_achievement_via_the_integrators_route() {
 
     let headers = auth_headers(&http, &base, &app).await;
     let response = http
-        .post(format!("{base}/integrators/{}/achievements", app.slug))
+        .post(format!("{base}/integrations/{}/achievements", app.slug))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "sneaky",
@@ -195,7 +195,7 @@ async fn a_integrator_cannot_create_a_milestone_via_the_integrations_route() {
 #[ignore]
 async fn listing_achievements_for_an_app_is_rejected_not_silently_empty() {
     // The read side needs the same category check as the write side, or
-    // GET /integrators/{app-slug}/achievements would silently serve that app's
+    // GET /integrations/{app-slug}/achievements would silently serve that app's
     // real milestones back mislabeled as achievements (both live in the
     // same underlying table, keyed by integrator_id — see achievements.rs's
     // module doc comment).
@@ -216,7 +216,7 @@ async fn listing_achievements_for_an_app_is_rejected_not_silently_empty() {
         .unwrap();
 
     let response = http
-        .get(format!("{base}/integrators/{}/achievements", app.slug))
+        .get(format!("{base}/integrations/{}/achievements", app.slug))
         .send()
         .await
         .unwrap();

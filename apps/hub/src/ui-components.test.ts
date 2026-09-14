@@ -213,7 +213,7 @@ describe('AvalonCard', () => {
 
 const navItems = [
   { label: 'Home', to: '/home', icon: 'home', active: true },
-  { label: 'Integrators', to: '/integrators', icon: 'integrators', active: false, disabled: true },
+  { label: 'Integrators', to: '/integrations', icon: 'integrators', active: false, disabled: true },
   { label: 'Friends', to: '/friends', icon: 'friends', active: false },
 ] as const
 
@@ -324,12 +324,12 @@ describe('AvalonIntegratorCard', () => {
   const baseProps = {
     name: 'Ashen Realms',
     slug: 'ashen-realms',
-    developer: 'Ashen Studios',
+    ownerName: 'Ashen Studios',
     status: 'active',
     registeredAt: 'Jan 12, 2026',
   }
 
-  it('renders name, developer, and registration date', () => {
+  it('renders name, owner, and registration date', () => {
     const wrapper = mount(AvalonIntegratorCard, { props: baseProps })
     expect(wrapper.text()).toContain('Ashen Realms')
     expect(wrapper.text()).toContain('Ashen Studios')

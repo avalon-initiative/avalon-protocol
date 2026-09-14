@@ -320,7 +320,7 @@ pub fn router(state: AppState) -> Router {
             post(guilds::transfer_ownership),
         )
         .route(
-            "/guilds/{id}/integrators/{integrator_id}",
+            "/guilds/{id}/integrations/{integrator_id}",
             post(guilds::associate_integrator),
         )
         .route(

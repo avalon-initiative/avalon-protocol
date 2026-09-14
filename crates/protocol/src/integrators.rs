@@ -14,7 +14,7 @@ use crate::ids::IntegratorId;
 use crate::permissions::Capability;
 
 /// An integrator's registration status (issue #26). Grown by #84 to catalogue the
-/// full set `docs/architecture/integrators-and-issuers.md`'s status column always
+/// full set `docs/architecture/issuers.md`'s status column always
 /// named (`Active`/`Suspended`/`Revoked`/`Deprecated`) — milestone 1 still
 /// only ever *sets* `Active`; the network-level authorization model for who
 /// can transition an issuer into the other three, and the endpoints that do
@@ -284,10 +284,10 @@ pub struct IntegratorCredential {
 /// "This identity participates in this integrator" — nothing more (issue #83). No
 /// characters, race, class, level, appearance, or progression: those stay in
 /// the integrator's own database, and this type deliberately has no field for any
-/// of them. See `docs/architecture/integrator-bindings.md`.
+/// of them. See `docs/architecture/bindings.md`.
 ///
 /// A binding is established by the **user**, through the consent flow
-/// (issue #27, `POST /integrators/{slug}/connect`) — never created by an integrator
+/// (issue #27, `POST /integrations/{slug}/connect`) — never created by an integrator
 /// unilaterally. Capability grants (`PermissionGrant`, `permissions.rs`) are
 /// scoped to a binding: no active binding, no grants, and ending a binding
 /// ends every grant under it. Ending a binding does not delete history —
@@ -402,7 +402,7 @@ mod tests {
         assert!(!k.is_valid_at(t(10)));
     }
 
-    /// Scenario E (`docs/architecture/integrators-and-issuers.md`): a claim
+    /// Scenario E (`docs/architecture/issuers.md`): a claim
     /// signed by k1 in the past stays authentic after k1 is later retired —
     /// rotation never invalidates history.
     #[test]
@@ -419,7 +419,7 @@ mod tests {
         assert!(resolve_valid_signing_key(std::slice::from_ref(&k1), k1.key_id, t(20)).is_none());
     }
 
-    /// Scenario F (`docs/architecture/integrators-and-issuers.md`): claims signed
+    /// Scenario F (`docs/architecture/issuers.md`): claims signed
     /// by a compromised key before revocation remain authentic; claims
     /// "signed" after revocation are rejected.
     #[test]

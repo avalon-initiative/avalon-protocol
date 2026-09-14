@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // Consent view for connecting to an integrator (#27): shows the integrator's name and
-// developer plus every requested capability with a plain-language
+// owner plus every requested capability with a plain-language
 // description and an unchecked-by-default checkbox — no "approve all".
-// Submitting posts only the checked subset to POST /integrators/{slug}/connect,
+// Submitting posts only the checked subset to POST /integrations/{slug}/connect,
 // which is also where the IntegratorBinding (#83) gets established.
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -50,7 +50,7 @@ function onCancel() {
   <div v-if="!loading && integrator" :class="styles.page">
     <header :class="styles.pageHeader">
       <h1 :class="styles.title">Connect to {{ integrator.name }}</h1>
-      <p :class="styles.subtitle">{{ integrator.developer }}</p>
+      <p :class="styles.subtitle">{{ integrator.owner_name }}</p>
     </header>
 
     <p v-if="error" :class="styles.error">{{ error }}</p>

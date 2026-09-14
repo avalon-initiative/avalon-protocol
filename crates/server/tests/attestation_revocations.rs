@@ -73,7 +73,7 @@ async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIn
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -96,7 +96,7 @@ async fn auth_headers(
     integrator: &RegisteredIntegrator,
 ) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -156,7 +156,7 @@ async fn issue_one(
     let headers = auth_headers(http, base, &integrator).await;
     let define = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -173,7 +173,7 @@ async fn issue_one(
         .unwrap()
         .to_string();
 
-    http.post(format!("{base}/integrators/{}/connect", integrator.slug))
+    http.post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -192,7 +192,7 @@ async fn issue_one(
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
             integrator.slug
         ))
         .headers(headers)
@@ -292,7 +292,7 @@ async fn revoking_twice_is_rejected_not_silently_accepted() {
             let signature = signing_key.sign(&signing_bytes);
             let challenge: serde_json::Value = http
                 .post(format!(
-                    "{base}/integrators/{}/challenge",
+                    "{base}/integrations/{}/challenge",
                     issuer_ref.strip_prefix("integrator:").unwrap()
                 ))
                 .send()

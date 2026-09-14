@@ -105,7 +105,7 @@ async fn register_issuer(
 
 async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIssuer) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", issuer.slug))
+        .post(format!("{base}/integrations/{}/challenge", issuer.slug))
         .send()
         .await
         .unwrap()
@@ -155,7 +155,7 @@ async fn a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user() {
     let headers = auth_headers(&http, &base, &integrator).await;
     let define = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .headers(headers)
@@ -175,7 +175,7 @@ async fn a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user() {
 
     // The user connects and grants achievements.issue.
     let connect = http
-        .post(format!("{base}/integrators/{}/connect", integrator.slug))
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -196,7 +196,7 @@ async fn a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user() {
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
             integrator.slug
         ))
         .headers(headers)
@@ -254,7 +254,7 @@ async fn an_app_issues_a_signed_milestone_to_a_bound_consenting_user() {
         .to_string();
 
     let connect = http
-        .post(format!("{base}/integrators/{}/connect", app.slug))
+        .post(format!("{base}/integrations/{}/connect", app.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["milestones.issue"] }))
         .send()
@@ -302,7 +302,7 @@ async fn a_tampered_signature_is_rejected() {
 
     let headers = auth_headers(&http, &base, &integrator).await;
     http.post(format!(
-        "{base}/integrators/{}/achievements",
+        "{base}/integrations/{}/achievements",
         integrator.slug
     ))
     .headers(headers)
@@ -315,7 +315,7 @@ async fn a_tampered_signature_is_rejected() {
     .await
     .unwrap();
 
-    http.post(format!("{base}/integrators/{}/connect", integrator.slug))
+    http.post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -329,7 +329,7 @@ async fn a_tampered_signature_is_rejected() {
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
             integrator.slug
         ))
         .headers(headers)
@@ -354,7 +354,7 @@ async fn issuance_to_a_non_bound_identity_is_forbidden() {
 
     let headers = auth_headers(&http, &base, &integrator).await;
     http.post(format!(
-        "{base}/integrators/{}/achievements",
+        "{base}/integrations/{}/achievements",
         integrator.slug
     ))
     .headers(headers)
@@ -384,7 +384,7 @@ async fn issuance_to_a_non_bound_identity_is_forbidden() {
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
             integrator.slug
         ))
         .headers(headers)
@@ -409,7 +409,7 @@ async fn issuance_against_a_retired_definition_conflicts() {
 
     let headers = auth_headers(&http, &base, &integrator).await;
     http.post(format!(
-        "{base}/integrators/{}/achievements",
+        "{base}/integrations/{}/achievements",
         integrator.slug
     ))
     .headers(headers)
@@ -422,7 +422,7 @@ async fn issuance_against_a_retired_definition_conflicts() {
     .await
     .unwrap();
 
-    http.post(format!("{base}/integrators/{}/connect", integrator.slug))
+    http.post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -431,7 +431,7 @@ async fn issuance_against_a_retired_definition_conflicts() {
 
     let headers = auth_headers(&http, &base, &integrator).await;
     http.patch(format!(
-        "{base}/integrators/{}/achievements/dragon_slayer",
+        "{base}/integrations/{}/achievements/dragon_slayer",
         integrator.slug
     ))
     .headers(headers)
@@ -456,7 +456,7 @@ async fn issuance_against_a_retired_definition_conflicts() {
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
             integrator.slug
         ))
         .headers(headers)

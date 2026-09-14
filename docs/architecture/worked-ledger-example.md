@@ -75,7 +75,7 @@ from the object, not `null` (`null` means an explicit clear — see
 ### 3. Nova connects to Ashen Realms
 
 Ashen Realms itself already exists on the network from its own earlier
-`game.registered` event (written once, at the game's own registration —
+`game.registered` event (written once, at the integrator's own registration —
 not repeated here since this is Nova's ledger walkthrough, not Ashen
 Realms'; see [`./protocol-events.md`](./protocol-events.md#today-in-the-repo)
 for that payload's shape). Nova connecting to it
@@ -90,7 +90,7 @@ for that payload's shape). Nova connecting to it
   "payload": {
     "binding_id": "b1000000-0000-0000-0000-000000000001",
     "identity_id": "a1b2c3d4-...-000001",
-    "game_id": "9f000000-0000-0000-0000-00000000ash1",
+    "integrator_id": "9f000000-0000-0000-0000-00000000ash1",
     "slug": "ashen-realms"
   },
   "timestamp": "2027-01-10T14:02:11Z",
@@ -195,12 +195,12 @@ Note `issuer` here is Kestrel's own identity (the member who joined), while
 `issuer` says whose event this is on the ledger, the payload's own fields
 say who caused what within it; the two aren't always the same identity.
 
-## What a game's own custom fact looks like in the same ledger
+## What an integrator's own custom fact looks like in the same ledger
 
 Ashen Realms can also publish its own data model — a versioned `.proto`
 schema description — into this same ledger, same envelope, a completely
 different `kind` (`game_schema.published`,
-`crates/server/src/game_schemas.rs`, issue #255):
+`crates/server/src/integrator_schemas.rs`, issue #255):
 
 ```json
 {
@@ -210,7 +210,7 @@ different `kind` (`game_schema.published`,
   "subject": "game:ashen-realms:schema:character:v1",
   "payload": {
     "id": "game:ashen-realms:schema:character:v1",
-    "game_id": "9f000000-0000-0000-0000-00000000ash1",
+    "integrator_id": "9f000000-0000-0000-0000-00000000ash1",
     "slug": "ashen-realms",
     "version": 1,
     "proto_source": "message Character { uint32 level = 1; ... }",
@@ -224,16 +224,16 @@ different `kind` (`game_schema.published`,
 This is **shape only** — "here is how our data is structured," not an
 actual instance of Nova's in-game character. Data exposure (a real
 `character` instance, e.g. Nova's own level/skills, entering the ledger)
-is [Game Space](./game-space.md)'s explicitly unbuilt half — see that
-doc's own "Schema vs. data exposure" section. A game-defined *fact about a
+is [Integrator Space](./integrator-space.md)'s explicitly unbuilt half — see that
+doc's own "Schema vs. data exposure" section. An integrator-defined *fact about a
 specific user* that does land on the ledger today only ever does so
 through the achievement/milestone mechanism above (optionally carrying an
 issuer-declared `schema` reference in its own definition, matching a
 published schema's `GlobalId`), not through some other, more general
-custom-event path — no such path exists yet. [Game event result
+custom-event path — no such path exists yet. [Integrator event result
 attestations](./achievements-and-attestations.md) (tournaments, seasonal
 championships) are the same `achievement.issued`/`.defined` mechanism with
-a game-event schema, not a separate event kind — see issue #88, currently
+an integrator-event schema, not a separate event kind — see issue #88, currently
 on hold.
 
 ## What never appears here
@@ -253,8 +253,8 @@ and [`./privacy.md`](./privacy.md):
   checked by a source grep in
   `crates/server/tests/guild_messages_no_ledger.rs`).
 - **Ordinary gameplay** — HP, XP ticks, movement, combat, matchmaking,
-  Ashen Realms' own in-game economy. Avalon never sees any of it unless a
-  game deliberately chooses to describe or expose it through Game Space
+  Ashen Realms' own in-integrator economy. Avalon never sees any of it unless a
+  integrator deliberately chooses to describe or expose it through Integrator Space
   (schema publication today; data exposure, unbuilt).
 - **Typing indicators, connection state** — never durable, never even
   operational-tier storage beyond what a live connection needs.
@@ -263,9 +263,9 @@ A ledger reader (a mirror, an auditor, a future indexer rebuild) sees
 exactly the seven events above for Nova's part of this story — nothing
 about her online status right now, nothing she said in guild chat, nothing
 about how she actually fights dragons mechanically. That boundary is the
-whole point: Avalon durably remembers facts that matter *across* games and
+whole point: Avalon durably remembers facts that matter *across* integrators and
 *to* the user's own portable identity, and stays out of everything that's
-just one game being a game.
+just one integrator being an integrator.
 
 ## Today in the repo
 
@@ -284,10 +284,10 @@ decisions of its own. It draws on:
 - [`./protocol-events.md`](./protocol-events.md) — the event kind
   catalogue this walks through instances of; issue #82 (kind catalogue +
   versioning policy).
-- [`./game-space.md`](./game-space.md) — schema publication vs. data
+- [`./integrator-space.md`](./integrator-space.md) — schema publication vs. data
   exposure; issue #255 (schema publication, built), issue #181 (decided
   representation).
 - [`./achievements-and-attestations.md`](./achievements-and-attestations.md) —
-  issuance signing; issue #88 (game event result attestations, on hold).
+  issuance signing; issue #88 (integrator event result attestations, on hold).
 - [`./privacy.md`](./privacy.md) — durable vs. ephemeral/operational
   tiers.

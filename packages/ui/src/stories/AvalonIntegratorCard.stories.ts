@@ -7,7 +7,7 @@ const meta: Meta<typeof AvalonIntegratorCard> = {
   args: {
     name: 'Ashen Realms',
     slug: 'ashen-realms',
-    developer: 'Ashen Studios',
+    ownerName: 'Ashen Studios',
     status: 'active',
     registeredAt: 'Jan 12, 2026',
   },

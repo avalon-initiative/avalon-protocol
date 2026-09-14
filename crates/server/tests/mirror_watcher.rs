@@ -60,7 +60,7 @@ async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> St
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await

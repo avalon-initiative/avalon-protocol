@@ -36,9 +36,9 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-/// Registers a throwaway integrator via the real, unauthenticated `POST /integrators`
+/// Registers a throwaway integrator via the real, unauthenticated `POST /integrations`
 /// endpoint — the simplest real write in this codebase that goes through
-/// the outbox into the ledger (`crates/server/src/integrators.rs::register_integrator`),
+/// the outbox into the ledger (`crates/server/src/integrations.rs::register_integrator`),
 /// with no WebAuthn ceremony required. Returns the ledger `issuer` string
 /// (`game:<slug>:self:registered`) this test polls `ledger_entries` for.
 async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> String {
@@ -58,7 +58,7 @@ async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> St
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await

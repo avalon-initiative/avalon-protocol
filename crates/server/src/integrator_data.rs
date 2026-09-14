@@ -1,7 +1,7 @@
 //! Integrator Space instance-data publication and read (issue #384, implementing
 //! #381's decided policy on top of #255's schema publication). Two halves:
 //!
-//! **Write** (`POST /integrators/{slug}/schemas/{version}/data`): the schema's
+//! **Write** (`POST /integrations/{slug}/schemas/{version}/data`): the schema's
 //! own publishing integrator — proven the same way `integrator_schemas::publish_schema_version`
 //! proves it (`authenticate_owning_integrator`, so `{slug}` names the caller,
 //! never a request body field) — submits a JSON `instance` for a `subject`
@@ -83,7 +83,7 @@ pub struct IntegratorDataInstanceResponse {
     pub superseded_by: Option<String>,
 }
 
-/// `POST /integrators/{slug}/schemas/{version}/data` — publish (or supersede)
+/// `POST /integrations/{slug}/schemas/{version}/data` — publish (or supersede)
 /// this integrator's instance data for `subject` against the named schema
 /// version. Always an insert, never an update to an existing row (see
 /// module doc comment).

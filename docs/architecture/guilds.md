@@ -1,11 +1,11 @@
 # Guilds
 
 **An Avalon guild is a first-class primitive of the network, not of any game.**
-It exists before its members enter a particular game, has members playing many
-games at once, and survives any one of those games shutting down. **A game is a
+It exists before its members enter a particular integrator, has members playing many
+integrators at once, and survives any one of those integrators shutting down. **An integrator is a
 client of a guild, never its owner.** Guild membership, roles, permissions, and
-history belong to the network; a game may render and consume them, but cannot
-govern them through its game authority.
+history belong to the network; an integrator may render and consume them, but cannot
+govern them through its integrator authority.
 
 This is decided, not aspirational — see
 [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74). The narrative
@@ -27,30 +27,30 @@ Avalon Network
 │
 ├── Achievements / Attestations
 │
-├── Games
+├── Integrators
 │
 └── Assets / Ownership
 ```
 
-Guilds are a sibling of games, not a child of them. The same guild can be seen
-from inside Ashen Realms, inside WorldZero, and from the Hub with no game open:
+Guilds are a sibling of integrators, not a child of them. The same guild can be seen
+from inside Ashen Realms, inside WorldZero, and from the Hub with no integrator open:
 
 ```text
 Dragon Hunters
 
 Members: 1,284
 Founded: 2027
-Games: 7
+Integrators: 7
 Chat: Active
 
 Members currently playing:
     42 — Ashen Realms
     18 — WorldZero
-     7 — Game C
+     7 — Integrator C
 ```
 
-Nothing above is game-scoped. The per-game counts are realtime presence (see
-[presence](./presence.md)), not something any one game reports about "its" guild.
+Nothing above is integrator-scoped. The per-integrator counts are realtime presence (see
+[presence](./presence.md)), not something any one integrator reports about "its" guild.
 
 ## What Avalon owns
 
@@ -63,43 +63,43 @@ Nothing above is game-scoped. The per-game counts are realtime presence (see
 | Guild history | Network | append-only, reconstructable |
 | Guild chat channels and messages | Network | delivered to any authorized client |
 | Reputation, governance | Network | later; see [future layers](./future-layers.md) |
-| A game's in-world rendering of a guild | Game | banners, halls, roster UI, whatever |
-| Game-internal clans that never touch Avalon | Game | stay game-side entirely |
+| An integrator's in-world rendering of a guild | Integrator | banners, halls, roster UI, whatever |
+| Integrator-internal clans that never touch Avalon | Integrator | stay integrator-side entirely |
 
-A game that wants purely internal clans keeps them in its own database and does
-not put them on Avalon. Avalon does not try to model every in-game group.
+An integrator that wants purely internal clans keeps them in its own database and does
+not put them on Avalon. Avalon does not try to model every in-integrator group.
 
-## Game as client
+## Integrator as client
 
-"Join Dragon Hunters" inside a game calls Avalon social functionality; the
-membership change happens in the network layer, and the game then consumes it.
-The only relationship between a guild and a game is `GuildGameAssociation`:
+"Join Dragon Hunters" inside an integrator calls Avalon social functionality; the
+membership change happens in the network layer, and the integrator then consumes it.
+The only relationship between a guild and an integrator is `GuildIntegratorAssociation`:
 opt-in, many-to-many, non-owning, removable without affecting the guild.
 
-What a game can do through the association:
+What an integrator can do through the association:
 
 - render the roster and member presence (subject to [visibility](./privacy.md))
 - render guild chat in its own UI as a client of the channel
 - ask "is this identity a member of guild X, with role Y?"
-- unlock game-side content based on membership
+- unlock integrator-side content based on membership
 
-What a game cannot do: rename, dissolve, transfer, or govern a guild; remove
-members; grant roles. Those are guild-role authorizations, not game credentials.
+What an integrator cannot do: rename, dissolve, transfer, or govern a guild; remove
+members; grant roles. Those are guild-role authorizations, not integrator credentials.
 See [security model](./security-model.md) for the scoped-authority rules.
 
 **[#160](https://github.com/LunarVagabond/avalon-protocol/issues/160) (decided)
-reshapes this going forward**: a guild's connection to a game is never
-something a manager declares for a game none of their members have actually
-played — it can only ever come from what a game itself already knows via
-[game bindings](./game-bindings.md) (#83, shipped). This is a **read/display
+reshapes this going forward**: a guild's connection to an integrator is never
+something a manager declares for an integrator none of their members have actually
+played — it can only ever come from what an integrator itself already knows via
+[integrator bindings](./bindings.md) (#83, shipped). This is a **read/display
 feature**, not new durable guild structure: a role with sufficient authority
 (`manage_guild` or an equivalent permission) can see an aggregated,
-derived breakdown of which games guildmates play or have played, with a
-count/fraction of members per game — computed from binding data, not a
+derived breakdown of which integrators guildmates play or have played, with a
+count/fraction of members per integrator — computed from binding data, not a
 `guild.game_associated` protocol event, same "hot state, not history"
 treatment already given to presence and chat. That role chooses whether to
 show or hide this breakdown on the guild's public profile, and can pin up to
-5 games as the guild's curated "favorites" for display — pinning requires
+5 integrators as the guild's curated "favorites" for display — pinning requires
 the underlying binding-derived association to already exist; it's never a
 way to manufacture one. No minimum-member threshold is needed since nothing
 is being gated on/off automatically — it's a display choice, not a system
@@ -108,19 +108,19 @@ verdict. Implementation tracked as
 (affinity view) and
 [#207](https://github.com/LunarVagabond/avalon-protocol/issues/207)
 (favorites pin), both under the Guilds epic (#19); #20's original manual
-`associate_game` endpoint predates this decision and is superseded by it
+`associate_integrator` endpoint predates this decision and is superseded by it
 going forward.
 
 ## Guild chat is a network primitive
 
 A channel belongs to the guild. It is visible through the Hub, the mobile-hub
-companion app, a game that chooses to render it, a web client, and later a
-Discord bridge or other authorized client. User A in Game A and User B in
-Game B talk in the same channel. See
+companion app, an integrator that chooses to render it, a web client, and later a
+Discord bridge or other authorized client. User A in Integrator A and User B in
+Integrator B talk in the same channel. See
 [Proposal §12](../stakeholders/Proposal.md#12-communication).
 
-Guild chat is not gameplay chat. Games keep their own local chat; Avalon carries
-the cross-game social channel.
+Guild chat is not gameplay chat. Integrators keep their own local chat; Avalon carries
+the cross-integrator social channel.
 
 ## History vs current state
 
@@ -160,34 +160,34 @@ guild, only a user's own pointer at one of their memberships.
 
 ## Analytics phrasing
 
-Never describe network guilds as belonging to a game.
+Never describe network guilds as belonging to an integrator.
 
-Wrong, unless the guilds are explicitly game-owned:
+Wrong, unless the guilds are explicitly integrator-owned:
 
 ```text
-Game A has 18,291 guilds.
+Integrator A has 18,291 guilds.
 ```
 
 Right:
 
 ```text
-18,291 Avalon guild members are currently associated with Game A.
-4,217 Avalon guilds have members who play Game A.
+18,291 Avalon guild members are currently associated with Integrator A.
+4,217 Avalon guilds have members who play Integrator A.
 ```
 
-Metrics the [game registry](./game-registry.md) may derive: guild members
-associated with a game, guilds with members playing a game, cross-game guild
-activity, membership growth, active members, guild participation in game events,
-guilds spanning multiple games.
+Metrics the [integrator registry](./registry.md) may derive: guild members
+associated with an integrator, guilds with members playing an integrator, cross-integrator guild
+activity, membership growth, active members, guild participation in integrator events,
+guilds spanning multiple integrators.
 
 ## Scenario H — network guild
 
-Can a guild exist outside Game A and have members simultaneously playing Game A,
-Game B, and Game C? Yes, by construction: the guild has no game parent, members
-have [bindings](./game-bindings.md) to whichever games they play, and presence
-reports where each member currently is. If Game A shuts down, the guild, its
-roster, its channels, and its history are unaffected; only the `GuildGameAssociation`
-with Game A becomes historical.
+Can a guild exist outside Integrator A and have members simultaneously playing Integrator A,
+Integrator B, and Integrator C? Yes, by construction: the guild has no integrator parent, members
+have [bindings](./bindings.md) to whichever integrators they play, and presence
+reports where each member currently is. If Integrator A shuts down, the guild, its
+roster, its channels, and its history are unaffected; only the `GuildIntegratorAssociation`
+with Integrator A becomes historical.
 
 ## Today in the repo
 
@@ -197,7 +197,7 @@ section stays a short index instead of a changelog. Everything below is real
 and implemented unless noted otherwise.
 
 - **Core types** (`crates/protocol/src/guilds.rs`): `Guild`, `JoinPolicy`
-  (invite-only/open, #21), `GuildRole`, `GuildMember`, `GuildGameAssociation`,
+  (invite-only/open, #21), `GuildRole`, `GuildMember`, `GuildIntegratorAssociation`,
   `GuildChannel`, `GuildMessage`, and the fixed `GuildPermission` vocabulary (#20).
 - **Per-resource permission overrides** (#250, decided by #243) — a role's
   guild-wide base permissions can be overridden per channel or per event,
@@ -217,8 +217,8 @@ and implemented unless noted otherwise.
   icon** (#246) as an independent image slot.
 - **Guild discovery board** (#154) — browse/search recruiting guilds; a
   milestone-1 server-side stand-in pending the indexer projection (#44/#42).
-- **Guild game affinity view** (#206, implementing decision #160) and
-  **favorite games pin list** (#207) — derived from real member bindings,
+- **Guild integrator affinity view** (#206, implementing decision #160) and
+  **favorite integrators pin list** (#207) — derived from real member bindings,
   never manager-declared.
 - **Guild events calendar + RSVP** (#169), plus **per-member RSVP roster**
   (#248) — who's going/maybe/can't-go, not just aggregate counts.
@@ -232,14 +232,14 @@ exact types, endpoints, and migrations behind every item above.
 ## Decisions and tickets
 
 - [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74) — ADR: guilds
-  are network-level primitives, not game-owned.
+  are network-level primitives, not integrator-owned.
 - [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) — ADR: durable
   history is canonical; the roster is a projection.
 - [#19](https://github.com/LunarVagabond/avalon-protocol/issues/19) — Epic: Guilds
   & Guild Communication, with
   [#20](https://github.com/LunarVagabond/avalon-protocol/issues/20) (CRUD + roles,
   done — creation, rename/retag/redescribe, role definitions, ownership
-  transfer, game association),
+  transfer, integrator association),
   [#21](https://github.com/LunarVagabond/avalon-protocol/issues/21) (membership,
   done — invites, join/leave, removal, per-member role assignment, and the
   owner-departure-without-transfer guard),
@@ -266,9 +266,9 @@ exact types, endpoints, and migrations behind every item above.
   `server`-side stand-in pending [#44](https://github.com/LunarVagabond/avalon-protocol/issues/44)
   (server reads moved onto the indexer's `guild_rosters` projection, #42).
 - [#160](https://github.com/LunarVagabond/avalon-protocol/issues/160) — decided:
-  guild-game association is derived from real member bindings, never
-  manager-declared; superseded #20's `associate_game`. Implemented by
-  [#206](https://github.com/LunarVagabond/avalon-protocol/issues/206) (game
+  guild-integrator association is derived from real member bindings, never
+  manager-declared; superseded #20's `associate_integrator`. Implemented by
+  [#206](https://github.com/LunarVagabond/avalon-protocol/issues/206) (integrator
   affinity breakdown, done) and
   [#207](https://github.com/LunarVagabond/avalon-protocol/issues/207)
   (favorites pin, done — a curated top-5 subset of #206's breakdown, gated

@@ -160,7 +160,7 @@ async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIn
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -184,7 +184,7 @@ async fn define_achievement(
     key: &str,
 ) {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -197,7 +197,7 @@ async fn define_achievement(
 
     let response = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator.slug
         ))
         .header("x-avalon-integrator-key-id", &integrator.key_id)
@@ -231,7 +231,7 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
     // The user's own consent: an active binding plus grants for both
     // capabilities the SDK's two calls below each require.
     let connect = http
-        .post(format!("{base}/integrators/{}/connect", integrator.slug))
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
         .send()
@@ -285,7 +285,7 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
     let connect = http
-        .post(format!("{base}/integrators/{}/connect", integrator.slug))
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&json!({ "capabilities": ["achievements.issue"] }))
         .send()

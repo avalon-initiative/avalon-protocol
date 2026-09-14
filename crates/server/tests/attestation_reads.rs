@@ -3,7 +3,7 @@
 //! infra — see `make test-live` / `make start`.
 //!
 //! "Scenario D" (issue #33's own design text — not one of
-//! `docs/architecture/integrators-and-issuers.md`'s lettered scenarios, which
+//! `docs/architecture/issuers.md`'s lettered scenarios, which
 //! only goes up through F today): an authentic, valid claim from an
 //! issuer the reader doesn't trust must still read as
 //! `Authentic`/`Valid` — recognition is a separate, consumer-side
@@ -48,7 +48,7 @@ async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIn
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -71,7 +71,7 @@ async fn auth_headers(
     integrator: &RegisteredIntegrator,
 ) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -149,7 +149,7 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
     let headers = auth_headers(&http, &base, &integrator_c).await;
     let define = http
         .post(format!(
-            "{base}/integrators/{}/achievements",
+            "{base}/integrations/{}/achievements",
             integrator_c.slug
         ))
         .headers(headers)
@@ -166,7 +166,7 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
         .unwrap()
         .to_string();
 
-    http.post(format!("{base}/integrators/{}/connect", integrator_c.slug))
+    http.post(format!("{base}/integrations/{}/connect", integrator_c.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -185,7 +185,7 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
             integrator_c.slug
         ))
         .headers(headers)

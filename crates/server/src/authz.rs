@@ -421,7 +421,7 @@ mod live_tests {
     //! database.
     //!
     //! Revokes through `connections::revoke_grant` directly — the exact
-    //! handler function `DELETE /integrators/{slug}/grants/{capability}` runs,
+    //! handler function `DELETE /integrations/{slug}/grants/{capability}` runs,
     //! called in-process rather than over HTTP — so this proves the guard
     //! reads state a real revoke produced, not a hand-rolled SQL shortcut
     //! that happens to look the same.
@@ -473,7 +473,7 @@ mod live_tests {
 
     /// Seeds a bare identity + session, a registered integrator declaring
     /// `friends.read`, and an active binding + grant between them —
-    /// direct SQL, same rows `POST /integrators/{slug}/connect` would produce,
+    /// direct SQL, same rows `POST /integrations/{slug}/connect` would produce,
     /// since this test isn't going over HTTP at all (see module doc
     /// comment).
     async fn seed(pool: &PgPool) -> Seeded {

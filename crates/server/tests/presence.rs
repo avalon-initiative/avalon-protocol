@@ -15,7 +15,7 @@
 //! WebAuthn ceremony — same approach as `crates/server/tests/friends.rs`,
 //! since presence doesn't care how a session was established. The
 //! integrator-side tests below reuse `crates/server/tests/connections.rs` and
-//! `crates/server/tests/integrators.rs`'s own patterns for registering an integrator
+//! `crates/server/tests/integrations.rs`'s own patterns for registering an integrator
 //! and completing its challenge-response auth over real HTTP, since
 //! `PUT /presence/:identity_id` is authenticated the same way
 //! `crate::authz::authenticate_caller` authenticates any `Caller::Integrator`.
@@ -312,7 +312,7 @@ async fn explicitly_setting_online_clears_a_sticky_override_and_resumes_ttl_trac
     assert_eq!(read[0]["status"], "Offline");
 }
 
-/// Registers a fresh integrator via the real `POST /integrators` endpoint declaring
+/// Registers a fresh integrator via the real `POST /integrations` endpoint declaring
 /// `presence.publish` — same pattern
 /// `crates/server/tests/connections.rs::register_unique_integrator` uses.
 async fn register_unique_integrator(
@@ -333,7 +333,7 @@ async fn register_unique_integrator(
     });
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -347,7 +347,7 @@ async fn register_unique_integrator(
 /// carrying every header `crate::authz::authenticate_caller` needs to
 /// resolve a `Caller::Integrator { integrator_id, identity_id }` — the three
 /// `x-avalon-integrator-*` headers plus `x-avalon-identity-id`, same shape
-/// `crates/server/tests/integrators.rs`'s own round-trip test builds by hand.
+/// `crates/server/tests/integrations.rs`'s own round-trip test builds by hand.
 async fn integrator_auth_request(
     http: &reqwest::Client,
     base: &str,
@@ -358,7 +358,7 @@ async fn integrator_auth_request(
     request: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -392,7 +392,7 @@ async fn a_bound_integrator_can_publish_its_own_playing_claim() {
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
     auth(
-        http.post(format!("{base}/integrators/{slug}/connect")),
+        http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
     .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
@@ -446,7 +446,7 @@ async fn a_integrator_cannot_claim_to_be_playing_a_different_integrator() {
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
     auth(
-        http.post(format!("{base}/integrators/{slug}/connect")),
+        http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
     .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
@@ -487,7 +487,7 @@ async fn a_integrator_cannot_publish_presence_for_an_unbound_identity() {
     let slug = integrator["slug"].as_str().unwrap();
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
-    // Deliberately never calls `POST /integrators/{slug}/connect` — no binding,
+    // Deliberately never calls `POST /integrations/{slug}/connect` — no binding,
     // no grant, at all.
     let request = integrator_auth_request(
         &http,

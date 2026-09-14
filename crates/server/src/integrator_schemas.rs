@@ -26,7 +26,7 @@
 //! another integrator's id, structurally (the id used for every insert below is
 //! the *authenticated* integrator id, never anything read from the request body).
 //!
-//! **Immutability + lineage.** `POST /integrators/{slug}/schemas` always inserts
+//! **Immutability + lineage.** `POST /integrations/{slug}/schemas` always inserts
 //! a new row; there is no update/PATCH endpoint for `proto_source`, full
 //! stop. `version` is one more than the integrator's current maximum (1 for a
 //! integrator's first publication). When there is a prior version, its
@@ -43,8 +43,8 @@
 //! this crate uses: the row insert(s) and the event enqueue happen in one
 //! transaction via `crate::outbox`.
 //!
-//! **Reads.** `GET /integrators/{slug}/schemas` (list, oldest first) and `GET
-//! /integrators/{slug}/schemas/{version}` (one version) are public and
+//! **Reads.** `GET /integrations/{slug}/schemas` (list, oldest first) and `GET
+//! /integrations/{slug}/schemas/{version}` (one version) are public and
 //! unauthenticated, same visibility level `integrators::get_integrator` and
 //! `achievements::list_achievement_definitions` already use — nothing
 //! about a published schema is sensitive.
@@ -165,7 +165,7 @@ fn default_visibility_public() -> String {
     "public".to_string()
 }
 
-/// `POST /integrators/{slug}/schemas` — publish the next version. Always an
+/// `POST /integrations/{slug}/schemas` — publish the next version. Always an
 /// insert, never an update to an existing row (see module doc comment).
 pub async fn publish_schema_version(
     State(state): State<AppState>,
@@ -309,7 +309,7 @@ pub async fn publish_schema_version(
     )))
 }
 
-/// `GET /integrators/{slug}/schemas` — every published version for this integrator,
+/// `GET /integrations/{slug}/schemas` — every published version for this integrator,
 /// oldest first. Public, unauthenticated (see module doc comment). Empty
 /// for an integrator that has never published.
 pub async fn list_schema_versions(
@@ -345,7 +345,7 @@ pub async fn list_schema_versions(
     Ok(Json(versions))
 }
 
-/// `GET /integrators/{slug}/schemas/{version}` — one published version, verbatim.
+/// `GET /integrations/{slug}/schemas/{version}` — one published version, verbatim.
 /// Public, unauthenticated. This is the endpoint a round-trip fetch of a
 /// just-published version calls to prove the stored `proto_source` matches
 /// what was submitted exactly.

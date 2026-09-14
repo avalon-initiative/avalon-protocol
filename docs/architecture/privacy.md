@@ -21,7 +21,7 @@ that could be reconfigured.
 | authenticated-only | any Avalon identity |
 | friend-visible | identities in the subject's friends list |
 | guild-visible | members of a given guild (or of any shared guild) |
-| game-visible | a game holding the relevant capability under an active binding |
+| integrator-visible | an integrator holding the relevant capability under an active binding |
 | private | the subject only |
 | operator-only | node operators, for diagnostics; never surfaced through the API |
 
@@ -31,9 +31,9 @@ also set a policy on their own roster (public, members-only, hidden).
 
 ## Composition
 
-A game's capability grant never widens what non-game viewers can see, and a
-public visibility setting never grants a game a capability it wasn't given. For a
-read by a game the order is: active [binding](./game-bindings.md) → active
+An integrator's capability grant never widens what non-game viewers can see, and a
+public visibility setting never grants an integrator a capability it wasn't given. For a
+read by an integrator the order is: active [binding](./bindings.md) → active
 `PermissionGrant` for the specific capability → visibility scope. For a read by a
 person: relationship to the subject → visibility scope. One authorization helper
 answers (viewer, subject, resource); no endpoint does its own ad-hoc check.
@@ -52,7 +52,7 @@ accident:
 | friends list | private |
 | guild membership | guild-visible |
 | achievement history | public, individually hideable |
-| game bindings (which games a user plays) | private |
+| integrator bindings (which integrators a user plays) | private |
 
 Visibility settings are identity state, not durable protocol history, unless a
 later decision promotes them.
@@ -66,7 +66,7 @@ wants a hidden roster gets one. See [guilds](./guilds.md).
 
 ## Analytics
 
-The [game registry](./game-registry.md) publishes counts and aggregates:
+The [integrator registry](./registry.md) publishes counts and aggregates:
 
 ```text
 2,481,392 unique players
@@ -86,12 +86,12 @@ default 5) is coarsened to the floor itself and marked inexact rather than
 returned as the real sub-floor count; zero is never coarsened, since
 "nobody" identifies no one. Enforced once, centrally, in
 `avalon_indexer::registry` — see
-[game-registry.md](./game-registry.md#privacy).
+[registry.md](./registry.md#privacy).
 
 ## Today in the repo
 
 - `crates/protocol/src/permissions.rs` — `Capability` and `PermissionGrant`
-  (game-visible only). No `Visibility` type.
+  (integrator-visible only). No `Visibility` type.
 - `crates/server/src/handlers.rs` — `/me` reads the caller's own profile.
   Several cross-identity read paths exist now (`GET /friends`,
   `GET /ws/presence`, `GET /friends/handle/:handle`), still session-gated
@@ -119,10 +119,10 @@ returned as the real sub-floor count; zero is never coarsened, since
   and [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86).
 - `crates/server/src/authz.rs` (#28) implements the write-side half of the
   "active binding → active `PermissionGrant`" chain this section describes —
-  `require_capability(caller, capability, state)` for a `Caller::Game`. Its
+  `require_capability(caller, capability, state)` for a `Caller::Integrator`. Its
   first real caller is `crates/server/src/presence.rs`'s
-  `update_game_presence` (#16), gating `presence.publish`; every other
-  game-calling-the-API endpoint is still hypothetical (see the module's
+  `update_integrator_presence` (#16), gating `presence.publish`; every other
+  integrator-calling-the-API endpoint is still hypothetical (see the module's
   own doc comment) and should reuse this rather than hand-rolling a check.
 - `presence_preferences.hide_playing` (`crates/server/db/migrations/0017_presence_preferences`)
   is an identity-controlled setting that's *not* a visibility scope at all —
@@ -154,4 +154,4 @@ returned as the real sub-floor count; zero is never coarsened, since
 - [#28](https://github.com/LunarVagabond/avalon-protocol/issues/28) — permission
   enforcement middleware (the write-side counterpart).
 - Open in [Proposal §32](../stakeholders/Proposal.md#32-open-questions): how much social
-  information should be portable; cross-game blocking.
+  information should be portable; cross-integrator blocking.

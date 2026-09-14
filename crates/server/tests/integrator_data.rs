@@ -79,7 +79,7 @@ async fn register_integrator(
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -102,7 +102,7 @@ async fn integrator_auth_headers(
     integrator: &RegisteredIntegrator,
 ) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -136,7 +136,7 @@ async fn connect(
     token: &str,
 ) {
     let response = http
-        .post(format!("{base}/integrators/{}/connect", integrator.slug))
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(token)
         .json(&serde_json::json!({ "capabilities": [] }))
         .send()
@@ -152,7 +152,7 @@ async fn publish_schema(
     body: serde_json::Value,
 ) -> reqwest::Response {
     let headers = integrator_auth_headers(http, base, integrator).await;
-    http.post(format!("{base}/integrators/{}/schemas", integrator.slug))
+    http.post(format!("{base}/integrations/{}/schemas", integrator.slug))
         .headers(headers)
         .json(&body)
         .send()
@@ -300,7 +300,7 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let unknown_field = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator.slug
         ))
         .headers(headers)
@@ -317,7 +317,7 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let wrong_type = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator.slug
         ))
         .headers(headers)
@@ -366,7 +366,7 @@ async fn a_integrator_cannot_publish_instance_data_for_an_unbound_identity() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator.slug
         ))
         .headers(headers)
@@ -411,7 +411,7 @@ async fn a_integrator_cannot_publish_instance_data_against_another_integrators_s
     let headers = integrator_auth_headers(&http, &base, &integrator_b).await;
     let response = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator_a.slug
         ))
         .headers(headers)
@@ -458,7 +458,7 @@ async fn a_private_schema_with_one_public_field_exposes_only_that_field() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let publish_instance = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator.slug
         ))
         .headers(headers)
@@ -521,7 +521,7 @@ async fn a_public_schema_with_one_private_field_hides_only_that_field() {
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let publish_instance = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator.slug
         ))
         .headers(headers)
@@ -590,7 +590,7 @@ async fn cross_integrator_write_isolation_is_total() {
     let headers = integrator_auth_headers(&http, &base, &integrator_1).await;
     let instance_response = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator_1.slug
         ))
         .headers(headers)
@@ -644,7 +644,7 @@ async fn cross_integrator_write_isolation_is_total() {
     };
     connect(&http, &base, &issuer, &token).await;
     let issuer_connect = http
-        .post(format!("{base}/integrators/{}/connect", issuer.slug))
+        .post(format!("{base}/integrations/{}/connect", issuer.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -654,7 +654,7 @@ async fn cross_integrator_write_isolation_is_total() {
 
     let headers = integrator_auth_headers(&http, &base, &issuer).await;
     let define = http
-        .post(format!("{base}/integrators/{}/achievements", issuer.slug))
+        .post(format!("{base}/integrations/{}/achievements", issuer.slug))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "isolation_test",
@@ -682,7 +682,7 @@ async fn cross_integrator_write_isolation_is_total() {
     );
     let issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/isolation_test/issue",
+            "{base}/integrations/{}/achievements/isolation_test/issue",
             issuer.slug
         ))
         .headers(headers)
@@ -706,7 +706,7 @@ async fn cross_integrator_write_isolation_is_total() {
     // slug — the classic cross-slug schema-publish forbidden case.
     let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_schema_publish = http
-        .post(format!("{base}/integrators/{}/schemas", integrator_1.slug))
+        .post(format!("{base}/integrations/{}/schemas", integrator_1.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": CHARACTER_PROTO }))
         .send()
@@ -718,7 +718,7 @@ async fn cross_integrator_write_isolation_is_total() {
     let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_instance_publish = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator_1.slug
         ))
         .headers(headers)
@@ -741,7 +741,7 @@ async fn cross_integrator_write_isolation_is_total() {
     let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_issue = http
         .post(format!(
-            "{base}/integrators/{}/achievements/isolation_test/issue",
+            "{base}/integrations/{}/achievements/isolation_test/issue",
             integrator_1.slug
         ))
         .headers(headers)
@@ -760,7 +760,7 @@ async fn cross_integrator_write_isolation_is_total() {
     let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_supersede = http
         .post(format!(
-            "{base}/integrators/{}/schemas/{version}/data",
+            "{base}/integrations/{}/schemas/{version}/data",
             integrator_1.slug
         ))
         .headers(headers)
@@ -776,7 +776,7 @@ async fn cross_integrator_write_isolation_is_total() {
     // Nothing about integrator_1's stored state moved at all.
     let schema_after: serde_json::Value = http
         .get(format!(
-            "{base}/integrators/{}/schemas/{version}",
+            "{base}/integrations/{}/schemas/{version}",
             integrator_1.slug
         ))
         .send()

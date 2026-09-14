@@ -12,7 +12,7 @@ binaries.**
 Settlement   — validates and stores durable history (the log)
 Indexer      — consumes history, serves query projections
 Realtime     — presence and ephemeral connections
-Gateway/API  — the SDK/API surface games and clients talk to
+Gateway/API  — the SDK/API surface integrators and clients talk to
 ```
 
 An operator may run all four in one process, only Indexer + Gateway, only
@@ -115,9 +115,9 @@ resolved here.
 
 A hosted node is not protocol authority. The concrete guarantees:
 
-- A node **cannot fabricate** "Game A issued this achievement". Attestations are
-  signed by Game A's registered issuer key
-  ([`./games-and-issuers.md`](./games-and-issuers.md)); a node that stores an
+- A node **cannot fabricate** "Integrator A issued this achievement". Attestations are
+  signed by Integrator A's registered issuer key
+  ([`./issuers.md`](./issuers.md)); a node that stores an
   unsigned or wrongly-signed claim has stored something every verifier rejects.
 - A node **cannot replace** a signature, alter a settled entry, or drop one
   without detection — the log is hash-chained and, once
@@ -138,8 +138,8 @@ order, store, index, serve, and mirror.
 Multiple operators is a goal. It is achieved by **mirroring one public,
 verifiable log** — the Certificate Transparency pattern
 ([#70](https://github.com/LunarVagabond/avalon-protocol/issues/70)) — not by
-federation. Under federation, whether Game B can see an identity would
-depend on which servers Game B's server peers with; that recreates the walled
+federation. Under federation, whether Integrator B can see an identity would
+depend on which servers Integrator B's server peers with; that recreates the walled
 gardens Avalon exists to remove. Under mirroring, a client does not pick "which
 server to trust": any mirror that misrepresents the log is detectable, because
 the log is self-verifying. The log *is* Avalon's own chain, not an anchor into someone else's
@@ -169,7 +169,7 @@ instance both "self-host" the same code — they are not the same thing; see
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
 presence for identities on that node lapses until their next heartbeat
-([`./presence.md`](./presence.md)); nothing a game had already verified becomes
+([`./presence.md`](./presence.md)); nothing an integrator had already verified becomes
 unverifiable.
 
 ## Version rollout
@@ -186,7 +186,7 @@ versions on the *same* `network_id` genuinely isn't safe).
 
 **Standing rule for the wire/API axis, effective now**: additive-only,
 forever-compatible — generalizing #82's payload policy and what #293
-(`/games` → `/integrations`) and #297 (additive `register-integrator`
+(`/integrations` → `/integrations`) and #297 (additive `register-integrator`
 alias) already practiced without naming it. Never remove, rename, or
 repurpose a field or endpoint outright; add alongside and deprecate slowly.
 This is a code-review discipline expectation starting now, not gated on

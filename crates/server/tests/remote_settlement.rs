@@ -79,11 +79,11 @@ async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> St
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
-        .expect("POST /integrators failed — is the remote-settlement node running?");
+        .expect("POST /integrations failed — is the remote-settlement node running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     format!("game:{slug}:self:registered")
 }

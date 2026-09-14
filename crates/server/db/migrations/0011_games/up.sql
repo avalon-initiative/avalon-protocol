@@ -16,7 +16,7 @@
 --
 -- `status` is a simple string rather than a real state machine — this
 -- ticket only ever sets `'active'`. Suspension/revocation/deprecation are
--- a separate, later operator action (see `docs/architecture/games-and-issuers.md`).
+-- a separate, later operator action (see `docs/architecture/issuers.md`).
 CREATE TABLE games (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug TEXT NOT NULL UNIQUE,

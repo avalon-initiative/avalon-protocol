@@ -17,7 +17,7 @@ beforeEach(() => {
 function testRouter() {
   return createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/integrators/:slug', component: IntegrationProfile }],
+    routes: [{ path: '/integrations/:slug', component: IntegrationProfile }],
   })
 }
 
@@ -39,18 +39,18 @@ async function mountProfile(integratorOverrides: Record<string, unknown> = {}) {
       id: 'g1',
       slug: 'ashen-realms',
       name: 'Ashen Realms',
-      developer: 'Ashen Studios',
+      owner_name: 'Ashen Studios',
       registered_at: '2026-01-12T00:00:00Z',
       status: 'active',
       requested_capabilities: [],
       ...integratorOverrides,
     },
-    '/integrators/ashen-realms/registry': registryResponse,
-    '/integrators/ashen-realms/keys': [],
+    '/integrations/ashen-realms/registry': registryResponse,
+    '/integrations/ashen-realms/keys': [],
   })
 
   const router = testRouter()
-  router.push('/integrators/ashen-realms')
+  router.push('/integrations/ashen-realms')
   await router.isReady()
   const wrapper = mount(IntegrationProfile, { global: { plugins: [router] } })
   await flushPromises()
@@ -96,13 +96,13 @@ describe('IntegrationProfile', () => {
         id: 'g1',
         slug: 'ashen-realms',
         name: 'Ashen Realms',
-        developer: 'Ashen Studios',
+        owner_name: 'Ashen Studios',
         registered_at: '2026-01-12T00:00:00Z',
         status: 'active',
         requested_capabilities: [],
       },
-      '/integrators/ashen-realms/registry': registryResponse,
-      '/integrators/ashen-realms/keys': [
+      '/integrations/ashen-realms/registry': registryResponse,
+      '/integrations/ashen-realms/keys': [
         { key_id: 'k1', algorithm: 'ed25519', role: 'root', valid_from: '2026-01-12T00:00:00Z', valid_until: null, revoked_at: null },
         {
           key_id: 'k2',
@@ -115,7 +115,7 @@ describe('IntegrationProfile', () => {
       ],
     })
     const router = testRouter()
-    router.push('/integrators/ashen-realms')
+    router.push('/integrations/ashen-realms')
     await router.isReady()
     const wrapper = mount(IntegrationProfile, { global: { plugins: [router] } })
     await flushPromises()

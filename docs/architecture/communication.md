@@ -2,7 +2,7 @@
 
 **Avalon connects communities; it does not replace the tools they already use.**
 Guild chat is already decided as a network primitive ([guilds.md](./guilds.md)):
-a channel belongs to the guild, not to any one game, and is rendered by
+a channel belongs to the guild, not to any one integrator, and is rendered by
 whichever client a member happens to have open. This document covers the
 remaining communication surfaces that guild chat doesn't — direct/small-group
 conversations, voice, and notifications — and states the one architectural
@@ -33,10 +33,10 @@ implemented first.
 
 A `Conversation` (`crates/protocol/src/social.rs`) is the identity-to-identity
 sibling of a `GuildChannel`: it exists between two or more identities
-directly, with no guild in between, and no game owns it. The same reasoning
+directly, with no guild in between, and no integrator owns it. The same reasoning
 that makes a friendship ([social-graph.md](./social-graph.md)) and a guild
 ([guilds.md](./guilds.md)) network-level applies here — a conversation between
-two identities is a fact about their relationship, not about whatever game either
+two identities is a fact about their relationship, not about whatever integrator either
 of them happened to be in when they started talking.
 
 The hot/cold split guild chat already established carries over unchanged:
@@ -44,7 +44,7 @@ The hot/cold split guild chat already established carries over unchanged:
 - `Conversation { id, participants }` and message send/receive are ordinary
   server state, not a `ProtocolEvent` — the same reasoning as
   [#22](https://github.com/LunarVagabond/avalon-protocol/issues/22) (high
-  volume, non-interoperable, not something a receiving game ever needs to
+  volume, non-interoperable, not something a receiving integrator ever needs to
   verify). `ConversationMessage { id, conversation_id, author, body, sent_at }`
   lives in its own `conversation_messages` table, outside
   `SettlementProvider::commit`; no `conversation.message_*` event kind exists.
@@ -65,7 +65,7 @@ The hot/cold split guild chat already established carries over unchanged:
   rejection is silent from the blocked party's perspective: it returns the
   exact same error a genuine non-participant gets, never a distinguishable
   "blocked" response. See [social-graph.md](./social-graph.md#blocking-and-harassment).
-- A game may render a conversation as a client of it, exactly as it may render
+- An integrator may render a conversation as a client of it, exactly as it may render
   a guild channel — it never becomes the conversation's host.
 - **Sending while offline is not this domain's problem to solve.** A message
   composed with no connectivity queues through the SDK's sync journal and
@@ -81,7 +81,7 @@ The hot/cold split guild chat already established carries over unchanged:
 **Deferred, on hold.** [#103](https://github.com/LunarVagabond/avalon-protocol/issues/103)
 (decided) chose to defer voice indefinitely rather than commit to a
 transport/provider now: text (guild chat, DMs) already covers the core
-cross-game communication goal, and voice is a materially bigger,
+cross-integrator communication goal, and voice is a materially bigger,
 expensive-to-unwind infrastructure commitment (self-hosted SFU operations,
 or a third-party dependency the rest of the protocol has otherwise avoided)
 with no existing precedent in this codebase — matching the deferral posture
@@ -112,15 +112,15 @@ the realtime vertical, not a store of its own.
 ## Avalon is not Discord
 
 Avalon's job is to make guild chat, DMs, and voice work the same way
-regardless of which game (if any) an identity has open — not to build a
+regardless of which integrator (if any) an identity has open — not to build a
 destination identities go to instead of the tools they already use. A future
 Discord bridge, mentioned as an example client in
 [guilds.md](./guilds.md#guild-chat-is-a-network-primitive), is exactly that:
 one more authorized client rendering the same network-owned channel, no
-different in kind from a game rendering it or the Hub rendering it. Nothing
+different in kind from an integrator rendering it or the Hub rendering it. Nothing
 in this document should be read as scoping that bridge now; it's called out
 only so a future conversation/voice design doesn't accidentally paint itself
-into a Hub-only or game-only corner.
+into a Hub-only or integrator-only corner.
 
 ## Today in the repo
 

@@ -42,7 +42,7 @@ async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIn
     });
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -70,7 +70,7 @@ async fn integrator_auth_headers(
     integrator: &RegisteredIntegrator,
 ) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -115,7 +115,7 @@ async fn publishing_a_schema_version_round_trips_the_proto_source_verbatim() {
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let published: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/schemas", integrator.slug))
+        .post(format!("{base}/integrations/{}/schemas", integrator.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": PROTO_V1 }))
         .send()
@@ -131,7 +131,7 @@ async fn publishing_a_schema_version_round_trips_the_proto_source_verbatim() {
     );
 
     let fetched: serde_json::Value = http
-        .get(format!("{base}/integrators/{}/schemas/1", integrator.slug))
+        .get(format!("{base}/integrations/{}/schemas/1", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -151,7 +151,7 @@ async fn publishing_a_second_version_leaves_the_first_untouched_and_links_lineag
     let integrator = register_integrator(&http, &base).await;
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
-    http.post(format!("{base}/integrators/{}/schemas", integrator.slug))
+    http.post(format!("{base}/integrations/{}/schemas", integrator.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": PROTO_V1 }))
         .send()
@@ -160,7 +160,7 @@ async fn publishing_a_second_version_leaves_the_first_untouched_and_links_lineag
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let v2: serde_json::Value = http
-        .post(format!("{base}/integrators/{}/schemas", integrator.slug))
+        .post(format!("{base}/integrations/{}/schemas", integrator.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": PROTO_V2 }))
         .send()
@@ -173,7 +173,7 @@ async fn publishing_a_second_version_leaves_the_first_untouched_and_links_lineag
 
     // The first version's proto text is unchanged — immutability.
     let v1_after: serde_json::Value = http
-        .get(format!("{base}/integrators/{}/schemas/1", integrator.slug))
+        .get(format!("{base}/integrations/{}/schemas/1", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -196,7 +196,7 @@ async fn a_integrator_publishing_under_another_slug_is_forbidden() {
     // integrator_a's real credential, but the path names integrator_b's slug.
     let headers = integrator_auth_headers(&http, &base, &integrator_a).await;
     let response = http
-        .post(format!("{base}/integrators/{}/schemas", integrator_b.slug))
+        .post(format!("{base}/integrations/{}/schemas", integrator_b.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": PROTO_V1 }))
         .send()
@@ -213,7 +213,7 @@ async fn listing_a_integrators_schema_versions_is_public_and_unauthenticated() {
     let integrator = register_integrator(&http, &base).await;
 
     let headers = integrator_auth_headers(&http, &base, &integrator).await;
-    http.post(format!("{base}/integrators/{}/schemas", integrator.slug))
+    http.post(format!("{base}/integrations/{}/schemas", integrator.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": PROTO_V1 }))
         .send()
@@ -221,7 +221,7 @@ async fn listing_a_integrators_schema_versions_is_public_and_unauthenticated() {
         .unwrap();
 
     let listed: Vec<serde_json::Value> = http
-        .get(format!("{base}/integrators/{}/schemas", integrator.slug))
+        .get(format!("{base}/integrations/{}/schemas", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -240,7 +240,7 @@ async fn a_integrator_with_no_publications_lists_empty() {
     let integrator = register_integrator(&http, &base).await;
 
     let listed: Vec<serde_json::Value> = http
-        .get(format!("{base}/integrators/{}/schemas", integrator.slug))
+        .get(format!("{base}/integrations/{}/schemas", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -272,7 +272,7 @@ async fn two_concurrent_publishes_for_the_same_integrator_produce_distinct_seque
 
     let publish = |headers: HeaderMap, proto: &'static str| {
         let http = http.clone();
-        let url = format!("{base}/integrators/{}/schemas", integrator.slug);
+        let url = format!("{base}/integrations/{}/schemas", integrator.slug);
         async move {
             http.post(url)
                 .headers(headers)
@@ -299,7 +299,7 @@ async fn two_concurrent_publishes_for_the_same_integrator_produce_distinct_seque
     assert_eq!(versions, [1, 2]);
 
     let listed: Vec<serde_json::Value> = http
-        .get(format!("{base}/integrators/{}/schemas", integrator.slug))
+        .get(format!("{base}/integrations/{}/schemas", integrator.slug))
         .send()
         .await
         .unwrap()

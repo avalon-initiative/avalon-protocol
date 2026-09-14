@@ -11,7 +11,7 @@
 //! fully generic before this generalization — nothing in it says
 //! "achievement"). What varies by the issuer's own registered category
 //! (`IntegratorCategory::claim_kind`) is purely the *label*: `Game` issuers
-//! keep `"achievement"` — `POST/PATCH/GET /integrators/{slug}/achievements`,
+//! keep `"achievement"` — `POST/PATCH/GET /integrations/{slug}/achievements`,
 //! `game:<slug>:achievement:<key>`, `achievement.defined`/etc., exactly as
 //! #31 shipped, zero churn — while `App`/`Service` issuers get
 //! `"milestone"` — `POST/PATCH/GET /integrations/{slug}/milestones`,
@@ -25,7 +25,7 @@
 //! own suggestion.
 //!
 //! **A route's claim vocabulary is never caller-asserted.** Hitting
-//! `/integrators/{slug}/achievements` for an issuer actually registered as
+//! `/integrations/{slug}/achievements` for an issuer actually registered as
 //! `App`/`Service` (or `/integrations/{slug}/milestones` for a `Game`) is
 //! rejected ([`AppError::ClaimVocabularyMismatch`]) — the label is derived
 //! from the issuer's own real registered category
@@ -34,7 +34,7 @@
 //!
 //! **Namespacing.** A definition's `GlobalId` is
 //! `<namespace>:<slug>:<claim_kind>:<key>` (`crates/protocol/src/ids.rs`),
-//! minted by [`definition_ref`] the same way `crates/server/src/integrators.rs`'s
+//! minted by [`definition_ref`] the same way `crates/server/src/integrations.rs`'s
 //! `integrator_ref`/`issuer_ref` and `guilds.rs`'s `guild_ref` namespace their own
 //! events — `key` matches `[a-z0-9_]+` ([`validate_key`]), and the slug is
 //! always the caller's own, taken from its registration (#26), never the
@@ -422,7 +422,7 @@ async fn create_definition(
     )))
 }
 
-/// `POST /integrators/{slug}/achievements`.
+/// `POST /integrations/{slug}/achievements`.
 pub async fn create_achievement_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -601,7 +601,7 @@ async fn update_definition(
     )))
 }
 
-/// `PATCH /integrators/{slug}/achievements/{key}`.
+/// `PATCH /integrations/{slug}/achievements/{key}`.
 pub async fn update_achievement_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -638,7 +638,7 @@ async fn list_definitions(
     // construction — the write-side route check means an issuer's category
     // can never change after registration, so it can never accumulate rows
     // under more than one claim vocabulary. This check exists for the read
-    // side specifically: without it, `/integrators/{app-slug}/achievements`
+    // side specifically: without it, `/integrations/{app-slug}/achievements`
     // would silently serve that app's real milestones back mislabeled as
     // achievements, through the wrong URL's semantics.
     let category = fetch_integrator_category(state, integrator_id).await?;
@@ -677,7 +677,7 @@ async fn list_definitions(
     Ok(Json(definitions))
 }
 
-/// `GET /integrators/{slug}/achievements`.
+/// `GET /integrations/{slug}/achievements`.
 pub async fn list_achievement_definitions(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -892,7 +892,7 @@ async fn issue_attestation(
     }))
 }
 
-/// `POST /integrators/{slug}/achievements/{key}/issue` (#32).
+/// `POST /integrations/{slug}/achievements/{key}/issue` (#32).
 pub async fn issue_achievement(
     State(state): State<AppState>,
     headers: HeaderMap,

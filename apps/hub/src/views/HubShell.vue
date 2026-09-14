@@ -95,7 +95,7 @@ const navItems = computed<AvalonNavItem[]>(() => [
     label: 'Connected Apps',
     to: '/integrations',
     icon: 'integrators',
-    active: route.path.startsWith('/integrations') || route.path.startsWith('/integrators'),
+    active: route.path.startsWith('/integrations') || route.path.startsWith('/integrations'),
   },
   { label: 'Guilds', to: '/guilds', icon: 'guilds', active: route.path.startsWith('/guilds') },
   { label: 'Friends', to: '/friends', icon: 'friends', active: route.path === '/friends' },

@@ -1,12 +1,12 @@
-//! `GET /integrators/{slug}/registry` — the Integrator Registry's derived-metrics read
+//! `GET /integrations/{slug}/registry` — the Integrator Registry's derived-metrics read
 //! surface (issue #261, the first concrete slice of the epic-sized #89):
 //! four durable-derived facts about an integrator/issuer, each carrying its own
-//! definition and class label, per `docs/architecture/integrator-registry.md`.
+//! definition and class label, per `docs/architecture/registry.md`.
 //! No composite score, no ranking — see that doc's "statistics inform
 //! trust; they do not determine it."
 //!
 //! A separate endpoint rather than folding these fields into `GET
-//! /integrators/{slug}` (`integrators::get_integrator`): the two read models change for
+//! /integrations/{slug}` (`integrators::get_integrator`): the two read models change for
 //! different reasons (registration facts are edited rarely and directly;
 //! derived metrics move with every binding/attestation event elsewhere in
 //! the system) and want different response shapes — a metrics response is
@@ -18,7 +18,7 @@
 //!
 //! Public and unauthenticated, same visibility level `integrators::get_integrator`
 //! already uses: aggregates only, never per-player data
-//! (`docs/architecture/integrator-registry.md`'s privacy invariant), so nothing
+//! (`docs/architecture/registry.md`'s privacy invariant), so nothing
 //! returned here is sensitive. An integrator with no binding/achievement activity
 //! at all returns zeros for every metric, not an error — same "absence
 //! means nothing happened yet" posture the rest of this crate's read

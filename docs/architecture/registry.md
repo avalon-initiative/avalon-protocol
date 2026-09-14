@@ -1,4 +1,4 @@
-# Game Registry and Network Intelligence
+# Integrator Registry and Network Intelligence
 
 **The registry exposes facts with explicit definitions. It never publishes a
 score, a ranking, or a trust judgment.** Metrics are derived from protocol
@@ -8,41 +8,55 @@ decision; they do not determine it.**
 
 ## Not a static list
 
-The registry is the network's intelligence layer about participating games and
+The registry is the network's intelligence layer about participating integrators and
 issuers, not a directory of names:
 
 ```text
-Avalon Game Registry
-  ├── Game identity              (game:ashen-realms)
+Avalon Integrator Registry
+  ├── Integrator identity              (game:ashen-realms)
   ├── Issuer keys and key history
   ├── Status                     (active / suspended / revoked / deprecated)
-  ├── Capabilities               (what Avalon features the game supports/requests)
+  ├── Capabilities               (what Avalon features the integrator supports/requests)
   ├── Public metadata            (name, developer, website — self-reported)
-  ├── Published schema versions  (Game Space schema publication, #255)
+  ├── Published schema versions  (Integrator Space schema publication, #255)
   ├── Durable activity metrics   (derived from events)
   ├── Recognition relationships  (who recognizes whom, for what)
   └── Aggregate network analytics
 ```
 
-Identity, keys, and status come from [games and issuers](./games-and-issuers.md).
+Identity, keys, and status come from [integrators and issuers](./issuers.md).
 Everything else is a projection built by the [indexer](./query-and-indexing.md).
 
 ## Beyond games: integrator category (#282, decision #275)
 
-Games are the first and primary integrator, not the only one long-term:
-websites and other non-game applications can register too. `category`
-(`IntegratorCategory`: `game` / `app` / `service`) is an additive field on
-registration — it does not rename `GameId`, `Issuer::Game`, the `games`
-table, or any `game.*` event kind, which stay the permanent durable
-vocabulary per #275. A registrant that omits `category` is a `game`, so
-every existing registration and caller is unaffected. The Hub's directory
-(below) reflects this with category tabs; only `Games` has real
-registrants today.
+Games are the first and most-developed integrator category, not the only one
+long-term: websites and other non-game applications can register too.
+`category` (`IntegratorCategory`: `game` / `app` / `service`) is an additive
+field on registration; a registrant that omits it is a `game`, so every
+existing registration and caller is unaffected. The Hub's directory (below)
+reflects this with category tabs; only `Games` has real registrants today.
+
+#282 shipped that category as an additive field while the primitives
+underneath it still carried gaming names. #290 finished the job: the
+registrant is an `Integrator` (`IntegratorId`, the `integrators` table,
+`/integrations`), and "game" now appears only where it genuinely means
+gaming. Three things deliberately kept their original spelling, and are not
+oversights:
+
+- **Ledger event kinds** (`game.registered`, `game.binding_established`,
+  `game.binding_ended`, `game_schema.published`, `game_data.published`) and
+  their payload keys. These are hash-chained into committed
+  `ledger_entries` and replayed verbatim by the indexer — see
+  [protocol events](./protocol-events.md).
+- **The `game` `GlobalId` namespace**, so ids like
+  `game:ashen-realms:achievement:dragon_slayer` keep resolving.
+- **`Issuer::Game` / `IntegratorCategory::Game`**, whose variant names *are*
+  the category vocabulary, sitting alongside `App` and `Service`.
 
 ## Derive, don't trust
 
 ```text
-Game registers
+Integrator registers
        ↓
 Players establish bindings
        ↓
@@ -53,59 +67,59 @@ Indexer
 Aggregate statistics
 ```
 
-"Players" is not a number a game reports. It is *distinct Avalon identities with
-an active [binding](./game-bindings.md) to the game*, observed through protocol
+"Players" is not a number an integrator reports. It is *distinct Avalon identities with
+an active [binding](./bindings.md) to the integrator*, observed through protocol
 activity. Every published metric carries its definition and a class label.
 
 ## Metric definitions
 
 | Metric | Definition | Class |
 |---|---|---|
-| players | distinct identities with an active `GameBinding` | durable-derived |
+| players | distinct identities with an active `IntegratorBinding` | durable-derived |
 | total players ever | distinct identities that ever had a binding | durable-derived |
 | achievements issued / revoked | count of `achievement.issued` / `.revoked` by this issuer | durable-derived |
 | unique achievement holders | distinct subjects with ≥1 valid attestation from this issuer | durable-derived |
 | achievement popularity | holders per achievement id | durable-derived |
-| cross-game players | bound identities that also hold a binding elsewhere | durable-derived |
-| recognizing games | games with a public recognition relationship to this issuer | durable-derived |
-| guilds with players here | distinct guilds with ≥1 member bound to this game | durable-derived |
-| guild members associated | distinct guild members bound to this game | durable-derived |
-| game event participation | attestations with the game-event schema | durable-derived |
+| cross-integrator players | bound identities that also hold a binding elsewhere | durable-derived |
+| recognizing integrators | integrators with a public recognition relationship to this issuer | durable-derived |
+| guilds with players here | distinct guilds with ≥1 member bound to this integrator | durable-derived |
+| guild members associated | distinct guild members bound to this integrator | durable-derived |
+| integrator event participation | attestations with the integrator-event schema | durable-derived |
 | key lifecycle / status / registration history | from issuer events | durable-derived |
 | players online now | from presence | **realtime** |
-| anything supplied by the game | e.g. genre, website | **self-reported** |
+| anything supplied by the integrator | e.g. genre, website | **self-reported** |
 
 Realtime numbers are never stored as durable metrics
 ([#78](https://github.com/LunarVagabond/avalon-protocol/issues/78)). Self-reported
 fields are shown as self-reported. Guild metrics use the association phrasing
-from [guilds](./guilds.md): "N Avalon guilds have members who play Game A",
-never "Game A has N guilds".
+from [guilds](./guilds.md): "N Avalon guilds have members who play Integrator A",
+never "Integrator A has N guilds".
 
 ## Schema discovery (#255)
 
-Not a metric — a game's published [Game Space](./game-space.md) schema
-versions are self-authored facts (game id, version, `.proto` source,
+Not a metric — an integrator's published [Integrator Space](./integrator-space.md) schema
+versions are self-authored facts (integrator id, version, `.proto` source,
 published-at, `superseded_by` lineage), surfaced the same way everything
 else in this document is: an indexer projection derived from durable
 events, never a second source of truth. `game_schema.published` is decoded
-and applied by `crates/indexer/src/projections/game_schemas.rs`, the same
-decode/apply shape every other projection in that crate uses; `list_for_game`
-returns a game's published versions oldest-first, empty for a game that has
+and applied by `crates/indexer/src/projections/integrator_schemas.rs`, the same
+decode/apply shape every other projection in that crate uses; `list_for_integrator`
+returns an integrator's published versions oldest-first, empty for an integrator that has
 never published. This is the "reuse the existing registry-projection
 pattern" discovery surface #181 left open, rather than a dedicated
 schema-discovery service.
 
 ## Statistics inform trust; they do not determine it
 
-A consuming game may eventually write a policy like "accept tournament results
+A consuming integrator may eventually write a policy like "accept tournament results
 from issuers with at least X bound players and Y recognizing integrations". The
-registry provides the inputs. It does not enforce "games above X are trusted".
+registry provides the inputs. It does not enforce "integrators above X are trusted".
 
-A game with 10 players is not automatically malicious. A game with 10,000,000 is
+An integrator with 10 players is not automatically malicious. An integrator with 10,000,000 is
 not automatically trustworthy. There is no
 
 ```text
-Avalon Game Score: 92/100
+Avalon Integrator Score: 92/100
 ```
 
 and there will not be one without its own explicit design and decision, kept
@@ -114,30 +128,30 @@ distinguishable from objective network facts. See the
 
 ## Recognition relationships and the network graph
 
-When a game chooses to publish its recognition policy, the registry records it
+When an integrator chooses to publish its recognition policy, the registry records it
 as a fact:
 
 ```text
-Game A recognizes Game B    achievements, tournament results
-Game A recognizes Game C    tournament results
-Game B recognizes Game A    achievements
+Integrator A recognizes Integrator B    achievements, tournament results
+Integrator A recognizes Integrator C    tournament results
+Integrator B recognizes Integrator A    achievements
 ```
 
-Over time this forms a graph — shared players, guilds spanning games,
-game events connecting games, issuers recognized by others. The graph is
-valuable network intelligence. It is not authority: "72 games recognize Game A"
+Over time this forms a graph — shared players, guilds spanning integrators,
+integrator events connecting integrators, issuers recognized by others. The graph is
+valuable network intelligence. It is not authority: "72 integrators recognize Integrator A"
 is an input to someone's decision, never a conclusion Avalon draws. Recognition
 is also not validity — a claim can be authentic and valid while recognized by
 nobody.
 
 ## Sybil and metric manipulation
 
-A game can create a million identities, bind them, issue itself achievements,
+An integrator can create a million identities, bind them, issue itself achievements,
 and appear highly active. Any metric that might influence trust is attackable.
 Levers that raise the cost, none of which are implemented or weighted today:
 
 - identity quality and account age
-- cross-game participation (bindings to unrelated games)
+- cross-integrator participation (bindings to unrelated integrators)
 - attestations from other issuers about the same identities
 - issuer history and time in the network
 - the cost of manipulation relative to the benefit
@@ -148,7 +162,7 @@ weighted to compensate; doing so would be a reputation system by another name.
 ## Privacy
 
 The registry publishes aggregates ("2,481,392 unique players"), never
-per-identity lists. Which identities are bound to a game is visible only under
+per-identity lists. Which identities are bound to an integrator is visible only under
 the [visibility](./privacy.md) rules that apply to those identities.
 
 **A minimum cohort size (#96).** An aggregate that's small enough stops
@@ -163,102 +177,102 @@ enforced.
 
 ## Today in the repo
 
-- `crates/protocol/src/games.rs` — `Game { id, slug, name, developer,
-  registered_at, category }`, `GameRegistration`, `GameCredential`.
+- `crates/protocol/src/integrations.rs` — `Integrator { id, slug, name, developer,
+  registered_at, category }`, `IntegratorRegistration`, `IntegratorCredential`.
   `category` (`IntegratorCategory`, #282) defaults to `Game`. No
   capabilities-supported or metrics.
 - `crates/indexer/src/lib.rs` — the `Indexer` trait, dispatched by
   `crates/indexer/src/postgres.rs::PostgresIndexer`, to one projection
   module per read model under `crates/indexer/src/projections/`. Schema
-  discovery (`game_schemas.rs`, #255) is the first Game-Registry-facing
+  discovery (`integrator_schemas.rs`, #255) is the first Integrator-Registry-facing
   projection; profiles/friendships/guild rosters/attestations are the
   others, most of them not registry-shaped.
 - **First slice of the metric table implemented (#261)**: `players`,
   `total players ever`, `achievements issued`, `achievements revoked`, and
   `unique achievement holders` — all `durable-derived` — are real.
   `players`/`total players ever` come from
-  `crates/indexer/src/projections/game_bindings.rs` (its own
-  `indexer_game_bindings` table, decoded from
+  `crates/indexer/src/projections/integrator_bindings.rs` (its own
+  `indexer_integrator_bindings` table, decoded from
   `game.binding_established`/`game.binding_ended`, migration
   `0039_indexer_game_bindings`). The three achievement metrics come from
   `crates/indexer/src/projections/attestations.rs`, reading the existing
   `indexer_attestations` table.
 
-  `crates/indexer/src/registry.rs::compute_for_game` composes both into a
-  `GameRegistryMetrics` where every field is a `{ value, definition, class }`
-  triple, never a bare number, and returns zeros (not an error) for a game
+  `crates/indexer/src/registry.rs::compute_for_integrator` composes both into a
+  `IntegratorRegistryMetrics` where every field is a `{ value, definition, class }`
+  triple, never a bare number, and returns zeros (not an error) for an integrator
   with no activity. It's exposed publicly and unauthenticated at
-  `GET /games/{slug}/registry` (`crates/server/src/registry.rs`) — a separate
+  `GET /integrations/{slug}/registry` (`crates/server/src/registry.rs`) — a separate
   endpoint from `GET /integrations/{slug}` on purpose, so the class-label
   contract can't be accidentally skipped by flattening metrics alongside
   plain registration fields. Fixture-based unit tests per metric (no live
   Postgres) live alongside each projection module.
 - **Minimum cohort size (#96)**: `crates/indexer/src/registry.rs`'s
   `coarsen` is the single enforcement point every metric in
-  `compute_for_game` passes through before `Metric`/`MetricResponse` ever
+  `compute_for_integrator` passes through before `Metric`/`MetricResponse` ever
   leave the process — a raw count at or above `min_cohort()`
   (`AVALON_REGISTRY_MIN_COHORT` env var, default `DEFAULT_MIN_COHORT` = 5)
   ships exactly with `exact: true`; a nonzero count below it is replaced
   with the floor itself and `exact: false`. `0` is never coarsened. There
-  is exactly one caller today (`GET /games/{slug}/registry`, no filter
+  is exactly one caller today (`GET /integrations/{slug}/registry`, no filter
   params), so no live filter-chain-narrows-a-cohort path exists yet to
   exploit — `coarsen` checks the final computed count regardless of how it
   was produced, so a future filtered query composes into the same
   enforcement point rather than needing its own.
-- **`GET /integrations` — the Hub game directory's list endpoint (#270,
+- **`GET /integrations` — the Hub integrator directory's list endpoint (#270,
   canonical path per #293)**: public, unauthenticated, cursor-paginated the
   same way `GET /guilds/discover` already is (#154) —
-  `crates/server/src/games.rs`'s `build_games_list_query` mirrors
+  `crates/server/src/integrations.rs`'s `build_integrators_list_query` mirrors
   `guilds.rs`'s `build_discover_query` keyset-pagination shape exactly.
   `q=`/`sort=` (`newest` default | `name`, no ranking/score option)
-  /`limit=`/`cursor=`, returning each game's public summary
+  /`limit=`/`cursor=`, returning each integrator's public summary
   (id/slug/name/developer/registered_at/status) — the same fields `GET
   /integrations/{slug}` exposes, just listed, with `requested_capabilities`
   left off since a directory card has no reason to fetch a field it
-  doesn't show. Milestone-1 stand-in over the `games` table, not #42's real
+  doesn't show. Milestone-1 stand-in over the `integrators` table, not #42's real
   indexer read model, same pragmatic call `discover_guilds` already made
   for guilds.
 - **Hub directory generalized to "Connected Apps" (#282)**: the Hub nav
-  entry and route moved from `/games` to `/integrations`
-  (`apps/hub/src/router/index.ts`); `/games` and `/games/:slug` still
+  entry and route moved from `/integrations` to `/integrations`
+  (`apps/hub/src/router/index.ts`); `/integrations` and `/integrations/:slug` still
   resolve, as redirects, so existing deep links don't 404.
-  `GameDirectory.vue` gained category tabs (Games / Apps / Services)
-  filtering the fetched list client-side by `category`; only `Games` has
+  `IntegratorDirectory.vue` gained category tabs (Integrators / Apps / Services)
+  filtering the fetched list client-side by `category`; only `Integrators` has
   real registrants today, so the other tabs render correctly empty rather
   than being hidden.
-- **Server public API generalized: `/integrations` canonical, `/games`
-  compatibility path (#293)**: `crates/server/src/games.rs`/`lib.rs` route
+- **Server public API generalized: `/integrations` canonical, `/integrations`
+  compatibility path (#293)**: `crates/server/src/integrations.rs`/`lib.rs` route
   `GET /integrations`/`GET /integrations/{slug}` as the canonical reads, with
-  `GET /games`/`GET /games/{slug}` kept working as real HTTP redirects
-  (`redirect_list_games`/`redirect_get_game`) to the new paths, preserving
+  `GET /integrations`/`GET /integrations/{slug}` kept working as real HTTP redirects
+  (`redirect_list_integrators`/`redirect_get_integrator`) to the new paths, preserving
   the query string.
 
-  `POST /integrations` and `POST /games` (registration) both dual-route to
-  the same `register_game` handler rather than one redirecting to the
+  `POST /integrations` and `POST /integrations` (registration) both dual-route to
+  the same `register_integrator` handler rather than one redirecting to the
   other — a redirect would silently turn the `POST` into a `GET` in many
-  clients. The `x-avalon-game-key-id`/`x-avalon-game-challenge-id`/
-  `x-avalon-game-signature` auth headers on the challenge-response flow
+  clients. The `x-avalon-integrator-key-id`/`x-avalon-integrator-challenge-id`/
+  `x-avalon-integrator-signature` auth headers on the challenge-response flow
   (below) gained generic `x-avalon-integrator-*` equivalents; either name is
   accepted from a caller, and this repo's own SDK/CLI/Hub send only the new
   name. No JSON field was renamed. The Hub's API client
   (`apps/hub/src/api/client.ts`) now calls `/integrations`/`/integrations/{slug}`
   directly rather than the compatibility path.
-- **Hub game directory + per-game profile page (#270, first slice of
-  #90)**: `apps/hub/src/views/GameDirectory.vue` lists `GET /integrations`
+- **Hub integrator directory + per-integrator profile page (#270, first slice of
+  #90)**: `apps/hub/src/views/IntegratorDirectory.vue` lists `GET /integrations`
   results with a search box and name/newest sort toggle — no
-  "recommended" ordering, matching #89's invariant. `GameProfile.vue`
-  (`/integrations/:slug`, `/games/:slug` redirects) renders `GET
+  "recommended" ordering, matching #89's invariant. `IntegratorProfile.vue`
+  (`/integrations/:slug`, `/integrations/:slug` redirects) renders `GET
   /integrations/{slug}`'s public fields plus `GET
-  /games/{slug}/registry`'s five metrics via `AvalonMetricTile` — value,
+  /integrations/{slug}/registry`'s five metrics via `AvalonMetricTile` — value,
   definition, and class label together, never a bare number. A
   non-`active` `status` renders as a visibly distinct badge
-  (`AvalonGameCard`/`GameProfile.vue`'s status badge) rather than reading
+  (`AvalonIntegratorCard`/`IntegratorProfile.vue`'s status badge) rather than reading
   the same as `active`; no key-history UI is built here (blocked on the
-  still-open #80). `packages/ui`'s `AvalonGameCard` and `AvalonMetricTile`
+  still-open #80). `packages/ui`'s `AvalonIntegratorCard` and `AvalonMetricTile`
   are the new reusable components, in the existing
   components/styles/stories split.
 - Still open: the rest of the table above (achievement popularity,
-  cross-game players, recognizing games, guild-association metrics, game
+  cross-integrator players, recognizing integrators, guild-association metrics, integrator
   event participation, key lifecycle/status/registration history),
   recognition relationships (needs a new protocol event, #94), the
   privacy/cohort-size floor ([#96](https://github.com/LunarVagabond/avalon-protocol/issues/96)),
@@ -266,7 +280,7 @@ enforced.
   ([#95](https://github.com/LunarVagabond/avalon-protocol/issues/95)) that
   #261's endpoint is not itself. Schema discovery
   (#255) is likewise still queryable only via
-  `avalon_indexer::projections::game_schemas::list_for_game`, not yet
+  `avalon_indexer::projections::integrator_schemas::list_for_integrator`, not yet
   folded into the registry endpoint. Issuer key history and recognition
   relationships are still not rendered anywhere in the Hub — #270 is only
   the first buildable slice of #90, not the full ticket.
@@ -275,28 +289,28 @@ enforced.
 
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry read
   model: derived metrics with explicit definitions.
-- [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) — Hub game
-  discovery + per-game profile pages.
+- [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) — Hub integrator
+  discovery + per-integrator profile pages.
 - [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR: trust
   model (statistics inform, never determine).
-- [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — game
+- [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — integrator
   bindings, the unit "players" counts.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
   identity, keys, and status shown in the registry.
 - [#41](https://github.com/LunarVagabond/avalon-protocol/issues/41) — Epic:
   Query/Index Layer.
-- [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) — Game
+- [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) — Integrator
   Schema Publication; the schema-discovery projection described above.
 - [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) —
-  Decision: game-defined schema model, representation, and versioning
+  Decision: integrator-defined schema model, representation, and versioning
   strategy; left discovery surface to implementation, resolved by #255 as
   the registry read model, not a dedicated endpoint.
 - [#261](https://github.com/LunarVagabond/avalon-protocol/issues/261) —
   first slice: the five binding/achievement `durable-derived` metrics and
-  `GET /games/{slug}/registry`, described above.
+  `GET /integrations/{slug}/registry`, described above.
 - [#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) —
-  first buildable Hub slice on #90: `GET /integrations`, the game
-  directory, and the per-game profile page reading #261's metrics,
+  first buildable Hub slice on #90: `GET /integrations`, the integrator
+  directory, and the per-integrator profile page reading #261's metrics,
   described above.
 - [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275) —
   decision: additive `category` field, no durable rename.
@@ -305,7 +319,7 @@ enforced.
   nav/route, and category tabs, described above.
 - [#293](https://github.com/LunarVagabond/avalon-protocol/issues/293) —
   generalized #282's Hub-internal route rename onto the server's public
-  API: `/integrations` canonical, `/games` a compatibility path, generic
+  API: `/integrations` canonical, `/integrations` a compatibility path, generic
   `x-avalon-integrator-*` auth headers, described above.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic
   this ticket and the rest of the registry work sit under.

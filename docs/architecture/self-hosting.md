@@ -16,13 +16,13 @@ deciding which one they actually want.
    Transparency pattern, not federation.
 2. **Running a private, disconnected instance.** An organization runs the
    exact same code, but roots it under its own `network_id` — a studio
-   spinning up Avalon for its own internal games, an air-gapped environment,
+   spinning up Avalon for its own internal integrators, an air-gapped environment,
    a staging/dev copy that should never touch production data. This document
    is about this case.
 
 Both are "self-hosting" in casual conversation. Only the first one is part of
 the Avalon network. The second is deploying the software, not joining the
-protocol's community of games and identities — same code, disconnected data.
+protocol's community of integrators and identities — same code, disconnected data.
 
 ## Why this is safe to offer, and exactly where the line is
 
@@ -52,14 +52,14 @@ quietly blurs the two.
 
 A private instance is the real thing — identity, guilds, achievements,
 attestations, the same trust model — running for one organization's own
-games. What it does **not** get is the reason most of this exists:
+integrators. What it does **not** get is the reason most of this exists:
 
 - Its identities, guilds, and achievements are meaningless outside itself —
   nothing on the public network can see, verify, or recognize anything a
   private instance issues, and vice versa. [`./trust-model.md`](./trust-model.md)'s
   "authentic, valid, recognized" distinctions all still apply, but recognition
-  can only ever happen among games pointed at the same `network_id`.
-- None of the cross-game discovery, shared communities, or "your friends are
+  can only ever happen among integrators pointed at the same `network_id`.
+- None of the cross-integrator discovery, shared communities, or "your friends are
   already here" effects in
   [`../developers/WhyBuildOnAvalon.md`](../developers/WhyBuildOnAvalon.md)
   apply — those come from the network, not the code.
@@ -82,15 +82,15 @@ public network:
   that make joining any shared network a non-starter
 
 None of these are the goal of the project. Avalon exists to be the shared
-identity and social layer between *independent* games — the value described
+identity and social layer between *independent* integrators — the value described
 in [`../developers/WhyBuildOnAvalon.md`](../developers/WhyBuildOnAvalon.md)
 compounds with the size of the *public* network, not with how many private
 forks of the code exist. A studio is always welcome to run their own
-instance; we'd just rather have their games on the actual network, where
+instance; we'd just rather have their integrators on the actual network, where
 their users' identities and communities are worth something beyond that
-one studio's games. If a private deployment starts asking "how do we
+one studio's integrators. If a private deployment starts asking "how do we
 eventually connect this to the real network" — the honest answer today is
-"there isn't one yet beyond re-registering games and re-issuing attestations
+"there isn't one yet beyond re-registering integrators and re-issuing attestations
 on the public network" — that's a real gap, not a hidden feature; see
 [Decisions and tickets](#decisions-and-tickets) below.
 

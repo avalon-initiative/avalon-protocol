@@ -1,6 +1,6 @@
 //! The Integrator Registry's derived-metrics read model — issue #261, the first
 //! concrete slice of the epic-sized #89. See
-//! `docs/architecture/integrator-registry.md`.
+//! `docs/architecture/registry.md`.
 //!
 //! Composes two projections this crate already maintains
 //! (`projections::integrator_bindings`, `projections::attestations`) into the
@@ -8,7 +8,7 @@
 //! `achievements issued`/`revoked`, and `unique achievement holders`. Every
 //! value carries its definition string and class label — the contract the
 //! whole registry model depends on
-//! (`docs/architecture/integrator-registry.md`: "every published metric carries
+//! (`docs/architecture/registry.md`: "every published metric carries
 //! its definition and a class label"), never a bare number.
 //!
 //! All four are `durable-derived`: computed purely from durable protocol
@@ -36,7 +36,7 @@
 //! centrally, here — never something `server`/`sdk`/the Hub have to
 //! remember to re-check, since they only ever see the already-coarsened
 //! value. There is currently exactly one caller of [`compute_for_integrator`]
-//! (`GET /integrators/{slug}/registry`, no filter parameters at all), so the
+//! (`GET /integrations/{slug}/registry`, no filter parameters at all), so the
 //! "filter chain narrows a cohort below the floor" attack this ticket
 //! names has no live path yet — but [`coarsen`] checks the *final* computed
 //! count regardless of how many projections/filters fed into it, so a

@@ -1,10 +1,10 @@
-//! Exercises `GET /integrators/{slug}/registry` (issue #261, first slice of the
+//! Exercises `GET /integrations/{slug}/registry` (issue #261, first slice of the
 //! epic-sized #89) against a real, running `avalon-server` and Postgres.
 //! Gated `--ignored` since it needs live infra — see `make test-live` /
 //! `make start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no
 //! reachable Postgres here); written but not run against a live database.
 //!
-//! Mirrors `crates/server/tests/integrators.rs`'s own pattern for the
+//! Mirrors `crates/server/tests/integrations.rs`'s own pattern for the
 //! challenge-response integrator-auth flow and `crates/server/tests/connections.rs`'s
 //! pattern for seeding a bare identity/session directly via SQL rather than
 //! a real WebAuthn ceremony. There is no HTTP endpoint yet to issue an
@@ -77,7 +77,7 @@ async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> (Stri
     });
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -98,7 +98,7 @@ async fn a_integrator_with_no_activity_returns_zeros_for_every_labeled_metric() 
     let (slug, _) = register_unique_integrator(&http, &base).await;
 
     let response = http
-        .get(format!("{base}/integrators/{slug}/registry"))
+        .get(format!("{base}/integrations/{slug}/registry"))
         .send()
         .await
         .unwrap();
@@ -126,7 +126,7 @@ async fn a_integrator_with_no_activity_returns_zeros_for_every_labeled_metric() 
     }
 }
 
-/// One identity binds to the integrator (`POST /integrators/{slug}/connect`, a real
+/// One identity binds to the integrator (`POST /integrations/{slug}/connect`, a real
 /// `game.binding_established` event through the real indexer path) and two
 /// attestations are seeded directly into `indexer_attestations` (one
 /// later revoked) for a second identity — every resulting cohort here
@@ -146,7 +146,7 @@ async fn a_integrator_with_activity_below_the_floor_reports_coarsened_not_exact_
     let (slug, _) = register_unique_integrator(&http, &base).await;
 
     let connect = http
-        .post(format!("{base}/integrators/{slug}/connect"))
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": [] }))
         .send()
@@ -188,7 +188,7 @@ async fn a_integrator_with_activity_below_the_floor_reports_coarsened_not_exact_
     .unwrap();
 
     let body: serde_json::Value = http
-        .get(format!("{base}/integrators/{slug}/registry"))
+        .get(format!("{base}/integrations/{slug}/registry"))
         .send()
         .await
         .unwrap()
@@ -232,7 +232,7 @@ async fn a_integrator_with_activity_at_the_floor_reports_exact_counts() {
     for _ in 0..5 {
         let (_, token) = seed_identity_session(&pool).await;
         let connect = http
-            .post(format!("{base}/integrators/{slug}/connect"))
+            .post(format!("{base}/integrations/{slug}/connect"))
             .bearer_auth(&token)
             .json(&serde_json::json!({ "capabilities": [] }))
             .send()
@@ -242,7 +242,7 @@ async fn a_integrator_with_activity_at_the_floor_reports_exact_counts() {
     }
 
     let body: serde_json::Value = http
-        .get(format!("{base}/integrators/{slug}/registry"))
+        .get(format!("{base}/integrations/{slug}/registry"))
         .send()
         .await
         .unwrap()

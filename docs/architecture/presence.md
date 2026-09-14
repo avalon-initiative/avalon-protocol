@@ -23,9 +23,9 @@ architecture keeps them apart at every layer — see
 | Field | Example |
 |---|---|
 | status | online / away / do not disturb / offline |
-| current game | Ashen Realms |
+| current integrator | Ashen Realms |
 | current server / region | NA-East |
-| activity | "in a raid", free-form, game-supplied |
+| activity | "in a raid", free-form, integrator-supplied |
 | heartbeat | last seen at |
 | connection state | which realtime session, transient |
 
@@ -45,16 +45,16 @@ nothing anyone needs to prove later.
   and is never in [rebuild](./disaster-recovery.md) scope.
 - Presence may live in process memory, a cache, or a dedicated realtime service.
   It is not required to be in Postgres.
-- Presence is permissioned. A game publishing presence on an identity's behalf
-  requires the game to hold `presence.publish` under an active
-  [binding](./game-bindings.md); who else can see it is a
+- Presence is permissioned. An integrator publishing presence on an identity's behalf
+  requires the integrator to hold `presence.publish` under an active
+  [binding](./bindings.md); who else can see it is a
   [visibility](./privacy.md) setting (friends, guild, nobody) — friends-only
   by default.
-- A game publishes presence for identities bound to it (it knows they're
+- An integrator publishes presence for identities bound to it (it knows they're
   connected); it cannot publish presence for identities that are not bound to it.
-- Realtime population numbers ("players online in Game A") are labeled realtime
+- Realtime population numbers ("players online in Integrator A") are labeled realtime
   wherever shown and never stored as durable metrics in the
-  [game registry](./game-registry.md).
+  [integrator registry](./registry.md).
 - What *is* durable about presence-adjacent activity — a binding being
   established, an achievement being earned — is its own protocol event, never
   inferred from heartbeats.
@@ -75,8 +75,8 @@ nothing anyone needs to prove later.
 - friends lists with online/where
 - guild rosters with "members currently playing: 42 — Ashen Realms"
 - the Hub's activity view and the mobile-hub companion app
-  ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-game))
-- cross-game "join me" flows and matchmaking integrations a game chooses to build
+  ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-integrator))
+- cross-integrator "join me" flows and matchmaking integrations an integrator chooses to build
 - community tools
 
 ## Deployment
@@ -90,18 +90,18 @@ realtime connections is a separate axis from scaling history or queries
 ## Today in the repo
 
 - `crates/protocol/src/social.rs` — `PresenceStatus { Online, Away, DoNotDisturb, Offline }` and
-  `Presence { identity_id, status, playing: Option<GameId>, updated_at }`.
+  `Presence { identity_id, status, playing: Option<IntegratorId>, updated_at }`.
 - `crates/server/src/presence.rs` — an in-process `PresenceStore` (`Arc<RwLock<HashMap<...>>>`
   keyed by identity), never a migrated table, never touching the outbox or
   `avalon-chain`. `PUT /me/presence` lets the caller publish their own
   `status`; they can never set `playing`. `PUT /presence/:identity_id` lets
-  a game publish presence on behalf of an identity it's bound to —
+  an integrator publish presence on behalf of an identity it's bound to —
   authenticated via `crate::authz`'s `Caller`/`require_capability` (#28):
-  the caller must resolve to `Caller::Game`, hold an active
-  `presence.publish` grant under an active [binding](./game-bindings.md)
+  the caller must resolve to `Caller::Integrator`, hold an active
+  `presence.publish` grant under an active [binding](./bindings.md)
   to that identity (`crates/server/src/connections.rs`, #26/#83), and
-  `playing`, if set at all, must equal the game's own id — a game claiming
-  to be a *different* game's `playing` value is rejected
+  `playing`, if set at all, must equal the integrator's own id — an integrator claiming
+  to be a *different* integrator's `playing` value is rejected
   (`AppError::PresencePlayingMismatch`) even with a valid grant. `GET
   /presence?ids=…` and `GET /ws/presence` default to friends-only
   visibility: the caller's own entry is always visible; anyone else's is
@@ -112,7 +112,7 @@ realtime connections is a separate axis from scaling history or queries
   this one resource, **not** the full per-resource visibility-scope model
   #87 still owns (guild visibility, a private setting, etc.) — see that
   file's own "Today in the repo" note. An identity can independently opt
-  `playing` out of ever being shown, regardless of any game's grant
+  `playing` out of ever being shown, regardless of any integrator's grant
   (`presence_preferences.hide_playing`, set via `PUT /me/presence`,
   `crates/server/db/migrations/0017_presence_preferences`) — deliberately
   a durable Postgres row, not part of the ephemeral store, since it's a
@@ -165,7 +165,7 @@ realtime connections is a separate axis from scaling history or queries
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) — ADR:
   realtime presence is ephemeral and never enters durable history.
 - [#16](https://github.com/LunarVagabond/avalon-protocol/issues/16) — presence
-  tracking (status + playing game) + update endpoint.
+  tracking (status + playing integrator) + update endpoint.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes.
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry read

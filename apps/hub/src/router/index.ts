@@ -46,7 +46,7 @@ const router = createRouter({
           name: 'achievements',
           component: () => import('../views/Achievements.vue'),
         },
-        // #282: generalized off /integrators; old paths redirect below. #273: public/unauthenticated,
+        // #282: generalized off /integrations; old paths redirect below. #273: public/unauthenticated,
         // so requiresAuth: false overrides HubShell's inherited requiresAuth: true.
         {
           path: 'integrations',

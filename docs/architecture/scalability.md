@@ -1,8 +1,8 @@
 # Scalability
 
-The stress model is deliberately large. **1,000 games × 100,000 identities each =
+The stress model is deliberately large. **1,000 integrators × 100,000 identities each =
 100,000,000 identities.** That is **not** 100 million gameplay events per second
-flowing through Avalon — gameplay stays game-side, always. The question is how
+flowing through Avalon — gameplay stays integrator-side, always. The question is how
 many *durable* facts that population produces, how much history it accumulates,
 how many reads and connections it generates, and whether every part of the
 system scales independently of the others.
@@ -71,7 +71,7 @@ Asked of every design, with the intended answer:
   keep serving; commitments resume once the settlement operator does. No
   validator set to stall in the first place ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
 
-## Scenario L — 1,000 games, 100M identities
+## Scenario L — 1,000 integrators, 100M identities
 
 Does Avalon avoid becoming a gameplay bottleneck? Yes by construction, as long
 as the hot/durable line holds. The parts that do scale with population — event

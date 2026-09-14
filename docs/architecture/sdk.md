@@ -1,7 +1,7 @@
 # SDK
 
 **Avalon exposes protocol capabilities, not infrastructure.** A developer
-thinks in identity, guilds, achievements, presence, and game event verification —
+thinks in identity, guilds, achievements, presence, and integrator event verification —
 never in Postgres instances, chain RPCs, indexer shards, or node addresses.
 **Every capability-gated method checks its own required grant**; the SDK never
 trusts the caller. Narrative:
@@ -37,22 +37,22 @@ let avalon = Avalon::connect("postgres://...").await?;
 
 and not "which Postgres, which Redis, which chain RPC, which indexer, which
 region, which node". A developer should be able to say "I want identity,
-guilds, achievements, cross-game game event verification, and presence" and
+guilds, achievements, cross-integrator integrator event verification, and presence" and
 consume exactly those.
 
 ## What the SDK abstracts
 
-| Concern | Hidden from the game |
+| Concern | Hidden from the integrator |
 |---|---|
 | node discovery and selection | latency, proximity, capabilities, health |
-| authentication | identity session exchange, game credential |
+| authentication | identity session exchange, integrator credential |
 | protocol version and capability negotiation | which node roles are reachable |
 | retries, failover, routing | a node disappearing (scenario K) |
 | realtime connections | presence transport |
 | settlement submission | batching, commitments, whichever backend |
 | verification | signature checks, key resolution at issuance time, history walks |
 | indexing topology | which projection served the read |
-| infrastructure changes | a backend swap never reaches game code |
+| infrastructure changes | a backend swap never reaches integrator code |
 | offline/deferred participation | whether the call went out now or was journaled for later — see [synchronization](./synchronization.md) |
 
 See [nodes](./nodes.md) for what discovery selects among,
@@ -63,7 +63,7 @@ node to reach at all.
 ## Verification surfaces three results, not one
 
 From the [trust model](./trust-model.md): authentic, valid, and recognized are
-separate answers. The SDK returns them separately so a game can:
+separate answers. The SDK returns them separately so an integrator can:
 
 - show all authentic-and-valid claims with provenance (a Hub-style view), and
 - apply gameplay effects only to claims it recognizes under its own policy.
@@ -73,8 +73,8 @@ is exactly the authority Avalon does not have.
 
 ## Capability checks per method
 
-A `Session` is scoped to the capabilities the user actually granted the game
-under an active [binding](./game-bindings.md). `achievements()` requires
+A `Session` is scoped to the capabilities the user actually granted the integrator
+under an active [binding](./bindings.md). `achievements()` requires
 `achievements.read`; `issue_achievement()` requires `achievements.issue`;
 `friends()` requires `friends.read`; and so on. A method with no grant
 fails with `CapabilityNotGranted` rather than silently returning less.
@@ -103,10 +103,10 @@ protocol and the domain model in `crates/protocol`; they never pull in
 ## Today in the repo
 
 - `crates/sdk/src/lib.rs` — `AvalonClient::new(AvalonConfig { server_url,
-  game_credential_key_id, game_slug, signing_key })` and
+  integrator_credential_key_id, integrator_slug, signing_key })` and
   `authenticate(identity_token)` wired to a real `avalon-server` (`GET /me`,
   `GET /me/grants`). `Session::require(capability)` is the per-method check.
-  `game_slug`/`signing_key` are `Option`s: `None` for a read-only
+  `integrator_slug`/`signing_key` are `Option`s: `None` for a read-only
   integration, required by `issue_achievement`.
   `Session::grant_for_testing(capability)` (`#[doc(hidden)]`, gated behind
   the `test-util` feature) remains for tests that want a granted `Session`
@@ -115,19 +115,19 @@ protocol and the domain model in `crates/protocol`; they never pull in
   (`achievements.read`, `GET /me/achievements` — new, #34, listing the
   identity's own full attestation history across every issuer) and
   `Session::issue_achievement(key)` (`achievements.issue`, `POST
-  /games/{slug}/achievements/{key}/issue`) are both wired to a real server;
+  /integrations/{slug}/achievements/{key}/issue`) are both wired to a real server;
   neither returns `NotImplemented` any more. `VerifiedAttestation` carries
   `authenticity`/`validity`/`history` as the server computed them —
   deliberately no `recognition` field, matching `GET /attestations/{id}`'s
-  (#33) own posture; a game wanting a recognition verdict filters through
+  (#33) own posture; an integrator wanting a recognition verdict filters through
   its own policy. Issuing signs locally: `AvalonConfig::signing_key` never
   leaves this process, only a detached signature does, and the same
   challenge-response proof every other issuer-credentialed endpoint in this
-  repo uses (`POST /games/{slug}/challenge`) authenticates the HTTP call
+  repo uses (`POST /integrations/{slug}/challenge`) authenticates the HTTP call
   itself. Milestones (`issue_milestone`/`milestones()`, the App/Service
   equivalent) aren't wired up yet — same shape, not this ticket's scope.
   Found and fixed a real pre-existing bug while live-verifying this: `GET
-  /me/grants` only ever read the deprecated `x-avalon-game-key-id` header,
+  /me/grants` only ever read the deprecated `x-avalon-integrator-key-id` header,
   silently ignoring the generalized `x-avalon-integrator-key-id` name the
   SDK actually sends (per #293) — every grant this SDK ever fetched was
   therefore invisible to `Session::require`, not just this ticket's new
@@ -140,8 +140,8 @@ protocol and the domain model in `crates/protocol`; they never pull in
   batched `presence_of` call. `Friend.display_name` is always `None` today —
   no endpoint resolves another identity's profile yet. `Session::update_presence(status)`
   wraps `PUT /me/presence` (a user publishing their own status); it
-  deliberately isn't the game-authority `AvalonClient::publish_presence`
-  this issue originally described, since that needs a game-credential/binding
+  deliberately isn't the integrator-authority `AvalonClient::publish_presence`
+  this issue originally described, since that needs an integrator-credential/binding
   system (#26/#28/#83) that doesn't exist — see the module doc comment for
   the full reasoning. `presence_of` applies no visibility filtering (#87).
   `Session::subscribe_presence(&[IdentityId])` (`presence.read`, #136 —
@@ -231,7 +231,7 @@ protocol and the domain model in `crates/protocol`; they never pull in
   deduplicates identical payloads — both are unit-tested in the same file,
   no `make test-live`/Postgres dependency. `AvalonClient`/`Session` don't
   call it yet — that's #111 (deferred submission engine), which drains and
-  submits what a game journals.
+  submits what an integrator journals.
 - `crates/sdk/tests/conversations.rs` — live tests (`make test-live`)
   covering `dm()`/`send()`/`messages()` round-tripping across two real
   sessions (alice starts and sends, bob discovers the conversation via

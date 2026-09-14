@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Per-integrator profile page (issue #270, first buildable slice of #90):
-// GET /integrators/{slug}'s public fields plus GET /integrators/{slug}/registry's five
+// GET /integrations/{slug}'s public fields plus GET /integrations/{slug}/registry's five
 // metrics (#261), each rendered through AvalonMetricTile with its
 // definition and class label — never a bare number. `status` renders
 // through a visibly distinct badge whenever it isn't "active". Key history
-// (#84/#80, both since decided/closed) now reads from GET /integrators/{slug}/keys.
+// (#84/#80, both since decided/closed) now reads from GET /integrations/{slug}/keys.
 // "Your access" reuses AvalonConnectionCard/api.revokeGrant/disconnectIntegrator
 // exactly as Connections.vue does, scoped to just this integrator's binding — the
 // only part of this view with a session dependency; everything else stays
@@ -70,7 +70,7 @@ function formatKeyDate(iso: string): string {
         <h1 :class="styles.title">{{ integrator.name }}</h1>
         <span v-if="!isActiveIntegratorStatus(integrator.status)" :class="integratorStyles.statusBadge">{{ integrator.status }}</span>
       </div>
-      <p :class="styles.subtitle">{{ integrator.developer }} · Registered {{ formatRegisteredAt(integrator.registered_at) }}</p>
+      <p :class="styles.subtitle">{{ integrator.owner_name }} · Registered {{ formatRegisteredAt(integrator.registered_at) }}</p>
     </header>
 
     <p v-if="error" :class="styles.error">{{ error }}</p>

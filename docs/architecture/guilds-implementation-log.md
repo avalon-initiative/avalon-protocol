@@ -11,7 +11,7 @@ the actual code ever disagree, the code is right and this doc is stale.
 
 - `crates/protocol/src/guilds.rs` — `Guild` (now carrying `join_policy`),
   `JoinPolicy` (`InviteOnly` | `Open`, issue #21), `GuildRole`, `GuildMember`,
-  `GuildGameAssociation`, `GuildChannel` (now carrying `announcement_only`,
+  `GuildIntegratorAssociation`, `GuildChannel` (now carrying `announcement_only`,
   issue #250), `GuildMessage`, plus `GuildPermission` (issue #20): the
   fixed milestone-1 vocabulary a role's base permission list draws from —
   `manage_guild`, `manage_roles`, `manage_members`, `manage_channels`,
@@ -124,9 +124,9 @@ the actual code ever disagree, the code is right and this doc is stale.
   (`crates/server/src/guilds.rs`, issues #20 and #21): `POST /guilds`,
   `GET /guilds/{id}`, `PATCH /guilds/{id}`, `GET /guilds/{id}/roles`,
   `POST /guilds/{id}/roles`, `PATCH /guilds/{id}/roles/{idx}`,
-  `POST /guilds/{id}/transfer-ownership`, `POST /guilds/{id}/games/{game_id}`,
-  `GET /guilds/{id}/game-breakdown` (issue #206, see below),
-  `GET`/`PUT /guilds/{id}/favorite-games` (issue #207, see below),
+  `POST /guilds/{id}/transfer-ownership`, `POST /guilds/{id}/integrations/{integrator_id}`,
+  `GET /guilds/{id}/integrator-breakdown` (issue #206, see below),
+  `GET`/`PUT /guilds/{id}/favorite-integrators` (issue #207, see below),
   `POST /guilds/{id}/invites`, `POST /guilds/{id}/invites/{invite_id}/accept`,
   `POST /guilds/{id}/invites/{invite_id}/decline`, `POST /guilds/{id}/join`
   (open guilds only), `POST /guilds/{id}/leave`,
@@ -136,7 +136,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   `friends.rs`. `guild.created`, `guild.updated`, `guild.role_defined`,
   `guild.owner_transferred`, `guild.member_added`, `guild.member_removed`,
   and `guild.role_changed` are written into the outbox in the same
-  transaction as the `guilds`/`guild_roles`/`guild_game_associations`/
+  transaction as the `guilds`/`guild_roles`/`guild_integrator_associations`/
   `guild_members` projection change (`crates/server/db/migrations/0008_guilds`,
   `0009_guild_membership`, `0019_guild_role_badges`). Invites, declines, and withdrawals are
   deliberately not durable — resolving one is a plain `guild_invites`
@@ -201,7 +201,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   `crates/sdk/src/guilds.rs`'s `Session::guilds()` (`guilds.read`) lists the
   caller's own memberships, `Session::guild(id).roster()` (`guilds.read`)
   and `.channels()`/`.channel(cid).messages()`/`.send()` (`guilds.chat`)
-  read the roster and chat and post as the identity — never as the game.
+  read the roster and chat and post as the identity — never as the integrator.
   Creating guilds, inviting, kicking, changing roles, and managing channels
   stay Hub-only, not exposed on the SDK. See `docs/architecture/sdk.md`.
 - Hub guild views (issue #24) are real: `/guilds` (my guilds + create),
@@ -216,7 +216,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   (`apps/hub/src/api/guilds.ts::listMembersWithPresence`), same gap and
   same fix as `GET /friends`. Every management action (rename/describe,
   define roles, invite, kick, change role, transfer ownership, create/
-  archive channels, associate a game) is gated client-side on the caller's
+  archive channels, associate an integrator) is gated client-side on the caller's
   own resolved permission list, but the server is the real authority — a
   hidden-but-still-reachable action shows a plain error on a 403 rather
   than crashing. `apps/mobile-hub` isn't wired to guilds yet (still #60).
@@ -227,10 +227,10 @@ the actual code ever disagree, the code is right and this doc is stale.
   `local.tabs`/`local.tab`/`local.tabActive` CSS-module pattern
   `Guilds.vue`'s "My guilds"/"Discover" tabs already established — no
   routing involved for switching between them. Overview carries header
-  info, MOTD/banner/links (read-only), game affinity, favorite games, and
-  associated games (now visible to any member, read-only — previously the
-  whole "Associated games" card was hidden from non-managers, not just its
-  "associate a game" action); Members carries the roster, currently-playing
+  info, MOTD/banner/links (read-only), integrator affinity, favorite integrators, and
+  associated integrators (now visible to any member, read-only — previously the
+  whole "Associated integrators" card was hidden from non-managers, not just its
+  "associate an integrator" action); Members carries the roster, currently-playing
   summary, and invites; Roles and Events are unchanged content, just
   relocated; Settings carries the recruiting toggle, MOTD/banner/link
   editing, and ownership transfer, all still `canManageGuild`-gated exactly
@@ -288,16 +288,16 @@ the actual code ever disagree, the code is right and this doc is stale.
   whatever additional scopes it defines; until then this is the whole
   story, stated here rather than simulated in the UI.
 - **"Members currently playing" (#57).** `apps/hub/src/api/guilds.ts`'s
-  `groupMembersPlayingByGame`/`formatPlayingSummary` group the roster's
-  merged presence by `playing` game id and render "N members playing X" —
-  the #74-safe phrasing, never "Game X's guild" — in `Guild.vue`'s
+  `groupMembersPlayingByIntegrator`/`formatPlayingSummary` group the roster's
+  merged presence by `playing` integrator id and render "N members playing X" —
+  the #74-safe phrasing, never "Integrator X's guild" — in `Guild.vue`'s
   "Currently playing" card, labeled as live presence, never a durable
   stat. Same honest-empty-state posture as `Friends.vue`'s own
-  "Playing &lt;game&gt;" gap: `PresenceResponse.playing` is always null in
-  practice today (no game has a live presence-publish binding yet), so
-  this card renders "No members currently reporting an in-game presence"
+  "Playing &lt;integrator&gt;" gap: `PresenceResponse.playing` is always null in
+  practice today (no integrator has a live presence-publish binding yet), so
+  this card renders "No members currently reporting an in-integrator presence"
   in every real guild right now — the grouping/formatting logic itself is
-  real and tested, and needs no further wiring once a game actually
+  real and tested, and needs no further wiring once an integrator actually
   publishes `playing`.
 - **Guild MOTD and metadata (issue #153).** `Guild` (`crates/protocol/src/guilds.rs`)
   carries `motd` (capped prose, `None` means unset), `banner` (an `http`/
@@ -334,14 +334,14 @@ the actual code ever disagree, the code is right and this doc is stale.
   this only widens the browse listing to include them, same as the rest of
   the discovery board's "browsable surface over already-public data"
   posture.
-- **Guild discovery board (issue #154).** `GET /guilds/discover?q=&recruiting=&tag=&game=&sort=&limit=&cursor=`
+- **Guild discovery board (issue #154).** `GET /guilds/discover?q=&recruiting=&tag=&integrator=&sort=&limit=&cursor=`
   (`crates/server/src/guilds.rs::discover_guilds`) is a paged, filterable,
   session-authenticated browse over the same already-public guild metadata
   — no membership requirement, and no new visibility tier: it's a
   browsable surface over data #20/#153 already made public, not a
   privacy boundary of its own. **Milestone-1 stand-in**, explicitly: this
   is a direct query against the `guilds`/`guild_members`/
-  `guild_game_associations` tables in `server`, not routed through
+  `guild_integrator_associations` tables in `server`, not routed through
   `crates/indexer`'s `guild_rosters` projection (#42, closed) — the same
   pragmatic call #44 (open: wire `avalon-server` reads to use the indexer)
   documents for reads generally. When #44 lands, this endpoint's
@@ -351,9 +351,9 @@ the actual code ever disagree, the code is right and this doc is stale.
     `name`/`tag`/`description`; `tag=` is an exact case-insensitive match
     (indexed via `crates/server/db/migrations/0021_guild_discovery_index`'s
     `guilds_tag_lower_idx`, alongside #153's existing partial
-    `guilds_recruiting_idx`); `game=` filters to guilds with a matching row
-    in `guild_game_associations` (#20's `associate_game` — no new
-    game-association logic invented here).
+    `guilds_recruiting_idx`); `integrator=` filters to guilds with a matching row
+    in `guild_integrator_associations` (#20's `associate_integrator` — no new
+    integrator-association logic invented here).
   - **`recruiting` visibility rule**: a non-recruiting guild must never
     appear in a *stranger's* browse/search results, in any filter
     combination — only exact id/tag lookup (`GET /guilds/{id}`, unchanged
@@ -388,12 +388,12 @@ the actual code ever disagree, the code is right and this doc is stale.
     button walking `next_cursor`. `AvalonGuildCard` (#24) grew an optional
     `recruiting` prop to render a "Recruiting" pill, rather than a new
     duplicate card component.
-- **Guild game affinity view (issue #206, implementing decision #160).**
-  `GET /guilds/{id}/game-breakdown` (`crates/server/src/guilds.rs::game_breakdown`)
+- **Guild integrator affinity view (issue #206, implementing decision #160).**
+  `GET /guilds/{id}/integrator-breakdown` (`crates/server/src/guilds.rs::game_breakdown`)
   returns, for a guild, how many current members hold an active
-  [`GameBinding`](./game-bindings.md) (#83) to each game they play —
+  [`IntegratorBinding`](./bindings.md) (#83) to each integrator they play —
   computed on every read from `guild_members` JOIN `bindings`
-  (`ended_at IS NULL`) JOIN `games`, grouped by game. Same milestone-1
+  (`ended_at IS NULL`) JOIN `integrators`, grouped by integrator. Same milestone-1
   direct-query stand-in #154's discovery board already established
   (`build_game_breakdown_query`, split out and unit-tested the same way
   `build_discover_query` is), not routed through the indexer (#42, closed;
@@ -401,16 +401,16 @@ the actual code ever disagree, the code is right and this doc is stale.
   protocol event and no durable table backs the breakdown itself — it's
   derived/computed data, the same "hot state, not history" tier as
   presence (#57) and the discovery board, never touching
-  `SettlementProvider`. No minimum-member threshold: every game with at
+  `SettlementProvider`. No minimum-member threshold: every integrator with at
   least one bound member appears, since this is a display of real counts,
   not a system verdict (#160's rejection of #96-style cohort-size gating
   here). There is no "add" action anywhere in this surface — the only way
-  a game appears is a member actually holding an active binding to it,
-  which supersedes #20's original manual `POST /guilds/{id}/games/{game_id}`
-  (`associate_game`) as the honest source of "what games is this guild
+  an integrator appears is a member actually holding an active binding to it,
+  which supersedes #20's original manual `POST /guilds/{id}/integrations/{integrator_id}`
+  (`associate_integrator`) as the honest source of "what integrators is this guild
   connected to"; that endpoint still exists unchanged (removing it is out
   of this ticket's scope) but is no longer the intended way to express a
-  guild-game connection going forward.
+  guild-integrator connection going forward.
   - **Permission gate.** `can_view_game_breakdown` reuses the existing
     `manage_guild` permission (or guild ownership, via
     `has_guild_permission`'s structural owner check) rather than inventing
@@ -437,34 +437,34 @@ the actual code ever disagree, the code is right and this doc is stale.
     `total_members` (the guild's current membership — the denominator for
     "N of M members play X"; not the same as summing every entry's
     `member_count`, since a member can hold zero, one, or several active
-    bindings), and `breakdown: GameBreakdownEntry[]` (`game_id`,
-    `game_slug`, `game_name`, `member_count`), ordered by `member_count`
+    bindings), and `breakdown: GameBreakdownEntry[]` (`integrator_id`,
+    `integrator_slug`, `integrator_name`, `member_count`), ordered by `member_count`
     descending. This is deliberately a clean, queryable shape for #207
     (favorites pin, see below) to build on.
-  - Hub: `Guild.vue`'s "Game affinity" card renders each entry via
+  - Hub: `Guild.vue`'s "Integrator affinity" card renders each entry via
     `apps/hub/src/api/guilds.ts::formatGameBreakdownEntry` ("N of M
     members play X", the exact phrasing this ticket's design calls for)
     and shows the public-exposure toggle to a `manage_guild` holder. The
     breakdown is fetched independently of the rest of the guild page
-    (`useGuildDetail.ts`'s `gameBreakdown`/`gameBreakdownError`) since a
+    (`useGuildDetail.ts`'s `integratorBreakdown`/`integratorBreakdownError`) since a
     403 here — not permitted, and the guild hasn't made it public — is an
     expected, common outcome for a non-member, not a page-level error like
     the rest of the guild fetch.
-- **Guild favorite games: curated top-5 pin list (issue #207, implementing
+- **Guild favorite integrators: curated top-5 pin list (issue #207, implementing
   decision #160).** Layered directly on #206's affinity breakdown above: a
-  `manage_guild` holder may pin up to 5 games, in order, as the guild's
-  curated "favorites" for public display — but only games that already
+  `manage_guild` holder may pin up to 5 integrators, in order, as the guild's
+  curated "favorites" for public display — but only integrators that already
   show up in the breakdown (at least one currently-actively-bound member).
-  There is no way to pin a game the guild has no real, live connection to;
+  There is no way to pin an integrator the guild has no real, live connection to;
   the same invariant #206/#160 already established for the breakdown
   itself now also holds for this curated subset of it.
-  - **Storage.** `guild_favorite_games` (`(guild_id, game_id, position)`,
+  - **Storage.** `guild_favorite_games` (`(guild_id, integrator_id, position)`,
     `crates/server/db/migrations/0025_guild_favorite_games`) — a small
     table, not a capped JSONB/array column like #153's `guilds.links`,
     because a pin's validity depends on live data in another table
     (`bindings`, via `guild_members`), not just static per-entry
     validation, and each pin needs its own stable position for reordering.
-    Postgres enforces "no duplicate pin per game" (composite primary key)
+    Postgres enforces "no duplicate pin per integrator" (composite primary key)
     and "distinct positions per guild" (a unique index on
     `(guild_id, position)`) structurally; the 5-entry cap and the
     live-affinity check are application-level
@@ -474,35 +474,35 @@ the actual code ever disagree, the code is right and this doc is stale.
     beyond the outbox event on each write — like
     `guild_game_breakdown_public` before it, this is current-state-only.
   - **Validation reuses #206's own query.**
-    `guilds::guild_bound_game_ids` calls the exact same
+    `guilds::guild_bound_integrator_ids` calls the exact same
     `build_game_breakdown_query` #206's `game_breakdown` endpoint queries,
-    collecting the set of game ids with at least one actively-bound
-    member. A pin attempt for any other game id is rejected with
+    collecting the set of integrator ids with at least one actively-bound
+    member. A pin attempt for any other integrator id is rejected with
     `AppError::FavoriteGameNotBound` (403) — checked against this live
     query at write time, never a cached/stale value, so "pinnable" can
     never drift from "what the breakdown itself would show".
-  - **Endpoints and permission gate.** `PUT /guilds/{id}/favorite-games`
-    (`SetFavoriteGamesRequest { game_ids: Vec<Uuid> }`) always sends the
+  - **Endpoints and permission gate.** `PUT /guilds/{id}/favorite-integrators`
+    (`SetFavoriteGamesRequest { integrator_ids: Vec<Uuid> }`) always sends the
     full desired ordered list — same "resend the whole list, not a
     per-entry patch" convention #153's `links` established — and is gated
     by `has_guild_permission(..., GuildPermission::ManageGuild)`, the exact
     same check `update_guild`/#206's breakdown-visibility toggle already
     use, not a new one. Rejects more than
     `MAX_GUILD_FAVORITE_GAMES` (5) entries
-    (`AppError::TooManyFavoriteGames`), a duplicate game id in the same
+    (`AppError::TooManyFavoriteGames`), a duplicate integrator id in the same
     request (`AppError::DuplicateFavoriteGame`), or any id failing the
     live-affinity check above. On success it replaces the stored rows
     (delete + reinsert under one transaction) and records a
     `guild.favorite_games_updated` outbox event, matching every other
-    guild mutation in this module. `GET /guilds/{id}/favorite-games`
+    guild mutation in this module. `GET /guilds/{id}/favorite-integrators`
     returns the same shape read-only, gated only by session
     authentication (no `manage_guild` requirement) — see below for why.
-  - **Staleness, not silent removal.** If a pinned game's last bound
+  - **Staleness, not silent removal.** If a pinned integrator's last bound
     member later unbinds, the pin is *not* auto-removed — per #207's
     design, that would churn the guild's public display on a single
     member's binding change. Instead, every read
     (`guilds::fetch_favorite_games`) recomputes `stale: bool` per entry
-    against the same live `guild_bound_game_ids` set, so a `manage_guild`
+    against the same live `guild_bound_integrator_ids` set, so a `manage_guild`
     holder sees exactly which pins no longer reflect a real binding and
     can choose to unpin them; a non-manager viewing the public profile
     still sees the pin (a guild's curated choice stays visible until the
@@ -516,17 +516,17 @@ the actual code ever disagree, the code is right and this doc is stale.
     response already reaches (the guild's own profile page today; #154's
     discovery board list endpoint is a separate summary shape and doesn't
     embed favorites, to avoid an N+1 query per browsed guild — the
-    dedicated `GET /guilds/{id}/favorite-games` endpoint or the profile
+    dedicated `GET /guilds/{id}/favorite-integrators` endpoint or the profile
     fetch are the intended read paths). This is the guild's own
     deliberate curation choice — the same "always public" treatment
     `motd`/`banner`/`links` already get — distinct from the raw breakdown,
     which a guild may have reasons to keep internal.
-  - Hub: `Guild.vue`'s "Favorite games" card (below "Game affinity") shows
+  - Hub: `Guild.vue`'s "Favorite integrators" card (below "Integrator affinity") shows
     the pinned list (with staleness rendered inline via
     `apps/hub/src/api/guilds.ts::formatFavoriteGameEntry`) to anyone once
     there's something to show, and adds pin/unpin/reorder controls for a
     `manage_guild` holder. Pin candidates are drawn only from
-    `gameBreakdown.value.breakdown` (`pinnableBreakdownEntries`) — since
+    `integratorBreakdown.value.breakdown` (`pinnableBreakdownEntries`) — since
     viewing the full breakdown is itself `manage_guild`-gated, there is no
     UI path to even attempting a pin without real affinity. All four
     mutations (`addFavoriteGameId`/`removeFavoriteGameId`/
@@ -542,7 +542,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   durable (see "History vs current state" above); only a read path for
   them is missing.
 - **Guild events calendar + RSVP (issue #169).** A guild plans things —
-  raid nights, tournament prep, meetups — regardless of which game (if
+  raid nights, tournament prep, meetups — regardless of which integrator (if
   any) members currently have open; a pinned chat message is a poor
   substitute for a real calendar. `GuildEvent`/`GuildEventRsvp`
   (`crates/protocol/src/guilds.rs`) are served by
@@ -550,7 +550,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   `PATCH`/`DELETE /guilds/{id}/events/{eid}`,
   `PUT /guilds/{id}/events/{eid}/rsvp`, migration
   `crates/server/db/migrations/0028_guild_events`. This is distinct from
-  #88's game event *result* attestations — durable claims issued after the
+  #88's integrator event *result* attestations — durable claims issued after the
   fact about outcomes — this is scheduling something upcoming.
   **Durability call, made explicitly rather than assumed:** unlike guild
   *channels* (#22), whose structure — create/rename/archive — is durable

@@ -2,7 +2,7 @@
 -- epic-sized #89), built from `game.binding_established` /
 -- `game.binding_ended` — see
 -- `crates/indexer/src/projections/game_bindings.rs` and
--- `docs/architecture/game-registry.md`.
+-- `docs/architecture/registry.md`.
 --
 -- Kept as its own table rather than reusing `bindings` (0012_game_bindings)
 -- for the same reason `indexer_friendships`/`indexer_guild_members`/

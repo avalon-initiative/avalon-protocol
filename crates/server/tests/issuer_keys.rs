@@ -35,7 +35,7 @@ async fn register_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
         },
     });
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -57,7 +57,7 @@ async fn register_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
 /// Runs one challenge-response round: fetches a fresh challenge for `slug`,
 /// signs its nonce with `signing_key`, and returns the three headers the
 /// signature-carrying request needs — same shape
-/// `the_challenge_response_auth_flow_round_trips` in `tests/integrators.rs`
+/// `the_challenge_response_auth_flow_round_trips` in `tests/integrations.rs`
 /// already establishes for ordinary (non-root) auth.
 async fn signed_challenge_headers(
     http: &reqwest::Client,
@@ -67,7 +67,7 @@ async fn signed_challenge_headers(
 ) -> [(&'static str, String); 3] {
     let base = server_url();
     let challenge = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap();
@@ -112,7 +112,7 @@ async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls
     )
     .await;
     let add = with_headers(
-        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
+        http.post(format!("{base}/integrations/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -131,7 +131,7 @@ async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls
     // The freshly-added operational key authenticates an ordinary call.
     let headers =
         signed_challenge_headers(&http, &integrator.slug, &op_key_id, &operational_key).await;
-    let whoami = with_headers(http.get(format!("{base}/integrators/whoami")), &headers)
+    let whoami = with_headers(http.get(format!("{base}/integrations/whoami")), &headers)
         .send()
         .await
         .unwrap();
@@ -159,7 +159,7 @@ async fn an_operational_key_cannot_authorize_a_key_set_change() {
     )
     .await;
     let add = with_headers(
-        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
+        http.post(format!("{base}/integrations/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -181,7 +181,7 @@ async fn an_operational_key_cannot_authorize_a_key_set_change() {
     let headers =
         signed_challenge_headers(&http, &integrator.slug, &op_key_id, &operational_key).await;
     let attempt = with_headers(
-        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
+        http.post(format!("{base}/integrations/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -211,7 +211,7 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
     )
     .await;
     let add = with_headers(
-        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
+        http.post(format!("{base}/integrations/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -237,7 +237,7 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
     .await;
     let revoke = with_headers(
         http.post(format!(
-            "{base}/integrators/{}/keys/{}/revoke",
+            "{base}/integrations/{}/keys/{}/revoke",
             integrator.slug, op_key_id
         )),
         &headers,
@@ -253,7 +253,7 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
     // The revoked key can no longer authenticate anything.
     let headers =
         signed_challenge_headers(&http, &integrator.slug, &op_key_id, &operational_key).await;
-    let whoami = with_headers(http.get(format!("{base}/integrators/whoami")), &headers)
+    let whoami = with_headers(http.get(format!("{base}/integrations/whoami")), &headers)
         .send()
         .await
         .unwrap();
@@ -269,7 +269,7 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
     .await;
     let re_revoke = with_headers(
         http.post(format!(
-            "{base}/integrators/{}/keys/{}/revoke",
+            "{base}/integrations/{}/keys/{}/revoke",
             integrator.slug, op_key_id
         )),
         &headers,
@@ -299,7 +299,7 @@ async fn a_integrators_root_key_cannot_manage_a_different_integrators_keys() {
     )
     .await;
     let attempt = with_headers(
-        http.post(format!("{base}/integrators/{}/keys", integrator_b.slug)),
+        http.post(format!("{base}/integrations/{}/keys", integrator_b.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -313,7 +313,7 @@ async fn a_integrators_root_key_cannot_manage_a_different_integrators_keys() {
     assert_eq!(attempt.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
-/// `GET /integrators/{slug}/keys` (#90): public, no auth required, shows every
+/// `GET /integrations/{slug}/keys` (#90): public, no auth required, shows every
 /// key an issuer has ever registered — root and operational, valid and
 /// revoked — as a timeline.
 #[tokio::test]
@@ -332,7 +332,7 @@ async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
     )
     .await;
     let add = with_headers(
-        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
+        http.post(format!("{base}/integrations/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -357,7 +357,7 @@ async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
     .await;
     with_headers(
         http.post(format!(
-            "{base}/integrators/{}/keys/{}/revoke",
+            "{base}/integrations/{}/keys/{}/revoke",
             integrator.slug, op_key_id
         )),
         &headers,
@@ -369,7 +369,7 @@ async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
 
     // No auth headers at all — this is a plain, unauthenticated GET.
     let history: Vec<Value> = http
-        .get(format!("{base}/integrators/{}/keys", integrator.slug))
+        .get(format!("{base}/integrations/{}/keys", integrator.slug))
         .send()
         .await
         .unwrap()

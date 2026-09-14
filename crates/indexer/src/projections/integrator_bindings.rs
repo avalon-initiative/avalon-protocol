@@ -1,5 +1,5 @@
 //! The binding-status cache, built from `game.binding_established` /
-//! `game.binding_ended` — see `docs/architecture/integrator-bindings.md` and
+//! `game.binding_ended` — see `docs/architecture/bindings.md` and
 //! `avalon_protocol::integrators::IntegratorBinding`, whose shape this projection's
 //! payload expectations mirror.
 //!
@@ -145,7 +145,7 @@ pub fn fold(writes: &[IntegratorBindingWrite]) -> Vec<BindingState> {
 }
 
 /// "players" — distinct identities with an active `IntegratorBinding` to
-/// `integrator_id` (`docs/architecture/integrator-registry.md`).
+/// `integrator_id` (`docs/architecture/registry.md`).
 pub fn count_active_players(states: &[BindingState], integrator_id: Uuid) -> usize {
     states
         .iter()

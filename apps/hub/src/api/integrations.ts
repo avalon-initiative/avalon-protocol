@@ -3,11 +3,11 @@
 // apps/hub/src/api/guilds.ts already established for guilds.
 import type { IntegratorRegistryResponse, ListIntegratorsParams, MetricResponse } from './types'
 
-// Builds the `?q=&sort=&limit=&cursor=` query string for GET /integrators from a
+// Builds the `?q=&sort=&limit=&cursor=` query string for GET /integrations from a
 // params object — mirrors
 // apps/hub/src/api/guilds.ts::buildDiscoverQueryString exactly, including
 // its "omit rather than send empty/undefined" convention, matching
-// crates/server/src/integrators.rs::ListIntegratorsQuery's "omitted means use the
+// crates/server/src/integrations.rs::ListIntegratorsQuery's "omitted means use the
 // default" semantics.
 export function buildIntegratorsListQueryString(params: ListIntegratorsParams): string {
   const search = new URLSearchParams()
@@ -27,7 +27,7 @@ export function buildIntegratorsListQueryString(params: ListIntegratorsParams): 
   return query ? `?${query}` : ''
 }
 
-// Mirrors crates/server/src/integrators.rs's own posture: only "active" (today
+// Mirrors crates/server/src/integrations.rs's own posture: only "active" (today
 // the only status IntegratorStatus can ever produce, per its own doc comment) is
 // the unmarked, default-styled state — anything else renders as a visibly
 // distinct badge rather than reading the same as active. Pure and
@@ -41,7 +41,7 @@ export function isActiveIntegratorStatus(status: string): boolean {
 // renders them via a v-for over AvalonMetricTile rather than five
 // hand-written copies (and so a component test can assert "every metric
 // has a label" without duplicating this list itself). Order matches
-// docs/architecture/integrator-registry.md's metric table.
+// docs/architecture/registry.md's metric table.
 export interface LabeledMetric extends MetricResponse {
   key: keyof IntegratorRegistryResponse
   label: string

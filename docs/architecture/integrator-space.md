@@ -1,51 +1,51 @@
-# Game Space: Schemas, Publication, and Mapping
+# Integrator Space: Schemas, Publication, and Mapping
 
-**A binding says an identity participates in a game. A Game Space says what the
-game has chosen to describe to Avalon about its own data model, and how much
+**A binding says an identity participates in an integrator. An Integrator Space says what the
+integrator has chosen to describe to Avalon about its own data model, and how much
 of it is actually exposed.** Neither one gives Avalon an opinion about what a
 "level" or a "class" is. This document is the design for the layer that lets a
-game make its data *structurally describable, versioned, discoverable, and
+integrator make its data *structurally describable, versioned, discoverable, and
 attributable to itself* without Avalon standardizing what that data means.
 
 **Schema publication is now built; mapping and data exposure are not.**
 #181 decided the representation and #255 built the first implementation
-slice — a game can publish a versioned, immutable `.proto` description of
-its own data model and have that publication discoverable through the Game
+slice — an integrator can publish a versioned, immutable `.proto` description of
+its own data model and have that publication discoverable through the Integrator
 Registry. Mapping (a documented relationship between two schema versions)
 and data exposure (actual instances) remain unbuilt — see
 [Today in the repo](#today-in-the-repo).
 
-## Game Space is not a new participation record
+## Integrator Space is not a new participation record
 
-[Game bindings](./game-bindings.md) already establish "this identity
-participates in this game," deliberately with no game-data field, per
-[#67](https://github.com/LunarVagabond/avalon-protocol/issues/67). A **Game
-Space** is a different thing: it belongs to the *game*, not to an
-identity-game pair, and it is where a game optionally publishes *how its data is
+[Integrator bindings](./bindings.md) already establish "this identity
+participates in this integrator," deliberately with no integrator-data field, per
+[#67](https://github.com/LunarVagabond/avalon-protocol/issues/67). A **Integrator
+Space** is a different thing: it belongs to the *integrator*, not to an
+identity-integrator pair, and it is where an integrator optionally publishes *how its data is
 shaped* (schemas) and optionally exposes *instances of that data* (data
-exposure). It does not replace the game's own database, and it does not
-replace or extend `GameBinding`:
+exposure). It does not replace the integrator's own database, and it does not
+replace or extend `IntegratorBinding`:
 
 ```text
-Game
+Integrator
   │
-  ├── (game-side) full internal model — combat, quests, world state,
+  ├── (integrator-side) full internal model — combat, quests, world state,
   │                matchmaking, complete character state. Avalon never
   │                sees this by default.
   │
-  └── Game Space (Avalon-facing, optional, incremental)
+  └── Integrator Space (Avalon-facing, optional, incremental)
         ├── declared schemas          "here is how our data is structured"
         ├── schema versions           "here is how that structure evolved"
         ├── exposed entities          "here are instances we choose to expose"
         └── mappings between versions "here is how v1 corresponds to v2"
 ```
 
-A game with zero Game Space content is still a fully valid Avalon integration
+An integrator with zero Integrator Space content is still a fully valid Avalon integration
 today — identity, friends, guilds, and achievements do not require one.
 
 ## Minimal vs. deep integration
 
-Nothing about Game Space is required. A small/indie game can stay exactly
+Nothing about Integrator Space is required. A small/indie integrator can stay exactly
 where achievements already put it:
 
 ```text
@@ -55,19 +55,19 @@ Minimal
     (achievements-and-attestations.md) is already sufficient
 ```
 
-A game that wants richer interoperability declares more:
+An integrator that wants richer interoperability declares more:
 
 ```text
 Deep
   character (identity, progression, skills, reputation, equipment),
   items, achievements, titles — each a declared, versioned schema
-  → enables migration, portability, cross-game recognition,
+  → enables migration, portability, cross-integrator recognition,
     developer-to-developer integration
 ```
 
 Deep integration is opt-in per entity, the same way [portable assets are
 opt-in per item](./future-layers.md#portable-assets-phase-4). Avalon never
-requires a game to expose its full model to participate.
+requires an integrator to expose its full model to participate.
 
 ## Schema vs. data exposure — do not conflate these
 
@@ -82,15 +82,15 @@ Schema publication  =  "Here is how our data is structured."
 Data exposure        =  "Here are the instances we choose to expose."
 ```
 
-A game can publish a `character/v3` schema publicly (so other developers and
+An integrator can publish a `character/v3` schema publicly (so other developers and
 the registry can read its shape) without exposing a single actual character.
 Conversely nothing should let data exposure imply schema publication, or vice
 versa — they are independent decisions with independent authorization.
 
 This mirrors [provenance vs. functionality](./future-layers.md#portable-assets-phase-4):
 schema is about shape, exposure is about instances, and neither one is about
-meaning — a game's own `character.level` means whatever that game says it
-means, same as an asset's function is whatever the issuing game says it does.
+meaning — an integrator's own `character.level` means whatever that integrator says it
+means, same as an asset's function is whatever the issuing integrator says it does.
 
 ## Schema vs. mapping — a second distinction to hold
 
@@ -110,7 +110,7 @@ a human or another developer to read (renames, merges, splits, dropped
 fields, default values), rather than being a transformation Avalon runs.
 **The integrator owns the semantic transformation.** Avalon's job is
 infrastructure for describing, storing, discovering, and validating a mapping
-where one exists — never deciding what a game's migration means.
+where one exists — never deciding what an integrator's migration means.
 
 ## Worked example
 
@@ -128,12 +128,12 @@ where one exists — never deciding what a game's migration means.
   "skills.fishing.level": "professions.fishing" }
 ```
 
-A second game is free to model the same idea however it wants —
+A second integrator is free to model the same idea however it wants —
 `character.power_rating`, `character.specializations[]`, whatever fits its
-own game. Nothing above requires Game B to converge on Game A's field names.
+own integrator. Nothing above requires Integrator B to converge on Integrator A's field names.
 
 An emitted data instance is not bare JSON. It is an instance of a declared,
-versioned schema, attributable to its owning game:
+versioned schema, attributable to its owning integrator:
 
 ```json
 {
@@ -154,7 +154,7 @@ are — see [Decisions and tickets](#decisions-and-tickets).
 
 ## Representation and versioning (decided by #181, built by #255, parsing added by #384)
 
-A published game schema is protobuf IDL (`.proto`) — mature
+A published integrator schema is protobuf IDL (`.proto`) — mature
 field-numbering/evolution rules, broad developer familiarity. It is stored,
 versioned, and served back verbatim, exactly as submitted (`proto_source`
 itself is never rewritten or re-encoded). #181 originally specified this
@@ -167,16 +167,16 @@ protocol-event-payload policy): protobuf's canonical JSON mapping
 (`protobuf-json-mapping`) is the bridge #384 actually uses, not a reason to
 make Avalon's API gRPC or binary-protobuf-on-the-wire.
 
-Version identity is a monotonic `version: u32` per game — the same
+Version identity is a monotonic `version: u32` per integrator — the same
 precedent `AchievementDefinition.version` already established — plus an
 `superseded_by: Option<GlobalId>` pointer set on a version once a later one
 supersedes it, so lineage is traceable without ever rewriting a published
 version's `.proto` text. A version, once published, is immutable: evolving
 a schema means publishing a new version, never editing one in place. See
-`avalon_protocol::game_schemas::GameSchemaVersion`
-(`crates/protocol/src/game_schemas.rs`) and
-`crates/server/src/game_schemas.rs` (`POST`/`GET
-/games/{slug}/schemas[/{version}]`).
+`avalon_protocol::integrator_schemas::IntegratorSchemaVersion`
+(`crates/protocol/src/integrator_schemas.rs`) and
+`crates/server/src/integrator_schemas.rs` (`POST`/`GET
+/integrations/{slug}/schemas[/{version}]`).
 
 Still not decided or built: server-side validation of exposed data against
 a published schema, and mapping between schema versions — both explicitly
@@ -195,15 +195,15 @@ publication system would reuse that policy rather than invent a second one.
 
 ## Universal vs. game-specific semantics — the capability-mapping question
 
-A game's `character.level` field does not make "level" an Avalon-wide concept.
-Avalon may eventually define optional interoperable capabilities that a game
+An integrator's `character.level` field does not make "level" an Avalon-wide concept.
+Avalon may eventually define optional interoperable capabilities that an integrator
 can *choose* to map its own fields onto:
 
 ```text
 Protocol primitive: character.progression.level   (optional, Avalon-defined)
         │
-        ├── Game A maps: character.level → character.progression.level
-        └── Game B maps: character.rank  → character.progression.tier
+        ├── Integrator A maps: character.level → character.progression.level
+        └── Integrator B maps: character.rank  → character.progression.tier
 ```
 
 This is explicitly **not** decided or scoped by this document, and must not be
@@ -216,8 +216,8 @@ progression/skills/class taxonomy now.
 
 ## Provenance
 
-Game Space data reuses the existing [provenance](./provenance.md) model
-rather than inventing a parallel one: an exposed entity has an owning game
+Integrator Space data reuses the existing [provenance](./provenance.md) model
+rather than inventing a parallel one: an exposed entity has an owning integrator
 (source), a schema/version it was recorded under, and — where a mapping was
 used to produce it — the mapping and the source schema/version it came from,
 exactly as an asset's issuance and transfer history already work
@@ -227,9 +227,9 @@ required; a schema/mapping reference on an event or attestation is enough.
 ## Registry discoverability, not settlement bulk
 
 Publication *metadata* (schema id, version, owner, lineage) is the kind of
-durable-derived fact the [Game Registry](./game-registry.md) already exists
+durable-derived fact the [Integrator Registry](./registry.md) already exists
 to surface — the same place capabilities, keys, and activity metrics live
-today. #255 built exactly this: `crates/indexer/src/projections/game_schemas.rs`
+today. #255 built exactly this: `crates/indexer/src/projections/integrator_schemas.rs`
 projects `game_schema.published` events into the registry's read model,
 reusing the same decode/apply projection shape every other read model in
 that crate already uses, rather than a separate discovery path. Full schema
@@ -242,9 +242,9 @@ guarantee is actually needed, following the same discipline
 
 ## What this explicitly does not do
 
-- Does not require any game to expose its internal model beyond what it
+- Does not require any integrator to expose its internal model beyond what it
   chooses.
-- Does not make Avalon the arbiter of what a game's fields mean.
+- Does not make Avalon the arbiter of what an integrator's fields mean.
 - Does not imply that using Avalon makes a character portable — portability of
   any kind stays opt-in and per-entity, per
   [`./future-layers.md`](./future-layers.md).
@@ -253,19 +253,19 @@ guarantee is actually needed, following the same discipline
   versioning](#representation-and-versioning-decided-by-181-built-by-255-parsing-added-by-384).
   Compiling to a language binding (codegen) is still out of scope; parsing
   here is only ever for structural validation.
-- Does not extend `GameBinding` or the achievement `schema` field to carry
-  general game data; both stay exactly as narrowly scoped as they are today.
+- Does not extend `IntegratorBinding` or the achievement `schema` field to carry
+  general integrator data; both stay exactly as narrowly scoped as they are today.
 
 ## Today in the repo
 
-- `avalon_protocol::game_schemas::GameSchemaVersion`
-  (`crates/protocol/src/game_schemas.rs`) is the one domain type: game id,
+- `avalon_protocol::integrator_schemas::IntegratorSchemaVersion`
+  (`crates/protocol/src/integrator_schemas.rs`) is the one domain type: integrator id,
   raw `.proto` source, monotonic `version: u32`, `published_at`, and an
   optional `superseded_by: Option<GlobalId>` lineage pointer — the
   `AchievementDefinition.schema`/`version` precedent
   ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)),
   generalized from a bare reference field to the schema description itself.
-  No `GameSpace`/`Mapping`/`Entity` type exists yet — mapping between schema
+  No `IntegratorSpace`/`Mapping`/`Entity` type exists yet — mapping between schema
   versions remains unbuilt. Data exposure (this section's own gap) is now
   built, per #384.
 - **`proto_source` is now actually parsed** (#384's amendment to #181's
@@ -282,7 +282,7 @@ guarantee is actually needed, following the same discipline
 - **Schema-level and field-level visibility** (`default_visibility`:
   `"public"`/`"private"`, `field_visibility`: field name ->
   `"public"`/`"private"`, overriding the default for that field in either
-  direction) live on `game_schemas`/`indexer_game_schemas`
+  direction) live on `integrator_schemas`/`indexer_integrator_schemas`
   (`crates/server/db/migrations/0051_game_data_visibility`). Both default
   to fully open (`"public"`, `{}`) — a schema published before #384 landed
   keeps behaving exactly as it did before. `field_visibility`'s keys are
@@ -290,30 +290,30 @@ guarantee is actually needed, following the same discipline
   time (`proto_schema::validate_field_visibility_keys`); a nonexistent
   field name is rejected, not silently accepted.
 - **Instance-data publication**: `POST
-  /games/{slug}/schemas/{version}/data` (`crates/server/src/game_data.rs`) —
-  a new `game_data.published` event kind, with `game_data_instances` +
-  `indexer_game_data_instances` tables mirroring the
-  `game_schemas`/`indexer_game_schemas` pairing exactly (append-only,
+  /integrations/{slug}/schemas/{version}/data` (`crates/server/src/integrator_data.rs`) —
+  a new `game_data.published` event kind, with `integrator_data_instances` +
+  `indexer_integrator_data_instances` tables mirroring the
+  `integrator_schemas`/`indexer_integrator_schemas` pairing exactly (append-only,
   `superseded_by` lineage, no PATCH).
 
-  Write auth needs three things together: `authenticate_owning_game` (the
+  Write auth needs three things together: `authenticate_owning_integrator` (the
   caller must *be* `{slug}`, same guard `publish_schema_version` uses); an
-  active binding from the subject identity to that game
+  active binding from the subject identity to that integrator
   (`authz::has_active_binding`, mirroring `achievements::issue_attestation`'s
   "the user's own consent" pattern); and the resolved schema's own
-  `game_id` matching the caller. The submitted `instance` JSON is then
+  `integrator_id` matching the caller. The submitted `instance` JSON is then
   validated against the schema's parsed root message via
   `protobuf-json-mapping` (`proto_schema::validate_instance_json`) — unknown
   fields, wrong types, and (for a proto2-style schema) missing `required`
   fields are all rejected with `AppError::InstanceSchemaMismatch`, never
   stored.
-- **Read**: `GET /identities/{id}/game-data`
-  (`game_data::get_identity_game_data`) — public, unauthenticated, same
+- **Read**: `GET /identities/{id}/integrator-data`
+  (`integrator_data::get_identity_integrator_data`) — public, unauthenticated, same
   posture `GET /attestations/{id}` already has (#381's whole point).
   Reads the indexer's own projection
-  (`avalon_indexer::projections::game_data_instances`), never raw
+  (`avalon_indexer::projections::integrator_data_instances`), never raw
   ledger/outbox data, and applies the bidirectional visibility rule
-  (`game_data::resolve_visible_fields`, a pure function unit-tested
+  (`integrator_data::resolve_visible_fields`, a pure function unit-tested
   directly) per instance: a field is included iff `default_visibility` is
   `"public"` and the field isn't marked `"private"`, or `default_visibility`
   is `"private"` and the field is marked `"public"`. Only literal top-level
@@ -329,22 +329,22 @@ guarantee is actually needed, following the same discipline
 - `GlobalId::new(namespace, owner, kind, key)`
   (`crates/protocol/src/ids.rs`) namespaces a version as
   `game:<slug>:schema:<version>`, minted by
-  `crates/server/src/game_schemas.rs::schema_ref`.
-- `crates/server/src/game_schemas.rs` — `POST /games/{slug}/schemas`
-  (publish the next version, game-credential-authenticated the same way
+  `crates/server/src/integrator_schemas.rs::schema_ref`.
+- `crates/server/src/integrator_schemas.rs` — `POST /integrations/{slug}/schemas`
+  (publish the next version, integrator-credential-authenticated the same way
   `achievements.rs` authenticates achievement-definition writes — proving
-  the game owns the slug, not an identity-granted capability), `GET
-  /games/{slug}/schemas` (list, public), `GET
-  /games/{slug}/schemas/{version}` (one version, public). `game_schemas`
+  the integrator owns the slug, not an identity-granted capability), `GET
+  /integrations/{slug}/schemas` (list, public), `GET
+  /integrations/{slug}/schemas/{version}` (one version, public). `integrator_schemas`
   (`crates/server/db/migrations/0034_game_schemas`) is the request-serving
   projection; `proto_source` is never updated once inserted.
-- The [Game Registry](./game-registry.md)'s read model now covers schema
-  discovery: `crates/indexer/src/projections/game_schemas.rs` projects
-  `game_schema.published` into `indexer_game_schemas`, queried by
-  `list_for_game`.
+- The [Integrator Registry](./registry.md)'s read model now covers schema
+  discovery: `crates/indexer/src/projections/integrator_schemas.rs` projects
+  `game_schema.published` into `indexer_integrator_schemas`, queried by
+  `list_for_integrator`.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) is a
   versioning policy for `ProtocolEvent.kind`/payload, i.e. Avalon's own
-  events — not a mechanism for versioning a game's data model. Schema
+  events — not a mechanism for versioning an integrator's data model. Schema
   versioning follows the same discipline without #82 itself being widened
   to cover it.
 - Mapping between schema versions is still unbuilt — see #182's remaining
@@ -355,14 +355,14 @@ guarantee is actually needed, following the same discipline
 
 - [Proposal §32](../stakeholders/Proposal.md#32-open-questions) — "should
   assets have standardized schemas?" is the existing, still-open question this
-  document generalizes from assets to game data broadly.
+  document generalizes from assets to integrator data broadly.
 - [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) —
-  Decision: game-defined schema model, representation, and versioning
+  Decision: integrator-defined schema model, representation, and versioning
   strategy. Decided 2026-09-09: protobuf IDL as the description format,
   originally stored opaque; #384's amendment revised this to real parsing —
   see below.
 - [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) —
-  Game Schema Publication: the first implementation ticket under #182,
+  Integrator Schema Publication: the first implementation ticket under #182,
   building publication, immutability/lineage, and registry discovery per
   #181's decision.
 - [#381](https://github.com/LunarVagabond/avalon-protocol/issues/381) —
@@ -370,22 +370,22 @@ guarantee is actually needed, following the same discipline
   publishes instance data against its own published schema, with a
   schema-level opt-out and a bidirectional field-level override.
 - [#384](https://github.com/LunarVagabond/avalon-protocol/issues/384) —
-  Game Space data exposure: builds #381's decision — schema visibility
+  Integrator Space data exposure: builds #381's decision — schema visibility
   metadata, real instance-data publication (`game_data.published`), the
   visibility-enforcing read endpoint, and (its own amendment) real
   protobuf parsing/validation of both `proto_source` and submitted
   instances, replacing #181's original "stored opaque, never parsed"
   stance for schema text specifically.
 - [#182](https://github.com/LunarVagabond/avalon-protocol/issues/182) — Epic:
-  Game Space & Schema Publication, gated on #181.
+  Integrator Space & Schema Publication, gated on #181.
 - [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) — ADR:
-  identity is separate from game characters; the reason Game Space does not
-  become a second game database.
-- [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — game
-  bindings; Game Space is explicitly not an extension of this.
+  identity is separate from game characters; the reason Integrator Space does not
+  become a second integrator database.
+- [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — integrator
+  bindings; Integrator Space is explicitly not an extension of this.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic:
-  Game Registry & Network Intelligence; schema discovery lives in its read
-  surface (`crates/indexer/src/projections/game_schemas.rs`), not a new
+  Integrator Registry & Network Intelligence; schema discovery lives in its read
+  surface (`crates/indexer/src/projections/integrator_schemas.rs`), not a new
   service.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — protocol
   event kind/versioning policy; the pattern a schema versioning policy would

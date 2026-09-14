@@ -1,7 +1,7 @@
 // Integrator directory (issue #270): GET /integrations (#293's canonical alias
-// for GET /integrators) behind reactive filters (search text, sort). Mirrors
+// for GET /integrations) behind reactive filters (search text, sort). Mirrors
 // useDiscoverGuilds.ts's shape closely — server-side filtering/sorting/
-// pagination via the endpoint's own `next_cursor` (crates/server/src/integrators.rs's
+// pagination via the endpoint's own `next_cursor` (crates/server/src/integrations.rs's
 // keyset pagination — never re-derived or re-sorted client-side, since only
 // the server's `ORDER BY` matches its own cursor comparison) — but this
 // endpoint is public and unauthenticated, so unlike useDiscoverGuilds this

@@ -256,7 +256,7 @@ impl Session {
     /// Test-only escape hatch, kept even now that `authenticate()`
     /// populates `granted` from a real `GET /me/grants` call (#27): using
     /// the real flow end to end means driving a full integrator registration +
-    /// identity consent (`POST /integrators/{slug}/connect`) for every test that
+    /// identity consent (`POST /integrations/{slug}/connect`) for every test that
     /// needs a granted capability, which `crates/sdk/tests/guilds.rs` and
     /// `crates/sdk/tests/social.rs` do not otherwise need to exercise —
     /// they're testing `guilds.rs`/`social.rs`'s methods, not the consent

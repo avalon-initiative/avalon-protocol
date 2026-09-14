@@ -1,5 +1,5 @@
 // Issue #270's own invariant: the integrator directory must render integrators from
-// GET /integrators with no score/ranking element anywhere in the DOM.
+// GET /integrations with no score/ranking element anywhere in the DOM.
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,8 +10,8 @@ function testRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/integrators', component: IntegrationDirectory },
-      { path: '/integrators/:slug', name: 'integration-profile', component: IntegrationDirectory },
+      { path: '/integrations', component: IntegrationDirectory },
+      { path: '/integrations/:slug', name: 'integration-profile', component: IntegrationDirectory },
     ],
   })
 }
@@ -21,7 +21,7 @@ beforeEach(() => {
 })
 
 describe('IntegrationDirectory', () => {
-  it('lists integrators from GET /integrators with no score or ranking element anywhere', async () => {
+  it('lists integrators from GET /integrations with no score or ranking element anywhere', async () => {
     mockFetchByPath({
       '/integrations': {
         integrators: [
@@ -29,7 +29,7 @@ describe('IntegrationDirectory', () => {
             id: 'g1',
             slug: 'ashen-realms',
             name: 'Ashen Realms',
-            developer: 'Ashen Studios',
+            owner_name: 'Ashen Studios',
             registered_at: '2026-01-12T00:00:00Z',
             status: 'active',
             category: 'game',
@@ -38,7 +38,7 @@ describe('IntegrationDirectory', () => {
             id: 'g2',
             slug: 'worldzero',
             name: 'WorldZero',
-            developer: 'Lunar Vagabond',
+            owner_name: 'Lunar Vagabond',
             registered_at: '2026-02-01T00:00:00Z',
             status: 'suspended',
             category: 'game',
@@ -49,7 +49,7 @@ describe('IntegrationDirectory', () => {
     })
 
     const router = testRouter()
-    router.push('/integrators')
+    router.push('/integrations')
     await router.isReady()
     const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()
@@ -69,7 +69,7 @@ describe('IntegrationDirectory', () => {
     mockFetchByPath({ '/integrations': { integrators: [], next_cursor: null } })
 
     const router = testRouter()
-    router.push('/integrators')
+    router.push('/integrations')
     await router.isReady()
     const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()
@@ -84,7 +84,7 @@ describe('IntegrationDirectory', () => {
             id: 'g1',
             slug: 'ashen-realms',
             name: 'Ashen Realms',
-            developer: 'Ashen Studios',
+            owner_name: 'Ashen Studios',
             registered_at: '2026-01-12T00:00:00Z',
             status: 'active',
             category: 'game',
@@ -95,7 +95,7 @@ describe('IntegrationDirectory', () => {
     })
 
     const router = testRouter()
-    router.push('/integrators')
+    router.push('/integrations')
     await router.isReady()
     const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()

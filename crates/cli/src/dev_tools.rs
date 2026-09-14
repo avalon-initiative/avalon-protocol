@@ -492,11 +492,11 @@ impl RegisterIntegratorArgs {
 
 /// `avalon register-integrator` (issue #29) — registers a test integrator against #26's
 /// registration endpoint, sent to `POST /integrations` (#293's canonical
-/// alias for the same `POST /integrators` handler — a `register-integrator`
+/// alias for the same `POST /integrations` handler — a `register-integrator`
 /// command alias is a separate, lower-priority follow-up, not this),
 /// generating a fresh Ed25519 signing keypair locally (the
 /// only algorithm `crate::auth::verify_event_signature` on the server side
-/// can verify — see `crates/server/src/integrators.rs`). Only the public key is
+/// can verify — see `crates/server/src/integrations.rs`). Only the public key is
 /// ever sent to the server; the private key is saved locally (mirroring
 /// `create_identity`'s event-signing-key persistence) and printed exactly
 /// once, since the server never stores or returns it again.
@@ -602,7 +602,7 @@ pub(crate) async fn register_integrator(args: RegisterIntegratorArgs) {
 }
 
 /// Exercises the challenge-response round trip #26 built
-/// (`crates/server/src/integrators.rs`'s `create_integrator_challenge`/
+/// (`crates/server/src/integrations.rs`'s `create_integrator_challenge`/
 /// `authenticate_integrator`) once, as a sanity check that the freshly registered
 /// key actually works end to end. Not load-bearing for registration itself —
 /// any failure here is reported but doesn't fail the command.
@@ -614,7 +614,7 @@ async fn register_integrator_auth_sanity_check(
     signing_key: &SigningKey,
 ) -> Result<String, String> {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/integrators/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -635,7 +635,7 @@ async fn register_integrator_auth_sanity_check(
     let signature = signing_key.sign(&nonce);
 
     let response = http
-        .get(format!("{base}/integrators/whoami"))
+        .get(format!("{base}/integrations/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(

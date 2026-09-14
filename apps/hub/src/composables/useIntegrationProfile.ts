@@ -1,7 +1,7 @@
 // Per-integrator profile page (issue #270, first slice of #90): GET
-// /integrations/{slug} (#293's canonical alias for GET /integrators/{slug},
-// public fields) + GET /integrators/{slug}/registry (#261's five class-labeled
-// metrics — not renamed by #293) + GET /integrators/{slug}/keys (issuer key
+// /integrations/{slug} (#293's canonical alias for GET /integrations/{slug},
+// public fields) + GET /integrations/{slug}/registry (#261's five class-labeled
+// metrics — not renamed by #293) + GET /integrations/{slug}/keys (issuer key
 // history), fetched together since the profile page always needs all
 // three. All three reads are public/unauthenticated — no session token.
 import { computed, ref, watch } from 'vue'

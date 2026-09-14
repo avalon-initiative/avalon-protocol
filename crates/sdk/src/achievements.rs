@@ -17,9 +17,9 @@
 //! signing key — the server never sees it, only a detached signature
 //! (`AvalonConfig::integrator_slug`/`signing_key`). Two independent proofs go
 //! out, mirroring every other issuer-credentialed endpoint in this repo
-//! (`docs/architecture/integrators-and-issuers.md`): an ephemeral
+//! (`docs/architecture/issuers.md`): an ephemeral
 //! challenge-response proving *this key* is making the HTTP call right now
-//! (`POST /integrators/{slug}/challenge`), and a separate signature embedded in
+//! (`POST /integrations/{slug}/challenge`), and a separate signature embedded in
 //! the request body over the attestation's own canonical bytes, proving
 //! *this key* specifically authorized *this* attestation — checked
 //! independently server-side
@@ -149,7 +149,7 @@ impl Session {
         let challenge: ChallengeResponse = self
             .http
             .post(format!(
-                "{}/integrators/{}/challenge",
+                "{}/integrations/{}/challenge",
                 self.server_url, slug
             ))
             .send()
@@ -173,7 +173,7 @@ impl Session {
         let response = self
             .http
             .post(format!(
-                "{}/integrators/{}/achievements/{}/issue",
+                "{}/integrations/{}/achievements/{}/issue",
                 self.server_url, slug, key
             ))
             .header("x-avalon-integrator-key-id", &self.integrator_key_id)

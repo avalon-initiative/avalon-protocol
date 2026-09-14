@@ -1,7 +1,7 @@
 //! Integrator bindings and capability grants — the user consent flow (issue
 //! #27) that establishes a `IntegratorBinding` (issue #83).
 //!
-//! `POST /integrators/{slug}/connect` is the one endpoint both tickets describe
+//! `POST /integrations/{slug}/connect` is the one endpoint both tickets describe
 //! from two angles: #83 says "a binding is established by the user
 //! through the consent flow (#27)"; #27 says its own connect endpoint is
 //! "also where a IntegratorBinding (#83) is established." Building them as
@@ -12,7 +12,7 @@
 //! session** (`crate::handlers::authenticate`), never an integrator credential —
 //! same reasoning `crates/server/src/guilds.rs`'s module doc comment lays
 //! out for guild mutations: a grant is a user action, and no endpoint
-//! lets an integrator grant itself anything. `GET /integrators/{slug}` (in `integrators.rs`)
+//! lets an integrator grant itself anything. `GET /integrations/{slug}` (in `integrators.rs`)
 //! is the one public, unauthenticated read this module depends on, to
 //! validate an approved capability against what the integrator actually declared
 //! at registration (`integrator_requested_capabilities`).
@@ -119,7 +119,7 @@ pub struct ConnectResponse {
     pub granted_capabilities: Vec<String>,
 }
 
-/// `POST /integrators/{slug}/connect` — the consent flow (#27) and the endpoint
+/// `POST /integrations/{slug}/connect` — the consent flow (#27) and the endpoint
 /// that establishes a `IntegratorBinding` (#83). Idempotent: reconnecting to a
 /// integrator the caller already has an active binding to does not create a
 /// second binding or emit a second `game.binding_established`, but it does
@@ -269,7 +269,7 @@ pub async fn connect(
     }))
 }
 
-/// `DELETE /integrators/{slug}/grants/{capability}` — revokes one capability
+/// `DELETE /integrations/{slug}/grants/{capability}` — revokes one capability
 /// without ending the binding.
 pub async fn revoke_grant(
     State(state): State<AppState>,
@@ -319,7 +319,7 @@ pub async fn revoke_grant(
     Ok(Json(serde_json::json!({ "revoked": true })))
 }
 
-/// `DELETE /integrators/{slug}/connect` — ends the binding and revokes every
+/// `DELETE /integrations/{slug}/connect` — ends the binding and revokes every
 /// active grant under it, in the same transaction (#83's invariant).
 pub async fn disconnect(
     State(state): State<AppState>,

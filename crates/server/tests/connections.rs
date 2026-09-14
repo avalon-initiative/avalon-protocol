@@ -53,8 +53,8 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-/// Registers a fresh integrator via the real `POST /integrators` endpoint (same
-/// pattern `crates/server/tests/integrators.rs::unique_integrator` uses) declaring the
+/// Registers a fresh integrator via the real `POST /integrations` endpoint (same
+/// pattern `crates/server/tests/integrations.rs::unique_integrator` uses) declaring the
 /// two capabilities these tests approve/reject against.
 async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
@@ -72,7 +72,7 @@ async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> serde
     });
 
     let response = http
-        .post(format!("{base}/integrators"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
@@ -92,7 +92,7 @@ async fn connecting_creates_a_binding_and_grants_approved_capabilities() {
     let slug = integrator["slug"].as_str().unwrap();
 
     let response = http
-        .post(format!("{base}/integrators/{slug}/connect"))
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
         .send()
@@ -131,7 +131,7 @@ async fn connecting_with_an_undeclared_capability_is_rejected() {
     let slug = integrator["slug"].as_str().unwrap();
 
     let response = http
-        .post(format!("{base}/integrators/{slug}/connect"))
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["wallet.write"] }))
         .send()
@@ -151,7 +151,7 @@ async fn reconnecting_does_not_duplicate_the_binding() {
     let slug = integrator["slug"].as_str().unwrap();
 
     let first = http
-        .post(format!("{base}/integrators/{slug}/connect"))
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
         .send()
@@ -162,7 +162,7 @@ async fn reconnecting_does_not_duplicate_the_binding() {
         .unwrap();
 
     let second = http
-        .post(format!("{base}/integrators/{slug}/connect"))
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["friends.read"] }))
         .send()
@@ -213,7 +213,7 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
         .unwrap()
         .to_string();
 
-    http.post(format!("{base}/integrators/{slug}/connect"))
+    http.post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["friends.read"] }))
         .send()
@@ -238,7 +238,7 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
     );
 
     let revoke = http
-        .delete(format!("{base}/integrators/{slug}/grants/friends.read"))
+        .delete(format!("{base}/integrations/{slug}/grants/friends.read"))
         .bearer_auth(&token)
         .send()
         .await
@@ -266,7 +266,7 @@ async fn disconnecting_revokes_every_active_grant() {
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
 
-    http.post(format!("{base}/integrators/{slug}/connect"))
+    http.post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read", "friends.read"] }))
         .send()
@@ -274,7 +274,7 @@ async fn disconnecting_revokes_every_active_grant() {
         .unwrap();
 
     let disconnect = http
-        .delete(format!("{base}/integrators/{slug}/connect"))
+        .delete(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .send()
         .await
@@ -299,7 +299,7 @@ async fn disconnecting_revokes_every_active_grant() {
     // Reconnecting after ending must succeed (a partial-unique index, not a
     // plain unique constraint, backs `bindings`).
     let reconnect = http
-        .post(format!("{base}/integrators/{slug}/connect"))
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
         .send()

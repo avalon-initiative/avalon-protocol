@@ -697,7 +697,7 @@ export interface SendConversationMessageRequest {
 }
 
 // Integrator registration (#26) / binding + grant consent flow (#27, #83) wire
-// types, matching crates/server/src/integrators.rs and its #27 companion module
+// types, matching crates/server/src/integrations.rs and its #27 companion module
 // field-for-field. `requested_capabilities` is a declaration only — see
 // integrators.rs's own module doc comment — never itself a grant.
 
@@ -708,7 +708,7 @@ export interface IntegratorResponse {
   id: string
   slug: string
   name: string
-  developer: string
+  owner_name: string
   registered_at: string
   status: string
   category: IntegratorCategory
@@ -717,14 +717,14 @@ export interface IntegratorResponse {
 
 // Issue #270's integrator directory board — a distinct, narrower shape than
 // IntegratorResponse (no `requested_capabilities`, matching
-// crates/server/src/integrators.rs::IntegratorSummary field-for-field), since a
+// crates/server/src/integrations.rs::IntegratorSummary field-for-field), since a
 // directory card has no reason to fetch a field it doesn't show — same
 // reasoning DiscoverGuildSummary above already documents for guilds.
 export interface IntegratorSummary {
   id: string
   slug: string
   name: string
-  developer: string
+  owner_name: string
   registered_at: string
   status: string
   category: IntegratorCategory
@@ -737,8 +737,8 @@ export interface ListIntegratorsResponse {
   next_cursor: string | null
 }
 
-// Query params for GET /integrators — all optional, mirrors
-// crates/server/src/integrators.rs::ListIntegratorsQuery.
+// Query params for GET /integrations — all optional, mirrors
+// crates/server/src/integrations.rs::ListIntegratorsQuery.
 export interface ListIntegratorsParams {
   q?: string
   sort?: 'newest' | 'name'
@@ -756,7 +756,7 @@ export interface MetricResponse {
   class: string
 }
 
-// GET /integrators/{slug}/registry's response (issue #261), matching
+// GET /integrations/{slug}/registry's response (issue #261), matching
 // crates/server/src/registry.rs::IntegratorRegistryResponse field-for-field.
 export interface IntegratorRegistryResponse {
   players: MetricResponse
@@ -766,9 +766,9 @@ export interface IntegratorRegistryResponse {
   unique_achievement_holders: MetricResponse
 }
 
-// GET /integrators/{slug}/keys's response (issue #90): an issuer's full key
+// GET /integrations/{slug}/keys's response (issue #90): an issuer's full key
 // history, oldest first — public and unauthenticated, matching
-// crates/server/src/integrators.rs::IssuerKeyResponse field-for-field.
+// crates/server/src/integrations.rs::IssuerKeyResponse field-for-field.
 export interface IssuerKeyResponse {
   key_id: string
   algorithm: string
@@ -938,7 +938,7 @@ export interface AttestationResponse {
   // recognition is the consumer's own policy call, never the server's).
 }
 
-// GET /integrators/{slug}/achievements and GET /integrations/{slug}/milestones
+// GET /integrations/{slug}/achievements and GET /integrations/{slug}/milestones
 // (#31/#324/#325), matching crates/server/src/achievements.rs's
 // AchievementDefinitionResponse field-for-field. `id` is the definition's
 // GlobalId string ("game:<slug>:achievement:<key>" or the milestone

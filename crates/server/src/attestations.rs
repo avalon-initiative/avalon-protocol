@@ -14,7 +14,7 @@
 //! for every observer, but "recognized" only makes sense relative to one
 //! consumer's own `TrustRelationship`. Publishing/serving an integrator's own
 //! declared recognition policy (the ticket's `PUT
-//! /integrators/{slug}/recognition`) is deferred, not built in this pass — see
+//! /integrations/{slug}/recognition`) is deferred, not built in this pass — see
 //! this module's own tracking note in `docs/architecture/trust-model.md`.
 //!
 //! **Revocation is a signed, appended entry (#85), never a mutation.**

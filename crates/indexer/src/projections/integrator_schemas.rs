@@ -2,7 +2,7 @@
 //! #181): an integrator's published `IntegratorSchemaVersion`s, surfaced through the
 //! same indexer-projection machinery every other read model in this crate
 //! already uses, rather than a separate discovery path
-//! (`docs/architecture/integrator-registry.md`).
+//! (`docs/architecture/registry.md`).
 //!
 //! Decodes `game_schema.published`
 //! (`crates/server/src/integrator_schemas.rs::publish_schema_version`) into an
