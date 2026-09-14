@@ -1,4 +1,4 @@
-// Maps avalon-server's `{ "error": ... }` bodies to a message a player can
+// Maps avalon-server's `{ "error": ... }` bodies to a message a user can
 // see. Never surfaces raw server text — see issue #55's design.
 export class AvalonApiError extends Error {
   readonly status: number
@@ -34,7 +34,7 @@ export function messageForStatus(status: number, serverMessage?: string): string
   // Covers both a friend request that's already been resolved (accept/
   // decline) and removing a friendship that doesn't exist — the server
   // uses 404 for both (crates/server/src/friends.rs), and either way the
-  // underlying cause is the same from a player's point of view: whatever
+  // underlying cause is the same from a user's point of view: whatever
   // this was about to act on isn't there anymore.
   if (status === 404) return "That's no longer there — it may have already been handled."
   if (status >= 500) return 'Something went wrong on the server. Please try again.'

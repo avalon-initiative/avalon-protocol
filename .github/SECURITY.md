@@ -27,6 +27,6 @@ The areas most relevant to Avalon specifically: the identity/auth path
 signing, session issuance), the settlement ledger's hash-chaining and outbox
 atomicity (`crates/chain`, `crates/server/src/outbox.rs`), and — once
 implemented — the permission/capability model that decides what a game can
-read from a player's identity. Anything that could let one identity or one
+read from a user's identity. Anything that could let one identity or one
 game act with another's authority, forge an attestation, or read data a
-player hasn't granted is in scope even if it's in a crate not listed here.
+user hasn't granted is in scope even if it's in a crate not listed here.

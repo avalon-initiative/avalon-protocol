@@ -87,7 +87,7 @@ function testRouter() {
       { path: '/guilds/:id', name: 'guild', component: Guild },
       { path: '/guilds/:id/channels/:cid', name: 'guild-channel', component: Guild },
       { path: '/guilds', name: 'guilds', component: Guild },
-      { path: '/players/:id', name: 'player-profile', component: Guild },
+      { path: '/users/:id', name: 'user-profile', component: Guild },
     ],
   })
 }
@@ -305,7 +305,7 @@ describe('Guild', () => {
     await membersTab.trigger('click')
     await flushPromises()
 
-    const openInviteButton = wrapper.findAll('button').find((b) => b.text() === 'Invite a player')!
+    const openInviteButton = wrapper.findAll('button').find((b) => b.text() === 'Invite a user')!
     await openInviteButton.trigger('click')
     await flushPromises()
 
@@ -383,7 +383,7 @@ describe('Guild', () => {
   // actually complete) since this test mounts Guild.vue directly rather
   // than via a <RouterView> — a real route change would otherwise leave
   // this same, still-mounted instance reacting to its own `watch(guildId,
-  // load)` with a guild id that's really a player id.
+  // load)` with a guild id that's really a user id.
   it('navigates to a member profile card when their row is clicked', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
@@ -402,6 +402,6 @@ describe('Guild', () => {
     const memberButton = wrapper.findAll('button').find((b) => b.text().includes('id-owner'))!
     await memberButton.trigger('click')
 
-    expect(pushSpy).toHaveBeenCalledWith({ name: 'player-profile', params: { id: 'id-owner' } })
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'user-profile', params: { id: 'id-owner' } })
   })
 })

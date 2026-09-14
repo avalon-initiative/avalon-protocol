@@ -143,7 +143,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     }
   }
 
-  // A player navigating from one guild page straight to another (same
+  // A user navigating from one guild page straight to another (same
   // route component, different :id param) doesn't remount — vue-router
   // reuses the instance — so the reload has to be driven by watching the
   // param rather than only onMounted.

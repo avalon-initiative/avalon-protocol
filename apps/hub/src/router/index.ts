@@ -39,7 +39,7 @@ const router = createRouter({
         { path: 'friends', name: 'friends', component: () => import('../views/Friends.vue') },
         // Issue #393: a read-only profile card for another identity,
         // reachable from a friend row or a guild member row.
-        { path: 'players/:id', name: 'player-profile', component: () => import('../views/PlayerProfile.vue') },
+        { path: 'users/:id', name: 'user-profile', component: () => import('../views/UserProfile.vue') },
         { path: 'activity', name: 'activity', component: () => import('../views/Activity.vue') },
         {
           path: 'achievements',

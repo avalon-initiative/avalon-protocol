@@ -10,7 +10,7 @@ const audiences = [
   {
     icon: 'friends' as const,
     accent: 'primary' as const,
-    label: 'For players',
+    label: 'For users',
     body: 'Bring your identity, friends, and guilds with you. Log in the same way everywhere, and keep the people and history you’ve built even after a game moves on.',
   },
   {
@@ -86,7 +86,7 @@ const steps = [
 
     <section :class="styles.hero">
       <div :class="styles.heroText">
-        <span :class="styles.eyebrow">An open network for players, games, and communities</span>
+        <span :class="styles.eyebrow">An open network for users, games, and communities</span>
         <h1 :class="styles.headline">One identity.<br />Every world you play in.</h1>
         <p :class="styles.subhead">
           Your identity, friends, guilds, and achievements don’t belong to any single game —

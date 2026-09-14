@@ -42,10 +42,10 @@ read that section for the full reasoning behind each:
 
 - Games remain sovereign — a game keeps final authority over its own world,
   characters, and rules; Avalon never overrides that.
-- Identity belongs to the player, not any single game or platform.
+- Identity belongs to the user, not any single game or platform.
 - Interoperability is opt-in — a game chooses which capabilities it exposes
   and which other issuers' attestations it trusts. Nothing is forced.
-- Least privilege — a game gets only the capabilities a player has explicitly
+- Least privilege — a game gets only the capabilities a user has explicitly
   granted, never blanket access to an identity's whole history.
 - History is portable, and provenance is preserved even through revocation.
 - Blockchain is optional infrastructure detail, never the model — settlement

@@ -156,7 +156,7 @@ async function request<T>(
 
   if (!response.ok) {
     // avalon-server's `{ "error": "..." }` body is already written to be
-    // safe to show a player (crates/server/src/error.rs's own convention —
+    // safe to show a user (crates/server/src/error.rs's own convention —
     // every variant except a raw database/ledger failure gets real,
     // specific text) — read it when present so a 400 that isn't the
     // ceremony-expiry case messageForStatus was originally written for
@@ -200,7 +200,7 @@ export function sessionFinish(body: SessionFinishRequest): Promise<SessionFinish
 
 // Cross-device pairing (issue #307): bootstraps a session for a
 // WebAuthn-incapable client. `approvePairing`/`denyPairing` use the
-// player's existing authenticated Hub session — no new auth surface.
+// user's existing authenticated Hub session — no new auth surface.
 
 export function approvePairing(
   token: string,
@@ -304,7 +304,7 @@ export function searchIdentities(token: string, q: string): Promise<SearchIdenti
 }
 
 // PUT /me/presence — the caller publishing their own status. The shell
-// heartbeats this while the Hub is open so the player actually reads as
+// heartbeats this while the Hub is open so the user actually reads as
 // Online to their friends (the store's TTL expires a stale entry to
 // Offline otherwise — see crates/server/src/presence.rs).
 export function updateMyPresence(
@@ -927,7 +927,7 @@ export function listIssuerKeys(slug: string): Promise<IssuerKeyResponse[]> {
   return request(`/games/${slug}/keys`)
 }
 
-// Player-session only — a game credential never grants itself anything
+// User-session only — a game credential never grants itself anything
 // (see the ticket's own invariant). Idempotent: reconnecting to an
 // already-bound game doesn't duplicate the binding.
 export function connectGame(

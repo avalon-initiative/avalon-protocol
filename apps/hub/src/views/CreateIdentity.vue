@@ -23,13 +23,13 @@ const error = ref('')
 // autofilling the WebAuthn credential's stored username now shows the
 // identity id correctly (server-side fix), but not everyone has one
 // active, so this screen is a second, explicit chance to save it before
-// the player ever leaves the page.
+// the user ever leaves the page.
 const createdIdentityId = ref('')
 const copied = ref(false)
 
 // The signing key's BIP39 recovery phrase (#134) — shown exactly once,
 // right here, same reasoning as the identity id above: this is the only
-// moment the player will ever see it, since it's never stored anywhere.
+// moment the user will ever see it, since it's never stored anywhere.
 const signingKeyMnemonic = ref('')
 const mnemonicCopied = ref(false)
 
@@ -62,7 +62,7 @@ async function copyMnemonic() {
 
 async function continueToHome() {
   // Registration only proves the passkey/signing-key ceremony; it does not
-  // itself start a session — log in now that the player has acknowledged
+  // itself start a session — log in now that the user has acknowledged
   // their id, rather than sending them to a second manual login step.
   const { token } = await login(createdIdentityId.value)
   session.login(token)
@@ -121,7 +121,7 @@ async function continueToHome() {
         <AvalonTextField
           v-model="displayName"
           label="Display name"
-          placeholder="How other players see you"
+          placeholder="How other users see you"
         />
         <AvalonTextField
           v-model="deviceLabel"

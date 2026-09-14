@@ -29,7 +29,7 @@ export interface RegisterFinishRequest {
   webauthn_credential: RegistrationResponseJSON
   event_signing_public_key: string
   event_signature: string
-  // A player-chosen label for the device completing this ceremony (#145) —
+  // A user-chosen label for the device completing this ceremony (#145) —
   // purely descriptive.
   device_label: string | null
 }
@@ -85,10 +85,10 @@ export interface ProfileResponse {
   identity_created_at: string
   display_name: string
   avatar_url: string | null
-  // `display_name#discriminator` (issue #128) — the short handle players
+  // `display_name#discriminator` (issue #128) — the short handle users
   // share with each other instead of a raw identity id.
   handle: string
-  // Issue #155's small, player-optional self-description fields — same
+  // Issue #155's small, user-optional self-description fields — same
   // public exposure level as display_name/avatar_url above (GET /me only;
   // deliberately withheld from batch/public profile lookups server-side,
   // see crates/server/src/handlers.rs).

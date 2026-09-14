@@ -14,7 +14,7 @@ import { getPresence, getProfiles } from '../api/client'
 import type { PresenceStatus, PublicProfileResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 import page from './page.module.scss'
-import styles from './PlayerProfile.module.scss'
+import styles from './UserProfile.module.scss'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,11 +68,11 @@ const handle = computed(() =>
         <AvalonPresenceBadge :status="status" />
       </div>
       <p :class="styles.note">
-        Presence only shows if this player has made it visible to you. More profile detail isn't
-        shown to other players yet — see issue #403.
+        Presence only shows if this user has made it visible to you. More profile detail isn't
+        shown to other users yet — see issue #403.
       </p>
     </AvalonCard>
 
-    <p v-else :class="page.empty">That player couldn't be found.</p>
+    <p v-else :class="page.empty">That user couldn't be found.</p>
   </div>
 </template>

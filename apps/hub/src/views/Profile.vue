@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The "you" page: profile, device setup/recovery (#134/#135), the device
 // list, and log out. Everything is a styled read-only display until the
-// player presses Edit (AvalonEditableField) or a button that starts an
+// user presses Edit (AvalonEditableField) or a button that starts an
 // action — no open inputs sit on the page by default.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -780,7 +780,7 @@ async function onCancelGuardianRequest(requestId: string) {
       <p v-if="cancelMyRecoveryError" :class="page.error">{{ cancelMyRecoveryError }}</p>
     </template>
 
-    <AvalonCard title="Player search" :class="styles.discoverabilityCard">
+    <AvalonCard title="User search" :class="styles.discoverabilityCard">
       <div :class="styles.discoverabilityRow">
         <div :class="styles.discoverabilityText">
           <p :class="styles.discoverabilityStatus">
@@ -790,7 +790,7 @@ async function onCancelGuardianRequest(requestId: string) {
             {{ discoverable ? 'You are currently publicly searchable.' : 'You are not publicly searchable.' }}
           </p>
           <p :class="styles.listDetail">
-            Turning this on lets any player find you by name or handle in search. Off by
+            Turning this on lets any user find you by name or handle in search. Off by
             default — turning it off removes you from search immediately.
           </p>
         </div>
@@ -806,7 +806,7 @@ async function onCancelGuardianRequest(requestId: string) {
 
     <div :class="page.grid">
       <div :class="page.mainColumn">
-        <AvalonCard title="Profile" subtitle="How other players see you.">
+        <AvalonCard title="Profile" subtitle="How other users see you.">
           <div :class="styles.fields">
             <AvalonEditableField
               label="Display name"

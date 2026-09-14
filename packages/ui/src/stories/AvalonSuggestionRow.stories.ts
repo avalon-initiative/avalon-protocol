@@ -11,5 +11,5 @@ export default meta
 type Story = StoryObj<typeof AvalonSuggestionRow>
 
 export const Default: Story = {}
-export const WithDisplayName: Story = { args: { displayName: 'Avalon Player' } }
-export const Requested: Story = { args: { displayName: 'Avalon Player', requested: true } }
+export const WithDisplayName: Story = { args: { displayName: 'Avalon User' } }
+export const Requested: Story = { args: { displayName: 'Avalon User', requested: true } }

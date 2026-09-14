@@ -711,7 +711,7 @@ async function onSaveRoleChange() {
 
 // Issue #393: opens a member's read-only profile card.
 function onViewProfile(identityId: string) {
-  router.push({ name: 'player-profile', params: { id: identityId } })
+  router.push({ name: 'user-profile', params: { id: identityId } })
 }
 
 async function onKick(identityId: string) {
@@ -833,7 +833,7 @@ async function onInvite() {
       return
     }
     const invite = await api.createGuildInvite(session.token, guildId.value, { to })
-    // No endpoint lists a player's own pending guild invites yet (a real
+    // No endpoint lists a user's own pending guild invites yet (a real
     // gap — see docs/architecture/guilds.md's correction note), so the
     // invite id has to be shared with the invitee out of band for them to
     // accept it today.
@@ -1389,13 +1389,13 @@ const {
           <p :class="styles.empty">Live presence, not a durable stat — updates as members' status changes.</p>
         </AvalonCard>
 
-        <AvalonCard v-if="canManageMembers" title="Invite a player">
+        <AvalonCard v-if="canManageMembers" title="Invite a user">
           <p v-if="inviteSuccessId" :class="styles.empty">
             Invite sent (id {{ inviteSuccessId }}) — share it with them to accept.
           </p>
           <AvalonButton
             v-show="!showInvite"
-            label="Invite a player"
+            label="Invite a user"
             variant="secondary"
             @click="showInvite = true"
           />
@@ -1420,7 +1420,7 @@ const {
 
         <!--
           Issue #242: applicant-initiated join requests, the counterpart to
-          "Invite a player" above. manage_members-gated same as that card
+          "Invite a user" above. manage_members-gated same as that card
           (the server independently enforces this — joinRequests is simply
           empty for anyone else). Pending only, matching
           crates/server/src/guilds.rs::list_join_requests' own default.

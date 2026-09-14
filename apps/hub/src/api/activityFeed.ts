@@ -1,5 +1,5 @@
 // Turns a raw HistoryEntryResponse (issue #121) into something an actual
-// player would want to read — issue #146. Kept as pure functions, testable
+// user would want to read — issue #146. Kept as pure functions, testable
 // without mounting Activity.vue: given an event, what should the feed say.
 import type { HistoryEntryResponse } from './types'
 

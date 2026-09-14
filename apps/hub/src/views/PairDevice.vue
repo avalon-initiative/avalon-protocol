@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// "Pair a device" (issue #307): lets the player approve a WebAuthn-incapable
+// "Pair a device" (issue #307): lets the user approve a WebAuthn-incapable
 // client's pairing request (a game engine, a console) from their already
 // authenticated Hub session — no new auth surface for the Hub itself. The
 // `user_code` is pre-filled when this view is reached via a

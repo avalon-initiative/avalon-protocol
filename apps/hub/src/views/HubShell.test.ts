@@ -15,9 +15,9 @@ import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 const profile = {
   identity_id: 'id-1',
   identity_created_at: 'now',
-  display_name: 'Avalon Player',
+  display_name: 'Avalon User',
   avatar_url: null,
-  handle: 'Avalon Player#1234',
+  handle: 'Avalon User#1234',
 }
 
 function testRouter() {
@@ -67,7 +67,7 @@ describe('HubShell', () => {
     router.push('/profile')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player#1234'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
     expect(wrapper.text()).toContain('AVALON')
     expect(wrapper.text()).toContain('Home')
     expect(wrapper.text()).toContain('Soon')
@@ -82,12 +82,12 @@ describe('HubShell', () => {
     router.push('/friends')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon Player#1234'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
     expect(wrapper.text()).toContain('Add a friend')
     expect(wrapper.find('nav[aria-label="Primary"]').exists()).toBe(true)
   })
 
-  it('publishes an Online heartbeat so the player reads as online to friends', async () => {
+  it('publishes an Online heartbeat so the user reads as online to friends', async () => {
     useSessionStore().login('a-token')
 
     const router = testRouter()
@@ -109,7 +109,7 @@ describe('HubShell', () => {
   // tick (the server's `PUT /me/presence` treats Away/DoNotDisturb/Offline
   // as sticky overrides — the client has to honor that, not keep insisting
   // on Online).
-  it('lets the player manually set their status and does not overwrite it on the next heartbeat', async () => {
+  it('lets the user manually set their status and does not overwrite it on the next heartbeat', async () => {
     useSessionStore().login('a-token')
     vi.useFakeTimers()
 

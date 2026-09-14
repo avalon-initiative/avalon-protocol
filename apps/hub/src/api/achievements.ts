@@ -120,7 +120,7 @@ export async function listMyAchievements(token: string): Promise<Achievement[]> 
   const gamesLookup = Promise.all(issuerSlugs.map((slug) => api.getGamePublic(slug).catch(() => null)))
 
   // One definitions-list call per distinct (namespace, slug) pair rather
-  // than per attestation — a player with many claims from the same issuer
+  // than per attestation — a user with many claims from the same issuer
   // shouldn't refetch that issuer's whole definition list once per claim.
   const refs = attestations.map((a) => parseAchievementRef(a.achievement)).filter((r) => r !== null)
   const issuerKey = (r: { namespace: string; slug: string }) => `${r.namespace}:${r.slug}`

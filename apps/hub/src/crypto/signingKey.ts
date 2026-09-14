@@ -77,7 +77,7 @@ export function deriveSigningKeyFromMnemonic(mnemonic: string): SigningKeyPair {
  * persists the secret key for `identityId` — same storage shape as before
  * #134, just no longer random on its own. The mnemonic itself is never
  * stored anywhere; it's returned once so the caller (`CreateIdentity.vue`)
- * can show it to the player exactly once.
+ * can show it to the user exactly once.
  */
 export function generateAndStoreSigningKey(identityId: string): GeneratedSigningKey {
   const mnemonic = generateMnemonic(wordlist)

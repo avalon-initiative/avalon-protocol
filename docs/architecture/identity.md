@@ -412,7 +412,7 @@ its invariants.
   recovery-guardians picker on the same page. Own-profile view only — per
   `list_profiles`'s note just above, these three fields stay deliberately
   absent from any other identity's profile view.
-- `apps/hub/src/views/PlayerProfile.vue` (#393) — a read-only profile card
+- `apps/hub/src/views/UserProfile.vue` (#393) — a read-only profile card
   for *another* identity, reachable by clicking a friend row or a guild
   member row (neither had anywhere to link to before this). Shows only
   `list_profiles`'s fields (display name, handle, avatar) plus live
