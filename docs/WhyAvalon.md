@@ -55,7 +55,7 @@ scattered across companies that each built the piece useful to them:
   or trust relationships *inside* those games.
 - **Blockchain gaming identity projects** have tried to solve portability with
   tokens and wallets, and mostly ended up building speculative assets before they
-  built anything a player actually wanted.
+  built anything a user actually wanted.
 
 Every one of these is a real piece of the puzzle. None of them is the puzzle.
 
@@ -68,9 +68,9 @@ Look at the list above again. Every entry is either:
 3. **Proprietary** — closed, unextendable, and not something an independent
    studio can self-host or build against without that platform's permission.
 
-None of them separate **the player** from **the character**. Xbox Live doesn't
+None of them separate **the user** from **the character**. Xbox Live doesn't
 care about your character — it cares about your Xbox account, which is a
-platform identity, not a player identity, and it only works inside Microsoft's
+platform identity, not a user identity, and it only works inside Microsoft's
 walled garden. A guild in an MMO isn't a network-level entity — it's rows in that
 one game's database, gone when the game is. Achievements don't carry trust — they
 carry a badge image, verified by nobody but the platform that issued it, and
@@ -98,12 +98,12 @@ for it — the piece every platform-locked and character-locked attempt so far h
 skipped, because none of them had a reason to make their version of this work for
 someone else's game too.
 
-"Open" here means something specific: a player's identity is a fact any
+"Open" here means something specific: a user's identity is a fact any
 integrated game can read, not a fact that depends on which server a game
 happens to trust. That rules out federation (separate servers deciding whether
 to recognize each other) as much as it rules out one company's walled garden —
 both make identity conditional on a relationship between servers instead of a
-property of the player.
+property of the user.
 
 See [`stakeholders/Proposal.md`](stakeholders/Proposal.md) for what that actually looks like in practice —
 identity separate from characters, guilds and friends as network entities,
@@ -129,6 +129,6 @@ played with, what you've earned, which communities you belong to — never
 personhood.
 
 > Your character in one game can remain unique to that game. Your character in
-> another game can be completely different. But the player behind them remains
+> another game can be completely different. But the user behind them remains
 > the same — and for the first time, that fact is something the games themselves,
 > not just one platform, can actually recognize.

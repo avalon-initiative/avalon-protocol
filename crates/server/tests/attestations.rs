@@ -144,7 +144,7 @@ fn attestation_signing_bytes(
 
 #[tokio::test]
 #[ignore]
-async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_player() {
+async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_user() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
@@ -170,7 +170,7 @@ async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_player() {
         .unwrap()
         .to_string();
 
-    // The player connects and grants achievements.issue.
+    // The user connects and grants achievements.issue.
     let connect = http
         .post(format!("{base}/games/{}/connect", game.slug))
         .bearer_auth(&token)
@@ -225,7 +225,7 @@ async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_player() {
 
 #[tokio::test]
 #[ignore]
-async fn an_app_issues_a_signed_milestone_to_a_bound_consenting_player() {
+async fn an_app_issues_a_signed_milestone_to_a_bound_consenting_user() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;

@@ -3,7 +3,7 @@
 // across every issuer, shown with its own provenance and verification
 // result — never ranked, scored, or collapsed when revoked (ADR #77,
 // #81/#85). Reads only; issuing/revoking stays the issuer's own action via
-// its own credentials, never something the Hub does on a player's behalf.
+// its own credentials, never something the Hub does on a user's behalf.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAchievementCard, AvalonCard, AvalonFilterBar } from '@avalon/ui'
@@ -58,7 +58,7 @@ onUnmounted(() => {
 
 // One entry per distinct issuer present in the caller's own history — not
 // a global game directory listing, so the filter never offers a game the
-// player has no claims from.
+// user has no claims from.
 const games = computed(() => {
   const bySlug = new Map<string, string>()
   for (const a of achievements.value) {

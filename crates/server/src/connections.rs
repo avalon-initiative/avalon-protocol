@@ -1,17 +1,17 @@
-//! Game bindings and capability grants — the player consent flow (issue
+//! Game bindings and capability grants — the user consent flow (issue
 //! #27) that establishes a `GameBinding` (issue #83).
 //!
 //! `POST /games/{slug}/connect` is the one endpoint both tickets describe
-//! from two angles: #83 says "a binding is established by the player
+//! from two angles: #83 says "a binding is established by the user
 //! through the consent flow (#27)"; #27 says its own connect endpoint is
 //! "also where a GameBinding (#83) is established." Building them as
 //! separate endpoints would mean two code paths fighting over the same
 //! row, so this module owns both.
 //!
-//! **Every mutating endpoint here requires the caller's own player
+//! **Every mutating endpoint here requires the caller's own user
 //! session** (`crate::handlers::authenticate`), never a game credential —
 //! same reasoning `crates/server/src/guilds.rs`'s module doc comment lays
-//! out for guild mutations: a grant is a player action, and no endpoint
+//! out for guild mutations: a grant is a user action, and no endpoint
 //! lets a game grant itself anything. `GET /games/{slug}` (in `games.rs`)
 //! is the one public, unauthenticated read this module depends on, to
 //! validate an approved capability against what the game actually declared
@@ -22,7 +22,7 @@
 //! `game.binding_ended`, `permission.granted`, and `permission.revoked` are
 //! the durable history, written into the outbox in the same transaction as
 //! the row change they accompany. All four are network-attributed for now,
-//! not player-signed, for the same reason `games.rs`'s `game.registered`
+//! not user-signed, for the same reason `games.rs`'s `game.registered`
 //! is network-attributed rather than game-signed: no general per-event
 //! Ed25519 signing ceremony exists yet beyond `identity.created`
 //! (`crates/server/src/handlers.rs`'s "network as signer" milestone-1
@@ -37,7 +37,7 @@
 //!   the same transaction that guarantees an active binding exists.
 //! - Ending a binding ends every grant under it, in the same transaction
 //!   (`end_connection`).
-//! - A player can only grant a capability the game declared at registration
+//! - A user can only grant a capability the game declared at registration
 //!   (`game_requested_capabilities`) — anything else is a 400
 //!   (`AppError::CapabilityNotRequested`).
 //! - Reconnecting to an already-bound game does not duplicate the binding
@@ -483,16 +483,16 @@ pub struct MyGrantsResponse {
 }
 
 /// `GET /me/grants` — the calling game's own active grants for the
-/// authenticating player, read by `crates/sdk/src/lib.rs`'s
+/// authenticating user, read by `crates/sdk/src/lib.rs`'s
 /// `AvalonClient::authenticate()` to populate `Session.granted`.
 ///
-/// Authenticated by the caller's own player session
-/// (`Authorization: Bearer <player token>`), same as every other endpoint
+/// Authenticated by the caller's own user session
+/// (`Authorization: Bearer <user token>`), same as every other endpoint
 /// in this module — **not** the game challenge-response scheme
 /// (`games::authenticate_game`). The `x-avalon-game-key-id` header only
 /// says *which* game's grants to read; it is not itself a security
-/// boundary here, since the answer ("what has this player granted this
-/// game") is the player's own information to ask about their own
+/// boundary here, since the answer ("what has this user granted this
+/// game") is the user's own information to ask about their own
 /// connections, not something that needs a game to prove key possession —
 /// the SDK already knows its own `game_credential_key_id`
 /// (`AvalonConfig`) and just needs a way to tell the server which game it

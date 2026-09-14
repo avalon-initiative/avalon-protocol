@@ -1,4 +1,4 @@
-// Issue #205's player search UI on the Friends page — a search box +
+// Issue #205's user search UI on the Friends page — a search box +
 // results list reachable alongside the existing #204 "people you may
 // know" suggestions, using GET /identities/search.
 import { createPinia, setActivePinia } from 'pinia'
@@ -46,11 +46,11 @@ async function mountFriends(extraResponses: Record<string, unknown> = {}) {
   router.push('/')
   await router.isReady()
   const wrapper = mount(Friends, { global: { plugins: [router] } })
-  await vi.waitFor(() => expect(wrapper.text()).toContain('Search for players'))
+  await vi.waitFor(() => expect(wrapper.text()).toContain('Search for users'))
   return wrapper
 }
 
-describe('Friends player search (issue #205)', () => {
+describe('Friends user search (issue #205)', () => {
   it('shows a search box that is reachable without any prior friend/suggestion state', async () => {
     const wrapper = await mountFriends()
     expect(wrapper.find('input').exists()).toBe(true)
@@ -66,7 +66,7 @@ describe('Friends player search (issue #205)', () => {
     })
 
     // Two forms exist on this page — "Add a friend" (first) and "Search
-    // for players" (second) — so the search form has to be targeted
+    // for users" (second) — so the search form has to be targeted
     // specifically rather than grabbing the first `<form>` on the page.
     await wrapper.findAll('input')[1].setValue('alice')
     await wrapper.findAll('form')[1].trigger('submit')
@@ -83,7 +83,7 @@ describe('Friends player search (issue #205)', () => {
     await wrapper.findAll('form')[1].trigger('submit')
 
     await vi.waitFor(() =>
-      expect(wrapper.text()).toContain('No publicly searchable players match that.'),
+      expect(wrapper.text()).toContain('No publicly searchable users match that.'),
     )
   })
 })

@@ -17,7 +17,7 @@ function newIdentityId(): string {
 export interface CreateIdentityResult {
   identityId: string
   // The BIP39 recovery phrase (#134) the signing key was derived from —
-  // shown to the player exactly once, immediately after this call returns.
+  // shown to the user exactly once, immediately after this call returns.
   // Never stored anywhere; the caller's own state is the only copy once
   // this function returns.
   signingKeyMnemonic: string

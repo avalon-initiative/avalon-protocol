@@ -210,7 +210,7 @@ pub struct Session {
     http: reqwest::Client,
     server_url: String,
     /// The identity's own session bearer token, kept so `Session` methods can
-    /// call `avalon-server` on the player's behalf (e.g. `social::friends`,
+    /// call `avalon-server` on the user's behalf (e.g. `social::friends`,
     /// `social::update_presence`) without the caller having to thread it
     /// through again.
     token: String,

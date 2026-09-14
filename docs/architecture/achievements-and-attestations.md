@@ -1,6 +1,6 @@
 # Achievements and Attestations
 
-**An achievement is an issuer attestation, not a `player_id → achievement_id`
+**An achievement is an issuer attestation, not a `user_id → achievement_id`
 row.** The durable fact is "Game A asserts that Identity X accomplished Y", signed
 by Game A's key, with a timestamp and a schema. Avalon records that claim and
 its provenance. **It never dictates what another game does with it.**
@@ -77,7 +77,7 @@ Three distinct claims that happen to share a title. The display name stays
 
 - Game A issues Dragon Slayer after a brutal endgame raid.
 - Game B issues Dragon Slayer after a different hard achievement.
-- Game C lets every player click a button labelled Dragon Slayer.
+- Game C lets every user click a button labelled Dragon Slayer.
 
 All three are cryptographically authentic. Avalon does not pretend they are
 semantically identical, and it does not rank them. The Hub shows each with its
@@ -86,7 +86,7 @@ features or hides whichever they like.
 
 ## The receiving game decides meaning
 
-Game A: "Player X defeated the Dragon Lord."
+Game A: "User X defeated the Dragon Lord."
 Game B may unlock a title. Game C may unlock a quest. Game D may ignore it.
 
 A consuming game verifies authenticity and validity (universal) and then
@@ -152,7 +152,7 @@ Two independent proofs, doing different jobs, both required:
    #32's own invariant that the node operator can never produce a valid
    attestation for an issuer it doesn't control.
 
-Issuing also requires the **subject player's own consent**: an active
+Issuing also requires the **subject user's own consent**: an active
 `GameBinding` plus an active grant for `achievements.issue` (Game) or
 `milestones.issue` (App/Service) — #28's `Caller`/`require_capability`
 guard, the same infrastructure `presence::update_game_presence` already
@@ -180,7 +180,7 @@ uses. Neither proof substitutes for the other.
 - `crates/server/src/achievements.rs` (#32) — `POST
   /games/{slug}/achievements/{key}/issue` /
   `POST /integrations/{slug}/milestones/{key}/issue`: verifies the caller
-  is a game/app/service (never a player session), that the subject player
+  is a game/app/service (never a user session), that the subject user
   has an active binding + grant for the route's issue capability, that the
   definition exists and isn't retired, and that the embedded signature
   verifies against one of the issuer's currently-valid keys — in that

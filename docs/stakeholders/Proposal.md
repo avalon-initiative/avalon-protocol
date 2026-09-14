@@ -78,7 +78,7 @@ Instead, Avalon provides the infrastructure between games.
 
 A developer should be able to say:
 
-> **“This game uses the Avalon Protocol to connect your Player identity to our world.”**
+> **“This game uses the Avalon Protocol to connect your User identity to our world.”**
 
 The game remains the developer's world.
 
@@ -232,7 +232,7 @@ A game decides what Avalon data it wants to recognize.
 
 For example:
 
-> Game A grants a player the `Dragon Slayer` achievement.
+> Game A grants a user the `Dragon Slayer` achievement.
 
 Game B can choose to recognize that achievement.
 
@@ -329,7 +329,7 @@ For example:
 
 Game A:
 
-> Player defeated the Dragon Lord.
+> User defeated the Dragon Lord.
 
 Game B may interpret that as:
 
@@ -356,7 +356,7 @@ They should be verifiable claims.
 An attestation can establish:
 
 * Issuer
-* Player
+* User
 * Achievement
 * Timestamp
 * Relevant metadata
@@ -369,7 +369,7 @@ This creates a foundation for portable reputation without requiring every game t
 
 For example:
 
-> Avalon recognizes that `Game A` issued `Dragon Slayer` to Player X.
+> Avalon recognizes that `Game A` issued `Dragon Slayer` to User X.
 
 Game B decides:
 
@@ -446,9 +446,9 @@ Guild chat should not need to disappear simply because an identity leaves a game
 
 For example:
 
-Player A is playing Game A.
+User A is playing Game A.
 
-Player B is playing Game B.
+User B is playing Game B.
 
 Both belong to the same Avalon guild.
 
@@ -589,7 +589,7 @@ Portable assets are more complicated than portable identity.
 
 Ownership and functionality should be separated.
 
-A player might own:
+A user might own:
 
 > Sword of Aether
 
@@ -781,20 +781,20 @@ It should be the network foundation.
 
 The first milestone should prove:
 
-1. Player A creates an Avalon identity.
-2. Player B creates an Avalon identity.
+1. User A creates an Avalon identity.
+2. User B creates an Avalon identity.
 3. They become friends.
-4. Player A creates a guild.
-5. Player B joins.
+4. User A creates a guild.
+5. User B joins.
 6. The guild creates a channel.
 7. They communicate.
 8. Game A registers with Avalon.
-9. Player A authenticates through Game A.
+9. User A authenticates through Game A.
 10. Game A issues `Dragon Slayer`.
 11. Game B registers.
 12. Game B verifies the achievement.
 13. Game B chooses to recognize it.
-14. The Avalon Hub displays the player's identity, friends, guild, and achievement.
+14. The Avalon Hub displays the user's identity, friends, guild, and achievement.
 
 If this works, the fundamental concept has been proven.
 
@@ -835,15 +835,15 @@ The ideal integration experience is:
 
 > **This game uses the Avalon Protocol.**
 
-A player launches the game.
+A user launches the game.
 
 The game requests Avalon authentication.
 
-The player approves.
+The user approves.
 
 The game now knows:
 
-> This player is an Avalon identity.
+> This user is an Avalon identity.
 
 Nothing more is required unless the game requests additional capabilities.
 
@@ -881,7 +881,7 @@ Economics should serve the ecosystem rather than define it.
 
 # 28. Difference From Roblox
 
-Avalon may initially sound similar to Roblox because both connect players with multiple games.
+Avalon may initially sound similar to Roblox because both connect users with multiple games.
 
 The architectural philosophy is fundamentally different.
 
@@ -895,7 +895,7 @@ Roblox controls:
 * Economy
 * Rules
 * Developer ecosystem
-* Player experience
+* User experience
 
 Avalon does not attempt to own the games.
 
@@ -1083,7 +1083,7 @@ These should be solved incrementally.
 
 Avalon is successful if a developer can genuinely say:
 
-> **“This game uses the Avalon Protocol to connect your Player identity to our world.”**
+> **“This game uses the Avalon Protocol to connect your User identity to our world.”**
 
 And the statement means something useful.
 

@@ -1,7 +1,7 @@
 # An Identity's Aggregate View: Avalon-Native Data vs. Integrator Block Space
 
 [`./worked-ledger-example.md`](./worked-ledger-example.md) renders one
-player's ledger as an ordered *event log* — the sequence of things that
+user's ledger as an ordered *event log* — the sequence of things that
 happened, over time, in the actual `ProtocolEvent` envelope. This document
 is different: it renders the same identity as a single **aggregate
 snapshot** — what a full picture of "this identity, right now" looks like
@@ -186,7 +186,7 @@ Three distinct pieces, three different rules:
   own shape for these; every entry is a `GlobalId` +
   `AchievementAttestation`, identical in structure to any other game's,
   app's, or service's attestations. This is what makes a generic "show me
-  this player's achievements from anywhere" view possible at all.
+  this user's achievements from anywhere" view possible at all.
 - **`published_schemas`** — real, built (`game_schema.published`, issue
   #255; see
   [`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-games-own-custom-fact-looks-like-in-the-same-ledger)),
@@ -257,7 +257,7 @@ structurally off-limits to every integrator. Nothing in the durable event
 catalogue lets a game/app/service author an `identity.created` or
 `profile.updated` event, or a `friend.accepted`/`guild.*` event, under
 anyone's issuer key. Only the identity's own signing key (for
-identity/profile) or the relevant player-session actions (for
+identity/profile) or the relevant user-session actions (for
 friends/guilds) can. There's no code path that accepts one from anywhere
 else — by construction, not by a check that could be bypassed.
 
@@ -280,12 +280,12 @@ is a genuinely open question rather than a settled "yes":
   exists for reading *your own* full history (bearer-authenticated as
   that identity); there is no endpoint today for "give me Nova's
   attestations" as a different caller, and the actual visibility policy
-  that would govern one — an issuer-set ceiling, a subject/player
+  that would govern one — an issuer-set ceiling, a subject/user
   override, or some combination — is tracked, unresolved, in issue #295
   ("per-claim attestation visibility — issuer ceiling + subject
   override"). Do not assume attestation visibility is wide open by
   default; it's explicitly still being decided.
-- **An integrator's own custom, non-attestation data about a player,
+- **An integrator's own custom, non-attestation data about a user,
   explicitly published as schema instance data, defaults to
   network-readable — decided in #381, built in #384.** A game
   publishing instance data against its own schema is the same shape of
@@ -300,7 +300,7 @@ is a genuinely open question rather than a settled "yes":
   \[a character's] attributes" statement has been amended accordingly: it
   now names this as a second explicit path alongside attestations, not
   the only one. This does **not** change anything about a game's own
-  *unpublished, internal* profile of a player (its own database) — that
+  *unpublished, internal* profile of a user (its own database) — that
   stays exactly as closed as it always was; this is specifically about
   data the integrator chose to publish through Game Space.
 
@@ -317,7 +317,7 @@ reachable through Avalon at all and stays that way.
 
 The Hub (`apps/hub`) is a first-party **client**, not (yet) a registered
 integrator. It reads and writes layer 1 the same way any authenticated
-player session does — it has no issuer key of its own, and nothing in this
+user session does — it has no issuer key of its own, and nothing in this
 document's `integrations` array represents Hub data, because the Hub has not
 published anything under its own issuer identity (the way Ashen Realms
 publishes `game_schema.published` — see
@@ -329,8 +329,8 @@ for that pattern).
 including the fields #372 added) is layer-1, portable, identity-owned
 data, not something scoped to the Hub itself. The real candidate for genuine
 Hub-local data is issue #87 (visibility/preference store, open, not
-built): a per-player UI preference — which fields are hidden on this
-player's own profile view, feature flags, display settings — that has no
+built): a per-user UI preference — which fields are hidden on this
+user's own profile view, feature flags, display settings — that has no
 reason to be portable to another game or exposed to any integrator's SDK
 at all. Once #87 lands, *that* is what a Hub block-space entry would
 actually contain, and this document should be updated with a real,
@@ -355,7 +355,7 @@ cited example at that point rather than a speculative one now.
 - `game_schema.published` (issue #255) is real — an integrator can publish
   its own custom data *shape*, of any kind it wants (`characters` above is
   one example, not a fixed concept), and (as of #384) that `.proto` text is
-  actually parsed/validated, not stored opaque. Actual per-player instance
+  actually parsed/validated, not stored opaque. Actual per-user instance
   data against a published schema (`game_data.published`), its visibility
   model, and the read endpoint (`GET /identities/{id}/game-data`) are real
   and built (#384, decided by #381).

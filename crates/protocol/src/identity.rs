@@ -1,4 +1,4 @@
-//! Player identity, separate from any game's character model.
+//! User identity, separate from any game's character model.
 //!
 //! See GitHub issue #67 ("ADR: Identity Is Separate From Game Characters") for
 //! why this boundary is mandatory rather than incidental.
@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 
 use crate::ids::{GuildId, IdentityId};
 
-/// The persistent, network-level player identity.
+/// The persistent, network-level user identity.
 ///
 /// An `Identity` never references a game's character schema. It is the thing
 /// that survives any single game shutting down.
@@ -18,12 +18,12 @@ pub struct Identity {
     pub created_at: OffsetDateTime,
 }
 
-/// Player-controlled, human-facing profile data.
+/// User-controlled, human-facing profile data.
 ///
 /// Deliberately small and deliberately not the place where game-specific data
 /// lives — see `Proposal.md` §19, "Identity vs. Game Data". `bio`,
 /// `favorite_genres`, and `pronouns` (issue #155) are the "later" #86
-/// flagged: small, player-optional, non-game-specific self-description,
+/// flagged: small, user-optional, non-game-specific self-description,
 /// same promised-durable tier as `display_name`/`avatar_url` — see
 /// `docs/architecture/identity.md`'s durable-field table. Server-side
 /// validation of these (length caps, vocabulary membership) lives in

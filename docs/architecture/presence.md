@@ -9,8 +9,8 @@ disappears, identities look offline until their next heartbeat. Decided in
 ## Two kinds of fact
 
 ```text
-"Player X is currently online in Ashen Realms."      ephemeral
-"Player X defeated the Dragon Lord."                 durable history
+"User X is currently online in Ashen Realms."      ephemeral
+"User X defeated the Dragon Lord."                 durable history
 ```
 
 The first changes every few seconds, matters only now, and is worthless in an
@@ -30,7 +30,7 @@ architecture keeps them apart at every layer — see
 | connection state | which realtime session, transient |
 
 ```text
-Player X
+User X
     Online
     Playing Ashen Realms
     Server: NA-East

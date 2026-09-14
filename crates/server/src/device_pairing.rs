@@ -42,7 +42,7 @@ const SESSION_LIFETIME_DAYS: i64 = 30;
 /// grant's `slow_down` behavior so a waiting client can't hammer this route.
 const POLL_MIN_INTERVAL_SECONDS: i64 = 5;
 /// 8 chars from an alphabet with the visually-ambiguous characters
-/// (`0`/`O`, `1`/`I`/`L`) removed, so a player can read this off one screen
+/// (`0`/`O`, `1`/`I`/`L`) removed, so a user can read this off one screen
 /// and type it on another without guessing which glyph they saw.
 const USER_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const USER_CODE_LEN: usize = 8;
@@ -84,8 +84,8 @@ pub struct StartPairingResponse {
 
 /// `POST /auth/device/start` — unauthenticated. The waiting client's
 /// entrypoint: mints an opaque `device_code` (known only to this client and
-/// the server, never shown to the player) and a short human-typeable
-/// `user_code` (shown to the player, e.g. as a QR code), and stores a
+/// the server, never shown to the user) and a short human-typeable
+/// `user_code` (shown to the user, e.g. as a QR code), and stores a
 /// pending pairing row. Retries on a code collision the same way
 /// `handlers::generate_unique_discriminator` does — with 32^8 possible
 /// `user_code`s this only ever matters once a huge number are pending at

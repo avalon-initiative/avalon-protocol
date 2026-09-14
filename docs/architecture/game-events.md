@@ -2,7 +2,7 @@
 
 **A game event is an attestation for a durable, cross-game-relevant result a
 game produces** — a tournament, a seasonal championship, a world-first race, a
-community campaign, whatever draws players to it and is worth remembering
+community campaign, whatever draws users to it and is worth remembering
 after the fact. **A game runs the event, decides the outcome, and signs a
 claim; Avalon carries that durable fact; another game verifies it and decides
 on its own what, if anything, to do about it.** The event's gameplay —

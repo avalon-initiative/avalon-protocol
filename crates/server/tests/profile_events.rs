@@ -173,7 +173,7 @@ async fn clearing_the_avatar_is_recorded_as_an_explicit_null() {
 #[ignore]
 async fn a_self_description_update_round_trips_through_get_me() {
     // Issue #155: `bio`/`favorite_genres`/`pronouns` are promised-durable
-    // and player-optional, same as `display_name`/`avatar_url` — a `PATCH
+    // and user-optional, same as `display_name`/`avatar_url` — a `PATCH
     // /me` setting them must be reflected back by a subsequent `GET /me`.
     let pool = test_pool().await;
     let http = reqwest::Client::new();

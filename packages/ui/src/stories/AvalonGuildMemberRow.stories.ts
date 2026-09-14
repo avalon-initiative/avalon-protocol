@@ -21,7 +21,7 @@ export const Offline: Story = { args: { status: 'Offline' } }
 export const OwnerRole: Story = { args: { roleName: 'owner', roleVariant: 'owner' } }
 export const OfficerRole: Story = { args: { roleName: 'officer', roleVariant: 'officer' } }
 export const MemberRole: Story = { args: { roleName: 'member', roleVariant: 'member' } }
-export const WithDisplayName: Story = { args: { displayName: 'Avalon Player' } }
+export const WithDisplayName: Story = { args: { displayName: 'Avalon User' } }
 export const ManageableRow: Story = {
   args: { canChangeRole: true, canKick: true, roleName: 'officer', roleVariant: 'officer' },
 }

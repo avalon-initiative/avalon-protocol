@@ -13,4 +13,4 @@ type Story = StoryObj<typeof AvalonFriendRow>
 export const Online: Story = { args: { status: 'Online' } }
 export const Away: Story = { args: { status: 'Away' } }
 export const Offline: Story = { args: { status: 'Offline' } }
-export const WithDisplayName: Story = { args: { status: 'Online', displayName: 'Avalon Player' } }
+export const WithDisplayName: Story = { args: { status: 'Online', displayName: 'Avalon User' } }

@@ -3,7 +3,7 @@
 A protocol event is a durable fact Avalon considers part of its history. **Not
 every game action is a protocol event; ordinary gameplay never becomes one.**
 See [`./worked-ledger-example.md`](./worked-ledger-example.md) for one
-hypothetical player's ledger rendered as real, ordered JSON instances of the
+hypothetical user's ledger rendered as real, ordered JSON instances of the
 catalogue below, alongside what never appears on it.
 **Events are the canonical record — every table is a projection of them**
 ([#75](https://github.com/LunarVagabond/avalon-protocol/issues/75)), and
@@ -136,7 +136,7 @@ Both are kept, and kept distinct:
 
 ```text
 Guild membership history (events)        Current projection (indexer)
-2027-01-01  X joins Guild A              Player X
+2027-01-01  X joins Guild A              User X
 2027-04-14  X becomes Officer                Guild: none
 2028-02-10  X leaves Guild A
 ```

@@ -15,7 +15,7 @@ export default meta
 type Story = StoryObj<typeof AvalonChatMessage>
 
 export const Default: Story = {}
-export const WithDisplayName: Story = { args: { authorDisplayName: 'Avalon Player' } }
+export const WithDisplayName: Story = { args: { authorDisplayName: 'Avalon User' } }
 export const Deletable: Story = { args: { canDelete: true } }
 export const LongMessage: Story = {
   args: {

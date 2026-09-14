@@ -15,7 +15,7 @@ body:
     id: problem
     attributes:
       label: What problem are you trying to solve?
-      placeholder: e.g. A game wants to know which of a player's guildmates are online without polling presence per-friend
+      placeholder: e.g. A game wants to know which of a user's guildmates are online without polling presence per-friend
     validations:
       required: true
 

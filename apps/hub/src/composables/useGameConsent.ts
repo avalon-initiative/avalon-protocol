@@ -1,6 +1,6 @@
 // Game-connect consent view (#27) for a given slug: loads the game's
 // public registration info once (no polling needed — a game's declared
-// capabilities don't change while a player is looking at the consent
+// capabilities don't change while a user is looking at the consent
 // screen), and owns the checked-capabilities set the view submits.
 import { ref, type Ref } from 'vue'
 import * as api from '../api/client'

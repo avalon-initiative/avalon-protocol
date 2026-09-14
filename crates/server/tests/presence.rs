@@ -104,7 +104,7 @@ async fn publishing_presence_is_visible_via_get() {
 
 #[tokio::test]
 #[ignore]
-async fn a_player_cannot_claim_to_be_playing_a_game() {
+async fn a_user_cannot_claim_to_be_playing_a_game() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();

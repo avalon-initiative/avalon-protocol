@@ -1,7 +1,7 @@
 //! Game registration — how a game becomes known to Avalon and what it asks for.
 //!
 //! See `Proposal.md` §18. Registering does not grant any capability by
-//! itself; a player must still authorize each capability (`permissions`).
+//! itself; a user must still authorize each capability (`permissions`).
 //!
 //! Issuer key lifecycle (issue #80, decided; implemented here per #84):
 //! see [`KeyRole`] and [`IssuerKey`].
@@ -258,7 +258,7 @@ pub struct IssuerKeyInfo {
     pub public_key: Vec<u8>,
 }
 
-/// The capabilities a game declares it wants, presented to the player before
+/// The capabilities a game declares it wants, presented to the user before
 /// they connect their identity — not a grant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameRegistration {
@@ -268,7 +268,7 @@ pub struct GameRegistration {
 }
 
 /// A credential a game uses to authenticate itself to Avalon (server-to-server),
-/// distinct from a player's own session.
+/// distinct from a user's own session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameCredential {
     pub game_id: GameId,
@@ -280,7 +280,7 @@ pub struct GameCredential {
 /// the game's own database, and this type deliberately has no field for any
 /// of them. See `docs/architecture/game-bindings.md`.
 ///
-/// A binding is established by the **player**, through the consent flow
+/// A binding is established by the **user**, through the consent flow
 /// (issue #27, `POST /games/{slug}/connect`) — never created by a game
 /// unilaterally. Capability grants (`PermissionGrant`, `permissions.rs`) are
 /// scoped to a binding: no active binding, no grants, and ending a binding

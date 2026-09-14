@@ -22,7 +22,7 @@
 //!   [`load_verify_key_from_env`].
 //!
 //! `signing_key_id` is a caller-chosen label distinguishing this
-//! settlement-operator key domain from issuer keys (#80/#84) and player
+//! settlement-operator key domain from issuer keys (#80/#84) and user
 //! keys (#73) — three separate lifecycles, per #39's own scoping. It is
 //! not a foreign key into anything; nothing here enforces its shape beyond
 //! "non-empty text."

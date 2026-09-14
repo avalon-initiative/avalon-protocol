@@ -2,7 +2,7 @@
 
 **Avalon connectivity should be eventually available, not continuously
 required.** A game stays playable, and able to keep recording what its
-player is doing, when Avalon is unreachable — a genuinely offline
+user is doing, when Avalon is unreachable — a genuinely offline
 single-player game, a handheld with no signal, bad rural internet, or a
 temporary Avalon outage. The SDK owns this complexity, not each
 developer.
@@ -82,13 +82,13 @@ operation ticket rather than each re-deriving its own answer:
 ## The hard problem: what does an offline claim actually prove
 
 An offline single-player game has no live server to attest anything while
-disconnected — but its *client* could still record "the player defeated the
+disconnected — but its *client* could still record "the user defeated the
 dragon" locally. Treating that queued claim as equivalent to a normal
 `Issuer::Game` attestation the moment it's submitted is a real hole: it
 implies the game's live issuer signing key exists somewhere the client can
 reach, and a key reachable from a shipped client is a key that can be
 extracted — a solved, common reverse-engineering problem. Whoever extracts
-it can forge arbitrary achievements for any player, retroactively, and
+it can forge arbitrary achievements for any user, retroactively, and
 rotating the key afterward doesn't invalidate what already verifies against
 its old validity window.
 

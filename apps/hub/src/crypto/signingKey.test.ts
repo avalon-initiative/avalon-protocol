@@ -21,11 +21,11 @@ describe('identityCreatedSigningBytes', () => {
   it('matches the exact byte format crates/server/src/handlers.rs verifies against', () => {
     const bytes = identityCreatedSigningBytes(
       '11111111-1111-1111-1111-111111111111',
-      'Avalon Player',
+      'Avalon User',
     )
     const text = new TextDecoder().decode(bytes)
     expect(text).toBe(
-      'avalon:identity.created:v1:11111111-1111-1111-1111-111111111111:Avalon Player',
+      'avalon:identity.created:v1:11111111-1111-1111-1111-111111111111:Avalon User',
     )
   })
 })
@@ -39,7 +39,7 @@ describe('signing key storage', () => {
     expect(loaded).not.toBeNull()
     expect(bytesToBase64(loaded!)).toBe(bytesToBase64(secretKey))
 
-    const message = identityCreatedSigningBytes(identityId, 'Avalon Player')
+    const message = identityCreatedSigningBytes(identityId, 'Avalon User')
     const signature = signWithKey(secretKey, message)
     expect(ed25519.verify(signature, message, publicKey)).toBe(true)
   })
@@ -68,7 +68,7 @@ describe('mnemonic derivation and recovery', () => {
   it('the derived public key matches what register/finish already expects — a plain 32-byte Ed25519 verifying key', () => {
     const { publicKey, secretKey } = deriveSigningKeyFromMnemonic(generateMnemonic(wordlist))
     expect(publicKey).toHaveLength(32)
-    const message = identityCreatedSigningBytes(crypto.randomUUID(), 'Avalon Player')
+    const message = identityCreatedSigningBytes(crypto.randomUUID(), 'Avalon User')
     const signature = signWithKey(secretKey, message)
     expect(ed25519.verify(signature, message, publicKey)).toBe(true)
   })

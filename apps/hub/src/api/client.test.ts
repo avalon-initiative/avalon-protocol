@@ -162,7 +162,7 @@ describe('api client', () => {
     expect(url).toContain('/friends/handle/alice%234821')
   })
 
-  it('throws an AvalonApiError with a player-facing message on a non-2xx response', async () => {
+  it('throws an AvalonApiError with a user-facing message on a non-2xx response', async () => {
     mockFetchOnce(409, { error: 'identity id already taken' })
 
     await expect(registerStart({ identity_id: 'id', display_name: 'name' })).rejects.toMatchObject(

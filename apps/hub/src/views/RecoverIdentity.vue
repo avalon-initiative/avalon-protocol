@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Social recovery (issue #201) — the unauthenticated entry point for a
-// player who has lost every passkey for an identity and has guardians
+// user who has lost every passkey for an identity and has guardians
 // configured. Reachable from Login.vue without a session, same as
 // CreateIdentity.vue; unlike that flow, this one drives a WebAuthn
 // registration ceremony for a device that ends up owning no valid

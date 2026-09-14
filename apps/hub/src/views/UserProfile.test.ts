@@ -6,7 +6,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
-import PlayerProfile from './PlayerProfile.vue'
+import UserProfile from './UserProfile.vue'
 import { useSessionStore } from '../stores/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
@@ -24,7 +24,7 @@ function testRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/friends', name: 'friends', component: Friends },
-      { path: '/players/:id', name: 'player-profile', component: PlayerProfile },
+      { path: '/users/:id', name: 'user-profile', component: UserProfile },
     ],
   })
 }
@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
-describe('viewing another player from Friends', () => {
+describe('viewing another user from Friends', () => {
   it('navigates to the profile card when a friend row is clicked', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
@@ -59,20 +59,20 @@ describe('viewing another player from Friends', () => {
     await nameButton.trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.name).toBe('player-profile')
+    expect(router.currentRoute.value.name).toBe('user-profile')
     expect(router.currentRoute.value.params.id).toBe('id-friend')
   })
 })
 
-describe('PlayerProfile', () => {
+describe('UserProfile', () => {
   function testRouterForCard() {
     return createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/players/:id', name: 'player-profile', component: PlayerProfile }],
+      routes: [{ path: '/users/:id', name: 'user-profile', component: UserProfile }],
     })
   }
 
-  it("shows the player's public profile fields and live presence", async () => {
+  it("shows the user's public profile fields and live presence", async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
       '/identities/profiles': [
@@ -82,9 +82,9 @@ describe('PlayerProfile', () => {
     })
 
     const router = testRouterForCard()
-    router.push('/players/id-friend')
+    router.push('/users/id-friend')
     await router.isReady()
-    const wrapper = mount(PlayerProfile, { global: { plugins: [router] } })
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('Ilya'))
 
     expect(wrapper.text()).toContain('Ilya#1122')
@@ -93,7 +93,7 @@ describe('PlayerProfile', () => {
     // not requested/shown here yet.
   })
 
-  it("shows a not-found message when the player doesn't resolve", async () => {
+  it("shows a not-found message when the user doesn't resolve", async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
       '/identities/profiles': [],
@@ -101,9 +101,9 @@ describe('PlayerProfile', () => {
     })
 
     const router = testRouterForCard()
-    router.push('/players/id-missing')
+    router.push('/users/id-missing')
     await router.isReady()
-    const wrapper = mount(PlayerProfile, { global: { plugins: [router] } })
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain("couldn't be found"))
   })
 })

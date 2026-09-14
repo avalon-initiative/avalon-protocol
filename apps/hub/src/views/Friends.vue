@@ -79,7 +79,7 @@ onUnmounted(() => {
   if (suggestionsPollHandle) clearInterval(suggestionsPollHandle)
 })
 
-// Player search (issue #205) — the opt-in global counterpart to "people
+// User search (issue #205) — the opt-in global counterpart to "people
 // you may know" above. Only ever returns identities that have turned on
 // their own `discoverable` preference (Profile.vue); a blank query issues
 // no request at all (see api.searchIdentities). Reuses AvalonSuggestionRow
@@ -119,7 +119,7 @@ async function onAddFromSearch(identityId: string) {
   }
 }
 
-// Button-first: the add-friend input only appears once the player says
+// Button-first: the add-friend input only appears once the user says
 // they want to add someone — no open entry sits on the page by default.
 const showAddFriend = ref(false)
 const addFriendId = ref('')
@@ -186,7 +186,7 @@ async function onRemoveFriend(identityId: string) {
 
 // Issue #393: opens a friend's read-only profile card.
 function onViewProfile(identityId: string) {
-  router.push({ name: 'player-profile', params: { id: identityId } })
+  router.push({ name: 'user-profile', params: { id: identityId } })
 }
 
 // Starts (or opens the existing) conversation with this friend and jumps
@@ -289,8 +289,8 @@ async function onMessageFriend(identityId: string) {
         </AvalonCard>
 
         <AvalonCard
-          title="Search for players"
-          subtitle="Finds only players who've turned on public search for their own profile."
+          title="Search for users"
+          subtitle="Finds only users who've turned on public search for their own profile."
         >
           <AvalonForm
             submit-label="Search"
@@ -301,7 +301,7 @@ async function onMessageFriend(identityId: string) {
             <AvalonTextField v-model="searchQuery" label="Name or handle" placeholder="alice" />
           </AvalonForm>
           <p v-if="hasSearched && !searching && searchResults.length === 0" :class="styles.empty">
-            No publicly searchable players match that.
+            No publicly searchable users match that.
           </p>
           <AvalonSuggestionRow
             v-for="result in searchResults"

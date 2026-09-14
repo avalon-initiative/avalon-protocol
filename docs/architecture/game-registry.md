@@ -3,7 +3,7 @@
 **The registry exposes facts with explicit definitions. It never publishes a
 score, a ranking, or a trust judgment.** Metrics are derived from protocol
 activity wherever possible, labeled by how they were obtained, and aggregated so
-that no per-player data is exposed. **Statistics inform a consumer's trust
+that no per-user data is exposed. **Statistics inform a consumer's trust
 decision; they do not determine it.**
 
 ## Not a static list

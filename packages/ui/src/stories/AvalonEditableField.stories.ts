@@ -4,7 +4,7 @@ import AvalonEditableField from '../components/AvalonEditableField.vue'
 const meta: Meta<typeof AvalonEditableField> = {
   title: 'Avalon/EditableField',
   component: AvalonEditableField,
-  args: { label: 'Display name', value: 'Nova', placeholder: 'How other players see you' },
+  args: { label: 'Display name', value: 'Nova', placeholder: 'How other users see you' },
 }
 export default meta
 

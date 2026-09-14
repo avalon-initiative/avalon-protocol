@@ -25,7 +25,7 @@ export const Revoked: Story = {
     invalidReason: 'attestation has been revoked',
     history: [
       { event: 'issued', at: 'Mar 14, 2027' },
-      { event: 'revoked', at: 'May 2, 2027', reasonCode: 'cheating_detected', reason: 'Player used unauthorized tooling' },
+      { event: 'revoked', at: 'May 2, 2027', reasonCode: 'cheating_detected', reason: 'User used unauthorized tooling' },
     ],
   },
 }

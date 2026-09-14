@@ -236,7 +236,7 @@ pub fn router(state: AppState) -> Router {
             patch(achievements::update_achievement_definition),
         )
         // #32: issuance — a signed AchievementAttestation, gated on the
-        // subject player's own achievements.issue grant (#28), not just
+        // subject user's own achievements.issue grant (#28), not just
         // the game's own credential.
         .route(
             "/games/{slug}/achievements/{key}/issue",

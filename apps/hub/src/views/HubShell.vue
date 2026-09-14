@@ -15,7 +15,7 @@ import NetworkStatus from '../components/NetworkStatus.vue'
 import { useSessionStore } from '../stores/session'
 import styles from './HubShell.module.scss'
 
-// Re-publish well inside the server's 120s presence TTL so the player
+// Re-publish well inside the server's 120s presence TTL so the user
 // stays Online to their friends for as long as the Hub is open.
 const PRESENCE_HEARTBEAT_MS = 60_000
 
@@ -49,7 +49,7 @@ const revisionUrl =
 
 // Issue #390: `PUT /me/presence` treats Away/DoNotDisturb/Offline as sticky
 // manual overrides that persist until the caller explicitly sets Online
-// again — so the heartbeat re-publishes whatever status the player last
+// again — so the heartbeat re-publishes whatever status the user last
 // chose (`myStatus`), not a hardcoded 'Online', or it would silently
 // overwrite a manual Away/DND/Offline choice on the next tick.
 async function publishPresence(status: PresenceStatus = myStatus.value) {
@@ -151,7 +151,7 @@ function onSelectNav(to: string) {
           <input
             :class="styles.searchInput"
             type="search"
-            placeholder="Search games, players, guilds… (coming soon)"
+            placeholder="Search games, users, guilds… (coming soon)"
             disabled
           />
         </div>

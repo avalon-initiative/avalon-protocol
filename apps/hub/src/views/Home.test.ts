@@ -46,7 +46,7 @@ beforeEach(() => {
 })
 
 describe('Home', () => {
-  it('welcomes the player by display name', async () => {
+  it('welcomes the user by display name', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,

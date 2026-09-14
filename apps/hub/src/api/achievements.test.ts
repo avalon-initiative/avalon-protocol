@@ -45,7 +45,7 @@ function attestation(overrides: Partial<AttestationResponse> = {}): AttestationR
   return {
     id: 'a1',
     issuer: 'game:ashen-realms',
-    subject: 'player-1',
+    subject: 'user-1',
     achievement: 'game:ashen-realms:achievement:dragon_slayer',
     issued_at: '2027-03-14T00:00:00Z',
     proof: { key_id: 'k1', algorithm: 'ed25519' },

@@ -1,4 +1,4 @@
-//! Achievements (issue #34): read a player's own attestation history and
+//! Achievements (issue #34): read a user's own attestation history and
 //! issue new attestations on this integrator's own behalf. Previously both
 //! `Session` methods here returned `SdkError::NotImplemented`.
 //!

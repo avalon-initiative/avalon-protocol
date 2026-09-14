@@ -33,7 +33,7 @@ export function renamePasskey(token: string, passkeyId: string, label: string): 
 // `confirm: true` is required to revoke the identity's last remaining
 // passkey — the ticket's explicit "I understand this may lock me out"
 // invariant. A caller that gets a 409 back (crates/server/src/error.rs's
-// `LastPasskeyRequiresConfirmation`) should ask the player to confirm and
+// `LastPasskeyRequiresConfirmation`) should ask the user to confirm and
 // retry with `confirm: true`, not retry silently.
 export function revokePasskey(token: string, passkeyId: string, confirm = false): Promise<void> {
   return api.revokePasskey(token, passkeyId, confirm)

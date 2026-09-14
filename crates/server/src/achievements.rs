@@ -43,8 +43,8 @@
 //!
 //! **Auth.** All endpoints are game/app/service-credential-authenticated
 //! (`crate::games::authenticate_game`, the challenge-response scheme #26
-//! established), not a player session — defining a claim is something an
-//! issuer does about its own catalogue, not something a player consents
+//! established), not a user session — defining a claim is something an
+//! issuer does about its own catalogue, not something a user consents
 //! to. Unlike issuing (#32, gated behind a capability grant), *defining*
 //! needs nothing beyond the issuer proving its own identity. The write
 //! endpoints additionally check that the authenticated issuer is the one
@@ -171,10 +171,10 @@ impl ClaimRoute {
         }
     }
 
-    /// The capability a player must have granted before this route's
+    /// The capability a user must have granted before this route's
     /// issuing endpoint may act on their behalf (issue #32/#28) — distinct
     /// wire strings per route (`achievements.issue` vs `milestones.issue`,
-    /// #324) so a player's consent grant reads correctly for whichever
+    /// #324) so a user's consent grant reads correctly for whichever
     /// vocabulary the issuer actually uses.
     fn issue_capability(self) -> Capability {
         match self {
@@ -734,7 +734,7 @@ pub struct AttestationResponse {
 /// over the same mechanism). See the module doc comment's "Auth" section
 /// for the two independent checks every issuance goes through: the calling
 /// game/app/service's own credential (who is this, on whose behalf), and
-/// the *player's* consent grant for the issue capability — neither
+/// the *user's* consent grant for the issue capability — neither
 /// substitutes for the other, and neither substitutes for the embedded
 /// signature check below, which is the one piece of proof that would still
 /// hold up even if the HTTP layer's own auth were somehow bypassed.
@@ -746,7 +746,7 @@ async fn issue_attestation(
     route: ClaimRoute,
     body: IssueAttestationRequest,
 ) -> Result<Json<AttestationResponse>, AppError> {
-    // Who's calling, and on whose behalf — never a player's own session;
+    // Who's calling, and on whose behalf — never a user's own session;
     // only a game/app/service issues attestations, per #32's own design.
     let caller = authenticate_caller(state, headers).await?;
     let Caller::Game {
@@ -772,9 +772,9 @@ async fn issue_attestation(
         return Err(AppError::ClaimVocabularyMismatch);
     }
 
-    // The *player*'s own consent: an active binding to this issuer plus an
+    // The *user*'s own consent: an active binding to this issuer plus an
     // active grant for this route's issue capability (#28's guard, #32's
-    // own "game caller with achievements.issue for the subject player"
+    // own "game caller with achievements.issue for the subject user"
     // requirement).
     require_capability(&caller, route.issue_capability(), state).await?;
 

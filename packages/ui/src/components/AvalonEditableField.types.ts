@@ -1,6 +1,6 @@
 export interface AvalonEditableFieldProps {
   label: string
-  /** The saved value. Read-only until the player presses Edit. */
+  /** The saved value. Read-only until the user presses Edit. */
   value: string
   /** Shown (muted) in read mode when `value` is empty. */
   emptyText?: string

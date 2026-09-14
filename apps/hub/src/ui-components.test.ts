@@ -80,9 +80,9 @@ describe('AvalonFriendRow', () => {
 
   it('prefers the display name when one is given', () => {
     const wrapper = mount(AvalonFriendRow, {
-      props: { identityId: 'id-1', status: 'Online', displayName: 'Avalon Player' },
+      props: { identityId: 'id-1', status: 'Online', displayName: 'Avalon User' },
     })
-    expect(wrapper.text()).toContain('Avalon Player')
+    expect(wrapper.text()).toContain('Avalon User')
   })
 
   it('emits remove when the remove button is clicked', async () => {
@@ -104,9 +104,9 @@ describe('AvalonFriendRow', () => {
   // Issue #393: clicking the avatar/name opens the identity's profile card.
   it('emits view when the avatar/name area is clicked', async () => {
     const wrapper = mount(AvalonFriendRow, {
-      props: { identityId: 'id-1', status: 'Online', displayName: 'Avalon Player' },
+      props: { identityId: 'id-1', status: 'Online', displayName: 'Avalon User' },
     })
-    await wrapper.findAll('button').find((b) => b.text().includes('Avalon Player'))!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('Avalon User'))!.trigger('click')
     expect(wrapper.emitted('view')).toHaveLength(1)
   })
 })
@@ -153,9 +153,9 @@ describe('AvalonSuggestionRow', () => {
 
   it('prefers the display name when one is given', () => {
     const wrapper = mount(AvalonSuggestionRow, {
-      props: { identityId: 'id-1', displayName: 'Avalon Player' },
+      props: { identityId: 'id-1', displayName: 'Avalon User' },
     })
-    expect(wrapper.text()).toContain('Avalon Player')
+    expect(wrapper.text()).toContain('Avalon User')
   })
 
   it('emits add when the add button is clicked', async () => {

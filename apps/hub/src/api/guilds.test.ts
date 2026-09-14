@@ -310,8 +310,8 @@ describe('sortMembers', () => {
 
   it('sorts by resolved display name when present, falling back to id (#161)', () => {
     const mixed: GuildMember[] = [
-      { identityId: 'identity:1', displayName: 'zeta-player', roleIndex: 2, status: 'Online', joinedAt: 't' },
-      { identityId: 'identity:2', displayName: 'alpha-player', roleIndex: 2, status: 'Online', joinedAt: 't' },
+      { identityId: 'identity:1', displayName: 'zeta-user', roleIndex: 2, status: 'Online', joinedAt: 't' },
+      { identityId: 'identity:2', displayName: 'alpha-user', roleIndex: 2, status: 'Online', joinedAt: 't' },
       { identityId: 'identity:3', roleIndex: 2, status: 'Online', joinedAt: 't' },
     ]
     expect(sortMembers(mixed, 'name').map((m) => m.identityId)).toEqual(['identity:2', 'identity:3', 'identity:1'])
