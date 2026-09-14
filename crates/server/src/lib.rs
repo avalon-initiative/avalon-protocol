@@ -224,6 +224,14 @@ pub fn router(state: AppState) -> Router {
             "/integrations/{slug}/registry",
             get(registry::get_integrator_registry),
         )
+        // Issue #95: the same read, under a dedicated top-level namespace —
+        // the documented, stable external contract for anything that isn't
+        // the Hub (a game's own tooling, a researcher, a future client).
+        // `/integrations/{slug}/registry` above keeps working unchanged;
+        // this is additive, not a replacement — see
+        // `docs/architecture/registry.md`'s "External read surface"
+        // section for the stability policy.
+        .route("/registry/{slug}", get(registry::get_integrator_registry))
         .route(
             "/integrations/{slug}/achievements",
             get(achievements::list_achievement_definitions)

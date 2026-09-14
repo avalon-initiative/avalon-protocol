@@ -175,6 +175,51 @@ returned as the real sub-floor count — see [privacy.md](./privacy.md)
 and [Today in the repo](#today-in-the-repo) below for where this is
 enforced.
 
+## External read surface (#95)
+
+The registry is meant to be read by more than the Hub — a game's own
+tooling, a researcher, a future client that isn't the Hub — without
+scraping rendered pages or getting direct database access. `GET
+/registry/{slug}` is that dedicated, standalone contract: the exact same
+data `GET /integrations/{slug}/registry` already serves (that route stays,
+unchanged, for the Hub and anything else already depending on it), under
+its own top-level namespace so it reads as a real external surface rather
+than something incidental to integrator management.
+
+**Stability policy.** This repo has no route-versioning scheme anywhere
+yet (no `/v1/` prefix, no `Accept`-header negotiation), and inventing one
+for a single endpoint would be inconsistent with everything else. Instead:
+a response field's *meaning* is permanent once shipped, the same
+"permanent once shipped" discipline `Capability` wire strings
+(`crates/protocol/src/permissions.rs`) and ledger event-kind strings
+already follow. Concretely:
+
+- New metrics are additive — a new field can appear; an existing field's
+  `value`/`definition`/`class` never silently changes what it measures.
+- A genuinely breaking change (redefining what an existing field counts,
+  removing one) gets a new field name or a new route, never an in-place
+  change to what callers already depend on.
+- `definition`/`class` on every field are part of the contract, not
+  incidental — a caller is meant to render them, not hardcode field-name
+  assumptions about what `players` means independent of what the response
+  itself says.
+
+**What's guaranteed stable today:** the five fields `GET /registry/{slug}`
+currently returns (`players`, `total_players_ever`, `achievements_issued`,
+`achievements_revoked`, `unique_achievement_holders`), each as `{ value,
+definition, class, exact }`, and that no response ever carries per-identity
+data. **What can still change:** the route family may grow siblings (a
+listing route, recognition relationships once #94's recognition-policy
+publishing lands — see [Recognition relationships](#recognition-relationships-and-the-network-graph)
+above) without those being covered by today's stability promise until they
+exist.
+
+`crates/sdk/src/registry.rs`'s `AvalonClient::registry(slug)` is the thin
+typed client this ticket asked for — no `Session`/`authenticate()` needed,
+since the route itself is public and unauthenticated. `bindings/csharp`
+does not mirror this yet, same "settle the Rust surface first" posture
+recent SDK additions (#398, #113) have taken.
+
 ## Today in the repo
 
 - `crates/protocol/src/integrators.rs` — `Integrator { id, slug, name, developer,
