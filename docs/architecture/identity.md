@@ -218,6 +218,65 @@ migrating an existing username/password identity (none exist outside
 development, so not applicable yet), and whether identities
 can be transferred (Proposal §32).
 
+### Hybrid transport ("use a phone or tablet") — issue #397
+
+WebAuthn recognizes three authenticator categories: platform (Touch ID,
+Windows Hello — built into the device doing the ceremony), cross-platform
+hardware (a USB/NFC security key), and **hybrid transport** — the browser
+shows a QR code, a nearby phone proves proximity over Bluetooth and unlocks
+its own resident passkey, and the desktop/browser session is authenticated
+through it without the passkey ever leaving the phone. This matters on a
+desktop browser with no platform authenticator and no hardware key handy —
+incognito/private mode commonly disables platform authenticators too — since
+hybrid transport is otherwise the only way such a browser can use a passkey
+at all.
+
+This is a different problem from [#307](#cross-device-pairing-for-a-webauthn-incapable-client-307)
+above: #307 is for a client with *no* WebAuthn/browser surface whatsoever
+(a game engine, a console). Hybrid transport is a built-in feature of an
+ordinary WebAuthn-capable browser and OS — Avalon doesn't implement it,
+doesn't need to, and can't disable it short of explicitly restricting
+authenticator attachment.
+
+Verified by reading `crates/server/src/auth.rs`'s `build_webauthn` and
+`crates/server/src/handlers.rs`'s `register_start`/`session_start`: neither
+sets `webauthn-rs`'s `authenticator_attachment` (the registration option
+that, if set to `Platform`, would suppress the hybrid/cross-platform choice
+in the browser's UI), and the stored `Passkey`'s credential descriptor
+carries no `transports` hint either (`webauthn-rs-core` hardcodes
+`transports: None` when building it), so an authentication challenge's
+`allowCredentials` entries never restrict which transport the browser may
+use to satisfy them. Both are exactly the two levers that could suppress
+hybrid transport, and neither is set — confirmed by inspecting the raw JSON
+`/identities/register/start` and `/sessions/start` actually return
+(`crates/server/tests/hybrid_transport.rs`, `--ignored`, live). That same
+test also completes a full register-then-login round trip through a generic
+(non-platform) virtual authenticator to confirm the server applies no
+authenticator-type-specific logic anywhere in that path — nothing reads or
+branches on `authenticatorAttachment`, an AAGUID, or a transport value.
+`require_resident_key(false)` (this file's own non-discoverable-credential
+note above) is orthogonal: it controls whether the browser must create a
+*resident* credential, not which transport may satisfy the ceremony, so it
+neither helps nor hinders hybrid transport here.
+
+What this does *not* establish: an actual end-to-end hybrid ceremony —
+scanning a QR code with a real phone over real Bluetooth — was not run.
+That requires a real, non-headless browser and a real phone, which no
+session doing this verification had access to; the configuration-level
+check above is the strongest verification available without that hardware,
+and is offered as exactly that, not as a substitute for it. A maintainer
+with a phone and a normal (non-incognito) browser handy should still
+confirm the "use a phone or tablet" option actually appears and completes
+against a real `make start` server before treating this as fully closed.
+
+Per [#51](https://github.com/LunarVagabond/avalon-protocol/issues/51)'s
+design, this entire question is invisible to `avalon-sdk`: an integrator
+never performs a WebAuthn ceremony through the SDK at all —
+`AvalonClient::authenticate()` exchanges an already-issued bearer session
+token for `GET /me`/`GET /me/grants`, nothing else (`crates/sdk/src/lib.rs`).
+Which authenticator category produced that token has no representation
+anywhere in that exchange, by construction, not by omission.
+
 ### Where the Ed25519 signing key lives in a browser
 
 The Hub derives the identity's Ed25519 signing keypair client-side during
@@ -450,6 +509,13 @@ its invariants.
   alongside the existing `'registration'`/`'authentication'` (#200); no
   other schema change needed, since `identity_keys` already supported
   multiple rows per identity, `label` included, from migration 0001.
+- `crates/server/tests/hybrid_transport.rs` (#397, `--ignored`, live) —
+  confirms `/identities/register/start` and `/sessions/start` set neither
+  `authenticatorAttachment` nor a credential `transports` restriction (the
+  two levers that would suppress hybrid transport), and that a credential
+  from a generic virtual authenticator registers and logs in exactly like
+  any other. See "Hybrid transport" above for what this does and does not
+  verify.
 - `crates/server/src/passkeys.rs` (#200) — `POST /me/passkeys/register/start`,
   `POST /me/passkeys/register/finish`, `GET /me/passkeys`,
   `PATCH /me/passkeys/:id` (rename), `POST /me/passkeys/:id/revoke[?confirm=true]`.
@@ -619,5 +685,15 @@ its invariants.
   cross-device pairing for a WebAuthn-incapable client. Done:
   `crates/server/src/device_pairing.rs`, `apps/hub/src/views/PairDevice.vue`,
   `avalon pair-device`. See the section above.
+- [#397](https://github.com/LunarVagabond/avalon-protocol/issues/397) —
+  verify and document native WebAuthn hybrid transport. Done at the
+  configuration/test level: `crates/server/tests/hybrid_transport.rs`
+  confirms nothing in Avalon's own `webauthn-rs` config or handlers
+  restricts or special-cases it, and `crates/sdk/src/lib.rs::authenticate()`
+  is confirmed unaffected by construction (#51). Not done, and needing a
+  human with a real browser and phone: an actual end-to-end hybrid ceremony
+  was never run. See the section above.
+- [#395](https://github.com/LunarVagabond/avalon-protocol/issues/395) —
+  credential-friction decision #397 feeds into.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:
   Identity & Player Profile.
