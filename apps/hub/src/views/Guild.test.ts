@@ -281,6 +281,51 @@ describe('Guild', () => {
     expect(wrapper.text()).toContain("always has every permission")
   })
 
+  // Issue #392: the invite field used to send whatever was typed straight
+  // through as a raw UUID, opaque-422ing on anything else. It now accepts
+  // a display_name#1234 handle (resolved first, same as Friends.vue's
+  // add-friend flow) and rejects anything that isn't an id or handle
+  // client-side, with a clear message, before ever hitting the network.
+  it('invites by identity id, resolves a handle first, and rejects neither', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      ...baseRoutes(),
+      '/guilds/g1/invites': { id: 'inv1', guild_id: 'g1', to: 'id-outsider', status: 'pending' },
+      '/friends/handle/Nova%234821': { identity_id: '11111111-2222-3333-4444-555555555555' },
+    })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const membersTab = wrapper.findAll('button').find((b) => b.text() === 'Members')!
+    await membersTab.trigger('click')
+    await flushPromises()
+
+    const openInviteButton = wrapper.findAll('button').find((b) => b.text() === 'Invite a player')!
+    await openInviteButton.trigger('click')
+    await flushPromises()
+
+    const inviteField = wrapper.find('input[placeholder="Identity id, or display_name#1234"]')
+    const inviteForm = wrapper.findAll('form').find((f) => f.text().includes('Send invite'))!
+
+    // Neither a UUID nor a handle: rejected client-side, no network call.
+    ;(fetch as ReturnType<typeof vi.fn>).mockClear()
+    await inviteField.setValue('some random name')
+    await inviteForm.trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain("doesn't look like an identity id or a display_name#1234 handle")
+    expect(fetch).not.toHaveBeenCalled()
+
+    // A handle is resolved to an identity id before inviting.
+    await inviteField.setValue('Nova#4821')
+    await inviteForm.trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Invite sent (id inv1)')
+  })
+
   // Issue #391: channels/events are member-only server-side (403 for a
   // non-member), but that must never blank the whole page — only the
   // member-only tabs should disappear.
