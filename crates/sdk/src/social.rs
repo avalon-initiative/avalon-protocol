@@ -241,7 +241,7 @@ impl Session {
             serde_json::to_string(&PresenceSubscribeMessage::Subscribe { ids: ids.to_vec() })
                 .expect("PresenceSubscribeMessage always serializes");
         write
-            .send(WsMessage::Text(subscribe))
+            .send(WsMessage::Text(subscribe.into()))
             .await
             .map_err(|e| SdkError::WebSocket(e.to_string()))?;
 
