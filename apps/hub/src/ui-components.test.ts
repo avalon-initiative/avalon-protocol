@@ -89,7 +89,7 @@ describe('AvalonFriendRow', () => {
     const wrapper = mount(AvalonFriendRow, {
       props: { identityId: 'id-1', status: 'Online' },
     })
-    await wrapper.findAll('button').at(-1)?.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text() === 'Remove')!.trigger('click')
     expect(wrapper.emitted('remove')).toHaveLength(1)
   })
 
@@ -97,8 +97,17 @@ describe('AvalonFriendRow', () => {
     const wrapper = mount(AvalonFriendRow, {
       props: { identityId: 'id-1', status: 'Online' },
     })
-    await wrapper.find('button').trigger('click')
+    await wrapper.findAll('button').find((b) => b.text() === 'Message')!.trigger('click')
     expect(wrapper.emitted('message')).toHaveLength(1)
+  })
+
+  // Issue #393: clicking the avatar/name opens the identity's profile card.
+  it('emits view when the avatar/name area is clicked', async () => {
+    const wrapper = mount(AvalonFriendRow, {
+      props: { identityId: 'id-1', status: 'Online', displayName: 'Avalon Player' },
+    })
+    await wrapper.findAll('button').find((b) => b.text().includes('Avalon Player'))!.trigger('click')
+    expect(wrapper.emitted('view')).toHaveLength(1)
   })
 })
 
@@ -377,9 +386,11 @@ describe('AvalonGuildMemberRow', () => {
     expect(wrapper.text()).toContain('id-1')
   })
 
-  it('shows no management buttons by default', () => {
+  it('shows no management buttons by default (only the always-present view trigger)', () => {
     const wrapper = mount(AvalonGuildMemberRow, { props: baseProps })
-    expect(wrapper.findAll('button')).toHaveLength(0)
+    expect(wrapper.findAll('button')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('Change role')
+    expect(wrapper.text()).not.toContain('Kick')
   })
 
   it('shows only Change role when canChangeRole is set without canKick', () => {
@@ -396,8 +407,15 @@ describe('AvalonGuildMemberRow', () => {
 
   it('emits kick when the kick button is clicked', async () => {
     const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, canKick: true } })
-    await wrapper.find('button').trigger('click')
+    await wrapper.findAll('button').find((b) => b.text() === 'Kick')!.trigger('click')
     expect(wrapper.emitted('kick')).toHaveLength(1)
+  })
+
+  // Issue #393: clicking the avatar/name opens the identity's profile card.
+  it('emits view when the avatar/name area is clicked', async () => {
+    const wrapper = mount(AvalonGuildMemberRow, { props: { ...baseProps, displayName: 'Alice' } })
+    await wrapper.findAll('button').find((b) => b.text().includes('Alice'))!.trigger('click')
+    expect(wrapper.emitted('view')).toHaveLength(1)
   })
 
   it('uses the display name when set, instead of the identity id', () => {

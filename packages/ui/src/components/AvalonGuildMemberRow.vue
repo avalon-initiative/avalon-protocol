@@ -13,7 +13,7 @@ const props = withDefaults(defineProps<AvalonGuildMemberRowProps>(), {
   canChangeRole: false,
   canKick: false,
 })
-defineEmits<{ 'change-role': []; kick: [] }>()
+defineEmits<{ 'change-role': []; kick: []; view: [] }>()
 
 // #161's batch identity lookup resolves real display names now, wired in
 // via apps/hub/src/api/guilds.ts. `displayName` can still be undefined for
@@ -29,8 +29,10 @@ const fallbackName = computed(() => props.displayName ?? shortenIdentityId(props
 
 <template>
   <div :class="styles.row">
-    <AvalonAvatar :src="avatarUrl" :name="displayName ?? identityId" size="md" />
-    <span :class="styles.name" :title="identityId">{{ fallbackName }}</span>
+    <button :class="styles.viewTrigger" type="button" @click="$emit('view')">
+      <AvalonAvatar :src="avatarUrl" :name="displayName ?? identityId" size="md" />
+      <span :class="styles.name" :title="identityId">{{ fallbackName }}</span>
+    </button>
     <AvalonRoleBadge :name="roleName" :variant="roleVariant" />
     <AvalonPresenceBadge :status="status" />
     <div v-if="canChangeRole || canKick" :class="styles.actions">

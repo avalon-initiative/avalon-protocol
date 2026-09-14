@@ -328,13 +328,15 @@ via the outbox: `identity.recovery_configured`, `.recovery_requested`,
 
 Scoped out of #201's first pass, deliberately: a background sweep that
 auto-finalizes every eligible request the moment its delay elapses (today,
-`finalize_request` is called lazily — by the recovering device polling, or
-by anyone else who happens to check — which is correct but not
+`finalize_request` is caller-triggered — the recovering device's
+`RecoverIdentity.vue` calls it once it observes a ready `delay`-status
+request past its `delay_ends_at`, #394 — which is correct but not
 self-triggering); Rust SDK and C# binding surface for this flow; and Hub UI
-polish beyond a functional guardian-management card, initiation flow, and
-approval list (an owner-visible in-progress banner shows wherever
-`GET /me/recovery/status` is checked, but a dedicated real-time alert is
-future work). None of these affect the state machine or its invariants.
+polish beyond a functional guardian-management card, initiation flow,
+approval list, and finalize action (an owner-visible in-progress banner
+shows wherever `GET /me/recovery/status` is checked, but a dedicated
+real-time alert is future work). None of these affect the state machine or
+its invariants.
 
 ## What identity is not
 
@@ -410,6 +412,15 @@ future work). None of these affect the state machine or its invariants.
   recovery-guardians picker on the same page. Own-profile view only — per
   `list_profiles`'s note just above, these three fields stay deliberately
   absent from any other identity's profile view.
+- `apps/hub/src/views/PlayerProfile.vue` (#393) — a read-only profile card
+  for *another* identity, reachable by clicking a friend row or a guild
+  member row (neither had anywhere to link to before this). Shows only
+  `list_profiles`'s fields (display name, handle, avatar) plus live
+  presence — no `bio`/`favorite_genres`/`pronouns`/`banner_url`/etc., and no
+  shared-guilds list (no endpoint exposes another identity's guild
+  memberships at all yet). Whether/how to widen exposure for this specific
+  use case is tracked as its own open decision, issue #403 — not resolved
+  here as a side effect of adding the view.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never
@@ -575,11 +586,13 @@ future work). None of these affect the state machine or its invariants.
 - [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) —
   social recovery via an M-of-N set of trusted guardians, #99's real answer
   for losing every device at once. Done: `crates/server/src/recovery.rs`,
-  `crates/server/tests/recovery.rs`. Scoped out this pass: a background
-  auto-finalize sweep (finalize is currently caller-triggered, not
-  self-triggering), Rust SDK / C# binding surface, and Hub UI polish beyond
-  a functional guardian-management/initiation/approval flow — see the
-  section above for the full scoping rationale.
+  `crates/server/tests/recovery.rs`, and (#394) the recovering device's own
+  finalize step in `apps/hub/src/views/RecoverIdentity.vue` — the flow
+  could be started and approved from the Hub but never actually completed
+  until this. Scoped out this pass: a background auto-finalize sweep
+  (finalize is currently caller-triggered, not self-triggering), Rust SDK /
+  C# binding surface — see the section above for the full scoping
+  rationale.
 - [#199](https://github.com/LunarVagabond/avalon-protocol/issues/199) —
   onboarding/settings total-loss warning for a single-passkey identity, part
   of [#198](https://github.com/LunarVagabond/avalon-protocol/issues/198).

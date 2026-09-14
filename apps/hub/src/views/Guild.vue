@@ -136,7 +136,26 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'settings', label: 'Settings' },
 ]
 
+// Issue #391: channels/events are member-only server-side — hide those tabs
+// (and Calendar, which is just another view of events) for a non-member
+// browsing a recruiting guild's public page, rather than showing an
+// always-empty tab.
+const MEMBER_ONLY_TABS: TabKey[] = ['channels', 'events', 'calendar']
+const visibleTabs = computed(() => TABS.filter((tab) => isMember.value || !MEMBER_ONLY_TABS.includes(tab.key)))
+
 const activeTab = ref<TabKey>(route.name === 'guild-channel' ? 'channels' : 'overview')
+
+// A non-member landed here via a deep link into a member-only tab (e.g.
+// `/guilds/:id/channels/:cid`) — once membership is known, fall back to the
+// always-visible Overview tab instead of a hidden one. Gated on `loading`
+// (rather than `isMember` directly) so this doesn't fire on mount, before
+// membership is known, and wrongly bounce an actual member away from a
+// deep-linked channel.
+watch(loading, (isLoading) => {
+  if (!isLoading && !isMember.value && MEMBER_ONLY_TABS.includes(activeTab.value)) {
+    activeTab.value = 'overview'
+  }
+})
 
 function selectTab(tab: TabKey) {
   activeTab.value = tab
@@ -690,6 +709,11 @@ async function onSaveRoleChange() {
   }
 }
 
+// Issue #393: opens a member's read-only profile card.
+function onViewProfile(identityId: string) {
+  router.push({ name: 'player-profile', params: { id: identityId } })
+}
+
 async function onKick(identityId: string) {
   if (!session.token) return
   actionError.value = ''
@@ -790,15 +814,25 @@ function cancelInvite() {
   inviteError.value = ''
 }
 
+// Issue #392: accepts either a raw identity id or a `display_name#1234`
+// handle, the same convenience Friends.vue's onAddFriend already offers —
+// a handle (anything containing '#') is resolved to an identity id first,
+// since createGuildInvite always targets an identity id on the wire.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 async function onInvite() {
   if (!session.token) return
   inviteError.value = ''
   inviteSuccessId.value = ''
   inviting.value = true
   try {
-    const invite = await api.createGuildInvite(session.token, guildId.value, {
-      to: inviteIdentityId.value.trim(),
-    })
+    const input = inviteIdentityId.value.trim()
+    const to = input.includes('#') ? (await api.resolveHandle(session.token, input)).identity_id : input
+    if (!UUID_RE.test(to)) {
+      inviteError.value = "That doesn't look like an identity id or a display_name#1234 handle — enter one of those."
+      return
+    }
+    const invite = await api.createGuildInvite(session.token, guildId.value, { to })
     // No endpoint lists a player's own pending guild invites yet (a real
     // gap — see docs/architecture/guilds.md's correction note), so the
     // invite id has to be shared with the invitee out of band for them to
@@ -1085,7 +1119,7 @@ const {
 
     <div :class="local.tabs">
       <button
-        v-for="tab in TABS"
+        v-for="tab in visibleTabs"
         :key="tab.key"
         type="button"
         :class="[local.tab, activeTab === tab.key && local.tabActive]"
@@ -1315,6 +1349,7 @@ const {
               :can-kick="canKickMember(guild, selfId, selfPermissions, member)"
               @change-role="startChangeRole(member.identityId, member.roleIndex)"
               @kick="onKick(member.identityId)"
+              @view="onViewProfile(member.identityId)"
             />
           </div>
 
@@ -1371,7 +1406,11 @@ const {
               :error="inviteError"
               @submit="onInvite"
             >
-              <AvalonTextField v-model="inviteIdentityId" label="Identity id" />
+              <AvalonTextField
+                v-model="inviteIdentityId"
+                label="Identity id or handle"
+                placeholder="Identity id, or display_name#1234"
+              />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelInvite" />
               </template>

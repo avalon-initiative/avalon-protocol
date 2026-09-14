@@ -87,6 +87,7 @@ function testRouter() {
       { path: '/guilds/:id', name: 'guild', component: Guild },
       { path: '/guilds/:id/channels/:cid', name: 'guild-channel', component: Guild },
       { path: '/guilds', name: 'guilds', component: Guild },
+      { path: '/players/:id', name: 'player-profile', component: Guild },
     ],
   })
 }
@@ -279,5 +280,128 @@ describe('Guild', () => {
 
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.text()).toContain("always has every permission")
+  })
+
+  // Issue #392: the invite field used to send whatever was typed straight
+  // through as a raw UUID, opaque-422ing on anything else. It now accepts
+  // a display_name#1234 handle (resolved first, same as Friends.vue's
+  // add-friend flow) and rejects anything that isn't an id or handle
+  // client-side, with a clear message, before ever hitting the network.
+  it('invites by identity id, resolves a handle first, and rejects neither', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      ...baseRoutes(),
+      '/guilds/g1/invites': { id: 'inv1', guild_id: 'g1', to: 'id-outsider', status: 'pending' },
+      '/friends/handle/Nova%234821': { identity_id: '11111111-2222-3333-4444-555555555555' },
+    })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const membersTab = wrapper.findAll('button').find((b) => b.text() === 'Members')!
+    await membersTab.trigger('click')
+    await flushPromises()
+
+    const openInviteButton = wrapper.findAll('button').find((b) => b.text() === 'Invite a player')!
+    await openInviteButton.trigger('click')
+    await flushPromises()
+
+    const inviteField = wrapper.find('input[placeholder="Identity id, or display_name#1234"]')
+    const inviteForm = wrapper.findAll('form').find((f) => f.text().includes('Send invite'))!
+
+    // Neither a UUID nor a handle: rejected client-side, no network call.
+    ;(fetch as ReturnType<typeof vi.fn>).mockClear()
+    await inviteField.setValue('some random name')
+    await inviteForm.trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain("doesn't look like an identity id or a display_name#1234 handle")
+    expect(fetch).not.toHaveBeenCalled()
+
+    // A handle is resolved to an identity id before inviting.
+    await inviteField.setValue('Nova#4821')
+    await inviteForm.trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Invite sent (id inv1)')
+  })
+
+  // Issue #391: channels/events are member-only server-side (403 for a
+  // non-member), but that must never blank the whole page — only the
+  // member-only tabs should disappear.
+  it('renders a recruiting guild for a non-member despite 403s on channels/events', async () => {
+    useSessionStore().login('a-token')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        const path = new URL(url, 'http://test').pathname
+        const routes: Record<string, unknown> = {
+          ...baseRoutes(),
+          '/me': { ...profile, identity_id: 'id-outsider' },
+          '/guilds/g1': { ...guild, join_policy: 'open', recruiting: true },
+        }
+        if (path === '/guilds/g1/channels' || path === '/guilds/g1/events') {
+          return Promise.resolve({
+            ok: false,
+            status: 403,
+            json: () => Promise.resolve({ error: 'forbidden' }),
+            text: () => Promise.resolve('forbidden'),
+          })
+        }
+        const body = path in routes ? routes[path] : undefined
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body)),
+        })
+      }),
+    )
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    // Public info renders despite the 403s.
+    expect(wrapper.text()).toContain('Dragon Hunters')
+    expect(wrapper.text()).not.toContain('Something went wrong')
+
+    // Member-only tabs are hidden for a non-member rather than shown blank.
+    const tabLabels = wrapper.findAll('button').map((b) => b.text())
+    expect(tabLabels).not.toContain('Channels')
+    expect(tabLabels).not.toContain('Events')
+    expect(tabLabels).not.toContain('Calendar')
+    expect(tabLabels).toContain('Overview')
+    expect(tabLabels).toContain('Members')
+  })
+
+  // Issue #393: clicking a member's row opens their read-only profile card.
+  // `router.push` is intercepted (rather than letting the navigation
+  // actually complete) since this test mounts Guild.vue directly rather
+  // than via a <RouterView> — a real route change would otherwise leave
+  // this same, still-mounted instance reacting to its own `watch(guildId,
+  // load)` with a guild id that's really a player id.
+  it('navigates to a member profile card when their row is clicked', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined)
+
+    const membersTab = wrapper.findAll('button').find((b) => b.text() === 'Members')!
+    await membersTab.trigger('click')
+    await flushPromises()
+
+    const memberButton = wrapper.findAll('button').find((b) => b.text().includes('id-owner'))!
+    await memberButton.trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'player-profile', params: { id: 'id-owner' } })
   })
 })

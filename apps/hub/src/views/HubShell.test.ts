@@ -4,7 +4,7 @@
 // fail this, not just a HubShell-in-isolation mount.
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
@@ -93,10 +93,49 @@ describe('HubShell', () => {
     const router = testRouter()
     router.push('/profile')
     await router.isReady()
+    mount(HubShell, { global: { plugins: [router] } })
+    // Waiting on the page containing "Online" is ambiguous — NetworkStatus
+    // renders its own "Online"/"Offline" connectivity text regardless of
+    // presence — so wait on the actual heartbeat call instead.
+    await vi.waitFor(() => {
+      const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls as [string, RequestInit][]
+      const presenceCall = calls.find(([url, init]) => url.endsWith('/me/presence') && init.method === 'PUT')
+      expect(presenceCall).toBeDefined()
+    })
+  })
+
+  // Issue #390: manually picking a status must actually publish it, and
+  // must not get silently overwritten back to Online by the next heartbeat
+  // tick (the server's `PUT /me/presence` treats Away/DoNotDisturb/Offline
+  // as sticky overrides — the client has to honor that, not keep insisting
+  // on Online).
+  it('lets the player manually set their status and does not overwrite it on the next heartbeat', async () => {
+    useSessionStore().login('a-token')
+    vi.useFakeTimers()
+
+    const router = testRouter()
+    router.push('/profile')
+    await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Online'))
-    const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls as [string, RequestInit][]
-    const presenceCall = calls.find(([url, init]) => url.endsWith('/me/presence') && init.method === 'PUT')
-    expect(presenceCall).toBeDefined()
+    await flushPromises()
+
+    mockFetchByPath({
+      '/me/presence': { identity_id: 'id-1', status: 'DoNotDisturb', playing: null, updated_at: 'now' },
+    })
+
+    const select = wrapper.find('select[aria-label="Set your status"]')
+    await select.setValue('DoNotDisturb')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Do Not Disturb')
+
+    // Advancing past a heartbeat tick must not silently flip the badge back
+    // to Online — asserting on the rendered badge (rather than the raw
+    // fetch call log) since fetch is a single global spy shared across
+    // whatever else is mounted in this test file.
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Do Not Disturb')
+
+    vi.useRealTimers()
   })
 })
