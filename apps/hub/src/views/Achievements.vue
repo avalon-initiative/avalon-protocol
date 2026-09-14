@@ -4,7 +4,7 @@
 // result — never ranked, scored, or collapsed when revoked (ADR #77,
 // #81/#85). Reads only; issuing/revoking stays the issuer's own action via
 // its own credentials, never something the Hub does on a player's behalf.
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAchievementCard, AvalonCard, AvalonFilterBar } from '@avalon/ui'
 import { formatActivityTimestamp } from '../api/activityFeed'
@@ -18,6 +18,12 @@ import { useSessionStore } from '../stores/session'
 import page from './page.module.scss'
 import styles from './Achievements.module.scss'
 
+// Issue #389: this view used to load once on mount and never refresh —
+// polling on the same interval useConversations/useGuildChat already
+// established for milestone 1 (no WebSocket needed) rather than adding a
+// third, different cadence.
+const POLL_INTERVAL_MS = 15_000
+
 const session = useSessionStore()
 const router = useRouter()
 
@@ -29,15 +35,25 @@ const query = ref('')
 const sort = ref<AchievementSort>('date')
 const selectedGame = ref('')
 
-onMounted(async () => {
+let pollHandle: ReturnType<typeof setInterval> | undefined
+
+async function refresh() {
   if (!session.token) return
   try {
     achievements.value = await listMyAchievements(session.token)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
-  } finally {
-    loading.value = false
   }
+}
+
+onMounted(async () => {
+  await refresh()
+  loading.value = false
+  pollHandle = setInterval(refresh, POLL_INTERVAL_MS)
+})
+
+onUnmounted(() => {
+  if (pollHandle) clearInterval(pollHandle)
 })
 
 // One entry per distinct issuer present in the caller's own history — not

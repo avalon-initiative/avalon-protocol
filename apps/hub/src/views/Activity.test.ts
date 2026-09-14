@@ -65,4 +65,28 @@ describe('Activity', () => {
     const wrapper = mount(Activity)
     await vi.waitFor(() => expect(wrapper.text()).toContain('No activity yet'))
   })
+
+  // Issue #389: this view used to load once and never refresh.
+  it('polls for new history entries without a manual reload', async () => {
+    useSessionStore().login('a-token')
+    vi.useFakeTimers()
+    mockFetchOnce([])
+
+    const wrapper = mount(Activity)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('No activity yet'))
+
+    mockFetchOnce([
+      {
+        event_id: 'evt-1',
+        kind: 'identity.created',
+        subject: 'identity:id-1:self:created',
+        payload: {},
+        timestamp: '2026-09-08T00:00:00Z',
+      },
+    ])
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(wrapper.text()).toContain('You created your identity.')
+    vi.useRealTimers()
+  })
 })

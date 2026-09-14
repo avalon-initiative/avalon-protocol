@@ -4,7 +4,7 @@
 // (crates/server/src/handlers.rs's my_history) rather than a summarized
 // digest, so a fresh identity's single `identity.created` entry and a busy
 // identity's full history render the same way, just with more rows.
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { AvalonCard, AvalonIcon } from '@avalon/ui'
 import { getMyHistory } from '../api/client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
@@ -13,21 +13,37 @@ import { useSessionStore } from '../stores/session'
 import page from './page.module.scss'
 import styles from './Activity.module.scss'
 
+// Issue #389: this view used to load once on mount and never refresh —
+// polling on the same interval useConversations/useGuildChat already
+// established for milestone 1 (no WebSocket needed) rather than adding a
+// third, different cadence.
+const POLL_INTERVAL_MS = 15_000
+
 const session = useSessionStore()
 
 const entries = ref<HistoryEntryResponse[]>([])
 const loading = ref(true)
 const error = ref('')
 
-onMounted(async () => {
+let pollHandle: ReturnType<typeof setInterval> | undefined
+
+async function refresh() {
   if (!session.token) return
   try {
     entries.value = await getMyHistory(session.token)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
-  } finally {
-    loading.value = false
   }
+}
+
+onMounted(async () => {
+  await refresh()
+  loading.value = false
+  pollHandle = setInterval(refresh, POLL_INTERVAL_MS)
+})
+
+onUnmounted(() => {
+  if (pollHandle) clearInterval(pollHandle)
 })
 </script>
 
