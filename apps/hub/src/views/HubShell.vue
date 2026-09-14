@@ -47,14 +47,26 @@ const revisionUrl =
       ? `${GITHUB_REPO_URL}/releases/tag/${buildRevision}`
       : `${GITHUB_REPO_URL}/commit/${buildRevision}`
 
-async function publishPresence() {
+// Issue #390: `PUT /me/presence` treats Away/DoNotDisturb/Offline as sticky
+// manual overrides that persist until the caller explicitly sets Online
+// again — so the heartbeat re-publishes whatever status the player last
+// chose (`myStatus`), not a hardcoded 'Online', or it would silently
+// overwrite a manual Away/DND/Offline choice on the next tick.
+async function publishPresence(status: PresenceStatus = myStatus.value) {
   if (!session.token) return
   try {
-    const presence = await updateMyPresence(session.token, { status: 'Online' })
-    myStatus.value = presence?.status ?? 'Online'
+    const presence = await updateMyPresence(session.token, { status })
+    myStatus.value = presence?.status ?? status
   } catch {
     // Presence is best-effort; the next heartbeat retries.
   }
+}
+
+const STATUS_OPTIONS: PresenceStatus[] = ['Online', 'Away', 'DoNotDisturb', 'Offline']
+
+async function onSelectStatus(event: Event) {
+  const status = (event.target as HTMLSelectElement).value as PresenceStatus
+  await publishPresence(status)
 }
 
 onMounted(async () => {
@@ -69,8 +81,8 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-  await publishPresence()
-  heartbeatHandle = setInterval(publishPresence, PRESENCE_HEARTBEAT_MS)
+  await publishPresence('Online')
+  heartbeatHandle = setInterval(() => publishPresence(), PRESENCE_HEARTBEAT_MS)
 })
 
 onUnmounted(() => {
@@ -118,6 +130,16 @@ function onSelectNav(to: string) {
       <AvalonSidebarNav :items="navItems" @select="onSelectNav" />
       <div :class="styles.sidebarFooter">
         <AvalonPresenceBadge :status="myStatus" />
+        <select
+          :class="styles.statusSelect"
+          aria-label="Set your status"
+          :value="myStatus"
+          @change="onSelectStatus"
+        >
+          <option v-for="status in STATUS_OPTIONS" :key="status" :value="status">
+            {{ status === 'DoNotDisturb' ? 'Do Not Disturb' : status }}
+          </option>
+        </select>
         <NetworkStatus />
       </div>
     </aside>

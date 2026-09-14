@@ -53,6 +53,16 @@
   border-top: 1px solid var(--av-color-border);
 }
 
+.statusSelect {
+  width: 100%;
+  padding: var(--av-space-1) var(--av-space-2);
+  border-radius: var(--av-radius-sm);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: inherit;
+  font: inherit;
+}
+
 .body {
   display: flex;
   flex-direction: column;
