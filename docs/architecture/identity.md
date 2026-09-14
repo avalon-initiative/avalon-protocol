@@ -181,6 +181,14 @@ table rather than being bolted onto `devices.rs`. No password field or
 password-shaped persistent secret is introduced anywhere in this flow.
 `avalon pair-device` (`crates/cli`) drives the `start`/`poll` side as a
 stand-in incapable client, for testing this without a real console/engine.
+`avalon-sdk`'s `AvalonClient::login()`/`DeviceLogin::wait()`
+(`crates/sdk/src/device_login.rs`, #398) is the real, required integration
+surface for that same waiting side — #307 had left an SDK-side wrapper as
+optional scope-creep, but hand-sequencing `start`/`poll` per integrator
+risked every game getting backoff/expiry handling slightly wrong, so #398
+promoted it to a first-class helper that resolves straight to a `Session`.
+
+
 
 Recovery after every passkey is lost
 ([#99](https://github.com/LunarVagabond/avalon-protocol/issues/99), decided,
