@@ -1,13 +1,13 @@
-//! Guilds — network-level entities that exist independently of any one game.
+//! Guilds — network-level entities that exist independently of any one integrator.
 //!
-//! A guild is never assumed to belong to a single game; games optionally
+//! A guild is never assumed to belong to a single integrator; integrators optionally
 //! associate their own game-specific guild representation with a network
 //! guild. See `Proposal.md` §10.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::{GameId, GuildId, IdentityId};
+use crate::ids::{GuildId, IdentityId, IntegratorId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Guild {
@@ -359,12 +359,12 @@ pub struct GuildMember {
     pub joined_at: OffsetDateTime,
 }
 
-/// A game may optionally surface its own view of a network guild — this
-/// association is opt-in and does not make the game the guild's owner.
+/// An integrator may optionally surface its own view of a network guild — this
+/// association is opt-in and does not make the integrator the guild's owner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GuildGameAssociation {
+pub struct GuildIntegratorAssociation {
     pub guild_id: GuildId,
-    pub game_id: GameId,
+    pub integrator_id: IntegratorId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,7 +399,7 @@ pub struct GuildMessage {
 }
 
 /// A scheduled guild event (issue #169) — raid night, tournament prep,
-/// meetup, anything a guild plans in advance. Distinct from #88's game
+/// meetup, anything a guild plans in advance. Distinct from #88's integrator
 /// event *result* attestations: this is a plan for something upcoming, not
 /// a durable claim about something that already happened.
 ///

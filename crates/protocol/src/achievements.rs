@@ -1,14 +1,14 @@
 //! Achievements as verifiable claims (attestations), not shared database rows.
 //!
 //! Avalon records that an issuer made a claim about a user. It never
-//! dictates what a receiving game does with that claim — see
+//! dictates what a receiving integrator does with that claim — see
 //! `docs/stakeholders/Proposal.md` §8–9, `docs/architecture/achievements-and-attestations.md`, and the trust
 //! model in `docs/architecture/trust-model.md` (issue #76).
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::{AttestationId, GameId, GlobalId, IdentityId};
+use crate::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AchievementDefinition {
@@ -16,7 +16,7 @@ pub struct AchievementDefinition {
     pub issuer: Issuer,
     pub name: String,
     pub description: String,
-    /// An issuer-declared schema reference (e.g. a game-event-result schema,
+    /// An issuer-declared schema reference (e.g. an integrator-event-result schema,
     /// #88) so a consumer can recognize a claim's shape independently of the
     /// issuer's own naming for it. Optional: not every definition needs one.
     pub schema: Option<GlobalId>,
@@ -28,14 +28,14 @@ pub struct AchievementDefinition {
 
 /// Whoever is entitled to issue attestations. `Game`/`App`/`Service` mirror
 /// `IntegratorCategory` (issue #282, decision #275) — additive sibling
-/// variants sharing `GameId`'s id space, each minting its own `GlobalId`
-/// namespace prefix (`game:`/`app:`/`service:`) for events they author.
+/// variants sharing `IntegratorId`'s id space, each minting its own `GlobalId`
+/// namespace prefix (`integrator:`/`app:`/`service:`) for events they author.
 /// `Issuer::Game` itself is unchanged, per #275.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Issuer {
-    Game(GameId),
-    App(GameId),
-    Service(GameId),
+    Game(IntegratorId),
+    App(IntegratorId),
+    Service(IntegratorId),
 }
 
 impl Issuer {
@@ -52,7 +52,7 @@ impl Issuer {
     /// The claim-vocabulary word this issuer's category uses (issue #324,
     /// decided; #325 built the definition-CRUD half, #32 this attestation
     /// half): `"achievement"` for `Game`, `"milestone"` for `App`/
-    /// `Service` — matches `avalon_protocol::games::IntegratorCategory::claim_kind()`
+    /// `Service` — matches `avalon_protocol::integrators::IntegratorCategory::claim_kind()`
     /// exactly (kept as its own method here rather than converting through
     /// `IntegratorCategory`, since `Issuer` is what this module's own types
     /// are already built around).
@@ -63,7 +63,7 @@ impl Issuer {
         }
     }
 
-    pub fn id(&self) -> GameId {
+    pub fn id(&self) -> IntegratorId {
         match self {
             Issuer::Game(id) | Issuer::App(id) | Issuer::Service(id) => *id,
         }
@@ -72,7 +72,7 @@ impl Issuer {
 
 /// A detached Ed25519 signature over an attestation's canonical bytes
 /// (issue #32), produced by one of the issuer's own keys
-/// (`avalon_protocol::games::IssuerKey`) — never by the node operator.
+/// (`avalon_protocol::integrators::IssuerKey`) — never by the node operator.
 /// `key_id` names which of the issuer's (possibly several) keys signed it,
 /// so verification can resolve that exact key's point-in-time validity at
 /// `issued_at` (#84's `resolve_valid_signing_key`) rather than assuming the
@@ -86,7 +86,7 @@ pub struct Signature {
 
 /// A signed, verifiable claim: `issuer` claims `subject` earned `achievement`.
 ///
-/// The receiving game decides independently whether it trusts `issuer` and
+/// The receiving integrator decides independently whether it trusts `issuer` and
 /// what the claim means to it — see `TrustRelationship` and `Proposal.md` §9.
 ///
 /// **No `revoked_at` here** (issue #32, per #81's decided revocation
@@ -148,14 +148,14 @@ mod issuer_tests {
     use uuid::Uuid;
 
     #[test]
-    fn game_issuer_namespace_is_unchanged() {
-        let issuer = Issuer::Game(GameId(Uuid::new_v4()));
+    fn integrator_issuer_namespace_is_unchanged() {
+        let issuer = Issuer::Game(IntegratorId(Uuid::new_v4()));
         assert_eq!(issuer.namespace(), "game");
     }
 
     #[test]
     fn app_issuer_mints_the_app_namespace() {
-        let id = GameId(Uuid::new_v4());
+        let id = IntegratorId(Uuid::new_v4());
         let issuer = Issuer::App(id);
         assert_eq!(issuer.namespace(), "app");
         assert_eq!(issuer.id(), id);
@@ -163,7 +163,7 @@ mod issuer_tests {
 
     #[test]
     fn service_issuer_mints_the_service_namespace() {
-        let id = GameId(Uuid::new_v4());
+        let id = IntegratorId(Uuid::new_v4());
         let issuer = Issuer::Service(id);
         assert_eq!(issuer.namespace(), "service");
         assert_eq!(issuer.id(), id);
@@ -171,23 +171,23 @@ mod issuer_tests {
 
     #[test]
     fn issuer_variants_produce_distinct_global_ids_for_the_same_id() {
-        let id = GameId(Uuid::new_v4());
+        let id = IntegratorId(Uuid::new_v4());
         let owner = id.0.to_string();
 
-        let game_ref = GlobalId::new(Issuer::Game(id).namespace(), &owner, "self", "x");
+        let integrator_ref = GlobalId::new(Issuer::Game(id).namespace(), &owner, "self", "x");
         let app_ref = GlobalId::new(Issuer::App(id).namespace(), &owner, "self", "x");
         let service_ref = GlobalId::new(Issuer::Service(id).namespace(), &owner, "self", "x");
 
-        assert_eq!(game_ref.as_str(), format!("game:{owner}:self:x"));
+        assert_eq!(integrator_ref.as_str(), format!("game:{owner}:self:x"));
         assert_eq!(app_ref.as_str(), format!("app:{owner}:self:x"));
         assert_eq!(service_ref.as_str(), format!("service:{owner}:self:x"));
-        assert_ne!(game_ref, app_ref);
+        assert_ne!(integrator_ref, app_ref);
         assert_ne!(app_ref, service_ref);
     }
 
     #[test]
     fn claim_kind_matches_the_decided_vocabulary_split() {
-        let id = GameId(Uuid::new_v4());
+        let id = IntegratorId(Uuid::new_v4());
         assert_eq!(Issuer::Game(id).claim_kind(), "achievement");
         assert_eq!(Issuer::App(id).claim_kind(), "milestone");
         assert_eq!(Issuer::Service(id).claim_kind(), "milestone");
@@ -269,13 +269,13 @@ pub fn attestation_status_at(
 /// second of three separate questions — authentic, valid, recognized —
 /// never merged into one boolean). Checks the attestation's own revocation
 /// status ([`attestation_status_at`], #85) and the issuer's current
-/// `GameStatus` (#84 catalogued `Suspended`/`Revoked`/`Deprecated`, but
+/// `IntegratorStatus` (#84 catalogued `Suspended`/`Revoked`/`Deprecated`, but
 /// nothing can transition an issuer into them yet — no point-in-time
 /// issuer-status history exists either, so that half of this check is
 /// still "as of now", not "as of `at`"; the attestation-revocation half
 /// genuinely is point-in-time). Issuer-key-validity-at-issuance is a
 /// separate question, already covered by
-/// [`crate::games::IssuerKey::is_valid_at`]/`Authenticity`
+/// [`crate::integrators::IssuerKey::is_valid_at`]/`Authenticity`
 /// (`avalon_chain::attestations::verify_authenticity`), not repeated here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Validity {
@@ -284,24 +284,24 @@ pub enum Validity {
 }
 
 pub fn validity(
-    issuer_status: crate::games::GameStatus,
+    issuer_status: crate::integrators::IntegratorStatus,
     attestation_status: AttestationStatus,
 ) -> Validity {
-    use crate::games::GameStatus;
+    use crate::integrators::IntegratorStatus;
     if attestation_status == AttestationStatus::Revoked {
         return Validity::Invalid {
             reason: "attestation has been revoked".to_string(),
         };
     }
     match issuer_status {
-        GameStatus::Active => Validity::Valid,
-        GameStatus::Suspended => Validity::Invalid {
+        IntegratorStatus::Active => Validity::Valid,
+        IntegratorStatus::Suspended => Validity::Invalid {
             reason: "issuer is currently suspended".to_string(),
         },
-        GameStatus::Revoked => Validity::Invalid {
+        IntegratorStatus::Revoked => Validity::Invalid {
             reason: "issuer has been revoked".to_string(),
         },
-        GameStatus::Deprecated => Validity::Invalid {
+        IntegratorStatus::Deprecated => Validity::Invalid {
             reason: "issuer is deprecated".to_string(),
         },
     }
@@ -326,7 +326,7 @@ pub struct RecognitionScope {
     /// no floor.
     pub min_version: Option<u32>,
     /// Only claims issued at or after this instant — `None` means no
-    /// floor. Matches the ticket's own example: "Game A's achievements...
+    /// floor. Matches the ticket's own example: "Integrator A's achievements...
     /// issued after 2027-01".
     pub issued_after: Option<OffsetDateTime>,
 }
@@ -370,7 +370,7 @@ impl RecognitionScope {
 /// unscoped-only shape exactly (additive, not a breaking change).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustRelationship {
-    pub truster: GameId,
+    pub truster: IntegratorId,
     pub trusted_issuer: Issuer,
     pub established_at: OffsetDateTime,
     #[serde(default)]
@@ -379,7 +379,7 @@ pub struct TrustRelationship {
 
 /// "Does *this consumer's own policy* recognize this claim" (issue #33,
 /// ADR #76's third question) — evaluated entirely on the consumer's side
-/// (SDK or the game's own code), never a boolean the server computes or
+/// (SDK or the integrator's own code), never a boolean the server computes or
 /// returns. Deliberately separate from [`Validity`]/authenticity: a claim
 /// can be authentic and valid and still `NotRecognized` here, and the API
 /// must be able to express exactly that (this ticket's own invariant).
@@ -421,31 +421,31 @@ pub fn recognize(
 #[cfg(test)]
 mod verification_tests {
     use super::*;
-    use crate::games::GameStatus;
+    use crate::integrators::IntegratorStatus;
     use uuid::Uuid;
 
     #[test]
     fn validity_is_valid_only_for_an_active_issuer_and_non_revoked_attestation() {
         assert_eq!(
-            validity(GameStatus::Active, AttestationStatus::Active),
+            validity(IntegratorStatus::Active, AttestationStatus::Active),
             Validity::Valid
         );
         assert_ne!(
-            validity(GameStatus::Suspended, AttestationStatus::Active),
+            validity(IntegratorStatus::Suspended, AttestationStatus::Active),
             Validity::Valid
         );
         assert_ne!(
-            validity(GameStatus::Revoked, AttestationStatus::Active),
+            validity(IntegratorStatus::Revoked, AttestationStatus::Active),
             Validity::Valid
         );
         assert_ne!(
-            validity(GameStatus::Deprecated, AttestationStatus::Active),
+            validity(IntegratorStatus::Deprecated, AttestationStatus::Active),
             Validity::Valid
         );
         // A revoked attestation is invalid even under an otherwise-active
         // issuer.
         assert_ne!(
-            validity(GameStatus::Active, AttestationStatus::Revoked),
+            validity(IntegratorStatus::Active, AttestationStatus::Revoked),
             Validity::Valid
         );
     }
@@ -488,7 +488,7 @@ mod verification_tests {
     }
 
     fn issuer_and_scope_fixture() -> (Issuer, GlobalId) {
-        let issuer = Issuer::Game(GameId(Uuid::new_v4()));
+        let issuer = Issuer::Game(IntegratorId(Uuid::new_v4()));
         let schema = GlobalId::new("game", "ashen-realms", "schema", "v1");
         (issuer, schema)
     }
@@ -497,7 +497,7 @@ mod verification_tests {
     fn an_unscoped_relationship_recognizes_everything_from_the_trusted_issuer() {
         let (issuer, schema) = issuer_and_scope_fixture();
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer.clone(),
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![],
@@ -518,9 +518,9 @@ mod verification_tests {
     #[test]
     fn a_different_issuer_is_never_recognized_regardless_of_scopes() {
         let (issuer, _schema) = issuer_and_scope_fixture();
-        let other_issuer = Issuer::Game(GameId(Uuid::new_v4()));
+        let other_issuer = Issuer::Game(IntegratorId(Uuid::new_v4()));
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer,
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![],
@@ -544,7 +544,7 @@ mod verification_tests {
     fn scoped_by_claim_kind_rejects_the_other_kind() {
         let (issuer, _schema) = issuer_and_scope_fixture();
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer.clone(),
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![RecognitionScope {
@@ -583,7 +583,7 @@ mod verification_tests {
         let (issuer, schema) = issuer_and_scope_fixture();
         let other_schema = GlobalId::new("game", "ashen-realms", "schema", "v2");
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer.clone(),
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![RecognitionScope {
@@ -632,7 +632,7 @@ mod verification_tests {
     fn scoped_by_min_version_rejects_older_versions() {
         let (issuer, _schema) = issuer_and_scope_fixture();
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer.clone(),
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![RecognitionScope {
@@ -671,7 +671,7 @@ mod verification_tests {
         let (issuer, _schema) = issuer_and_scope_fixture();
         let cutoff = OffsetDateTime::UNIX_EPOCH + time::Duration::days(365);
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer.clone(),
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![RecognitionScope {
@@ -702,7 +702,7 @@ mod verification_tests {
     fn multiple_scopes_are_or_combined() {
         let (issuer, _schema) = issuer_and_scope_fixture();
         let policy = TrustRelationship {
-            truster: GameId(Uuid::new_v4()),
+            truster: IntegratorId(Uuid::new_v4()),
             trusted_issuer: issuer.clone(),
             established_at: OffsetDateTime::UNIX_EPOCH,
             scopes: vec![

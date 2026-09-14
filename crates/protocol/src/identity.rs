@@ -1,6 +1,6 @@
-//! User identity, separate from any game's character model.
+//! User identity, separate from any integrator's character model.
 //!
-//! See GitHub issue #67 ("ADR: Identity Is Separate From Game Characters") for
+//! See GitHub issue #67 ("ADR: Identity Is Separate From Integrator Characters") for
 //! why this boundary is mandatory rather than incidental.
 
 use serde::{Deserialize, Serialize};
@@ -10,8 +10,8 @@ use crate::ids::{GuildId, IdentityId};
 
 /// The persistent, network-level user identity.
 ///
-/// An `Identity` never references a game's character schema. It is the thing
-/// that survives any single game shutting down.
+/// An `Identity` never references an integrator's character schema. It is the thing
+/// that survives any single integrator shutting down.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
     pub id: IdentityId,
@@ -21,7 +21,7 @@ pub struct Identity {
 /// User-controlled, human-facing profile data.
 ///
 /// Deliberately small and deliberately not the place where game-specific data
-/// lives — see `Proposal.md` §19, "Identity vs. Game Data". `bio`,
+/// lives — see `Proposal.md` §19, "Identity vs. Integrator Data". `bio`,
 /// `favorite_genres`, and `pronouns` (issue #155) are the "later" #86
 /// flagged: small, user-optional, non-game-specific self-description,
 /// same promised-durable tier as `display_name`/`avatar_url` — see
@@ -73,8 +73,8 @@ pub struct Profile {
     /// contributor must not silently add geolocation here.
     pub location: Option<String>,
     /// A self-chosen pointer to one of this identity's own current guild
-    /// memberships (not scoped to any game/app/service category — a guild
-    /// itself isn't category-scoped, see `GuildGameAssociation` in
+    /// memberships (not scoped to any integrator/app/service category — a guild
+    /// itself isn't category-scoped, see `GuildIntegratorAssociation` in
     /// `crates/protocol/src/guilds.rs`), so an integrator building a
     /// guild-chat-style UI has one guild to default to instead of having to
     /// support arbitrarily-many simultaneous memberships. Server-side

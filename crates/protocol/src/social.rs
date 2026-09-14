@@ -1,12 +1,12 @@
-//! Friends and presence — network-level social concepts, not game-scoped.
+//! Friends and presence — network-level social concepts, not integrator-scoped.
 //!
-//! A game never automatically receives a user's whole social graph; see
+//! An integrator never automatically receives a user's whole social graph; see
 //! `permissions` for the capability that gates each of these reads.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::{GameId, IdentityId};
+use crate::ids::{IdentityId, IntegratorId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Friendship {
@@ -46,16 +46,16 @@ pub enum PresenceStatus {
 pub struct Presence {
     pub identity_id: IdentityId,
     pub status: PresenceStatus,
-    /// The game the user is currently in, if any and if shared.
-    pub playing: Option<GameId>,
+    /// The integrator the user is currently active in, if any and if shared.
+    pub active_in: Option<IntegratorId>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
 /// A direct or small-group conversation (issue #102) — the identity-to-identity
 /// sibling of [`crate::guilds::GuildChannel`], mirroring its shape: pure
-/// structure, no game reference anywhere. A conversation between users is
-/// a fact about their relationship, not about whichever game either of them
+/// structure, no integrator reference anywhere. A conversation between users is
+/// a fact about their relationship, not about whichever integrator either of them
 /// had open when it started — see `docs/architecture/communication.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
@@ -65,7 +65,7 @@ pub struct Conversation {
 
 /// A single message within a [`Conversation`]. Deliberately **not** protocol
 /// history, for the same reason [`crate::guilds::GuildMessage`] isn't
-/// (issue #22): high-volume, non-interoperable, nothing a receiving game
+/// (issue #22): high-volume, non-interoperable, nothing a receiving integrator
 /// ever needs to verify. No `conversation.message_*` event kind exists, and
 /// nothing in the send/read path touches `SettlementProvider::commit` — see
 /// `crates/server/src/conversations.rs`.

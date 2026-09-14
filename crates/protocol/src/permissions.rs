@@ -1,6 +1,6 @@
 //! Explicit, capability-based permissions.
 //!
-//! Least privilege by default: a game receives only the capabilities a user
+//! Least privilege by default: an integrator receives only the capabilities a user
 //! has actually authorized, never everything associated with an identity.
 //! See `Proposal.md` §13.
 
@@ -11,7 +11,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::OffsetDateTime;
 
-use crate::ids::{GameId, IdentityId};
+use crate::ids::{IdentityId, IntegratorId};
 
 /// A single scoped permission, e.g. `presence.read`.
 ///
@@ -180,14 +180,14 @@ impl<'de> Deserialize<'de> for Capability {
     }
 }
 
-/// A capability a user has actually granted to a specific game.
+/// A capability a user has actually granted to a specific integrator.
 ///
-/// Revocable and scoped: this record is the entire answer to "can Game X do
-/// Y for User Z," not an implicit `game_has_access_to_user = true`.
+/// Revocable and scoped: this record is the entire answer to "can Integrator X do
+/// Y for User Z," not an implicit `integrator_has_access_to_user = true`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionGrant {
     pub identity_id: IdentityId,
-    pub game_id: GameId,
+    pub integrator_id: IntegratorId,
     pub capability: Capability,
     pub granted_at: OffsetDateTime,
     pub revoked_at: Option<OffsetDateTime>,

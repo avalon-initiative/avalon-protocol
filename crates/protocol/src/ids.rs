@@ -1,6 +1,6 @@
 //! Globally unique identifiers.
 //!
-//! Human-readable names (a game's slug, an achievement's key) are never
+//! Human-readable names (an integrator's slug, an achievement's key) are never
 //! assumed to be globally unique on their own — see
 //! `docs/architecture/achievements-and-attestations.md` (claim namespacing).
 //! A `GlobalId` namespaces a human-readable key under the entity that issued
@@ -22,7 +22,7 @@ impl fmt::Display for IdentityId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct GameId(pub Uuid);
+pub struct IntegratorId(pub Uuid);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GuildId(pub Uuid);
@@ -38,8 +38,8 @@ impl fmt::Display for AttestationId {
 
 /// A namespaced, human-readable identifier: `<namespace>:<owner>:<kind>:<key>`.
 ///
-/// Example: `game:ashen-realms:achievement:dragon_slayer`. Two different games
-/// can both define `dragon_slayer` without colliding, because the game's own
+/// Example: `game:ashen-realms:achievement:dragon_slayer`. Two different integrators
+/// can both define `dragon_slayer` without colliding, because the integrator's own
 /// slug is part of the identifier, not just the achievement key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GlobalId(String);

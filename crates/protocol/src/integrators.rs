@@ -1,4 +1,4 @@
-//! Game registration — how a game becomes known to Avalon and what it asks for.
+//! Integrator registration — how an integrator becomes known to Avalon and what it asks for.
 //!
 //! See `Proposal.md` §18. Registering does not grant any capability by
 //! itself; a user must still authorize each capability (`permissions`).
@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::ids::GameId;
+use crate::ids::IntegratorId;
 use crate::permissions::Capability;
 
-/// A game's registration status (issue #26). Grown by #84 to catalogue the
-/// full set `docs/architecture/games-and-issuers.md`'s status column always
+/// An integrator's registration status (issue #26). Grown by #84 to catalogue the
+/// full set `docs/architecture/integrators-and-issuers.md`'s status column always
 /// named (`Active`/`Suspended`/`Revoked`/`Deprecated`) — milestone 1 still
 /// only ever *sets* `Active`; the network-level authorization model for who
 /// can transition an issuer into the other three, and the endpoints that do
@@ -24,29 +24,29 @@ use crate::permissions::Capability;
 /// (`crates/protocol/src/guilds.rs`) already established in this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum GameStatus {
+pub enum IntegratorStatus {
     Active,
     Suspended,
     Revoked,
     Deprecated,
 }
 
-impl GameStatus {
+impl IntegratorStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
-            GameStatus::Active => "active",
-            GameStatus::Suspended => "suspended",
-            GameStatus::Revoked => "revoked",
-            GameStatus::Deprecated => "deprecated",
+            IntegratorStatus::Active => "active",
+            IntegratorStatus::Suspended => "suspended",
+            IntegratorStatus::Revoked => "revoked",
+            IntegratorStatus::Deprecated => "deprecated",
         }
     }
 
-    pub fn parse(s: &str) -> Option<GameStatus> {
+    pub fn parse(s: &str) -> Option<IntegratorStatus> {
         Some(match s {
-            "active" => GameStatus::Active,
-            "suspended" => GameStatus::Suspended,
-            "revoked" => GameStatus::Revoked,
-            "deprecated" => GameStatus::Deprecated,
+            "active" => IntegratorStatus::Active,
+            "suspended" => IntegratorStatus::Suspended,
+            "revoked" => IntegratorStatus::Revoked,
+            "deprecated" => IntegratorStatus::Deprecated,
             _ => return None,
         })
     }
@@ -187,8 +187,11 @@ pub fn resolve_valid_root_key(
 }
 
 /// What kind of integrator a registrant is (issue #282, decision #275).
-/// Additive only — does not rename `GameId`/`Issuer::Game`/`games`/`game.*`
-/// events. Defaults to `Game`, so a caller that omits `category` is unaffected.
+/// The variant names are the category vocabulary itself, so they stay
+/// `Game`/`App`/`Service` even after #290 renamed the surrounding
+/// primitives to `Integrator*` — and `as_str()` remains the durable wire
+/// string. Defaults to `Game`, so a caller that omits `category` is
+/// unaffected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntegratorCategory {
@@ -236,18 +239,21 @@ impl IntegratorCategory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Game {
-    pub id: GameId,
+pub struct Integrator {
+    pub id: IntegratorId,
     pub slug: String,
     pub name: String,
-    pub developer: String,
+    /// Who owns/operates this integrator — a studio, company, or individual.
+    /// Named `owner_name` rather than "operator", which this codebase already
+    /// uses for settlement/node operators.
+    pub owner_name: String,
     pub registered_at: OffsetDateTime,
-    pub status: GameStatus,
+    pub status: IntegratorStatus,
     #[serde(default)]
     pub category: IntegratorCategory,
 }
 
-/// The first signing key a game registers with (issue #26). Shaped so issue
+/// The first signing key an integrator registers with (issue #26). Shaped so issue
 /// #84 (issuer key lifecycle — rotation, multiple keys, revocation) can
 /// extend rather than replace it: this only ever describes the one key
 /// recorded at registration time, never a full key history.
@@ -258,44 +264,44 @@ pub struct IssuerKeyInfo {
     pub public_key: Vec<u8>,
 }
 
-/// The capabilities a game declares it wants, presented to the user before
+/// The capabilities an integrator declares it wants, presented to the user before
 /// they connect their identity — not a grant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GameRegistration {
-    pub game: Game,
+pub struct IntegratorRegistration {
+    pub integrator: Integrator,
     pub requested_capabilities: Vec<Capability>,
     pub initial_key: IssuerKeyInfo,
 }
 
-/// A credential a game uses to authenticate itself to Avalon (server-to-server),
+/// A credential an integrator uses to authenticate itself to Avalon (server-to-server),
 /// distinct from a user's own session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GameCredential {
-    pub game_id: GameId,
+pub struct IntegratorCredential {
+    pub integrator_id: IntegratorId,
     pub key_id: String,
 }
 
-/// "This identity participates in this game" — nothing more (issue #83). No
+/// "This identity participates in this integrator" — nothing more (issue #83). No
 /// characters, race, class, level, appearance, or progression: those stay in
-/// the game's own database, and this type deliberately has no field for any
-/// of them. See `docs/architecture/game-bindings.md`.
+/// the integrator's own database, and this type deliberately has no field for any
+/// of them. See `docs/architecture/integrator-bindings.md`.
 ///
 /// A binding is established by the **user**, through the consent flow
-/// (issue #27, `POST /games/{slug}/connect`) — never created by a game
+/// (issue #27, `POST /integrators/{slug}/connect`) — never created by an integrator
 /// unilaterally. Capability grants (`PermissionGrant`, `permissions.rs`) are
 /// scoped to a binding: no active binding, no grants, and ending a binding
 /// ends every grant under it. Ending a binding does not delete history —
 /// `ended_at` records when, it does not remove the row or the durable
 /// `game.binding_established`/`game.binding_ended` events behind it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GameBinding {
+pub struct IntegratorBinding {
     pub identity_id: crate::ids::IdentityId,
-    pub game_id: GameId,
+    pub integrator_id: IntegratorId,
     pub established_at: OffsetDateTime,
     pub ended_at: Option<OffsetDateTime>,
 }
 
-impl GameBinding {
+impl IntegratorBinding {
     pub fn is_active(&self) -> bool {
         self.ended_at.is_none()
     }
@@ -306,10 +312,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn game_status_round_trips_through_its_wire_string() {
-        assert_eq!(GameStatus::Active.as_str(), "active");
-        assert_eq!(GameStatus::parse("active"), Some(GameStatus::Active));
-        assert_eq!(GameStatus::parse("bogus"), None);
+    fn integrator_status_round_trips_through_its_wire_string() {
+        assert_eq!(IntegratorStatus::Active.as_str(), "active");
+        assert_eq!(
+            IntegratorStatus::parse("active"),
+            Some(IntegratorStatus::Active)
+        );
+        assert_eq!(IntegratorStatus::parse("bogus"), None);
     }
 
     #[test]
@@ -333,19 +342,19 @@ mod tests {
     }
 
     #[test]
-    fn integrator_category_defaults_to_game() {
+    fn integrator_category_defaults_to_integrator() {
         assert_eq!(IntegratorCategory::default(), IntegratorCategory::Game);
     }
 
     #[test]
-    fn game_status_round_trips_every_variant() {
+    fn integrator_status_round_trips_every_variant() {
         for status in [
-            GameStatus::Active,
-            GameStatus::Suspended,
-            GameStatus::Revoked,
-            GameStatus::Deprecated,
+            IntegratorStatus::Active,
+            IntegratorStatus::Suspended,
+            IntegratorStatus::Revoked,
+            IntegratorStatus::Deprecated,
         ] {
-            assert_eq!(GameStatus::parse(status.as_str()), Some(status));
+            assert_eq!(IntegratorStatus::parse(status.as_str()), Some(status));
         }
     }
 
@@ -393,7 +402,7 @@ mod tests {
         assert!(!k.is_valid_at(t(10)));
     }
 
-    /// Scenario E (`docs/architecture/games-and-issuers.md`): a claim
+    /// Scenario E (`docs/architecture/integrators-and-issuers.md`): a claim
     /// signed by k1 in the past stays authentic after k1 is later retired —
     /// rotation never invalidates history.
     #[test]
@@ -410,7 +419,7 @@ mod tests {
         assert!(resolve_valid_signing_key(std::slice::from_ref(&k1), k1.key_id, t(20)).is_none());
     }
 
-    /// Scenario F (`docs/architecture/games-and-issuers.md`): claims signed
+    /// Scenario F (`docs/architecture/integrators-and-issuers.md`): claims signed
     /// by a compromised key before revocation remain authentic; claims
     /// "signed" after revocation are rejected.
     #[test]
