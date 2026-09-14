@@ -20,17 +20,21 @@
 //! identity, and `active_in`, if set at all, must equal the integrator's own
 //! `integrator_id` — [`validate_integrator_playing`] is the one place that rule lives.
 //!
-//! **Reading.** `GET /presence` and `GET /ws/presence` default to
-//! friends-only visibility (`docs/architecture/privacy.md`'s proposed
-//! default for this resource): the caller always sees their own entry;
-//! for anyone else, only if the caller and that identity are currently
-//! friends (`crate::friends::friend_partners`) and there's no block
-//! between them (`crate::blocks::block_partners`, issue #97, checked
-//! first — a block hides presence even between friends). This is a
-//! literal implementation of that one proposed default, **not** the full
-//! per-resource visibility-scope model issue #87 still owns (guild
-//! visibility, a private setting, etc.) — seeing the friends-only rule
-//! land nowhere else in this file is expected, not an oversight.
+//! **Reading.** `GET /presence` and `GET /ws/presence` are gated by each
+//! subject's own `profiles.presence_visibility` setting (issue #87,
+//! `avalon_protocol::permissions::Visibility` — defaults to `friends`,
+//! preserving this endpoint's original hardcoded default from before #87):
+//! the caller always sees their own entry; for anyone else,
+//! [`presence_visible`] evaluates the subject's stored setting against the
+//! caller's relationship to them (`crate::friends::friend_partners` for
+//! `Friends`). A block always wins regardless of setting
+//! (`crate::blocks::block_partners`, issue #97, checked first — a block
+//! hides presence even between friends, or even under a `Public` setting).
+//! [`presence_visible`] takes pre-batched friend/visibility maps rather
+//! than calling `crate::visibility::is_visible` per id — the same
+//! single-query-per-request shape `hide_active_in_for` already uses for
+//! this endpoint, worth keeping now that visibility is a per-subject
+//! lookup too, not a blanket rule.
 //!
 //! **Sticky manual overrides.** `Online` is the only status this store
 //! computes automatically from heartbeat/TTL state. `Away`, `DoNotDisturb`,
@@ -80,7 +84,7 @@ use crate::authz::{authenticate_caller, require_capability, Caller};
 use crate::error::AppError;
 use crate::handlers::{authenticate, authenticate_token};
 use crate::state::AppState;
-use avalon_protocol::permissions::Capability;
+use avalon_protocol::permissions::{Capability, Visibility};
 
 /// A published presence entry that hasn't been refreshed within this window
 /// reads as `Offline`. Overridable via `AVALON_PRESENCE_TTL_SECS` (see
@@ -283,6 +287,34 @@ async fn hide_active_in_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uu
     Ok(set)
 }
 
+/// Reads `profiles.presence_visibility` for every id in `ids` in one
+/// batched query (issue #87). An id with no `profiles` row (shouldn't
+/// happen for a real identity, but never assumed) falls back to
+/// `Visibility::Friends` — this endpoint's own original hardcoded
+/// default, preserved rather than silently becoming more permissive for a
+/// row this lookup can't find.
+async fn presence_visibility_for(
+    state: &AppState,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, Visibility>, AppError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT identity_id, presence_visibility FROM profiles WHERE identity_id = ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut map = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let identity_id: Uuid = row.try_get("identity_id")?;
+        let raw: String = row.try_get("presence_visibility")?;
+        map.insert(identity_id, crate::visibility::parse_visibility(&raw));
+    }
+    Ok(map)
+}
+
 /// Upserts `identity_id`'s own `hide_active_in` preference — the durable
 /// half of `PUT /me/presence`, see module doc comment for why this isn't
 /// part of the ephemeral `PresenceStore`.
@@ -412,23 +444,32 @@ pub struct PresenceQuery {
 }
 
 /// True if `caller` may see `subject`'s real presence: always for their
-/// own entry, otherwise only if they're currently friends
-/// (`crate::friends::friend_partners`) and there's no block between them
-/// (checked first — a block hides presence even between friends that
-/// haven't unfriended each other, issue #97). This is the literal
-/// friends-only default `docs/architecture/privacy.md` proposes for this
-/// resource, not the full scope model issue #87 owns — see module doc
-/// comment.
+/// own entry; otherwise a block between them always hides it (checked
+/// first, issue #97 — a block wins even under a `Public` setting); beyond
+/// that, `subject`'s own stored `Visibility` decides (issue #87) —
+/// `Public`/`AuthenticatedOnly` always visible here (`GET /presence`
+/// already requires a valid session, so "authenticated" is trivially
+/// true), `Friends` only if `friend_ids` contains `subject`,
+/// `GuildMembers`/`Private` never (presence has no guild context, and
+/// `Private` means nobody but the subject).
 fn presence_visible(
     caller: Uuid,
     subject: Uuid,
+    visibility: Visibility,
     friend_ids: &HashSet<Uuid>,
     blocked_partners: &HashSet<Uuid>,
 ) -> bool {
+    if subject == caller {
+        return true;
+    }
     if blocked_partners.contains(&subject) {
         return false;
     }
-    subject == caller || friend_ids.contains(&subject)
+    match visibility {
+        Visibility::Public | Visibility::AuthenticatedOnly => true,
+        Visibility::Friends => friend_ids.contains(&subject),
+        Visibility::GuildMembers | Visibility::Private => false,
+    }
 }
 
 fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> PresenceResponse {
@@ -474,10 +515,15 @@ pub async fn get_presence(
     let friend_ids = crate::friends::friend_partners(&state, caller).await?;
     let blocked_partners = crate::blocks::block_partners(&state, caller).await?;
     let hidden_playing = hide_active_in_for(&state, &ids).await?;
+    let visibility_by_id = presence_visibility_for(&state, &ids).await?;
     let views = ids
         .into_iter()
         .map(|id| {
-            if presence_visible(caller, id, &friend_ids, &blocked_partners) {
+            let visibility = visibility_by_id
+                .get(&id)
+                .copied()
+                .unwrap_or(Visibility::Friends);
+            if presence_visible(caller, id, visibility, &friend_ids, &blocked_partners) {
                 hidden_playing_view(state.presence.get(id).into(), &hidden_playing)
             } else {
                 PresenceResponse {
@@ -556,6 +602,7 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
     };
     let mut subscribed: HashSet<Uuid> = HashSet::new();
     let mut hidden_playing: HashSet<Uuid> = HashSet::new();
+    let mut visibility_by_id: HashMap<Uuid, Visibility> = HashMap::new();
     let mut updates = state.presence.subscribe();
 
     loop {
@@ -573,13 +620,20 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
                         if let Ok(hidden) = hide_active_in_for(&state, &new_ids).await {
                             hidden_playing.extend(hidden);
                         }
+                        if let Ok(visibility) = presence_visibility_for(&state, &new_ids).await {
+                            visibility_by_id.extend(visibility);
+                        }
                         // Send a catch-up snapshot for each newly-subscribed
                         // id immediately, rather than making the client wait
                         // for that identity's next publish to learn its
                         // current status.
                         for id in new_ids {
                             subscribed.insert(id);
-                            let view: PresenceResponse = if presence_visible(caller, id, &friend_ids, &blocked_partners) {
+                            let visibility = visibility_by_id
+                                .get(&id)
+                                .copied()
+                                .unwrap_or(Visibility::Friends);
+                            let view: PresenceResponse = if presence_visible(caller, id, visibility, &friend_ids, &blocked_partners) {
                                 hidden_playing_view(state.presence.get(id).into(), &hidden_playing)
                             } else {
                                 offline_view(id)
@@ -598,7 +652,11 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
             update = updates.recv() => {
                 match update {
                     Ok(update) if subscribed.contains(&update.identity_id) => {
-                        let view = if presence_visible(caller, update.identity_id, &friend_ids, &blocked_partners) {
+                        let visibility = visibility_by_id
+                            .get(&update.identity_id)
+                            .copied()
+                            .unwrap_or(Visibility::Friends);
+                        let view = if presence_visible(caller, update.identity_id, visibility, &friend_ids, &blocked_partners) {
                             hidden_playing_view(update, &hidden_playing)
                         } else {
                             offline_view(update.identity_id)
@@ -742,36 +800,77 @@ mod tests {
     // full `PUT /presence/:identity_id` endpoint exercising it end to end.
 
     #[test]
-    fn presence_visible_to_self_regardless_of_friend_state() {
+    fn presence_visible_to_self_regardless_of_visibility_setting() {
         let caller = Uuid::new_v4();
         let empty = HashSet::new();
-        assert!(presence_visible(caller, caller, &empty, &empty));
+        assert!(presence_visible(
+            caller,
+            caller,
+            Visibility::Private,
+            &empty,
+            &empty
+        ));
     }
 
     #[test]
-    fn presence_visible_to_a_friend() {
+    fn presence_visible_to_a_friend_under_the_friends_default() {
         let caller = Uuid::new_v4();
         let friend = Uuid::new_v4();
         let friends: HashSet<Uuid> = [friend].into_iter().collect();
-        assert!(presence_visible(caller, friend, &friends, &HashSet::new()));
+        assert!(presence_visible(
+            caller,
+            friend,
+            Visibility::Friends,
+            &friends,
+            &HashSet::new()
+        ));
     }
 
     #[test]
-    fn presence_hidden_from_a_non_friend_by_default() {
+    fn presence_hidden_from_a_non_friend_under_the_friends_default() {
         let caller = Uuid::new_v4();
         let stranger = Uuid::new_v4();
         assert!(!presence_visible(
             caller,
             stranger,
+            Visibility::Friends,
             &HashSet::new(),
             &HashSet::new()
         ));
     }
 
     #[test]
-    fn presence_hidden_from_a_blocked_friend() {
-        // A block hides presence even when the two are still friends —
-        // the block check runs first in `presence_visible`.
+    fn presence_visible_to_a_stranger_under_public() {
+        let caller = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        assert!(presence_visible(
+            caller,
+            stranger,
+            Visibility::Public,
+            &HashSet::new(),
+            &HashSet::new()
+        ));
+    }
+
+    #[test]
+    fn presence_hidden_from_everyone_but_self_under_private() {
+        let caller = Uuid::new_v4();
+        let friend = Uuid::new_v4();
+        let friends: HashSet<Uuid> = [friend].into_iter().collect();
+        assert!(!presence_visible(
+            caller,
+            friend,
+            Visibility::Private,
+            &friends,
+            &HashSet::new()
+        ));
+    }
+
+    #[test]
+    fn presence_hidden_from_a_blocked_friend_even_under_public() {
+        // A block hides presence regardless of the subject's own
+        // visibility setting — the block check runs before the setting is
+        // ever consulted.
         let caller = Uuid::new_v4();
         let friend_and_blocked = Uuid::new_v4();
         let friends: HashSet<Uuid> = [friend_and_blocked].into_iter().collect();
@@ -779,6 +878,7 @@ mod tests {
         assert!(!presence_visible(
             caller,
             friend_and_blocked,
+            Visibility::Public,
             &friends,
             &blocked
         ));

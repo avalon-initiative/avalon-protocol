@@ -202,6 +202,73 @@ impl PermissionGrant {
     }
 }
 
+/// Who else can see a resource — orthogonal to [`PermissionGrant`], which
+/// answers "what may a specific integrator do for a specific user."
+/// `Visibility` answers "who, viewer-relationship-wise, gets to read this
+/// at all" (issue #87): a stranger, any authenticated identity, a friend,
+/// a fellow guild member, or nobody but the subject themselves. An
+/// integrator's own read access is governed entirely by its capability
+/// grant, checked separately — `Visibility` never widens or narrows that;
+/// it's the answer for every *other* kind of viewer a capability grant
+/// says nothing about.
+///
+/// The wire string (`as_str()`/`Display`), not the Rust variant name, is
+/// the permanent identifier — same posture `Capability` takes, for the
+/// same reason: this is stored as player-controlled settings state (see
+/// `crates/server/src/visibility.rs`), and an unrecognized stored value
+/// must never become a hard failure to read back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// Anyone, including an unauthenticated caller.
+    Public,
+    /// Any identity with a valid session — a stranger, but a
+    /// known-to-be-real one.
+    AuthenticatedOnly,
+    /// Only identities currently friends with the subject (or the subject
+    /// themselves).
+    Friends,
+    /// Only identities who are members of the relevant guild (or the
+    /// subject themselves, for a subject-scoped resource with a guild
+    /// context).
+    GuildMembers,
+    /// Nobody but the subject.
+    Private,
+}
+
+impl Visibility {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Visibility::Public => "public",
+            Visibility::AuthenticatedOnly => "authenticated_only",
+            Visibility::Friends => "friends",
+            Visibility::GuildMembers => "guild_members",
+            Visibility::Private => "private",
+        }
+    }
+}
+
+impl fmt::Display for Visibility {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Visibility {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "public" => Ok(Visibility::Public),
+            "authenticated_only" => Ok(Visibility::AuthenticatedOnly),
+            "friends" => Ok(Visibility::Friends),
+            "guild_members" => Ok(Visibility::GuildMembers),
+            "private" => Ok(Visibility::Private),
+            other => Err(format!("unrecognized visibility: {other}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +334,32 @@ mod tests {
             unknown,
             Capability::Other("a.brand.new.capability".to_string())
         );
+    }
+
+    #[test]
+    fn every_visibility_variant_round_trips_through_its_wire_string() {
+        for variant in [
+            Visibility::Public,
+            Visibility::AuthenticatedOnly,
+            Visibility::Friends,
+            Visibility::GuildMembers,
+            Visibility::Private,
+        ] {
+            let round_tripped: Visibility = variant.as_str().parse().unwrap();
+            assert_eq!(round_tripped, variant);
+        }
+    }
+
+    #[test]
+    fn visibility_from_str_rejects_an_unrecognized_string() {
+        assert!("not-a-real-visibility".parse::<Visibility>().is_err());
+    }
+
+    #[test]
+    fn visibility_serde_round_trips_through_the_snake_case_string() {
+        let json = serde_json::to_string(&Visibility::GuildMembers).unwrap();
+        assert_eq!(json, "\"guild_members\"");
+        let back: Visibility = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Visibility::GuildMembers);
     }
 }

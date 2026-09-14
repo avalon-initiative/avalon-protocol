@@ -38,21 +38,22 @@ read by an integrator the order is: active [binding](./bindings.md) → active
 person: relationship to the subject → visibility scope. One authorization helper
 answers (viewer, subject, resource); no endpoint does its own ad-hoc check.
 
-## Proposed defaults
+## Defaults
 
-User-controlled, changeable through the API and the Hub. To be finalized in
-[#87](https://github.com/LunarVagabond/avalon-protocol/issues/87), not by
-accident:
+User-controlled, changeable through the API and (once built) the Hub.
+Presence and guild membership are real and player/guild-changeable as of
+#87; the rest are still the proposed defaults #87 didn't implement this
+pass — see "Today in the repo" for exactly what's live.
 
-| Resource | Proposed default |
+| Resource | Default |
 |---|---|
 | display name | public |
 | avatar | public |
-| presence | friend-visible (implemented as a hardcoded default, #16 — see "Today in the repo") |
-| friends list | private |
-| guild membership | guild-visible |
-| achievement history | public, individually hideable |
-| integrator bindings (which integrators a user plays) | private |
+| presence | friends (real, changeable — `profiles.presence_visibility`) |
+| friends list | private (proposed — no third-party read endpoint exists yet) |
+| guild membership | guild_members (real, changeable — `guilds.roster_visibility`) |
+| achievement history | public, individually hideable (proposed) |
+| integrator bindings (which integrators a user plays) | private (proposed) |
 
 Visibility settings are identity state, not durable protocol history, unless a
 later decision promotes them.
@@ -90,21 +91,51 @@ returned as the real sub-floor count; zero is never coarsened, since
 
 ## Today in the repo
 
-- `crates/protocol/src/permissions.rs` — `Capability` and `PermissionGrant`
-  (integrator-visible only). No `Visibility` type.
-- `crates/server/src/handlers.rs` — `/me` reads the caller's own profile.
-  Several cross-identity read paths exist now (`GET /friends`,
-  `GET /ws/presence`, `GET /friends/handle/:handle`), still session-gated
-  only, with no visibility-scope check at all — that's #87's open
-  decision, not yet built.
-- `crates/server/src/presence.rs` (#16) is the first read path with any
-  visibility check at all: `GET /presence` and `GET /ws/presence` apply a
-  literal, hardcoded friends-only default (self always visible; otherwise
-  only if `crates/server/src/friends.rs`'s `friend_partners` says the
-  caller and subject are currently friends, and there's no block between
-  them). This is one resource's proposed default made real, **not** #87's
-  general per-resource/guild/private scope model — everything else in this
-  list (friends list, guild membership, etc.) is still unscoped.
+- `crates/protocol/src/permissions.rs` (#87) — `Visibility`: `Public`,
+  `AuthenticatedOnly`, `Friends`, `GuildMembers`, `Private`. A fixed, closed
+  vocabulary (unlike `Capability`, which has an `Other(String)` escape
+  hatch) — the ticket's own "recommendation... finalize in the ticket, not
+  by accident" directive. `Game(GameId)`/`operator-only` from this
+  document's own scope table aren't modeled as `Visibility` variants: an
+  integrator's read access is entirely the existing capability-grant
+  mechanism (`Capability`/`PermissionGrant`, orthogonal to `Visibility` —
+  see "Composition" above), and no resource needing an operator-only scope
+  exists yet.
+- `crates/server/src/visibility.rs` (#87) — `is_visible(state, visibility,
+  viewer, subject, guild_id)` is the one shared authorization helper this
+  document's "Composition" section describes: the subject always sees
+  their own data; otherwise `Public`/`AuthenticatedOnly` are static,
+  `Friends` checks `friendships`, `GuildMembers` checks `guild_members`.
+  `parse_visibility` never hard-fails a read over an unrecognized stored
+  string — falls back to `Public`, same posture `guilds.rs`'s
+  `JoinPolicy::parse` already takes for the same class of problem.
+- **Presence** (`crates/server/src/presence.rs`, #16/#87): `GET /presence`/
+  `GET /ws/presence` are now gated by each subject's own
+  `profiles.presence_visibility` (default `friends` — the exact same
+  behavior this endpoint always had, now a real, player-changeable setting
+  via `PATCH /me` rather than a hardcoded rule). A block always wins
+  regardless of setting (#97, checked before the setting is even
+  consulted).
+- **Guild rosters** (`crates/server/src/guilds.rs::list_members`, #87):
+  previously any authenticated session could read any guild's full roster,
+  entirely unscoped. Now gated by that guild's own `guilds.roster_visibility`
+  (default `guild_members`, settable via `PATCH /guilds/{id}`, `manage_guild`-
+  gated same as every other guild setting) — `public`, `guild_members`, or
+  `private`. The guild owner always sees it regardless of setting, the same
+  "gates outside exposure, never locks the guild out of its own view"
+  exception `game_breakdown_public` already established for a different
+  guild-level toggle.
+- **Deliberately not touched this pass**: profile fields already have their
+  own established field-level exposure system (#403) rather than a
+  `Visibility` setting; there is no endpoint today that lets one identity
+  read another's *friends list* at all, so there's nothing to gate there
+  yet; achievement history's per-claim hide/feature control is a separate,
+  larger feature. Extending `is_visible` to these as their own read paths
+  need it is the intended shape going forward — see
+  `crates/server/src/visibility.rs`'s own module doc comment.
+- `crates/server/tests/visibility.rs` — a live matrix test (self/friend/
+  stranger × public/friends/private for presence; owner/member/outsider ×
+  public/guild_members/private for guild rosters).
 - `crates/server/src/blocks.rs` (#97) — a block is visible only to the
   identity that created it; no endpoint, anywhere in this crate, reveals to
   the blocked party that they've been blocked. A blocked pair's friend
