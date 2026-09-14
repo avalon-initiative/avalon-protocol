@@ -25,6 +25,7 @@ pub mod outbox;
 pub mod passkeys;
 pub mod presence;
 pub mod proto_schema;
+pub mod recognitions;
 pub mod recovery;
 pub mod registry;
 pub mod retention;
@@ -238,6 +239,21 @@ pub fn router(state: AppState) -> Router {
         // `docs/architecture/registry.md`'s "External read surface"
         // section for the stability policy.
         .route("/registry/{slug}", get(registry::get_integrator_registry))
+        // Issue #89: public recognition relationships — an integrator
+        // declaring "I recognize <other integrator>'s claims, for
+        // <scope>" as a durable fact, queryable in both directions.
+        .route(
+            "/integrations/{slug}/recognitions",
+            post(recognitions::publish_recognition).get(recognitions::list_recognitions),
+        )
+        .route(
+            "/integrations/{slug}/recognitions/revoke",
+            post(recognitions::revoke_recognition),
+        )
+        .route(
+            "/integrations/{slug}/recognized-by",
+            get(recognitions::list_recognized_by),
+        )
         .route(
             "/integrations/{slug}/achievements",
             get(achievements::list_achievement_definitions)
