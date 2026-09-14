@@ -1,4 +1,4 @@
--- A user's self-chosen main guild (avalon_protocol::identity::Profile.main_guild):
+-- A player's self-chosen main guild (avalon_protocol::identity::Profile.main_guild):
 -- a pointer to one of their own current guild memberships, so an integrator
 -- building a guild-chat-style UI has a single guild to default to instead of
 -- supporting arbitrarily-many simultaneous memberships.

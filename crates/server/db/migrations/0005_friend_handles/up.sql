@@ -1,12 +1,12 @@
--- A short, user-facing handle for adding friends (issue #128) — a
+-- A short, player-facing handle for adding friends (issue #128) — a
 -- Battle.net/Discord-style `display_name#1234` pair, resolved by *exact*
--- match only, never partial/fuzzy (that's the separate user-discovery
+-- match only, never partial/fuzzy (that's the separate player-discovery
 -- question, issue #129).
 --
 -- The discriminator is a 4-digit string generated once, server-side, when a
 -- profile is created (or when a display-name change collides with an
 -- existing handle — see `crates/server/src/handlers.rs`); it is not
--- user-chosen and does not change on its own. `display_name` can still
+-- player-chosen and does not change on its own. `display_name` can still
 -- change (`PATCH /me`), so the uniqueness constraint covers the
 -- (display_name, discriminator) pair, not either column alone.
 -- The DEFAULT exists as a safety net for any insert path that doesn't set

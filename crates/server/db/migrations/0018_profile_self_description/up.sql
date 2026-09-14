@@ -1,4 +1,4 @@
--- Small, user-optional self-description fields (issue #155), same
+-- Small, player-optional self-description fields (issue #155), same
 -- promised-durable tier as `display_name`/`avatar_url` — see #86 and
 -- docs/architecture/identity.md's durable-field table.
 --

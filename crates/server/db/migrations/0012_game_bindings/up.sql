@@ -10,7 +10,7 @@
 -- level, appearance, progression) — that data stays in the game's own
 -- database, by design. `ended_at IS NULL` means active. The partial unique
 -- index (rather than a plain `UNIQUE (identity_id, game_id)`) allows a
--- user to re-bind to the same game after ending a previous binding —
+-- player to re-bind to the same game after ending a previous binding —
 -- `POST /games/{slug}/connect` is idempotent against an *active* binding
 -- only, not against binding history, and ending a binding must not block
 -- ever reconnecting.
@@ -26,7 +26,7 @@ CREATE UNIQUE INDEX bindings_one_active_per_identity_game
     ON bindings (identity_id, game_id)
     WHERE ended_at IS NULL;
 
--- One row per capability a user has actually approved for a game, scoped
+-- One row per capability a player has actually approved for a game, scoped
 -- to the binding it hangs off — no active binding, no grants (enforced at
 -- the application layer: `binding_id` always references a still-active
 -- binding at insert time, and `DELETE /games/{slug}/connect` revokes every

@@ -13,7 +13,7 @@
 -- Postgres — it's loaded from the environment at commit time
 -- (`AVALON_SETTLEMENT_SIGNING_KEY`, see `.env.example`). `signing_key_id`
 -- is only a caller-chosen label distinguishing this settlement-operator
--- key domain from issuer keys (#80/#84) and user keys (#73); it is not a
+-- key domain from issuer keys (#80/#84) and player keys (#73); it is not a
 -- foreign key into anything here.
 CREATE TABLE signed_tree_heads (
     tree_size BIGINT PRIMARY KEY,

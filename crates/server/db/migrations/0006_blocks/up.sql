@@ -8,7 +8,7 @@
 -- even hashed, would let every mirror operator (and eventually the blocked
 -- party via log analysis) learn who blocked whom. This table is
 -- avalon-server's own application state, the same relationship presence has
--- to durable history (ADR #78) — losing it means users re-block people,
+-- to durable history (ADR #78) — losing it means players re-block people,
 -- an acceptable failure mode, not a fact anyone needs to prove later.
 --
 -- Deliberately not symmetric like `friendships` (`a < b`): blocking has a

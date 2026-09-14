@@ -10,7 +10,7 @@
 --     (an M-of-0 scheme can never be satisfied, and a guardian-less
 --     identity has no one to ask).
 --   * `recovery_guardians` — the guardian set itself, drawn from the
---     user's friends (enforced at the handler layer against
+--     player's friends (enforced at the handler layer against
 --     `friendships`, not by a DB constraint — friendship can change after
 --     a guardian is designated, and a former friend remaining a guardian
 --     until the owner explicitly changes the set is the safer default,
