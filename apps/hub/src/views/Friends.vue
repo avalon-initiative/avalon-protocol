@@ -3,7 +3,7 @@
 // live presence, and the membership poll live in useFriendsPresence — this
 // view owns only the add/accept/decline/remove actions, plus the
 // "people you may know" suggestions section (issue #204).
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   AvalonButton,
@@ -63,7 +63,21 @@ async function onAddSuggestion(identityId: string) {
   }
 }
 
-onMounted(loadSuggestions)
+// Issue #389: this used to load once on mount and never refresh — polling
+// on the same interval useConversations/useGuildChat already established
+// for milestone 1 (no WebSocket needed) rather than adding a third,
+// different cadence.
+const SUGGESTIONS_POLL_INTERVAL_MS = 15_000
+let suggestionsPollHandle: ReturnType<typeof setInterval> | undefined
+
+onMounted(() => {
+  loadSuggestions()
+  suggestionsPollHandle = setInterval(loadSuggestions, SUGGESTIONS_POLL_INTERVAL_MS)
+})
+
+onUnmounted(() => {
+  if (suggestionsPollHandle) clearInterval(suggestionsPollHandle)
+})
 
 // Player search (issue #205) — the opt-in global counterpart to "people
 // you may know" above. Only ever returns identities that have turned on
