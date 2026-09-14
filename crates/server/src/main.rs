@@ -37,13 +37,20 @@ fn init_tracing() {
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
 
+    // tracing-subscriber's fmt layer defaults to ANSI color on regardless of
+    // whether stdout is a real terminal, which litters log files (e.g. under
+    // `make start`, which redirects to a file) with raw escape codes.
+    let ansi = std::io::IsTerminal::is_terminal(&std::io::stdout());
+
     let registry = tracing_subscriber::registry().with(env_filter);
     if json_format {
         registry
             .with(tracing_subscriber::fmt::layer().json())
             .init();
     } else {
-        registry.with(tracing_subscriber::fmt::layer()).init();
+        registry
+            .with(tracing_subscriber::fmt::layer().with_ansi(ansi))
+            .init();
     }
 }
 

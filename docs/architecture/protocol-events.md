@@ -100,60 +100,17 @@ stored twice.
 
 ## Kind catalogue (proposed)
 
-Naming: `<domain>.<past-tense-verb>`. This table is the starting point that
-[#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) finalizes;
-until then it is proposed, not normative. "Network" as signer means the node
-records the fact on behalf of an authenticated actor and is the
-milestone-1 stand-in until actor signatures exist.
+The full row-by-row list of every `ProtocolEvent` kind — issuer/subject,
+payload, what it drives, and who signs it — lives in its own file:
+[`./protocol-events-catalogue.md`](./protocol-events-catalogue.md). It's the
+starting point [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)
+finalizes; until then it's proposed, not normative.
 
-| Kind | Issuer → subject | Payload (canonical) | Drives | Signed by |
-|---|---|---|---|---|
-| `identity.created` | identity → identity | identity id | identities | identity's Ed25519 event-signing key (#73, done) |
-| `identity.signing_key_added` | identity → identity | new signing key id/public key, device label, approving key id | identity signing keys | the approving device's key (#135, done) |
-| `identity.signing_key_revoked` | identity → identity | revoked signing key id | identity signing keys | network (milestone-1 stand-in, #135, done) |
-| `identity.recovery_configured` | identity → identity | guardian ids, threshold | recovery guardian settings | identity key (session-authenticated, #201, done) |
-| `identity.recovery_requested` | identity → identity | request id, threshold | recovery requests | network (milestone-1 stand-in — the requester by definition has no session; #201, done) |
-| `identity.recovery_approved` | identity (guardian) → identity | request id, guardian id, approvals count, threshold, delay end | recovery requests/approvals | network (milestone-1 stand-in, #201, done) |
-| `identity.recovery_cancelled` | identity (owner or guardian) → identity | request id, cancelled by, reason | recovery requests | network (milestone-1 stand-in, #201, done) |
-| `identity.recovered` | identity → identity | request id, new device label | identity keys | network (milestone-1 stand-in, #201, done) |
-| `profile.updated` | identity → identity | changed promised-durable fields (`display_name`, `discriminator`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`) | profiles | identity key |
-| `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
-| `game.binding_established` | identity → game | identity, game | bindings, registry identities | identity key |
-| `game.binding_ended` | identity → game | binding ref | bindings | identity key |
-| `permission.granted` | identity → game (per capability) | binding, capability | permission grants | identity key |
-| `permission.revoked` | identity → game (per capability) | binding, capability, reason | permission grants | identity key |
-| `issuer.registered` | issuer → issuer | issuer id, initial key set | issuers | issuer key |
-| `issuer.key_added` | issuer → issuer | key id, public key, algorithm, validity window | issuer keys | existing issuer key |
-| `issuer.key_revoked` | issuer → issuer | key id, reason (`rotated`, `compromised`, …) | issuer keys | issuer key |
-| `issuer.key_expired` | issuer → issuer | key id | issuer keys | issuer key or network |
-| `issuer.suspended` / `.reinstated` / `.revoked` / `.deprecated` | network or issuer → issuer | reason, effective at | issuer status | operator (audited) or issuer |
-| `friend.requested` / `.accepted` / `.removed` | identity → identity | the two identities, actor | friendships | acting identity's key — decided promised-durable; see [social-graph.md](./social-graph.md) |
-| `guild.created` | identity → guild | name, tag, description, founder | guilds | founder key |
-| `guild.updated` | guild → guild | changed fields (motd, banner, links, recruiting, join_policy, ...) | guilds | acting officer's key |
-| `guild.role_defined` / `.role_deleted` | identity → guild | name_index, name, permissions, description, badge (icon, color), actor | role definitions | acting member's key |
-| `guild.member_added` / `.member_removed` | guild → identity | role, actor | rosters, history | acting member's key |
-| `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
-| `guild.owner_transferred` | guild → identity | old owner, new owner, actor | guilds | acting owner's key |
-| `guild.game_associated` | guild → game | guild, game | associations | guild officer key |
-| `guild.favorite_games_updated` | guild → guild | favorited game ids, actor | favorites | acting officer's key |
-| `guild.channel_created` / `.channel_renamed` / `.channel_archived` | guild → channel | channel id, name, actor | channels | acting officer's key |
-| `game_schema.published` | game → schema | game id, version, `.proto` source, superseded_by | schema discovery (#255) | game key |
-| `achievement.defined` | game → achievement id | name, description, schema | definitions | game key |
-| `achievement.definition_updated` | game → achievement id | name, description, schema, version | definitions | game key |
-| `achievement.definition_retired` | game → achievement id | achievement id | definitions | game key |
-| `achievement.issued` | game → identity | achievement id, attestation id, evidence ref | attestations | issuer key |
-| `achievement.revoked` | game → attestation | attestation ref, reason code, reason | attestation status | issuer key |
-| `milestone.defined` / `.definition_updated` / `.definition_retired` | app/service → milestone id | same fields as the `achievement.*` row above | definitions | app/service key |
-| `milestone.issued` / `.revoked` | app/service → identity / attestation | same fields as `achievement.issued`/`.revoked` above | attestations | issuer key |
-| `attestation.superseded` | game → attestation | old ref, new ref | attestation status | issuer key |
-| `game_event.result_issued` | game → identity | `achievement.issued` with the game-event schema | attestations, registry | issuer key |
-| `recognition.published` | game → issuer | recognized claim types / scopes | recognition graph | game key |
-
-Conventions: `issuer` and `subject` are `GlobalId`s
-(`crates/protocol/src/ids.rs`) — namespaced, e.g.
-`game:ashen-realms:achievement:dragon_slayer`, so two games' `dragon_slayer`
-never collide ([`./provenance.md`](./provenance.md)). Each kind has exactly one
-payload schema per version.
+Two conventions worth knowing before you open that table: `issuer` and
+`subject` are `GlobalId`s (`crates/protocol/src/ids.rs`), namespaced so two
+games' `dragon_slayer` never collide (see
+[`./provenance.md`](./provenance.md)); and each kind has exactly one payload
+schema per version.
 
 ## Versioning policy
 
@@ -191,176 +148,118 @@ the record — [`./revocation.md`](./revocation.md).
 
 ## Today in the repo
 
-- Types: `crates/protocol/src/events.rs` as shown above.
-- `crates/server/src/handlers.rs` writes two kinds. `register_finish`
-  emits `identity.created` with `issuer = identity:<id>:self:created` — the
-  identity's own Ed25519 event-signing key signs it, verified independently
-  of the WebAuthn ceremony that authenticated the registration request — with
-  a payload of `identity_id`, the initial `display_name`, and the handle
-  `discriminator` (no `username` field exists anywhere; #73). `update_profile`
-  emits `profile.updated` (#86, widened by #155) whenever `display_name`,
-  `avatar_url`, `bio`, `favorite_genres`, or `pronouns` actually changes,
-  with a payload of only the changed fields (plus the discriminator on a
-  rename, since a rebuild has to reproduce the handle); a no-op request
-  emits nothing. `avatar_url`/`bio`/`pronouns` each use `null` in the
-  payload for an explicit clear vs. an absent key for untouched;
-  `favorite_genres` has no separate clear state — a present key is always
-  the field's new, complete value (as genre-vocabulary strings, e.g.
-  `["rpg", "puzzle"]`), including `[]` to clear it. Network-attributed, not
-  identity-signed — the same milestone-1 stand-in the social-graph events
-  use. Both are enqueued into `protocol_outbox` (`crates/server/src/outbox.rs`)
-  in the same transaction as the row they describe.
-- A second emitter: `crates/server/src/friends.rs` writes `friend.requested`,
-  `friend.accepted`, and `friend.removed`, each enqueued into
-  `protocol_outbox` in the same transaction as the `friendships`/
-  `friend_requests` row it accompanies (#15, closing #71's pattern for a
-  second path). `issuer`/`subject` are both `identity:<id>:self:<verb>`
-  `GlobalId`s naming the acting identity and the counterpart, respectively;
-  unlike `identity.created` these are not yet individually signed — no
-  general per-event Ed25519 signing ceremony exists yet, so this is the
-  "network as signer" milestone-1 stand-in the catalogue above describes,
-  attributed to the identity that authenticated the request rather than to
-  the node. Declining or withdrawing a request emits no event — see
+Types live in `crates/protocol/src/events.rs`, as shown above. There's no
+single dispatcher — each domain module emits its own kinds directly into
+`protocol_outbox` (`crates/server/src/outbox.rs`), in the same transaction as
+the row change it accompanies. Two signing postures recur throughout: a real
+per-event signature (rare so far — see `identity.created` and issuance
+below), or "network as signer," today's milestone-1 stand-in where the node
+attributes the event to whichever identity authenticated the request instead
+of embedding a signature. Almost every emitter below still uses the latter;
+where an emitter is genuinely signed, it's called out explicitly.
+
+- **`crates/server/src/handlers.rs`** — identity and profile.
+  - `register_finish` emits `identity.created`, signed by the identity's own
+    Ed25519 event-signing key (verified independently of the WebAuthn
+    ceremony that authenticated registration). Payload: `identity_id`,
+    initial `display_name`, and the handle `discriminator` — no `username`
+    field exists anywhere (#73).
+  - `update_profile` emits `profile.updated` (#86, widened by #155) only
+    when `display_name`, `avatar_url`, `bio`, `favorite_genres`, or
+    `pronouns` actually changes; a no-op request emits nothing. Payload
+    carries only the changed fields (plus `discriminator` on a rename, so a
+    rebuild can reproduce the handle). `avatar_url`/`bio`/`pronouns` use
+    `null` for an explicit clear vs. an absent key for untouched;
+    `favorite_genres` has no separate clear state — a present key is always
+    the field's complete new value, including `[]` to clear it.
+    Network-attributed, not identity-signed.
+- **`crates/server/src/friends.rs`** (#15) — `friend.requested`,
+  `friend.accepted`, `friend.removed`. `issuer`/`subject` are both
+  `identity:<id>:self:<verb>` `GlobalId`s naming the acting identity and the
+  counterpart. Network-attributed — no general per-event signing ceremony
+  exists yet. Declining or withdrawing a request emits no event — see
   [social-graph.md](./social-graph.md).
-- A third emitter: `crates/server/src/devices.rs` (#135) writes
-  `identity.signing_key_added` when a device grant is approved (signed by
-  the approving device's Ed25519 key, verified the same way
-  `register_finish` verifies `identity.created`'s signature) and
-  `identity.signing_key_revoked` when a signing key is revoked
-  (network-attributed, same milestone-1 stand-in `friend.requested` uses).
-- A fourth emitter: `crates/server/src/games.rs` (#26) writes
-  `game.registered` on `POST /games`, enqueued into `protocol_outbox` in the
-  same transaction as the `games`/`game_requested_capabilities`/
-  `issuer_keys` rows it accompanies. `issuer`/`subject` are both
-  `game:<slug>:self:registered` `GlobalId`s (`game_ref`, mirroring
-  `guilds.rs`'s `guild_ref`); network-attributed rather than signed by the
-  game's own key even though the catalogue above lists that as the eventual
-  signer — nothing has verified the registrant controls the submitted key
-  yet at the point this event is built, so a real signature claim would be
-  false. Payload is `game_id`, `slug`, `name`, `developer`,
-  `requested_capabilities`, and the initial key's id/algorithm/public key.
-- A fifth emitter: `crates/server/src/connections.rs` (#27/#83) writes
-  `game.binding_established` (only on the first `POST /games/{slug}/connect`
-  for a given identity/game pair — reconnecting to an already-active binding
-  emits nothing), `game.binding_ended` (`DELETE /games/{slug}/connect`),
-  and one `permission.granted`/`permission.revoked` per capability
-  (`connect`, `DELETE /games/{slug}/grants/{capability}`, and every grant a
-  `disconnect` revokes), all enqueued into `protocol_outbox` in the same
-  transaction as the `bindings`/`permission_grants` row change they
-  accompany. `issuer` is `identity:<id>:self:<verb>` (the acting identity);
+- **`crates/server/src/devices.rs`** (#135) — `identity.signing_key_added`
+  when a device grant is approved (signed by the approving device's own
+  Ed25519 key, verified the same way as `identity.created`) and
+  `identity.signing_key_revoked` when a key is revoked
+  (network-attributed).
+- **`crates/server/src/games.rs`** (#26) — `game.registered` on
+  `POST /games`. `issuer`/`subject` are both `game:<slug>:self:registered`
+  (`game_ref`). Network-attributed rather than game-key-signed — nothing has
+  verified the registrant controls the submitted key yet at the point this
+  event is built, so a real signature claim would be false. Payload:
+  `game_id`, `slug`, `name`, `developer`, `requested_capabilities`, and the
+  initial key's id/algorithm/public key.
+- **`crates/server/src/connections.rs`** (#27/#83) — `game.binding_established`
+  (only on the first `POST /games/{slug}/connect` for a given identity/game
+  pair; reconnecting emits nothing), `game.binding_ended`
+  (`DELETE /games/{slug}/connect`), and one `permission.granted`/
+  `permission.revoked` per capability. `issuer` is the acting identity;
   `subject` is `game:<slug>:self:<verb>` for binding events and
-  `game:<slug>:self:<capability>` for grant events. Network-attributed
-  rather than identity-signed, same "network as signer" milestone-1
-  stand-in as `game.registered` and the social-graph events — no general
-  per-event signing ceremony exists yet, so claiming the catalogue's
-  eventual "identity key" signer here would be false.
-- A sixth emitter: `crates/server/src/achievements.rs` (#31, generalized to
-  App/Service by #324/#325) writes `achievement.defined`/
-  `milestone.defined` on `POST /games/{slug}/achievements` /
-  `POST /integrations/{slug}/milestones`, `.definition_updated` on the
-  matching `PATCH` route when name/description/schema actually change, and
-  `.definition_retired` when that same endpoint retires a definition — each
-  enqueued into `protocol_outbox` in the same transaction as the
-  `achievement_definitions` row it accompanies (one shared table for both
-  claim vocabularies — see `achievements.rs`'s own module doc comment).
-  Which of the two event-kind prefixes gets used is derived from the
-  authenticated issuer's own registered category
-  (`IntegratorCategory::claim_kind`), never caller-chosen: `Game` issuers
-  get `achievement.*` exactly as #31 shipped, `App`/`Service` issuers get
-  `milestone.*`. `issuer` is `<namespace>:<slug>:self:<verb>`
-  (`games::issuer_ref`, generalizing `game_ref`); `subject` is the
-  definition's own `<namespace>:<slug>:<claim_kind>:<key>` `GlobalId`,
-  matching the catalogue's "issuer → claim id" shape above.
-  Network-attributed rather than issuer-signed for the same reason
-  `game.registered` is: no general per-event signing ceremony exists yet
-  beyond `identity.created`.
-
-  **The same module's issuance path (#32) is different: genuinely
-  issuer-signed, not network-attributed.** `POST
-  /games/{slug}/achievements/{key}/issue` /
-  `POST /integrations/{slug}/milestones/{key}/issue` write
-  `achievement.issued`/`milestone.issued` — the payload's `proof` field
-  carries a real detached Ed25519 signature (verified server-side against
-  the issuer's own key set, #84's `resolve_valid_signing_key`, before the
-  event is ever built), the first event kind in this catalogue whose
-  signer is genuinely the issuer's key and not a "network as signer"
-  stand-in. `subject` is `identity:<id>:self:<claim_kind>_issued`
-  (`games::issuer_ref`, reused with the `"identity"` namespace).
-
-  **Revocation (#85, landed) follows the same posture.** `POST
-  /attestations/{id}/revoke` (`crates/server/src/attestations.rs`) writes
-  `achievement.revoked`/`milestone.revoked` with its own embedded
-  Ed25519 signature (over `revocation_signing_bytes`, verified the same
-  way as issuance — `avalon_chain::attestations::verify_signature`),
-  requires the caller to authenticate as the attestation's original
-  issuer, and appends the fact to a dedicated `attestation_revocations`
-  table rather than mutating `achievement_attestations`. `issuer` is
-  `game:<slug>:self:{claim_kind}_revoked`; `subject` is
-  `attestation:<id>:self:{claim_kind}_revoked`. Supersession
-  (`attestation.superseded`, listed in the catalogue above) and
-  attestation-level reinstatement (no event kind catalogued yet) remain
-  unbuilt — `attestation_revocations` is capped at one row per
-  attestation for exactly this reason.
-- A seventh emitter: `crates/server/src/recovery.rs` (#201) writes
-  `identity.recovery_configured` (guardian-set/threshold change),
-  `identity.recovery_requested` (a new device completes the recovery
-  ceremony), `identity.recovery_approved` (one per guardian approval, with
-  the running approvals count/threshold/delay end in the payload),
-  `identity.recovery_cancelled` (owner or guardian veto), and
-  `identity.recovered` (finalize, once the delay elapses unvetoed) — each
-  enqueued into `protocol_outbox` in the same transaction as the
-  `recovery_guardians`/`recovery_requests`/`recovery_approvals`/
-  `identity_keys` row change it accompanies. `issuer`/`subject` are
-  `identity:<id>:self:<verb>` `GlobalId`s, same shape `friends.rs` and
-  `devices.rs` use; `identity.recovery_approved`/`.recovery_cancelled`'s
-  issuer is the acting guardian's or canceller's own identity, not
-  necessarily the identity being recovered. Network-attributed rather than
-  identity-signed for the same "network as signer" milestone-1 stand-in
-  every emitter but `identity.created`/`identity.signing_key_added` uses —
-  most acutely necessary here, since `identity.recovery_requested` is
-  authored by a caller who by definition has no session, let alone a
-  signing key, for the identity being recovered.
-- An eighth emitter: `crates/server/src/guilds.rs` writes `guild.created`,
-  `guild.updated`, `guild.role_defined`/`.role_deleted`, `guild.member_added`/
+  `game:<slug>:self:<capability>` for grant events. Network-attributed.
+- **`crates/server/src/achievements.rs`** (#31, generalized to App/Service by
+  #324/#325) — definitions and issuance, two different signing postures:
+  - *Definitions* (`achievement.defined`/`milestone.defined` on creation,
+    `.definition_updated`, `.definition_retired`) share one table
+    (`achievement_definitions`) across both claim vocabularies. Which
+    prefix is used comes from the authenticated issuer's own registered
+    category (`IntegratorCategory::claim_kind`), never caller-chosen: `Game`
+    issuers get `achievement.*`, `App`/`Service` issuers get `milestone.*`.
+    Network-attributed, same reason as `game.registered`.
+  - **Issuance (#32) is genuinely issuer-signed, not network-attributed** —
+    the first event kind in this catalogue where that's true.
+    `POST /games/{slug}/achievements/{key}/issue` and its milestone
+    equivalent write `achievement.issued`/`milestone.issued` with a real
+    detached Ed25519 signature in the payload's `proof` field, verified
+    server-side against the issuer's own key set (#84's
+    `resolve_valid_signing_key`) before the event is built.
+  - **Revocation (#85) follows the same signed posture.**
+    `POST /attestations/{id}/revoke` writes `achievement.revoked`/
+    `milestone.revoked` with its own embedded signature, requires the
+    caller to authenticate as the attestation's original issuer, and
+    appends to a dedicated `attestation_revocations` table rather than
+    mutating `achievement_attestations`. Supersession
+    (`attestation.superseded`) and attestation-level reinstatement (no
+    event kind yet) remain unbuilt — `attestation_revocations` is capped at
+    one row per attestation for exactly that reason.
+- **`crates/server/src/recovery.rs`** (#201) — `identity.recovery_configured`
+  (guardian-set/threshold change), `identity.recovery_requested` (a new
+  device completes the recovery ceremony), `identity.recovery_approved`
+  (one per guardian approval), `identity.recovery_cancelled` (owner or
+  guardian veto), and `identity.recovered` (finalize, once the delay elapses
+  unvetoed). Network-attributed — most acutely necessary here, since
+  `identity.recovery_requested` is authored by a caller who by definition
+  has no session, let alone a signing key, for the identity being recovered.
+- **`crates/server/src/guilds.rs`** — `guild.created`, `guild.updated`,
+  `guild.role_defined`/`.role_deleted`, `guild.member_added`/
   `.member_removed`, `guild.role_changed`, `guild.owner_transferred`,
-  `guild.game_associated`, and `guild.favorite_games_updated`, each enqueued
-  into `protocol_outbox` in the same transaction as the `guilds`/
-  `guild_members`/`guild_roles` row change it accompanies.
-- A ninth emitter: `crates/server/src/channels.rs` writes
-  `guild.channel_created`, `.channel_renamed`, and `.channel_archived`,
-  same outbox pattern.
-- A tenth emitter: `crates/server/src/game_schemas.rs` (#255) writes
-  `game_schema.published`, consumed by
-  `crates/indexer/src/projections/game_schemas.rs` for schema-version
-  discovery (see [game-registry.md](./game-registry.md)).
-- An eleventh emitter: `crates/server/src/games.rs` (#84, implementing
-  #80's decided two-tier key model) writes `issuer.key_added` on `POST
-  /games/{slug}/keys` and `issuer.key_revoked` on `POST
-  /games/{slug}/keys/{key_id}/revoke`, each enqueued into `protocol_outbox`
-  in the same transaction as the `issuer_keys` row it accompanies.
-  `issuer`/`subject` are both `game:<slug>:self:key_added`/`:key_revoked`
-  `GlobalId`s (`game_ref`), same network-attributed posture every emitter
-  but `identity.created`/`identity.signing_key_added` uses — the catalogue
-  above's "existing issuer key"/"issuer key" signer column describes the
-  HTTP-level challenge-response authentication both endpoints require
-  (`authenticate_game_root`, specifically a currently-valid **root** key
-  per #80's decision — an operational key cannot author either event, even
-  its own revocation), not a signature embedded in the event itself.
+  `guild.game_associated`, `guild.favorite_games_updated`.
+- **`crates/server/src/channels.rs`** — `guild.channel_created`,
+  `.channel_renamed`, `.channel_archived`.
+- **`crates/server/src/game_schemas.rs`** (#255) — `game_schema.published`,
+  consumed by `crates/indexer/src/projections/game_schemas.rs` for
+  schema-version discovery (see [game-registry.md](./game-registry.md)).
+- **`crates/server/src/games.rs`** (#84, implementing #80's two-tier key
+  model) — `issuer.key_added` (`POST /games/{slug}/keys`) and
+  `issuer.key_revoked` (`POST /games/{slug}/keys/{key_id}/revoke`). Both
+  require a currently-valid **root** key (`authenticate_game_root`) — an
+  operational key can't author either event, even its own revocation.
   `issuer.key_expired` and the `issuer.suspended`/`.reinstated`/`.revoked`/
-  `.deprecated` family the catalogue also lists remain unimplemented — the
-  former has no expiry-sweep mechanism built, and the latter's
-  network-level authorization model is #84's own explicit deferred scope.
-- The ledger row shape is `crates/server/db/migrations/0002_ledger/up.sql`
-  plus `0014_ledger_batches/up.sql` (issue #38 — adds `batch_id`),
-  `0024_signed_tree_heads/up.sql` (#210 — Merkle root + Signed Tree Heads),
-  and `0027_ledger_payload_retention/up.sql` (retention tiering); the
-  content hash covers `event_id`, `kind`, `issuer`, `subject`, `payload`,
-  `timestamp`, `version` (`crates/chain/src/postgres.rs`). Every event lands
-  in `protocol_outbox` (#71) and is committed as part of whatever
-  `EventBatch` the settlement worker's current drain tick assembles
-  (`crates/server/src/outbox.rs`) — batches close on a worker tick, not on
-  size or a timer; a single-event batch is legal.
-- No typed kinds, no payload structs, no catalogue in code.
+  `.deprecated` family remain unimplemented: no expiry-sweep mechanism
+  exists, and the latter's network-level authorization model is #84's own
+  explicit deferred scope.
+
+The ledger row itself: shape defined across
+`crates/server/db/migrations/0002_ledger/up.sql`,
+`0014_ledger_batches/up.sql` (#38, adds `batch_id`),
+`0024_signed_tree_heads/up.sql` (#210, Merkle root + Signed Tree Heads), and
+`0027_ledger_payload_retention/up.sql` (retention tiering). The content hash
+covers `event_id`, `kind`, `issuer`, `subject`, `payload`, `timestamp`,
+`version` (`crates/chain/src/postgres.rs`). Every event lands in
+`protocol_outbox` and is committed as part of whatever `EventBatch` the
+settlement worker's current drain tick assembles — batches close on a worker
+tick, not on size or a timer, so a single-event batch is legal.
 
 ## Decisions and tickets
 

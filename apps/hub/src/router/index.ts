@@ -6,7 +6,9 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: () => (useSessionStore().isAuthenticated() ? '/home' : '/create-identity'),
+      name: 'landing',
+      component: () => import('../views/Landing.vue'),
+      beforeEnter: () => (useSessionStore().isAuthenticated() ? '/home' : true),
     },
     {
       path: '/create-identity',
