@@ -235,7 +235,7 @@ async fn scenario_c_issue_then_revoke_flips_validity_and_history_shows_both() {
             "key_id": game.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
             "reason_code": reason_code,
-            "reason": "Player used unauthorized tooling",
+            "reason": "User used unauthorized tooling",
         }))
         .send()
         .await

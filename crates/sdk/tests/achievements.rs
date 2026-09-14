@@ -2,10 +2,10 @@
 //! against a real, running `avalon-server` and Postgres. Gated `--ignored`
 //! since it needs live infra — see `make test-live` / `make start`.
 //!
-//! Setup mirrors real usage: a real WebAuthn ceremony creates the player
+//! Setup mirrors real usage: a real WebAuthn ceremony creates the user
 //! identity (same helper `authenticate.rs` uses, duplicated here rather
 //! than shared — see that file's own comment on why), a real game
-//! registers and the player consents to it, then the SDK — never the raw
+//! registers and the user consents to it, then the SDK — never the raw
 //! HTTP API — issues an achievement to itself and reads its own history
 //! back.
 
@@ -220,7 +220,7 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
     let game = register_game(&http, &base).await;
     define_achievement(&http, &base, &game, "dragon_slayer").await;
 
-    // The player's own consent: an active binding plus grants for both
+    // The user's own consent: an active binding plus grants for both
     // capabilities the SDK's two calls below each require.
     let connect = http
         .post(format!("{base}/games/{}/connect", game.slug))

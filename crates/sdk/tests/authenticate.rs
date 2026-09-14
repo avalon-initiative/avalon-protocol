@@ -3,7 +3,7 @@
 //! since it needs live infra — see `make test-live` / `make start`.
 //!
 //! Setup mirrors real usage: this SDK never creates identities or logs a
-//! player in itself (that's the Hub's/CLI's job), so the test drives the raw
+//! user in itself (that's the Hub's/CLI's job), so the test drives the raw
 //! WebAuthn registration and login ceremonies directly over HTTP, using a
 //! virtual/software authenticator (`passkey-authenticator`'s `testable`
 //! feature) to simulate what a browser+passkey will do once the Hub (#55)

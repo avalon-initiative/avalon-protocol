@@ -28,7 +28,7 @@ CREATE TABLE games (
 
 -- What a game declared it wants at registration time (`requested_capabilities`
 -- on `GameRegistration`, `crates/protocol/src/games.rs`) — a presentation to
--- the player, never a grant. #27 owns the actual grant table; nothing here
+-- the user, never a grant. #27 owns the actual grant table; nothing here
 -- gives a game access to anything.
 CREATE TABLE game_requested_capabilities (
     game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,

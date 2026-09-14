@@ -1,16 +1,16 @@
--- A player's own opt-out of `playing` being shown in their presence,
--- closing part of issue #16 ("a player can independently opt out of
+-- A user's own opt-out of `playing` being shown in their presence,
+-- closing part of issue #16 ("a user can independently opt out of
 -- `playing` being shown at all, separate from any game's capability
 -- grant").
 --
 -- Deliberately not part of the ephemeral `PresenceStore`
 -- (`crates/server/src/presence.rs`) even though it gates a presence field:
--- this is a durable player *preference* ("never show what I'm playing"),
+-- this is a durable user *preference* ("never show what I'm playing"),
 -- not a realtime fact like "playing right now" — it must survive a server
--- restart the same way any other player setting would, unlike the
+-- restart the same way any other user setting would, unlike the
 -- ephemeral store itself (ADR #78). It is also not a `ProtocolEvent`: same
 -- reasoning `docs/architecture/privacy.md` already gives for visibility
--- settings generally ("player state, not durable protocol history, unless
+-- settings generally ("user state, not durable protocol history, unless
 -- a later decision promotes them").
 --
 -- One row per identity, created lazily on first opt-out (see
