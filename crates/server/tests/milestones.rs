@@ -34,7 +34,7 @@ async fn register_issuer(http: &reqwest::Client, base: &str, category: &str) -> 
     let body = serde_json::json!({
         "slug": slug,
         "name": format!("Test {} {}", category, &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "category": category,
         "initial_key": {
             "algorithm": "ed25519",

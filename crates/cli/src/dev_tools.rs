@@ -512,7 +512,7 @@ pub(crate) async fn register_integrator(args: RegisterIntegratorArgs) {
     let request_body = json!({
         "slug": args.slug,
         "name": args.name,
-        "developer": args.owner_name,
+        "owner_name": args.owner_name,
         "requested_capabilities": args.capabilities,
         "initial_key": {
             "algorithm": "ed25519",

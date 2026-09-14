@@ -28,7 +28,7 @@ async fn register_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
     let body = serde_json::json!({
         "slug": format!("test-issuer-keys-{}", &suffix[..12]),
         "name": format!("Issuer Key Test {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "initial_key": {
             "algorithm": "ed25519",
             "public_key": BASE64.encode(root_signing_key.verifying_key().as_bytes()),

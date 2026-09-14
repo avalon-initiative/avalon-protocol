@@ -65,7 +65,7 @@ async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIn
     let body = serde_json::json!({
         "slug": slug,
         "name": format!("Revoke Test {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": ["achievements.issue"],
         "initial_key": {
             "algorithm": "ed25519",
@@ -335,7 +335,7 @@ async fn only_the_original_issuer_may_revoke() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_original_game, _issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
+    let (_original_integrator, _issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
     // A completely unrelated integrator tries to revoke it.
     let intruder = register_integrator(&http, &base).await;

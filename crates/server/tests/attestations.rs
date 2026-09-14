@@ -74,7 +74,7 @@ async fn register_issuer(
     let body = serde_json::json!({
         "slug": slug,
         "name": format!("Test Issuer {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "category": category,
         "requested_capabilities": requested_capabilities,
         "initial_key": {

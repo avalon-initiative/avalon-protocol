@@ -49,7 +49,7 @@ async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> St
     let body = serde_json::json!({
         "slug": slug,
         "name": "Mirror Watcher Test Integrator",
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
             "algorithm": "ed25519",

@@ -29,7 +29,7 @@ fn unique_integrator() -> UnregisteredIntegrator {
     let body = serde_json::json!({
         "slug": format!("test-integrator-{}", &suffix[..12]),
         "name": format!("Test Integrator {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": ["presence.read", "friends.read"],
         "initial_key": {
             "algorithm": "ed25519",
@@ -58,8 +58,8 @@ async fn registering_a_integrator_returns_the_integrator_and_its_credential() {
     assert_eq!(body["slug"].as_str().unwrap(), integrator.body["slug"]);
     assert_eq!(body["name"].as_str().unwrap(), integrator.body["name"]);
     assert_eq!(
-        body["developer"].as_str().unwrap(),
-        integrator.body["developer"]
+        body["owner_name"].as_str().unwrap(),
+        integrator.body["owner_name"]
     );
     assert_eq!(body["status"].as_str().unwrap(), "active");
     // #282: omitted category defaults to "game".
@@ -138,7 +138,7 @@ async fn a_second_registration_with_the_same_slug_conflicts() {
     // alone, matching the invariant that an integrator cannot register with
     // another integrator's slug.
     let mut second_body = integrator.body.clone();
-    second_body["developer"] = serde_json::json!("A Different Studio");
+    second_body["owner_name"] = serde_json::json!("A Different Studio");
     let second = http
         .post(format!("{base}/integrators"))
         .json(&second_body)
@@ -431,8 +431,8 @@ async fn registering_via_integrations_returns_the_integrator_and_its_credential(
     assert_eq!(body["slug"].as_str().unwrap(), integrator.body["slug"]);
     assert_eq!(body["name"].as_str().unwrap(), integrator.body["name"]);
     assert_eq!(
-        body["developer"].as_str().unwrap(),
-        integrator.body["developer"]
+        body["owner_name"].as_str().unwrap(),
+        integrator.body["owner_name"]
     );
 }
 

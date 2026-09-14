@@ -324,7 +324,7 @@ async fn register_unique_integrator(
     let body = serde_json::json!({
         "slug": format!("presence-test-{}", &suffix[..12]),
         "name": format!("Presence Test Integrator {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": ["presence.publish"],
         "initial_key": {
             "algorithm": "ed25519",

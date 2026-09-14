@@ -71,7 +71,7 @@ async fn register_integrator(
     let body = serde_json::json!({
         "slug": slug,
         "name": format!("Test Integrator {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
             "algorithm": "ed25519",
@@ -617,7 +617,7 @@ async fn cross_integrator_write_isolation_is_total() {
         let body = serde_json::json!({
             "slug": slug,
             "name": "Isolation Test Issuer",
-            "developer": "Test Studio",
+            "owner_name": "Test Studio",
             "category": "game",
             "requested_capabilities": ["achievements.issue"],
             "initial_key": {

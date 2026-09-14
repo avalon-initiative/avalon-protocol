@@ -63,7 +63,7 @@ async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> serde
     let body = serde_json::json!({
         "slug": format!("test-conn-{}", &suffix[..12]),
         "name": format!("Connections Test Integrator {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": ["presence.read", "friends.read"],
         "initial_key": {
             "algorithm": "ed25519",
