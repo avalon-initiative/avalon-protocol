@@ -1,9 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/vue3'
-import AvalonGameCard from '../components/AvalonGameCard.vue'
+import AvalonIntegratorCard from '../components/AvalonIntegratorCard.vue'
 
-const meta: Meta<typeof AvalonGameCard> = {
-  title: 'Avalon/GameCard',
-  component: AvalonGameCard,
+const meta: Meta<typeof AvalonIntegratorCard> = {
+  title: 'Avalon/IntegratorCard',
+  component: AvalonIntegratorCard,
   args: {
     name: 'Ashen Realms',
     slug: 'ashen-realms',
@@ -14,7 +14,7 @@ const meta: Meta<typeof AvalonGameCard> = {
 }
 export default meta
 
-type Story = StoryObj<typeof AvalonGameCard>
+type Story = StoryObj<typeof AvalonIntegratorCard>
 
 export const Default: Story = {}
 export const LongName: Story = {

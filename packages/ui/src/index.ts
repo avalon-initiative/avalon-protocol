@@ -29,7 +29,7 @@ export { default as AvalonWarningBanner } from './components/AvalonWarningBanner
 export { default as AvalonEventCard } from './components/AvalonEventCard.vue'
 export { default as AvalonRsvpControl } from './components/AvalonRsvpControl.vue'
 export { default as AvalonRsvpRosterPanel } from './components/AvalonRsvpRosterPanel.vue'
-export { default as AvalonGameCard } from './components/AvalonGameCard.vue'
+export { default as AvalonIntegratorCard } from './components/AvalonIntegratorCard.vue'
 export { default as AvalonMetricTile } from './components/AvalonMetricTile.vue'
 export { default as AvalonAchievementCard } from './components/AvalonAchievementCard.vue'
 export type { AvalonIconName } from './components/AvalonIcon.types'
@@ -46,7 +46,7 @@ export type {
   AvalonRsvpRosterPanelProps,
   AvalonRsvpRosterStatus,
 } from './components/AvalonRsvpRosterPanel.types'
-export type { AvalonGameCardProps } from './components/AvalonGameCard.types'
+export type { AvalonIntegratorCardProps } from './components/AvalonIntegratorCard.types'
 export type { AvalonMetricTileProps } from './components/AvalonMetricTile.types'
 export type {
   AchievementIconName,

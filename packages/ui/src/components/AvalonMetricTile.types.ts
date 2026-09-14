@@ -10,7 +10,7 @@ export interface AvalonMetricTileProps {
   definition: string
   // Always "durable-derived" today (#261's own scope) — typed as a plain
   // string, not a closed union, so a future "realtime"/"self-reported"
-  // class (docs/architecture/game-registry.md's still-open metrics) needs
+  // class (docs/architecture/integrator-registry.md's still-open metrics) needs
   // no change here.
   metricClass: string
 }

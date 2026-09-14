@@ -1,37 +1,37 @@
 import { describe, expect, it } from 'vitest'
-import { buildGamesListQueryString, isActiveGameStatus, listRegistryMetrics } from './games'
-import type { GameRegistryResponse } from './types'
+import { buildIntegratorsListQueryString, isActiveIntegratorStatus, listRegistryMetrics } from './integrations'
+import type { IntegratorRegistryResponse } from './types'
 
-describe('buildGamesListQueryString', () => {
+describe('buildIntegratorsListQueryString', () => {
   it('omits every key when nothing is set', () => {
-    expect(buildGamesListQueryString({})).toBe('')
+    expect(buildIntegratorsListQueryString({})).toBe('')
   })
 
   it('trims and includes q only when non-blank', () => {
-    expect(buildGamesListQueryString({ q: '  ashen  ' })).toBe('?q=ashen')
-    expect(buildGamesListQueryString({ q: '   ' })).toBe('')
+    expect(buildIntegratorsListQueryString({ q: '  ashen  ' })).toBe('?q=ashen')
+    expect(buildIntegratorsListQueryString({ q: '   ' })).toBe('')
   })
 
   it('includes sort, limit, and cursor when set', () => {
-    const query = buildGamesListQueryString({ sort: 'name', limit: 10, cursor: 'abc-123' })
+    const query = buildIntegratorsListQueryString({ sort: 'name', limit: 10, cursor: 'abc-123' })
     expect(query).toContain('sort=name')
     expect(query).toContain('limit=10')
     expect(query).toContain('cursor=abc-123')
   })
 })
 
-describe('isActiveGameStatus', () => {
+describe('isActiveIntegratorStatus', () => {
   it('is true only for exactly "active"', () => {
-    expect(isActiveGameStatus('active')).toBe(true)
-    expect(isActiveGameStatus('suspended')).toBe(false)
-    expect(isActiveGameStatus('revoked')).toBe(false)
-    expect(isActiveGameStatus('Active')).toBe(false)
+    expect(isActiveIntegratorStatus('active')).toBe(true)
+    expect(isActiveIntegratorStatus('suspended')).toBe(false)
+    expect(isActiveIntegratorStatus('revoked')).toBe(false)
+    expect(isActiveIntegratorStatus('Active')).toBe(false)
   })
 })
 
 describe('listRegistryMetrics', () => {
-  const registry: GameRegistryResponse = {
-    players: { value: 10, definition: 'distinct identities with an active GameBinding', class: 'durable-derived' },
+  const registry: IntegratorRegistryResponse = {
+    players: { value: 10, definition: 'distinct identities with an active IntegratorBinding', class: 'durable-derived' },
     total_players_ever: { value: 12, definition: 'distinct identities that ever had a binding', class: 'durable-derived' },
     achievements_issued: { value: 5, definition: 'count of achievement.issued events', class: 'durable-derived' },
     achievements_revoked: { value: 1, definition: 'count of achievement.revoked events', class: 'durable-derived' },

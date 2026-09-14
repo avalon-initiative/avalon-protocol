@@ -1,10 +1,10 @@
-// Connected-games view (#27, #83): every binding the caller has, with its
+// Connected-integrators view (#27, #83): every binding the caller has, with its
 // currently-active grants. Loads once, then polls — same "no WebSocket
 // needed for milestone 1" shape apps/hub/src/composables/useGuildDetail.ts
 // already establishes.
 import { onMounted, onUnmounted, ref } from 'vue'
 import * as api from '../api/client'
-import type { GameBindingResponse } from '../api/types'
+import type { IntegratorBindingResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
@@ -12,7 +12,7 @@ const POLL_INTERVAL_MS = 5 * 60_000
 export function useMyConnections() {
   const session = useSessionStore()
 
-  const bindings = ref<GameBindingResponse[]>([])
+  const bindings = ref<IntegratorBindingResponse[]>([])
   const loading = ref(true)
   const error = ref('')
 

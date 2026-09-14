@@ -9,7 +9,7 @@
 // documented gaps rather than inventing stricter behavior: no visibility
 // scoping on presence_of (issue #87), and update_presence is an identity
 // publishing its own status, not an integrator-authority publish (no
-// GameCredential/GameBinding capability-grant system exists yet).
+// IntegratorCredential/IntegratorBinding capability-grant system exists yet).
 
 using System;
 using System.Collections.Generic;
@@ -42,9 +42,9 @@ namespace Avalon.Sdk
         [JsonPropertyName("status")]
         public PresenceStatus Status { get; set; }
 
-        /// <summary>The game the user is currently in, if any and if shared.</summary>
-        [JsonPropertyName("playing")]
-        public Guid? Playing { get; set; }
+        /// <summary>The integrator the user is currently active in, if any and if shared.</summary>
+        [JsonPropertyName("active_in")]
+        public Guid? ActiveIn { get; set; }
 
         [JsonPropertyName("updated_at")]
         public DateTimeOffset UpdatedAt { get; set; }

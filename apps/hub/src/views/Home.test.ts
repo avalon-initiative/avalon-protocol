@@ -114,7 +114,7 @@ describe('Home', () => {
     expect(wrapper.text()).toContain('View all')
   })
 
-  it('shows connected games, guilds, and their latest messages', async () => {
+  it('shows connected integrators, guilds, and their latest messages', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
@@ -125,7 +125,7 @@ describe('Home', () => {
       '/me/connections': [
         {
           binding_id: 'bind-1',
-          game_id: 'game-1',
+          integrator_id: 'integrator-1',
           slug: 'echoes-of-aether',
           name: 'Echoes of Aether',
           established_at: '2026-09-01T00:00:00Z',
@@ -141,7 +141,7 @@ describe('Home', () => {
         owner: 'id-1',
         created_at: '2026-09-01T00:00:00Z',
         member_count: 42,
-        games: [],
+        integrators: [],
         join_policy: 'invite_only',
         motd: null,
         banner: null,

@@ -10,8 +10,8 @@ import type {
   AttestationResponse,
   CancelRecoveryRequest,
   ChannelResponse,
-  ConnectGameRequest,
-  ConnectGameResponse,
+  ConnectIntegratorRequest,
+  ConnectIntegratorResponse,
   ConversationMessageResponse,
   ConversationResponse,
   CreateChannelRequest,
@@ -31,9 +31,9 @@ import type {
   FriendRequestResponse,
   FriendshipResponse,
   GameBreakdownResponse,
-  GameRegistryResponse,
+  IntegratorRegistryResponse,
   IssuerKeyResponse,
-  GameResponse,
+  IntegratorResponse,
   GuardianRequestSummary,
   GuardianSettingsResponse,
   GuildInviteResponse,
@@ -43,7 +43,7 @@ import type {
   GuildResponse,
   HistoryEntryResponse,
   ListEventsQuery,
-  ListGamesResponse,
+  ListIntegratorsResponse,
   MessageResponse,
   MyConnectionsResponse,
   MyGuildMembershipResponse,
@@ -240,7 +240,7 @@ export function getMyAchievements(token: string): Promise<AttestationResponse[]>
 // which AttestationResponse itself doesn't carry (only the definition's
 // GlobalId string).
 export function listAchievementDefinitions(slug: string): Promise<AchievementDefinitionResponse[]> {
-  return request(`/games/${slug}/achievements`)
+  return request(`/integrators/${slug}/achievements`)
 }
 
 export function listMilestoneDefinitions(slug: string): Promise<AchievementDefinitionResponse[]> {
@@ -573,41 +573,41 @@ export function transferOwnership(
   return request(`/guilds/${guildId}/transfer-ownership`, { method: 'POST', body, token })
 }
 
-export function associateGame(
+export function associateIntegrator(
   token: string,
   guildId: string,
-  gameId: string,
+  integratorId: string,
 ): Promise<GuildResponse> {
-  return request(`/guilds/${guildId}/games/${gameId}`, { method: 'POST', token })
+  return request(`/guilds/${guildId}/integrators/${integratorId}`, { method: 'POST', token })
 }
 
-// GET /guilds/{id}/game-breakdown (issue #206) — gated server-side to a
+// GET /guilds/{id}/integrator-breakdown (issue #206) — gated server-side to a
 // manage_guild holder (always) or anyone when the guild has set
 // `game_breakdown_public` (see api/guilds.ts's own note and
 // crates/server/src/guilds.rs::game_breakdown). A 403 here is expected and
 // handled by the caller, not a bug.
 export function getGameBreakdown(token: string, guildId: string): Promise<GameBreakdownResponse> {
-  return request(`/guilds/${guildId}/game-breakdown`, { token })
+  return request(`/guilds/${guildId}/integrator-breakdown`, { token })
 }
 
-// GET/PUT /guilds/{id}/favorite-games (issue #207, implementing decision
-// #160): a manage_guild-curated top-5 pin list drawn only from games with
+// GET/PUT /guilds/{id}/favorite-integrators (issue #207, implementing decision
+// #160): a manage_guild-curated top-5 pin list drawn only from integrators with
 // real affinity per getGameBreakdown above. GET is unrestricted (same
 // visibility as getGuild — favorites are always part of the public
 // profile, see GuildResponse.favorite_games); PUT is manage_guild-gated
 // server-side and always sends the full desired ordered list.
 export function getFavoriteGames(token: string, guildId: string): Promise<FavoriteGamesResponse> {
-  return request(`/guilds/${guildId}/favorite-games`, { token })
+  return request(`/guilds/${guildId}/favorite-integrators`, { token })
 }
 
 export function setFavoriteGames(
   token: string,
   guildId: string,
-  gameIds: string[],
+  integratorIds: string[],
 ): Promise<FavoriteGamesResponse> {
-  return request(`/guilds/${guildId}/favorite-games`, {
+  return request(`/guilds/${guildId}/favorite-integrators`, {
     method: 'PUT',
-    body: { game_ids: gameIds },
+    body: { integrator_ids: integratorIds },
     token,
   })
 }
@@ -890,60 +890,60 @@ export function listEventRsvps(
   return request(`/guilds/${guildId}/events/${eventId}/rsvps`, { token })
 }
 
-// Game registration read (#26) + the binding/grant consent flow (#27,
-// #83), matching crates/server/src/games.rs's #27 companion module
+// Integrator registration read (#26) + the binding/grant consent flow (#27,
+// #83), matching crates/server/src/integrators.rs's #27 companion module
 // field-for-field. Issue #293 made `/integrations` the server's canonical
-// path for these reads (`/games` still works as a compatibility redirect,
+// path for these reads (`/integrators` still works as a compatibility redirect,
 // but this repo's own client calls the canonical path directly).
 
-export function getGame(token: string, slug: string): Promise<GameResponse> {
+export function getIntegrator(token: string, slug: string): Promise<IntegratorResponse> {
   return request(`/integrations/${slug}`, { token })
 }
 
-// Issue #270's game directory + profile page: GET /integrations and GET
+// Issue #270's integrator directory + profile page: GET /integrations and GET
 // /integrations/{slug} are both public and unauthenticated
-// (crates/server/src/games.rs), so unlike getGame above (always called
+// (crates/server/src/integrators.rs), so unlike getIntegrator above (always called
 // from an already-authenticated screen) these take no bearer token at
 // all — a logged-out visitor to the Hub could browse them exactly as-is
 // once routing allows that (not scoped here).
-export function listGames(queryString: string): Promise<ListGamesResponse> {
+export function listIntegrators(queryString: string): Promise<ListIntegratorsResponse> {
   return request(`/integrations${queryString}`)
 }
 
-export function getGamePublic(slug: string): Promise<GameResponse> {
+export function getIntegratorPublic(slug: string): Promise<IntegratorResponse> {
   return request(`/integrations/${slug}`)
 }
 
 // Issue #261's registry-metrics endpoint — same public, unauthenticated
-// visibility as getGame/listGames.
-export function getGameRegistry(slug: string): Promise<GameRegistryResponse> {
-  return request(`/games/${slug}/registry`)
+// visibility as getIntegrator/listIntegrators.
+export function getIntegratorRegistry(slug: string): Promise<IntegratorRegistryResponse> {
+  return request(`/integrators/${slug}/registry`)
 }
 
-// Issue #90's game profile page: an issuer's full key history, root and
+// Issue #90's integrator profile page: an issuer's full key history, root and
 // operational, valid and revoked. Same public/unauthenticated visibility
-// as getGamePublic/getGameRegistry above.
+// as getIntegratorPublic/getIntegratorRegistry above.
 export function listIssuerKeys(slug: string): Promise<IssuerKeyResponse[]> {
-  return request(`/games/${slug}/keys`)
+  return request(`/integrators/${slug}/keys`)
 }
 
-// User-session only — a game credential never grants itself anything
+// User-session only — an integrator credential never grants itself anything
 // (see the ticket's own invariant). Idempotent: reconnecting to an
-// already-bound game doesn't duplicate the binding.
-export function connectGame(
+// already-bound integrator doesn't duplicate the binding.
+export function connectIntegrator(
   token: string,
   slug: string,
-  body: ConnectGameRequest,
-): Promise<ConnectGameResponse> {
-  return request(`/games/${slug}/connect`, { method: 'POST', body, token })
+  body: ConnectIntegratorRequest,
+): Promise<ConnectIntegratorResponse> {
+  return request(`/integrators/${slug}/connect`, { method: 'POST', body, token })
 }
 
 export function revokeGrant(token: string, slug: string, capability: string): Promise<void> {
-  return request(`/games/${slug}/grants/${capability}`, { method: 'DELETE', token })
+  return request(`/integrators/${slug}/grants/${capability}`, { method: 'DELETE', token })
 }
 
-export function disconnectGame(token: string, slug: string): Promise<void> {
-  return request(`/games/${slug}/connect`, { method: 'DELETE', token })
+export function disconnectIntegrator(token: string, slug: string): Promise<void> {
+  return request(`/integrators/${slug}/connect`, { method: 'DELETE', token })
 }
 
 export function listMyConnections(token: string): Promise<MyConnectionsResponse> {

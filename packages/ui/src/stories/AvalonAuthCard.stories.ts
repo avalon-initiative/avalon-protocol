@@ -17,5 +17,5 @@ type Story = StoryObj<typeof AvalonAuthCard>
 
 export const Default: Story = {}
 export const WithSubtitle: Story = {
-  args: { subtitle: 'One identity, every game connected to Avalon.' },
+  args: { subtitle: 'One identity, every integrator connected to Avalon.' },
 }

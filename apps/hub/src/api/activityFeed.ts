@@ -57,7 +57,7 @@ export function summarizeActivityEntry(entry: HistoryEntryResponse): string {
     case 'guild.owner_transferred':
       return 'You transferred guild ownership.'
     case 'guild.game_associated':
-      return 'You associated a game with your guild.'
+      return 'You associated an integrator with your guild.'
     case 'guild.member_added':
       return 'You joined a guild.'
     case 'guild.member_removed': {
@@ -65,7 +65,7 @@ export function summarizeActivityEntry(entry: HistoryEntryResponse): string {
       return reason === 'removed' ? 'You removed a member from a guild.' : 'You left a guild.'
     }
     case 'guild.favorite_games_updated':
-      return "You updated your guild's favorite games."
+      return "You updated your guild's favorite integrators."
     case 'guild.channel_created': {
       const name = stringField(entry.payload, 'name')
       return name ? `You created the channel #${name}.` : 'You created a guild channel.'

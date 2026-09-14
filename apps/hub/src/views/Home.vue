@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The landing page after login (issue #148/#312): welcome header, a
-// featured/connected-games strip, quick actions, friends online, guilds,
+// featured/connected-integrators strip, quick actions, friends online, guilds,
 // latest guild messages, and recent activity — every section backed by an
-// API that already exists (games.ts/guilds.ts/guildChat.ts), no new
+// API that already exists (integrators.ts/guilds.ts/guildChat.ts), no new
 // endpoints added here.
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -25,19 +25,19 @@ const router = useRouter()
 const session = useSessionStore()
 const { onlineFriends, loading: friendsLoading } = useFriendsPresence()
 const { guilds, loading: guildsLoading } = useMyGuilds()
-const { bindings: connectedGames, loading: gamesLoading } = useMyConnections()
+const { bindings: connectedIntegrators, loading: integratorsLoading } = useMyConnections()
 const { latestMessages, loading: messagesLoading } = useLatestGuildMessages(guilds)
 
 const homeGuilds = computed(() => guilds.value.slice(0, HOME_GUILDS_LIMIT))
 const homeMessages = computed(() => latestMessages.value.slice(0, HOME_MESSAGES_LIMIT))
 
-// The most recently connected app/game, if any — the only honest ordering
-// available (GameBindingResponse has no last-played/session data yet), so
+// The most recently connected app/integrator, if any — the only honest ordering
+// available (IntegratorBindingResponse has no last-played/session data yet), so
 // "Recently Connected" means exactly that, not "most played" or a curated
-// pick — renamed from "Featured Game" since it isn't curated and connected
-// apps aren't only games.
-const featuredGame = computed(() =>
-  [...connectedGames.value].sort((a, b) => b.established_at.localeCompare(a.established_at))[0],
+// pick — renamed from "Featured Integrator" since it isn't curated and connected
+// apps aren't only integrators.
+const featuredIntegrator = computed(() =>
+  [...connectedIntegrators.value].sort((a, b) => b.established_at.localeCompare(a.established_at))[0],
 )
 
 const displayName = ref('')
@@ -74,33 +74,33 @@ const quickActions = [
       <h1 :class="styles.title">
         Welcome back<template v-if="displayName">, {{ displayName }}</template>
       </h1>
-      <p :class="styles.tagline">Your games. Your community. Your identity. Across every world.</p>
+      <p :class="styles.tagline">Your integrators. Your community. Your identity. Across every world.</p>
     </header>
     <p v-if="error" :class="styles.error">{{ error }}</p>
 
-    <AvalonCard v-if="!gamesLoading" title="Recently Connected" :class="styles.featuredCard">
-      <div v-if="featuredGame" :class="styles.featured">
-        <span :class="styles.featuredIcon"><AvalonIcon name="games" :size="28" /></span>
+    <AvalonCard v-if="!integratorsLoading" title="Recently Connected" :class="styles.featuredCard">
+      <div v-if="featuredIntegrator" :class="styles.featured">
+        <span :class="styles.featuredIcon"><AvalonIcon name="integrators" :size="28" /></span>
         <div :class="styles.featuredText">
-          <p :class="styles.featuredLabel">{{ featuredGame.name }}</p>
+          <p :class="styles.featuredLabel">{{ featuredIntegrator.name }}</p>
           <p :class="styles.featuredMeta">
-            Connected {{ formatActivityTimestamp(featuredGame.established_at) }}
+            Connected {{ formatActivityTimestamp(featuredIntegrator.established_at) }}
           </p>
         </div>
         <AvalonButton
           label="View"
           variant="secondary"
-          @click="router.push({ name: 'integration-profile', params: { slug: featuredGame.slug } })"
+          @click="router.push({ name: 'integration-profile', params: { slug: featuredIntegrator.slug } })"
         />
       </div>
       <div v-else :class="styles.featured">
         <span :class="styles.featuredIcon"><AvalonIcon name="discover" :size="28" /></span>
         <div :class="styles.featuredText">
           <p :class="styles.featuredLabel">Nothing connected yet</p>
-          <p :class="styles.featuredMeta">Browse the directory to find your first app or game.</p>
+          <p :class="styles.featuredMeta">Browse the directory to find your first app or integrator.</p>
         </div>
         <AvalonButton
-          label="Browse Apps & Games"
+          label="Browse Apps & Integrators"
           variant="secondary"
           @click="router.push({ name: 'integrations' })"
         />
@@ -109,26 +109,26 @@ const quickActions = [
 
     <div :class="styles.grid">
       <div :class="styles.mainColumn">
-        <AvalonCard title="Your Apps & Games">
+        <AvalonCard title="Your Apps & Integrators">
           <template #action>
             <RouterLink to="/connections">View all</RouterLink>
           </template>
-          <template v-if="!gamesLoading && connectedGames.length === 0">
+          <template v-if="!integratorsLoading && connectedIntegrators.length === 0">
             <p :class="styles.empty">You haven't connected anything yet.</p>
             <AvalonButton
-              label="Browse Apps & Games"
+              label="Browse Apps & Integrators"
               variant="secondary"
               @click="router.push({ name: 'integrations' })"
             />
           </template>
-          <ul v-else :class="styles.gameGrid">
-            <li v-for="binding in connectedGames" :key="binding.binding_id" :class="styles.gameTile">
+          <ul v-else :class="styles.integratorGrid">
+            <li v-for="binding in connectedIntegrators" :key="binding.binding_id" :class="styles.integratorTile">
               <RouterLink
                 :to="{ name: 'integration-profile', params: { slug: binding.slug } }"
-                :class="styles.gameTileLink"
+                :class="styles.integratorTileLink"
               >
-                <span :class="styles.gameTileIcon"><AvalonIcon name="games" :size="20" /></span>
-                <span :class="styles.gameTileName">{{ binding.name }}</span>
+                <span :class="styles.integratorTileIcon"><AvalonIcon name="integrators" :size="20" /></span>
+                <span :class="styles.integratorTileName">{{ binding.name }}</span>
               </RouterLink>
             </li>
           </ul>

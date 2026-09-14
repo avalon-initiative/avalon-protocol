@@ -43,7 +43,7 @@ import {
   formatGameBreakdownEntry,
   formatPlayingSummary,
   groupMembersByRole,
-  groupMembersPlayingByGame,
+  groupMembersPlayingByIntegrator,
   hasGuildPermission,
   hasNoGameBreakdownData,
   membershipStatusText,
@@ -93,8 +93,8 @@ const {
   isOwner,
   loading,
   error,
-  gameBreakdown,
-  gameBreakdownError,
+  integratorBreakdown,
+  integratorBreakdownError,
   joinRequests,
   myJoinRequest,
   refresh,
@@ -300,58 +300,58 @@ async function onToggleAnnouncementOnly() {
   }
 }
 
-// --- Game affinity breakdown (issue #206, implementing decision #160) -----
-// Aggregated from real GameBinding (#83) data only — never a manager-added
-// association (that's #20's superseded associate_game flow below). A
+// --- Integrator affinity breakdown (issue #206, implementing decision #160) -----
+// Aggregated from real IntegratorBinding (#83) data only — never a manager-added
+// association (that's #20's superseded associate_integrator flow below). A
 // manage_guild holder always sees it, gated server-side; anyone else only
 // once the guild opts into public exposure via the toggle just below.
-const gameBreakdownLines = computed(() => {
-  if (!gameBreakdown.value) return []
-  return gameBreakdown.value.breakdown.map((entry) => formatGameBreakdownEntry(entry, gameBreakdown.value!.total_members))
+const integratorBreakdownLines = computed(() => {
+  if (!integratorBreakdown.value) return []
+  return integratorBreakdown.value.breakdown.map((entry) => formatGameBreakdownEntry(entry, integratorBreakdown.value!.total_members))
 })
-const gameBreakdownEmpty = computed(
-  () => gameBreakdown.value !== null && hasNoGameBreakdownData(gameBreakdown.value.breakdown),
+const integratorBreakdownEmpty = computed(
+  () => integratorBreakdown.value !== null && hasNoGameBreakdownData(integratorBreakdown.value.breakdown),
 )
 
 const savingGameBreakdownPublic = ref(false)
-const gameBreakdownPublicError = ref('')
+const integratorBreakdownPublicError = ref('')
 
 async function onToggleGameBreakdownPublic(next: boolean) {
   if (!session.token) return
-  gameBreakdownPublicError.value = ''
+  integratorBreakdownPublicError.value = ''
   savingGameBreakdownPublic.value = true
   try {
     await api.updateGuild(session.token, guildId.value, { game_breakdown_public: next })
     await refresh()
   } catch (e) {
-    gameBreakdownPublicError.value = e instanceof Error ? e.message : 'Something went wrong.'
+    integratorBreakdownPublicError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     savingGameBreakdownPublic.value = false
   }
 }
 
-// --- Favorite games: curated top-5 pin list (issue #207, implementing -----
+// --- Favorite integrators: curated top-5 pin list (issue #207, implementing -----
 // decision #160). Always part of the public profile (`guild.favorite_games`
 // — unlike the breakdown above, no public-exposure toggle of its own), so
 // it's readable here whether or not the caller can manage the guild.
-// Pinning is only ever offered from `gameBreakdown.value.breakdown` — the
+// Pinning is only ever offered from `integratorBreakdown.value.breakdown` — the
 // same real-affinity data #206 already gates behind manage_guild — so a
-// manager can never even attempt to pin a game without real affinity.
+// manager can never even attempt to pin an integrator without real affinity.
 const favorites = computed(() => guild.value?.favorite_games ?? [])
-const pinnableGames = computed(() =>
-  gameBreakdown.value ? pinnableBreakdownEntries(gameBreakdown.value.breakdown, favorites.value) : [],
+const pinnableIntegrators = computed(() =>
+  integratorBreakdown.value ? pinnableBreakdownEntries(integratorBreakdown.value.breakdown, favorites.value) : [],
 )
 const canPinMore = computed(() => canPinMoreFavorites(favorites.value))
 
 const savingFavorites = ref(false)
 const favoritesError = ref('')
 
-async function applyFavoriteGameIds(gameIds: string[]) {
+async function applyFavoriteGameIds(integratorIds: string[]) {
   if (!session.token) return
   favoritesError.value = ''
   savingFavorites.value = true
   try {
-    await api.setFavoriteGames(session.token, guildId.value, gameIds)
+    await api.setFavoriteGames(session.token, guildId.value, integratorIds)
     await refresh()
   } catch (e) {
     favoritesError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -360,16 +360,16 @@ async function applyFavoriteGameIds(gameIds: string[]) {
   }
 }
 
-function onPinFavorite(gameId: string) {
-  return applyFavoriteGameIds(addFavoriteGameId(favorites.value, gameId))
+function onPinFavorite(integratorId: string) {
+  return applyFavoriteGameIds(addFavoriteGameId(favorites.value, integratorId))
 }
 
-function onUnpinFavorite(gameId: string) {
-  return applyFavoriteGameIds(removeFavoriteGameId(favorites.value, gameId))
+function onUnpinFavorite(integratorId: string) {
+  return applyFavoriteGameIds(removeFavoriteGameId(favorites.value, integratorId))
 }
 
-function onReorderFavorite(gameId: string, direction: 'up' | 'down') {
-  return applyFavoriteGameIds(reorderFavoriteGameIds(favorites.value, gameId, direction))
+function onReorderFavorite(integratorId: string, direction: 'up' | 'down') {
+  return applyFavoriteGameIds(reorderFavoriteGameIds(favorites.value, integratorId, direction))
 }
 
 // Roster search/filter/sort — milestone-1 polish, plain pure functions
@@ -395,14 +395,14 @@ const roleGroups = computed(() => {
 })
 const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMember.value))
 
-// "Members currently playing" (#57): realtime presence grouped by game,
-// never a durable stat and never phrased as the guild belonging to a game
-// (#74 — "N members playing X", not "Game X's guild"). Computed from the
+// "Members currently playing" (#57): realtime presence grouped by integrator,
+// never a durable stat and never phrased as the guild belonging to an integrator
+// (#74 — "N members playing X", not "Integrator X's guild"). Computed from the
 // same roster/presence merge the roles view already loads, so it's always
-// null in practice today (no game publishes presence.playing yet — see
+// null in practice today (no integrator publishes presence.playing yet — see
 // api/guilds.ts's own note) and renders the honest empty state below
 // rather than fabricating activity.
-const playingGroups = computed(() => groupMembersPlayingByGame(members.value))
+const playingGroups = computed(() => groupMembersPlayingByIntegrator(members.value))
 
 // --- Rename / retag / redescribe / MOTD / banner / icon --------------------
 
@@ -728,7 +728,7 @@ async function onKick(identityId: string) {
 // --- Join requests (issue #242) ------------------------------------------
 // `joinRequests` (pending-only, per useGuildDetail's default listJoinRequests
 // call) is manage_members-gated server-side — empty here for anyone who
-// isn't a manager, same non-fatal-403 posture gameBreakdown already has.
+// isn't a manager, same non-fatal-403 posture integratorBreakdown already has.
 
 const decidingRequestId = ref<string | null>(null)
 const joinRequestsError = ref('')
@@ -894,34 +894,34 @@ async function onTransferOwnership() {
   }
 }
 
-// --- Associate game -------------------------------------------------------
-// No game registry/picker exists yet (#18's own deferral) — a plain
-// game-id text input is milestone-1 scope, matching how "Add friend" took
+// --- Associate integrator -------------------------------------------------------
+// No integrator registry/picker exists yet (#18's own deferral) — a plain
+// integrator-id text input is milestone-1 scope, matching how "Add friend" took
 // a raw identity id with no search.
 
-const showAssociateGame = ref(false)
-const associateGameId = ref('')
-const associatingGame = ref(false)
-const associateGameError = ref('')
+const showAssociateIntegrator = ref(false)
+const associateIntegratorId = ref('')
+const associatingIntegrator = ref(false)
+const associateIntegratorError = ref('')
 
-function cancelAssociateGame() {
-  showAssociateGame.value = false
-  associateGameId.value = ''
-  associateGameError.value = ''
+function cancelAssociateIntegrator() {
+  showAssociateIntegrator.value = false
+  associateIntegratorId.value = ''
+  associateIntegratorError.value = ''
 }
 
-async function onAssociateGame() {
+async function onAssociateIntegrator() {
   if (!session.token) return
-  associateGameError.value = ''
-  associatingGame.value = true
+  associateIntegratorError.value = ''
+  associatingIntegrator.value = true
   try {
-    await api.associateGame(session.token, guildId.value, associateGameId.value.trim())
-    cancelAssociateGame()
+    await api.associateIntegrator(session.token, guildId.value, associateIntegratorId.value.trim())
+    cancelAssociateIntegrator()
     await refresh()
   } catch (e) {
-    associateGameError.value = e instanceof Error ? e.message : 'Something went wrong.'
+    associateIntegratorError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
-    associatingGame.value = false
+    associatingIntegrator.value = false
   }
 }
 
@@ -1130,8 +1130,8 @@ const {
     </div>
 
     <!-- Overview: header info already above (MOTD is now its own banner
-         above the tab bar, issue #276), plus links, game affinity, favorite
-         games, associated games, and guild history — all read-only here;
+         above the tab bar, issue #276), plus links, integrator affinity, favorite
+         integrators, associated integrators, and guild history — all read-only here;
          editing lives in Settings. -->
     <div v-if="activeTab === 'overview'" :class="styles.grid">
       <div :class="styles.mainColumn">
@@ -1142,9 +1142,9 @@ const {
         </AvalonCard>
 
         <AvalonCard
-          v-if="canManageGuild || gameBreakdown"
-          title="Game affinity"
-          subtitle="Auto-derived from members' active game bindings — not something anyone sets by hand. Managers can choose whether it's visible on this guild's public profile and discovery card; it's always visible to members."
+          v-if="canManageGuild || integratorBreakdown"
+          title="Integrator affinity"
+          subtitle="Auto-derived from members' active integrator bindings — not something anyone sets by hand. Managers can choose whether it's visible on this guild's public profile and discovery card; it's always visible to members."
         >
           <p v-if="canManageGuild" :class="styles.empty">
             Shown on this guild's public profile and discovery card:
@@ -1162,22 +1162,22 @@ const {
             variant="secondary"
             @click="onToggleGameBreakdownPublic(!guild.game_breakdown_public)"
           />
-          <p v-if="gameBreakdownPublicError" :class="styles.error">{{ gameBreakdownPublicError }}</p>
+          <p v-if="integratorBreakdownPublicError" :class="styles.error">{{ integratorBreakdownPublicError }}</p>
 
-          <p v-if="gameBreakdownError && !canManageGuild" :class="styles.empty">
-            This guild hasn't shared its game affinity breakdown publicly.
+          <p v-if="integratorBreakdownError && !canManageGuild" :class="styles.empty">
+            This guild hasn't shared its integrator affinity breakdown publicly.
           </p>
           <template v-else>
-            <p v-for="line in gameBreakdownLines" :key="line" :class="styles.empty">{{ line }}</p>
-            <p v-if="gameBreakdownEmpty" :class="styles.empty">
-              No guild member has an active game binding yet.
+            <p v-for="line in integratorBreakdownLines" :key="line" :class="styles.empty">{{ line }}</p>
+            <p v-if="integratorBreakdownEmpty" :class="styles.empty">
+              No guild member has an active integrator binding yet.
             </p>
           </template>
         </AvalonCard>
 
-        <AvalonCard v-if="canManageGuild || favorites.length > 0" title="Favorite games">
-          <p v-if="favorites.length === 0" :class="styles.empty">No favorite games pinned yet.</p>
-          <div v-for="(entry, index) in favorites" :key="entry.game_id" :class="styles.empty">
+        <AvalonCard v-if="canManageGuild || favorites.length > 0" title="Favorite integrators">
+          <p v-if="favorites.length === 0" :class="styles.empty">No favorite integrators pinned yet.</p>
+          <div v-for="(entry, index) in favorites" :key="entry.integrator_id" :class="styles.empty">
             {{ formatFavoriteGameEntry(entry) }}
             <template v-if="canManageGuild">
               <AvalonButton
@@ -1185,36 +1185,36 @@ const {
                 label="Move up"
                 variant="secondary"
                 :disabled="savingFavorites"
-                @click="onReorderFavorite(entry.game_id, 'up')"
+                @click="onReorderFavorite(entry.integrator_id, 'up')"
               />
               <AvalonButton
                 v-if="index < favorites.length - 1"
                 label="Move down"
                 variant="secondary"
                 :disabled="savingFavorites"
-                @click="onReorderFavorite(entry.game_id, 'down')"
+                @click="onReorderFavorite(entry.integrator_id, 'down')"
               />
               <AvalonButton
                 label="Unpin"
                 variant="danger"
                 :disabled="savingFavorites"
-                @click="onUnpinFavorite(entry.game_id)"
+                @click="onUnpinFavorite(entry.integrator_id)"
               />
             </template>
           </div>
 
           <template v-if="canManageGuild">
-            <p v-if="!canPinMore" :class="styles.empty">Up to 5 games may be pinned at once.</p>
-            <p v-else-if="pinnableGames.length === 0" :class="styles.empty">
-              No unpinned game currently has affinity to pin.
+            <p v-if="!canPinMore" :class="styles.empty">Up to 5 integrators may be pinned at once.</p>
+            <p v-else-if="pinnableIntegrators.length === 0" :class="styles.empty">
+              No unpinned integrator currently has affinity to pin.
             </p>
-            <div v-for="entry in pinnableGames" :key="entry.game_id" :class="styles.empty">
-              {{ entry.game_name }}
+            <div v-for="entry in pinnableIntegrators" :key="entry.integrator_id" :class="styles.empty">
+              {{ entry.integrator_name }}
               <AvalonButton
                 label="Pin"
                 variant="secondary"
                 :disabled="savingFavorites"
-                @click="onPinFavorite(entry.game_id)"
+                @click="onPinFavorite(entry.integrator_id)"
               />
             </div>
             <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
@@ -1222,32 +1222,32 @@ const {
         </AvalonCard>
 
         <!--
-          Associated games (#20's original manual associate_game flow,
+          Associated integrators (#20's original manual associate_integrator flow,
           superseded by #206/#207's real-binding-derived affinity above but
           still live): now visible to any member, read-only — only the
-          "associate a game" action itself stays canManageGuild-gated
+          "associate an integrator" action itself stays canManageGuild-gated
           (issue #241).
         -->
-        <AvalonCard v-if="canManageGuild || guild.games.length > 0" title="Associated games">
-          <p v-for="gameId in guild.games" :key="gameId" :class="styles.empty">{{ gameId }}</p>
-          <p v-if="guild.games.length === 0" :class="styles.empty">No games associated yet.</p>
+        <AvalonCard v-if="canManageGuild || guild.integrators.length > 0" title="Associated integrators">
+          <p v-for="integratorId in guild.integrators" :key="integratorId" :class="styles.empty">{{ integratorId }}</p>
+          <p v-if="guild.integrators.length === 0" :class="styles.empty">No integrators associated yet.</p>
           <template v-if="canManageGuild">
             <AvalonButton
-              v-show="!showAssociateGame"
-              label="Associate a game"
+              v-show="!showAssociateIntegrator"
+              label="Associate an integrator"
               variant="secondary"
-              @click="showAssociateGame = true"
+              @click="showAssociateIntegrator = true"
             />
-            <div v-show="showAssociateGame">
+            <div v-show="showAssociateIntegrator">
               <AvalonForm
                 submit-label="Associate"
-                :submitting="associatingGame"
-                :error="associateGameError"
-                @submit="onAssociateGame"
+                :submitting="associatingIntegrator"
+                :error="associateIntegratorError"
+                @submit="onAssociateIntegrator"
               >
-                <AvalonTextField v-model="associateGameId" label="Game id" />
+                <AvalonTextField v-model="associateIntegratorId" label="Integrator id" />
                 <template #secondary-actions>
-                  <AvalonButton label="Cancel" variant="secondary" @click="cancelAssociateGame" />
+                  <AvalonButton label="Cancel" variant="secondary" @click="cancelAssociateIntegrator" />
                 </template>
               </AvalonForm>
             </div>
@@ -1379,10 +1379,10 @@ const {
       <div :class="styles.sideColumn">
         <AvalonCard title="Currently playing">
           <p v-if="playingGroups.length === 0" :class="styles.empty">
-            No members currently reporting an in-game presence.
+            No members currently reporting an in-integrator presence.
           </p>
           <template v-else>
-            <p v-for="group in playingGroups" :key="group.gameId" :class="styles.empty">
+            <p v-for="group in playingGroups" :key="group.integratorId" :class="styles.empty">
               {{ formatPlayingSummary(group) }}
             </p>
           </template>

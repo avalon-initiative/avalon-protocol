@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { activeCapabilities, capabilityDescription, CAPABILITY_DESCRIPTIONS } from './connections'
-import type { GameBindingResponse } from './types'
+import type { IntegratorBindingResponse } from './types'
 
 describe('capabilityDescription', () => {
   it('returns the plain-language description for a known capability', () => {
@@ -37,9 +37,9 @@ describe('capabilityDescription', () => {
 })
 
 describe('activeCapabilities', () => {
-  const baseBinding: GameBindingResponse = {
+  const baseBinding: IntegratorBindingResponse = {
     binding_id: 'b1',
-    game_id: 'g1',
+    integrator_id: 'g1',
     slug: 'ashen-realms',
     name: 'Ashen Realms',
     established_at: '2026-09-01T00:00:00Z',
@@ -63,7 +63,7 @@ describe('activeCapabilities', () => {
 
   it('returns an empty list when every requested capability was denied', () => {
     // "All denied" is indistinguishable from "none requested" at the
-    // GameBinding level — a binding can exist with zero grants under it
+    // IntegratorBinding level — a binding can exist with zero grants under it
     // (connecting while approving nothing is still a valid connect).
     expect(activeCapabilities({ ...baseBinding, grants: [] })).toEqual([])
   })

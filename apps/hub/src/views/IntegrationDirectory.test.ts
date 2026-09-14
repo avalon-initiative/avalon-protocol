@@ -1,17 +1,17 @@
-// Issue #270's own invariant: the game directory must render games from
-// GET /games with no score/ranking element anywhere in the DOM.
+// Issue #270's own invariant: the integrator directory must render integrators from
+// GET /integrators with no score/ranking element anywhere in the DOM.
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import GameDirectory from './GameDirectory.vue'
+import IntegrationDirectory from './IntegrationDirectory.vue'
 import { mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/games', component: GameDirectory },
-      { path: '/games/:slug', name: 'integration-profile', component: GameDirectory },
+      { path: '/integrators', component: IntegrationDirectory },
+      { path: '/integrators/:slug', name: 'integration-profile', component: IntegrationDirectory },
     ],
   })
 }
@@ -20,11 +20,11 @@ beforeEach(() => {
   localStorage.clear()
 })
 
-describe('GameDirectory', () => {
-  it('lists games from GET /games with no score or ranking element anywhere', async () => {
+describe('IntegrationDirectory', () => {
+  it('lists integrators from GET /integrators with no score or ranking element anywhere', async () => {
     mockFetchByPath({
       '/integrations': {
-        games: [
+        integrators: [
           {
             id: 'g1',
             slug: 'ashen-realms',
@@ -49,9 +49,9 @@ describe('GameDirectory', () => {
     })
 
     const router = testRouter()
-    router.push('/games')
+    router.push('/integrators')
     await router.isReady()
-    const wrapper = mount(GameDirectory, { global: { plugins: [router] } })
+    const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
 
@@ -65,21 +65,21 @@ describe('GameDirectory', () => {
     expect(text).not.toContain('recommended')
   })
 
-  it('shows an empty message rather than an error when no games match', async () => {
-    mockFetchByPath({ '/integrations': { games: [], next_cursor: null } })
+  it('shows an empty message rather than an error when no integrators match', async () => {
+    mockFetchByPath({ '/integrations': { integrators: [], next_cursor: null } })
 
     const router = testRouter()
-    router.push('/games')
+    router.push('/integrators')
     await router.isReady()
-    const wrapper = mount(GameDirectory, { global: { plugins: [router] } })
+    const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('No games match'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('No integrators match'))
   })
 
   it('renders the Apps/Services tabs as empty rather than hiding them', async () => {
     mockFetchByPath({
       '/integrations': {
-        games: [
+        integrators: [
           {
             id: 'g1',
             slug: 'ashen-realms',
@@ -95,14 +95,14 @@ describe('GameDirectory', () => {
     })
 
     const router = testRouter()
-    router.push('/games')
+    router.push('/integrators')
     await router.isReady()
-    const wrapper = mount(GameDirectory, { global: { plugins: [router] } })
+    const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
 
     const tabs = wrapper.findAll('[role="tab"]')
-    expect(tabs.map((t) => t.text())).toEqual(['Games', 'Apps', 'Services'])
+    expect(tabs.map((t) => t.text())).toEqual(['Integrators', 'Apps', 'Services'])
 
     await tabs[1].trigger('click')
     await flushPromises()

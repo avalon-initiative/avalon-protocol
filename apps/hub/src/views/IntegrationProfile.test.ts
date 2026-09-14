@@ -6,7 +6,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import GameProfile from './GameProfile.vue'
+import IntegrationProfile from './IntegrationProfile.vue'
 import { mockFetchByPath } from '../testing/fakes'
 
 beforeEach(() => {
@@ -17,12 +17,12 @@ beforeEach(() => {
 function testRouter() {
   return createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/games/:slug', component: GameProfile }],
+    routes: [{ path: '/integrators/:slug', component: IntegrationProfile }],
   })
 }
 
 const registryResponse = {
-  players: { value: 10, definition: 'Distinct identities with an active GameBinding.', class: 'durable-derived' },
+  players: { value: 10, definition: 'Distinct identities with an active IntegratorBinding.', class: 'durable-derived' },
   total_players_ever: { value: 12, definition: 'Distinct identities that ever had a binding.', class: 'durable-derived' },
   achievements_issued: { value: 5, definition: 'Count of achievement.issued events by this issuer.', class: 'durable-derived' },
   achievements_revoked: { value: 1, definition: 'Count of achievement.revoked events by this issuer.', class: 'durable-derived' },
@@ -33,7 +33,7 @@ const registryResponse = {
   },
 }
 
-async function mountProfile(gameOverrides: Record<string, unknown> = {}) {
+async function mountProfile(integratorOverrides: Record<string, unknown> = {}) {
   mockFetchByPath({
     '/integrations/ashen-realms': {
       id: 'g1',
@@ -43,28 +43,28 @@ async function mountProfile(gameOverrides: Record<string, unknown> = {}) {
       registered_at: '2026-01-12T00:00:00Z',
       status: 'active',
       requested_capabilities: [],
-      ...gameOverrides,
+      ...integratorOverrides,
     },
-    '/games/ashen-realms/registry': registryResponse,
-    '/games/ashen-realms/keys': [],
+    '/integrators/ashen-realms/registry': registryResponse,
+    '/integrators/ashen-realms/keys': [],
   })
 
   const router = testRouter()
-  router.push('/games/ashen-realms')
+  router.push('/integrators/ashen-realms')
   await router.isReady()
-  const wrapper = mount(GameProfile, { global: { plugins: [router] } })
+  const wrapper = mount(IntegrationProfile, { global: { plugins: [router] } })
   await flushPromises()
   await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
   return wrapper
 }
 
-describe('GameProfile', () => {
+describe('IntegrationProfile', () => {
   it('renders every metric with its definition and class label, never a bare number', async () => {
     const wrapper = await mountProfile()
     const text = wrapper.text()
 
     expect(text).toContain('Players')
-    expect(text).toContain('Distinct identities with an active GameBinding.')
+    expect(text).toContain('Distinct identities with an active IntegratorBinding.')
     expect(text).toContain('Achievements issued')
     expect(text).toContain('Count of achievement.issued events by this issuer.')
     expect(text).toContain('Unique achievement holders')
@@ -101,8 +101,8 @@ describe('GameProfile', () => {
         status: 'active',
         requested_capabilities: [],
       },
-      '/games/ashen-realms/registry': registryResponse,
-      '/games/ashen-realms/keys': [
+      '/integrators/ashen-realms/registry': registryResponse,
+      '/integrators/ashen-realms/keys': [
         { key_id: 'k1', algorithm: 'ed25519', role: 'root', valid_from: '2026-01-12T00:00:00Z', valid_until: null, revoked_at: null },
         {
           key_id: 'k2',
@@ -115,9 +115,9 @@ describe('GameProfile', () => {
       ],
     })
     const router = testRouter()
-    router.push('/games/ashen-realms')
+    router.push('/integrators/ashen-realms')
     await router.isReady()
-    const wrapper = mount(GameProfile, { global: { plugins: [router] } })
+    const wrapper = mount(IntegrationProfile, { global: { plugins: [router] } })
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
 

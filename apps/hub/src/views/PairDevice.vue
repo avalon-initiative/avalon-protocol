@@ -61,7 +61,7 @@ function onStartOver() {
     <header :class="styles.pageHeader">
       <h1 :class="styles.title">Pair a device</h1>
       <p :class="styles.subtitle">
-        Approve a code shown on another device (a game, a console) to sign it in as you.
+        Approve a code shown on another device (an integrator, a console) to sign it in as you.
       </p>
     </header>
 

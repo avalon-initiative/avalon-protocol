@@ -21,7 +21,7 @@ export const AllIcons: Story = {
     `,
     setup() {
       const allIconNames = [
-        'home', 'games', 'guilds', 'friends', 'chat', 'discover', 'profile', 'search',
+        'home', 'integrators', 'guilds', 'friends', 'chat', 'discover', 'profile', 'search',
         'bell', 'plus', 'device', 'activity', 'logo', 'alert', 'pencil', 'check', 'close',
         'settings', 'voice', 'video', 'messages', 'calendar', 'achievements', 'library',
         'wallet', 'more', 'community', 'faction', 'event', 'reward', 'leaderboards', 'map',

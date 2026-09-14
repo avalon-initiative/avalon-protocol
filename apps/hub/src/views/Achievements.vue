@@ -9,7 +9,7 @@ import { useRouter } from 'vue-router'
 import { AvalonAchievementCard, AvalonCard, AvalonFilterBar } from '@avalon/ui'
 import { formatActivityTimestamp } from '../api/activityFeed'
 import {
-  filterAchievementsByGame,
+  filterAchievementsByIntegrator,
   listMyAchievements,
   sortAchievements,
 } from '../api/achievements'
@@ -33,7 +33,7 @@ const error = ref('')
 
 const query = ref('')
 const sort = ref<AchievementSort>('date')
-const selectedGame = ref('')
+const selectedIntegrator = ref('')
 
 let pollHandle: ReturnType<typeof setInterval> | undefined
 
@@ -57,9 +57,9 @@ onUnmounted(() => {
 })
 
 // One entry per distinct issuer present in the caller's own history — not
-// a global game directory listing, so the filter never offers a game the
+// a global integrator directory listing, so the filter never offers an integrator the
 // user has no claims from.
-const games = computed(() => {
+const integrators = computed(() => {
   const bySlug = new Map<string, string>()
   for (const a of achievements.value) {
     if (!bySlug.has(a.issuerSlug)) bySlug.set(a.issuerSlug, a.issuerName ?? a.issuerSlug)
@@ -72,8 +72,8 @@ const visibleAchievements = computed(() => {
     const haystack = `${a.achievementName ?? ''} ${a.issuerName ?? ''}`.toLowerCase()
     return haystack.includes(query.value.trim().toLowerCase())
   })
-  const byGame = filterAchievementsByGame(byName, selectedGame.value || null)
-  return sortAchievements(byGame, sort.value)
+  const byIntegrator = filterAchievementsByIntegrator(byName, selectedIntegrator.value || null)
+  return sortAchievements(byIntegrator, sort.value)
 })
 
 function onViewIssuer(slug: string) {
@@ -86,7 +86,7 @@ function onViewIssuer(slug: string) {
     <header :class="page.pageHeader">
       <h1 :class="page.title">Achievements</h1>
       <p :class="page.subtitle">
-        Every claim issued to you, across every game, app, and service — including ones that were
+        Every claim issued to you, across every integrator, app, and service — including ones that were
         later revoked.
       </p>
     </header>
@@ -96,22 +96,22 @@ function onViewIssuer(slug: string) {
       <template v-if="achievements.length > 0">
         <div :class="styles.filters">
           <AvalonFilterBar
-            label="Search by achievement or game"
+            label="Search by achievement or integrator"
             placeholder="Dragon Slayer"
             :query="query"
             no-margin
             :sort-options="[
               { value: 'date', label: 'Date issued' },
               { value: 'name', label: 'Achievement name' },
-              { value: 'game', label: 'Game' },
+              { value: 'game', label: 'Integrator' },
             ]"
             :sort-value="sort"
             @update:query="query = $event"
             @update:sort-value="sort = $event as AchievementSort"
           />
-          <select v-model="selectedGame" :class="styles.gameSelect">
-            <option value="">All games</option>
-            <option v-for="game in games" :key="game.slug" :value="game.slug">{{ game.name }}</option>
+          <select v-model="selectedIntegrator" :class="styles.integratorSelect">
+            <option value="">All integrators</option>
+            <option v-for="integrator in integrators" :key="integrator.slug" :value="integrator.slug">{{ integrator.name }}</option>
           </select>
         </div>
 
@@ -138,7 +138,7 @@ function onViewIssuer(slug: string) {
         </div>
       </template>
       <p v-else :class="page.empty">
-        No achievements yet — they'll show up here as soon as a connected game, app, or service
+        No achievements yet — they'll show up here as soon as a connected integrator, app, or service
         issues you one.
       </p>
     </AvalonCard>

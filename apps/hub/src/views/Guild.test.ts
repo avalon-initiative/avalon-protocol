@@ -29,7 +29,7 @@ const guild = {
   owner: 'id-owner',
   created_at: 'now',
   member_count: 1,
-  games: [],
+  integrators: [],
   join_policy: 'invite_only',
   motd: null,
   banner: null,
@@ -73,7 +73,7 @@ function baseRoutes() {
     '/guilds/g1/events': [],
     // The owner (canManageGuild) can always fetch the breakdown regardless
     // of the public-exposure toggle.
-    '/guilds/g1/game-breakdown': { guild_id: 'g1', total_members: 1, breakdown: [] },
+    '/guilds/g1/integrator-breakdown': { guild_id: 'g1', total_members: 1, breakdown: [] },
     '/guilds/g1/join-requests': [],
     '/guilds/g1/channels/c1/messages': messagesFor('c1'),
     '/guilds/g1/channels/c2/messages': messagesFor('c2'),
@@ -109,7 +109,7 @@ describe('Guild', () => {
     const wrapper = mount(Guild, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
 
-    // Overview content (game history card is always present).
+    // Overview content (integrator history card is always present).
     expect(wrapper.text()).toContain('History')
     // Members-only content isn't rendered yet.
     expect(wrapper.text()).not.toContain('Search by identity id')

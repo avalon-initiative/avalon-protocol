@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  filterAchievementsByGame,
+  filterAchievementsByIntegrator,
   mergeAchievement,
   parseAchievementRef,
   parseIssuerSlug,
@@ -153,10 +153,10 @@ describe('sortAchievements', () => {
     expect(sortAchievements([zebra, apple], 'name').map((a) => a.id)).toEqual(['2', '1'])
   })
 
-  it('sorts by game name, then achievement name as a tiebreaker', () => {
-    const bGame = achievement({ id: '1', issuerName: 'B Studio', achievementName: 'A' })
-    const aGame = achievement({ id: '2', issuerName: 'A Studio', achievementName: 'Z' })
-    expect(sortAchievements([bGame, aGame], 'game').map((a) => a.id)).toEqual(['2', '1'])
+  it('sorts by integrator name, then achievement name as a tiebreaker', () => {
+    const bIntegrator = achievement({ id: '1', issuerName: 'B Studio', achievementName: 'A' })
+    const aIntegrator = achievement({ id: '2', issuerName: 'A Studio', achievementName: 'Z' })
+    expect(sortAchievements([bIntegrator, aIntegrator], 'game').map((a) => a.id)).toEqual(['2', '1'])
   })
 
   it('does not mutate the input array', () => {
@@ -167,14 +167,14 @@ describe('sortAchievements', () => {
   })
 })
 
-describe('filterAchievementsByGame', () => {
-  it('returns every achievement when no game is selected', () => {
+describe('filterAchievementsByIntegrator', () => {
+  it('returns every achievement when no integrator is selected', () => {
     const list = [achievement({ issuerSlug: 'a' }), achievement({ issuerSlug: 'b' })]
-    expect(filterAchievementsByGame(list, null)).toHaveLength(2)
+    expect(filterAchievementsByIntegrator(list, null)).toHaveLength(2)
   })
 
   it('returns only achievements from the selected issuer slug', () => {
     const list = [achievement({ id: '1', issuerSlug: 'a' }), achievement({ id: '2', issuerSlug: 'b' })]
-    expect(filterAchievementsByGame(list, 'b').map((a) => a.id)).toEqual(['2'])
+    expect(filterAchievementsByIntegrator(list, 'b').map((a) => a.id)).toEqual(['2'])
   })
 })

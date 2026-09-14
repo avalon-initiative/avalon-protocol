@@ -1,16 +1,16 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A clickable summary card for the game directory (issue #270) — the
-// caller decides what a click does (usually a route push to the game's
+// A clickable summary card for the integrator directory (issue #270) — the
+// caller decides what a click does (usually a route push to the integrator's
 // profile page); this component knows nothing about routing. Formatting
 // (e.g. a relative/localized registeredAt) is the caller's job, same
 // "props in, ready-to-render" convention AvalonGuildCard/
 // AvalonConnectionCard already use.
 import { computed } from 'vue'
-import styles from '../styles/AvalonGameCard.module.scss'
-import type { AvalonGameCardProps } from './AvalonGameCard.types'
+import styles from '../styles/AvalonIntegratorCard.module.scss'
+import type { AvalonIntegratorCardProps } from './AvalonIntegratorCard.types'
 
-const props = defineProps<AvalonGameCardProps>()
+const props = defineProps<AvalonIntegratorCardProps>()
 defineEmits<{ select: [] }>()
 
 const isActive = computed(() => props.status === 'active')

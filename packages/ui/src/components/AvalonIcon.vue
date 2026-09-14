@@ -28,7 +28,7 @@ withDefaults(defineProps<AvalonIconProps>(), {
       <path d="M3 11.5 12 4l9 7.5" />
       <path d="M5 10.5V20h14v-9.5" />
     </template>
-    <template v-else-if="name === 'games'">
+    <template v-else-if="name === 'integrators'">
       <rect x="2.5" y="7" width="19" height="11" rx="4" />
       <path d="M7 11v3M5.5 12.5h3" />
       <circle cx="16" cy="11.5" r="0.9" fill="currentColor" stroke="none" />

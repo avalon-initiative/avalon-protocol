@@ -7,7 +7,7 @@ const meta: Meta<typeof AvalonMetricTile> = {
   args: {
     label: 'Players',
     value: 2481392,
-    definition: 'Distinct identities with an active GameBinding.',
+    definition: 'Distinct identities with an active IntegratorBinding.',
     metricClass: 'durable-derived',
   },
 }

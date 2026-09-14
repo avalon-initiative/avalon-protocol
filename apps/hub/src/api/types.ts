@@ -370,9 +370,9 @@ export interface UpdatePresenceRequest {
 export interface PresenceResponse {
   identity_id: string
   status: PresenceStatus
-  // Always null today — no game-side presence-publish path exists yet
+  // Always null today — no integrator-side presence-publish path exists yet
   // (see #16's scope cut, and #18's own correction note on the issue).
-  playing: string | null
+  active_in: string | null
   updated_at: string
 }
 
@@ -404,7 +404,7 @@ export interface GuildResponse {
   owner: string
   created_at: string
   member_count: number
-  games: string[]
+  integrators: string[]
   // "invite_only" | "open" — no endpoint changes this after creation today
   // (CreateGuildRequest doesn't take it, neither does UpdateGuildRequest),
   // so every guild is "invite_only" in practice. See guilds.ts's own note.
@@ -419,12 +419,12 @@ export interface GuildResponse {
   icon: string | null
   links: GuildLink[]
   recruiting: boolean
-  // Issue #206. Whether the game affinity breakdown
-  // (GET /guilds/{id}/game-breakdown) is shown on this guild's public
+  // Issue #206. Whether the integrator affinity breakdown
+  // (GET /guilds/{id}/integrator-breakdown) is shown on this guild's public
   // profile — a manage_guild holder can always fetch the breakdown
   // regardless of this flag; it only gates exposure to everyone else.
   game_breakdown_public: boolean
-  // Issue #207. The guild's curated top-5 favorite games, in display
+  // Issue #207. The guild's curated top-5 favorite integrators, in display
   // order — always part of the public profile (unlike the full
   // breakdown, which stays behind game_breakdown_public).
   favorite_games: FavoriteGameEntry[]
@@ -460,15 +460,15 @@ export interface UpdateGuildRequest {
   join_policy?: 'invite_only' | 'open'
 }
 
-// GET /guilds/{id}/game-breakdown (issue #206, implementing decision #160):
-// aggregated count of guild members holding an active GameBinding (#83) per
-// game, computed on read — never a manager-declared association (superseded
+// GET /guilds/{id}/integrator-breakdown (issue #206, implementing decision #160):
+// aggregated count of guild members holding an active IntegratorBinding (#83) per
+// integrator, computed on read — never a manager-declared association (superseded
 // #20 behavior, see docs/architecture/guilds.md). No minimum-member
-// threshold: every game with at least one bound member appears.
+// threshold: every integrator with at least one bound member appears.
 export interface GameBreakdownEntry {
-  game_id: string
-  game_slug: string
-  game_name: string
+  integrator_id: string
+  integrator_slug: string
+  integrator_name: string
   member_count: number
 }
 
@@ -478,17 +478,17 @@ export interface GameBreakdownResponse {
   breakdown: GameBreakdownEntry[]
 }
 
-// GET /guilds/{id}/favorite-games and PUT /guilds/{id}/favorite-games
+// GET /guilds/{id}/favorite-integrators and PUT /guilds/{id}/favorite-integrators
 // (issue #207, implementing decision #160): a manage_guild-curated, capped
-// (5), ordered pin list drawn only from games that already appear in the
+// (5), ordered pin list drawn only from integrators that already appear in the
 // affinity breakdown above. `stale` is computed live against the same
 // binding data on every read — a stale pin is never auto-removed (see
 // crates/server/src/guilds.rs's module doc comment), just flagged so a
 // manage_guild holder can choose to unpin it.
 export interface FavoriteGameEntry {
-  game_id: string
-  game_slug: string
-  game_name: string
+  integrator_id: string
+  integrator_slug: string
+  integrator_name: string
   position: number
   stale: boolean
 }
@@ -499,9 +499,9 @@ export interface FavoriteGamesResponse {
 }
 
 export interface SetFavoriteGamesRequest {
-  // Full desired ordered list of pinned game ids — always a full replace,
+  // Full desired ordered list of pinned integrator ids — always a full replace,
   // same convention UpdateGuildRequest's `links` field uses server-side.
-  game_ids: string[]
+  integrator_ids: string[]
 }
 
 export interface RoleResponse {
@@ -564,7 +564,7 @@ export interface GuildJoinRequestResponse {
 }
 
 // Issue #154's discovery board — a distinct, narrower shape than
-// GuildResponse (no `owner`/`games`/`join_policy`, matching
+// GuildResponse (no `owner`/`integrators`/`join_policy`, matching
 // crates/server/src/guilds.rs::DiscoverGuildSummary field-for-field), since
 // a browse listing has no reason to fetch anything the card doesn't show.
 export interface DiscoverGuildSummary {
@@ -594,7 +594,7 @@ export interface DiscoverGuildsParams {
   q?: string
   recruiting?: boolean
   tag?: string
-  game?: string
+  integrator?: string
   sort?: 'newest' | 'alphabetical' | 'most_members'
   limit?: number
   cursor?: string
@@ -696,15 +696,15 @@ export interface SendConversationMessageRequest {
   client_entry_id?: string
 }
 
-// Game registration (#26) / binding + grant consent flow (#27, #83) wire
-// types, matching crates/server/src/games.rs and its #27 companion module
+// Integrator registration (#26) / binding + grant consent flow (#27, #83) wire
+// types, matching crates/server/src/integrators.rs and its #27 companion module
 // field-for-field. `requested_capabilities` is a declaration only — see
-// games.rs's own module doc comment — never itself a grant.
+// integrators.rs's own module doc comment — never itself a grant.
 
 // What kind of integrator a registration is (#282). Additive on the wire.
 export type IntegratorCategory = 'game' | 'app' | 'service'
 
-export interface GameResponse {
+export interface IntegratorResponse {
   id: string
   slug: string
   name: string
@@ -715,12 +715,12 @@ export interface GameResponse {
   requested_capabilities: string[]
 }
 
-// Issue #270's game directory board — a distinct, narrower shape than
-// GameResponse (no `requested_capabilities`, matching
-// crates/server/src/games.rs::GameSummary field-for-field), since a
+// Issue #270's integrator directory board — a distinct, narrower shape than
+// IntegratorResponse (no `requested_capabilities`, matching
+// crates/server/src/integrators.rs::IntegratorSummary field-for-field), since a
 // directory card has no reason to fetch a field it doesn't show — same
 // reasoning DiscoverGuildSummary above already documents for guilds.
-export interface GameSummary {
+export interface IntegratorSummary {
   id: string
   slug: string
   name: string
@@ -730,16 +730,16 @@ export interface GameSummary {
   category: IntegratorCategory
 }
 
-export interface ListGamesResponse {
-  games: GameSummary[]
+export interface ListIntegratorsResponse {
+  integrators: IntegratorSummary[]
   // Present (non-null) only when another page exists — pass back as
   // `cursor=` to fetch it.
   next_cursor: string | null
 }
 
-// Query params for GET /games — all optional, mirrors
-// crates/server/src/games.rs::ListGamesQuery.
-export interface ListGamesParams {
+// Query params for GET /integrators — all optional, mirrors
+// crates/server/src/integrators.rs::ListIntegratorsQuery.
+export interface ListIntegratorsParams {
   q?: string
   sort?: 'newest' | 'name'
   limit?: number
@@ -756,9 +756,9 @@ export interface MetricResponse {
   class: string
 }
 
-// GET /games/{slug}/registry's response (issue #261), matching
-// crates/server/src/registry.rs::GameRegistryResponse field-for-field.
-export interface GameRegistryResponse {
+// GET /integrators/{slug}/registry's response (issue #261), matching
+// crates/server/src/registry.rs::IntegratorRegistryResponse field-for-field.
+export interface IntegratorRegistryResponse {
   players: MetricResponse
   total_players_ever: MetricResponse
   achievements_issued: MetricResponse
@@ -766,9 +766,9 @@ export interface GameRegistryResponse {
   unique_achievement_holders: MetricResponse
 }
 
-// GET /games/{slug}/keys's response (issue #90): an issuer's full key
+// GET /integrators/{slug}/keys's response (issue #90): an issuer's full key
 // history, oldest first — public and unauthenticated, matching
-// crates/server/src/games.rs::IssuerKeyResponse field-for-field.
+// crates/server/src/integrators.rs::IssuerKeyResponse field-for-field.
 export interface IssuerKeyResponse {
   key_id: string
   algorithm: string
@@ -778,13 +778,13 @@ export interface IssuerKeyResponse {
   revoked_at: string | null
 }
 
-export interface ConnectGameRequest {
+export interface ConnectIntegratorRequest {
   capabilities: string[]
 }
 
-export interface ConnectGameResponse {
+export interface ConnectIntegratorResponse {
   binding_id: string
-  game_id: string
+  integrator_id: string
   established_at: string
   granted_capabilities: string[]
 }
@@ -794,9 +794,9 @@ export interface GrantResponse {
   granted_at: string
 }
 
-export interface GameBindingResponse {
+export interface IntegratorBindingResponse {
   binding_id: string
-  game_id: string
+  integrator_id: string
   slug: string
   name: string
   established_at: string
@@ -806,7 +806,7 @@ export interface GameBindingResponse {
 // GET /me/connections only lists active bindings (no `ended_at` — an ended
 // binding simply stops appearing), so the response is a bare array, not a
 // wrapper object.
-export type MyConnectionsResponse = GameBindingResponse[]
+export type MyConnectionsResponse = IntegratorBindingResponse[]
 
 // Settlement / transparency-log reads (issues #210/#211/#232), matching
 // `crates/server/src/settlement.rs::SignedTreeHeadResponse` field-for-field.
@@ -938,7 +938,7 @@ export interface AttestationResponse {
   // recognition is the consumer's own policy call, never the server's).
 }
 
-// GET /games/{slug}/achievements and GET /integrations/{slug}/milestones
+// GET /integrators/{slug}/achievements and GET /integrations/{slug}/milestones
 // (#31/#324/#325), matching crates/server/src/achievements.rs's
 // AchievementDefinitionResponse field-for-field. `id` is the definition's
 // GlobalId string ("game:<slug>:achievement:<key>" or the milestone
@@ -946,7 +946,7 @@ export interface AttestationResponse {
 // which is how achievements.ts resolves a display name for a claim.
 export interface AchievementDefinitionResponse {
   id: string
-  game_id: string
+  integrator_id: string
   key: string
   name: string
   description: string

@@ -22,8 +22,8 @@ export function parseIssuerSlug(issuer: string): string | null {
 // `achievement` on the wire is the definition's full GlobalId ref —
 // "<namespace>:<slug>:<achievement|milestone>:<key>"
 // (crates/server/src/achievements.rs::definition_ref). `namespace` says
-// which listing endpoint carries this definition's name: `game` ->
-// GET /games/{slug}/achievements, `app`/`service` ->
+// which listing endpoint carries this definition's name: `integrator` ->
+// GET /integrators/{slug}/achievements, `app`/`service` ->
 // GET /integrations/{slug}/milestones.
 export function parseAchievementRef(
   ref: string,
@@ -117,7 +117,7 @@ export async function listMyAchievements(token: string): Promise<Achievement[]> 
   }
 
   const issuerSlugs = [...new Set(attestations.map((a) => parseIssuerSlug(a.issuer) ?? a.issuer))]
-  const gamesLookup = Promise.all(issuerSlugs.map((slug) => api.getGamePublic(slug).catch(() => null)))
+  const integratorsLookup = Promise.all(issuerSlugs.map((slug) => api.getIntegratorPublic(slug).catch(() => null)))
 
   // One definitions-list call per distinct (namespace, slug) pair rather
   // than per attestation — a user with many claims from the same issuer
@@ -134,11 +134,11 @@ export async function listMyAchievements(token: string): Promise<Achievement[]> 
     ),
   )
 
-  const [games, definitionLists] = await Promise.all([gamesLookup, definitionsLookup])
+  const [integrators, definitionLists] = await Promise.all([integratorsLookup, definitionsLookup])
 
   const issuerNameBySlug = new Map<string, string>()
-  games.forEach((game, index) => {
-    if (game) issuerNameBySlug.set(issuerSlugs[index], game.name)
+  integrators.forEach((integrator, index) => {
+    if (integrator) issuerNameBySlug.set(issuerSlugs[index], integrator.name)
   })
 
   const achievementByRef = new Map<string, AchievementDefinitionSummary>()
@@ -177,8 +177,8 @@ export function sortAchievements(achievements: Achievement[], sort: AchievementS
   return sorted
 }
 
-// Pure filter-by-issuer-slug — `null`/omitted means "every game".
-export function filterAchievementsByGame(
+// Pure filter-by-issuer-slug — `null`/omitted means "every integrator".
+export function filterAchievementsByIntegrator(
   achievements: Achievement[],
   issuerSlug: string | null,
 ): Achievement[] {

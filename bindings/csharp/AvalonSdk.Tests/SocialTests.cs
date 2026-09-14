@@ -65,7 +65,7 @@ public class SocialTests
         var other = Guid.NewGuid();
         var handler = new StubHttpMessageHandler()
             .Enqueue($@"[{{""a"":""{self}"",""b"":""{other}"",""since"":""2026-01-01T00:00:00Z""}}]")
-            .Enqueue($@"[{{""identity_id"":""{other}"",""status"":""Online"",""playing"":null,""updated_at"":""2026-01-01T00:00:00Z""}}]");
+            .Enqueue($@"[{{""identity_id"":""{other}"",""status"":""Online"",""active_in"":null,""updated_at"":""2026-01-01T00:00:00Z""}}]");
         var session = Session.ForTesting(new[] { "friends.read", "presence.read" }, handler.ToHttpClient(), identityId: self);
 
         var friends = await session.FriendsAsync();

@@ -1,26 +1,26 @@
-// Game directory (issue #270): GET /integrations (#293's canonical alias
-// for GET /games) behind reactive filters (search text, sort). Mirrors
+// Integrator directory (issue #270): GET /integrations (#293's canonical alias
+// for GET /integrators) behind reactive filters (search text, sort). Mirrors
 // useDiscoverGuilds.ts's shape closely — server-side filtering/sorting/
-// pagination via the endpoint's own `next_cursor` (crates/server/src/games.rs's
+// pagination via the endpoint's own `next_cursor` (crates/server/src/integrators.rs's
 // keyset pagination — never re-derived or re-sorted client-side, since only
 // the server's `ORDER BY` matches its own cursor comparison) — but this
 // endpoint is public and unauthenticated, so unlike useDiscoverGuilds this
 // needs no session token at all.
 import { ref, watch } from 'vue'
 import * as api from '../api/client'
-import { buildGamesListQueryString } from '../api/games'
-import type { GameSummary, ListGamesParams } from '../api/types'
+import { buildIntegratorsListQueryString } from '../api/integrations'
+import type { IntegratorSummary, ListIntegratorsParams } from '../api/types'
 
-export function useDiscoverGames() {
+export function useDiscoverIntegrations() {
   const query = ref('')
   const sort = ref<'newest' | 'name'>('newest')
 
-  const games = ref<GameSummary[]>([])
+  const integrators = ref<IntegratorSummary[]>([])
   const nextCursor = ref<string | null>(null)
   const loading = ref(false)
   const error = ref('')
 
-  function currentParams(cursor?: string): ListGamesParams {
+  function currentParams(cursor?: string): ListIntegratorsParams {
     return {
       q: query.value.trim() || undefined,
       sort: sort.value,
@@ -32,8 +32,8 @@ export function useDiscoverGames() {
     loading.value = true
     error.value = ''
     try {
-      const response = await api.listGames(buildGamesListQueryString(currentParams()))
-      games.value = response.games
+      const response = await api.listIntegrators(buildIntegratorsListQueryString(currentParams()))
+      integrators.value = response.integrators
       nextCursor.value = response.next_cursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -47,8 +47,8 @@ export function useDiscoverGames() {
     loading.value = true
     error.value = ''
     try {
-      const response = await api.listGames(buildGamesListQueryString(currentParams(nextCursor.value)))
-      games.value = [...games.value, ...response.games]
+      const response = await api.listIntegrators(buildIntegratorsListQueryString(currentParams(nextCursor.value)))
+      integrators.value = [...integrators.value, ...response.integrators]
       nextCursor.value = response.next_cursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -61,5 +61,5 @@ export function useDiscoverGames() {
   // milestone-1 stand-in useDiscoverGuilds.ts already takes.
   watch([query, sort], refresh)
 
-  return { query, sort, games, nextCursor, loading, error, refresh, loadMore }
+  return { query, sort, integrators, nextCursor, loading, error, refresh, loadMore }
 }

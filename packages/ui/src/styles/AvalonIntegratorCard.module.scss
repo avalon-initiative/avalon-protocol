@@ -34,7 +34,7 @@
 }
 
 // Visibly distinct from the default "active" state (no badge at all) —
-// issue #270's own acceptance criterion: a suspended/revoked game must not
+// issue #270's own acceptance criterion: a suspended/revoked integrator must not
 // read the same as an active one.
 .statusBadge {
   font-size: var(--av-text-xs);

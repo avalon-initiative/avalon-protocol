@@ -115,7 +115,7 @@ async function continueToHome() {
     <AvalonAuthCard
       v-else
       title="Create your Avalon identity"
-      subtitle="One identity, every game connected to Avalon."
+      subtitle="One identity, every integrator connected to Avalon."
     >
       <AvalonForm submit-label="Create identity" :submitting="submitting" :error="error" @submit="onSubmit">
         <AvalonTextField

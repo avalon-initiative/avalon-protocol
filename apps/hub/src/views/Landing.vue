@@ -11,19 +11,19 @@ const audiences = [
     icon: 'friends' as const,
     accent: 'primary' as const,
     label: 'For users',
-    body: 'Bring your identity, friends, and guilds with you. Log in the same way everywhere, and keep the people and history you’ve built even after a game moves on.',
+    body: 'Bring your identity, friends, and guilds with you. Log in the same way everywhere, and keep the people and history you’ve built even after an integrator moves on.',
   },
   {
     icon: 'library' as const,
     accent: 'secondary' as const,
     label: 'For developers',
-    body: 'Plug your game into an identity, social, and achievement layer you didn’t have to build yourself — without handing over control of your world.',
+    body: 'Plug your integrator into an identity, social, and achievement layer you didn’t have to build yourself — without handing over control of your world.',
   },
   {
     icon: 'community' as const,
     accent: 'tertiary' as const,
     label: 'For communities',
-    body: 'Give your guild a home that outlasts any one game — membership, roles, and chat that travel with the community, not with a server that could disappear.',
+    body: 'Give your guild a home that outlasts any one integrator — membership, roles, and chat that travel with the community, not with a server that could disappear.',
   },
   {
     icon: 'settings' as const,
@@ -38,8 +38,8 @@ const whatIsThis = [
     icon: 'discover' as const,
     kicker: 'network',
     label: 'An open protocol',
-    body: 'Avalon is the connective layer — identity, social graph, guilds, achievements — not a platform that owns your world. Your game stays sovereign over its rules, economy, and world state; Avalon is the shared layer underneath it, the way OAuth or Steam Cloud sit under an app without being the app.',
-    snippet: 'game.connect(avalon)',
+    body: 'Avalon is the connective layer — identity, social graph, guilds, achievements — not a platform that owns your world. Your integrator stays sovereign over its rules, economy, and world state; Avalon is the shared layer underneath it, the way OAuth or Steam Cloud sit under an app without being the app.',
+    snippet: 'integrator.connect(avalon)',
   },
   {
     icon: 'device' as const,
@@ -57,9 +57,9 @@ const steps = [
     body: 'One self-custodied keypair — a passkey to log in, a signing key that’s yours alone.',
   },
   {
-    icon: 'games' as const,
+    icon: 'integrators' as const,
     label: 'Connect it everywhere',
-    body: 'Any game or app on the network recognizes the same you, with your consent.',
+    body: 'Any integrator or app on the network recognizes the same you, with your consent.',
   },
   {
     icon: 'achievements' as const,
@@ -86,10 +86,10 @@ const steps = [
 
     <section :class="styles.hero">
       <div :class="styles.heroText">
-        <span :class="styles.eyebrow">An open network for users, games, and communities</span>
+        <span :class="styles.eyebrow">An open network for users, integrators, and communities</span>
         <h1 :class="styles.headline">One identity.<br />Every world you play in.</h1>
         <p :class="styles.subhead">
-          Your identity, friends, guilds, and achievements don’t belong to any single game —
+          Your identity, friends, guilds, and achievements don’t belong to any single integrator —
           they move with you, so a world can end without taking your community down with it.
         </p>
         <div :class="styles.heroActions">

@@ -36,13 +36,13 @@ export function useGuildDetail(guildId: Ref<string>) {
   // here (not permitted, and the guild hasn't made it public) is an
   // expected, common outcome — not a page-level error like the others
   // above. `null` means "nothing to show" (either state), distinguished
-  // from an actual empty breakdown (`breakdown: []`) by `gameBreakdownError`.
-  const gameBreakdown = ref<GameBreakdownResponse | null>(null)
-  const gameBreakdownError = ref('')
+  // from an actual empty breakdown (`breakdown: []`) by `integratorBreakdownError`.
+  const integratorBreakdown = ref<GameBreakdownResponse | null>(null)
+  const integratorBreakdownError = ref('')
 
   // Issue #242: pending join requests, `manage_members`-gated server-side.
   // Same "fetched separately, a 403 just means nothing to show" posture as
-  // gameBreakdown above — most callers aren't managers, so this is an
+  // integratorBreakdown above — most callers aren't managers, so this is an
   // expected, common outcome, not a page-level error.
   const joinRequests = ref<GuildJoinRequestResponse[]>([])
 
@@ -55,7 +55,7 @@ export function useGuildDetail(guildId: Ref<string>) {
 
   // Issue #391: channels/events are member-only server-side (require_member)
   // — a 403 here for a non-member browsing a recruiting guild is expected,
-  // not a page-level failure, so (like gameBreakdown/joinRequests above)
+  // not a page-level failure, so (like integratorBreakdown/joinRequests above)
   // these are fetched separately from the Promise.all below.
   async function refreshChannels() {
     if (!session.token) return
@@ -78,11 +78,11 @@ export function useGuildDetail(guildId: Ref<string>) {
   async function refreshGameBreakdown() {
     if (!session.token) return
     try {
-      gameBreakdown.value = await api.getGameBreakdown(session.token, guildId.value)
-      gameBreakdownError.value = ''
+      integratorBreakdown.value = await api.getGameBreakdown(session.token, guildId.value)
+      integratorBreakdownError.value = ''
     } catch (e) {
-      gameBreakdown.value = null
-      gameBreakdownError.value = e instanceof Error ? e.message : 'Something went wrong.'
+      integratorBreakdown.value = null
+      integratorBreakdownError.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
   }
 
@@ -172,8 +172,8 @@ export function useGuildDetail(guildId: Ref<string>) {
     isOwner,
     loading,
     error,
-    gameBreakdown,
-    gameBreakdownError,
+    integratorBreakdown,
+    integratorBreakdownError,
     joinRequests,
     myJoinRequest,
     refresh,
