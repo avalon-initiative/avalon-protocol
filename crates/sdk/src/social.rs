@@ -1,7 +1,7 @@
 //! Friends and presence — capability-gated reads/writes on [`crate::Session`]
 //! (issue #17).
 //!
-//! Every method here calls [`crate::Session::require`] with its exact
+//! Every method here calls `Session::require` with its exact
 //! capability string *before* making any request — a `Session` with no
 //! grants (which is every `Session` today; see `crate::AvalonClient::authenticate`)
 //! correctly rejects without ever touching the network. The server enforces
@@ -51,7 +51,9 @@ use crate::{SdkError, Session};
 /// doesn't exist; tracked as a documented gap here rather than guessed at.
 #[derive(Debug, Clone)]
 pub struct Friend {
+    /// The friend's own identity id.
     pub identity_id: IdentityId,
+    /// Always `None` today — see this struct's own doc comment.
     pub display_name: Option<String>,
     /// Populated only if `presence.read` is also granted alongside
     /// `friends.read` — otherwise always `None`, so an integrator with only

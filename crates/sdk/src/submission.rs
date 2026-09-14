@@ -102,7 +102,7 @@
 //! [`Transport::submit`], which is expected to include it in the request so
 //! the receiving endpoint can dedupe (see `HttpTransport`'s conversation
 //! message submission, which routes through
-//! [`crate::conversations::ConversationHandle::send_with_client_entry_id`],
+//! `ConversationHandle::send_with_client_entry_id`,
 //! and `crates/server/src/conversations.rs::send_message`'s
 //! `client_entry_id` handling — the one endpoint this ticket wires
 //! idempotency into end-to-end).
@@ -130,7 +130,9 @@ pub const CONVERSATION_MESSAGE_KIND: &str = "chat.message";
 /// carries: which conversation, and what to say.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessagePayload {
+    /// Which conversation to post into.
     pub conversation_id: Uuid,
+    /// The message body.
     pub body: String,
 }
 
@@ -139,11 +141,13 @@ pub struct ConversationMessagePayload {
 /// vs. terminal failure" section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmitOutcome {
+    /// The server accepted it.
     Applied,
     /// The world moved on while this was pending, or the request is
     /// otherwise permanently invalid — reconciliation surfaces this as
     /// [`DrainOutcome::Rejected`], never retried.
     Rejected {
+        /// Why, for surfacing to the integrator/user.
         reason: String,
     },
 }
@@ -173,11 +177,13 @@ pub enum SubmitError {
 /// the one `#[ignore]`d end-to-end dedupe test.
 #[async_trait]
 pub trait Transport: Send + Sync {
+    /// Submits `entry`, classifying the result per this module's own
+    /// retry-vs-terminal rules.
     async fn submit(&self, entry: &JournalEntry) -> Result<SubmitOutcome, SubmitError>;
 }
 
 /// The real transport: submits [`CONVERSATION_MESSAGE_KIND`] entries via
-/// [`crate::conversations::ConversationHandle::send_with_client_entry_id`],
+/// `ConversationHandle::send_with_client_entry_id`,
 /// passing the journal entry's [`EntryId`] as `client_entry_id`, the
 /// idempotency key `crates/server/src/conversations.rs::send_message`
 /// dedupes on. Every other `kind` is [`SubmitError::UnsupportedKind`] — see
@@ -307,8 +313,11 @@ impl Transport for HttpTransport<'_> {
 /// `delay_for_attempt(1)`).
 #[derive(Debug, Clone)]
 pub struct BackoffPolicy {
+    /// Delay before the first retry.
     pub base: Duration,
+    /// How much the delay grows per additional attempt.
     pub multiplier: f64,
+    /// The delay never exceeds this, no matter how many attempts.
     pub max: Duration,
 }
 
@@ -323,6 +332,8 @@ impl Default for BackoffPolicy {
 }
 
 impl BackoffPolicy {
+    /// The delay before retry number `attempt` (1-indexed), capped at
+    /// [`Self::max`].
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let attempt = attempt.max(1);
         let factor = self.multiplier.powi((attempt - 1) as i32);
@@ -336,9 +347,11 @@ impl BackoffPolicy {
 /// [`SubmissionEngine`] uses; tests substitute a fake that advances on
 /// command.
 pub trait Clock: Send + Sync {
+    /// The current time.
     fn now(&self) -> OffsetDateTime;
 }
 
+/// The real [`Clock`] — wall-clock time via [`OffsetDateTime::now_utc`].
 pub struct SystemClock;
 
 impl Clock for SystemClock {
@@ -355,9 +368,11 @@ struct RetryState {
 /// The per-entry outcome of one [`SubmissionEngine::drain`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrainOutcome {
+    /// The server accepted it; marked submitted in the journal.
     Applied,
     /// Terminal — see the module docs. Never retried again.
     Rejected {
+        /// Why, for surfacing to the integrator/user.
         reason: String,
     },
     /// Still pending: either backoff hasn't elapsed yet, this attempt just
@@ -372,10 +387,15 @@ pub enum DrainOutcome {
     AuthenticationRequired,
 }
 
+/// One journal entry's outcome from a single [`SubmissionEngine::drain`]
+/// call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainReport {
+    /// The entry's own id.
     pub id: EntryId,
+    /// The entry's `kind` (e.g. [`CONVERSATION_MESSAGE_KIND`]).
     pub kind: String,
+    /// What happened to it this call.
     pub outcome: DrainOutcome,
 }
 
@@ -390,13 +410,20 @@ pub struct DrainReport {
 /// changed from a caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusTransition {
+    /// The entry was accepted by the server.
     Submitted {
+        /// The entry's own id.
         id: EntryId,
+        /// The entry's `kind`.
         kind: String,
     },
+    /// The entry was terminally rejected.
     Rejected {
+        /// The entry's own id.
         id: EntryId,
+        /// The entry's `kind`.
         kind: String,
+        /// Why.
         reason: String,
     },
 }
@@ -424,10 +451,14 @@ pub struct SubmissionEngine<C: Clock = SystemClock> {
 }
 
 impl SubmissionEngine<SystemClock> {
+    /// A new engine with [`BackoffPolicy::default`] and a real
+    /// [`SystemClock`].
     pub fn new() -> Self {
         Self::with_backoff(BackoffPolicy::default())
     }
 
+    /// A new engine with a custom [`BackoffPolicy`], still a real
+    /// [`SystemClock`].
     pub fn with_backoff(backoff: BackoffPolicy) -> Self {
         Self {
             backoff,

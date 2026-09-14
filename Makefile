@@ -8,7 +8,7 @@ PID_FILE := $(PID_DIR)/avalon-server.pid
 LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
-	build run start stop restart status test test-live fmt fmt-check lint check clean \
+	build run start stop restart status test test-live fmt fmt-check lint sdk-examples sdk-doc check clean \
 	migrate migrate-down db-reset \
 	stack-up stack-down stack-logs \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
@@ -123,7 +123,20 @@ fmt-check:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-check: fmt-check lint test
+# `avalon-sdk`'s runnable examples (issue #49) — `--all-targets` above
+# already lints them, but a dedicated build step catches an example that
+# compiles-but-clippy-skips (unlikely) and is what the ticket itself names
+# as the acceptance check.
+sdk-examples:
+	cargo build -p avalon-sdk --examples
+
+# `#![deny(missing_docs)]` (issue #49) is enforced by `cargo build`/`check`
+# already; this additionally catches broken intra-doc links, which are a
+# doc-only warning `cargo build` never sees.
+sdk-doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc -p avalon-sdk --no-deps
+
+check: fmt-check lint test sdk-examples sdk-doc
 
 clean:
 	cargo clean

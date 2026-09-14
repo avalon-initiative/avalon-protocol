@@ -2,7 +2,7 @@
 //! reads/writes on [`crate::Session`] (issue #23), built against the real
 //! `avalon-server` guild endpoints from #20/#21/#22.
 //!
-//! Every method here calls [`crate::Session::require`] with its exact
+//! Every method here calls `Session::require` with its exact
 //! capability *before* making any request, same convention `social.rs`
 //! (#17) already established — a `Session` with no grants rejects without
 //! ever touching the network. The server enforces the same capabilities
@@ -44,13 +44,13 @@
 //! doesn't scope any of these to what the caller is actually allowed to
 //! see, so these methods return exactly what the server returns. Presence
 //! embedded on a roster entry is additionally gated client-side on
-//! `presence.read` (see [`merge_roster_member`]), same as `friends()`.
+//! `presence.read` (see `merge_roster_member`), same as `friends()`.
 //!
 //! ## `GuildChannel.archived` is dropped, not modeled
 //!
 //! `GET /guilds/{id}/channels` (`crates/server/src/channels.rs`) returns an
 //! `archived: bool` the protocol `GuildChannel` type has no field for.
-//! [`channels()`] surfaces the protocol type unchanged per the ticket
+//! [`GuildHandle::channels`] surfaces the protocol type unchanged per the ticket
 //! ("protocol types cross the boundary unchanged"), so archived channels
 //! are still listed but indistinguishable from active ones through this
 //! method today — a real gap, not silently worked around.
@@ -75,8 +75,11 @@ use crate::{SdkError, Session};
 /// the guild itself).
 #[derive(Debug, Clone)]
 pub struct GuildMembership {
+    /// The full guild record.
     pub guild: Guild,
+    /// The caller's own role in this guild.
     pub role: GuildRole,
+    /// When the caller joined.
     pub joined_at: OffsetDateTime,
 }
 
@@ -86,6 +89,7 @@ pub struct GuildMembership {
 /// returning `Vec<GuildMember>` directly.
 #[derive(Debug, Clone)]
 pub struct GuildRosterMember {
+    /// The protocol member record.
     pub member: GuildMember,
     /// Populated only if `presence.read` is also granted alongside
     /// `guilds.read` — otherwise always `None`, mirroring `Friend::presence`
@@ -440,7 +444,7 @@ impl<'a> GuildHandle<'a> {
     /// scheduled events for the guild, unfiltered (the server also accepts
     /// `from`/`to` date-range query params — not exposed through this
     /// method yet, matching #169's read-only SDK scope). See
-    /// [`EventResponse`]'s doc comment for why `rsvp_counts` doesn't survive
+    /// `EventResponse`'s doc comment for why `rsvp_counts` doesn't survive
     /// the mapping to [`GuildEvent`].
     pub async fn events(&self) -> Result<Vec<GuildEvent>, SdkError> {
         self.session.require(Capability::GuildsRead)?;

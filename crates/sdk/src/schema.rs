@@ -70,13 +70,21 @@ struct ChallengeResponse {
 /// at the wire level.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SchemaVersion {
+    /// This version's own namespaced id, e.g. `"game:<slug>:schema:<version>"`.
     pub id: String,
+    /// The publishing integrator's id.
     pub integrator_id: Uuid,
+    /// Monotonic version number, starting at 1.
     pub version: u32,
+    /// The generated `.proto` message text.
     pub proto_source: String,
+    /// When this version was published, RFC3339.
     pub published_at: String,
+    /// This version's own id, if a newer version has since superseded it.
     pub superseded_by: Option<String>,
+    /// `"public"` or `"private"` — the schema-level visibility default.
     pub default_visibility: String,
+    /// Field name -> `"public"`/`"private"` overrides of the default.
     pub field_visibility: BTreeMap<String, String>,
 }
 
@@ -84,12 +92,20 @@ pub struct SchemaVersion {
 /// at the wire level.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DataInstance {
+    /// This instance's own id.
     pub id: String,
+    /// The schema version this instance conforms to.
     pub schema_id: String,
+    /// The publishing integrator's id.
     pub integrator_id: Uuid,
+    /// The identity this instance is about.
     pub subject: Uuid,
+    /// The instance data itself, as validated against the schema.
     pub instance: serde_json::Value,
+    /// When this instance was published, RFC3339.
     pub published_at: String,
+    /// This instance's own id, if a newer instance for the same
+    /// `(schema, subject)` has since superseded it.
     pub superseded_by: Option<String>,
 }
 

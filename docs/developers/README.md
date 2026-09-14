@@ -4,66 +4,37 @@ Documentation for developers integrating Avalon into their own game, app, or
 service — the audience the SDKs (`crates/sdk`, `bindings/csharp`) exist for.
 
 Start with [`WhyBuildOnAvalon.md`](WhyBuildOnAvalon.md) for the case for
-integrating your game, app, or service with Avalon at all. It's a vision document, not an
-integration guide — there's no stable, documented SDK to integrate against
-yet. `crates/sdk` has real implementations for authentication, friends/
-presence, guilds, conversations, achievements (including issuance), Integrator
-Space schema publication, and offline sync/submission; `bindings/csharp/AvalonSdk`
-mirrors most of that surface but is still catching up. Once the surface is
-stable enough to commit to, this is where getting-started guides, capability/
-permission reference, and integration examples belong.
+integrating your game, app, or service with Avalon at all — a vision
+document, not an integration guide. The pages below are the integration
+guide, for the Rust SDK (`crates/sdk`), the reference implementation.
+`bindings/csharp/AvalonSdk` mirrors most of that surface but doesn't have
+its own parallel guide yet — it'll get one once #51 catches it up.
 
-Until then, see [`../architecture/sdk.md`](../architecture/sdk.md) for the SDK
+## Guides
+
+1. [`getting-started.md`](getting-started.md) — add the crate,
+   `AvalonClient::new`, `authenticate`, read a profile. Ten minutes.
+2. [`capabilities.md`](capabilities.md) — the capability list, what each
+   unlocks, how a player grants one, what `CapabilityNotGranted` means.
+3. [`achievements.md`](achievements.md) — define, issue (signed with your
+   own issuer key), read, verify, revoke.
+4. [`guilds-and-friends.md`](guilds-and-friends.md) — reading rosters,
+   friends, and presence, and their current visibility-scoping gaps.
+5. [`errors-and-retries.md`](errors-and-retries.md) — the `SdkError`
+   taxonomy and what's safe to retry.
+6. [`local-development.md`](local-development.md) — running the whole
+   vertical slice locally through `avalon-cli`, no game client needed.
+
+These pages are about *doing* — they link into
+[`../architecture/`](../architecture/) for the concepts behind what you're
+doing (the trust model, capability grants, revocation, visibility) rather
+than restating it. Runnable, `make check`-compiled examples for each guide's
+core flow live in `crates/sdk/examples/` (`authenticate.rs`,
+`issue_achievement.rs`, `list_friends.rs`).
+
+See also [`../architecture/sdk.md`](../architecture/sdk.md) for the SDK
 design principle (protocol capabilities, not infrastructure),
 [`../architecture/trust-model.md`](../architecture/trust-model.md) for what an
 integrator is and isn't told about an attestation, [`../stakeholders/Proposal.md`](../stakeholders/Proposal.md)
 §17–19 and §24 for the intended developer experience, and the repository root
 `README.md` for the current build status.
-
-## Trying the vertical slice locally via `avalon-cli`
-
-`avalon-cli` (`crates/cli`, issue #48) is a local dev/ops tool, not an SDK —
-useful for exercising the milestone-1 vertical slice against a real
-`make start`/`make migrate` server without writing a game. The mutating
-commands below (`register-integrator`, `issue-achievement`, `create-identity`,
-`login`) only exist in the default `dev-tools` build (`cargo build -p
-avalon-cli` — omit `--no-default-features`); a deployment-facing build strips
-them out entirely, not just at runtime (see `crates/cli/src/dev_tools.rs`'s
-own doc comment).
-
-1. **Register an integrator** and save its signing key locally:
-   ```
-   make register-integrator SLUG=my-game NAME="My Game" OWNER="My Studio"
-   ```
-   Prints the private signing key exactly once — the server only ever stores
-   the public half. The key (and its `key_id`) are also saved under
-   `_running/keys/integrator-<slug>.*`, so later commands that take
-   `--integrator <slug>` don't need them pasted back in.
-
-2. **Define an achievement** for that integrator — not yet a CLI command
-   (only issuing an already-defined one is, per this ticket's own scope);
-   use `POST /integrations/{slug}/achievements` directly, with the
-   challenge-response headers `crates/server/src/integrations.rs` documents,
-   or issue it through the Hub once that flow exists there.
-
-3. **Create and log in an identity**:
-   ```
-   make create-identity
-   make login IDENTITY_ID=<uuid>
-   ```
-   `login` prints a live bearer session token — copy it for the next step.
-
-4. **Consent** to the integrator (an identity must grant `achievements.issue`
-   before anything can issue to it) via `POST /integrations/{slug}/connect`
-   with that bearer token — not yet a CLI command either.
-
-5. **Issue the achievement**, through `avalon-sdk` exactly the way a real
-   game/app/service would (`Session::issue_achievement`):
-   ```
-   make issue-achievement INTEGRATOR=my-game ACHIEVEMENT=dragon_slayer TOKEN=<session-token>
-   ```
-
-6. **Inspect the ledger** to see it land:
-   ```
-   make inspect-ledger
-   ```
