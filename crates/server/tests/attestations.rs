@@ -57,7 +57,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 struct RegisteredIssuer {
     signing_key: SigningKey,
     slug: String,
-    game_id: Uuid,
+    integrator_id: Uuid,
     key_id: String,
 }
 
@@ -95,7 +95,7 @@ async fn register_issuer(
     RegisteredIssuer {
         signing_key,
         slug,
-        game_id: registered["id"].as_str().unwrap().parse().unwrap(),
+        integrator_id: registered["id"].as_str().unwrap().parse().unwrap(),
         key_id: registered["credential"]["key_id"]
             .as_str()
             .unwrap()
@@ -105,7 +105,7 @@ async fn register_issuer(
 
 async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIssuer) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{}/challenge", issuer.slug))
+        .post(format!("{base}/integrators/{}/challenge", issuer.slug))
         .send()
         .await
         .unwrap()
@@ -144,17 +144,20 @@ fn attestation_signing_bytes(
 
 #[tokio::test]
 #[ignore]
-async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_user() {
+async fn a_integrator_issues_a_signed_achievement_to_a_bound_consenting_user() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    let game = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
+    let integrator = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
 
     // Define the achievement.
-    let headers = auth_headers(&http, &base, &game).await;
+    let headers = auth_headers(&http, &base, &integrator).await;
     let define = http
-        .post(format!("{base}/games/{}/achievements", game.slug))
+        .post(format!(
+            "{base}/integrators/{}/achievements",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "dragon_slayer",
@@ -172,7 +175,7 @@ async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_user() {
 
     // The user connects and grants achievements.issue.
     let connect = http
-        .post(format!("{base}/games/{}/connect", game.slug))
+        .post(format!("{base}/integrators/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -181,24 +184,24 @@ async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_user() {
     assert!(connect.status().is_success(), "{:?}", connect.status());
 
     // Sign and issue the attestation.
-    let issuer_ref = format!("game:{}", game.slug);
+    let issuer_ref = format!("game:{}", integrator.slug);
     let signing_bytes =
         attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
-    let signature = game.signing_key.sign(&signing_bytes);
+    let signature = integrator.signing_key.sign(&signing_bytes);
 
-    let mut headers = auth_headers(&http, &base, &game).await;
+    let mut headers = auth_headers(&http, &base, &integrator).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/dragon_slayer/issue",
-            game.slug
+            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            integrator.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game.key_id,
+            "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
         }))
         .send()
@@ -214,13 +217,13 @@ async fn a_game_issues_a_signed_achievement_to_a_bound_consenting_user() {
     assert_eq!(attestation["achievement"].as_str().unwrap(), achievement_id);
 
     // The row landed in achievement_attestations.
-    let row = sqlx::query("SELECT game_id FROM achievement_attestations WHERE subject = $1")
+    let row = sqlx::query("SELECT integrator_id FROM achievement_attestations WHERE subject = $1")
         .bind(identity_id)
         .fetch_one(&pool)
         .await
         .expect("attestation row should exist");
-    let stored_game_id: Uuid = sqlx::Row::try_get(&row, "game_id").unwrap();
-    assert_eq!(stored_game_id, game.game_id);
+    let stored_integrator_id: Uuid = sqlx::Row::try_get(&row, "integrator_id").unwrap();
+    assert_eq!(stored_integrator_id, integrator.integrator_id);
 }
 
 #[tokio::test]
@@ -251,7 +254,7 @@ async fn an_app_issues_a_signed_milestone_to_a_bound_consenting_user() {
         .to_string();
 
     let connect = http
-        .post(format!("{base}/games/{}/connect", app.slug))
+        .post(format!("{base}/integrators/{}/connect", app.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["milestones.issue"] }))
         .send()
@@ -295,40 +298,43 @@ async fn a_tampered_signature_is_rejected() {
     let base = server_url();
     let pool = test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    let game = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
+    let integrator = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
 
-    let headers = auth_headers(&http, &base, &game).await;
-    http.post(format!("{base}/games/{}/achievements", game.slug))
-        .headers(headers)
-        .json(&serde_json::json!({
-            "key": "dragon_slayer",
-            "name": "Dragon Slayer",
-            "description": "Slew the dragon",
-        }))
-        .send()
-        .await
-        .unwrap();
+    let headers = auth_headers(&http, &base, &integrator).await;
+    http.post(format!(
+        "{base}/integrators/{}/achievements",
+        integrator.slug
+    ))
+    .headers(headers)
+    .json(&serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+    }))
+    .send()
+    .await
+    .unwrap();
 
-    http.post(format!("{base}/games/{}/connect", game.slug))
+    http.post(format!("{base}/integrators/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
         .await
         .unwrap();
 
-    let mut headers = auth_headers(&http, &base, &game).await;
+    let mut headers = auth_headers(&http, &base, &integrator).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/dragon_slayer/issue",
-            game.slug
+            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            integrator.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game.key_id,
+            "key_id": integrator.key_id,
             "signature": BASE64.encode([0u8; 64]),
         }))
         .send()
@@ -344,43 +350,46 @@ async fn issuance_to_a_non_bound_identity_is_forbidden() {
     let base = server_url();
     let pool = test_pool().await;
     let (identity_id, _token) = seed_identity_session(&pool).await;
-    let game = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
+    let integrator = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
 
-    let headers = auth_headers(&http, &base, &game).await;
-    http.post(format!("{base}/games/{}/achievements", game.slug))
-        .headers(headers)
-        .json(&serde_json::json!({
-            "key": "dragon_slayer",
-            "name": "Dragon Slayer",
-            "description": "Slew the dragon",
-        }))
-        .send()
-        .await
-        .unwrap();
+    let headers = auth_headers(&http, &base, &integrator).await;
+    http.post(format!(
+        "{base}/integrators/{}/achievements",
+        integrator.slug
+    ))
+    .headers(headers)
+    .json(&serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+    }))
+    .send()
+    .await
+    .unwrap();
     // Deliberately never connects/grants.
 
-    let issuer_ref = format!("game:{}", game.slug);
+    let issuer_ref = format!("game:{}", integrator.slug);
     let signing_bytes = attestation_signing_bytes(
         "achievement",
         &issuer_ref,
         identity_id,
-        &format!("game:{}:achievement:dragon_slayer", game.slug),
+        &format!("game:{}:achievement:dragon_slayer", integrator.slug),
     );
-    let signature = game.signing_key.sign(&signing_bytes);
+    let signature = integrator.signing_key.sign(&signing_bytes);
 
-    let mut headers = auth_headers(&http, &base, &game).await;
+    let mut headers = auth_headers(&http, &base, &integrator).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/dragon_slayer/issue",
-            game.slug
+            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            integrator.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game.key_id,
+            "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
         }))
         .send()
@@ -396,31 +405,34 @@ async fn issuance_against_a_retired_definition_conflicts() {
     let base = server_url();
     let pool = test_pool().await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    let game = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
+    let integrator = register_issuer(&http, &base, "game", &["achievements.issue"]).await;
 
-    let headers = auth_headers(&http, &base, &game).await;
-    http.post(format!("{base}/games/{}/achievements", game.slug))
-        .headers(headers)
-        .json(&serde_json::json!({
-            "key": "dragon_slayer",
-            "name": "Dragon Slayer",
-            "description": "Slew the dragon",
-        }))
-        .send()
-        .await
-        .unwrap();
+    let headers = auth_headers(&http, &base, &integrator).await;
+    http.post(format!(
+        "{base}/integrators/{}/achievements",
+        integrator.slug
+    ))
+    .headers(headers)
+    .json(&serde_json::json!({
+        "key": "dragon_slayer",
+        "name": "Dragon Slayer",
+        "description": "Slew the dragon",
+    }))
+    .send()
+    .await
+    .unwrap();
 
-    http.post(format!("{base}/games/{}/connect", game.slug))
+    http.post(format!("{base}/integrators/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
         .await
         .unwrap();
 
-    let headers = auth_headers(&http, &base, &game).await;
+    let headers = auth_headers(&http, &base, &integrator).await;
     http.patch(format!(
-        "{base}/games/{}/achievements/dragon_slayer",
-        game.slug
+        "{base}/integrators/{}/achievements/dragon_slayer",
+        integrator.slug
     ))
     .headers(headers)
     .json(&serde_json::json!({ "retired": true }))
@@ -428,28 +440,28 @@ async fn issuance_against_a_retired_definition_conflicts() {
     .await
     .unwrap();
 
-    let issuer_ref = format!("game:{}", game.slug);
+    let issuer_ref = format!("game:{}", integrator.slug);
     let signing_bytes = attestation_signing_bytes(
         "achievement",
         &issuer_ref,
         identity_id,
-        &format!("game:{}:achievement:dragon_slayer", game.slug),
+        &format!("game:{}:achievement:dragon_slayer", integrator.slug),
     );
-    let signature = game.signing_key.sign(&signing_bytes);
+    let signature = integrator.signing_key.sign(&signing_bytes);
 
-    let mut headers = auth_headers(&http, &base, &game).await;
+    let mut headers = auth_headers(&http, &base, &integrator).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/dragon_slayer/issue",
-            game.slug
+            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            integrator.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game.key_id,
+            "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
         }))
         .send()

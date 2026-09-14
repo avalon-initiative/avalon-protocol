@@ -104,8 +104,8 @@ pub async fn apply(
 
 /// Current attestation state, derived by folding decoded writes in
 /// order — pure and unit-testable without Postgres, same purpose
-/// `projections::game_bindings::fold`/`BindingState` serve for the
-/// binding metrics: it lets the Game Registry's (#89, first slice #261)
+/// `projections::integrator_bindings::fold`/`BindingState` serve for the
+/// binding metrics: it lets the Integrator Registry's (#89, first slice #261)
 /// achievement metrics be proven against hand-built fixture events, no
 /// live Postgres needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,7 +193,7 @@ pub fn count_unique_holders(
 
 /// The SQL-backed equivalent of [`count_issued`], read at request time
 /// from `indexer_attestations` rather than replayed in memory — what
-/// `crate::registry::compute_for_game` actually calls.
+/// `crate::registry::compute_for_integrator` actually calls.
 pub async fn issued_count(pool: &PgPool, issuer: &str) -> Result<i64, IndexError> {
     let row = sqlx::query("SELECT COUNT(*) AS c FROM indexer_attestations WHERE issuer = $1")
         .bind(issuer)
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn achievement_metrics_from_a_fixture_event_stream() {
         let issuer = "game:ashen-realms";
-        let other_issuer = "game:other-game";
+        let other_issuer = "game:other-integrator";
         let subject_x = Uuid::new_v4();
         let subject_y = Uuid::new_v4();
 

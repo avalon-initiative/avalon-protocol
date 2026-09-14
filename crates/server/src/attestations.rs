@@ -2,7 +2,7 @@
 //! #76's "authentic, valid, recognized are three separate questions"
 //! model and #81's decided revocation mechanics). `GET
 //! /attestations/{id}` is a public, unauthenticated read — same visibility
-//! level `games::get_game`/`achievements::list_achievement_definitions`
+//! level `integrators::get_integrator`/`achievements::list_achievement_definitions`
 //! already use — returning an attestation with its computed authenticity
 //! ([`avalon_chain::attestations::verify_authenticity`]) and validity
 //! (`avalon_protocol::achievements::validity`, now revocation-aware).
@@ -12,9 +12,9 @@
 //! evaluation (`avalon_protocol::achievements::recognize`), never a
 //! boolean this endpoint computes — the same claim is `Authentic`/`Valid`
 //! for every observer, but "recognized" only makes sense relative to one
-//! consumer's own `TrustRelationship`. Publishing/serving a game's own
+//! consumer's own `TrustRelationship`. Publishing/serving an integrator's own
 //! declared recognition policy (the ticket's `PUT
-//! /games/{slug}/recognition`) is deferred, not built in this pass — see
+//! /integrators/{slug}/recognition`) is deferred, not built in this pass — see
 //! this module's own tracking note in `docs/architecture/trust-model.md`.
 //!
 //! **Revocation is a signed, appended entry (#85), never a mutation.**
@@ -47,8 +47,9 @@ use avalon_protocol::ids::AttestationId;
 use avalon_protocol::events::ProtocolEvent;
 
 use crate::error::AppError;
-use crate::games::{
-    authenticate_game, fetch_game_category, fetch_game_status, fetch_issuer_keys, issuer_ref,
+use crate::integrators::{
+    authenticate_integrator, fetch_integrator_category, fetch_integrator_status, fetch_issuer_keys,
+    issuer_ref,
 };
 use crate::outbox;
 use crate::state::AppState;
@@ -137,7 +138,7 @@ pub async fn get_attestation(
     Path(id): Path<Uuid>,
 ) -> Result<Json<AttestationReadResponse>, AppError> {
     let row = sqlx::query(
-        "SELECT id, game_id, issuer, subject, achievement, issued_at, \
+        "SELECT id, integrator_id, issuer, subject, achievement, issued_at, \
                 proof_key_id, proof_algorithm, proof_bytes \
          FROM achievement_attestations WHERE id = $1",
     )
@@ -165,7 +166,7 @@ pub async fn list_my_achievements(
     let identity_id = crate::handlers::authenticate(&state, &headers).await?;
 
     let rows = sqlx::query(
-        "SELECT id, game_id, issuer, subject, achievement, issued_at, \
+        "SELECT id, integrator_id, issuer, subject, achievement, issued_at, \
                 proof_key_id, proof_algorithm, proof_bytes \
          FROM achievement_attestations \
          WHERE subject = $1 ORDER BY issued_at DESC",
@@ -186,7 +187,7 @@ async fn build_attestation_response(
     row: PgRow,
 ) -> Result<AttestationReadResponse, AppError> {
     let id: Uuid = row.try_get("id")?;
-    let game_id: Uuid = row.try_get("game_id")?;
+    let integrator_id: Uuid = row.try_get("integrator_id")?;
     let issuer: String = row.try_get("issuer")?;
     let subject: Uuid = row.try_get("subject")?;
     let achievement: String = row.try_get("achievement")?;
@@ -195,22 +196,26 @@ async fn build_attestation_response(
     let proof_algorithm: String = row.try_get("proof_algorithm")?;
     let proof_bytes: Vec<u8> = row.try_get("proof_bytes")?;
 
-    let category = fetch_game_category(state, game_id).await?;
-    let status = fetch_game_status(state, game_id).await?;
-    let issuer_keys = fetch_issuer_keys(state, game_id).await?;
+    let category = fetch_integrator_category(state, integrator_id).await?;
+    let status = fetch_integrator_status(state, integrator_id).await?;
+    let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
 
     let attestation = avalon_protocol::achievements::AchievementAttestation {
         id: avalon_protocol::ids::AttestationId(id),
         issuer: match category {
-            avalon_protocol::games::IntegratorCategory::Game => {
-                avalon_protocol::achievements::Issuer::Game(avalon_protocol::ids::GameId(game_id))
+            avalon_protocol::integrators::IntegratorCategory::Game => {
+                avalon_protocol::achievements::Issuer::Game(avalon_protocol::ids::IntegratorId(
+                    integrator_id,
+                ))
             }
-            avalon_protocol::games::IntegratorCategory::App => {
-                avalon_protocol::achievements::Issuer::App(avalon_protocol::ids::GameId(game_id))
+            avalon_protocol::integrators::IntegratorCategory::App => {
+                avalon_protocol::achievements::Issuer::App(avalon_protocol::ids::IntegratorId(
+                    integrator_id,
+                ))
             }
-            avalon_protocol::games::IntegratorCategory::Service => {
-                avalon_protocol::achievements::Issuer::Service(avalon_protocol::ids::GameId(
-                    game_id,
+            avalon_protocol::integrators::IntegratorCategory::Service => {
+                avalon_protocol::achievements::Issuer::Service(avalon_protocol::ids::IntegratorId(
+                    integrator_id,
                 ))
             }
         },
@@ -305,19 +310,19 @@ pub async fn revoke_attestation(
     Json(body): Json<RevokeAttestationRequest>,
 ) -> Result<Json<RevocationResponse>, AppError> {
     let row = sqlx::query(
-        "SELECT game_id, issuer, achievement FROM achievement_attestations WHERE id = $1",
+        "SELECT integrator_id, issuer, achievement FROM achievement_attestations WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::AttestationNotFound)?;
-    let game_id: Uuid = row.try_get("game_id")?;
+    let integrator_id: Uuid = row.try_get("integrator_id")?;
     let issuer: String = row.try_get("issuer")?;
 
     // Only the attestation's own issuer — never a different issuer, never
     // the node operator, never the subject.
-    let caller_game_id = authenticate_game(&state, &headers).await?;
-    if caller_game_id != game_id {
+    let caller_integrator_id = authenticate_integrator(&state, &headers).await?;
+    if caller_integrator_id != integrator_id {
         return Err(AppError::AttestationRevocationForbidden);
     }
 
@@ -331,7 +336,7 @@ pub async fn revoke_attestation(
         return Err(AppError::AttestationAlreadyRevoked);
     }
 
-    let category = fetch_game_category(&state, game_id).await?;
+    let category = fetch_integrator_category(&state, integrator_id).await?;
     let claim_kind = category.claim_kind();
     let signature_bytes = BASE64
         .decode(&body.signature)
@@ -339,7 +344,7 @@ pub async fn revoke_attestation(
     let signing_bytes =
         revocation_signing_bytes(claim_kind, &issuer, AttestationId(id), &body.reason_code);
 
-    let issuer_keys = fetch_issuer_keys(&state, game_id).await?;
+    let issuer_keys = fetch_issuer_keys(&state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
     let Authenticity::Authentic { .. } = verify_signature(
         &body.key_id.to_string(),

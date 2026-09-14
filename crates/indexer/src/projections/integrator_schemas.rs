@@ -1,11 +1,11 @@
-//! The Game Registry's schema-discovery projection (issue #255, decided by
-//! #181): a game's published `GameSchemaVersion`s, surfaced through the
+//! The Integrator Registry's schema-discovery projection (issue #255, decided by
+//! #181): an integrator's published `IntegratorSchemaVersion`s, surfaced through the
 //! same indexer-projection machinery every other read model in this crate
 //! already uses, rather than a separate discovery path
-//! (`docs/architecture/game-registry.md`).
+//! (`docs/architecture/integrator-registry.md`).
 //!
 //! Decodes `game_schema.published`
-//! (`crates/server/src/game_schemas.rs::publish_schema_version`) into an
+//! (`crates/server/src/integrator_schemas.rs::publish_schema_version`) into an
 //! upsert of the new version, plus — when the event names a `supersedes`
 //! id — an update of that earlier row's `superseded_by`. Both writes are
 //! natural-key upserts/updates, so replaying the same event twice
@@ -20,14 +20,14 @@ use uuid::Uuid;
 use crate::IndexError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameSchemaPublished {
+pub struct IntegratorSchemaPublished {
     pub id: String,
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub version: u32,
     pub proto_source: String,
     pub published_at: OffsetDateTime,
     /// The immediately-prior version's id, if this publication supersedes
-    /// one — `None` for a game's first published version.
+    /// one — `None` for an integrator's first published version.
     pub supersedes: Option<String>,
     /// `"public"`/`"private"` (#384/#381) — absent on an event emitted
     /// before #384 landed, in which case this defaults to `"public"`,
@@ -37,12 +37,12 @@ pub struct GameSchemaPublished {
     pub field_visibility: serde_json::Value,
 }
 
-pub fn decode(event: &ProtocolEvent) -> Option<GameSchemaPublished> {
+pub fn decode(event: &ProtocolEvent) -> Option<IntegratorSchemaPublished> {
     if event.kind != "game_schema.published" {
         return None;
     }
     let id = event.payload.get("id")?.as_str()?.to_string();
-    let game_id = super::uuid_field(&event.payload, "game_id")?;
+    let integrator_id = super::uuid_field(&event.payload, "game_id")?;
     let version = event.payload.get("version")?.as_u64()? as u32;
     let proto_source = event.payload.get("proto_source")?.as_str()?.to_string();
     let supersedes = event
@@ -61,9 +61,9 @@ pub fn decode(event: &ProtocolEvent) -> Option<GameSchemaPublished> {
         .get("field_visibility")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    Some(GameSchemaPublished {
+    Some(IntegratorSchemaPublished {
         id,
-        game_id,
+        integrator_id,
         version,
         proto_source,
         published_at: event.timestamp,
@@ -75,15 +75,15 @@ pub fn decode(event: &ProtocolEvent) -> Option<GameSchemaPublished> {
 
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
-    write: &GameSchemaPublished,
+    write: &IntegratorSchemaPublished,
 ) -> Result<(), IndexError> {
     sqlx::query(
-        "INSERT INTO indexer_game_schemas \
-         (id, game_id, version, proto_source, published_at, superseded_by, \
+        "INSERT INTO indexer_integrator_schemas \
+         (id, integrator_id, version, proto_source, published_at, superseded_by, \
           default_visibility, field_visibility) \
          VALUES ($1, $2, $3, $4, $5, NULL, $6, $7) \
          ON CONFLICT (id) DO UPDATE SET \
-             game_id = EXCLUDED.game_id, \
+             integrator_id = EXCLUDED.integrator_id, \
              version = EXCLUDED.version, \
              proto_source = EXCLUDED.proto_source, \
              published_at = EXCLUDED.published_at, \
@@ -91,7 +91,7 @@ pub async fn apply(
              field_visibility = EXCLUDED.field_visibility",
     )
     .bind(&write.id)
-    .bind(write.game_id)
+    .bind(write.integrator_id)
     .bind(write.version as i32)
     .bind(&write.proto_source)
     .bind(write.published_at)
@@ -101,7 +101,7 @@ pub async fn apply(
     .await?;
 
     if let Some(supersedes) = &write.supersedes {
-        sqlx::query("UPDATE indexer_game_schemas SET superseded_by = $2 WHERE id = $1")
+        sqlx::query("UPDATE indexer_integrator_schemas SET superseded_by = $2 WHERE id = $1")
             .bind(supersedes)
             .bind(&write.id)
             .execute(&mut **tx)
@@ -112,11 +112,11 @@ pub async fn apply(
 }
 
 /// Visibility metadata for one schema, as recorded by the indexer's own
-/// projection — what `game_data`'s read endpoint (#384) resolves per
+/// projection — what `integrator_data`'s read endpoint (#384) resolves per
 /// instance to apply the bidirectional visibility rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaVisibility {
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub default_visibility: String,
     pub field_visibility: serde_json::Value,
 }
@@ -128,8 +128,8 @@ pub async fn get_visibility(
     schema_id: &str,
 ) -> Result<Option<SchemaVisibility>, IndexError> {
     let row = sqlx::query(
-        "SELECT game_id, default_visibility, field_visibility \
-         FROM indexer_game_schemas WHERE id = $1",
+        "SELECT integrator_id, default_visibility, field_visibility \
+         FROM indexer_integrator_schemas WHERE id = $1",
     )
     .bind(schema_id)
     .fetch_optional(pool)
@@ -138,16 +138,16 @@ pub async fn get_visibility(
         return Ok(None);
     };
     Ok(Some(SchemaVisibility {
-        game_id: row.try_get("game_id")?,
+        integrator_id: row.try_get("integrator_id")?,
         default_visibility: row.try_get("default_visibility")?,
         field_visibility: row.try_get("field_visibility")?,
     }))
 }
 
-/// One row of the registry's discovery surface — a game's published schema
+/// One row of the registry's discovery surface — an integrator's published schema
 /// versions, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameSchemaVersionRow {
+pub struct IntegratorSchemaVersionRow {
     pub id: String,
     pub version: u32,
     pub proto_source: String,
@@ -155,26 +155,26 @@ pub struct GameSchemaVersionRow {
     pub superseded_by: Option<String>,
 }
 
-/// Every published schema version for `game_id`, oldest first — empty for
-/// a game with no publications, same "absence means nothing published"
+/// Every published schema version for `integrator_id`, oldest first — empty for
+/// an integrator with no publications, same "absence means nothing published"
 /// posture the rest of this crate's read models use rather than a
 /// distinguished "not found" error.
-pub async fn list_for_game(
+pub async fn list_for_integrator(
     pool: &PgPool,
-    game_id: Uuid,
-) -> Result<Vec<GameSchemaVersionRow>, IndexError> {
+    integrator_id: Uuid,
+) -> Result<Vec<IntegratorSchemaVersionRow>, IndexError> {
     let rows = sqlx::query(
         "SELECT id, version, proto_source, published_at, superseded_by \
-         FROM indexer_game_schemas WHERE game_id = $1 ORDER BY version",
+         FROM indexer_integrator_schemas WHERE integrator_id = $1 ORDER BY version",
     )
-    .bind(game_id)
+    .bind(integrator_id)
     .fetch_all(pool)
     .await?;
 
     let mut versions = Vec::with_capacity(rows.len());
     for row in rows {
         let version: i32 = row.try_get("version")?;
-        versions.push(GameSchemaVersionRow {
+        versions.push(IntegratorSchemaVersionRow {
             id: row.try_get("id")?,
             version: version as u32,
             proto_source: row.try_get("proto_source")?,
@@ -205,12 +205,12 @@ mod tests {
 
     #[test]
     fn decodes_a_first_publication_with_no_supersedes() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         let source_event = event(
             "game_schema.published",
             serde_json::json!({
                 "id": "game:ashen-realms:schema:1",
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "version": 1,
                 "proto_source": "message Character { uint32 level = 1; }",
                 "supersedes": null,
@@ -219,9 +219,9 @@ mod tests {
         let write = decode(&source_event).unwrap();
         assert_eq!(
             write,
-            GameSchemaPublished {
+            IntegratorSchemaPublished {
                 id: "game:ashen-realms:schema:1".to_string(),
-                game_id,
+                integrator_id,
                 version: 1,
                 proto_source: "message Character { uint32 level = 1; }".to_string(),
                 published_at: source_event.timestamp,
@@ -234,12 +234,12 @@ mod tests {
 
     #[test]
     fn decodes_visibility_metadata_when_present() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         let source_event = event(
             "game_schema.published",
             serde_json::json!({
                 "id": "game:ashen-realms:schema:1",
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "version": 1,
                 "proto_source": "message Character { uint32 level = 1; }",
                 "supersedes": null,
@@ -257,12 +257,12 @@ mod tests {
 
     #[test]
     fn decoding_a_pre_384_event_defaults_to_fully_open_visibility() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         let source_event = event(
             "game_schema.published",
             serde_json::json!({
                 "id": "game:ashen-realms:schema:1",
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "version": 1,
                 "proto_source": "message Character { uint32 level = 1; }",
                 "supersedes": null,
@@ -275,12 +275,12 @@ mod tests {
 
     #[test]
     fn decodes_a_second_publication_with_supersedes_set() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         let source_event = event(
             "game_schema.published",
             serde_json::json!({
                 "id": "game:ashen-realms:schema:2",
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "version": 2,
                 "proto_source": "message Character { uint32 level = 1; uint32 xp = 2; }",
                 "supersedes": "game:ashen-realms:schema:1",

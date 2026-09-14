@@ -62,12 +62,12 @@ async fn remote_settlement_pool() -> Option<PgPool> {
     )
 }
 
-async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
+async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> String {
     let suffix = Uuid::new_v4().simple().to_string();
     let slug = format!("test-remote-settlement-{}", &suffix[..8]);
     let body = serde_json::json!({
         "slug": slug,
-        "name": "Remote Settlement Test Game",
+        "name": "Remote Settlement Test Integrator",
         "developer": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
@@ -79,11 +79,11 @@ async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&body)
         .send()
         .await
-        .expect("POST /games failed — is the remote-settlement node running?");
+        .expect("POST /integrators failed — is the remote-settlement node running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     format!("game:{slug}:self:registered")
 }
@@ -168,7 +168,7 @@ async fn a_write_on_the_remote_settlement_node_lands_on_the_authority_and_is_bac
         .expect("failed to connect to the authority's Postgres");
 
     let http = reqwest::Client::new();
-    let issuer = register_throwaway_game(&http, &remote_base).await;
+    let issuer = register_throwaway_integrator(&http, &remote_base).await;
 
     // Committed on the real authority — not the remote-settlement node's
     // own database, which never runs `chain.commit` locally while
@@ -192,7 +192,7 @@ async fn a_write_on_the_remote_settlement_node_lands_on_the_authority_and_is_bac
     // mirror-watcher — not merely visible because the write handler
     // itself already touched the local indexer (see this ticket's own
     // discussion of why identity/profile writes are a poor test fixture:
-    // registering a game does not self-apply to any indexer projection,
+    // registering an integrator does not self-apply to any indexer projection,
     // so this row can only appear via backfill).
     let mirrored_seq: i64 = wait_for_row(
         async || {

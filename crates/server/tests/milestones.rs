@@ -1,5 +1,5 @@
 //! Exercises the App/Service "Milestone" claim-definition routes (issues
-//! #324/#325, generalizing #31's Game-only "Achievement" CRUD) against a
+//! #324/#325, generalizing #31's Integrator-only "Achievement" CRUD) against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!
@@ -62,11 +62,11 @@ async fn register_issuer(http: &reqwest::Client, base: &str, category: &str) -> 
     }
 }
 
-/// Same shape `achievements.rs`'s own `game_auth_headers` uses — a new
+/// Same shape `achievements.rs`'s own `integrator_auth_headers` uses — a new
 /// challenge every call, since one is single-use.
 async fn auth_headers(http: &reqwest::Client, base: &str, issuer: &RegisteredIssuer) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{}/challenge", issuer.slug))
+        .post(format!("{base}/integrators/{}/challenge", issuer.slug))
         .send()
         .await
         .unwrap()
@@ -146,14 +146,14 @@ async fn a_service_creates_a_milestone_namespaced_under_its_own_slug() {
 
 #[tokio::test]
 #[ignore]
-async fn an_app_cannot_create_an_achievement_via_the_games_route() {
+async fn an_app_cannot_create_an_achievement_via_the_integrators_route() {
     let http = reqwest::Client::new();
     let base = server_url();
     let app = register_issuer(&http, &base, "app").await;
 
     let headers = auth_headers(&http, &base, &app).await;
     let response = http
-        .post(format!("{base}/games/{}/achievements", app.slug))
+        .post(format!("{base}/integrators/{}/achievements", app.slug))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "sneaky",
@@ -168,14 +168,17 @@ async fn an_app_cannot_create_an_achievement_via_the_games_route() {
 
 #[tokio::test]
 #[ignore]
-async fn a_game_cannot_create_a_milestone_via_the_integrations_route() {
+async fn a_integrator_cannot_create_a_milestone_via_the_integrations_route() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_issuer(&http, &base, "game").await;
+    let integrator = register_issuer(&http, &base, "game").await;
 
-    let headers = auth_headers(&http, &base, &game).await;
+    let headers = auth_headers(&http, &base, &integrator).await;
     let response = http
-        .post(format!("{base}/integrations/{}/milestones", game.slug))
+        .post(format!(
+            "{base}/integrations/{}/milestones",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "sneaky",
@@ -192,9 +195,9 @@ async fn a_game_cannot_create_a_milestone_via_the_integrations_route() {
 #[ignore]
 async fn listing_achievements_for_an_app_is_rejected_not_silently_empty() {
     // The read side needs the same category check as the write side, or
-    // GET /games/{app-slug}/achievements would silently serve that app's
+    // GET /integrators/{app-slug}/achievements would silently serve that app's
     // real milestones back mislabeled as achievements (both live in the
-    // same underlying table, keyed by game_id — see achievements.rs's
+    // same underlying table, keyed by integrator_id — see achievements.rs's
     // module doc comment).
     let http = reqwest::Client::new();
     let base = server_url();
@@ -213,7 +216,7 @@ async fn listing_achievements_for_an_app_is_rejected_not_silently_empty() {
         .unwrap();
 
     let response = http
-        .get(format!("{base}/games/{}/achievements", app.slug))
+        .get(format!("{base}/integrators/{}/achievements", app.slug))
         .send()
         .await
         .unwrap();

@@ -1,11 +1,11 @@
-//! Exercises the Game Registry schema-discovery projection (issue #255)
+//! Exercises the Integrator Registry schema-discovery projection (issue #255)
 //! against a real, migrated Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make migrate`, same convention
 //! `postgres_indexer.rs` already uses. `cargo test --workspace` (this
 //! sandbox's only reachable check) skips these by default.
 
 use avalon_indexer::postgres::PostgresIndexer;
-use avalon_indexer::projections::game_schemas::list_for_game;
+use avalon_indexer::projections::integrator_schemas::list_for_integrator;
 use avalon_indexer::Indexer;
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
@@ -22,40 +22,40 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn seed_game(pool: &PgPool) -> Uuid {
-    let game_id = Uuid::new_v4();
+async fn seed_integrator(pool: &PgPool) -> Uuid {
+    let integrator_id = Uuid::new_v4();
     let slug = format!("indexer-schema-test-{}", Uuid::new_v4().simple());
     sqlx::query(
-        "INSERT INTO games (id, slug, name, developer, registered_at, status) \
+        "INSERT INTO integrators (id, slug, name, owner_name, registered_at, status) \
          VALUES ($1, $2, $3, $4, $5, 'active')",
     )
-    .bind(game_id)
+    .bind(integrator_id)
     .bind(&slug)
-    .bind("Indexer Schema Test Game")
+    .bind("Indexer Schema Test Integrator")
     .bind("Test Studio")
     .bind(OffsetDateTime::now_utc())
     .execute(pool)
     .await
-    .expect("failed to seed game");
-    game_id
+    .expect("failed to seed integrator");
+    integrator_id
 }
 
-/// Scoped by `game_id`, not just `version` — the real id shape
-/// (`game:<slug>:schema:<version>`) is per-game, and `indexer_game_schemas`
+/// Scoped by `integrator_id`, not just `version` — the real id shape
+/// (`game:<slug>:schema:<version>`) is per-integrator, and `indexer_integrator_schemas`
 /// upserts on `id` alone, so a global constant here would race with any
 /// other test using the same `version` (this file's tests run in parallel
-/// by default) instead of just this test's own freshly-seeded game.
-fn schema_id(game_id: Uuid, version: u32) -> String {
-    format!("game:{game_id}:schema:{version}")
+/// by default) instead of just this test's own freshly-seeded integrator.
+fn schema_id(integrator_id: Uuid, version: u32) -> String {
+    format!("game:{integrator_id}:schema:{version}")
 }
 
 fn published_event(
-    game_id: Uuid,
+    integrator_id: Uuid,
     version: u32,
     proto_source: &str,
     supersedes: Option<&str>,
 ) -> ProtocolEvent {
-    let id = schema_id(game_id, version);
+    let id = schema_id(integrator_id, version);
     ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "game_schema.published".to_string(),
@@ -63,7 +63,7 @@ fn published_event(
         subject: GlobalId::new("game", "test", "schema", &version.to_string()),
         payload: serde_json::json!({
             "id": id,
-            "game_id": game_id,
+            "game_id": integrator_id,
             "version": version,
             "proto_source": proto_source,
             "supersedes": supersedes,
@@ -75,38 +75,43 @@ fn published_event(
 
 #[tokio::test]
 #[ignore]
-async fn a_game_with_no_publications_surfaces_an_empty_list() {
+async fn a_integrator_with_no_publications_surfaces_an_empty_list() {
     let pool = test_pool().await;
-    let game_id = seed_game(&pool).await;
+    let integrator_id = seed_integrator(&pool).await;
 
-    let versions = list_for_game(&pool, game_id)
+    let versions = list_for_integrator(&pool, integrator_id)
         .await
-        .expect("list_for_game failed");
+        .expect("list_for_integrator failed");
     assert!(versions.is_empty());
 }
 
 #[tokio::test]
 #[ignore]
-async fn a_game_with_publications_surfaces_them_oldest_first_with_lineage() {
+async fn a_integrator_with_publications_surfaces_them_oldest_first_with_lineage() {
     let pool = test_pool().await;
     let indexer = PostgresIndexer::new(pool.clone());
-    let game_id = seed_game(&pool).await;
+    let integrator_id = seed_integrator(&pool).await;
 
-    let v1_id = schema_id(game_id, 1);
-    let v1 = published_event(game_id, 1, "message Character { uint32 level = 1; }", None);
+    let v1_id = schema_id(integrator_id, 1);
+    let v1 = published_event(
+        integrator_id,
+        1,
+        "message Character { uint32 level = 1; }",
+        None,
+    );
     indexer.apply(&v1).await.expect("apply v1 failed");
 
     let v2 = published_event(
-        game_id,
+        integrator_id,
         2,
         "message Character { uint32 level = 1; uint64 xp = 2; }",
         Some(&v1_id),
     );
     indexer.apply(&v2).await.expect("apply v2 failed");
 
-    let versions = list_for_game(&pool, game_id)
+    let versions = list_for_integrator(&pool, integrator_id)
         .await
-        .expect("list_for_game failed");
+        .expect("list_for_integrator failed");
     assert_eq!(versions.len(), 2);
 
     assert_eq!(versions[0].version, 1);
@@ -116,7 +121,7 @@ async fn a_game_with_publications_surfaces_them_oldest_first_with_lineage() {
     );
     assert_eq!(
         versions[0].superseded_by.as_deref(),
-        Some(schema_id(game_id, 2).as_str())
+        Some(schema_id(integrator_id, 2).as_str())
     );
 
     assert_eq!(versions[1].version, 2);
@@ -132,14 +137,19 @@ async fn a_game_with_publications_surfaces_them_oldest_first_with_lineage() {
 async fn applying_a_publication_twice_does_not_duplicate_the_row() {
     let pool = test_pool().await;
     let indexer = PostgresIndexer::new(pool.clone());
-    let game_id = seed_game(&pool).await;
+    let integrator_id = seed_integrator(&pool).await;
 
-    let event = published_event(game_id, 1, "message Character { uint32 level = 1; }", None);
+    let event = published_event(
+        integrator_id,
+        1,
+        "message Character { uint32 level = 1; }",
+        None,
+    );
     indexer.apply(&event).await.expect("first apply failed");
     indexer.apply(&event).await.expect("second apply failed");
 
-    let versions = list_for_game(&pool, game_id)
+    let versions = list_for_integrator(&pool, integrator_id)
         .await
-        .expect("list_for_game failed");
+        .expect("list_for_integrator failed");
     assert_eq!(versions.len(), 1);
 }

@@ -1,19 +1,19 @@
-//! Guild creation, roles, ownership transfer, and game association
+//! Guild creation, roles, ownership transfer, and integrator association
 //! (issue #20).
 //!
 //! Every mutation here requires the caller's own user session — same
-//! "no game-credential auth path exists in this repo" reasoning
+//! "no integrator-credential auth path exists in this repo" reasoning
 //! `crates/server/src/friends.rs`'s module doc comment already lays out,
-//! so "a game cannot act on a guild's behalf" is satisfied simply by these
+//! so "an integrator cannot act on a guild's behalf" is satisfied simply by these
 //! routes only ever accepting a session bearer token.
 //!
-//! A guild is a network-level primitive, not a game's (issue #74) — see
+//! A guild is a network-level primitive, not an integrator's (issue #74) — see
 //! `docs/architecture/guilds.md`. `guild.created`, `guild.updated`,
 //! `guild.role_defined`, and `guild.owner_transferred` are promised-durable
 //! history, written into the outbox in the same transaction as the
 //! `guilds`/`guild_roles` projection change, same pattern
 //! `handlers::register_finish` and `friends.rs` already established. The
-//! `guilds`/`guild_roles`/`guild_game_associations` tables are projections,
+//! `guilds`/`guild_roles`/`guild_integrator_associations` tables are projections,
 //! rebuildable from that history — nothing here treats them as canonical.
 //!
 //! **Membership lifecycle (issue #21).** `guild_members`/`guild_invites`
@@ -98,7 +98,7 @@ const MAX_GUILD_LINK_LABEL_LEN: usize = 60;
 /// `MAX_AVATAR_URL_LEN`/`MAX_GUILD_BANNER_URL_LEN` use.
 const MAX_GUILD_LINK_URL_LEN: usize = 2048;
 
-/// Cap on the number of entries in a guild's curated favorite-games pin
+/// Cap on the number of entries in a guild's curated favorite-integrators pin
 /// list (issue #207) — same "top N, not a free-form list" shape
 /// [`MAX_GUILD_LINKS`] already uses, capped at a smaller number since this
 /// is meant to be a deliberately curated highlight, not a catalog.
@@ -462,7 +462,7 @@ struct GuildRow {
     links: Vec<GuildLink>,
     /// Issue #153.
     recruiting: bool,
-    /// Issue #206 — whether the game affinity breakdown (see
+    /// Issue #206 — whether the integrator affinity breakdown (see
     /// [`game_breakdown`]) is shown on this guild's public profile /
     /// discovery card. Always visible to a `manage_guild` holder
     /// regardless of this flag; it only gates *public* exposure.
@@ -512,7 +512,7 @@ pub struct GuildResponse {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     pub member_count: i64,
-    pub games: Vec<Uuid>,
+    pub integrators: Vec<Uuid>,
     pub join_policy: String,
     /// Issue #153.
     pub motd: Option<String>,
@@ -524,12 +524,12 @@ pub struct GuildResponse {
     pub links: Vec<GuildLink>,
     /// Issue #153.
     pub recruiting: bool,
-    /// Issue #206. Whether the game affinity breakdown
-    /// (`GET /guilds/{id}/game-breakdown`) is shown on this guild's public
+    /// Issue #206. Whether the integrator affinity breakdown
+    /// (`GET /guilds/{id}/integrator-breakdown`) is shown on this guild's public
     /// profile — a `manage_guild` holder can always fetch the breakdown
     /// regardless of this flag; it only gates exposure to everyone else.
     pub game_breakdown_public: bool,
-    /// Issue #207. The guild's curated top-5 favorite games, in display
+    /// Issue #207. The guild's curated top-5 favorite integrators, in display
     /// order, each flagged `stale` if it no longer has an actively-bound
     /// member. Unlike `game_breakdown_public`'s full breakdown, this
     /// curated subset is always part of the guild's public profile — it's
@@ -539,13 +539,14 @@ pub struct GuildResponse {
 }
 
 async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildResponse, AppError> {
-    let game_rows = sqlx::query("SELECT game_id FROM guild_game_associations WHERE guild_id = $1")
-        .bind(guild.id)
-        .fetch_all(&state.pool)
-        .await?;
-    let mut games = Vec::with_capacity(game_rows.len());
-    for row in game_rows {
-        games.push(row.try_get("game_id")?);
+    let integrator_rows =
+        sqlx::query("SELECT integrator_id FROM guild_integrator_associations WHERE guild_id = $1")
+            .bind(guild.id)
+            .fetch_all(&state.pool)
+            .await?;
+    let mut integrators = Vec::with_capacity(integrator_rows.len());
+    for row in integrator_rows {
+        integrators.push(row.try_get("integrator_id")?);
     }
 
     let member_count_row =
@@ -565,7 +566,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         owner: guild.owner,
         created_at: guild.created_at,
         member_count,
-        games,
+        integrators,
         join_policy: guild.join_policy.as_str().to_string(),
         motd: guild.motd,
         banner: guild.banner,
@@ -750,7 +751,7 @@ pub struct UpdateGuildRequest {
     /// the invite (#21) and join-request/approval (#242) flows entirely.
     pub join_policy: Option<String>,
     /// Issue #206. Omitted leaves it untouched. Controls only whether the
-    /// game affinity breakdown is shown on this guild's *public* profile —
+    /// integrator affinity breakdown is shown on this guild's *public* profile —
     /// a `manage_guild` holder can always see it internally either way.
     pub game_breakdown_public: Option<bool>,
 }
@@ -1566,16 +1567,16 @@ pub async fn transfer_ownership(
     ))
 }
 
-pub async fn associate_game(
+pub async fn associate_integrator(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((guild_id, game_id)): Path<(Uuid, Uuid)>,
+    Path((guild_id, integrator_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<GuildResponse>, AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
 
-    // A guild manager associates a game, never the game itself (ticket
-    // "Game association") — `manage_guild` is the closest fit among the
+    // A guild manager associates an integrator, never the integrator itself (ticket
+    // "Integrator association") — `manage_guild` is the closest fit among the
     // fixed milestone-1 permission set.
     let actor_permissions = actor_role_permissions(&state, guild_id, actor).await?;
     if !has_guild_permission(
@@ -1590,22 +1591,22 @@ pub async fn associate_game(
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
-        "INSERT INTO guild_game_associations (guild_id, game_id) VALUES ($1, $2) \
-         ON CONFLICT (guild_id, game_id) DO NOTHING",
+        "INSERT INTO guild_integrator_associations (guild_id, integrator_id) VALUES ($1, $2) \
+         ON CONFLICT (guild_id, integrator_id) DO NOTHING",
     )
     .bind(guild_id)
-    .bind(game_id)
+    .bind(integrator_id)
     .execute(&mut *tx)
     .await?;
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: "guild.game_associated".to_string(),
-        issuer: identity_ref(actor, "guild_game_associated"),
-        subject: guild_ref(guild_id, "guild_game_associated"),
+        issuer: identity_ref(actor, "guild_integrator_associated"),
+        subject: guild_ref(guild_id, "guild_integrator_associated"),
         payload: serde_json::json!({
             "guild_id": guild_id,
-            "game_id": game_id,
+            "game_id": integrator_id,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -2643,9 +2644,9 @@ pub struct DiscoverGuildsQuery {
     pub recruiting: Option<bool>,
     /// Case-insensitive exact match on `guilds.tag`.
     pub tag: Option<String>,
-    /// Filter to guilds associated (issue #20's `associate_game`) with this
-    /// game id.
-    pub game: Option<Uuid>,
+    /// Filter to guilds associated (issue #20's `associate_integrator`) with this
+    /// integrator id.
+    pub integrator: Option<Uuid>,
     /// `newest` (default) | `alphabetical` | `most_members`.
     pub sort: Option<String>,
     pub limit: Option<i64>,
@@ -2680,7 +2681,7 @@ pub struct DiscoverGuildsResponse {
     pub next_cursor: Option<Uuid>,
 }
 
-/// `GET /guilds/discover?q=&recruiting=&tag=&game=&sort=&limit=&cursor=`
+/// `GET /guilds/discover?q=&recruiting=&tag=&integrator=&sort=&limit=&cursor=`
 /// (issue #154). Session-authenticated only — any authenticated identity
 /// may browse, no membership requirement, matching #20's existing "guild
 /// name/tag/description/member_count are readable by any authenticated
@@ -2759,11 +2760,11 @@ fn build_discover_query(
         builder.push_bind(escape_like(tag));
     }
 
-    if let Some(game_id) = query.game {
+    if let Some(integrator_id) = query.integrator {
         builder.push(
-            " AND EXISTS (SELECT 1 FROM guild_game_associations gga WHERE gga.guild_id = g.id AND gga.game_id = ",
+            " AND EXISTS (SELECT 1 FROM guild_integrator_associations gga WHERE gga.guild_id = g.id AND gga.integrator_id = ",
         );
-        builder.push_bind(game_id);
+        builder.push_bind(integrator_id);
         builder.push(")");
     }
 
@@ -2850,19 +2851,19 @@ pub async fn discover_guilds(
     }))
 }
 
-// --- Game affinity breakdown (issue #206, implementing decision #160) -----
+// --- Integrator affinity breakdown (issue #206, implementing decision #160) -----
 
-/// One game's slice of a guild's game affinity breakdown: how many of the
-/// guild's current members hold an active [`GameBinding`](avalon_protocol::games::GameBinding)
-/// to it. Never includes a game with zero bound members — there's no
+/// One integrator's slice of a guild's integrator affinity breakdown: how many of the
+/// guild's current members hold an active [`IntegratorBinding`](avalon_protocol::integrators::IntegratorBinding)
+/// to it. Never includes an integrator with zero bound members — there's no
 /// "add" action here, only real binding data feeds this (see the module
 /// doc comment and `docs/architecture/guilds.md`).
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct GameBreakdownEntry {
-    pub game_id: Uuid,
-    pub game_slug: String,
-    pub game_name: String,
-    /// Distinct guild members with an active binding to this game.
+    pub integrator_id: Uuid,
+    pub integrator_slug: String,
+    pub integrator_name: String,
+    /// Distinct guild members with an active binding to this integrator.
     pub member_count: i64,
 }
 
@@ -2872,9 +2873,9 @@ pub struct GameBreakdownResponse {
     /// Total current guild membership — the denominator for a
     /// "N of M members play X" display. Not the same as summing
     /// `breakdown[].member_count`, since a member can be bound to zero,
-    /// one, or several games.
+    /// one, or several integrators.
     pub total_members: i64,
-    /// No minimum-member threshold and no fixed cap — every game with at
+    /// No minimum-member threshold and no fixed cap — every integrator with at
     /// least one bound member appears, ordered by member count descending
     /// (ties broken alphabetically by name for a stable, readable order).
     /// This is a display of real counts, not a system verdict, per #160.
@@ -2882,7 +2883,7 @@ pub struct GameBreakdownResponse {
 }
 
 /// True if `actor` (holding `actor_permissions` in a guild owned by
-/// `guild_owner`) may view the game affinity breakdown: either they hold
+/// `guild_owner`) may view the integrator affinity breakdown: either they hold
 /// `manage_guild` (or are the owner, via [`has_guild_permission`]'s
 /// structural check) — the authority deciding whether to expose the
 /// breakdown, who can always see it internally — or the guild has opted
@@ -2910,32 +2911,32 @@ fn can_view_game_breakdown(
 /// already established for #154.
 ///
 /// Groups the guild's current members (`guild_members`) by their active
-/// `bindings` (`ended_at IS NULL`, issue #83), joined against `games` for
-/// display name/slug. A member with no active binding to any game
-/// contributes to no row; a member bound to several games contributes to
-/// each. No `HAVING` / minimum-count filter — every game with at least one
+/// `bindings` (`ended_at IS NULL`, issue #83), joined against `integrators` for
+/// display name/slug. A member with no active binding to any integrator
+/// contributes to no row; a member bound to several integrators contributes to
+/// each. No `HAVING` / minimum-count filter — every integrator with at least one
 /// bound member is included, per #160's "no minimum-member threshold"
 /// invariant.
 fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT b.game_id, g.slug AS game_slug, g.name AS game_name, \
+        "SELECT b.integrator_id, g.slug AS integrator_slug, g.name AS integrator_name, \
          COUNT(DISTINCT b.identity_id) AS member_count \
          FROM guild_members gm \
          JOIN bindings b ON b.identity_id = gm.identity_id AND b.ended_at IS NULL \
-         JOIN games g ON g.id = b.game_id \
+         JOIN integrators g ON g.id = b.integrator_id \
          WHERE gm.guild_id = ",
     );
     builder.push_bind(guild_id);
     builder.push(
-        " GROUP BY b.game_id, g.slug, g.name \
+        " GROUP BY b.integrator_id, g.slug, g.name \
          ORDER BY member_count DESC, g.name ASC",
     );
     builder
 }
 
-/// `GET /guilds/{id}/game-breakdown` (issue #206, implementing decision
+/// `GET /guilds/{id}/integrator-breakdown` (issue #206, implementing decision
 /// #160). Milestone-1 stand-in: a direct query over `guild_members` JOIN
-/// `bindings` JOIN `games`, same precedent [`discover_guilds`] (#154)
+/// `bindings` JOIN `integrators`, same precedent [`discover_guilds`] (#154)
 /// already set, not #42's real indexer read model. Derived/computed on
 /// every read — no protocol event, no durable table backs this (see the
 /// module doc comment).
@@ -2975,9 +2976,9 @@ pub async fn game_breakdown(
     let mut breakdown = Vec::with_capacity(rows.len());
     for row in rows {
         breakdown.push(GameBreakdownEntry {
-            game_id: row.try_get("game_id")?,
-            game_slug: row.try_get("game_slug")?,
-            game_name: row.try_get("game_name")?,
+            integrator_id: row.try_get("integrator_id")?,
+            integrator_slug: row.try_get("integrator_slug")?,
+            integrator_name: row.try_get("integrator_name")?,
             member_count: row.try_get("member_count")?,
         });
     }
@@ -2989,15 +2990,15 @@ pub async fn game_breakdown(
     }))
 }
 
-// --- Favorite games: curated top-5 pin list (issue #207, implementing -----
+// --- Favorite integrators: curated top-5 pin list (issue #207, implementing -----
 // --- decision #160) --------------------------------------------------------
 
-/// Every game the guild currently has a real affinity for, per #206's
+/// Every integrator the guild currently has a real affinity for, per #206's
 /// aggregation (`build_game_breakdown_query`): at least one current member
 /// holds an active binding to it. This is the *only* source of truth a pin
 /// may be validated against — reused as-is (not a separate query) so
 /// "pinnable" can never drift from "what the breakdown itself would show".
-async fn guild_bound_game_ids(
+async fn guild_bound_integrator_ids(
     state: &AppState,
     guild_id: Uuid,
 ) -> Result<std::collections::HashSet<Uuid>, AppError> {
@@ -3005,22 +3006,22 @@ async fn guild_bound_game_ids(
     let rows = builder.build().fetch_all(&state.pool).await?;
     let mut ids = std::collections::HashSet::with_capacity(rows.len());
     for row in rows {
-        ids.insert(row.try_get::<Uuid, _>("game_id")?);
+        ids.insert(row.try_get::<Uuid, _>("integrator_id")?);
     }
     Ok(ids)
 }
 
-/// One entry in a guild's favorite-games pin list, as read back.
+/// One entry in a guild's favorite-integrators pin list, as read back.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct FavoriteGameEntry {
-    pub game_id: Uuid,
-    pub game_slug: String,
-    pub game_name: String,
+    pub integrator_id: Uuid,
+    pub integrator_slug: String,
+    pub integrator_name: String,
     /// 0-indexed display order — the guild's curated ranking, not a
     /// popularity/member-count sort.
     pub position: i16,
-    /// True when this game no longer has any actively-bound guild member
-    /// (per [`guild_bound_game_ids`]) — its last bound member left/unbound
+    /// True when this integrator no longer has any actively-bound guild member
+    /// (per [`guild_bound_integrator_ids`]) — its last bound member left/unbound
     /// since the pin was added. Per #207's design, a stale pin is never
     /// auto-removed (that would churn the guild's public display on a
     /// single member's binding change); it's surfaced here so a
@@ -3034,7 +3035,7 @@ pub struct FavoriteGamesResponse {
     pub favorites: Vec<FavoriteGameEntry>,
 }
 
-/// Shared by `GET /guilds/{id}/favorite-games` and [`guild_response`] (the
+/// Shared by `GET /guilds/{id}/favorite-integrators` and [`guild_response`] (the
 /// list embedded in `GET /guilds/{id}`) so both read paths compute
 /// staleness identically, against the same live data.
 async fn fetch_favorite_games(
@@ -3042,9 +3043,9 @@ async fn fetch_favorite_games(
     guild_id: Uuid,
 ) -> Result<Vec<FavoriteGameEntry>, AppError> {
     let rows = sqlx::query(
-        "SELECT gfg.game_id, gfg.position, g.slug AS game_slug, g.name AS game_name \
+        "SELECT gfg.integrator_id, gfg.position, g.slug AS integrator_slug, g.name AS integrator_name \
          FROM guild_favorite_games gfg \
-         JOIN games g ON g.id = gfg.game_id \
+         JOIN integrators g ON g.id = gfg.integrator_id \
          WHERE gfg.guild_id = $1 \
          ORDER BY gfg.position ASC",
     )
@@ -3052,23 +3053,23 @@ async fn fetch_favorite_games(
     .fetch_all(&state.pool)
     .await?;
 
-    let bound_ids = guild_bound_game_ids(state, guild_id).await?;
+    let bound_ids = guild_bound_integrator_ids(state, guild_id).await?;
 
     let mut favorites = Vec::with_capacity(rows.len());
     for row in rows {
-        let game_id: Uuid = row.try_get("game_id")?;
+        let integrator_id: Uuid = row.try_get("integrator_id")?;
         favorites.push(FavoriteGameEntry {
-            game_id,
-            game_slug: row.try_get("game_slug")?,
-            game_name: row.try_get("game_name")?,
+            integrator_id,
+            integrator_slug: row.try_get("integrator_slug")?,
+            integrator_name: row.try_get("integrator_name")?,
             position: row.try_get("position")?,
-            stale: !bound_ids.contains(&game_id),
+            stale: !bound_ids.contains(&integrator_id),
         });
     }
     Ok(favorites)
 }
 
-/// `GET /guilds/{id}/favorite-games` (issue #207). Same "any authenticated
+/// `GET /guilds/{id}/favorite-integrators` (issue #207). Same "any authenticated
 /// identity may read a guild's public metadata" visibility as `GET
 /// /guilds/{id}` itself (see that handler's doc comment) — the favorites
 /// list is exactly the curated subset of affinity data a guild has chosen
@@ -3091,38 +3092,38 @@ pub async fn list_favorite_games(
 
 #[derive(Deserialize)]
 pub struct SetFavoriteGamesRequest {
-    /// The full desired ordered list of pinned game ids — always a full
+    /// The full desired ordered list of pinned integrator ids — always a full
     /// replace, never a per-entry patch, same "resend the whole list"
     /// convention `UpdateGuildRequest::links` already established for #153.
     /// Position in this array is the new display order.
-    pub game_ids: Vec<Uuid>,
+    pub integrator_ids: Vec<Uuid>,
 }
 
 /// [`MAX_GUILD_FAVORITE_GAMES`]-capped, order-preserving, no duplicates, and
 /// every entry must currently appear in `bound_ids` (#206's live affinity
 /// breakdown) — the one invariant this ticket exists to enforce: a pin can
-/// never manufacture an association with a game the guild has no real,
+/// never manufacture an association with an integrator the guild has no real,
 /// currently-bound connection to.
 fn validate_favorite_game_ids(
-    game_ids: &[Uuid],
+    integrator_ids: &[Uuid],
     bound_ids: &std::collections::HashSet<Uuid>,
 ) -> Result<(), AppError> {
-    if game_ids.len() > MAX_GUILD_FAVORITE_GAMES {
+    if integrator_ids.len() > MAX_GUILD_FAVORITE_GAMES {
         return Err(AppError::TooManyFavoriteGames);
     }
-    let mut seen = std::collections::HashSet::with_capacity(game_ids.len());
-    for game_id in game_ids {
-        if !seen.insert(*game_id) {
+    let mut seen = std::collections::HashSet::with_capacity(integrator_ids.len());
+    for integrator_id in integrator_ids {
+        if !seen.insert(*integrator_id) {
             return Err(AppError::DuplicateFavoriteGame);
         }
-        if !bound_ids.contains(game_id) {
+        if !bound_ids.contains(integrator_id) {
             return Err(AppError::FavoriteGameNotBound);
         }
     }
     Ok(())
 }
 
-/// `PUT /guilds/{id}/favorite-games` (issue #207). Gated by the same
+/// `PUT /guilds/{id}/favorite-integrators` (issue #207). Gated by the same
 /// `manage_guild`/owner permission as #206's breakdown-visibility toggle
 /// (via [`has_guild_permission`]) — reuses that check rather than inventing
 /// a new one, per the ticket. Validates every id against the guild's real,
@@ -3151,8 +3152,8 @@ pub async fn set_favorite_games(
         return Err(AppError::MissingGuildPermission);
     }
 
-    let bound_ids = guild_bound_game_ids(&state, guild_id).await?;
-    validate_favorite_game_ids(&body.game_ids, &bound_ids)?;
+    let bound_ids = guild_bound_integrator_ids(&state, guild_id).await?;
+    validate_favorite_game_ids(&body.integrator_ids, &bound_ids)?;
 
     let mut tx = state.pool.begin().await?;
 
@@ -3160,12 +3161,12 @@ pub async fn set_favorite_games(
         .bind(guild_id)
         .execute(&mut *tx)
         .await?;
-    for (position, game_id) in body.game_ids.iter().enumerate() {
+    for (position, integrator_id) in body.integrator_ids.iter().enumerate() {
         sqlx::query(
-            "INSERT INTO guild_favorite_games (guild_id, game_id, position) VALUES ($1, $2, $3)",
+            "INSERT INTO guild_favorite_games (guild_id, integrator_id, position) VALUES ($1, $2, $3)",
         )
         .bind(guild_id)
-        .bind(game_id)
+        .bind(integrator_id)
         .bind(position as i16)
         .execute(&mut *tx)
         .await?;
@@ -3178,7 +3179,7 @@ pub async fn set_favorite_games(
         subject: guild_ref(guild_id, "guild_favorite_games_updated"),
         payload: serde_json::json!({
             "guild_id": guild_id,
-            "game_ids": body.game_ids,
+            "game_ids": body.integrator_ids,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -3662,7 +3663,7 @@ mod tests {
             q: None,
             recruiting: None,
             tag: None,
-            game: None,
+            integrator: None,
             sort: None,
             limit: None,
             cursor: None,
@@ -3756,15 +3757,15 @@ mod tests {
     }
 
     #[test]
-    fn game_filter_adds_association_exists_clause() {
+    fn integrator_filter_adds_association_exists_clause() {
         let mut query = empty_discover_query();
-        query.game = Some(Uuid::new_v4());
+        query.integrator = Some(Uuid::new_v4());
         let actor = Uuid::new_v4();
         let builder = build_discover_query(&query, DiscoverSort::Newest, actor, 20);
         assert!(builder
             .sql()
             .as_str()
-            .contains("EXISTS (SELECT 1 FROM guild_game_associations"));
+            .contains("EXISTS (SELECT 1 FROM guild_integrator_associations"));
     }
 
     #[test]
@@ -3833,7 +3834,7 @@ mod tests {
         assert!(sql.contains("g.icon"));
     }
 
-    // --- Issue #206: game affinity breakdown -------------------------------
+    // --- Issue #206: integrator affinity breakdown -------------------------------
 
     #[test]
     fn breakdown_query_aggregates_over_active_bindings_only_no_minimum_threshold() {
@@ -3843,11 +3844,11 @@ mod tests {
         let sql = sql_owned.as_str();
         assert!(sql
             .contains("JOIN bindings b ON b.identity_id = gm.identity_id AND b.ended_at IS NULL"));
-        assert!(sql.contains("JOIN games g ON g.id = b.game_id"));
+        assert!(sql.contains("JOIN integrators g ON g.id = b.integrator_id"));
         assert!(sql.contains("COUNT(DISTINCT b.identity_id) AS member_count"));
         assert!(sql.contains("WHERE gm.guild_id ="));
-        assert!(sql.contains("GROUP BY b.game_id, g.slug, g.name"));
-        // No #160 "minimum member count" gate — every game with at least
+        assert!(sql.contains("GROUP BY b.integrator_id, g.slug, g.name"));
+        // No #160 "minimum member count" gate — every integrator with at least
         // one bound member appears, so there must be no HAVING clause.
         assert!(!sql.contains("HAVING"));
     }
@@ -3898,17 +3899,17 @@ mod tests {
         assert!(can_view_game_breakdown(owner, stranger, &[], true));
     }
 
-    // --- Issue #207: favorite games pin list --------------------------------
+    // --- Issue #207: favorite integrators pin list --------------------------------
 
     #[test]
     fn a_sixth_pin_is_rejected() {
         let bound: std::collections::HashSet<Uuid> = (0..MAX_GUILD_FAVORITE_GAMES + 1)
             .map(|_| Uuid::new_v4())
             .collect();
-        let game_ids: Vec<Uuid> = bound.iter().copied().collect();
-        assert_eq!(game_ids.len(), MAX_GUILD_FAVORITE_GAMES + 1);
+        let integrator_ids: Vec<Uuid> = bound.iter().copied().collect();
+        assert_eq!(integrator_ids.len(), MAX_GUILD_FAVORITE_GAMES + 1);
         assert!(matches!(
-            validate_favorite_game_ids(&game_ids, &bound),
+            validate_favorite_game_ids(&integrator_ids, &bound),
             Err(AppError::TooManyFavoriteGames)
         ));
     }
@@ -3918,27 +3919,27 @@ mod tests {
         let bound: std::collections::HashSet<Uuid> = (0..MAX_GUILD_FAVORITE_GAMES)
             .map(|_| Uuid::new_v4())
             .collect();
-        let game_ids: Vec<Uuid> = bound.iter().copied().collect();
-        assert_eq!(game_ids.len(), MAX_GUILD_FAVORITE_GAMES);
-        assert!(validate_favorite_game_ids(&game_ids, &bound).is_ok());
+        let integrator_ids: Vec<Uuid> = bound.iter().copied().collect();
+        assert_eq!(integrator_ids.len(), MAX_GUILD_FAVORITE_GAMES);
+        assert!(validate_favorite_game_ids(&integrator_ids, &bound).is_ok());
     }
 
     #[test]
-    fn pinning_a_game_with_zero_bound_members_is_rejected() {
+    fn pinning_a_integrator_with_zero_bound_members_is_rejected() {
         let bound: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
-        let unbound_game = Uuid::new_v4();
+        let unbound_integrator = Uuid::new_v4();
         assert!(matches!(
-            validate_favorite_game_ids(&[unbound_game], &bound),
+            validate_favorite_game_ids(&[unbound_integrator], &bound),
             Err(AppError::FavoriteGameNotBound)
         ));
     }
 
     #[test]
-    fn pinning_the_same_game_twice_is_rejected_as_duplicate() {
-        let game_id = Uuid::new_v4();
-        let bound: std::collections::HashSet<Uuid> = [game_id].into_iter().collect();
+    fn pinning_the_same_integrator_twice_is_rejected_as_duplicate() {
+        let integrator_id = Uuid::new_v4();
+        let bound: std::collections::HashSet<Uuid> = [integrator_id].into_iter().collect();
         assert!(matches!(
-            validate_favorite_game_ids(&[game_id, game_id], &bound),
+            validate_favorite_game_ids(&[integrator_id, integrator_id], &bound),
             Err(AppError::DuplicateFavoriteGame)
         ));
     }

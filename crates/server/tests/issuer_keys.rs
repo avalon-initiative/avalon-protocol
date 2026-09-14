@@ -13,14 +13,14 @@ fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
-struct RegisteredGame {
+struct RegisteredIntegrator {
     slug: String,
-    game_id: String,
+    integrator_id: String,
     root_key_id: String,
     root_signing_key: SigningKey,
 }
 
-async fn register_game(http: &reqwest::Client) -> RegisteredGame {
+async fn register_integrator(http: &reqwest::Client) -> RegisteredIntegrator {
     let base = server_url();
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
@@ -35,17 +35,17 @@ async fn register_game(http: &reqwest::Client) -> RegisteredGame {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     let registered: Value = response.json().await.unwrap();
 
-    RegisteredGame {
+    RegisteredIntegrator {
         slug: registered["slug"].as_str().unwrap().to_string(),
-        game_id: registered["id"].as_str().unwrap().to_string(),
+        integrator_id: registered["id"].as_str().unwrap().to_string(),
         root_key_id: registered["credential"]["key_id"]
             .as_str()
             .unwrap()
@@ -57,7 +57,7 @@ async fn register_game(http: &reqwest::Client) -> RegisteredGame {
 /// Runs one challenge-response round: fetches a fresh challenge for `slug`,
 /// signs its nonce with `signing_key`, and returns the three headers the
 /// signature-carrying request needs — same shape
-/// `the_challenge_response_auth_flow_round_trips` in `tests/games.rs`
+/// `the_challenge_response_auth_flow_round_trips` in `tests/integrators.rs`
 /// already establishes for ordinary (non-root) auth.
 async fn signed_challenge_headers(
     http: &reqwest::Client,
@@ -67,7 +67,7 @@ async fn signed_challenge_headers(
 ) -> [(&'static str, String); 3] {
     let base = server_url();
     let challenge = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .unwrap();
@@ -101,14 +101,18 @@ fn with_headers(
 async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http).await;
+    let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     let add = with_headers(
-        http.post(format!("{base}/games/{}/keys", game.slug)),
+        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -125,14 +129,18 @@ async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls
     let op_key_id = added["key_id"].as_str().unwrap().to_string();
 
     // The freshly-added operational key authenticates an ordinary call.
-    let headers = signed_challenge_headers(&http, &game.slug, &op_key_id, &operational_key).await;
-    let whoami = with_headers(http.get(format!("{base}/games/whoami")), &headers)
+    let headers =
+        signed_challenge_headers(&http, &integrator.slug, &op_key_id, &operational_key).await;
+    let whoami = with_headers(http.get(format!("{base}/integrators/whoami")), &headers)
         .send()
         .await
         .unwrap();
     assert!(whoami.status().is_success(), "{:?}", whoami.status());
     let whoami: Value = whoami.json().await.unwrap();
-    assert_eq!(whoami["game_id"].as_str().unwrap(), game.game_id);
+    assert_eq!(
+        whoami["integrator_id"].as_str().unwrap(),
+        integrator.integrator_id
+    );
 }
 
 #[tokio::test]
@@ -140,14 +148,18 @@ async fn root_key_can_add_an_operational_key_and_it_authenticates_ordinary_calls
 async fn an_operational_key_cannot_authorize_a_key_set_change() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http).await;
+    let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     let add = with_headers(
-        http.post(format!("{base}/games/{}/keys", game.slug)),
+        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -166,9 +178,10 @@ async fn an_operational_key_cannot_authorize_a_key_set_change() {
 
     // The operational key tries to add another key — must be rejected.
     let another_key = SigningKey::generate(&mut rand::rng());
-    let headers = signed_challenge_headers(&http, &game.slug, &op_key_id, &operational_key).await;
+    let headers =
+        signed_challenge_headers(&http, &integrator.slug, &op_key_id, &operational_key).await;
     let attempt = with_headers(
-        http.post(format!("{base}/games/{}/keys", game.slug)),
+        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -187,14 +200,18 @@ async fn an_operational_key_cannot_authorize_a_key_set_change() {
 async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anything() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http).await;
+    let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     let add = with_headers(
-        http.post(format!("{base}/games/{}/keys", game.slug)),
+        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -211,13 +228,17 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
         .to_string();
 
     // Root revokes it.
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     let revoke = with_headers(
         http.post(format!(
-            "{base}/games/{}/keys/{}/revoke",
-            game.slug, op_key_id
+            "{base}/integrators/{}/keys/{}/revoke",
+            integrator.slug, op_key_id
         )),
         &headers,
     )
@@ -230,21 +251,26 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
     assert!(revoked["revoked_at"].is_string());
 
     // The revoked key can no longer authenticate anything.
-    let headers = signed_challenge_headers(&http, &game.slug, &op_key_id, &operational_key).await;
-    let whoami = with_headers(http.get(format!("{base}/games/whoami")), &headers)
+    let headers =
+        signed_challenge_headers(&http, &integrator.slug, &op_key_id, &operational_key).await;
+    let whoami = with_headers(http.get(format!("{base}/integrators/whoami")), &headers)
         .send()
         .await
         .unwrap();
     assert_eq!(whoami.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     // Revoking it again is rejected, not a silent no-op.
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     let re_revoke = with_headers(
         http.post(format!(
-            "{base}/games/{}/keys/{}/revoke",
-            game.slug, op_key_id
+            "{base}/integrators/{}/keys/{}/revoke",
+            integrator.slug, op_key_id
         )),
         &headers,
     )
@@ -257,23 +283,23 @@ async fn root_revokes_an_operational_key_and_it_can_no_longer_authenticate_anyth
 
 #[tokio::test]
 #[ignore]
-async fn a_games_root_key_cannot_manage_a_different_games_keys() {
+async fn a_integrators_root_key_cannot_manage_a_different_integrators_keys() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game_a = register_game(&http).await;
-    let game_b = register_game(&http).await;
+    let integrator_a = register_integrator(&http).await;
+    let integrator_b = register_integrator(&http).await;
 
     let intruding_key = SigningKey::generate(&mut rand::rng());
-    // Authenticate as game A's root key, but target game B's slug.
+    // Authenticate as integrator A's root key, but target integrator B's slug.
     let headers = signed_challenge_headers(
         &http,
-        &game_a.slug,
-        &game_a.root_key_id,
-        &game_a.root_signing_key,
+        &integrator_a.slug,
+        &integrator_a.root_key_id,
+        &integrator_a.root_signing_key,
     )
     .await;
     let attempt = with_headers(
-        http.post(format!("{base}/games/{}/keys", game_b.slug)),
+        http.post(format!("{base}/integrators/{}/keys", integrator_b.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -287,7 +313,7 @@ async fn a_games_root_key_cannot_manage_a_different_games_keys() {
     assert_eq!(attempt.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
-/// `GET /games/{slug}/keys` (#90): public, no auth required, shows every
+/// `GET /integrators/{slug}/keys` (#90): public, no auth required, shows every
 /// key an issuer has ever registered — root and operational, valid and
 /// revoked — as a timeline.
 #[tokio::test]
@@ -295,14 +321,18 @@ async fn a_games_root_key_cannot_manage_a_different_games_keys() {
 async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http).await;
+    let integrator = register_integrator(&http).await;
 
     let operational_key = SigningKey::generate(&mut rand::rng());
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     let add = with_headers(
-        http.post(format!("{base}/games/{}/keys", game.slug)),
+        http.post(format!("{base}/integrators/{}/keys", integrator.slug)),
         &headers,
     )
     .json(&serde_json::json!({
@@ -318,13 +348,17 @@ async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
         .unwrap()
         .to_string();
 
-    let headers =
-        signed_challenge_headers(&http, &game.slug, &game.root_key_id, &game.root_signing_key)
-            .await;
+    let headers = signed_challenge_headers(
+        &http,
+        &integrator.slug,
+        &integrator.root_key_id,
+        &integrator.root_signing_key,
+    )
+    .await;
     with_headers(
         http.post(format!(
-            "{base}/games/{}/keys/{}/revoke",
-            game.slug, op_key_id
+            "{base}/integrators/{}/keys/{}/revoke",
+            integrator.slug, op_key_id
         )),
         &headers,
     )
@@ -335,7 +369,7 @@ async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
 
     // No auth headers at all — this is a plain, unauthenticated GET.
     let history: Vec<Value> = http
-        .get(format!("{base}/games/{}/keys", game.slug))
+        .get(format!("{base}/integrators/{}/keys", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -344,7 +378,7 @@ async fn key_history_is_publicly_readable_and_includes_revoked_keys() {
         .unwrap();
 
     assert_eq!(history.len(), 2, "{history:?}");
-    assert_eq!(history[0]["key_id"], game.root_key_id);
+    assert_eq!(history[0]["key_id"], integrator.root_key_id);
     assert_eq!(history[0]["role"], "root");
     assert!(history[0]["revoked_at"].is_null());
     assert_eq!(history[1]["key_id"], op_key_id);

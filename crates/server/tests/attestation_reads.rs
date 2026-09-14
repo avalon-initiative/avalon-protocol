@@ -3,7 +3,7 @@
 //! infra — see `make test-live` / `make start`.
 //!
 //! "Scenario D" (issue #33's own design text — not one of
-//! `docs/architecture/games-and-issuers.md`'s lettered scenarios, which
+//! `docs/architecture/integrators-and-issuers.md`'s lettered scenarios, which
 //! only goes up through F today): an authentic, valid claim from an
 //! issuer the reader doesn't trust must still read as
 //! `Authentic`/`Valid` — recognition is a separate, consumer-side
@@ -14,7 +14,7 @@
 //! needed since recognition is never a server computation.
 
 use avalon_protocol::achievements::{recognize, Issuer, Recognition, TrustRelationship};
-use avalon_protocol::ids::GameId;
+use avalon_protocol::ids::IntegratorId;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -26,13 +26,13 @@ fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
-struct RegisteredGame {
+struct RegisteredIntegrator {
     signing_key: SigningKey,
     slug: String,
     key_id: String,
 }
 
-async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
+async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIntegrator {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
@@ -48,14 +48,14 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     let registered: serde_json::Value = response.json().await.unwrap();
-    RegisteredGame {
+    RegisteredIntegrator {
         signing_key,
         slug,
         key_id: registered["credential"]["key_id"]
@@ -65,9 +65,13 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
     }
 }
 
-async fn auth_headers(http: &reqwest::Client, base: &str, game: &RegisteredGame) -> HeaderMap {
+async fn auth_headers(
+    http: &reqwest::Client,
+    base: &str,
+    integrator: &RegisteredIntegrator,
+) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{}/challenge", game.slug))
+        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -76,10 +80,13 @@ async fn auth_headers(http: &reqwest::Client, base: &str, game: &RegisteredGame)
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature = game.signing_key.sign(&nonce);
+    let signature = integrator.signing_key.sign(&nonce);
 
     let mut headers = HeaderMap::new();
-    headers.insert("x-avalon-integrator-key-id", game.key_id.parse().unwrap());
+    headers.insert(
+        "x-avalon-integrator-key-id",
+        integrator.key_id.parse().unwrap(),
+    );
     headers.insert(
         "x-avalon-integrator-challenge-id",
         challenge_id.parse().unwrap(),
@@ -137,11 +144,14 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
         .expect("failed to connect to Postgres — is it reachable?");
     let (identity_id, token) = seed_identity_session(&pool).await;
 
-    let game_c = register_game(&http, &base).await;
+    let integrator_c = register_integrator(&http, &base).await;
 
-    let headers = auth_headers(&http, &base, &game_c).await;
+    let headers = auth_headers(&http, &base, &integrator_c).await;
     let define = http
-        .post(format!("{base}/games/{}/achievements", game_c.slug))
+        .post(format!(
+            "{base}/integrators/{}/achievements",
+            integrator_c.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "dragon_slayer",
@@ -156,31 +166,31 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
         .unwrap()
         .to_string();
 
-    http.post(format!("{base}/games/{}/connect", game_c.slug))
+    http.post(format!("{base}/integrators/{}/connect", integrator_c.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
         .await
         .unwrap();
 
-    let issuer_ref = format!("game:{}", game_c.slug);
+    let issuer_ref = format!("game:{}", integrator_c.slug);
     let signing_bytes =
         attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
-    let signature = game_c.signing_key.sign(&signing_bytes);
+    let signature = integrator_c.signing_key.sign(&signing_bytes);
 
-    let mut headers = auth_headers(&http, &base, &game_c).await;
+    let mut headers = auth_headers(&http, &base, &integrator_c).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/dragon_slayer/issue",
-            game_c.slug
+            "{base}/integrators/{}/achievements/dragon_slayer/issue",
+            integrator_c.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game_c.key_id,
+            "key_id": integrator_c.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
         }))
         .send()
@@ -192,8 +202,8 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
         .unwrap()
         .to_string();
 
-    // Game B (a reader who never issued this and has no trust relationship
-    // with Game C) reads it back.
+    // Integrator B (a reader who never issued this and has no trust relationship
+    // with Integrator C) reads it back.
     let read = http
         .get(format!("{base}/attestations/{attestation_id}"))
         .send()
@@ -208,17 +218,17 @@ async fn scenario_d_an_authentic_valid_claim_from_an_untrusted_issuer_is_not_rec
     // answer.
     assert!(body.get("recognition").is_none());
 
-    // Game B's own policy (empty — it doesn't trust Game C at all)
+    // Integrator B's own policy (empty — it doesn't trust Integrator C at all)
     // evaluated purely client-side, no server round trip.
-    let game_b_policy = TrustRelationship {
-        truster: GameId(Uuid::new_v4()),
-        trusted_issuer: Issuer::Game(GameId(Uuid::new_v4())), // some other issuer entirely
+    let integrator_b_policy = TrustRelationship {
+        truster: IntegratorId(Uuid::new_v4()),
+        trusted_issuer: Issuer::Game(IntegratorId(Uuid::new_v4())), // some other issuer entirely
         established_at: OffsetDateTime::UNIX_EPOCH,
         scopes: vec![],
     };
-    let claimed_issuer = Issuer::Game(GameId(Uuid::new_v4())); // Game C's id, distinct from the policy's trusted_issuer
+    let claimed_issuer = Issuer::Game(IntegratorId(Uuid::new_v4())); // Integrator C's id, distinct from the policy's trusted_issuer
     let recognition = recognize(
-        &game_b_policy,
+        &integrator_b_policy,
         &claimed_issuer,
         "achievement",
         None,

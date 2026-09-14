@@ -1,4 +1,4 @@
-//! Exercises game registration and the challenge-response game-auth flow
+//! Exercises integrator registration and the challenge-response integrator-auth flow
 //! (issue #26) against a real, running `avalon-server` and Postgres. Gated
 //! `--ignored` since it needs live infra — see `make test-live` / `make
 //! start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no reachable
@@ -17,18 +17,18 @@ fn server_url() -> String {
 /// short random slug/name pair so concurrent test runs never collide on the
 /// unique `slug` constraint, mirroring `unique_guild_body()` in
 /// `crates/server/tests/guilds.rs`.
-struct UnregisteredGame {
+struct UnregisteredIntegrator {
     signing_key: SigningKey,
     body: serde_json::Value,
 }
 
-fn unique_game() -> UnregisteredGame {
+fn unique_integrator() -> UnregisteredIntegrator {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let body = serde_json::json!({
-        "slug": format!("test-game-{}", &suffix[..12]),
-        "name": format!("Test Game {}", &suffix[..8]),
+        "slug": format!("test-integrator-{}", &suffix[..12]),
+        "name": format!("Test Integrator {}", &suffix[..8]),
         "developer": "Test Studio",
         "requested_capabilities": ["presence.read", "friends.read"],
         "initial_key": {
@@ -36,35 +36,38 @@ fn unique_game() -> UnregisteredGame {
             "public_key": BASE64.encode(signing_key.verifying_key().as_bytes()),
         },
     });
-    UnregisteredGame { signing_key, body }
+    UnregisteredIntegrator { signing_key, body }
 }
 
 #[tokio::test]
 #[ignore]
-async fn registering_a_game_returns_the_game_and_its_credential() {
+async fn registering_a_integrator_returns_the_integrator_and_its_credential() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let response = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
 
     let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["slug"].as_str().unwrap(), game.body["slug"]);
-    assert_eq!(body["name"].as_str().unwrap(), game.body["name"]);
-    assert_eq!(body["developer"].as_str().unwrap(), game.body["developer"]);
+    assert_eq!(body["slug"].as_str().unwrap(), integrator.body["slug"]);
+    assert_eq!(body["name"].as_str().unwrap(), integrator.body["name"]);
+    assert_eq!(
+        body["developer"].as_str().unwrap(),
+        integrator.body["developer"]
+    );
     assert_eq!(body["status"].as_str().unwrap(), "active");
     // #282: omitted category defaults to "game".
     assert_eq!(body["category"].as_str().unwrap(), "game");
     assert_eq!(body["requested_capabilities"].as_array().unwrap().len(), 2);
     let credential = &body["credential"];
     assert_eq!(
-        credential["game_id"].as_str().unwrap(),
+        credential["integrator_id"].as_str().unwrap(),
         body["id"].as_str().unwrap()
     );
     assert!(!credential["key_id"].as_str().unwrap().is_empty());
@@ -72,25 +75,25 @@ async fn registering_a_game_returns_the_game_and_its_credential() {
 
 #[tokio::test]
 #[ignore]
-async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_game() {
+async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_integrator() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let mut game = unique_game();
-    game.body["category"] = serde_json::json!("app");
+    let mut integrator = unique_integrator();
+    integrator.body["category"] = serde_json::json!("app");
 
     let register = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(register.status().is_success(), "{:?}", register.status());
     let registered: serde_json::Value = register.json().await.unwrap();
     assert_eq!(registered["category"].as_str().unwrap(), "app");
 
-    let slug = game.body["slug"].as_str().unwrap();
+    let slug = integrator.body["slug"].as_str().unwrap();
     let get = http
-        .get(format!("{base}/games/{slug}"))
+        .get(format!("{base}/integrators/{slug}"))
         .send()
         .await
         .unwrap();
@@ -104,15 +107,15 @@ async fn registering_with_an_explicit_category_is_honored_and_returned_by_get_ga
 async fn registering_with_an_unrecognized_category_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let mut game = unique_game();
-    game.body["category"] = serde_json::json!("bogus");
+    let mut integrator = unique_integrator();
+    integrator.body["category"] = serde_json::json!("bogus");
 
     let response = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
 }
 
@@ -121,23 +124,23 @@ async fn registering_with_an_unrecognized_category_is_rejected() {
 async fn a_second_registration_with_the_same_slug_conflicts() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let first = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
     assert!(first.status().is_success());
 
     // Different developer/key, same slug — should still collide on slug
-    // alone, matching the invariant that a game cannot register with
-    // another game's slug.
-    let mut second_body = game.body.clone();
+    // alone, matching the invariant that an integrator cannot register with
+    // another integrator's slug.
+    let mut second_body = integrator.body.clone();
     second_body["developer"] = serde_json::json!("A Different Studio");
     let second = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&second_body)
         .send()
         .await
@@ -150,12 +153,12 @@ async fn a_second_registration_with_the_same_slug_conflicts() {
 async fn an_uppercase_slug_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let mut game = unique_game();
-    game.body["slug"] = serde_json::json!("Not-Lowercase");
+    let mut integrator = unique_integrator();
+    integrator.body["slug"] = serde_json::json!("Not-Lowercase");
 
     let response = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -167,11 +170,11 @@ async fn an_uppercase_slug_is_rejected() {
 async fn the_challenge_response_auth_flow_round_trips() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -181,7 +184,7 @@ async fn the_challenge_response_auth_flow_round_trips() {
     let key_id = registered["credential"]["key_id"].as_str().unwrap();
 
     let challenge = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .unwrap();
@@ -190,14 +193,14 @@ async fn the_challenge_response_auth_flow_round_trips() {
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
 
-    let signature = game.signing_key.sign(&nonce);
+    let signature = integrator.signing_key.sign(&nonce);
 
     let whoami = http
-        .get(format!("{base}/games/whoami"))
-        .header("x-avalon-game-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
+        .get(format!("{base}/integrators/whoami"))
+        .header("x-avalon-integrator-key-id", key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(
-            "x-avalon-game-signature",
+            "x-avalon-integrator-signature",
             BASE64.encode(signature.to_bytes()),
         )
         .send()
@@ -206,7 +209,7 @@ async fn the_challenge_response_auth_flow_round_trips() {
     assert!(whoami.status().is_success(), "{:?}", whoami.status());
     let whoami: serde_json::Value = whoami.json().await.unwrap();
     assert_eq!(
-        whoami["game_id"].as_str().unwrap(),
+        whoami["integrator_id"].as_str().unwrap(),
         registered["id"].as_str().unwrap()
     );
 }
@@ -216,11 +219,11 @@ async fn the_challenge_response_auth_flow_round_trips() {
 async fn a_challenge_cannot_be_replayed() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -229,7 +232,7 @@ async fn a_challenge_cannot_be_replayed() {
     let key_id = registered["credential"]["key_id"].as_str().unwrap();
 
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -238,13 +241,13 @@ async fn a_challenge_cannot_be_replayed() {
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature_b64 = BASE64.encode(game.signing_key.sign(&nonce).to_bytes());
+    let signature_b64 = BASE64.encode(integrator.signing_key.sign(&nonce).to_bytes());
 
     let first = http
-        .get(format!("{base}/games/whoami"))
-        .header("x-avalon-game-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
-        .header("x-avalon-game-signature", &signature_b64)
+        .get(format!("{base}/integrators/whoami"))
+        .header("x-avalon-integrator-key-id", key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
+        .header("x-avalon-integrator-signature", &signature_b64)
         .send()
         .await
         .unwrap();
@@ -253,10 +256,10 @@ async fn a_challenge_cannot_be_replayed() {
     // The same (challenge_id, signature) pair a second time — the
     // challenge row was already consumed by the first request.
     let second = http
-        .get(format!("{base}/games/whoami"))
-        .header("x-avalon-game-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
-        .header("x-avalon-game-signature", &signature_b64)
+        .get(format!("{base}/integrators/whoami"))
+        .header("x-avalon-integrator-key-id", key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
+        .header("x-avalon-integrator-signature", &signature_b64)
         .send()
         .await
         .unwrap();
@@ -268,11 +271,11 @@ async fn a_challenge_cannot_be_replayed() {
 async fn a_signature_from_the_wrong_key_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -281,7 +284,7 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     let key_id = registered["credential"]["key_id"].as_str().unwrap();
 
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -291,45 +294,45 @@ async fn a_signature_from_the_wrong_key_is_rejected() {
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
 
-    // Signed with a key the game never registered.
+    // Signed with a key the integrator never registered.
     let mut csprng = rand::rng();
     let wrong_key = SigningKey::generate(&mut csprng);
     let signature_b64 = BASE64.encode(wrong_key.sign(&nonce).to_bytes());
 
     let response = http
-        .get(format!("{base}/games/whoami"))
-        .header("x-avalon-game-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
-        .header("x-avalon-game-signature", &signature_b64)
+        .get(format!("{base}/integrators/whoami"))
+        .header("x-avalon-integrator-key-id", key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
+        .header("x-avalon-integrator-signature", &signature_b64)
         .send()
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
-// --- Issue #270: GET /games list + directory read path -------------------
+// --- Issue #270: GET /integrators list + directory read path -------------------
 
 #[tokio::test]
 #[ignore]
-async fn listing_games_finds_a_freshly_registered_game_by_name_search() {
+async fn listing_integrators_finds_a_freshly_registered_integrator_by_name_search() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(register.status().is_success());
     let registered: serde_json::Value = register.json().await.unwrap();
     let slug = registered["slug"].as_str().unwrap();
     let name = registered["name"].as_str().unwrap();
 
-    // No auth header at all — GET /games is public and unauthenticated.
+    // No auth header at all — GET /integrators is public and unauthenticated.
     let response = http
-        .get(format!("{base}/games"))
+        .get(format!("{base}/integrators"))
         .query(&[("q", name), ("sort", "name")])
         .send()
         .await
@@ -337,9 +340,9 @@ async fn listing_games_finds_a_freshly_registered_game_by_name_search() {
     assert!(response.status().is_success());
 
     let body: serde_json::Value = response.json().await.unwrap();
-    let games = body["games"].as_array().unwrap();
-    assert!(games.iter().any(|g| g["slug"].as_str() == Some(slug)));
-    let found = games
+    let integrators = body["integrators"].as_array().unwrap();
+    assert!(integrators.iter().any(|g| g["slug"].as_str() == Some(slug)));
+    let found = integrators
         .iter()
         .find(|g| g["slug"].as_str() == Some(slug))
         .unwrap();
@@ -353,21 +356,21 @@ async fn listing_games_finds_a_freshly_registered_game_by_name_search() {
 
 #[tokio::test]
 #[ignore]
-async fn listing_games_paginates_with_cursor_and_next_cursor() {
+async fn listing_integrators_paginates_with_cursor_and_next_cursor() {
     let http = reqwest::Client::new();
     let base = server_url();
 
     for _ in 0..3 {
-        let game = unique_game();
-        http.post(format!("{base}/games"))
-            .json(&game.body)
+        let integrator = unique_integrator();
+        http.post(format!("{base}/integrators"))
+            .json(&integrator.body)
             .send()
             .await
             .unwrap();
     }
 
     let first_page: serde_json::Value = http
-        .get(format!("{base}/games"))
+        .get(format!("{base}/integrators"))
         .query(&[("sort", "newest"), ("limit", "1")])
         .send()
         .await
@@ -375,16 +378,16 @@ async fn listing_games_paginates_with_cursor_and_next_cursor() {
         .json()
         .await
         .unwrap();
-    let first_games = first_page["games"].as_array().unwrap();
-    assert_eq!(first_games.len(), 1);
+    let first_integrators = first_page["integrators"].as_array().unwrap();
+    assert_eq!(first_integrators.len(), 1);
     let next_cursor = first_page["next_cursor"].as_str();
     assert!(
         next_cursor.is_some(),
-        "expected a next_cursor with 3+ games registered"
+        "expected a next_cursor with 3+ integrators registered"
     );
 
     let second_page: serde_json::Value = http
-        .get(format!("{base}/games"))
+        .get(format!("{base}/integrators"))
         .query(&[
             ("sort", "newest"),
             ("limit", "1"),
@@ -396,53 +399,56 @@ async fn listing_games_paginates_with_cursor_and_next_cursor() {
         .json()
         .await
         .unwrap();
-    let second_games = second_page["games"].as_array().unwrap();
-    assert_eq!(second_games.len(), 1);
-    // The second page's game must differ from the first's — the cursor
+    let second_integrators = second_page["integrators"].as_array().unwrap();
+    assert_eq!(second_integrators.len(), 1);
+    // The second page's integrator must differ from the first's — the cursor
     // actually advanced rather than re-returning the same row.
-    assert_ne!(first_games[0]["id"], second_games[0]["id"]);
+    assert_ne!(first_integrators[0]["id"], second_integrators[0]["id"]);
 }
 
-// --- Issue #293: `/integrations` as the canonical path, `/games` as a ----
+// --- Issue #293: `/integrations` as the canonical path, `/integrators` as a ----
 // --- compatibility redirect/dual-route, either auth header name works. --
 //
-// The tests above all still hit `/games` unmodified, proving old-path
+// The tests above all still hit `/integrators` unmodified, proving old-path
 // backward compat. These hit `/integrations` directly.
 
 #[tokio::test]
 #[ignore]
-async fn registering_via_integrations_returns_the_game_and_its_credential() {
+async fn registering_via_integrations_returns_the_integrator_and_its_credential() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let response = http
         .post(format!("{base}/integrations"))
-        .json(&game.body)
+        .json(&integrator.body)
         .send()
         .await
         .expect("register integration failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
 
     let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["slug"].as_str().unwrap(), game.body["slug"]);
-    assert_eq!(body["name"].as_str().unwrap(), game.body["name"]);
-    assert_eq!(body["developer"].as_str().unwrap(), game.body["developer"]);
+    assert_eq!(body["slug"].as_str().unwrap(), integrator.body["slug"]);
+    assert_eq!(body["name"].as_str().unwrap(), integrator.body["name"]);
+    assert_eq!(
+        body["developer"].as_str().unwrap(),
+        integrator.body["developer"]
+    );
 }
 
 #[tokio::test]
 #[ignore]
-async fn get_games_slug_redirects_to_integrations_slug() {
+async fn get_integrators_slug_redirects_to_integrations_slug() {
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
-        .post(format!("{base}/games"))
-        .json(&game.body)
+        .post(format!("{base}/integrators"))
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -450,7 +456,7 @@ async fn get_games_slug_redirects_to_integrations_slug() {
     let slug = registered["slug"].as_str().unwrap();
 
     let response = http
-        .get(format!("{base}/games/{slug}"))
+        .get(format!("{base}/integrators/{slug}"))
         .send()
         .await
         .unwrap();
@@ -470,7 +476,7 @@ async fn get_games_slug_redirects_to_integrations_slug() {
 
 #[tokio::test]
 #[ignore]
-async fn get_games_redirects_to_integrations_preserving_query_string() {
+async fn get_integrators_redirects_to_integrations_preserving_query_string() {
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -478,7 +484,7 @@ async fn get_games_redirects_to_integrations_preserving_query_string() {
     let base = server_url();
 
     let response = http
-        .get(format!("{base}/games"))
+        .get(format!("{base}/integrators"))
         .query(&[("q", "ashen"), ("sort", "name")])
         .send()
         .await
@@ -504,11 +510,11 @@ async fn get_games_redirects_to_integrations_preserving_query_string() {
 async fn get_integrations_slug_serves_directly_without_redirecting() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
         .post(format!("{base}/integrations"))
-        .json(&game.body)
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -530,11 +536,11 @@ async fn get_integrations_slug_serves_directly_without_redirecting() {
 async fn either_auth_header_name_works_for_the_challenge_response_flow() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = unique_game();
+    let integrator = unique_integrator();
 
     let register = http
         .post(format!("{base}/integrations"))
-        .json(&game.body)
+        .json(&integrator.body)
         .send()
         .await
         .unwrap();
@@ -544,7 +550,7 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
 
     // New `x-avalon-integrator-*` header names, same challenge-response flow.
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -553,10 +559,10 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature_b64 = BASE64.encode(game.signing_key.sign(&nonce).to_bytes());
+    let signature_b64 = BASE64.encode(integrator.signing_key.sign(&nonce).to_bytes());
 
     let whoami = http
-        .get(format!("{base}/games/whoami"))
+        .get(format!("{base}/integrators/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)
@@ -566,14 +572,14 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
     assert!(whoami.status().is_success(), "{:?}", whoami.status());
     let whoami: serde_json::Value = whoami.json().await.unwrap();
     assert_eq!(
-        whoami["game_id"].as_str().unwrap(),
+        whoami["integrator_id"].as_str().unwrap(),
         registered["id"].as_str().unwrap()
     );
 
     // Mixed old/new header names on a second round trip — either name is
     // accepted independently of the others.
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -582,12 +588,12 @@ async fn either_auth_header_name_works_for_the_challenge_response_flow() {
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature_b64 = BASE64.encode(game.signing_key.sign(&nonce).to_bytes());
+    let signature_b64 = BASE64.encode(integrator.signing_key.sign(&nonce).to_bytes());
 
     let mixed = http
-        .get(format!("{base}/games/whoami"))
+        .get(format!("{base}/integrators/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
         .header("x-avalon-integrator-signature", &signature_b64)
         .send()
         .await

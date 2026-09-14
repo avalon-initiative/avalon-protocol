@@ -1,35 +1,35 @@
-//! Game bindings and capability grants — the user consent flow (issue
-//! #27) that establishes a `GameBinding` (issue #83).
+//! Integrator bindings and capability grants — the user consent flow (issue
+//! #27) that establishes a `IntegratorBinding` (issue #83).
 //!
-//! `POST /games/{slug}/connect` is the one endpoint both tickets describe
+//! `POST /integrators/{slug}/connect` is the one endpoint both tickets describe
 //! from two angles: #83 says "a binding is established by the user
 //! through the consent flow (#27)"; #27 says its own connect endpoint is
-//! "also where a GameBinding (#83) is established." Building them as
+//! "also where a IntegratorBinding (#83) is established." Building them as
 //! separate endpoints would mean two code paths fighting over the same
 //! row, so this module owns both.
 //!
 //! **Every mutating endpoint here requires the caller's own user
-//! session** (`crate::handlers::authenticate`), never a game credential —
+//! session** (`crate::handlers::authenticate`), never an integrator credential —
 //! same reasoning `crates/server/src/guilds.rs`'s module doc comment lays
 //! out for guild mutations: a grant is a user action, and no endpoint
-//! lets a game grant itself anything. `GET /games/{slug}` (in `games.rs`)
+//! lets an integrator grant itself anything. `GET /integrators/{slug}` (in `integrators.rs`)
 //! is the one public, unauthenticated read this module depends on, to
-//! validate an approved capability against what the game actually declared
-//! at registration (`game_requested_capabilities`).
+//! validate an approved capability against what the integrator actually declared
+//! at registration (`integrator_requested_capabilities`).
 //!
 //! `bindings` and `permission_grants` are projections, same posture as
 //! every other table in this repo: `game.binding_established`,
 //! `game.binding_ended`, `permission.granted`, and `permission.revoked` are
 //! the durable history, written into the outbox in the same transaction as
 //! the row change they accompany. All four are network-attributed for now,
-//! not user-signed, for the same reason `games.rs`'s `game.registered`
-//! is network-attributed rather than game-signed: no general per-event
+//! not user-signed, for the same reason `integrators.rs`'s `game.registered`
+//! is network-attributed rather than integrator-signed: no general per-event
 //! Ed25519 signing ceremony exists yet beyond `identity.created`
 //! (`crates/server/src/handlers.rs`'s "network as signer" milestone-1
 //! stand-in). `issuer`/`subject` for the binding events are the acting
-//! identity and the game, mirroring the event-kind catalogue
+//! identity and the integrator, mirroring the event-kind catalogue
 //! (`docs/architecture/protocol-events.md`); for the grant events, the
-//! acting identity and the game+capability pair.
+//! acting identity and the integrator+capability pair.
 //!
 //! **Invariants enforced here:**
 //! - No grant exists without a binding — every `permission_grants` row
@@ -37,10 +37,10 @@
 //!   the same transaction that guarantees an active binding exists.
 //! - Ending a binding ends every grant under it, in the same transaction
 //!   (`end_connection`).
-//! - A user can only grant a capability the game declared at registration
-//!   (`game_requested_capabilities`) — anything else is a 400
+//! - A user can only grant a capability the integrator declared at registration
+//!   (`integrator_requested_capabilities`) — anything else is a 400
 //!   (`AppError::CapabilityNotRequested`).
-//! - Reconnecting to an already-bound game does not duplicate the binding
+//! - Reconnecting to an already-bound integrator does not duplicate the binding
 //!   or emit a second `game.binding_established` — `connect` only creates a
 //!   binding row (and only emits the event) when no active binding already
 //!   exists.
@@ -57,8 +57,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::games::{fetch_game_id_by_slug, game_ref};
 use crate::handlers::authenticate;
+use crate::integrators::{fetch_integrator_id_by_slug, integrator_ref};
 use crate::outbox;
 use crate::state::AppState;
 
@@ -66,37 +66,39 @@ fn identity_ref(identity_id: Uuid, verb: &str) -> avalon_protocol::ids::GlobalId
     avalon_protocol::ids::GlobalId::new("identity", &identity_id.to_string(), "self", verb)
 }
 
-/// The set of capabilities `game_id` declared at registration — what
+/// The set of capabilities `integrator_id` declared at registration — what
 /// `connect` and the undeclared-capability check validate approvals
 /// against.
 async fn requested_capabilities(
     tx: &mut Transaction<'_, Postgres>,
-    game_id: Uuid,
+    integrator_id: Uuid,
 ) -> Result<HashSet<String>, AppError> {
-    let rows = sqlx::query("SELECT capability FROM game_requested_capabilities WHERE game_id = $1")
-        .bind(game_id)
-        .fetch_all(&mut **tx)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT capability FROM integrator_requested_capabilities WHERE integrator_id = $1",
+    )
+    .bind(integrator_id)
+    .fetch_all(&mut **tx)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|r| r.try_get::<String, _>("capability"))
         .collect::<Result<HashSet<_>, _>>()?)
 }
 
-/// The active binding row (if any) for `(identity_id, game_id)`, locked
+/// The active binding row (if any) for `(identity_id, integrator_id)`, locked
 /// `FOR UPDATE` so a concurrent connect/disconnect can't race past this
 /// check within the same transaction.
 async fn active_binding(
     tx: &mut Transaction<'_, Postgres>,
     identity_id: Uuid,
-    game_id: Uuid,
+    integrator_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
     let row = sqlx::query(
-        "SELECT id FROM bindings WHERE identity_id = $1 AND game_id = $2 AND ended_at IS NULL \
+        "SELECT id FROM bindings WHERE identity_id = $1 AND integrator_id = $2 AND ended_at IS NULL \
          FOR UPDATE",
     )
     .bind(identity_id)
-    .bind(game_id)
+    .bind(integrator_id)
     .fetch_optional(&mut **tx)
     .await?;
     Ok(row.map(|r| r.try_get("id")).transpose()?)
@@ -111,15 +113,15 @@ pub struct ConnectRequest {
 #[derive(Serialize)]
 pub struct ConnectResponse {
     pub binding_id: Uuid,
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
     pub established_at: OffsetDateTime,
     pub granted_capabilities: Vec<String>,
 }
 
-/// `POST /games/{slug}/connect` — the consent flow (#27) and the endpoint
-/// that establishes a `GameBinding` (#83). Idempotent: reconnecting to a
-/// game the caller already has an active binding to does not create a
+/// `POST /integrators/{slug}/connect` — the consent flow (#27) and the endpoint
+/// that establishes a `IntegratorBinding` (#83). Idempotent: reconnecting to a
+/// integrator the caller already has an active binding to does not create a
 /// second binding or emit a second `game.binding_established`, but it does
 /// still grant any newly-approved capabilities.
 pub async fn connect(
@@ -129,11 +131,11 @@ pub async fn connect(
     Json(body): Json<ConnectRequest>,
 ) -> Result<Json<ConnectResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
-    let game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let integrator_id = fetch_integrator_id_by_slug(&state, &slug).await?;
 
     let mut tx = state.pool.begin().await?;
 
-    let declared = requested_capabilities(&mut tx, game_id).await?;
+    let declared = requested_capabilities(&mut tx, integrator_id).await?;
     for capability in &body.capabilities {
         if !declared.contains(capability) {
             return Err(AppError::CapabilityNotRequested);
@@ -148,7 +150,7 @@ pub async fn connect(
     let now = now
         .replace_nanosecond((now.nanosecond() / 1_000) * 1_000)
         .expect("truncating toward zero always stays in the valid nanosecond range");
-    let existing_binding = active_binding(&mut tx, identity_id, game_id).await?;
+    let existing_binding = active_binding(&mut tx, identity_id, integrator_id).await?;
 
     let (binding_id, established_at, newly_created) = if let Some(binding_id) = existing_binding {
         let row = sqlx::query("SELECT established_at FROM bindings WHERE id = $1")
@@ -159,12 +161,12 @@ pub async fn connect(
     } else {
         let binding_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO bindings (id, identity_id, game_id, established_at) \
+            "INSERT INTO bindings (id, identity_id, integrator_id, established_at) \
              VALUES ($1, $2, $3, $4)",
         )
         .bind(binding_id)
         .bind(identity_id)
-        .bind(game_id)
+        .bind(integrator_id)
         .bind(now)
         .execute(&mut *tx)
         .await?;
@@ -176,19 +178,19 @@ pub async fn connect(
             id: Uuid::new_v4(),
             kind: "game.binding_established".to_string(),
             issuer: identity_ref(identity_id, "binding_established"),
-            subject: game_ref(&slug, "binding_established"),
+            subject: integrator_ref(&slug, "binding_established"),
             payload: serde_json::json!({
                 "binding_id": binding_id,
                 "identity_id": identity_id,
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "slug": slug,
             }),
             timestamp: now,
             version: 1,
         };
-        // outbox::enqueue alone only drives ledger settlement — the Game
+        // outbox::enqueue alone only drives ledger settlement — the Integrator
         // Registry's players/total_players_ever metrics (crate::registry,
-        // backed by indexer_game_bindings) need the projection applied too,
+        // backed by indexer_integrator_bindings) need the projection applied too,
         // same as register_finish/update_profile do for their own events.
         state.indexer.apply_in_tx(&mut tx, &event).await?;
         outbox::enqueue(&mut tx, &event).await?;
@@ -243,11 +245,11 @@ pub async fn connect(
             id: Uuid::new_v4(),
             kind: "permission.granted".to_string(),
             issuer: identity_ref(identity_id, "granted"),
-            subject: game_ref(&slug, capability),
+            subject: integrator_ref(&slug, capability),
             payload: serde_json::json!({
                 "binding_id": binding_id,
                 "identity_id": identity_id,
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "capability": capability,
             }),
             timestamp: now,
@@ -261,13 +263,13 @@ pub async fn connect(
 
     Ok(Json(ConnectResponse {
         binding_id,
-        game_id,
+        integrator_id,
         established_at,
         granted_capabilities,
     }))
 }
 
-/// `DELETE /games/{slug}/grants/{capability}` — revokes one capability
+/// `DELETE /integrators/{slug}/grants/{capability}` — revokes one capability
 /// without ending the binding.
 pub async fn revoke_grant(
     State(state): State<AppState>,
@@ -275,10 +277,10 @@ pub async fn revoke_grant(
     Path((slug, capability)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
-    let game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let integrator_id = fetch_integrator_id_by_slug(&state, &slug).await?;
 
     let mut tx = state.pool.begin().await?;
-    let binding_id = active_binding(&mut tx, identity_id, game_id)
+    let binding_id = active_binding(&mut tx, identity_id, integrator_id)
         .await?
         .ok_or(AppError::BindingNotFound)?;
 
@@ -300,11 +302,11 @@ pub async fn revoke_grant(
         id: Uuid::new_v4(),
         kind: "permission.revoked".to_string(),
         issuer: identity_ref(identity_id, "revoked"),
-        subject: game_ref(&slug, &capability),
+        subject: integrator_ref(&slug, &capability),
         payload: serde_json::json!({
             "binding_id": binding_id,
             "identity_id": identity_id,
-            "game_id": game_id,
+            "game_id": integrator_id,
             "capability": capability,
         }),
         timestamp: now,
@@ -317,7 +319,7 @@ pub async fn revoke_grant(
     Ok(Json(serde_json::json!({ "revoked": true })))
 }
 
-/// `DELETE /games/{slug}/connect` — ends the binding and revokes every
+/// `DELETE /integrators/{slug}/connect` — ends the binding and revokes every
 /// active grant under it, in the same transaction (#83's invariant).
 pub async fn disconnect(
     State(state): State<AppState>,
@@ -325,10 +327,10 @@ pub async fn disconnect(
     Path(slug): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
-    let game_id = fetch_game_id_by_slug(&state, &slug).await?;
+    let integrator_id = fetch_integrator_id_by_slug(&state, &slug).await?;
 
     let mut tx = state.pool.begin().await?;
-    let binding_id = active_binding(&mut tx, identity_id, game_id)
+    let binding_id = active_binding(&mut tx, identity_id, integrator_id)
         .await?
         .ok_or(AppError::BindingNotFound)?;
 
@@ -358,11 +360,11 @@ pub async fn disconnect(
             id: Uuid::new_v4(),
             kind: "permission.revoked".to_string(),
             issuer: identity_ref(identity_id, "revoked"),
-            subject: game_ref(&slug, capability),
+            subject: integrator_ref(&slug, capability),
             payload: serde_json::json!({
                 "binding_id": binding_id,
                 "identity_id": identity_id,
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "capability": capability,
                 "reason": "binding_ended",
             }),
@@ -376,11 +378,11 @@ pub async fn disconnect(
         id: Uuid::new_v4(),
         kind: "game.binding_ended".to_string(),
         issuer: identity_ref(identity_id, "binding_ended"),
-        subject: game_ref(&slug, "binding_ended"),
+        subject: integrator_ref(&slug, "binding_ended"),
         payload: serde_json::json!({
             "binding_id": binding_id,
             "identity_id": identity_id,
-            "game_id": game_id,
+            "game_id": integrator_id,
             "slug": slug,
         }),
         timestamp: now,
@@ -404,7 +406,7 @@ pub struct ConnectionGrant {
 #[derive(Serialize)]
 pub struct Connection {
     pub binding_id: Uuid,
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub slug: String,
     pub name: String,
     #[serde(with = "time::serde::rfc3339")]
@@ -423,8 +425,8 @@ pub async fn list_my_connections(
     let identity_id = authenticate(&state, &headers).await?;
 
     let binding_rows = sqlx::query(
-        "SELECT b.id AS binding_id, b.game_id, b.established_at, g.slug, g.name \
-         FROM bindings b JOIN games g ON g.id = b.game_id \
+        "SELECT b.id AS binding_id, b.integrator_id, b.established_at, g.slug, g.name \
+         FROM bindings b JOIN integrators g ON g.id = b.integrator_id \
          WHERE b.identity_id = $1 AND b.ended_at IS NULL \
          ORDER BY b.established_at",
     )
@@ -454,7 +456,7 @@ pub async fn list_my_connections(
 
         connections.push(Connection {
             binding_id,
-            game_id: row.try_get("game_id")?,
+            integrator_id: row.try_get("integrator_id")?,
             slug: row.try_get("slug")?,
             name: row.try_get("name")?,
             established_at: row.try_get("established_at")?,
@@ -465,37 +467,34 @@ pub async fn list_my_connections(
     Ok(Json(connections))
 }
 
-/// `x-avalon-game-key-id` is the original name; `x-avalon-integrator-key-id`
-/// is the generalized name every non-game integrator (and the SDK, #34)
-/// actually sends (#293) — same two-name posture `games.rs`'s
-/// `header_value` uses for its own auth headers. Found via a live #34 SDK
-/// test that failed with `CapabilityNotGranted` despite a real grant
-/// existing: this handler only ever read the old name, so `AvalonClient`'s
-/// `x-avalon-integrator-key-id` (the only one it has ever sent, per its own
-/// doc comment) was silently ignored, not merely deprioritized.
-const GAME_KEY_ID_HEADER: &str = "x-avalon-game-key-id";
+/// The single accepted spelling since #290 collapsed the transitional
+/// `x-avalon-game-key-id`/`x-avalon-integrator-key-id` pair that #293 had
+/// introduced. Worth keeping in mind when touching this: a live #34 SDK test
+/// once failed with `CapabilityNotGranted` despite a real grant existing,
+/// because this handler read only one of the two names and silently ignored
+/// the one `AvalonClient` actually sends.
 const INTEGRATOR_KEY_ID_HEADER: &str = "x-avalon-integrator-key-id";
 
 #[derive(Serialize)]
 pub struct MyGrantsResponse {
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub capabilities: Vec<String>,
 }
 
-/// `GET /me/grants` — the calling game's own active grants for the
+/// `GET /me/grants` — the calling integrator's own active grants for the
 /// authenticating user, read by `crates/sdk/src/lib.rs`'s
 /// `AvalonClient::authenticate()` to populate `Session.granted`.
 ///
 /// Authenticated by the caller's own user session
 /// (`Authorization: Bearer <user token>`), same as every other endpoint
-/// in this module — **not** the game challenge-response scheme
-/// (`games::authenticate_game`). The `x-avalon-game-key-id` header only
-/// says *which* game's grants to read; it is not itself a security
+/// in this module — **not** the integrator challenge-response scheme
+/// (`integrators::authenticate_integrator`). The `x-avalon-integrator-key-id` header only
+/// says *which* integrator's grants to read; it is not itself a security
 /// boundary here, since the answer ("what has this user granted this
-/// game") is the user's own information to ask about their own
-/// connections, not something that needs a game to prove key possession —
-/// the SDK already knows its own `game_credential_key_id`
-/// (`AvalonConfig`) and just needs a way to tell the server which game it
+/// integrator") is the user's own information to ask about their own
+/// connections, not something that needs an integrator to prove key possession —
+/// the SDK already knows its own `integrator_credential_key_id`
+/// (`AvalonConfig`) and just needs a way to tell the server which integrator it
 /// is asking on behalf of.
 pub async fn my_grants(
     State(state): State<AppState>,
@@ -504,26 +503,26 @@ pub async fn my_grants(
     let identity_id = authenticate(&state, &headers).await?;
     let key_id: Uuid = headers
         .get(INTEGRATOR_KEY_ID_HEADER)
-        .or_else(|| headers.get(GAME_KEY_ID_HEADER))
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
-        .ok_or(AppError::GameKeyNotFound)?;
+        .ok_or(AppError::IntegratorKeyNotFound)?;
 
-    let game_id: Uuid = sqlx::query("SELECT game_id FROM issuer_keys WHERE key_id = $1")
-        .bind(key_id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::GameKeyNotFound)?
-        .try_get("game_id")?;
+    let integrator_id: Uuid =
+        sqlx::query("SELECT integrator_id FROM issuer_keys WHERE key_id = $1")
+            .bind(key_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::IntegratorKeyNotFound)?
+            .try_get("integrator_id")?;
 
     let rows = sqlx::query(
         "SELECT pg.capability FROM permission_grants pg \
          JOIN bindings b ON b.id = pg.binding_id \
-         WHERE b.identity_id = $1 AND b.game_id = $2 \
+         WHERE b.identity_id = $1 AND b.integrator_id = $2 \
          AND b.ended_at IS NULL AND pg.revoked_at IS NULL",
     )
     .bind(identity_id)
-    .bind(game_id)
+    .bind(integrator_id)
     .fetch_all(&state.pool)
     .await?;
     let capabilities = rows
@@ -532,7 +531,7 @@ pub async fn my_grants(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Json(MyGrantsResponse {
-        game_id,
+        integrator_id,
         capabilities,
     }))
 }
@@ -547,7 +546,7 @@ mod tests {
     use std::collections::HashSet;
 
     /// Mirrors the rejection `connect` performs: any approved capability
-    /// not present in what the game declared is rejected outright, not
+    /// not present in what the integrator declared is rejected outright, not
     /// silently dropped.
     #[test]
     fn granting_an_undeclared_capability_is_rejected() {
@@ -555,7 +554,10 @@ mod tests {
         let approved = ["friends.read".to_string(), "wallet.write".to_string()];
 
         let rejected = approved.iter().any(|c| !declared.contains(c));
-        assert!(rejected, "wallet.write was never declared by the game");
+        assert!(
+            rejected,
+            "wallet.write was never declared by the integrator"
+        );
     }
 
     #[test]

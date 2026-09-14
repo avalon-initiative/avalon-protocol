@@ -10,7 +10,7 @@
 //! **All four endpoints are public, unauthenticated reads.** A
 //! transparency log's whole point is independent verifiability by anyone
 //! holding only the operator's public key (`AVALON_SETTLEMENT_VERIFY_KEY`)
-//! — gating these behind a session or game credential would defeat that.
+//! — gating these behind a session or integrator credential would defeat that.
 //! Nothing here exposes entry *content*: responses carry `tree_size`,
 //! hex-encoded hashes, and signatures, the same shape `avalon
 //! inspect-ledger` already prints and no more sensitive than the
@@ -364,7 +364,7 @@ pub async fn list_entries(
 /// **Auth: a shared-secret bearer token (`AVALON_SETTLEMENT_SUBMIT_KEY`).**
 /// Nothing more specific for trusted node-to-node calls already existed in
 /// this codebase to reuse (every other authenticated route here checks a
-/// user's own session or a game's own registered credential, neither of
+/// user's own session or an integrator's own registered credential, neither of
 /// which fits "one operator's own two nodes talking to each other"), and
 /// the ticket left the exact mechanism open with this as its suggested
 /// default. If this node has no `AVALON_SETTLEMENT_SUBMIT_KEY` configured

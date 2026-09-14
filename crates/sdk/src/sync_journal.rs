@@ -17,7 +17,7 @@
 //! - It adds zero new dependencies — `uuid`, `time`, and `serde_json` are
 //!   already workspace dependencies this crate uses elsewhere. `rusqlite`
 //!   (or a bundled `libsqlite3-sys`) pulls in a C dependency and a
-//!   compiler-toolchain requirement onto every game that links this crate,
+//!   compiler-toolchain requirement onto every integrator that links this crate,
 //!   which is a heavy ask for what's fundamentally a small local log.
 //! - Crash safety only needs one property: an `fsync`'d append either fully
 //!   landed or didn't. A flat file gets that directly (`write_all` the

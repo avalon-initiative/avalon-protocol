@@ -80,7 +80,7 @@ pub struct GuildMembership {
     pub joined_at: OffsetDateTime,
 }
 
-/// A roster entry, from this game's point of view.
+/// A roster entry, from this integrator's point of view.
 ///
 /// See the module doc comment for why this exists instead of `roster()`
 /// returning `Vec<GuildMember>` directly.
@@ -574,7 +574,7 @@ mod tests {
             server_url: "http://127.0.0.1:1".to_string(),
             token: "test-token".to_string(),
             integrator_key_id: "test-key".to_string(),
-            game_slug: None,
+            integrator_slug: None,
             signing_key: None,
         }
     }
@@ -595,7 +595,7 @@ mod tests {
         Presence {
             identity_id,
             status: PresenceStatus::Online,
-            playing: None,
+            active_in: None,
             updated_at: OffsetDateTime::now_utc(),
         }
     }

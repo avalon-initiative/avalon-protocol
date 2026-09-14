@@ -1,9 +1,9 @@
-//! Real protobuf parsing/validation for Game Space schemas and instance
+//! Real protobuf parsing/validation for Integrator Space schemas and instance
 //! data (issue #384's amendment — replacing the original ticket's "store
 //! `proto_source` opaquely, never parse it" stance). Two call sites use
-//! this module: [`game_schemas::publish_schema_version`] (parse + resolve
+//! this module: [`integrator_schemas::publish_schema_version`] (parse + resolve
 //! the schema's root message, validate `field_visibility`'s keys against
-//! it) and [`game_data::publish_instance`] (validate a submitted JSON
+//! it) and [`integrator_data::publish_instance`] (validate a submitted JSON
 //! instance against that root message).
 //!
 //! **Toolchain**: `protobuf-parse` (raw `.proto` text -> `FileDescriptorProto`,
@@ -54,7 +54,7 @@ const VIRTUAL_FILE_NAME: &str = "schema.proto";
 
 /// In-process cache of already-parsed root messages, keyed by schema id
 /// (`game:<slug>:schema:<version>`). Schema versions are immutable once
-/// published (`game_schemas`'s own invariant), so a cache entry never
+/// published (`integrator_schemas`'s own invariant), so a cache entry never
 /// goes stale — there is no invalidation to get wrong, only population.
 /// At integrator scale, re-running the pure-Rust `.proto` parser (a real,
 /// non-trivial CPU cost: a temp file write + full lex/parse/typecheck)
@@ -80,9 +80,9 @@ fn lock_cache() -> std::sync::MutexGuard<'static, HashMap<String, MessageDescrip
 }
 
 /// [`parse_root_message`], but checks/populates [`ROOT_MESSAGE_CACHE`]
-/// first — the entry point [`crate::game_data::publish_instance`] uses
+/// first — the entry point [`crate::integrator_data::publish_instance`] uses
 /// (validating an instance re-parses nothing once the schema's first
-/// instance write has warmed the cache). `game_schemas::publish_schema_version`
+/// instance write has warmed the cache). `integrator_schemas::publish_schema_version`
 /// calls [`cache_root_message`] directly at publish time instead, so the
 /// very first instance write against a brand-new schema is already a
 /// cache hit too.
@@ -100,7 +100,7 @@ pub fn parse_root_message_cached(
 
 /// Populates the cache for `schema_id` with an already-parsed root
 /// message — called right after a successful publish
-/// (`game_schemas::publish_schema_version`), so parsing happens exactly
+/// (`integrator_schemas::publish_schema_version`), so parsing happens exactly
 /// once per publication even under concurrent instance-data writes
 /// racing to be the first cache populator.
 pub fn cache_root_message(schema_id: &str, root: MessageDescriptor) {

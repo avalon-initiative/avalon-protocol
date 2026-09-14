@@ -11,7 +11,7 @@
 //! fully generic before this generalization — nothing in it says
 //! "achievement"). What varies by the issuer's own registered category
 //! (`IntegratorCategory::claim_kind`) is purely the *label*: `Game` issuers
-//! keep `"achievement"` — `POST/PATCH/GET /games/{slug}/achievements`,
+//! keep `"achievement"` — `POST/PATCH/GET /integrators/{slug}/achievements`,
 //! `game:<slug>:achievement:<key>`, `achievement.defined`/etc., exactly as
 //! #31 shipped, zero churn — while `App`/`Service` issuers get
 //! `"milestone"` — `POST/PATCH/GET /integrations/{slug}/milestones`,
@@ -25,24 +25,24 @@
 //! own suggestion.
 //!
 //! **A route's claim vocabulary is never caller-asserted.** Hitting
-//! `/games/{slug}/achievements` for an issuer actually registered as
+//! `/integrators/{slug}/achievements` for an issuer actually registered as
 //! `App`/`Service` (or `/integrations/{slug}/milestones` for a `Game`) is
 //! rejected ([`AppError::ClaimVocabularyMismatch`]) — the label is derived
 //! from the issuer's own real registered category
-//! (`games::fetch_game_category`), checked server-side, not trusted from
+//! (`integrators::fetch_integrator_category`), checked server-side, not trusted from
 //! which URL the caller happened to call.
 //!
 //! **Namespacing.** A definition's `GlobalId` is
 //! `<namespace>:<slug>:<claim_kind>:<key>` (`crates/protocol/src/ids.rs`),
-//! minted by [`definition_ref`] the same way `crates/server/src/games.rs`'s
-//! `game_ref`/`issuer_ref` and `guilds.rs`'s `guild_ref` namespace their own
+//! minted by [`definition_ref`] the same way `crates/server/src/integrators.rs`'s
+//! `integrator_ref`/`issuer_ref` and `guilds.rs`'s `guild_ref` namespace their own
 //! events — `key` matches `[a-z0-9_]+` ([`validate_key`]), and the slug is
 //! always the caller's own, taken from its registration (#26), never the
 //! caller's choice. `id` is immutable once created; nothing in this module
 //! ever changes it.
 //!
-//! **Auth.** All endpoints are game/app/service-credential-authenticated
-//! (`crate::games::authenticate_game`, the challenge-response scheme #26
+//! **Auth.** All endpoints are integrator/app/service-credential-authenticated
+//! (`crate::integrators::authenticate_integrator`, the challenge-response scheme #26
 //! established), not a user session — defining a claim is something an
 //! issuer does about its own catalogue, not something a user consents
 //! to. Unlike issuing (#32, gated behind a capability grant), *defining*
@@ -52,15 +52,15 @@
 //! can never create or change a definition under another issuer's slug
 //! (`AppError::AchievementDefinitionForbidden`, 403). The `GET` list
 //! endpoints are public and unauthenticated, same visibility level
-//! `games::get_game` and `guilds::get_guild` already use.
+//! `integrators::get_integrator` and `guilds::get_guild` already use.
 //!
 //! **Durability.** `achievement_definitions` is a projection; the
 //! `<claim_kind>.defined`/`.definition_updated`/`.definition_retired`
 //! family is the durable history, written into the outbox in the same
 //! transaction as the row insert/update, same pattern
-//! `friends.rs`/`guilds.rs`/`games.rs` already established for #71.
+//! `friends.rs`/`guilds.rs`/`integrators.rs` already established for #71.
 //! `issuer` is `<namespace>:<slug>:self:<verb>` (mirroring
-//! `games::issuer_ref`); `subject` is the definition's own `GlobalId` —
+//! `integrators::issuer_ref`); `subject` is the definition's own `GlobalId` —
 //! matching the event-kind catalogue's "issuer → claim id" shape
 //! (`docs/architecture/protocol-events.md`).
 //!
@@ -79,8 +79,8 @@
 use avalon_chain::attestations::{verify_authenticity, Authenticity};
 use avalon_protocol::achievements::{AchievementAttestation, Issuer, Signature};
 use avalon_protocol::events::ProtocolEvent;
-use avalon_protocol::games::{resolve_valid_signing_key, IntegratorCategory};
-use avalon_protocol::ids::{AttestationId, GameId, GlobalId, IdentityId};
+use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
+use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory};
 use avalon_protocol::permissions::Capability;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -94,17 +94,18 @@ use uuid::Uuid;
 
 use crate::authz::{authenticate_caller, require_capability, Caller};
 use crate::error::AppError;
-use crate::games::{
-    authenticate_game, fetch_game_category, fetch_game_id_by_slug, fetch_issuer_keys, issuer_ref,
-};
 use crate::handlers::is_http_url;
+use crate::integrators::{
+    authenticate_integrator, fetch_integrator_category, fetch_integrator_id_by_slug,
+    fetch_issuer_keys, issuer_ref,
+};
 use crate::outbox;
 use crate::state::AppState;
 
 /// The built-in icon set shipped with `packages/ui` (issue #332) — a key
 /// into `AchievementIconName` on the frontend
 /// (`packages/ui/src/components/AvalonAchievementCard.types.ts`), generic
-/// enough to cover games/apps/services alike. Kept as a small, fixed list
+/// enough to cover integrators/apps/services alike. Kept as a small, fixed list
 /// here (not a caller-extensible enum) so a bogus `icon` value can never
 /// silently render as a blank/broken slot in the Hub.
 const BUILTIN_ICONS: &[&str] = &["trophy", "star", "shield", "sword"];
@@ -187,7 +188,7 @@ impl ClaimRoute {
 /// Authenticates the calling issuer, checks it is the one named by `slug`,
 /// and checks its actual registered category belongs to `route` — the
 /// shared guard every write endpoint (achievement or milestone) uses.
-/// Returns the path slug's own `game_id` and category (already resolved,
+/// Returns the path slug's own `integrator_id` and category (already resolved,
 /// so callers don't fetch either twice).
 async fn authenticate_owning_issuer(
     state: &AppState,
@@ -195,21 +196,21 @@ async fn authenticate_owning_issuer(
     slug: &str,
     route: ClaimRoute,
 ) -> Result<(Uuid, IntegratorCategory), AppError> {
-    let path_game_id = fetch_game_id_by_slug(state, slug).await?;
-    let caller_game_id = authenticate_game(state, headers).await?;
-    if caller_game_id != path_game_id {
+    let path_integrator_id = fetch_integrator_id_by_slug(state, slug).await?;
+    let caller_integrator_id = authenticate_integrator(state, headers).await?;
+    if caller_integrator_id != path_integrator_id {
         return Err(AppError::AchievementDefinitionForbidden);
     }
-    let category = fetch_game_category(state, path_game_id).await?;
+    let category = fetch_integrator_category(state, path_integrator_id).await?;
     if !route.allows(category) {
         return Err(AppError::ClaimVocabularyMismatch);
     }
-    Ok((path_game_id, category))
+    Ok((path_integrator_id, category))
 }
 
 /// Lowercase `[a-z0-9_]`, 2-128 characters — deliberately rejects rather
 /// than normalizes an out-of-charset key, same posture
-/// `games::validate_slug` documents for slugs.
+/// `integrators::validate_slug` documents for slugs.
 fn validate_key(key: &str) -> Result<(), AppError> {
     let len = key.chars().count();
     if !(2..=128).contains(&len) {
@@ -240,15 +241,15 @@ struct DefinitionRow {
 
 async fn fetch_definition(
     state: &AppState,
-    game_id: Uuid,
+    integrator_id: Uuid,
     key: &str,
 ) -> Result<DefinitionRow, AppError> {
     let row = sqlx::query(
         "SELECT id, key, name, description, schema, icon, icon_url, version, created_at, \
          updated_at, retired_at \
-         FROM achievement_definitions WHERE game_id = $1 AND key = $2",
+         FROM achievement_definitions WHERE integrator_id = $1 AND key = $2",
     )
-    .bind(game_id)
+    .bind(integrator_id)
     .bind(key)
     .fetch_optional(&state.pool)
     .await?
@@ -271,7 +272,7 @@ async fn fetch_definition(
 #[derive(Serialize)]
 pub struct AchievementDefinitionResponse {
     pub id: String,
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub key: String,
     pub name: String,
     pub description: String,
@@ -294,10 +295,10 @@ pub struct AchievementDefinitionResponse {
     pub retired_at: Option<OffsetDateTime>,
 }
 
-fn definition_response(game_id: Uuid, row: DefinitionRow) -> AchievementDefinitionResponse {
+fn definition_response(integrator_id: Uuid, row: DefinitionRow) -> AchievementDefinitionResponse {
     AchievementDefinitionResponse {
         id: row.id,
-        game_id,
+        integrator_id,
         key: row.key,
         name: row.name,
         description: row.description,
@@ -342,7 +343,7 @@ async fn create_definition(
     route: ClaimRoute,
     body: CreateAchievementDefinitionRequest,
 ) -> Result<Json<AchievementDefinitionResponse>, AppError> {
-    let (game_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
+    let (integrator_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
     validate_key(&body.key)?;
     validate_icon(body.icon.as_deref())?;
     validate_icon_url(body.icon_url.as_deref())?;
@@ -357,11 +358,11 @@ async fn create_definition(
 
     let inserted = sqlx::query(
         "INSERT INTO achievement_definitions \
-         (id, game_id, key, name, description, schema, icon, icon_url, version, created_at, updated_at) \
+         (id, integrator_id, key, name, description, schema, icon, icon_url, version, created_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",
     )
     .bind(id.as_str())
-    .bind(game_id)
+    .bind(integrator_id)
     .bind(&body.key)
     .bind(&body.name)
     .bind(&body.description)
@@ -386,7 +387,7 @@ async fn create_definition(
         subject: id.clone(),
         payload: serde_json::json!({
             "id": id.as_str(),
-            "game_id": game_id,
+            "game_id": integrator_id,
             "slug": slug,
             "key": body.key,
             "name": body.name,
@@ -404,7 +405,7 @@ async fn create_definition(
     tx.commit().await?;
 
     Ok(Json(definition_response(
-        game_id,
+        integrator_id,
         DefinitionRow {
             id: id.as_str().to_string(),
             key: body.key,
@@ -421,7 +422,7 @@ async fn create_definition(
     )))
 }
 
-/// `POST /games/{slug}/achievements`.
+/// `POST /integrators/{slug}/achievements`.
 pub async fn create_achievement_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -472,11 +473,11 @@ async fn update_definition(
     route: ClaimRoute,
     body: UpdateAchievementDefinitionRequest,
 ) -> Result<Json<AchievementDefinitionResponse>, AppError> {
-    let (game_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
+    let (integrator_id, category) = authenticate_owning_issuer(state, headers, slug, route).await?;
     validate_icon(body.icon.as_deref())?;
     validate_icon_url(body.icon_url.as_deref())?;
     let claim_kind = category.claim_kind();
-    let existing = fetch_definition(state, game_id, &key).await?;
+    let existing = fetch_definition(state, integrator_id, &key).await?;
 
     let new_name = body.name.clone().unwrap_or_else(|| existing.name.clone());
     let new_description = body
@@ -515,9 +516,9 @@ async fn update_definition(
         "UPDATE achievement_definitions \
          SET name = $3, description = $4, schema = $5, icon = $6, icon_url = $7, version = $8, \
          updated_at = $9, retired_at = $10 \
-         WHERE game_id = $1 AND key = $2",
+         WHERE integrator_id = $1 AND key = $2",
     )
-    .bind(game_id)
+    .bind(integrator_id)
     .bind(&key)
     .bind(&new_name)
     .bind(&new_description)
@@ -542,7 +543,7 @@ async fn update_definition(
             subject: definition_ref(category, slug, &key),
             payload: serde_json::json!({
                 "id": existing.id,
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "slug": slug,
                 "key": key,
                 "name": new_name,
@@ -570,7 +571,7 @@ async fn update_definition(
             subject: definition_ref(category, slug, &key),
             payload: serde_json::json!({
                 "id": existing.id,
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "slug": slug,
                 "key": key,
             }),
@@ -583,7 +584,7 @@ async fn update_definition(
     tx.commit().await?;
 
     Ok(Json(definition_response(
-        game_id,
+        integrator_id,
         DefinitionRow {
             id: existing.id,
             key,
@@ -600,7 +601,7 @@ async fn update_definition(
     )))
 }
 
-/// `PATCH /games/{slug}/achievements/{key}`.
+/// `PATCH /integrators/{slug}/achievements/{key}`.
 pub async fn update_achievement_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -623,7 +624,7 @@ pub async fn update_milestone_definition(
 /// Shared core of [`list_achievement_definitions`]/
 /// [`list_milestone_definitions`] (#324/#325) — public listing (feeds the
 /// registry, #89). No auth required, same visibility level
-/// `games::get_game` and `guilds::get_guild` already use. Includes retired
+/// `integrators::get_integrator` and `guilds::get_guild` already use. Includes retired
 /// definitions (marked `retired: true`) rather than hiding them — a
 /// retired definition's past attestations are still real and still need
 /// somewhere to point.
@@ -632,15 +633,15 @@ async fn list_definitions(
     slug: &str,
     route: ClaimRoute,
 ) -> Result<Json<Vec<AchievementDefinitionResponse>>, AppError> {
-    let game_id = fetch_game_id_by_slug(state, slug).await?;
-    // Every row under a given `game_id` is already the same claim kind by
+    let integrator_id = fetch_integrator_id_by_slug(state, slug).await?;
+    // Every row under a given `integrator_id` is already the same claim kind by
     // construction — the write-side route check means an issuer's category
     // can never change after registration, so it can never accumulate rows
     // under more than one claim vocabulary. This check exists for the read
-    // side specifically: without it, `/games/{app-slug}/achievements`
+    // side specifically: without it, `/integrators/{app-slug}/achievements`
     // would silently serve that app's real milestones back mislabeled as
     // achievements, through the wrong URL's semantics.
-    let category = fetch_game_category(state, game_id).await?;
+    let category = fetch_integrator_category(state, integrator_id).await?;
     if !route.allows(category) {
         return Err(AppError::ClaimVocabularyMismatch);
     }
@@ -648,16 +649,16 @@ async fn list_definitions(
     let rows = sqlx::query(
         "SELECT id, key, name, description, schema, icon, icon_url, version, created_at, \
          updated_at, retired_at \
-         FROM achievement_definitions WHERE game_id = $1 ORDER BY created_at",
+         FROM achievement_definitions WHERE integrator_id = $1 ORDER BY created_at",
     )
-    .bind(game_id)
+    .bind(integrator_id)
     .fetch_all(&state.pool)
     .await?;
 
     let mut definitions = Vec::with_capacity(rows.len());
     for row in rows {
         definitions.push(definition_response(
-            game_id,
+            integrator_id,
             DefinitionRow {
                 id: row.try_get("id")?,
                 key: row.try_get("key")?,
@@ -676,7 +677,7 @@ async fn list_definitions(
     Ok(Json(definitions))
 }
 
-/// `GET /games/{slug}/achievements`.
+/// `GET /integrators/{slug}/achievements`.
 pub async fn list_achievement_definitions(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -733,7 +734,7 @@ pub struct AttestationResponse {
 /// implementing #80/#84's key model and #324's category-driven vocabulary
 /// over the same mechanism). See the module doc comment's "Auth" section
 /// for the two independent checks every issuance goes through: the calling
-/// game/app/service's own credential (who is this, on whose behalf), and
+/// integrator/app/service's own credential (who is this, on whose behalf), and
 /// the *user's* consent grant for the issue capability — neither
 /// substitutes for the other, and neither substitutes for the embedded
 /// signature check below, which is the one piece of proof that would still
@@ -747,10 +748,10 @@ async fn issue_attestation(
     body: IssueAttestationRequest,
 ) -> Result<Json<AttestationResponse>, AppError> {
     // Who's calling, and on whose behalf — never a user's own session;
-    // only a game/app/service issues attestations, per #32's own design.
+    // only an integrator/app/service issues attestations, per #32's own design.
     let caller = authenticate_caller(state, headers).await?;
-    let Caller::Game {
-        game_id,
+    let Caller::Integrator {
+        integrator_id,
         identity_id: subject_id,
     } = caller
     else {
@@ -759,28 +760,28 @@ async fn issue_attestation(
 
     // The caller must be the exact issuer named by {slug} — same guard
     // every other write endpoint in this module uses.
-    let path_game_id = fetch_game_id_by_slug(state, slug).await?;
-    if game_id != path_game_id {
+    let path_integrator_id = fetch_integrator_id_by_slug(state, slug).await?;
+    if integrator_id != path_integrator_id {
         return Err(AppError::AchievementDefinitionForbidden);
     }
 
     // The issuer's actual registered category must match this route's
     // claim vocabulary (#324) — an App/Service can't issue "achievements"
-    // and a Game can't issue "milestones".
-    let category = fetch_game_category(state, game_id).await?;
+    // and an Integrator can't issue "milestones".
+    let category = fetch_integrator_category(state, integrator_id).await?;
     if !route.allows(category) {
         return Err(AppError::ClaimVocabularyMismatch);
     }
 
     // The *user*'s own consent: an active binding to this issuer plus an
     // active grant for this route's issue capability (#28's guard, #32's
-    // own "game caller with achievements.issue for the subject user"
+    // own "integrator caller with achievements.issue for the subject user"
     // requirement).
     require_capability(&caller, route.issue_capability(), state).await?;
 
     // The definition must exist and not be retired — no new issuances
     // against a retired definition (#31's invariant, still enforced here).
-    let definition = fetch_definition(state, game_id, &key).await?;
+    let definition = fetch_definition(state, integrator_id, &key).await?;
     if definition.retired_at.is_some() {
         return Err(AppError::AttestationDefinitionRetired);
     }
@@ -800,13 +801,13 @@ async fn issue_attestation(
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidAttestationSignature)?;
 
-    let issuer_keys = fetch_issuer_keys(state, game_id).await?;
+    let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
     let attestation_id = Uuid::new_v4();
     let issuer_enum = match category {
-        IntegratorCategory::Game => Issuer::Game(GameId(game_id)),
-        IntegratorCategory::App => Issuer::App(GameId(game_id)),
-        IntegratorCategory::Service => Issuer::Service(GameId(game_id)),
+        IntegratorCategory::Game => Issuer::Game(IntegratorId(integrator_id)),
+        IntegratorCategory::App => Issuer::App(IntegratorId(integrator_id)),
+        IntegratorCategory::Service => Issuer::Service(IntegratorId(integrator_id)),
     };
     let candidate = AchievementAttestation {
         id: AttestationId(attestation_id),
@@ -816,7 +817,7 @@ async fn issue_attestation(
         issued_at: now,
         proof: Signature {
             key_id: body.key_id.to_string(),
-            // The only algorithm registration accepts today (games::SUPPORTED_KEY_ALGORITHM);
+            // The only algorithm registration accepts today (integrators::SUPPORTED_KEY_ALGORITHM);
             // the resolved key's own algorithm is authoritative for storage below.
             algorithm: "ed25519".to_string(),
             bytes: signature_bytes,
@@ -834,11 +835,11 @@ async fn issue_attestation(
 
     sqlx::query(
         "INSERT INTO achievement_attestations \
-         (id, game_id, issuer, subject, achievement, issued_at, proof_key_id, proof_algorithm, proof_bytes) \
+         (id, integrator_id, issuer, subject, achievement, issued_at, proof_key_id, proof_algorithm, proof_bytes) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(attestation_id)
-    .bind(game_id)
+    .bind(integrator_id)
     .bind(&issuer_str)
     .bind(subject_id)
     .bind(&definition.id)
@@ -891,7 +892,7 @@ async fn issue_attestation(
     }))
 }
 
-/// `POST /games/{slug}/achievements/{key}/issue` (#32).
+/// `POST /integrators/{slug}/achievements/{key}/issue` (#32).
 pub async fn issue_achievement(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1015,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn two_games_defining_the_same_key_produce_distinct_ids() {
+    fn two_integrators_defining_the_same_key_produce_distinct_ids() {
         let a = definition_ref(IntegratorCategory::Game, "ashen-realms", "dragon_slayer");
         let b = definition_ref(IntegratorCategory::Game, "worldzero", "dragon_slayer");
         assert_ne!(a, b);
@@ -1031,9 +1032,9 @@ mod tests {
         let service_id = definition_ref(IntegratorCategory::Service, "payments", "onboarded");
         assert_eq!(service_id.as_str(), "service:payments:milestone:onboarded");
 
-        let game_id = definition_ref(IntegratorCategory::Game, "wallet-app", "onboarded");
+        let integrator_id = definition_ref(IntegratorCategory::Game, "wallet-app", "onboarded");
         assert_ne!(
-            app_id, game_id,
+            app_id, integrator_id,
             "different category, same slug/key: still distinct ids"
         );
     }

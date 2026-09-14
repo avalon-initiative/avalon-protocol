@@ -1,6 +1,6 @@
 //! Everything that *mutates* state against a real `avalon-server` — creating
 //! identities, logging in via a virtual (software-only) passkey, and
-//! registering games — lives in this module, gated behind the `dev-tools`
+//! registering integrators — lives in this module, gated behind the `dev-tools`
 //! Cargo feature (issue #173's second layer).
 //!
 //! `avalon inspect-ledger`/`inspect-ledger-full`/`outbox-status` (in
@@ -9,7 +9,7 @@
 //! against a real deployment. Everything in *this* file either drives a
 //! software WebAuthn ceremony with no real hardware behind it
 //! (`create_identity`, `login`) or performs an administrative write that, in
-//! a real deployment, should be self-service by the actual user or game
+//! a real deployment, should be self-service by the actual user or integrator
 //! developer through the real API — not an operator running a CLI on their
 //! behalf (see `docs/architecture/settlement.md` and the discussion on
 //! issue #173). `dev-tools` is on by default (this crate is exactly the
@@ -438,25 +438,25 @@ pub(crate) async fn pair_device() {
     }
 }
 
-pub(crate) const REGISTER_GAME_USAGE: &str = "usage: avalon register-game --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]";
+pub(crate) const REGISTER_INTEGRATOR_USAGE: &str = "usage: avalon register-integrator --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]";
 
-/// Parsed `avalon register-game` arguments. Hand-rolled to match this file's
+/// Parsed `avalon register-integrator` arguments. Hand-rolled to match this file's
 /// existing `match command.as_deref()` style rather than pulling in `clap`
 /// (not already a dependency of this crate).
 #[derive(Debug)]
-pub(crate) struct RegisterGameArgs {
+pub(crate) struct RegisterIntegratorArgs {
     slug: String,
     name: String,
-    developer: String,
+    owner_name: String,
     capabilities: Vec<String>,
     server: Option<String>,
 }
 
-impl RegisterGameArgs {
+impl RegisterIntegratorArgs {
     pub(crate) fn parse(args: &[String]) -> Result<Self, String> {
         let mut slug = None;
         let mut name = None;
-        let mut developer = None;
+        let mut owner_name = None;
         let mut capabilities = Vec::new();
         let mut server = None;
 
@@ -465,8 +465,10 @@ impl RegisterGameArgs {
             match arg.as_str() {
                 "--slug" => slug = Some(iter.next().ok_or("--slug requires a value")?.clone()),
                 "--name" => name = Some(iter.next().ok_or("--name requires a value")?.clone()),
-                "--developer" => {
-                    developer = Some(iter.next().ok_or("--developer requires a value")?.clone())
+                // `--developer` is the original spelling (#29), kept working
+                // as an alias so existing scripts don't break.
+                "--owner-name" | "--developer" => {
+                    owner_name = Some(iter.next().ok_or("--owner-name requires a value")?.clone())
                 }
                 "--capability" => {
                     capabilities.push(iter.next().ok_or("--capability requires a value")?.clone())
@@ -481,24 +483,24 @@ impl RegisterGameArgs {
         Ok(Self {
             slug: slug.ok_or("--slug is required")?,
             name: name.ok_or("--name is required")?,
-            developer: developer.ok_or("--developer is required")?,
+            owner_name: owner_name.ok_or("--owner-name is required")?,
             capabilities,
             server,
         })
     }
 }
 
-/// `avalon register-game` (issue #29) — registers a test game against #26's
+/// `avalon register-integrator` (issue #29) — registers a test integrator against #26's
 /// registration endpoint, sent to `POST /integrations` (#293's canonical
-/// alias for the same `POST /games` handler — a `register-integrator`
+/// alias for the same `POST /integrators` handler — a `register-integrator`
 /// command alias is a separate, lower-priority follow-up, not this),
 /// generating a fresh Ed25519 signing keypair locally (the
 /// only algorithm `crate::auth::verify_event_signature` on the server side
-/// can verify — see `crates/server/src/games.rs`). Only the public key is
+/// can verify — see `crates/server/src/integrators.rs`). Only the public key is
 /// ever sent to the server; the private key is saved locally (mirroring
 /// `create_identity`'s event-signing-key persistence) and printed exactly
 /// once, since the server never stores or returns it again.
-pub(crate) async fn register_game(args: RegisterGameArgs) {
+pub(crate) async fn register_integrator(args: RegisterIntegratorArgs) {
     let base = args.server.clone().unwrap_or_else(server_url);
     let http = reqwest::Client::new();
 
@@ -510,7 +512,7 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
     let request_body = json!({
         "slug": args.slug,
         "name": args.name,
-        "developer": args.developer,
+        "developer": args.owner_name,
         "requested_capabilities": args.capabilities,
         "initial_key": {
             "algorithm": "ed25519",
@@ -527,7 +529,7 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
 
     if response.status() == reqwest::StatusCode::CONFLICT {
         eprintln!(
-            "game registration failed: slug '{}' is already taken.",
+            "integrator registration failed: slug '{}' is already taken.",
             args.slug
         );
         eprintln!("slugs are forever and can't be renamed or reused — pick a different --slug.");
@@ -535,7 +537,7 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
     }
     if !response.status().is_success() {
         eprintln!(
-            "game registration failed: {:?}\n{}",
+            "integrator registration failed: {:?}\n{}",
             response.status(),
             response.text().await.unwrap_or_default()
         );
@@ -546,7 +548,7 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
         .json()
         .await
         .expect("POST /integrations response was not JSON");
-    let game_id = response_body["id"]
+    let integrator_id = response_body["id"]
         .as_str()
         .expect("POST /integrations response missing id")
         .to_string();
@@ -555,17 +557,17 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
         .expect("POST /integrations response missing credential.key_id")
         .to_string();
 
-    // The game's signing key: nothing else lets this CLI reuse it later
+    // The integrator's signing key: nothing else lets this CLI reuse it later
     // (e.g. for the challenge-response sanity check just below, or a future
-    // `avalon` command acting as this game) except a local file — same
+    // `avalon` command acting as this integrator) except a local file — same
     // rationale as `create_identity`'s event-signing-key persistence.
     let key_dir = key_dir();
     std::fs::create_dir_all(&key_dir).ok();
-    let key_path = key_dir.join(format!("game-{}.signing-key", args.slug));
+    let key_path = key_dir.join(format!("integrator-{}.signing-key", args.slug));
     std::fs::write(&key_path, &private_key_base64).expect("failed to write signing key file");
 
     println!();
-    println!("Game registered: {} ({game_id})", args.slug);
+    println!("Integrator registered: {} ({integrator_id})", args.slug);
     println!("Key ID:               {key_id}");
     println!("Signing key saved to: {}", key_path.display());
     println!();
@@ -577,16 +579,18 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
     println!("│ This is the ONLY time this private signing key is shown.    │");
     println!("│ Avalon only ever stores the public key — if this key is     │");
     println!(
-        "│ lost, '{:<12}' can no longer authenticate as this game    │",
+        "│ lost, '{:<12}' can no longer authenticate as this integrator    │",
         args.slug
     );
-    println!("│ and there is no recovery; register a new key/game instead.  │");
+    println!("│ and there is no recovery; register a new key/integrator instead.  │");
     println!("└─────────────────────────────────────────────────────────────┘");
 
-    match register_game_auth_sanity_check(&http, &base, &args.slug, &key_id, &signing_key).await {
-        Ok(whoami_game_id) => {
+    match register_integrator_auth_sanity_check(&http, &base, &args.slug, &key_id, &signing_key)
+        .await
+    {
+        Ok(whoami_integrator_id) => {
             println!();
-            println!("Challenge-response sanity check passed (whoami: {whoami_game_id}).");
+            println!("Challenge-response sanity check passed (whoami: {whoami_integrator_id}).");
         }
         Err(message) => {
             println!();
@@ -598,11 +602,11 @@ pub(crate) async fn register_game(args: RegisterGameArgs) {
 }
 
 /// Exercises the challenge-response round trip #26 built
-/// (`crates/server/src/games.rs`'s `create_game_challenge`/
-/// `authenticate_game`) once, as a sanity check that the freshly registered
+/// (`crates/server/src/integrators.rs`'s `create_integrator_challenge`/
+/// `authenticate_integrator`) once, as a sanity check that the freshly registered
 /// key actually works end to end. Not load-bearing for registration itself —
 /// any failure here is reported but doesn't fail the command.
-async fn register_game_auth_sanity_check(
+async fn register_integrator_auth_sanity_check(
     http: &reqwest::Client,
     base: &str,
     slug: &str,
@@ -610,7 +614,7 @@ async fn register_game_auth_sanity_check(
     signing_key: &SigningKey,
 ) -> Result<String, String> {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrators/{slug}/challenge"))
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -631,7 +635,7 @@ async fn register_game_auth_sanity_check(
     let signature = signing_key.sign(&nonce);
 
     let response = http
-        .get(format!("{base}/games/whoami"))
+        .get(format!("{base}/integrators/whoami"))
         .header("x-avalon-integrator-key-id", key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(
@@ -645,9 +649,9 @@ async fn register_game_auth_sanity_check(
         return Err(format!("whoami returned {}", response.status()));
     }
     let whoami: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    Ok(whoami["game_id"]
+    Ok(whoami["integrator_id"]
         .as_str()
-        .ok_or("whoami response missing game_id")?
+        .ok_or("whoami response missing integrator_id")?
         .to_string())
 }
 
@@ -709,8 +713,8 @@ mod tests {
     }
 
     #[test]
-    fn register_game_args_parses_required_fields() {
-        let parsed = RegisterGameArgs::parse(&args(&[
+    fn register_integrator_args_parses_required_fields() {
+        let parsed = RegisterIntegratorArgs::parse(&args(&[
             "--slug",
             "ashen-realms",
             "--name",
@@ -722,14 +726,14 @@ mod tests {
 
         assert_eq!(parsed.slug, "ashen-realms");
         assert_eq!(parsed.name, "Ashen Realms");
-        assert_eq!(parsed.developer, "Ashen Studios");
+        assert_eq!(parsed.owner_name, "Ashen Studios");
         assert!(parsed.capabilities.is_empty());
         assert_eq!(parsed.server, None);
     }
 
     #[test]
-    fn register_game_args_collects_repeated_capability_flags() {
-        let parsed = RegisterGameArgs::parse(&args(&[
+    fn register_integrator_args_collects_repeated_capability_flags() {
+        let parsed = RegisterIntegratorArgs::parse(&args(&[
             "--slug",
             "ashen-realms",
             "--name",
@@ -753,56 +757,46 @@ mod tests {
     }
 
     #[test]
-    fn register_game_args_rejects_missing_required_args() {
-        let err = RegisterGameArgs::parse(&args(&["--slug", "ashen-realms"]))
-            .expect_err("missing --name and --developer should fail to parse");
+    fn register_integrator_args_rejects_missing_required_args() {
+        let err = RegisterIntegratorArgs::parse(&args(&["--slug", "ashen-realms"]))
+            .expect_err("missing --name and --owner-name should fail to parse");
         assert!(err.contains("--name"));
     }
 
     #[test]
-    fn register_game_args_rejects_flag_missing_its_value() {
-        let err = RegisterGameArgs::parse(&args(&["--slug"]))
+    fn register_integrator_args_rejects_flag_missing_its_value() {
+        let err = RegisterIntegratorArgs::parse(&args(&["--slug"]))
             .expect_err("a trailing flag with no value should fail to parse");
         assert!(err.contains("--slug"));
     }
 
-    /// `avalon register-integrator` (issue #297) is an additive alias for
-    /// `register-game`, routed in `main.rs` to this exact same
-    /// `RegisterGameArgs::parse`/`register_game` call — the command name
-    /// itself never affects parsing, so any argument list produces
-    /// identical `RegisterGameArgs` regardless of which alias invoked it.
+    /// `--developer` is the original spelling of what is now `--owner-name`
+    /// (#290), kept working as an alias so existing scripts don't break. The
+    /// flag spelling never affects anything downstream, so both produce an
+    /// identical `RegisterIntegratorArgs`.
     #[test]
-    fn register_integrator_alias_parses_identically_to_register_game() {
-        let raw = args(&[
-            "--slug",
-            "ashen-realms",
-            "--name",
-            "Ashen Realms",
-            "--developer",
-            "Ashen Studios",
-            "--capability",
-            "friends.read",
-        ]);
+    fn owner_name_flag_accepts_the_deprecated_developer_spelling() {
+        let base = ["--slug", "ashen-realms", "--name", "Ashen Realms"];
 
-        let via_register_game = RegisterGameArgs::parse(&raw).expect("should parse");
-        let via_register_integrator = RegisterGameArgs::parse(&raw).expect("should parse");
+        let mut with_owner = base.to_vec();
+        with_owner.extend_from_slice(&["--owner-name", "Ashen Studios"]);
+        let mut with_developer = base.to_vec();
+        with_developer.extend_from_slice(&["--developer", "Ashen Studios"]);
 
-        assert_eq!(via_register_game.slug, via_register_integrator.slug);
-        assert_eq!(via_register_game.name, via_register_integrator.name);
-        assert_eq!(
-            via_register_game.developer,
-            via_register_integrator.developer
-        );
-        assert_eq!(
-            via_register_game.capabilities,
-            via_register_integrator.capabilities
-        );
-        assert_eq!(via_register_game.server, via_register_integrator.server);
+        let via_owner_name =
+            RegisterIntegratorArgs::parse(&args(&with_owner)).expect("should parse");
+        let via_developer =
+            RegisterIntegratorArgs::parse(&args(&with_developer)).expect("should parse");
+
+        assert_eq!(via_owner_name.slug, via_developer.slug);
+        assert_eq!(via_owner_name.name, via_developer.name);
+        assert_eq!(via_owner_name.owner_name, via_developer.owner_name);
+        assert_eq!(via_owner_name.owner_name, "Ashen Studios");
     }
 
     #[test]
-    fn register_game_args_rejects_unrecognized_flags() {
-        let err = RegisterGameArgs::parse(&args(&[
+    fn register_integrator_args_rejects_unrecognized_flags() {
+        let err = RegisterIntegratorArgs::parse(&args(&[
             "--slug",
             "ashen-realms",
             "--name",

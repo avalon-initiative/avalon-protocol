@@ -1,11 +1,11 @@
-//! Exercises `GET /games/{slug}/registry` (issue #261, first slice of the
+//! Exercises `GET /integrators/{slug}/registry` (issue #261, first slice of the
 //! epic-sized #89) against a real, running `avalon-server` and Postgres.
 //! Gated `--ignored` since it needs live infra — see `make test-live` /
 //! `make start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no
 //! reachable Postgres here); written but not run against a live database.
 //!
-//! Mirrors `crates/server/tests/games.rs`'s own pattern for the
-//! challenge-response game-auth flow and `crates/server/tests/connections.rs`'s
+//! Mirrors `crates/server/tests/integrators.rs`'s own pattern for the
+//! challenge-response integrator-auth flow and `crates/server/tests/connections.rs`'s
 //! pattern for seeding a bare identity/session directly via SQL rather than
 //! a real WebAuthn ceremony. There is no HTTP endpoint yet to issue an
 //! achievement attestation (issuance itself is Epic #30, not landed) — so
@@ -60,14 +60,14 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-async fn register_unique_game(http: &reqwest::Client, base: &str) -> (String, SigningKey) {
+async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> (String, SigningKey) {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let slug = format!("test-registry-{}", &suffix[..12]);
     let body = serde_json::json!({
         "slug": slug,
-        "name": format!("Registry Test Game {}", &suffix[..8]),
+        "name": format!("Registry Test Integrator {}", &suffix[..8]),
         "developer": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
@@ -77,28 +77,28 @@ async fn register_unique_game(http: &reqwest::Client, base: &str) -> (String, Si
     });
 
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     (slug, signing_key)
 }
 
 /// Every metric is present with its `durable-derived` class label and a
 /// non-empty definition — the ticket's hard contract — and every count is
-/// zero, not an error or a missing field, for a game with no binding or
+/// zero, not an error or a missing field, for an integrator with no binding or
 /// achievement activity at all.
 #[tokio::test]
 #[ignore]
-async fn a_game_with_no_activity_returns_zeros_for_every_labeled_metric() {
+async fn a_integrator_with_no_activity_returns_zeros_for_every_labeled_metric() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let (slug, _) = register_unique_game(&http, &base).await;
+    let (slug, _) = register_unique_integrator(&http, &base).await;
 
     let response = http
-        .get(format!("{base}/games/{slug}/registry"))
+        .get(format!("{base}/integrators/{slug}/registry"))
         .send()
         .await
         .unwrap();
@@ -120,13 +120,13 @@ async fn a_game_with_no_activity_returns_zeros_for_every_labeled_metric() {
             "{field} must carry a non-empty definition"
         );
         // Issue #96: zero is never coarsened — "nobody" identifies no one,
-        // so a game with no activity yet still reads as an exact 0, not a
+        // so an integrator with no activity yet still reads as an exact 0, not a
         // withheld/"fewer than" value.
         assert_eq!(metric["exact"], true, "{field} should be exact at zero");
     }
 }
 
-/// One identity binds to the game (`POST /games/{slug}/connect`, a real
+/// One identity binds to the integrator (`POST /integrators/{slug}/connect`, a real
 /// `game.binding_established` event through the real indexer path) and two
 /// attestations are seeded directly into `indexer_attestations` (one
 /// later revoked) for a second identity — every resulting cohort here
@@ -138,15 +138,15 @@ async fn a_game_with_no_activity_returns_zeros_for_every_labeled_metric() {
 /// sub-floor count.
 #[tokio::test]
 #[ignore]
-async fn a_game_with_activity_below_the_floor_reports_coarsened_not_exact_counts() {
+async fn a_integrator_with_activity_below_the_floor_reports_coarsened_not_exact_counts() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
     let (_, token) = seed_identity_session(&pool).await;
-    let (slug, _) = register_unique_game(&http, &base).await;
+    let (slug, _) = register_unique_integrator(&http, &base).await;
 
     let connect = http
-        .post(format!("{base}/games/{slug}/connect"))
+        .post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": [] }))
         .send()
@@ -188,7 +188,7 @@ async fn a_game_with_activity_below_the_floor_reports_coarsened_not_exact_counts
     .unwrap();
 
     let body: serde_json::Value = http
-        .get(format!("{base}/games/{slug}/registry"))
+        .get(format!("{base}/integrators/{slug}/registry"))
         .send()
         .await
         .unwrap()
@@ -215,7 +215,7 @@ async fn a_game_with_activity_below_the_floor_reports_coarsened_not_exact_counts
     }
 }
 
-/// Five distinct identities bind to the game — a cohort exactly at the
+/// Five distinct identities bind to the integrator — a cohort exactly at the
 /// server's default minimum-cohort floor (issue #96,
 /// `avalon_indexer::registry::DEFAULT_MIN_COHORT` = 5) — so `players`/
 /// `total_players_ever` come back as the real, exact count rather than
@@ -223,16 +223,16 @@ async fn a_game_with_activity_below_the_floor_reports_coarsened_not_exact_counts
 /// not a blanket rounding applied to every metric regardless of size.
 #[tokio::test]
 #[ignore]
-async fn a_game_with_activity_at_the_floor_reports_exact_counts() {
+async fn a_integrator_with_activity_at_the_floor_reports_exact_counts() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (slug, _) = register_unique_game(&http, &base).await;
+    let (slug, _) = register_unique_integrator(&http, &base).await;
 
     for _ in 0..5 {
         let (_, token) = seed_identity_session(&pool).await;
         let connect = http
-            .post(format!("{base}/games/{slug}/connect"))
+            .post(format!("{base}/integrators/{slug}/connect"))
             .bearer_auth(&token)
             .json(&serde_json::json!({ "capabilities": [] }))
             .send()
@@ -242,7 +242,7 @@ async fn a_game_with_activity_at_the_floor_reports_exact_counts() {
     }
 
     let body: serde_json::Value = http
-        .get(format!("{base}/games/{slug}/registry"))
+        .get(format!("{base}/integrators/{slug}/registry"))
         .send()
         .await
         .unwrap()

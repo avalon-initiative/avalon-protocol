@@ -1,19 +1,19 @@
-//! Game Space instance-data projection (issue #384, implementing #381's
+//! Integrator Space instance-data projection (issue #384, implementing #381's
 //! decided policy): decodes `game_data.published`
-//! (`crates/server/src/game_data.rs::publish_instance`) into an upsert of
+//! (`crates/server/src/integrator_data.rs::publish_instance`) into an upsert of
 //! the new instance row, plus — when the event names a `supersedes`
 //! id — an update of that earlier row's `superseded_by`. Same shape as
-//! `game_schemas`'s own projection in this same directory, matching the
-//! `game_schemas`/`indexer_game_schemas` pairing exactly as the ticket
+//! `integrator_schemas`'s own projection in this same directory, matching the
+//! `integrator_schemas`/`indexer_integrator_schemas` pairing exactly as the ticket
 //! requires.
 //!
-//! **Read-side visibility filtering happens in `crates/server/src/game_data.rs`,
+//! **Read-side visibility filtering happens in `crates/server/src/integrator_data.rs`,
 //! not here.** This module only stores/serves full instances — every
-//! stored field, unfiltered — the same posture `indexer_game_schemas`
-//! already has relative to `game_schemas::get_schema_version`'s public,
+//! stored field, unfiltered — the same posture `indexer_integrator_schemas`
+//! already has relative to `integrator_schemas::get_schema_version`'s public,
 //! unfiltered `proto_source` read. The visibility rule is applied once,
 //! at the one HTTP read endpoint, against the schema's visibility
-//! metadata resolved via `game_schemas::get_visibility`.
+//! metadata resolved via `integrator_schemas::get_visibility`.
 
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -23,10 +23,10 @@ use uuid::Uuid;
 use crate::IndexError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameDataPublished {
+pub struct IntegratorDataPublished {
     pub id: String,
     pub schema_id: String,
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub subject: Uuid,
     pub instance: serde_json::Value,
     pub published_at: OffsetDateTime,
@@ -35,13 +35,13 @@ pub struct GameDataPublished {
     pub supersedes: Option<String>,
 }
 
-pub fn decode(event: &ProtocolEvent) -> Option<GameDataPublished> {
+pub fn decode(event: &ProtocolEvent) -> Option<IntegratorDataPublished> {
     if event.kind != "game_data.published" {
         return None;
     }
     let id = event.payload.get("id")?.as_str()?.to_string();
     let schema_id = event.payload.get("schema")?.as_str()?.to_string();
-    let game_id = super::uuid_field(&event.payload, "game_id")?;
+    let integrator_id = super::uuid_field(&event.payload, "game_id")?;
     let subject = super::uuid_field(&event.payload, "subject")?;
     let instance = event.payload.get("instance")?.clone();
     let supersedes = event
@@ -49,10 +49,10 @@ pub fn decode(event: &ProtocolEvent) -> Option<GameDataPublished> {
         .get("supersedes")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    Some(GameDataPublished {
+    Some(IntegratorDataPublished {
         id,
         schema_id,
-        game_id,
+        integrator_id,
         subject,
         instance,
         published_at: event.timestamp,
@@ -62,22 +62,22 @@ pub fn decode(event: &ProtocolEvent) -> Option<GameDataPublished> {
 
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
-    write: &GameDataPublished,
+    write: &IntegratorDataPublished,
 ) -> Result<(), IndexError> {
     sqlx::query(
-        "INSERT INTO indexer_game_data_instances \
-         (id, schema_id, game_id, subject, instance, published_at, superseded_by) \
+        "INSERT INTO indexer_integrator_data_instances \
+         (id, schema_id, integrator_id, subject, instance, published_at, superseded_by) \
          VALUES ($1, $2, $3, $4, $5, $6, NULL) \
          ON CONFLICT (id) DO UPDATE SET \
              schema_id = EXCLUDED.schema_id, \
-             game_id = EXCLUDED.game_id, \
+             integrator_id = EXCLUDED.integrator_id, \
              subject = EXCLUDED.subject, \
              instance = EXCLUDED.instance, \
              published_at = EXCLUDED.published_at",
     )
     .bind(&write.id)
     .bind(&write.schema_id)
-    .bind(write.game_id)
+    .bind(write.integrator_id)
     .bind(write.subject)
     .bind(&write.instance)
     .bind(write.published_at)
@@ -85,39 +85,41 @@ pub async fn apply(
     .await?;
 
     if let Some(supersedes) = &write.supersedes {
-        sqlx::query("UPDATE indexer_game_data_instances SET superseded_by = $2 WHERE id = $1")
-            .bind(supersedes)
-            .bind(&write.id)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query(
+            "UPDATE indexer_integrator_data_instances SET superseded_by = $2 WHERE id = $1",
+        )
+        .bind(supersedes)
+        .bind(&write.id)
+        .execute(&mut **tx)
+        .await?;
     }
 
     Ok(())
 }
 
-/// One stored instance, as read back for `GET /identities/{id}/game-data`
+/// One stored instance, as read back for `GET /identities/{id}/integrator-data`
 /// — visibility filtering is applied by the caller
-/// (`crates/server/src/game_data.rs`), not here.
+/// (`crates/server/src/integrator_data.rs`), not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameDataInstanceRow {
+pub struct IntegratorDataInstanceRow {
     pub id: String,
     pub schema_id: String,
-    pub game_id: Uuid,
+    pub integrator_id: Uuid,
     pub instance: serde_json::Value,
     pub published_at: OffsetDateTime,
 }
 
 /// Every *current* (non-superseded) instance belonging to `subject`,
-/// across every schema/game that has ever published one — empty if none,
+/// across every schema/integrator that has ever published one — empty if none,
 /// same "absence means nothing published" posture the rest of this
 /// crate's read models use.
 pub async fn list_current_for_subject(
     pool: &PgPool,
     subject: Uuid,
-) -> Result<Vec<GameDataInstanceRow>, IndexError> {
+) -> Result<Vec<IntegratorDataInstanceRow>, IndexError> {
     let rows = sqlx::query(
-        "SELECT id, schema_id, game_id, instance, published_at \
-         FROM indexer_game_data_instances \
+        "SELECT id, schema_id, integrator_id, instance, published_at \
+         FROM indexer_integrator_data_instances \
          WHERE subject = $1 AND superseded_by IS NULL \
          ORDER BY published_at",
     )
@@ -127,10 +129,10 @@ pub async fn list_current_for_subject(
 
     let mut instances = Vec::with_capacity(rows.len());
     for row in rows {
-        instances.push(GameDataInstanceRow {
+        instances.push(IntegratorDataInstanceRow {
             id: row.try_get("id")?,
             schema_id: row.try_get("schema_id")?,
-            game_id: row.try_get("game_id")?,
+            integrator_id: row.try_get("integrator_id")?,
             instance: row.try_get("instance")?,
             published_at: row.try_get("published_at")?,
         });
@@ -149,7 +151,7 @@ mod tests {
             id: Uuid::new_v4(),
             kind: kind.to_string(),
             issuer: GlobalId::new("game", "ashen-realms", "self", "x"),
-            subject: GlobalId::new("identity", "abc", "game_data", "1"),
+            subject: GlobalId::new("identity", "abc", "integrator_data", "1"),
             payload,
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
@@ -158,14 +160,14 @@ mod tests {
 
     #[test]
     fn decodes_a_first_publication_with_no_supersedes() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         let subject = Uuid::new_v4();
         let source_event = event(
             "game_data.published",
             serde_json::json!({
                 "id": "game:ashen-realms:schema:1:data:1",
                 "schema": "game:ashen-realms:schema:1",
-                "game_id": game_id,
+                "game_id": integrator_id,
                 "subject": subject,
                 "instance": { "level": 5 },
                 "supersedes": null,

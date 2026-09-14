@@ -13,9 +13,9 @@
 //! Available only when this binary is built with the default `dev-tools`
 //! Cargo feature (issue #173 — see `dev_tools.rs`'s own doc comment for the
 //! full rationale): `avalon create-identity`, `avalon login <identity_id>`
-//! (issue #115), `avalon register-game` (issue #29), `avalon
-//! register-integrator` (issue #297's additive alias for the same command —
-//! both work identically, neither is deprecated), and `avalon pair-device`
+//! (issue #115), `avalon register-integrator` (issue #29, renamed from
+//! `register-game` by #290 — the old name stays a working alias), and
+//! `avalon pair-device`
 //! (issue #307 — drives the `start`/`poll` side of cross-device pairing,
 //! standing in for a real WebAuthn-incapable client so that flow is
 //! testable without a real console/engine). A build compiled with
@@ -68,11 +68,11 @@ async fn main() {
         #[cfg(feature = "dev-tools")]
         Some(cmd) if is_register_integrator_command(cmd) => {
             let raw_args: Vec<String> = args.collect();
-            match dev_tools::RegisterGameArgs::parse(&raw_args) {
-                Ok(parsed) => dev_tools::register_game(parsed).await,
+            match dev_tools::RegisterIntegratorArgs::parse(&raw_args) {
+                Ok(parsed) => dev_tools::register_integrator(parsed).await,
                 Err(message) => {
                     eprintln!("{message}");
-                    eprintln!("{}", dev_tools::REGISTER_GAME_USAGE);
+                    eprintln!("{}", dev_tools::REGISTER_INTEGRATOR_USAGE);
                     std::process::exit(1);
                 }
             }
@@ -81,7 +81,7 @@ async fn main() {
             eprintln!(
                 "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
-                    "|create-identity|login <identity_id>|register-game|register-integrator --slug <slug> --name <name> --developer <dev> [--capability <cap>]... [--server <url>]|pair-device"
+                    "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|pair-device"
                 } else {
                     ""
                 }
@@ -91,13 +91,14 @@ async fn main() {
     }
 }
 
-/// `register-integrator` (issue #297) is an additive alias for
-/// `register-game` — both route here to the exact same
-/// `RegisterGameArgs::parse`/`register_game` call, neither deprecated (see
-/// `docs/architecture/games-and-issuers.md`).
+/// `register-integrator` is the primary command name (#290); `register-game`
+/// (the original, #29) stays a working deprecated alias so existing scripts
+/// keep running. Both route here to the exact same
+/// `RegisterIntegratorArgs::parse`/`register_integrator` call — see
+/// `docs/architecture/issuers.md`.
 #[cfg(feature = "dev-tools")]
 fn is_register_integrator_command(command: &str) -> bool {
-    matches!(command, "register-game" | "register-integrator")
+    matches!(command, "register-integrator" | "register-game")
 }
 
 async fn outbox_status() {
@@ -557,9 +558,9 @@ mod tests {
 
     #[cfg(feature = "dev-tools")]
     #[test]
-    fn register_integrator_is_an_alias_for_register_game() {
-        assert!(is_register_integrator_command("register-game"));
+    fn register_game_stays_a_working_alias_for_register_integrator() {
         assert!(is_register_integrator_command("register-integrator"));
+        assert!(is_register_integrator_command("register-game"));
         assert!(!is_register_integrator_command("register-app"));
     }
 

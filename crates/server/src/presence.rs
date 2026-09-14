@@ -10,15 +10,15 @@
 //!
 //! **Publishing.** `PUT /me/presence` is a user publishing their own
 //! status under their own session (`crate::handlers::authenticate`) — it
-//! can never set `playing`. `PUT /presence/:identity_id` is a game
+//! can never set `active_in`. `PUT /presence/:identity_id` is an integrator
 //! publishing on behalf of a bound user, authenticated via
 //! `crate::authz::authenticate_caller`/`require_capability` (issue #28's
-//! guard, resolving issues #26/#83's `GameCredential`/`GameBinding`
+//! guard, resolving issues #26/#83's `IntegratorCredential`/`IntegratorBinding`
 //! machinery, which — contrary to an earlier version of this doc comment —
-//! is now built): a `Caller::Game` must hold an active
+//! is now built): a `Caller::Integrator` must hold an active
 //! `presence.publish` grant under an active binding to the target
-//! identity, and `playing`, if set at all, must equal the game's own
-//! `game_id` — [`validate_game_playing`] is the one place that rule lives.
+//! identity, and `active_in`, if set at all, must equal the integrator's own
+//! `integrator_id` — [`validate_integrator_playing`] is the one place that rule lives.
 //!
 //! **Reading.** `GET /presence` and `GET /ws/presence` default to
 //! friends-only visibility (`docs/architecture/privacy.md`'s proposed
@@ -35,7 +35,7 @@
 //! **Sticky manual overrides.** `Online` is the only status this store
 //! computes automatically from heartbeat/TTL state. `Away`, `DoNotDisturb`,
 //! and `Offline`, once explicitly published via `PUT /me/presence` (or the
-//! game-side `PUT /presence/:identity_id`), stick — they're reported as-is
+//! integrator-side `PUT /presence/:identity_id`), stick — they're reported as-is
 //! on every subsequent read regardless of TTL expiry, surviving reconnects
 //! and continued heartbeats, until the caller explicitly publishes `Online`
 //! again, which immediately resumes live TTL tracking. See
@@ -50,10 +50,10 @@
 //! store's existing everything-resets-on-restart posture rather than
 //! adding a durable exception to it.
 //!
-//! **User opt-out.** Independent of any game's capability grant, a
-//! user can opt out of `playing` being shown at all
-//! (`presence_preferences.hide_playing`, set via `PUT /me/presence`) —
-//! [`hide_playing_for`] is the one place that preference is read; every
+//! **User opt-out.** Independent of any integrator's capability grant, a
+//! user can opt out of `active_in` being shown at all
+//! (`presence_preferences.hide_active_in`, set via `PUT /me/presence`) —
+//! [`hide_active_in_for`] is the one place that preference is read; every
 //! caller of it treats a missing row as "not hidden" (the default), the
 //! same "absence means the default, never invented" posture
 //! `PresenceStore::get` already uses for a missing presence entry.
@@ -91,7 +91,7 @@ pub const DEFAULT_PRESENCE_TTL: Duration = Duration::from_secs(120);
 #[derive(Clone)]
 struct PresenceEntry {
     status: PresenceStatus,
-    playing: Option<Uuid>,
+    active_in: Option<Uuid>,
     updated_at: OffsetDateTime,
     seen_at: Instant,
 }
@@ -154,7 +154,7 @@ impl PresenceStore {
         &self,
         identity_id: Uuid,
         status: PresenceStatus,
-        playing: Option<Uuid>,
+        active_in: Option<Uuid>,
     ) -> OffsetDateTime {
         let now = OffsetDateTime::now_utc();
         {
@@ -163,7 +163,7 @@ impl PresenceStore {
                 identity_id,
                 PresenceEntry {
                     status,
-                    playing,
+                    active_in,
                     updated_at: now,
                     seen_at: Instant::now(),
                 },
@@ -174,7 +174,7 @@ impl PresenceStore {
         let _ = self.updates.send(PresenceResponse {
             identity_id,
             status,
-            playing,
+            active_in,
             updated_at: now,
         });
         now
@@ -205,14 +205,14 @@ impl PresenceStore {
                     PresenceView {
                         identity_id,
                         status: PresenceStatus::Offline,
-                        playing: None,
+                        active_in: None,
                         updated_at: OffsetDateTime::now_utc(),
                     }
                 } else {
                     PresenceView {
                         identity_id,
                         status: entry.status,
-                        playing: entry.playing,
+                        active_in: entry.active_in,
                         updated_at: entry.updated_at,
                     }
                 }
@@ -220,7 +220,7 @@ impl PresenceStore {
             None => PresenceView {
                 identity_id,
                 status: PresenceStatus::Offline,
-                playing: None,
+                active_in: None,
                 updated_at: OffsetDateTime::now_utc(),
             },
         }
@@ -236,7 +236,7 @@ impl Default for PresenceStore {
 struct PresenceView {
     identity_id: Uuid,
     status: PresenceStatus,
-    playing: Option<Uuid>,
+    active_in: Option<Uuid>,
     updated_at: OffsetDateTime,
 }
 
@@ -244,7 +244,7 @@ struct PresenceView {
 pub struct PresenceResponse {
     pub identity_id: Uuid,
     pub status: PresenceStatus,
-    pub playing: Option<Uuid>,
+    pub active_in: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
@@ -254,24 +254,24 @@ impl From<PresenceView> for PresenceResponse {
         Self {
             identity_id: view.identity_id,
             status: view.status,
-            playing: view.playing,
+            active_in: view.active_in,
             updated_at: view.updated_at,
         }
     }
 }
 
-/// Reads `presence_preferences.hide_playing` for every id in `ids` in one
+/// Reads `presence_preferences.hide_active_in` for every id in `ids` in one
 /// batched query, returning the set of ids that currently have it set.
 /// Absence (no row at all) means "not hidden" — see module doc comment —
 /// so the caller only ever needs the positive set, never a full map with
 /// defaults filled in.
-async fn hide_playing_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uuid>, AppError> {
+async fn hide_active_in_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uuid>, AppError> {
     if ids.is_empty() {
         return Ok(HashSet::new());
     }
     let rows = sqlx::query(
         "SELECT identity_id FROM presence_preferences WHERE identity_id = ANY($1) \
-         AND hide_playing = true",
+         AND hide_active_in = true",
     )
     .bind(ids)
     .fetch_all(&state.pool)
@@ -283,13 +283,17 @@ async fn hide_playing_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uuid
     Ok(set)
 }
 
-/// Upserts `identity_id`'s own `hide_playing` preference — the durable
+/// Upserts `identity_id`'s own `hide_active_in` preference — the durable
 /// half of `PUT /me/presence`, see module doc comment for why this isn't
 /// part of the ephemeral `PresenceStore`.
-async fn set_hide_playing(state: &AppState, identity_id: Uuid, hide: bool) -> Result<(), AppError> {
+async fn set_hide_active_in(
+    state: &AppState,
+    identity_id: Uuid,
+    hide: bool,
+) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO presence_preferences (identity_id, hide_playing) VALUES ($1, $2) \
-         ON CONFLICT (identity_id) DO UPDATE SET hide_playing = EXCLUDED.hide_playing",
+        "INSERT INTO presence_preferences (identity_id, hide_active_in) VALUES ($1, $2) \
+         ON CONFLICT (identity_id) DO UPDATE SET hide_active_in = EXCLUDED.hide_active_in",
     )
     .bind(identity_id)
     .bind(hide)
@@ -301,80 +305,85 @@ async fn set_hide_playing(state: &AppState, identity_id: Uuid, hide: bool) -> Re
 #[derive(Deserialize)]
 pub struct UpdatePresenceRequest {
     pub status: PresenceStatus,
-    /// Opt out of (or back into) `playing` ever being shown, independent
-    /// of any game's `presence.publish` grant. `None` leaves the existing
+    /// Opt out of (or back into) `active_in` ever being shown, independent
+    /// of any integrator's `presence.publish` grant. `None` leaves the existing
     /// preference untouched — this endpoint publishes a status on every
     /// call, but the caller doesn't have to re-state its opt-out choice
     /// every heartbeat.
     #[serde(default)]
-    pub hide_playing: Option<bool>,
+    pub hide_active_in: Option<bool>,
 }
 
 /// `PUT /me/presence` — a user publishing their own status. Deliberately
-/// cannot set `playing`: that's reserved for a game's own credential
-/// (`update_game_presence` below).
+/// cannot set `active_in`: that's reserved for an integrator's own credential
+/// (`update_integrator_presence` below).
 pub async fn update_my_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<UpdatePresenceRequest>,
 ) -> Result<Json<PresenceResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
-    if let Some(hide) = body.hide_playing {
-        set_hide_playing(&state, identity_id, hide).await?;
+    if let Some(hide) = body.hide_active_in {
+        set_hide_active_in(&state, identity_id, hide).await?;
     }
     let updated_at = state.presence.set(identity_id, body.status, None);
     Ok(Json(PresenceResponse {
         identity_id,
         status: body.status,
-        playing: None,
+        active_in: None,
         updated_at,
     }))
 }
 
-/// The one rule a game's presence claim must satisfy: `playing`, if set at
-/// all, must name the calling game's own id. Pure and DB-free so it's
+/// The one rule an integrator's presence claim must satisfy: `active_in`, if set at
+/// all, must name the calling integrator's own id. Pure and DB-free so it's
 /// directly unit-testable — see this module's tests below — separate from
 /// `require_capability`'s binding/grant check, which does need the
 /// database.
-fn validate_game_playing(caller_game_id: Uuid, playing: Option<Uuid>) -> Result<(), AppError> {
-    match playing {
-        Some(game_id) if game_id != caller_game_id => Err(AppError::PresencePlayingMismatch),
+fn validate_integrator_playing(
+    caller_integrator_id: Uuid,
+    active_in: Option<Uuid>,
+) -> Result<(), AppError> {
+    match active_in {
+        Some(integrator_id) if integrator_id != caller_integrator_id => {
+            Err(AppError::PresenceActiveInMismatch)
+        }
         _ => Ok(()),
     }
 }
 
 #[derive(Deserialize)]
-pub struct UpdateGamePresenceRequest {
+pub struct UpdateIntegratorPresenceRequest {
     pub status: PresenceStatus,
-    /// Must be the calling game's own id, or omitted/`null` — see
-    /// [`validate_game_playing`].
+    /// Must be the calling integrator's own id, or omitted/`null` — see
+    /// [`validate_integrator_playing`].
     #[serde(default)]
-    pub playing: Option<Uuid>,
+    pub active_in: Option<Uuid>,
 }
 
-/// `PUT /presence/:identity_id` — a game publishing presence on behalf of
+/// `PUT /presence/:identity_id` — an integrator publishing presence on behalf of
 /// a user it's bound to. Authenticated via `crate::authz`'s
 /// `Caller`/`require_capability` (issue #28): the caller must be
-/// `Caller::Game` (a user session hitting this route is rejected — that
+/// `Caller::Integrator` (a user session hitting this route is rejected — that
 /// endpoint is `PUT /me/presence` above), the path `identity_id` must
-/// match the identity the game claims to act for
+/// match the identity the integrator claims to act for
 /// (`x-avalon-identity-id`, resolved by `authenticate_caller` — see
-/// `authz`'s own doc comment for why this heads off a game naming one
-/// identity in the path and another in the header), and the game must
+/// `authz`'s own doc comment for why this heads off an integrator naming one
+/// identity in the path and another in the header), and the integrator must
 /// hold an active `presence.publish` grant under an active binding to
 /// that identity — `require_capability` alone is what rejects an unbound
 /// identity or a revoked/missing grant, no separate hand-rolled check
 /// here (see `authz`'s own module doc comment on why that's the one
 /// authorization decision, not two).
-pub async fn update_game_presence(
+pub async fn update_integrator_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(identity_id): Path<Uuid>,
-    Json(body): Json<UpdateGamePresenceRequest>,
+    Json(body): Json<UpdateIntegratorPresenceRequest>,
 ) -> Result<Json<PresenceResponse>, AppError> {
     let caller = authenticate_caller(&state, &headers).await?;
-    let Caller::Game {
-        game_id,
+    let Caller::Integrator {
+        integrator_id,
         identity_id: caller_identity_id,
     } = caller
     else {
@@ -384,14 +393,14 @@ pub async fn update_game_presence(
         return Err(AppError::Forbidden);
     }
 
-    validate_game_playing(game_id, body.playing)?;
+    validate_integrator_playing(integrator_id, body.active_in)?;
     require_capability(&caller, Capability::PresencePublish, &state).await?;
 
-    let updated_at = state.presence.set(identity_id, body.status, body.playing);
+    let updated_at = state.presence.set(identity_id, body.status, body.active_in);
     Ok(Json(PresenceResponse {
         identity_id,
         status: body.status,
-        playing: body.playing,
+        active_in: body.active_in,
         updated_at,
     }))
 }
@@ -425,7 +434,7 @@ fn presence_visible(
 fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> PresenceResponse {
     if hidden.contains(&view.identity_id) {
         PresenceResponse {
-            playing: None,
+            active_in: None,
             ..view
         }
     } else {
@@ -435,10 +444,10 @@ fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> Presen
 
 /// `GET /presence?ids=…` — session-authenticated. Reads default to
 /// friends-only visibility (see [`presence_visible`] and module doc
-/// comment); a caller-hidden `playing` preference
-/// (`presence_preferences.hide_playing`, see [`hide_playing_for`]) is
+/// comment); a caller-hidden `active_in` preference
+/// (`presence_preferences.hide_active_in`, see [`hide_active_in_for`]) is
 /// applied independently on top, so an identity visible to the caller can
-/// still have `playing` come back `null` if they've opted out of it.
+/// still have `active_in` come back `null` if they've opted out of it.
 pub async fn get_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -464,7 +473,7 @@ pub async fn get_presence(
     // non-friend reads identically, for the same reason.
     let friend_ids = crate::friends::friend_partners(&state, caller).await?;
     let blocked_partners = crate::blocks::block_partners(&state, caller).await?;
-    let hidden_playing = hide_playing_for(&state, &ids).await?;
+    let hidden_playing = hide_active_in_for(&state, &ids).await?;
     let views = ids
         .into_iter()
         .map(|id| {
@@ -474,7 +483,7 @@ pub async fn get_presence(
                 PresenceResponse {
                     identity_id: id,
                     status: PresenceStatus::Offline,
-                    playing: None,
+                    active_in: None,
                     updated_at: OffsetDateTime::now_utc(),
                 }
             }
@@ -526,7 +535,7 @@ fn offline_view(id: Uuid) -> PresenceResponse {
     PresenceResponse {
         identity_id: id,
         status: PresenceStatus::Offline,
-        playing: None,
+        active_in: None,
         updated_at: OffsetDateTime::now_utc(),
     }
 }
@@ -535,7 +544,7 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
     // Loaded once per connection, not per message — see
     // `blocks::block_partners`'s own doc comment for the staleness
     // tradeoff this accepts; `friend_partners` and each subscribed id's
-    // `hide_playing` preference accept the same tradeoff for the same
+    // `hide_active_in` preference accept the same tradeoff for the same
     // reason.
     let friend_ids = match crate::friends::friend_partners(&state, caller).await {
         Ok(set) => set,
@@ -561,7 +570,7 @@ async fn handle_presence_socket(mut socket: WebSocket, state: AppState, caller: 
                         if new_ids.is_empty() {
                             continue;
                         }
-                        if let Ok(hidden) = hide_playing_for(&state, &new_ids).await {
+                        if let Ok(hidden) = hide_active_in_for(&state, &new_ids).await {
                             hidden_playing.extend(hidden);
                         }
                         // Send a catch-up snapshot for each newly-subscribed
@@ -703,33 +712,33 @@ mod tests {
     }
 
     #[test]
-    fn a_game_publishing_playing_for_another_games_id_is_rejected() {
-        let own_game_id = Uuid::new_v4();
-        let other_game_id = Uuid::new_v4();
+    fn a_integrator_publishing_playing_for_another_integrators_id_is_rejected() {
+        let own_integrator_id = Uuid::new_v4();
+        let other_integrator_id = Uuid::new_v4();
         assert!(matches!(
-            validate_game_playing(own_game_id, Some(other_game_id)),
-            Err(AppError::PresencePlayingMismatch)
+            validate_integrator_playing(own_integrator_id, Some(other_integrator_id)),
+            Err(AppError::PresenceActiveInMismatch)
         ));
     }
 
     #[test]
-    fn a_game_publishing_playing_for_its_own_id_is_accepted() {
-        let game_id = Uuid::new_v4();
-        assert!(validate_game_playing(game_id, Some(game_id)).is_ok());
+    fn a_integrator_publishing_playing_for_its_own_id_is_accepted() {
+        let integrator_id = Uuid::new_v4();
+        assert!(validate_integrator_playing(integrator_id, Some(integrator_id)).is_ok());
     }
 
     #[test]
-    fn a_game_publishing_with_no_playing_claim_is_always_accepted() {
-        assert!(validate_game_playing(Uuid::new_v4(), None).is_ok());
+    fn a_integrator_publishing_with_no_playing_claim_is_always_accepted() {
+        assert!(validate_integrator_playing(Uuid::new_v4(), None).is_ok());
     }
 
-    // The DB-backed "a game publishing for an unbound identity is
+    // The DB-backed "an integrator publishing for an unbound identity is
     // rejected" case is `require_capability`'s job, not
-    // `validate_game_playing`'s — see `crate::authz`'s own exhaustive
+    // `validate_integrator_playing`'s — see `crate::authz`'s own exhaustive
     // pure-logic test matrix (`no_binding_at_all_is_rejected` et al.) plus
     // its `live_tests` submodule for the real-Postgres version, and
     // `crates/server/tests/presence.rs`'s
-    // `a_game_cannot_publish_presence_for_an_unbound_identity` for the
+    // `a_integrator_cannot_publish_presence_for_an_unbound_identity` for the
     // full `PUT /presence/:identity_id` endpoint exercising it end to end.
 
     #[test]
@@ -784,16 +793,18 @@ mod tests {
         let view = PresenceResponse {
             identity_id: shown,
             status: PresenceStatus::Online,
-            playing: Some(Uuid::new_v4()),
+            active_in: Some(Uuid::new_v4()),
             updated_at: OffsetDateTime::now_utc(),
         };
-        assert!(hidden_playing_view(view.clone(), &hidden).playing.is_some());
+        assert!(hidden_playing_view(view.clone(), &hidden)
+            .active_in
+            .is_some());
 
         let hidden_view = PresenceResponse {
             identity_id: hidden_id,
             ..view
         };
-        assert_eq!(hidden_playing_view(hidden_view, &hidden).playing, None);
+        assert_eq!(hidden_playing_view(hidden_view, &hidden).active_in, None);
     }
 
     /// The ticket's own explicit ask (issue #16's Tests section): a

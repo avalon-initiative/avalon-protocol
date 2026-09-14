@@ -1,4 +1,4 @@
-//! Exercises the game-connect / capability grant / revoke flow (issues #27
+//! Exercises the integrator-connect / capability grant / revoke flow (issues #27
 //! and #83) against a real, running `avalon-server` and Postgres. Gated
 //! `--ignored` since it needs live infra — see `make test-live` / `make
 //! start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no reachable
@@ -53,16 +53,16 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-/// Registers a fresh game via the real `POST /games` endpoint (same
-/// pattern `crates/server/tests/games.rs::unique_game` uses) declaring the
+/// Registers a fresh integrator via the real `POST /integrators` endpoint (same
+/// pattern `crates/server/tests/integrators.rs::unique_integrator` uses) declaring the
 /// two capabilities these tests approve/reject against.
-async fn register_unique_game(http: &reqwest::Client, base: &str) -> serde_json::Value {
+async fn register_unique_integrator(http: &reqwest::Client, base: &str) -> serde_json::Value {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let body = serde_json::json!({
         "slug": format!("test-conn-{}", &suffix[..12]),
-        "name": format!("Connections Test Game {}", &suffix[..8]),
+        "name": format!("Connections Test Integrator {}", &suffix[..8]),
         "developer": "Test Studio",
         "requested_capabilities": ["presence.read", "friends.read"],
         "initial_key": {
@@ -72,11 +72,11 @@ async fn register_unique_game(http: &reqwest::Client, base: &str) -> serde_json:
     });
 
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     response.json().await.unwrap()
 }
@@ -88,11 +88,11 @@ async fn connecting_creates_a_binding_and_grants_approved_capabilities() {
     let base = server_url();
     let pool = test_pool().await;
     let (_, token) = seed_identity_session(&pool).await;
-    let game = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
+    let integrator = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
 
     let response = http
-        .post(format!("{base}/games/{slug}/connect"))
+        .post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
         .send()
@@ -127,11 +127,11 @@ async fn connecting_with_an_undeclared_capability_is_rejected() {
     let base = server_url();
     let pool = test_pool().await;
     let (_, token) = seed_identity_session(&pool).await;
-    let game = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
+    let integrator = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
 
     let response = http
-        .post(format!("{base}/games/{slug}/connect"))
+        .post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["wallet.write"] }))
         .send()
@@ -147,11 +147,11 @@ async fn reconnecting_does_not_duplicate_the_binding() {
     let base = server_url();
     let pool = test_pool().await;
     let (_, token) = seed_identity_session(&pool).await;
-    let game = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
+    let integrator = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
 
     let first = http
-        .post(format!("{base}/games/{slug}/connect"))
+        .post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
         .send()
@@ -162,7 +162,7 @@ async fn reconnecting_does_not_duplicate_the_binding() {
         .unwrap();
 
     let second = http
-        .post(format!("{base}/games/{slug}/connect"))
+        .post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["friends.read"] }))
         .send()
@@ -206,11 +206,14 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
     let base = server_url();
     let pool = test_pool().await;
     let (_, token) = seed_identity_session(&pool).await;
-    let game = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
-    let key_id = game["credential"]["key_id"].as_str().unwrap().to_string();
+    let integrator = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
+    let key_id = integrator["credential"]["key_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    http.post(format!("{base}/games/{slug}/connect"))
+    http.post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["friends.read"] }))
         .send()
@@ -219,8 +222,8 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
 
     let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
         server_url: base.clone(),
-        game_credential_key_id: key_id,
-        game_slug: None,
+        integrator_credential_key_id: key_id,
+        integrator_slug: None,
         signing_key: None,
     });
     let session = client
@@ -235,7 +238,7 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
     );
 
     let revoke = http
-        .delete(format!("{base}/games/{slug}/grants/friends.read"))
+        .delete(format!("{base}/integrators/{slug}/grants/friends.read"))
         .bearer_auth(&token)
         .send()
         .await
@@ -260,10 +263,10 @@ async fn disconnecting_revokes_every_active_grant() {
     let base = server_url();
     let pool = test_pool().await;
     let (_, token) = seed_identity_session(&pool).await;
-    let game = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
+    let integrator = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
 
-    http.post(format!("{base}/games/{slug}/connect"))
+    http.post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read", "friends.read"] }))
         .send()
@@ -271,7 +274,7 @@ async fn disconnecting_revokes_every_active_grant() {
         .unwrap();
 
     let disconnect = http
-        .delete(format!("{base}/games/{slug}/connect"))
+        .delete(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .send()
         .await
@@ -296,7 +299,7 @@ async fn disconnecting_revokes_every_active_grant() {
     // Reconnecting after ending must succeed (a partial-unique index, not a
     // plain unique constraint, backs `bindings`).
     let reconnect = http
-        .post(format!("{base}/games/{slug}/connect"))
+        .post(format!("{base}/integrators/{slug}/connect"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
         .send()

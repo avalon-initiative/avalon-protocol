@@ -95,7 +95,7 @@ fn event_body(title: &str) -> serde_json::Value {
     let starts_at = OffsetDateTime::now_utc() + time::Duration::days(1);
     serde_json::json!({
         "title": title,
-        "description": "bring your A game",
+        "description": "bring your An integrator",
         "starts_at": starts_at.format(&time::format_description::well_known::Rfc3339).unwrap(),
     })
 }

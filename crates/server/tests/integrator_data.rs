@@ -1,4 +1,4 @@
-//! Exercises Game Space instance-data publication and its visibility-aware
+//! Exercises Integrator Space instance-data publication and its visibility-aware
 //! read endpoint (issue #384, implementing #381's decided policy) against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
@@ -35,7 +35,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
         .expect("failed to seed identity");
     sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
         .bind(identity_id)
-        .bind(format!("game-data-test-{identity_id}"))
+        .bind(format!("integrator-data-test-{identity_id}"))
         .execute(pool)
         .await
         .expect("failed to seed profile");
@@ -53,20 +53,24 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-struct RegisteredGame {
+struct RegisteredIntegrator {
     signing_key: SigningKey,
     slug: String,
     key_id: String,
 }
 
-async fn register_game(http: &reqwest::Client, base: &str, prefix: &str) -> RegisteredGame {
+async fn register_integrator(
+    http: &reqwest::Client,
+    base: &str,
+    prefix: &str,
+) -> RegisteredIntegrator {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
     let slug = format!("{prefix}-{}", &suffix[..10]);
     let body = serde_json::json!({
         "slug": slug,
-        "name": format!("Test Game {}", &suffix[..8]),
+        "name": format!("Test Integrator {}", &suffix[..8]),
         "developer": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
@@ -75,14 +79,14 @@ async fn register_game(http: &reqwest::Client, base: &str, prefix: &str) -> Regi
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrators"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     let registered: serde_json::Value = response.json().await.unwrap();
-    RegisteredGame {
+    RegisteredIntegrator {
         signing_key,
         slug,
         key_id: registered["credential"]["key_id"]
@@ -92,9 +96,13 @@ async fn register_game(http: &reqwest::Client, base: &str, prefix: &str) -> Regi
     }
 }
 
-async fn game_auth_headers(http: &reqwest::Client, base: &str, game: &RegisteredGame) -> HeaderMap {
+async fn integrator_auth_headers(
+    http: &reqwest::Client,
+    base: &str,
+    integrator: &RegisteredIntegrator,
+) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{}/challenge", game.slug))
+        .post(format!("{base}/integrators/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -103,21 +111,32 @@ async fn game_auth_headers(http: &reqwest::Client, base: &str, game: &Registered
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature = game.signing_key.sign(&nonce);
+    let signature = integrator.signing_key.sign(&nonce);
 
     let mut headers = HeaderMap::new();
-    headers.insert("x-avalon-game-key-id", game.key_id.parse().unwrap());
-    headers.insert("x-avalon-game-challenge-id", challenge_id.parse().unwrap());
     headers.insert(
-        "x-avalon-game-signature",
+        "x-avalon-integrator-key-id",
+        integrator.key_id.parse().unwrap(),
+    );
+    headers.insert(
+        "x-avalon-integrator-challenge-id",
+        challenge_id.parse().unwrap(),
+    );
+    headers.insert(
+        "x-avalon-integrator-signature",
         BASE64.encode(signature.to_bytes()).parse().unwrap(),
     );
     headers
 }
 
-async fn connect(http: &reqwest::Client, base: &str, game: &RegisteredGame, token: &str) {
+async fn connect(
+    http: &reqwest::Client,
+    base: &str,
+    integrator: &RegisteredIntegrator,
+    token: &str,
+) {
     let response = http
-        .post(format!("{base}/games/{}/connect", game.slug))
+        .post(format!("{base}/integrators/{}/connect", integrator.slug))
         .bearer_auth(token)
         .json(&serde_json::json!({ "capabilities": [] }))
         .send()
@@ -129,11 +148,11 @@ async fn connect(http: &reqwest::Client, base: &str, game: &RegisteredGame, toke
 async fn publish_schema(
     http: &reqwest::Client,
     base: &str,
-    game: &RegisteredGame,
+    integrator: &RegisteredIntegrator,
     body: serde_json::Value,
 ) -> reqwest::Response {
-    let headers = game_auth_headers(http, base, game).await;
-    http.post(format!("{base}/games/{}/schemas", game.slug))
+    let headers = integrator_auth_headers(http, base, integrator).await;
+    http.post(format!("{base}/integrators/{}/schemas", integrator.slug))
         .headers(headers)
         .json(&body)
         .send()
@@ -152,12 +171,12 @@ const CHARACTER_PROTO: &str =
 async fn a_malformed_proto_schema_is_rejected_cleanly_and_the_server_stays_up() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http, &base, "test-malformed").await;
+    let integrator = register_integrator(&http, &base, "test-malformed").await;
 
     let response = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({ "proto_source": "this is not valid proto syntax {{{" }),
     )
     .await;
@@ -166,11 +185,11 @@ async fn a_malformed_proto_schema_is_rejected_cleanly_and_the_server_stays_up() 
     assert!(body.is_object());
 
     // The server is still alive and correctly serving an unrelated request.
-    let other_game = register_game(&http, &base, "test-after-malformed").await;
+    let other_integrator = register_integrator(&http, &base, "test-after-malformed").await;
     let ok = publish_schema(
         &http,
         &base,
-        &other_game,
+        &other_integrator,
         serde_json::json!({ "proto_source": CHARACTER_PROTO }),
     )
     .await;
@@ -185,21 +204,21 @@ async fn zero_or_multiple_top_level_messages_are_rejected_cleanly() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let game_zero = register_game(&http, &base, "test-zero-msg").await;
+    let integrator_zero = register_integrator(&http, &base, "test-zero-msg").await;
     let zero = publish_schema(
         &http,
         &base,
-        &game_zero,
+        &integrator_zero,
         serde_json::json!({ "proto_source": "syntax = \"proto3\";" }),
     )
     .await;
     assert_eq!(zero.status(), reqwest::StatusCode::BAD_REQUEST);
 
-    let game_multi = register_game(&http, &base, "test-multi-msg").await;
+    let integrator_multi = register_integrator(&http, &base, "test-multi-msg").await;
     let multi = publish_schema(
         &http,
         &base,
-        &game_multi,
+        &integrator_multi,
         serde_json::json!({
             "proto_source": "syntax = \"proto3\"; message A { uint32 x = 1; } message B { uint32 y = 1; }"
         }),
@@ -215,12 +234,12 @@ async fn zero_or_multiple_top_level_messages_are_rejected_cleanly() {
 async fn field_visibility_naming_a_nonexistent_field_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http, &base, "test-bad-field-vis").await;
+    let integrator = register_integrator(&http, &base, "test-bad-field-vis").await;
 
     let response = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({
             "proto_source": CHARACTER_PROTO,
             "field_visibility": { "does_not_exist": "private" },
@@ -238,12 +257,12 @@ async fn field_visibility_naming_a_nonexistent_field_is_rejected() {
 async fn a_pre_384_publish_request_shape_still_works() {
     let http = reqwest::Client::new();
     let base = server_url();
-    let game = register_game(&http, &base, "test-pre-384").await;
+    let integrator = register_integrator(&http, &base, "test-pre-384").await;
 
     let response = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({ "proto_source": CHARACTER_PROTO }),
     )
     .await;
@@ -261,14 +280,14 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let game = register_game(&http, &base, "test-bad-instance").await;
+    let integrator = register_integrator(&http, &base, "test-bad-instance").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &game, &token).await;
+    connect(&http, &base, &integrator, &token).await;
 
     let published = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({ "proto_source": CHARACTER_PROTO }),
     )
     .await
@@ -278,9 +297,12 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     let version = published["version"].as_u64().unwrap();
 
     // Unknown field.
-    let headers = game_auth_headers(&http, &base, &game).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let unknown_field = http
-        .post(format!("{base}/games/{}/schemas/{version}/data", game.slug))
+        .post(format!(
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "subject": identity_id,
@@ -292,9 +314,12 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     assert_eq!(unknown_field.status(), reqwest::StatusCode::BAD_REQUEST);
 
     // Wrong type.
-    let headers = game_auth_headers(&http, &base, &game).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let wrong_type = http
-        .post(format!("{base}/games/{}/schemas/{version}/data", game.slug))
+        .post(format!(
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "subject": identity_id,
@@ -305,9 +330,9 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
         .unwrap();
     assert_eq!(wrong_type.status(), reqwest::StatusCode::BAD_REQUEST);
 
-    // Nothing landed in game_data_instances for this subject.
+    // Nothing landed in integrator_data_instances for this subject.
     let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM game_data_instances WHERE subject = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM integrator_data_instances WHERE subject = $1")
             .bind(identity_id)
             .fetch_one(&pool)
             .await
@@ -315,21 +340,21 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     assert_eq!(count, 0);
 }
 
-/// Scenario 7: a game cannot publish instance data for an identity it has
+/// Scenario 7: an integrator cannot publish instance data for an identity it has
 /// no active binding to.
 #[tokio::test]
 #[ignore]
-async fn a_game_cannot_publish_instance_data_for_an_unbound_identity() {
+async fn a_integrator_cannot_publish_instance_data_for_an_unbound_identity() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let game = register_game(&http, &base, "test-unbound").await;
+    let integrator = register_integrator(&http, &base, "test-unbound").await;
     let (identity_id, _token) = seed_identity_session(&pool).await; // never connects
 
     let published = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({ "proto_source": CHARACTER_PROTO }),
     )
     .await
@@ -338,9 +363,12 @@ async fn a_game_cannot_publish_instance_data_for_an_unbound_identity() {
     .unwrap();
     let version = published["version"].as_u64().unwrap();
 
-    let headers = game_auth_headers(&http, &base, &game).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let response = http
-        .post(format!("{base}/games/{}/schemas/{version}/data", game.slug))
+        .post(format!(
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "subject": identity_id,
@@ -353,24 +381,24 @@ async fn a_game_cannot_publish_instance_data_for_an_unbound_identity() {
 }
 
 /// Scenario 8 (folded into the fuller cross-integrator isolation test
-/// below too): a game cannot publish instance data against another game's
+/// below too): an integrator cannot publish instance data against another integrator's
 /// schema.
 #[tokio::test]
 #[ignore]
-async fn a_game_cannot_publish_instance_data_against_another_games_schema() {
+async fn a_integrator_cannot_publish_instance_data_against_another_integrators_schema() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let game_a = register_game(&http, &base, "test-owner").await;
-    let game_b = register_game(&http, &base, "test-intruder").await;
+    let integrator_a = register_integrator(&http, &base, "test-owner").await;
+    let integrator_b = register_integrator(&http, &base, "test-intruder").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &game_a, &token).await;
-    connect(&http, &base, &game_b, &token).await;
+    connect(&http, &base, &integrator_a, &token).await;
+    connect(&http, &base, &integrator_b, &token).await;
 
     let published = publish_schema(
         &http,
         &base,
-        &game_a,
+        &integrator_a,
         serde_json::json!({ "proto_source": CHARACTER_PROTO }),
     )
     .await
@@ -379,12 +407,12 @@ async fn a_game_cannot_publish_instance_data_against_another_games_schema() {
     .unwrap();
     let version = published["version"].as_u64().unwrap();
 
-    // game_b authenticates as itself, but the path names game_a's schema.
-    let headers = game_auth_headers(&http, &base, &game_b).await;
+    // integrator_b authenticates as itself, but the path names integrator_a's schema.
+    let headers = integrator_auth_headers(&http, &base, &integrator_b).await;
     let response = http
         .post(format!(
-            "{base}/games/{}/schemas/{version}/data",
-            game_a.slug
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator_a.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
@@ -394,7 +422,7 @@ async fn a_game_cannot_publish_instance_data_against_another_games_schema() {
         .send()
         .await
         .unwrap();
-    // Rejected by `authenticate_owning_game` before schema ownership is
+    // Rejected by `authenticate_owning_integrator` before schema ownership is
     // even consulted: the path's own slug doesn't match the caller.
     assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
 }
@@ -407,14 +435,14 @@ async fn a_private_schema_with_one_public_field_exposes_only_that_field() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let game = register_game(&http, &base, "test-private-vis").await;
+    let integrator = register_integrator(&http, &base, "test-private-vis").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &game, &token).await;
+    connect(&http, &base, &integrator, &token).await;
 
     let published = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({
             "proto_source": CHARACTER_PROTO,
             "default_visibility": "private",
@@ -427,9 +455,12 @@ async fn a_private_schema_with_one_public_field_exposes_only_that_field() {
     .unwrap();
     let version = published["version"].as_u64().unwrap();
 
-    let headers = game_auth_headers(&http, &base, &game).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let publish_instance = http
-        .post(format!("{base}/games/{}/schemas/{version}/data", game.slug))
+        .post(format!(
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "subject": identity_id,
@@ -445,7 +476,7 @@ async fn a_private_schema_with_one_public_field_exposes_only_that_field() {
     );
 
     let read: Vec<serde_json::Value> = http
-        .get(format!("{base}/identities/{identity_id}/game-data"))
+        .get(format!("{base}/identities/{identity_id}/integrator-data"))
         .send()
         .await
         .unwrap()
@@ -468,14 +499,14 @@ async fn a_public_schema_with_one_private_field_hides_only_that_field() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let game = register_game(&http, &base, "test-public-vis").await;
+    let integrator = register_integrator(&http, &base, "test-public-vis").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &game, &token).await;
+    connect(&http, &base, &integrator, &token).await;
 
     let published = publish_schema(
         &http,
         &base,
-        &game,
+        &integrator,
         serde_json::json!({
             "proto_source": CHARACTER_PROTO,
             "field_visibility": { "level": "private" },
@@ -487,9 +518,12 @@ async fn a_public_schema_with_one_private_field_hides_only_that_field() {
     .unwrap();
     let version = published["version"].as_u64().unwrap();
 
-    let headers = game_auth_headers(&http, &base, &game).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator).await;
     let publish_instance = http
-        .post(format!("{base}/games/{}/schemas/{version}/data", game.slug))
+        .post(format!(
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "subject": identity_id,
@@ -505,7 +539,7 @@ async fn a_public_schema_with_one_private_field_hides_only_that_field() {
     );
 
     let read: Vec<serde_json::Value> = http
-        .get(format!("{base}/identities/{identity_id}/game-data"))
+        .get(format!("{base}/identities/{identity_id}/integrator-data"))
         .send()
         .await
         .unwrap()
@@ -520,10 +554,10 @@ async fn a_public_schema_with_one_private_field_hides_only_that_field() {
 }
 
 /// Full cross-integrator write isolation, end to end: a second, genuinely
-/// separate, properly-authenticated game can neither modify nor even
-/// observe any change against the first game's schema, instance data, or
+/// separate, properly-authenticated integrator can neither modify nor even
+/// observe any change against the first integrator's schema, instance data, or
 /// attestation. Deliberately stronger than "an unauthenticated caller is
-/// rejected" — Game 2 authenticates as itself throughout.
+/// rejected" — Integrator 2 authenticates as itself throughout.
 #[tokio::test]
 #[ignore]
 async fn cross_integrator_write_isolation_is_total() {
@@ -531,15 +565,15 @@ async fn cross_integrator_write_isolation_is_total() {
     let base = server_url();
     let pool = test_pool().await;
 
-    // Game 1: schema + instance + achievement, all real.
-    let game_1 = register_game(&http, &base, "test-iso-owner").await;
+    // Integrator 1: schema + instance + achievement, all real.
+    let integrator_1 = register_integrator(&http, &base, "test-iso-owner").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &game_1, &token).await;
+    connect(&http, &base, &integrator_1, &token).await;
 
     let published = publish_schema(
         &http,
         &base,
-        &game_1,
+        &integrator_1,
         serde_json::json!({
             "proto_source": CHARACTER_PROTO,
             "default_visibility": "private",
@@ -553,11 +587,11 @@ async fn cross_integrator_write_isolation_is_total() {
     let version = published["version"].as_u64().unwrap();
     let schema_id = published["id"].as_str().unwrap().to_string();
 
-    let headers = game_auth_headers(&http, &base, &game_1).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator_1).await;
     let instance_response = http
         .post(format!(
-            "{base}/games/{}/schemas/{version}/data",
-            game_1.slug
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator_1.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
@@ -570,10 +604,10 @@ async fn cross_integrator_write_isolation_is_total() {
     assert!(instance_response.status().is_success());
     let instance_before: serde_json::Value = instance_response.json().await.unwrap();
 
-    // A real achievement, defined and issued by game_1.
+    // A real achievement, defined and issued by integrator_1.
     // Re-register with the achievements.issue capability so `connect`
     // above (already run with `[]`) doesn't need to be redone — instead
-    // register a second game specifically for this, matching
+    // register a second integrator specifically for this, matching
     // `tests/attestations.rs`'s own pattern.
     let issuer = {
         let suffix = Uuid::new_v4().simple().to_string();
@@ -599,7 +633,7 @@ async fn cross_integrator_write_isolation_is_total() {
             .unwrap();
         assert!(response.status().is_success());
         let registered: serde_json::Value = response.json().await.unwrap();
-        RegisteredGame {
+        RegisteredIntegrator {
             signing_key,
             slug,
             key_id: registered["credential"]["key_id"]
@@ -610,7 +644,7 @@ async fn cross_integrator_write_isolation_is_total() {
     };
     connect(&http, &base, &issuer, &token).await;
     let issuer_connect = http
-        .post(format!("{base}/games/{}/connect", issuer.slug))
+        .post(format!("{base}/integrators/{}/connect", issuer.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -618,9 +652,9 @@ async fn cross_integrator_write_isolation_is_total() {
         .unwrap();
     assert!(issuer_connect.status().is_success());
 
-    let headers = game_auth_headers(&http, &base, &issuer).await;
+    let headers = integrator_auth_headers(&http, &base, &issuer).await;
     let define = http
-        .post(format!("{base}/games/{}/achievements", issuer.slug))
+        .post(format!("{base}/integrators/{}/achievements", issuer.slug))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "isolation_test",
@@ -641,14 +675,14 @@ async fn cross_integrator_write_isolation_is_total() {
         format!("avalon:achievement.issued:v1:{issuer_ref_str}:{identity_id}:{achievement_id}")
             .into_bytes();
     let signature = issuer.signing_key.sign(&signing_bytes);
-    let mut headers = game_auth_headers(&http, &base, &issuer).await;
+    let mut headers = integrator_auth_headers(&http, &base, &issuer).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/isolation_test/issue",
+            "{base}/integrators/{}/achievements/isolation_test/issue",
             issuer.slug
         ))
         .headers(headers)
@@ -663,16 +697,16 @@ async fn cross_integrator_write_isolation_is_total() {
     let attestation_before: serde_json::Value = issue.json().await.unwrap();
     let attestation_id = attestation_before["id"].as_str().unwrap().to_string();
 
-    // Game 2: a fully legitimate, separately-registered, properly
-    // authenticated integrator with no relationship to game_1's stuff.
-    let game_2 = register_game(&http, &base, "test-iso-intruder").await;
-    connect(&http, &base, &game_2, &token).await;
+    // Integrator 2: a fully legitimate, separately-registered, properly
+    // authenticated integrator with no relationship to integrator_1's stuff.
+    let integrator_2 = register_integrator(&http, &base, "test-iso-intruder").await;
+    connect(&http, &base, &integrator_2, &token).await;
 
-    // (a) Attempt to publish a new schema version attributed to game_1's
+    // (a) Attempt to publish a new schema version attributed to integrator_1's
     // slug — the classic cross-slug schema-publish forbidden case.
-    let headers = game_auth_headers(&http, &base, &game_2).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_schema_publish = http
-        .post(format!("{base}/games/{}/schemas", game_1.slug))
+        .post(format!("{base}/integrators/{}/schemas", integrator_1.slug))
         .headers(headers)
         .json(&serde_json::json!({ "proto_source": CHARACTER_PROTO }))
         .send()
@@ -680,12 +714,12 @@ async fn cross_integrator_write_isolation_is_total() {
         .unwrap();
     assert_eq!(bad_schema_publish.status(), reqwest::StatusCode::FORBIDDEN);
 
-    // (b) Publish instance data against game_1's schema (scenario 8).
-    let headers = game_auth_headers(&http, &base, &game_2).await;
+    // (b) Publish instance data against integrator_1's schema (scenario 8).
+    let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_instance_publish = http
         .post(format!(
-            "{base}/games/{}/schemas/{version}/data",
-            game_1.slug
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator_1.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
@@ -700,15 +734,15 @@ async fn cross_integrator_write_isolation_is_total() {
         reqwest::StatusCode::FORBIDDEN
     );
 
-    // (c) Issue an attestation under game_1's own issuer namespace — game_2
-    // can only authenticate and issue as itself, never as game_1, so this
-    // is exercised as "game_2 cannot issue under game_1's achievement key"
-    // by attempting the issue route under game_1's slug entirely.
-    let headers = game_auth_headers(&http, &base, &game_2).await;
+    // (c) Issue an attestation under integrator_1's own issuer namespace — integrator_2
+    // can only authenticate and issue as itself, never as integrator_1, so this
+    // is exercised as "integrator_2 cannot issue under integrator_1's achievement key"
+    // by attempting the issue route under integrator_1's slug entirely.
+    let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_issue = http
         .post(format!(
-            "{base}/games/{}/achievements/isolation_test/issue",
-            game_1.slug
+            "{base}/integrators/{}/achievements/isolation_test/issue",
+            integrator_1.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
@@ -720,14 +754,14 @@ async fn cross_integrator_write_isolation_is_total() {
         .unwrap();
     assert!(!bad_issue.status().is_success(), "{:?}", bad_issue.status());
 
-    // (d) Attempt to supersede game_1's existing instance data as game_2 —
+    // (d) Attempt to supersede integrator_1's existing instance data as integrator_2 —
     // same endpoint as (b), same result expected; folded in as a second
     // call to prove it's not a one-shot fluke.
-    let headers = game_auth_headers(&http, &base, &game_2).await;
+    let headers = integrator_auth_headers(&http, &base, &integrator_2).await;
     let bad_supersede = http
         .post(format!(
-            "{base}/games/{}/schemas/{version}/data",
-            game_1.slug
+            "{base}/integrators/{}/schemas/{version}/data",
+            integrator_1.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
@@ -739,9 +773,12 @@ async fn cross_integrator_write_isolation_is_total() {
         .unwrap();
     assert_eq!(bad_supersede.status(), reqwest::StatusCode::FORBIDDEN);
 
-    // Nothing about game_1's stored state moved at all.
+    // Nothing about integrator_1's stored state moved at all.
     let schema_after: serde_json::Value = http
-        .get(format!("{base}/games/{}/schemas/{version}", game_1.slug))
+        .get(format!(
+            "{base}/integrators/{}/schemas/{version}",
+            integrator_1.slug
+        ))
         .send()
         .await
         .unwrap()
@@ -753,7 +790,7 @@ async fn cross_integrator_write_isolation_is_total() {
     assert!(schema_after["superseded_by"].is_null());
 
     let instance_row = sqlx::query(
-        "SELECT id, instance, superseded_by FROM game_data_instances \
+        "SELECT id, instance, superseded_by FROM integrator_data_instances \
          WHERE schema_id = $1 AND subject = $2",
     )
     .bind(&schema_id)

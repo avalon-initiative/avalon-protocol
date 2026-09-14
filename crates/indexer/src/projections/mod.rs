@@ -16,10 +16,10 @@
 
 pub mod attestations;
 pub mod friendships;
-pub mod game_bindings;
-pub mod game_data_instances;
-pub mod game_schemas;
 pub mod guild_rosters;
+pub mod integrator_bindings;
+pub mod integrator_data_instances;
+pub mod integrator_schemas;
 pub mod profiles;
 
 /// Pulls a `Uuid`-shaped string field out of an event payload. Shared by

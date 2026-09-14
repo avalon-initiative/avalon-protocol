@@ -11,11 +11,11 @@
 //! ## `update_presence` deviates from issue #17's original design
 //!
 //! The issue describes presence *publishing* as `AvalonClient::publish_presence(identity_id,
-//! status)`, gated on an integrator credential and an active `GameBinding` (#83).
-//! None of that exists in this repo yet — there is no `GameCredential`, no
-//! `GameBinding`, no capability-grant system. What #16 actually built is
+//! status)`, gated on an integrator credential and an active `IntegratorBinding` (#83).
+//! None of that exists in this repo yet — there is no `IntegratorCredential`, no
+//! `IntegratorBinding`, no capability-grant system. What #16 actually built is
 //! `PUT /me/presence`: an *identity*, under their own session, publishing their
-//! own status. It has no `playing` field (no integrator can attribute that claim
+//! own status. It has no `active_in` field (no integrator can attribute that claim
 //! to itself yet) and cannot target another identity. So this module exposes
 //! `Session::update_presence` instead — matching what the server actually
 //! does — rather than an integrator-authority method the server has no endpoint
@@ -42,7 +42,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::{SdkError, Session};
 
-/// A friend, from this game's point of view.
+/// A friend, from this integrator's point of view.
 ///
 /// `display_name` is always `None` today: `GET /friends` returns only the
 /// two identity ids and the friendship's `since` timestamp (see
@@ -283,7 +283,7 @@ mod tests {
         Presence {
             identity_id,
             status: PresenceStatus::Online,
-            playing: None,
+            active_in: None,
             updated_at: OffsetDateTime::now_utc(),
         }
     }
@@ -321,7 +321,7 @@ mod tests {
             server_url: "http://127.0.0.1:1".to_string(),
             token: "test-token".to_string(),
             integrator_key_id: "test-key".to_string(),
-            game_slug: None,
+            integrator_slug: None,
             signing_key: None,
         }
     }

@@ -15,7 +15,7 @@
 //! "resolve the key at this point in time, then check the signature" logic.
 
 use avalon_protocol::achievements::{attestation_signing_bytes, AchievementAttestation};
-use avalon_protocol::games::{resolve_valid_signing_key, IssuerKey};
+use avalon_protocol::integrators::{resolve_valid_signing_key, IssuerKey};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -120,8 +120,8 @@ pub fn verify_authenticity(
 mod tests {
     use super::*;
     use avalon_protocol::achievements::{Issuer, Signature as AttestationSignature};
-    use avalon_protocol::games::{IssuerKey, KeyRole};
-    use avalon_protocol::ids::{AttestationId, GameId, GlobalId, IdentityId};
+    use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
+    use avalon_protocol::integrators::{IssuerKey, KeyRole};
     use ed25519_dalek::{Signer, SigningKey};
     use time::OffsetDateTime;
     use uuid::Uuid;
@@ -140,7 +140,7 @@ mod tests {
         let signature = signing_key.sign(&bytes);
         AchievementAttestation {
             id: AttestationId(Uuid::new_v4()),
-            issuer: Issuer::Game(GameId(Uuid::new_v4())),
+            issuer: Issuer::Game(IntegratorId(Uuid::new_v4())),
             subject,
             achievement,
             issued_at,

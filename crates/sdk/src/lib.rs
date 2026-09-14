@@ -1,11 +1,11 @@
-//! Reference Rust SDK. An integrator (game, app, or service) depends on this
+//! Reference Rust SDK. An integrator (integrator, app, or service) depends on this
 //! crate, never on `avalon-server` or `avalon-chain` directly — see
 //! `docs/stakeholders/Proposal.md` §17 and `docs/architecture/sdk.md`.
 //!
 //! `authenticate()` is wired to a real `avalon-server`: `GET /me` for
 //! identity/profile, `GET /me/grants` (issue #27) for this integrator's own
 //! active capability grants for the authenticating identity, identified via
-//! `AvalonConfig::game_credential_key_id`. `AvalonClient::login()` (issue
+//! `AvalonConfig::integrator_credential_key_id`. `AvalonClient::login()` (issue
 //! #398, see `device_login`) is the other way to end up with a `Session`,
 //! for a client with no WebAuthn surface of its own — it wraps #307's
 //! cross-device pairing and resolves to the same `Session` `authenticate()`
@@ -59,12 +59,12 @@ pub enum SdkError {
     #[error("not yet implemented")]
     NotImplemented,
     /// `Session::issue_achievement` (#34) needs this integrator's own slug
-    /// and signing key (`AvalonConfig::game_slug`/`signing_key`) to
+    /// and signing key (`AvalonConfig::integrator_slug`/`signing_key`) to
     /// authenticate the issuing request and sign the attestation locally —
     /// neither is required for a read-only integration, so both are
     /// `Option`s rather than mandatory config, and this is what's returned
     /// when a caller reaches for issuance without having supplied them.
-    #[error("this integrator's game_slug/signing_key were not configured")]
+    #[error("this integrator's integrator_slug/signing_key were not configured")]
     MissingIssuerCredentials,
     /// `device_login::DeviceLogin::wait` (#398): the user explicitly denied
     /// the pairing from the approving device (`POST /auth/device/deny`).
@@ -79,12 +79,12 @@ pub enum SdkError {
 
 pub struct AvalonConfig {
     pub server_url: String,
-    pub game_credential_key_id: String,
+    pub integrator_credential_key_id: String,
     /// This integrator's own registered slug — required only by methods
     /// that issue attestations on this integrator's own behalf
     /// (`Session::issue_achievement`, #34). `None` for a read-only
     /// integration.
-    pub game_slug: Option<String>,
+    pub integrator_slug: Option<String>,
     /// This integrator's own 32-byte Ed25519 signing key seed, held only
     /// in this process — the server never sees it, only a detached
     /// signature (#34's design). `None` for a read-only integration;
@@ -143,9 +143,9 @@ impl AvalonClient {
 
         // Permission grants (#27) — `GET /me/grants` returns this
         // integrator's own active grants for the authenticating identity,
-        // identified via `game_credential_key_id`
+        // identified via `integrator_credential_key_id`
         // (`x-avalon-integrator-key-id` — #293's generic header name; the
-        // server still accepts the older `x-avalon-game-key-id` too, but
+        // server still accepts the older `x-avalon-integrator-key-id` too, but
         // this SDK sends only the new one). A non-success response (e.g. an
         // unrecognized/placeholder key id, or the integrator has no grants
         // yet) is treated as "no grants" rather than an authentication
@@ -178,8 +178,8 @@ impl AvalonClient {
             http: self.http.clone(),
             server_url: self.config.server_url.clone(),
             token: identity_token.to_string(),
-            integrator_key_id: self.config.game_credential_key_id.clone(),
-            game_slug: self.config.game_slug.clone(),
+            integrator_key_id: self.config.integrator_credential_key_id.clone(),
+            integrator_slug: self.config.integrator_slug.clone(),
             signing_key: self.config.signing_key,
         })
     }
@@ -191,7 +191,7 @@ impl AvalonClient {
             .bearer_auth(identity_token)
             .header(
                 "x-avalon-integrator-key-id",
-                &self.config.game_credential_key_id,
+                &self.config.integrator_credential_key_id,
             )
             .send()
             .await?;
@@ -229,12 +229,12 @@ pub struct Session {
     /// through again.
     token: String,
     /// This integrator's own registered key id
-    /// (`AvalonConfig::game_credential_key_id`) — the same value already
+    /// (`AvalonConfig::integrator_credential_key_id`) — the same value already
     /// used for `GET /me/grants`, reused by `achievements::issue_achievement`
     /// (#34) as the challenge-response and embedded-proof `key_id`.
     integrator_key_id: String,
-    /// See `AvalonConfig::game_slug`.
-    game_slug: Option<String>,
+    /// See `AvalonConfig::integrator_slug`.
+    integrator_slug: Option<String>,
     /// See `AvalonConfig::signing_key`.
     signing_key: Option<[u8; 32]>,
 }
@@ -256,7 +256,7 @@ impl Session {
     /// Test-only escape hatch, kept even now that `authenticate()`
     /// populates `granted` from a real `GET /me/grants` call (#27): using
     /// the real flow end to end means driving a full integrator registration +
-    /// identity consent (`POST /games/{slug}/connect`) for every test that
+    /// identity consent (`POST /integrators/{slug}/connect`) for every test that
     /// needs a granted capability, which `crates/sdk/tests/guilds.rs` and
     /// `crates/sdk/tests/social.rs` do not otherwise need to exercise —
     /// they're testing `guilds.rs`/`social.rs`'s methods, not the consent

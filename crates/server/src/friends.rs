@@ -1,8 +1,8 @@
 //! Friend requests, friendships, and their durable events (issue #15).
 //!
 //! Every mutation here requires the caller's own user session — there is
-//! no game-credential auth path in this repo yet (see `crates/server/src/auth.rs`),
-//! so "a game cannot act on a user's behalf" is enforced simply by these
+//! no integrator-credential auth path in this repo yet (see `crates/server/src/auth.rs`),
+//! so "an integrator cannot act on a user's behalf" is enforced simply by these
 //! routes only ever accepting a session bearer token in the first place, not
 //! by an explicit per-request check against a credential kind.
 //!
@@ -86,7 +86,7 @@ pub struct ResolveHandleResponse {
 /// privacy tradeoffs, deliberately not folded in here. Session-authenticated
 /// like every other route in this module, both so an anonymous caller can't
 /// use it to enumerate handles and so it matches this module's existing
-/// "no game-credential auth path" convention.
+/// "no integrator-credential auth path" convention.
 pub async fn resolve_handle(
     State(state): State<AppState>,
     headers: HeaderMap,

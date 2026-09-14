@@ -1,14 +1,14 @@
-//! The Game Registry's derived-metrics read model — issue #261, the first
+//! The Integrator Registry's derived-metrics read model — issue #261, the first
 //! concrete slice of the epic-sized #89. See
-//! `docs/architecture/game-registry.md`.
+//! `docs/architecture/integrator-registry.md`.
 //!
 //! Composes two projections this crate already maintains
-//! (`projections::game_bindings`, `projections::attestations`) into the
+//! (`projections::integrator_bindings`, `projections::attestations`) into the
 //! four metrics #261 scopes in: `players`, `total players ever`,
 //! `achievements issued`/`revoked`, and `unique achievement holders`. Every
 //! value carries its definition string and class label — the contract the
 //! whole registry model depends on
-//! (`docs/architecture/game-registry.md`: "every published metric carries
+//! (`docs/architecture/integrator-registry.md`: "every published metric carries
 //! its definition and a class label"), never a bare number.
 //!
 //! All four are `durable-derived`: computed purely from durable protocol
@@ -25,18 +25,18 @@
 //! cardinality, not anonymity — `unique_achievement_holders: 1` on an
 //! obscure achievement identifies a specific real person just as surely as
 //! a name would. [`coarsen`] is the single enforcement point every metric
-//! in [`compute_for_game`] passes through: a count at or above
+//! in [`compute_for_integrator`] passes through: a count at or above
 //! [`min_cohort`] ships exactly as computed (`exact: true`); a count below
 //! it is replaced with the floor itself and `exact: false`, so a caller can
 //! render "fewer than N" rather than a false-precision number. Zero is
 //! never coarsened — "nobody" identifies no one, and reporting a
-//! non-durable-derived-activity game's metrics as `0` (rather than
+//! non-durable-derived-activity integrator's metrics as `0` (rather than
 //! withholding them) is this module's existing "absence means nothing
 //! happened yet" posture, unrelated to privacy. This is enforced once,
 //! centrally, here — never something `server`/`sdk`/the Hub have to
 //! remember to re-check, since they only ever see the already-coarsened
-//! value. There is currently exactly one caller of [`compute_for_game`]
-//! (`GET /games/{slug}/registry`, no filter parameters at all), so the
+//! value. There is currently exactly one caller of [`compute_for_integrator`]
+//! (`GET /integrators/{slug}/registry`, no filter parameters at all), so the
 //! "filter chain narrows a cohort below the floor" attack this ticket
 //! names has no live path yet — but [`coarsen`] checks the *final* computed
 //! count regardless of how many projections/filters fed into it, so a
@@ -47,7 +47,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::projections::{attestations, game_bindings};
+use crate::projections::{attestations, integrator_bindings};
 use crate::IndexError;
 
 pub const CLASS_DURABLE_DERIVED: &str = "durable-derived";
@@ -67,7 +67,7 @@ pub fn min_cohort() -> i64 {
 }
 
 /// Chosen as a round, documented number, not a silently-picked magic
-/// constant — small enough that a legitimate small/indie game's registry
+/// constant — small enough that a legitimate small/indie integrator's registry
 /// entry isn't withheld outright, large enough that "fewer than 5" doesn't
 /// narrow a cohort down to one identifiable person. Revisit with real data
 /// once the registry has real external traffic; see issue #96.
@@ -113,9 +113,9 @@ fn coarsen(raw_value: i64, floor: i64) -> (i64, bool) {
     }
 }
 
-/// The four #261 metrics for one game/issuer, each independently labeled.
+/// The four #261 metrics for one integrator/issuer, each independently labeled.
 #[derive(Debug, Clone, Serialize)]
-pub struct GameRegistryMetrics {
+pub struct IntegratorRegistryMetrics {
     pub players: Metric,
     pub total_players_ever: Metric,
     pub achievements_issued: Metric,
@@ -123,8 +123,8 @@ pub struct GameRegistryMetrics {
     pub unique_achievement_holders: Metric,
 }
 
-/// Computes all four metrics for `game_id`. `issuer` is the string form
-/// achievement events attribute to this game — `format!("game:{slug}")`,
+/// Computes all four metrics for `integrator_id`. `issuer` is the string form
+/// achievement events attribute to this integrator — `format!("game:{slug}")`,
 /// matching the convention `projections::attestations`'s own fixtures
 /// already established for the `issuer` field
 /// (`avalon_protocol::achievements::Issuer::Game` serialized as a plain
@@ -133,20 +133,20 @@ pub struct GameRegistryMetrics {
 ///
 /// Reads the projection tables directly (SQL aggregates), never replays
 /// events in memory — this is the request-time path; the pure
-/// `fold`/`count_*` helpers in `projections::game_bindings` and
+/// `fold`/`count_*` helpers in `projections::integrator_bindings` and
 /// `projections::attestations` exist so the same arithmetic can be proven
 /// against fixture events without Postgres (see their test modules).
 ///
-/// Never errors for a game with no activity — every count is `0`, not a
+/// Never errors for an integrator with no activity — every count is `0`, not a
 /// missing field or a distinguished error, matching this crate's "absence
 /// means nothing happened yet" posture (`docs/architecture/query-and-indexing.md`).
-pub async fn compute_for_game(
+pub async fn compute_for_integrator(
     pool: &PgPool,
-    game_id: Uuid,
+    integrator_id: Uuid,
     issuer: &str,
-) -> Result<GameRegistryMetrics, IndexError> {
-    let players = game_bindings::active_player_count(pool, game_id).await?;
-    let total_players_ever = game_bindings::total_players_ever(pool, game_id).await?;
+) -> Result<IntegratorRegistryMetrics, IndexError> {
+    let players = integrator_bindings::active_player_count(pool, integrator_id).await?;
+    let total_players_ever = integrator_bindings::total_players_ever(pool, integrator_id).await?;
     let achievements_issued = attestations::issued_count(pool, issuer).await?;
     let achievements_revoked = attestations::revoked_count(pool, issuer).await?;
     let unique_achievement_holders = attestations::unique_holder_count(pool, issuer).await?;
@@ -156,10 +156,10 @@ pub async fn compute_for_game(
     // consumer-agnostic, not one check per metric with its own threshold.
     let floor = min_cohort();
 
-    Ok(GameRegistryMetrics {
+    Ok(IntegratorRegistryMetrics {
         players: Metric::durable_derived(
             players,
-            "distinct identities with an active GameBinding",
+            "distinct identities with an active IntegratorBinding",
             floor,
         ),
         total_players_ever: Metric::durable_derived(
