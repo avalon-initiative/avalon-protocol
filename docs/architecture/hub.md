@@ -34,7 +34,7 @@ Because the Hub uses only the public API, other clients are possible by
 construction: web, mobile, desktop, a Discord integration, an integrator's native UI, a
 third-party application. `apps/mobile-hub` is the first proof — the same UI in a
 Tauri shell for desktop and mobile, for guild chat and presence without an integrator
-running ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-integrator)).
+running ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-game)).
 A user who never installs any Hub loses nothing at the protocol level.
 
 Rules that keep this true:
@@ -112,7 +112,7 @@ below is real and implemented unless noted otherwise.
   `Messages.vue` #105, `Activity.vue` #121, `Guilds.vue`/`Guild.vue` #24).
   Nothing on a logged-in page is an open input by default — read-only until
   an explicit edit action.
-- **Integrator discovery** (`IntegratorDirectory.vue`/`IntegratorProfile.vue`, #270),
+- **Integrator discovery** (`IntegrationDirectory.vue`/`IntegrationProfile.vue`, #270),
   **connections** (`Connections.vue`, #27/#83), and **guardian-based
   recovery** (`RecoverIdentity.vue`, #201) round out the unauthenticated and
   cross-integrator surfaces.

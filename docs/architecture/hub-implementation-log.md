@@ -68,7 +68,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   already covers), and the six most recent entries from `GET /me/history`
   with a "View all" link to `/activity`. All four of the newer sections
   reuse `apps/hub/src/api/integrations.ts`/`guilds.ts`/`guildChat.ts` as they
-  already existed for `IntegratorDirectory.vue`/`Guilds.vue`/guild chat — no new
+  already existed for `IntegrationDirectory.vue`/`Guilds.vue`/guild chat — no new
   endpoints. Every section has its own empty state with a next action
   (Explore Integrators / Find a Guild / Find friends), and
   `summarizeActivityEntry` covers all twelve `guild.*` event kinds the
@@ -190,9 +190,9 @@ the actual code ever disagree, the code is right and this doc is stale.
   /rank badges (star, rare, epic, legendary, …) get their own component per
   #311's design rather than being forced through `AvalonIcon`'s
   single-color `currentColor` model — tracked on the concurrent #332.
-- `IntegratorDirectory.vue` / `IntegratorProfile.vue` (#270, first buildable slice of
+- `IntegrationDirectory.vue` / `IntegrationProfile.vue` (#270, first buildable slice of
   #90) — `/integrations` (a search box + name/newest sort over `GET /integrations`,
-  `apps/hub/src/composables/useDiscoverIntegrators.ts`, same server-side
+  `apps/hub/src/composables/useDiscoverIntegrations.ts`, same server-side
   cursor-pagination-on-filter-change pattern `useDiscoverGuilds.ts`
   established for #154) and `/integrations/:slug` (the profile page: `GET
   /integrations/{slug}`'s public fields plus `GET /integrations/{slug}/registry`'s five
@@ -200,16 +200,16 @@ the actual code ever disagree, the code is right and this doc is stale.
   and class label — never a bare number). `/integrations` and `/integrations/:slug`
   redirect to the routes above (`apps/hub/src/router/index.ts`), so
   existing deep links don't 404. The nav entry (`HubShell.vue`) reads
-  "Connected Apps", not "Integrators" — per #282/#275, `category` tabs
+  "Connected Apps", not "Games" — per #282/#275, `category` tabs
   (Integrators/Apps/Services) filter the fetched list client-side, though only
   Integrators has real registrants today. Both public, unauthenticated reads —
   no session token required, matching the endpoints' own visibility (#273).
   `status` renders through a badge that's visibly distinct whenever it
   isn't `"active"`. No ranking, no score, no "recommended" ordering
   anywhere in either view, per #89's invariant —
-  `apps/hub/src/views/IntegratorDirectory.test.ts` and `IntegratorProfile.test.ts`
+  `apps/hub/src/views/IntegrationDirectory.test.ts` and `IntegrationProfile.test.ts`
   assert every metric's label renders and that no score/ranking element
-  exists. `IntegratorProfile.vue` also renders `GET /integrations/{slug}/keys`'s
+  exists. `IntegrationProfile.vue` also renders `GET /integrations/{slug}/keys`'s
   full issuer key history (#90, #80/#84 now decided/closed) — every key
   ever registered, root or operational, with its revoked status — and,
   only when the viewer is logged in, a "Your access" section reusing
@@ -220,7 +220,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   per-attestation (#33), not an integrator-level relationship graph — tracked as
   the one open item left on #90.
 - `Connections.vue` (`/connections`, #27/#83) — lists the caller's own
-  `IntegratorBinding`s with a revoke action. `ConnectIntegrator.vue` (`/connect/:slug`,
+  `IntegratorBinding`s with a revoke action. `ConnectIntegration.vue` (`/connect/:slug`,
   #27) — the capability-consent flow a user lands on to authorize an integrator,
   posting to `POST /integrations/{slug}/connect`.
 - `RecoverIdentity.vue` (`/recover-identity`, #201) — the guardian-based
@@ -247,7 +247,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   mobile-only fork** (#61's invariant, generalized library-wide by #310).
   `HubShell.vue` already collapses sidebar → `AvalonBottomNav` and hides the
   header search/footer at `768px` (`apps/hub/src/views/HubShell.module.scss`);
-  `Home.vue`'s grid and `IntegratorProfile.vue`'s metrics grid have their own
+  `Home.vue`'s grid and `IntegrationProfile.vue`'s metrics grid have their own
   breakpoints. #310's audit covered every `packages/ui` component the mock's
   Home/Login/CreateIdentity/Profile/Friends/`NetworkStatus` screens actually
   use (`AvalonAuthCard`, `AvalonForm`, `AvalonTextField`, `AvalonButton`,
@@ -326,5 +326,5 @@ the actual code ever disagree, the code is right and this doc is stale.
   above: `POST|DELETE /integrations/:slug/connect` (bind/unbind), `GET
   /me/connections`, `GET /me/grants`, and `DELETE
   /integrations/:slug/grants/:capability` (#27/#83), used by
-  `Connections.vue`/`ConnectIntegrator.vue`.
+  `Connections.vue`/`ConnectIntegration.vue`.
 

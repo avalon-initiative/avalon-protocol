@@ -20,7 +20,7 @@ const sortOptions: AvalonFilterBarSortOption[] = [
 ]
 
 const categoryTabs: { value: IntegratorCategory; label: string }[] = [
-  { value: 'game', label: 'Integrators' },
+  { value: 'game', label: 'Games' },
   { value: 'app', label: 'Apps' },
   { value: 'service', label: 'Services' },
 ]
@@ -43,7 +43,7 @@ function openIntegrator(slug: string) {
   <div :class="styles.page">
     <header :class="styles.pageHeader">
       <h1 :class="styles.title">Connected Apps</h1>
-      <p :class="styles.subtitle">Integrators, apps, and services connected to Avalon — browse by name or see the newest arrivals.</p>
+      <p :class="styles.subtitle">Games, apps, and services connected to Avalon — browse by name or see the newest arrivals.</p>
     </header>
 
     <AvalonCard title="Directory">

@@ -130,7 +130,7 @@ achievement.defined  →  achievement.issued  →  (achievement.revoked | attest
 Every step is an appended protocol event. Revocation never removes the issuance
 — see [`./revocation.md`](./revocation.md). Integrator event results (tournaments,
 seasonal championships, community campaigns, ...) are attestations with a
-integrator-event schema, not a separate mechanism — see
+game-event schema, not a separate mechanism — see
 [`./cross-integrator-events.md`](./cross-integrator-events.md).
 
 ## Issuance is signed, not merely authenticated (#32)

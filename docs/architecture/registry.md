@@ -84,7 +84,7 @@ activity. Every published metric carries its definition and a class label.
 | recognizing integrators | integrators with a public recognition relationship to this issuer | durable-derived |
 | guilds with players here | distinct guilds with ≥1 member bound to this integrator | durable-derived |
 | guild members associated | distinct guild members bound to this integrator | durable-derived |
-| integrator event participation | attestations with the integrator-event schema | durable-derived |
+| integrator event participation | attestations with the game-event schema | durable-derived |
 | key lifecycle / status / registration history | from issuer events | durable-derived |
 | players online now | from presence | **realtime** |
 | anything supplied by the integrator | e.g. genre, website | **self-reported** |
@@ -177,7 +177,7 @@ enforced.
 
 ## Today in the repo
 
-- `crates/protocol/src/integrations.rs` — `Integrator { id, slug, name, developer,
+- `crates/protocol/src/integrators.rs` — `Integrator { id, slug, name, developer,
   registered_at, category }`, `IntegratorRegistration`, `IntegratorCredential`.
   `category` (`IntegratorCategory`, #282) defaults to `Game`. No
   capabilities-supported or metrics.
@@ -222,7 +222,7 @@ enforced.
 - **`GET /integrations` — the Hub integrator directory's list endpoint (#270,
   canonical path per #293)**: public, unauthenticated, cursor-paginated the
   same way `GET /guilds/discover` already is (#154) —
-  `crates/server/src/integrations.rs`'s `build_integrators_list_query` mirrors
+  `crates/server/src/integrators.rs`'s `build_integrators_list_query` mirrors
   `guilds.rs`'s `build_discover_query` keyset-pagination shape exactly.
   `q=`/`sort=` (`newest` default | `name`, no ranking/score option)
   /`limit=`/`cursor=`, returning each integrator's public summary
@@ -233,40 +233,41 @@ enforced.
   indexer read model, same pragmatic call `discover_guilds` already made
   for guilds.
 - **Hub directory generalized to "Connected Apps" (#282)**: the Hub nav
-  entry and route moved from `/integrations` to `/integrations`
-  (`apps/hub/src/router/index.ts`); `/integrations` and `/integrations/:slug` still
+  entry and route moved from `/games` to `/integrations`
+  (`apps/hub/src/router/index.ts`); `/games` and `/games/:slug` still
   resolve, as redirects, so existing deep links don't 404.
-  `IntegratorDirectory.vue` gained category tabs (Integrators / Apps / Services)
-  filtering the fetched list client-side by `category`; only `Integrators` has
+  `IntegrationDirectory.vue` gained category tabs (Games / Apps / Services)
+  filtering the fetched list client-side by `category`; only `Games` has
   real registrants today, so the other tabs render correctly empty rather
   than being hidden.
-- **Server public API generalized: `/integrations` canonical, `/integrations`
-  compatibility path (#293)**: `crates/server/src/integrations.rs`/`lib.rs` route
-  `GET /integrations`/`GET /integrations/{slug}` as the canonical reads, with
-  `GET /integrations`/`GET /integrations/{slug}` kept working as real HTTP redirects
-  (`redirect_list_integrators`/`redirect_get_integrator`) to the new paths, preserving
-  the query string.
+- **Server public API generalized: `/integrations` canonical, `/games`
+  compatibility path (#293), compatibility since removed (#290)**:
+  `crates/server/src/integrators.rs`/`lib.rs` route
+  `GET /integrations`/`GET /integrations/{slug}` as the canonical reads. #293
+  kept `GET /games`/`GET /games/{slug}` working as real HTTP redirects to the
+  new paths (preserving the query string), and dual-routed `POST /games`
+  alongside `POST /integrations` to the same `register_integrator` handler
+  rather than redirecting — a redirect would silently turn the `POST` into a
+  `GET` in many clients. It also added generic `x-avalon-integrator-*`
+  equivalents for the `x-avalon-game-key-id`/`x-avalon-game-challenge-id`/
+  `x-avalon-game-signature` auth headers on the challenge-response flow
+  (below), accepting either name.
 
-  `POST /integrations` and `POST /integrations` (registration) both dual-route to
-  the same `register_integrator` handler rather than one redirecting to the
-  other — a redirect would silently turn the `POST` into a `GET` in many
-  clients. The `x-avalon-integrator-key-id`/`x-avalon-integrator-challenge-id`/
-  `x-avalon-integrator-signature` auth headers on the challenge-response flow
-  (below) gained generic `x-avalon-integrator-*` equivalents; either name is
-  accepted from a caller, and this repo's own SDK/CLI/Hub send only the new
-  name. No JSON field was renamed. The Hub's API client
-  (`apps/hub/src/api/client.ts`) now calls `/integrations`/`/integrations/{slug}`
-  directly rather than the compatibility path.
+  **#290 removed both compatibility layers** once it generalized the rest of
+  the vocabulary: `/integrations` is the only path and `x-avalon-integrator-*`
+  the only accepted header spelling. The Hub's API client
+  (`apps/hub/src/api/client.ts`) calls `/integrations`/`/integrations/{slug}`
+  directly.
 - **Hub integrator directory + per-integrator profile page (#270, first slice of
-  #90)**: `apps/hub/src/views/IntegratorDirectory.vue` lists `GET /integrations`
+  #90)**: `apps/hub/src/views/IntegrationDirectory.vue` lists `GET /integrations`
   results with a search box and name/newest sort toggle — no
-  "recommended" ordering, matching #89's invariant. `IntegratorProfile.vue`
-  (`/integrations/:slug`, `/integrations/:slug` redirects) renders `GET
+  "recommended" ordering, matching #89's invariant. `IntegrationProfile.vue`
+  (`/integrations/:slug`, with `/games/:slug` redirecting) renders `GET
   /integrations/{slug}`'s public fields plus `GET
   /integrations/{slug}/registry`'s five metrics via `AvalonMetricTile` — value,
   definition, and class label together, never a bare number. A
   non-`active` `status` renders as a visibly distinct badge
-  (`AvalonIntegratorCard`/`IntegratorProfile.vue`'s status badge) rather than reading
+  (`AvalonIntegratorCard`/`IntegrationProfile.vue`'s status badge) rather than reading
   the same as `active`; no key-history UI is built here (blocked on the
   still-open #80). `packages/ui`'s `AvalonIntegratorCard` and `AvalonMetricTile`
   are the new reusable components, in the existing
@@ -319,8 +320,9 @@ enforced.
   nav/route, and category tabs, described above.
 - [#293](https://github.com/LunarVagabond/avalon-protocol/issues/293) —
   generalized #282's Hub-internal route rename onto the server's public
-  API: `/integrations` canonical, `/integrations` a compatibility path, generic
-  `x-avalon-integrator-*` auth headers, described above.
+  API: `/integrations` canonical, `/games` a compatibility path, generic
+  `x-avalon-integrator-*` auth headers, described above. #290 later removed
+  the `/games` and `x-avalon-game-*` compatibility layers.
 - [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic
   this ticket and the rest of the registry work sit under.
 - [#96](https://github.com/LunarVagabond/avalon-protocol/issues/96) —

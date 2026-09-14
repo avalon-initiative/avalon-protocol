@@ -1,7 +1,7 @@
 # Synchronization: Offline and Deferred Protocol Participation
 
 **Avalon connectivity should be eventually available, not continuously
-required.** An integrator stays playable, and able to keep recording what its
+required.** A game stays playable, and able to keep recording what its
 user is doing, when Avalon is unreachable — a genuinely offline
 single-player integrator, a handheld with no signal, bad rural internet, or a
 temporary Avalon outage. The SDK owns this complexity, not each
@@ -81,7 +81,7 @@ operation ticket rather than each re-deriving its own answer:
 
 ## The hard problem: what does an offline claim actually prove
 
-An offline single-player integrator has no live server to attest anything while
+An offline single-player game has no live server to attest anything while
 disconnected — but its *client* could still record "the user defeated the
 dragon" locally. Treating that queued claim as equivalent to a normal
 `Issuer::Game` attestation the moment it's submitted is a real hole: it

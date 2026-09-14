@@ -67,7 +67,7 @@ Nothing above is integrator-scoped. The per-integrator counts are realtime prese
 | Integrator-internal clans that never touch Avalon | Integrator | stay integrator-side entirely |
 
 An integrator that wants purely internal clans keeps them in its own database and does
-not put them on Avalon. Avalon does not try to model every in-integrator group.
+not put them on Avalon. Avalon does not try to model every integrator-internal group.
 
 ## Integrator as client
 

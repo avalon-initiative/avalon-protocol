@@ -23,7 +23,7 @@ A shared, opt-in network that independent integrators can connect to for:
 - eventually, portable assets and ownership history
 
 An integrator may be commercial, open source, proprietary, self-hosted, community run,
-an MMO, a strategy integrator, or something that fits no category. Avalon has to be
+an MMO, a strategy game, or something that fits no category. Avalon has to be
 useful regardless.
 
 ## What Avalon is not
@@ -33,7 +33,7 @@ useful regardless.
 | A centralized platform (Roblox) | Avalon does not control identity, distribution, rules, economy, or governance for anyone's integrator. |
 | One universal MMO | There may be thousands of independent worlds; none is canonical. |
 | A universal character format | Race, class, level, stats, appearance, inventory belong to each integrator. See [`./bindings.md`](./bindings.md). |
-| A blockchain integrator | Settlement is infrastructure. Real-time gameplay never touches it. See [`./settlement.md`](./settlement.md). |
+| A blockchain game | Settlement is infrastructure. Real-time gameplay never touches it. See [`./settlement.md`](./settlement.md). |
 | A universal economy | No universal currency, market, or financial layer is foundational. See [`./future-layers.md`](./future-layers.md). |
 | A universal trust oracle | A signature proves who signed a claim, never that the claim is meaningful. See [`./trust-model.md`](./trust-model.md). |
 | A "good integrators" ranking | The registry publishes facts with definitions, never a score. See [`./registry.md`](./registry.md). |
@@ -172,7 +172,7 @@ Phases, as laid out in the Proposal:
 2. **SDK** — Rust first, then the languages actual integrations demand.
    [`../stakeholders/Proposal.md#24-phase-2--developer-sdk`](../stakeholders/Proposal.md#24-phase-2--developer-sdk)
 3. **External integrators** — independent integrators integrating validates the protocol.
-   [`../stakeholders/Proposal.md#25-phase-3--external-integrators`](../stakeholders/Proposal.md#25-phase-3--external-integrators)
+   [`../stakeholders/Proposal.md#25-phase-3--external-games`](../stakeholders/Proposal.md#25-phase-3--external-games)
 4. **Portable assets** — provenance, ownership, transfers, recognition.
    [`../stakeholders/Proposal.md#26-phase-4--portable-assets`](../stakeholders/Proposal.md#26-phase-4--portable-assets)
 5. **Economy** — only after the network demonstrates real utility.

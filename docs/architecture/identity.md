@@ -8,7 +8,7 @@ establish their own scoped participation under it (see
 across all of them.
 
 Narrative: [`../stakeholders/Proposal.md` §7](../stakeholders/Proposal.md#7-persistent-identity)
-and [§19](../stakeholders/Proposal.md#19-identity-vs-integrator-data).
+and [§19](../stakeholders/Proposal.md#19-identity-vs-game-data).
 
 ## The model
 

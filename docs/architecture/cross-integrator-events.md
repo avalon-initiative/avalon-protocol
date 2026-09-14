@@ -48,7 +48,7 @@ Integrator Event:    game:ashen-realms:integrator_event:avalon-championship-2027
 Subject:       Avalon Identity X
 Achievement:   game:ashen-realms:integrator_event:avalon-championship-2027:winner
 Issued at:     2027-08-14T20:11:03Z
-Schema:        integrator-event-result/v1
+Schema:        game-event-result/v1
 Signature:     ...
 ```
 
@@ -69,7 +69,7 @@ game:<slug>:integrator_event:<event-id>:finalist
 game:<slug>:integrator_event:<event-id>:participant
 ```
 
-The event itself gets an identity (a `GlobalId` of kind `integrator_event`) so that
+The event itself gets an identity (a `GlobalId` of kind `game_event`) so that
 participation, placement, and victory attestations from one occurrence can be
 grouped, and so a consumer can scope a recognition policy to that specific
 event rather than to every achievement the issuer ever signs. A schema
@@ -77,8 +77,8 @@ reference on the attestation ("this is an integrator event result, version 1") l
 consumer recognize the shape independently of the issuer's naming or of which
 kind of event it was.
 
-There is no separate settlement path: `integrator_event.result_issued` is
-`achievement.issued` with the integrator-event schema, batched and committed like any
+There is no separate settlement path: `game_event.result_issued` is
+`achievement.issued` with the game-event schema, batched and committed like any
 other [protocol event](./protocol-events.md).
 
 ## What counts as an integrator event
@@ -108,7 +108,7 @@ results and ignore Integrator C's, and the Hub shows both with the issuer named.
 [integrator registry](./registry.md) may report integrator-event activity as a
 derived metric; it never ranks events or the integrators that ran them.
 
-## Scenario G — cross-integrator integrator event
+## Scenario G — cross-integrator event
 
 Can Integrator A issue an event result that Integrator B can verify? Yes: Integrator A signs it
 under a registered [issuer key](./issuers.md), Avalon records and
@@ -135,6 +135,6 @@ a scoring correction), the history shows both the issuance and the
 - [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
   attestation trust model.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event kind
-  catalogue, where the integrator-event schema is registered.
+  catalogue, where the game-event schema is registered.
 - [#30](https://github.com/LunarVagabond/avalon-protocol/issues/30) — Epic:
   Achievements & Attestations.

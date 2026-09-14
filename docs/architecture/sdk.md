@@ -37,7 +37,7 @@ let avalon = Avalon::connect("postgres://...").await?;
 
 and not "which Postgres, which Redis, which chain RPC, which indexer, which
 region, which node". A developer should be able to say "I want identity,
-guilds, achievements, cross-integrator integrator event verification, and presence" and
+guilds, achievements, cross-integrator event verification, and presence" and
 consume exactly those.
 
 ## What the SDK abstracts
@@ -127,7 +127,7 @@ protocol and the domain model in `crates/protocol`; they never pull in
   itself. Milestones (`issue_milestone`/`milestones()`, the App/Service
   equivalent) aren't wired up yet — same shape, not this ticket's scope.
   Found and fixed a real pre-existing bug while live-verifying this: `GET
-  /me/grants` only ever read the deprecated `x-avalon-integrator-key-id` header,
+  /me/grants` only ever read the deprecated `x-avalon-game-key-id` header,
   silently ignoring the generalized `x-avalon-integrator-key-id` name the
   SDK actually sends (per #293) — every grant this SDK ever fetched was
   therefore invisible to `Session::require`, not just this ticket's new

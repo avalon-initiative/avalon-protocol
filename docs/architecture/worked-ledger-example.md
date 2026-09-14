@@ -233,7 +233,7 @@ published schema's `GlobalId`), not through some other, more general
 custom-event path — no such path exists yet. [Integrator event result
 attestations](./achievements-and-attestations.md) (tournaments, seasonal
 championships) are the same `achievement.issued`/`.defined` mechanism with
-an integrator-event schema, not a separate event kind — see issue #88, currently
+an game-event schema, not a separate event kind — see issue #88, currently
 on hold.
 
 ## What never appears here
@@ -253,7 +253,7 @@ and [`./privacy.md`](./privacy.md):
   checked by a source grep in
   `crates/server/tests/guild_messages_no_ledger.rs`).
 - **Ordinary gameplay** — HP, XP ticks, movement, combat, matchmaking,
-  Ashen Realms' own in-integrator economy. Avalon never sees any of it unless a
+  Ashen Realms' own in-game economy. Avalon never sees any of it unless a
   integrator deliberately chooses to describe or expose it through Integrator Space
   (schema publication today; data exposure, unbuilt).
 - **Typing indicators, connection state** — never durable, never even

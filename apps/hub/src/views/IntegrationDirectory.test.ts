@@ -73,7 +73,7 @@ describe('IntegrationDirectory', () => {
     await router.isReady()
     const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
     await flushPromises()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('No integrators match'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('No games match'))
   })
 
   it('renders the Apps/Services tabs as empty rather than hiding them', async () => {
@@ -102,7 +102,7 @@ describe('IntegrationDirectory', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
 
     const tabs = wrapper.findAll('[role="tab"]')
-    expect(tabs.map((t) => t.text())).toEqual(['Integrators', 'Apps', 'Services'])
+    expect(tabs.map((t) => t.text())).toEqual(['Games', 'Apps', 'Services'])
 
     await tabs[1].trigger('click')
     await flushPromises()

@@ -6,7 +6,7 @@ verifiable as the issuer record behind them. **The node operator is never the
 issuer**: hosted infrastructure transports, indexes, and settles an integrator's
 claims; it cannot sign them.
 
-Narrative: [`../stakeholders/Proposal.md` §18](../stakeholders/Proposal.md#18-integrator-registration).
+Narrative: [`../stakeholders/Proposal.md` §18](../stakeholders/Proposal.md#18-game-registration).
 
 ## Registration
 
@@ -142,7 +142,7 @@ holding k1.
 
 ## Today in the repo
 
-- `crates/protocol/src/integrations.rs` — `Integrator { id, slug, name, developer,
+- `crates/protocol/src/integrators.rs` — `Integrator { id, slug, name, developer,
   registered_at, status, category }` (`IntegratorStatus`, now `Active`/
   `Suspended`/`Revoked`/`Deprecated` — see #84 note below; `category` is
   `IntegratorCategory` — `Game`/`App`/`Service`, #282, defaults to `Game`),
@@ -158,7 +158,7 @@ holding k1.
   `issued_at`; a key-set change requires the authenticating key to resolve
   as root specifically), unit-tested directly against scenarios E and F
   above.
-- `crates/server/src/integrations.rs` (#26) — `POST /integrations` registers an integrator: slug
+- `crates/server/src/integrators.rs` (#26) — `POST /integrations` registers an integrator: slug
   (unique, lowercase `[a-z0-9-]`, 409 on collision — enforced with a unique
   index + `is_unique_violation()`, same pattern `guilds.rs::create_guild`
   uses), name, developer, `requested_capabilities`, and an initial Ed25519
@@ -212,27 +212,29 @@ holding k1.
   `Revoked`/`Deprecated` (the enum variants exist; nothing can set them
   yet), and root-key loss/compromise recovery (#80's own honestly-flagged
   residual risk, the same shape as #99).
-- **`/integrations` as the canonical public API path (#293)**: `POST
-  /integrations` dual-routes to the same registration handler as `POST
-  /integrations` (not a redirect — a `POST` redirect silently becomes a `GET` in
-  many clients); `GET /integrations`/`GET /integrations/{slug}` are
-  canonical, with `GET /integrations`/`GET /integrations/{slug}` kept working as real HTTP
-  redirects. The challenge-response auth headers gained generic
+- **`/integrations` as the canonical public API path (#293, finished by
+  #290)**: #293 made `/integrations` canonical while keeping `/games`
+  working — `POST /games` dual-routed to the same registration handler (not
+  a redirect, since a `POST` redirect silently becomes a `GET` in many
+  clients), and `GET /games`/`GET /games/{slug}` were real HTTP redirects to
+  their `/integrations` equivalents. It also added generic
   `x-avalon-integrator-key-id`/`x-avalon-integrator-challenge-id`/
-  `x-avalon-integrator-signature` equivalents alongside the original
-  `x-avalon-integrator-*` names — either is accepted from a caller; this repo's
-  own SDK/CLI send only the new name. Neither the `/integrations/{slug}/challenge`
-  and `/integrations/whoami` paths nor any JSON field were renamed by this pass.
+  `x-avalon-integrator-signature` headers alongside the original
+  `x-avalon-game-*` names. **#290 removed both compatibility layers**: every
+  integrator route now lives under `/integrations` (including
+  `/integrations/{slug}/challenge` and `/integrations/whoami`), and the
+  `x-avalon-integrator-*` headers are the only spelling accepted.
 - `crates/protocol/src/achievements.rs` — `Issuer::Game(IntegratorId)`; no status,
   no key set. #297 added additive sibling variants `Issuer::App(IntegratorId)` and
   `Issuer::Service(IntegratorId)`, mirroring `IntegratorCategory` (#282) — each
   mints its own `app:`/`service:` `GlobalId` namespace prefix via
   `Issuer::namespace()`, parallel to (never replacing) `Issuer::Game`'s
-  `integrator:` namespace.
+  `game:` namespace.
 - `crates/cli` — `avalon register-integrator --slug <slug> --name <name>
-  --developer <dev> [--capability <cap>]... [--server <url>]` (#29): generates
-  a fresh Ed25519 keypair locally, calls `POST /integrations` (#293's
-  canonical alias for `POST /integrations`) with the public key, saves the private
+  --owner-name <owner> [--capability <cap>]... [--server <url>]` (#29,
+  renamed from `register-game`/`--developer` by #290, both kept as working
+  aliases): generates a fresh Ed25519 keypair locally, calls
+  `POST /integrations` with the public key, saves the private
   key to `_running/keys/integrator-<slug>.signing-key` (mirroring
   `create-identity`'s local-key persistence) and prints it once with a
   loss-of-key warning — the server only ever stores the public half. Also
@@ -258,13 +260,18 @@ holding k1.
   decision.
 - [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275) —
   decision: additive `category` field (game/app/service), no rename of
-  `IntegratorId`/`Issuer::Game`/the `integrators` table/`game.*` event kinds.
+  `GameId`/`Issuer::Game`/the `games` table/`game.*` event kinds. Superseded
+  in part by [#290](https://github.com/LunarVagabond/avalon-protocol/issues/290),
+  which renamed the Rust types, tables and routes to `Integrator*` while
+  keeping the `game.*` event kinds, the `game:` `GlobalId` namespace, and the
+  `Game`/`App`/`Service` category variant names.
 - [#282](https://github.com/LunarVagabond/avalon-protocol/issues/282) —
   implementation of #275, described above.
 - [#293](https://github.com/LunarVagabond/avalon-protocol/issues/293) —
-  `/integrations` as the canonical public API path, `/integrations` kept as a
+  `/integrations` as the canonical public API path, `/games` kept as a
   compatibility path, generic `x-avalon-integrator-*` auth headers,
-  described above.
+  described above. #290 later dropped the `/games` and `x-avalon-game-*`
+  compatibility layers.
 - [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
   identity implementation, now unblocked by #80's decision above.
 - [#297](https://github.com/LunarVagabond/avalon-protocol/issues/297) —

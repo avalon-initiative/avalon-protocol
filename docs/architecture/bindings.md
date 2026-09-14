@@ -7,7 +7,7 @@ in the integrator's own database. **Integrator authority is scoped to the integr
 binding**: Integrator A can create and manage its profile of an identity and issue its
 own attestations; it cannot touch Integrator B's.
 
-Narrative: [`../stakeholders/Proposal.md` §19](../stakeholders/Proposal.md#19-identity-vs-integrator-data).
+Narrative: [`../stakeholders/Proposal.md` §19](../stakeholders/Proposal.md#19-identity-vs-game-data).
 
 ## The tree
 
@@ -96,7 +96,7 @@ about Integrator B's unless X's permissions expose it.
 
 ## Today in the repo
 
-- `crates/protocol/src/integrations.rs` — `IntegratorBinding { identity_id, integrator_id,
+- `crates/protocol/src/integrators.rs` — `IntegratorBinding { identity_id, integrator_id,
   established_at, ended_at }`, real now (#83), alongside `Integrator`,
   `IntegratorRegistration`, `IntegratorCredential`. No game-specific field exists on it,
   by design.

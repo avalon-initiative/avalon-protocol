@@ -186,11 +186,24 @@ versions on the *same* `network_id` genuinely isn't safe).
 
 **Standing rule for the wire/API axis, effective now**: additive-only,
 forever-compatible — generalizing #82's payload policy and what #293
-(`/integrations` → `/integrations`) and #297 (additive `register-integrator`
+(`/games` → `/integrations`) and #297 (additive `register-integrator`
 alias) already practiced without naming it. Never remove, rename, or
 repurpose a field or endpoint outright; add alongside and deprecate slowly.
 This is a code-review discipline expectation starting now, not gated on
 any further ticket.
+
+**One deliberate exception, taken once, before the repo went public: #290.**
+The terminology generalization renamed the request/response field names, and
+dropped the `/games` route family and the `x-avalon-game-*` headers that #293
+had kept as compatibility paths. That is squarely a break of the rule above,
+made knowingly on the grounds the rule itself depends on: the rule exists
+because operators who cannot be forced to upgrade are running independent
+nodes, and at the time of #290 there were none — the repo was private with
+zero external integrators, and every consumer of these shapes lived in this
+monorepo and was updated in the same change. Once the repo is public that
+argument is gone permanently, and the additive-only rule applies without
+exception. Any future proposal to rename a wire field or endpoint needs its
+own decision issue; it does not get to cite #290 as precedent.
 
 **Cross-cutting invariant, applies to every future piece of this**: a
 version claim is never trusted for anything *cryptographic* or used to

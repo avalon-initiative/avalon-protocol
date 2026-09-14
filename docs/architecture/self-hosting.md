@@ -16,7 +16,7 @@ deciding which one they actually want.
    Transparency pattern, not federation.
 2. **Running a private, disconnected instance.** An organization runs the
    exact same code, but roots it under its own `network_id` — a studio
-   spinning up Avalon for its own internal integrators, an air-gapped environment,
+   spinning up Avalon for its own internal games, an air-gapped environment,
    a staging/dev copy that should never touch production data. This document
    is about this case.
 
@@ -86,9 +86,9 @@ identity and social layer between *independent* integrators — the value descri
 in [`../developers/WhyBuildOnAvalon.md`](../developers/WhyBuildOnAvalon.md)
 compounds with the size of the *public* network, not with how many private
 forks of the code exist. A studio is always welcome to run their own
-instance; we'd just rather have their integrators on the actual network, where
+instance; we'd just rather have their games on the actual network, where
 their users' identities and communities are worth something beyond that
-one studio's integrators. If a private deployment starts asking "how do we
+one studio's games. If a private deployment starts asking "how do we
 eventually connect this to the real network" — the honest answer today is
 "there isn't one yet beyond re-registering integrators and re-issuing attestations
 on the public network" — that's a real gap, not a hidden feature; see

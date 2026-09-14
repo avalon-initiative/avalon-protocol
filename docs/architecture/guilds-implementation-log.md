@@ -295,7 +295,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   stat. Same honest-empty-state posture as `Friends.vue`'s own
   "Playing &lt;integrator&gt;" gap: `PresenceResponse.playing` is always null in
   practice today (no integrator has a live presence-publish binding yet), so
-  this card renders "No members currently reporting an in-integrator presence"
+  this card renders "No members currently reporting an in-game presence"
   in every real guild right now — the grouping/formatting logic itself is
   real and tested, and needs no further wiring once an integrator actually
   publishes `playing`.

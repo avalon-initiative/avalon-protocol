@@ -1379,7 +1379,7 @@ const {
       <div :class="styles.sideColumn">
         <AvalonCard title="Currently playing">
           <p v-if="playingGroups.length === 0" :class="styles.empty">
-            No members currently reporting an in-integrator presence.
+            No members currently reporting an in-game presence.
           </p>
           <template v-else>
             <p v-for="group in playingGroups" :key="group.integratorId" :class="styles.empty">

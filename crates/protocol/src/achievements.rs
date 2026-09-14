@@ -29,7 +29,7 @@ pub struct AchievementDefinition {
 /// Whoever is entitled to issue attestations. `Game`/`App`/`Service` mirror
 /// `IntegratorCategory` (issue #282, decision #275) — additive sibling
 /// variants sharing `IntegratorId`'s id space, each minting its own `GlobalId`
-/// namespace prefix (`integrator:`/`app:`/`service:`) for events they author.
+/// namespace prefix (`game:`/`app:`/`service:`) for events they author.
 /// `Issuer::Game` itself is unchanged, per #275.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Issuer {
@@ -148,7 +148,7 @@ mod issuer_tests {
     use uuid::Uuid;
 
     #[test]
-    fn integrator_issuer_namespace_is_unchanged() {
+    fn game_issuer_namespace_is_unchanged() {
         let issuer = Issuer::Game(IntegratorId(Uuid::new_v4()));
         assert_eq!(issuer.namespace(), "game");
     }

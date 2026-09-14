@@ -18,7 +18,7 @@ rebuildable from those facts
 | issuer key lifecycle and status | `issuer.key_*`, `issuer.suspended` / `.reinstated` / `.revoked` |
 | achievement definitions, issuance, revocation, supersession | `achievement.*`, `attestation.superseded` |
 | guild existence, membership history, roles, integrator associations | `guild.*` |
-| integrator event results (tournaments, seasonal events, ...) | `integrator_event.result_issued` |
+| integrator event results (tournaments, seasonal events, ...) | `game_event.result_issued` |
 | recognition relationships | `recognition.published` |
 | ownership and provenance (later phase) | asset events, when they exist |
 

@@ -293,7 +293,7 @@ async fn revoking_twice_is_rejected_not_silently_accepted() {
             let challenge: serde_json::Value = http
                 .post(format!(
                     "{base}/integrations/{}/challenge",
-                    issuer_ref.strip_prefix("integrator:").unwrap()
+                    issuer_ref.strip_prefix("game:").unwrap()
                 ))
                 .send()
                 .await

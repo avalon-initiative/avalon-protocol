@@ -184,7 +184,7 @@ where an emitter is genuinely signed, it's called out explicitly.
   Ed25519 key, verified the same way as `identity.created`) and
   `identity.signing_key_revoked` when a key is revoked
   (network-attributed).
-- **`crates/server/src/integrations.rs`** (#26) — `game.registered` on
+- **`crates/server/src/integrators.rs`** (#26) — `game.registered` on
   `POST /integrations`. `issuer`/`subject` are both `game:<slug>:self:registered`
   (`integrator_ref`). Network-attributed rather than integrator-key-signed — nothing has
   verified the registrant controls the submitted key yet at the point this
@@ -240,7 +240,7 @@ where an emitter is genuinely signed, it's called out explicitly.
 - **`crates/server/src/integrator_schemas.rs`** (#255) — `game_schema.published`,
   consumed by `crates/indexer/src/projections/integrator_schemas.rs` for
   schema-version discovery (see [registry.md](./registry.md)).
-- **`crates/server/src/integrations.rs`** (#84, implementing #80's two-tier key
+- **`crates/server/src/integrators.rs`** (#84, implementing #80's two-tier key
   model) — `issuer.key_added` (`POST /integrations/{slug}/keys`) and
   `issuer.key_revoked` (`POST /integrations/{slug}/keys/{key_id}/revoke`). Both
   require a currently-valid **root** key (`authenticate_integrator_root`) — an

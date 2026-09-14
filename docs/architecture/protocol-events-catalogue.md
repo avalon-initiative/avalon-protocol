@@ -40,7 +40,7 @@ milestone-1 stand-in until actor signatures exist.
 | `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
 | `guild.owner_transferred` | guild → identity | old owner, new owner, actor | guilds | acting owner's key |
 | `guild.game_associated` | guild → integrator | guild, integrator | associations | guild officer key |
-| `guild.favorite_games_updated` | guild → guild | favorited integrator ids, actor | favorites | acting officer's key |
+| `guild.favorite_games_updated` | guild → guild | favorited game ids, actor | favorites | acting officer's key |
 | `guild.channel_created` / `.channel_renamed` / `.channel_archived` | guild → channel | channel id, name, actor | channels | acting officer's key |
 | `game_schema.published` | integrator → schema | integrator id, version, `.proto` source, superseded_by | schema discovery (#255) | integrator key |
 | `achievement.defined` | integrator → achievement id | name, description, schema | definitions | integrator key |
@@ -51,7 +51,7 @@ milestone-1 stand-in until actor signatures exist.
 | `milestone.defined` / `.definition_updated` / `.definition_retired` | app/service → milestone id | same fields as the `achievement.*` row above | definitions | app/service key |
 | `milestone.issued` / `.revoked` | app/service → identity / attestation | same fields as `achievement.issued`/`.revoked` above | attestations | issuer key |
 | `attestation.superseded` | integrator → attestation | old ref, new ref | attestation status | issuer key |
-| `integrator_event.result_issued` | integrator → identity | `achievement.issued` with the integrator-event schema | attestations, registry | issuer key |
+| `game_event.result_issued` | integrator → identity | `achievement.issued` with the game-event schema | attestations, registry | issuer key |
 | `recognition.published` | integrator → issuer | recognized claim types / scopes | recognition graph | integrator key |
 
 Conventions: `issuer` and `subject` are `GlobalId`s

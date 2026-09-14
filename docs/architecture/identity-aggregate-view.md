@@ -34,7 +34,7 @@ game, app, or service — a *binding* (the identity's opt-in connection to
 that integrator, [`./bindings.md`](./bindings.md)) plus whatever
 attestations that integrator has issued about the identity under its own
 issuer key ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)).
-Integrator, App, and Service are one unified concept —
+Game, App, and Service are one unified concept —
 `avalon_protocol::integrators::IntegratorCategory` (issue #282, decided #275) —
 not three separate systems; a "layer 2" entry is always shaped the same
 way regardless of which category it belongs to, distinguished only by its
@@ -189,7 +189,7 @@ Three distinct pieces, three different rules:
   this user's achievements from anywhere" view possible at all.
 - **`published_schemas`** — real, built (`game_schema.published`, issue
   #255; see
-  [`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-integrators-own-custom-fact-looks-like-in-the-same-ledger)),
+  [`./worked-ledger-example.md`](./worked-ledger-example.md#what-an-integrators-own-custom-fact-looks-like-in-the-same-ledger)),
   now also carrying `default_visibility`/`field_visibility` (#381/#384).
   Emberfall Online *can* define its own arbitrary `Character` shape here —
   this is genuinely integrator-custom, by design, because nothing outside
@@ -207,7 +207,7 @@ Three distinct pieces, three different rules:
   narrow by design, not by limitation: the intent is small, portable,
   *fun-to-carry-across-integrators* flavor data — name, level, race, class,
   titles — never a character's full mechanical state (inventory, skills,
-  stats used for integrator balance). That heavier, genuinely integrator-critical data
+  stats used for game balance). That heavier, genuinely game-critical data
   has no reason to ever leave an integrator's own database; publishing it here
   would be a design mistake even once this mechanism exists, not just
   noise. Its read-access model is decided and built: see "Read access is
@@ -321,7 +321,7 @@ user session does — it has no issuer key of its own, and nothing in this
 document's `integrations` array represents Hub data, because the Hub has not
 published anything under its own issuer identity (the way Ashen Realms
 publishes `game_schema.published` — see
-[`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-integrators-own-custom-fact-looks-like-in-the-same-ledger)
+[`./worked-ledger-example.md`](./worked-ledger-example.md#what-an-integrators-own-custom-fact-looks-like-in-the-same-ledger)
 for that pattern).
 
 **As of this writing, there is no Hub-exclusive "block space" to publish**
