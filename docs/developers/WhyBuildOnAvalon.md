@@ -302,6 +302,42 @@ independent developers, and — per [`../architecture/nodes.md`](../architecture
 anyone else's claims. The value comes from being connected, not from Avalon
 owning the destinations.
 
+## Getting started in C#
+
+`bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works in Unity)
+has a real, building surface for friends/presence, guilds, and
+conversations — see [`../architecture/sdk.md`](../architecture/sdk.md) for
+the full method list and what's still a gap (e.g. `roster()`/`channels()`/
+`messages()` apply no visibility scoping yet — issue #87).
+
+```csharp
+using Avalon.Sdk;
+
+var client = new AvalonClient(new AvalonConfig("https://avalon.example", "your-integrator-key-id"));
+var session = await client.AuthenticateAsync(identityToken);
+
+// Friends and presence
+var friends = await session.FriendsAsync();
+await session.UpdatePresenceAsync(PresenceStatus.Online);
+var presenceUpdates = await session.SubscribePresenceAsync(friends.Select(f => f.IdentityId).ToList());
+
+// Guilds
+var memberships = await session.GuildsAsync();
+var guild = session.Guild(memberships[0].Guild.Id);
+var roster = await guild.RosterAsync();
+var general = (await guild.ChannelsAsync()).First();
+await guild.Channel(general.Id).SendAsync("hello from the game");
+
+// Conversations
+var dm = await session.DmAsync(friends[0].IdentityId);
+await dm.SendAsync("hey, are you online?");
+```
+
+Every method checks its own capability before making a request — a
+`Session` with no grants for `friends.read`/`guilds.chat`/`messages.send`/
+etc. throws `CapabilityNotGrantedException` without touching the network,
+same as the Rust reference SDK.
+
 ## Where this stands today
 
 See the root `README.md` for current build status and
