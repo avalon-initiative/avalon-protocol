@@ -10,6 +10,21 @@
   padding: var(--av-space-2) 0;
 }
 
+.viewTrigger {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-3);
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
 .name {
   flex: 1;
   min-width: 0;
@@ -17,6 +32,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  .viewTrigger:hover & {
+    text-decoration: underline;
+  }
 }
 
 .actions {

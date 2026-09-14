@@ -170,6 +170,11 @@ async function onRemoveFriend(identityId: string) {
   }
 }
 
+// Issue #393: opens a friend's read-only profile card.
+function onViewProfile(identityId: string) {
+  router.push({ name: 'player-profile', params: { id: identityId } })
+}
+
 // Starts (or opens the existing) conversation with this friend and jumps
 // straight to it — POST /conversations is idempotent on the participant
 // set, so this is never a duplicate even if one already exists.
@@ -206,6 +211,7 @@ async function onMessageFriend(identityId: string) {
             :status="friend.status"
             @message="onMessageFriend(friend.identityId)"
             @remove="onRemoveFriend(friend.identityId)"
+            @view="onViewProfile(friend.identityId)"
           />
         </AvalonCard>
 
@@ -219,6 +225,7 @@ async function onMessageFriend(identityId: string) {
             :status="friend.status"
             @message="onMessageFriend(friend.identityId)"
             @remove="onRemoveFriend(friend.identityId)"
+            @view="onViewProfile(friend.identityId)"
           />
         </AvalonCard>
       </div>

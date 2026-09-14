@@ -690,6 +690,11 @@ async function onSaveRoleChange() {
   }
 }
 
+// Issue #393: opens a member's read-only profile card.
+function onViewProfile(identityId: string) {
+  router.push({ name: 'player-profile', params: { id: identityId } })
+}
+
 async function onKick(identityId: string) {
   if (!session.token) return
   actionError.value = ''
@@ -1315,6 +1320,7 @@ const {
               :can-kick="canKickMember(guild, selfId, selfPermissions, member)"
               @change-role="startChangeRole(member.identityId, member.roleIndex)"
               @kick="onKick(member.identityId)"
+              @view="onViewProfile(member.identityId)"
             />
           </div>
 

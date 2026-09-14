@@ -410,6 +410,15 @@ future work). None of these affect the state machine or its invariants.
   recovery-guardians picker on the same page. Own-profile view only — per
   `list_profiles`'s note just above, these three fields stay deliberately
   absent from any other identity's profile view.
+- `apps/hub/src/views/PlayerProfile.vue` (#393) — a read-only profile card
+  for *another* identity, reachable by clicking a friend row or a guild
+  member row (neither had anywhere to link to before this). Shows only
+  `list_profiles`'s fields (display name, handle, avatar) plus live
+  presence — no `bio`/`favorite_genres`/`pronouns`/`banner_url`/etc., and no
+  shared-guilds list (no endpoint exposes another identity's guild
+  memberships at all yet). Whether/how to widen exposure for this specific
+  use case is tracked as its own open decision, issue #403 — not resolved
+  here as a side effect of adding the view.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never
