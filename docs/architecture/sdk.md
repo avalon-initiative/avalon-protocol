@@ -223,15 +223,19 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `guilds.read`.
 - `crates/sdk/src/sync_journal.rs` (#110, see
   [synchronization](./synchronization.md)) — `SyncJournal` trait
-  (`append`/`pending`/`mark_submitted`/`mark_failed`) plus `FileJournal`, a
-  dependency-light reference implementation: an append-only, `fsync`-per-
-  write JSON-lines file, replayed on `open()` to recover pending state after
-  a crash. `EntryId` is a client-generated `Uuid`, stable and never
-  server-assigned. `mark_submitted` is idempotent; `append` never
-  deduplicates identical payloads — both are unit-tested in the same file,
-  no `make test-live`/Postgres dependency. `AvalonClient`/`Session` don't
-  call it yet — that's #111 (deferred submission engine), which drains and
-  submits what an integrator journals.
+  (`append`/`pending`/`all`/`entry`/`mark_submitted`/`mark_rejected`/
+  `mark_failed`, plus #113's `status`/`status_of` default methods) plus
+  `FileJournal`, a dependency-light reference implementation: an
+  append-only, `fsync`-per-write JSON-lines file, replayed on `open()` to
+  recover pending state after a crash. `EntryId` is a client-generated
+  `Uuid`, stable and never server-assigned. `mark_submitted`/`mark_rejected`
+  are both idempotent and mutually exclusive (never overwrite each other);
+  `append` never deduplicates identical payloads — all unit-tested in the
+  same file, no `make test-live`/Postgres dependency. `AvalonClient`/
+  `Session` don't call it yet — that's #111 (deferred submission engine),
+  which drains and submits what an integrator journals, and
+  `SubmissionEngine::subscribe` (#113) for terminal-transition
+  notifications.
 - `crates/sdk/tests/conversations.rs` — live tests (`make test-live`)
   covering `dm()`/`send()`/`messages()` round-tripping across two real
   sessions (alice starts and sends, bob discovers the conversation via

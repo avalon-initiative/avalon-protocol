@@ -25,8 +25,11 @@
 //!   server and the server made a final decision *not* to apply it (a 4xx
 //!   that means the request itself is now invalid — the target conversation
 //!   is gone, the caller is blocked, the payload no longer parses, etc.).
-//!   This is terminal: the entry is marked submitted (so it's never
-//!   attempted again) and the rejection is surfaced to the caller via
+//!   This is terminal: the entry is marked rejected in the journal (issue
+//!   #113's [`SyncJournal::mark_rejected`] — a genuine terminal state
+//!   distinct from a real submission, not the "diagnostic record then mark
+//!   submitted" workaround this module used before #113) so it's never
+//!   attempted again, and the rejection is surfaced to the caller via
 //!   [`DrainOutcome::Rejected`] — never silently dropped, never retried.
 //! - `Err(SubmitError::Retryable(reason))` — a network error or 5xx. The
 //!   entry stays pending; the engine records a failure (for diagnostics,
@@ -384,6 +387,34 @@ pub struct DrainReport {
     pub outcome: DrainOutcome,
 }
 
+/// A terminal status transition (issue #113) — pushed to every listener
+/// registered via [`SubmissionEngine::subscribe`] the moment [`drain`](SubmissionEngine::drain)
+/// produces a terminal [`DrainOutcome`] for an entry, so a caller doesn't
+/// have to poll [`SyncJournal::status_of`] to notice one. Fires exactly
+/// once per entry: once an entry reaches a terminal state it leaves
+/// [`SyncJournal::pending`] and [`SubmissionEngine::drain`] never attempts
+/// (and so never reports) it again. `Deferred`/`AuthenticationRequired`
+/// outcomes are not transitions — the entry is still pending, nothing
+/// changed from a caller's point of view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusTransition {
+    Submitted {
+        id: EntryId,
+        kind: String,
+    },
+    Rejected {
+        id: EntryId,
+        kind: String,
+        reason: String,
+    },
+}
+
+/// A callback registered via [`SubmissionEngine::subscribe`]. Boxed rather
+/// than generic over the engine so an integrator can register more than one
+/// (a UI update *and* a metrics hook, say) without the engine's own type
+/// growing a listener-count type parameter.
+type StatusListener = Box<dyn Fn(&StatusTransition) + Send + Sync>;
+
 /// Drains a [`SyncJournal`], submitting each pending entry through a
 /// [`Transport`]. Deliberately owns no journal or transport itself — both
 /// are passed to [`drain`](SubmissionEngine::drain) each call, so an
@@ -397,6 +428,7 @@ pub struct SubmissionEngine<C: Clock = SystemClock> {
     backoff: BackoffPolicy,
     clock: C,
     retry_state: HashMap<EntryId, RetryState>,
+    listeners: Vec<StatusListener>,
 }
 
 impl SubmissionEngine<SystemClock> {
@@ -409,6 +441,7 @@ impl SubmissionEngine<SystemClock> {
             backoff,
             clock: SystemClock,
             retry_state: HashMap::new(),
+            listeners: Vec::new(),
         }
     }
 }
@@ -426,6 +459,24 @@ impl<C: Clock> SubmissionEngine<C> {
             backoff,
             clock,
             retry_state: HashMap::new(),
+            listeners: Vec::new(),
+        }
+    }
+
+    /// Registers `listener` to be called synchronously, in-process, on
+    /// every subsequent terminal transition a [`drain`](Self::drain) call
+    /// produces (issue #113) — no polling, no background thread, no async
+    /// channel: `drain` calls it directly, inline, before returning. An
+    /// integrator wanting async delivery instead composes this with
+    /// whatever channel type its own runtime prefers (send into it from the
+    /// closure) rather than this crate committing to one.
+    pub fn subscribe(&mut self, listener: impl Fn(&StatusTransition) + Send + Sync + 'static) {
+        self.listeners.push(Box::new(listener));
+    }
+
+    fn notify(&self, transition: &StatusTransition) {
+        for listener in &self.listeners {
+            listener(transition);
         }
     }
 
@@ -480,14 +531,22 @@ impl<C: Clock> SubmissionEngine<C> {
             Ok(SubmitOutcome::Applied) => {
                 journal.mark_submitted(id)?;
                 self.retry_state.remove(&id);
+                self.notify(&StatusTransition::Submitted {
+                    id,
+                    kind: kind.clone(),
+                });
                 DrainOutcome::Applied
             }
             Ok(SubmitOutcome::Rejected { reason }) => {
-                // Terminal: recorded for diagnostics, then marked submitted
-                // so it leaves `pending()` and is never attempted again.
-                journal.mark_failed(id, reason.clone())?;
-                journal.mark_submitted(id)?;
+                // Terminal: a genuine rejection (issue #113), distinct from
+                // a real submission — never attempted again either way.
+                journal.mark_rejected(id, reason.clone())?;
                 self.retry_state.remove(&id);
+                self.notify(&StatusTransition::Rejected {
+                    id,
+                    kind: kind.clone(),
+                    reason: reason.clone(),
+                });
                 DrainOutcome::Rejected { reason }
             }
             Err(SubmitError::Retryable(reason)) => {
@@ -534,7 +593,7 @@ impl<C: Clock> SubmissionEngine<C> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use crate::sync_journal::FileJournal;
 
@@ -745,6 +804,130 @@ mod tests {
         assert!(
             journal.pending().unwrap().is_empty(),
             "a terminally-rejected entry must leave pending()"
+        );
+        assert_eq!(
+            journal.status_of(id).unwrap(),
+            crate::sync_journal::EntryStatus::Rejected {
+                reason: "target conversation no longer exists".to_string()
+            },
+            "issue #113: a terminal rejection must be readable back through status_of, \
+             distinct from a real submission"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn subscribe_fires_exactly_once_on_a_terminal_applied_transition() {
+        let path = temp_journal_path("subscribe-applied");
+        let journal = FileJournal::open(&path).unwrap();
+        let id = journal
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
+            .unwrap();
+
+        let transport = ScriptedTransport::new(vec![Ok(SubmitOutcome::Applied)]);
+        let mut engine = SubmissionEngine::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_listener = Arc::clone(&seen);
+        engine.subscribe(move |transition| {
+            seen_for_listener.lock().unwrap().push(transition.clone());
+        });
+
+        engine.drain(&journal, &transport).await.unwrap();
+        // A second drain: nothing pending, listener must not fire again —
+        // ScriptedTransport would also panic if called a second time,
+        // since it only has one scripted outcome.
+        engine.drain(&journal, &transport).await.unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "must fire exactly once, not once per drain call"
+        );
+        assert_eq!(
+            seen[0],
+            StatusTransition::Submitted {
+                id,
+                kind: CONVERSATION_MESSAGE_KIND.to_string()
+            }
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn subscribe_fires_exactly_once_on_a_terminal_rejected_transition() {
+        let path = temp_journal_path("subscribe-rejected");
+        let journal = FileJournal::open(&path).unwrap();
+        let id = journal
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
+            .unwrap();
+
+        let transport = ScriptedTransport::new(vec![Ok(SubmitOutcome::Rejected {
+            reason: "target conversation no longer exists".to_string(),
+        })]);
+        let mut engine = SubmissionEngine::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_listener = Arc::clone(&seen);
+        engine.subscribe(move |transition| {
+            seen_for_listener.lock().unwrap().push(transition.clone());
+        });
+
+        engine.drain(&journal, &transport).await.unwrap();
+        engine.drain(&journal, &transport).await.unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "must fire exactly once, not once per drain call"
+        );
+        assert_eq!(
+            seen[0],
+            StatusTransition::Rejected {
+                id,
+                kind: CONVERSATION_MESSAGE_KIND.to_string(),
+                reason: "target conversation no longer exists".to_string(),
+            }
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn subscribe_does_not_fire_for_a_non_terminal_deferred_outcome() {
+        let path = temp_journal_path("subscribe-deferred");
+        let journal = FileJournal::open(&path).unwrap();
+        journal
+            .append(
+                CONVERSATION_MESSAGE_KIND.to_string(),
+                conversation_payload(),
+            )
+            .unwrap();
+
+        let transport = ScriptedTransport::new(vec![Err(SubmitError::Retryable(
+            "connection reset".to_string(),
+        ))]);
+        let mut engine = SubmissionEngine::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_listener = Arc::clone(&seen);
+        engine.subscribe(move |transition| {
+            seen_for_listener.lock().unwrap().push(transition.clone());
+        });
+
+        let reports = engine.drain(&journal, &transport).await.unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(matches!(reports[0].outcome, DrainOutcome::Deferred));
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "a still-pending entry must not notify subscribers"
         );
 
         let _ = std::fs::remove_file(&path);
