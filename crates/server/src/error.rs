@@ -314,6 +314,10 @@ pub enum AppError {
     /// posture issue #97 established for friend requests and presence.
     #[error("not a participant in this conversation")]
     NotConversationParticipant,
+    #[error("an integrator may only publish or revoke its own recognition declarations")]
+    IntegratorRecognitionForbidden,
+    #[error("scope must be a non-empty list of non-empty strings, and an integrator cannot recognize itself")]
+    InvalidRecognitionScope,
     #[error("device pairing not found, already resolved, or expired")]
     DevicePairingNotFound,
     #[error("failed to generate a unique pairing code, try again")]
@@ -479,6 +483,8 @@ impl AppError {
             }
             AppError::InvalidConversationParticipants => "INVALID_CONVERSATION_PARTICIPANTS",
             AppError::NotConversationParticipant => "NOT_CONVERSATION_PARTICIPANT",
+            AppError::IntegratorRecognitionForbidden => "INTEGRATOR_RECOGNITION_FORBIDDEN",
+            AppError::InvalidRecognitionScope => "INVALID_RECOGNITION_SCOPE",
             AppError::DevicePairingNotFound => "DEVICE_PAIRING_NOT_FOUND",
             AppError::DevicePairingCodeGenerationFailed => "DEVICE_PAIRING_CODE_GENERATION_FAILED",
             AppError::Database(..) => "DATABASE",
@@ -663,6 +669,8 @@ impl IntoResponse for AppError {
             // deliberately reused for the blocked-pair-on-send case too, so
             // the response never distinguishes the two.
             AppError::NotConversationParticipant => StatusCode::FORBIDDEN,
+            AppError::IntegratorRecognitionForbidden => StatusCode::FORBIDDEN,
+            AppError::InvalidRecognitionScope => StatusCode::BAD_REQUEST,
             AppError::DevicePairingNotFound => StatusCode::NOT_FOUND,
             AppError::DevicePairingCodeGenerationFailed => StatusCode::CONFLICT,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {

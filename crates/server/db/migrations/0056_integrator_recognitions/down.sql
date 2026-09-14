@@ -1,0 +1,2 @@
+DROP TABLE indexer_integrator_recognitions;
+DROP TABLE integrator_recognitions;

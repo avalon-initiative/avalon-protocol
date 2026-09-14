@@ -317,19 +317,38 @@ recent SDK additions (#398, #113) have taken.
   still-open #80). `packages/ui`'s `AvalonIntegratorCard` and `AvalonMetricTile`
   are the new reusable components, in the existing
   components/styles/stories split.
-- Still open: the rest of the table above (achievement popularity,
-  cross-integrator players, recognizing integrators, guild-association metrics, integrator
-  event participation, key lifecycle/status/registration history),
-  recognition relationships (needs a new protocol event, #94), the
-  privacy/cohort-size floor ([#96](https://github.com/LunarVagabond/avalon-protocol/issues/96)),
-  and the public/external read surface
-  ([#95](https://github.com/LunarVagabond/avalon-protocol/issues/95)) that
-  #261's endpoint is not itself. Schema discovery
-  (#255) is likewise still queryable only via
+- **Recognition relationships (#89)**: `crates/server/src/recognitions.rs` —
+  `POST /integrations/{slug}/recognitions` (`{ recognized_slug, scope: [...] }`,
+  challenge-response-authenticated, same `authenticate_owning_integrator`
+  pattern `integrator_schemas.rs` established) publishes or updates a
+  directional recognition; `POST /integrations/{slug}/recognitions/revoke`
+  marks it revoked without deleting the row (the fact "A used to recognize
+  B" stays visible). `scope` is a free-form string list, never a fixed
+  protocol vocabulary or a score. `GET /integrations/{slug}/recognitions`
+  (who `slug` recognizes) and `GET /integrations/{slug}/recognized-by` (who
+  recognizes `slug`) are both public, unauthenticated, real queryable graph
+  edges — not a field collapsed onto either integrator's own row. Durable
+  (`integrator.recognition_published`/`.recognition_revoked` events,
+  `crates/indexer/src/projections/integrator_recognitions.rs`'s own
+  `indexer_integrator_recognitions` projection, migration
+  `0056_integrator_recognitions`), mirroring `integrator_schemas`'s
+  server-table-plus-indexer-projection split. Live-tested end to end
+  (`crates/server/tests/recognitions.rs`): publish, read from both
+  directions, confirm it isn't symmetric, revoke, confirm it disappears
+  from both directional reads; plus the two rejection cases (recognizing
+  as a different integrator than the authenticated caller; recognizing
+  yourself).
+- Still open: the rest of the metric table above (achievement popularity,
+  cross-integrator players, guild-association metrics, integrator event
+  participation, key lifecycle/status/registration history) and a
+  realtime "players online now" metric — #89 is epic-sized and this pass
+  adds recognition relationships specifically, the one sub-feature #261
+  didn't touch at all, not the remaining metrics. Schema discovery (#255)
+  is likewise still queryable only via
   `avalon_indexer::projections::integrator_schemas::list_for_integrator`, not yet
-  folded into the registry endpoint. Issuer key history and recognition
-  relationships are still not rendered anywhere in the Hub — #270 is only
-  the first buildable slice of #90, not the full ticket.
+  folded into the registry endpoint. Neither issuer key history nor
+  recognition relationships are rendered anywhere in the Hub yet — #270 is
+  only the first buildable slice of #90, not the full ticket.
 
 ## Decisions and tickets
 
