@@ -790,15 +790,25 @@ function cancelInvite() {
   inviteError.value = ''
 }
 
+// Issue #392: accepts either a raw identity id or a `display_name#1234`
+// handle, the same convenience Friends.vue's onAddFriend already offers —
+// a handle (anything containing '#') is resolved to an identity id first,
+// since createGuildInvite always targets an identity id on the wire.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 async function onInvite() {
   if (!session.token) return
   inviteError.value = ''
   inviteSuccessId.value = ''
   inviting.value = true
   try {
-    const invite = await api.createGuildInvite(session.token, guildId.value, {
-      to: inviteIdentityId.value.trim(),
-    })
+    const input = inviteIdentityId.value.trim()
+    const to = input.includes('#') ? (await api.resolveHandle(session.token, input)).identity_id : input
+    if (!UUID_RE.test(to)) {
+      inviteError.value = "That doesn't look like an identity id or a display_name#1234 handle — enter one of those."
+      return
+    }
+    const invite = await api.createGuildInvite(session.token, guildId.value, { to })
     // No endpoint lists a player's own pending guild invites yet (a real
     // gap — see docs/architecture/guilds.md's correction note), so the
     // invite id has to be shared with the invitee out of band for them to
@@ -1371,7 +1381,11 @@ const {
               :error="inviteError"
               @submit="onInvite"
             >
-              <AvalonTextField v-model="inviteIdentityId" label="Identity id" />
+              <AvalonTextField
+                v-model="inviteIdentityId"
+                label="Identity id or handle"
+                placeholder="Identity id, or display_name#1234"
+              />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelInvite" />
               </template>
