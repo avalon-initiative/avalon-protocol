@@ -469,3 +469,130 @@ async fn issuance_against_a_retired_definition_conflicts() {
         .unwrap();
     assert_eq!(issue.status(), reqwest::StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+#[ignore]
+async fn list_my_achievements_paginates_and_filters_by_integrator_and_claim_kind() {
+    // Issue #377: the issuance ceremony itself is covered by the other
+    // tests in this file; this one only exercises GET /me/achievements'
+    // read-side filtering/pagination, so the attestation rows are seeded
+    // directly rather than issued through a real signed ceremony each.
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+
+    let game = register_issuer(&http, &base, "game", &[]).await;
+    let app = register_issuer(&http, &base, "app", &[]).await;
+
+    for i in 0..3 {
+        sqlx::query(
+            "INSERT INTO achievement_attestations \
+             (id, integrator_id, issuer, subject, achievement, issued_at, \
+              proof_key_id, proof_algorithm, proof_bytes) \
+             VALUES ($1, $2, $3, $4, $5, now() - ($6 || ' seconds')::interval, $7, 'ed25519', $8)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(game.integrator_id)
+        .bind(format!("game:{}", game.slug))
+        .bind(identity_id)
+        .bind(format!("game:{}:achievement:test-{i}", game.slug))
+        .bind(i.to_string())
+        .bind(Uuid::new_v4())
+        .bind(vec![0u8; 4])
+        .execute(&pool)
+        .await
+        .expect("failed to seed achievement attestation");
+    }
+    sqlx::query(
+        "INSERT INTO achievement_attestations \
+         (id, integrator_id, issuer, subject, achievement, issued_at, \
+          proof_key_id, proof_algorithm, proof_bytes) \
+         VALUES ($1, $2, $3, $4, $5, now(), $6, 'ed25519', $7)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(app.integrator_id)
+    .bind(format!("app:{}", app.slug))
+    .bind(identity_id)
+    .bind(format!("app:{}:milestone:test-0", app.slug))
+    .bind(Uuid::new_v4())
+    .bind(vec![0u8; 4])
+    .execute(&pool)
+    .await
+    .expect("failed to seed milestone attestation");
+
+    let achievements_only: serde_json::Value = http
+        .get(format!("{base}/me/achievements?claim_kind=achievement"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        achievements_only["achievements"].as_array().unwrap().len(),
+        3
+    );
+
+    let milestones_only: serde_json::Value = http
+        .get(format!("{base}/me/achievements?claim_kind=milestone"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(milestones_only["achievements"].as_array().unwrap().len(), 1);
+
+    let game_only: serde_json::Value = http
+        .get(format!(
+            "{base}/me/achievements?integrator_id={}",
+            game.integrator_id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(game_only["achievements"].as_array().unwrap().len(), 3);
+
+    // Pagination: 4 total attestations seeded, limit=2 should split into
+    // two pages with a real next_cursor between them.
+    let page1: serde_json::Value = http
+        .get(format!("{base}/me/achievements?limit=2"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page1["achievements"].as_array().unwrap().len(), 2);
+    let cursor = page1["next_cursor"]
+        .as_str()
+        .expect("expected a next_cursor with more rows remaining");
+
+    let page2: serde_json::Value = http
+        .get(format!("{base}/me/achievements?limit=2&before={cursor}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page2["achievements"].as_array().unwrap().len(), 2);
+    assert!(page2["next_cursor"].is_null());
+
+    let bad = http
+        .get(format!("{base}/me/achievements?claim_kind=quest"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), reqwest::StatusCode::BAD_REQUEST);
+}

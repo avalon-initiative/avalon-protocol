@@ -7,7 +7,6 @@ import type {
   AddPasskeyFinishRequest,
   AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
-  AttestationResponse,
   CancelRecoveryRequest,
   ChannelResponse,
   ConnectIntegratorRequest,
@@ -44,6 +43,7 @@ import type {
   HistoryEntryResponse,
   ListEventsQuery,
   ListIntegratorsResponse,
+  ListMyAchievementsResponse,
   MessageResponse,
   MyConnectionsResponse,
   MyGuildMembershipResponse,
@@ -229,11 +229,15 @@ export function getMyHistory(token: string): Promise<HistoryEntryResponse[]> {
   return request('/me/history', { token })
 }
 
-// Issue #34/#35: the caller's own full attestation history across every
+// Issue #34/#35/#377: the caller's own attestation history across every
 // issuer (active and revoked alike) — see AttestationResponse's own doc
 // comment for why there's deliberately no recognition field here.
-export function getMyAchievements(token: string): Promise<AttestationResponse[]> {
-  return request('/me/achievements', { token })
+// `limit=200` (the server's max page size) rather than the endpoint's
+// default 50, matching the Rust SDK's own #377 scope decision: minimize
+// the behavior change from before pagination landed, without building
+// "load more" UI in this same pass.
+export function getMyAchievements(token: string): Promise<ListMyAchievementsResponse> {
+  return request('/me/achievements?limit=200', { token })
 }
 
 // Public, unauthenticated (crates/server/src/achievements.rs) — used by

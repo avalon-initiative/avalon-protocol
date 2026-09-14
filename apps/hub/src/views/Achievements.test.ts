@@ -24,7 +24,7 @@ describe('Achievements', () => {
   it('polls GET /me/achievements for updates without a manual reload', async () => {
     useSessionStore().login('a-token')
     vi.useFakeTimers()
-    mockFetchByPath({ '/me/achievements': [] })
+    mockFetchByPath({ '/me/achievements': { achievements: [], next_cursor: null } })
 
     const router = testRouter()
     router.push('/')
@@ -32,14 +32,14 @@ describe('Achievements', () => {
     mount(Achievements, { global: { plugins: [router] } })
     await vi.waitFor(() => {
       const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls as [string][]
-      expect(calls.some(([url]) => url.endsWith('/me/achievements'))).toBe(true)
+      expect(calls.some(([url]) => url.includes('/me/achievements'))).toBe(true)
     })
 
     ;(fetch as ReturnType<typeof vi.fn>).mockClear()
     await vi.advanceTimersByTimeAsync(15_000)
 
     const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls as [string][]
-    expect(calls.some(([url]) => url.endsWith('/me/achievements'))).toBe(true)
+    expect(calls.some(([url]) => url.includes('/me/achievements'))).toBe(true)
 
     vi.useRealTimers()
   })
