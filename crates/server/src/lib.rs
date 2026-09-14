@@ -94,6 +94,10 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(handlers::me).patch(handlers::update_profile))
         .route("/me/history", get(handlers::my_history))
         .route("/me/achievements", get(attestations::list_my_achievements))
+        .route(
+            "/me/guild-announcements",
+            get(guild_messages::list_my_guild_announcements),
+        )
         .route("/identities/profiles", get(handlers::list_profiles))
         .route(
             "/identities/{id}/profile",

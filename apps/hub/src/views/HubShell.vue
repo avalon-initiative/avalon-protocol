@@ -6,11 +6,19 @@
 // yet (chat, discover) are rendered disabled with a "Soon" tag
 // rather than hidden, so the layout reflects the roadmap honestly. Guilds
 // (issue #24) and Integrators (issue #270) are no longer among them.
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
 import type { AvalonNavItem, PresenceStatus } from '@avalon/ui'
-import { getMe, updateMyPresence } from '../api/client'
+import { getMe, getMyGuildAnnouncements, updateMyPresence } from '../api/client'
+import {
+  countUnread,
+  isUnread,
+  loadLastSeen,
+  markChannelSeen,
+  previewBody,
+} from '../api/guildAnnouncements'
+import type { GuildAnnouncementAlert } from '../api/types'
 import NetworkStatus from '../components/NetworkStatus.vue'
 import { useSessionStore } from '../stores/session'
 import styles from './HubShell.module.scss'
@@ -18,6 +26,10 @@ import styles from './HubShell.module.scss'
 // Re-publish well inside the server's 120s presence TTL so the user
 // stays Online to their friends for as long as the Hub is open.
 const PRESENCE_HEARTBEAT_MS = 60_000
+
+// Issue #280: same polling cadence #389 already established for
+// Achievements/Activity/Friends — no WebSocket needed for milestone 1.
+const ANNOUNCEMENTS_POLL_INTERVAL_MS = 15_000
 
 const route = useRoute()
 const router = useRouter()
@@ -31,6 +43,38 @@ const loading = ref(true)
 const error = ref('')
 
 let heartbeatHandle: ReturnType<typeof setInterval> | undefined
+let announcementsPollHandle: ReturnType<typeof setInterval> | undefined
+
+const announcementAlerts = ref<GuildAnnouncementAlert[]>([])
+const lastSeenByChannel = ref(loadLastSeen())
+const showAnnouncementsPanel = ref(false)
+const unreadAnnouncementCount = computed(() =>
+  countUnread(announcementAlerts.value, lastSeenByChannel.value),
+)
+
+async function refreshAnnouncements() {
+  if (!session.token) return
+  try {
+    announcementAlerts.value = (await getMyGuildAnnouncements(session.token)) ?? []
+  } catch {
+    // Best-effort, same posture as presence — the next poll retries.
+  }
+}
+
+function toggleAnnouncementsPanel() {
+  showAnnouncementsPanel.value = !showAnnouncementsPanel.value
+}
+
+// Opening a specific alert is what "reads" it (see
+// api/guildAnnouncements.ts's module doc comment) — the panel itself
+// staying open doesn't mark anything seen, only actually following an
+// alert to its channel does.
+function onSelectAnnouncement(alert: GuildAnnouncementAlert) {
+  markChannelSeen(alert.channel_id, alert.sent_at)
+  lastSeenByChannel.value = loadLastSeen()
+  showAnnouncementsPanel.value = false
+  router.push({ name: 'guild-channel', params: { id: alert.guild_id, cid: alert.channel_id } })
+}
 
 const GITHUB_PROFILE_URL = 'https://github.com/LunarVagabond'
 const GITHUB_REPO_URL = 'https://github.com/LunarVagabond/avalon-protocol'
@@ -83,10 +127,14 @@ onMounted(async () => {
   }
   await publishPresence('Online')
   heartbeatHandle = setInterval(() => publishPresence(), PRESENCE_HEARTBEAT_MS)
+
+  await refreshAnnouncements()
+  announcementsPollHandle = setInterval(refreshAnnouncements, ANNOUNCEMENTS_POLL_INTERVAL_MS)
 })
 
 onUnmounted(() => {
   if (heartbeatHandle) clearInterval(heartbeatHandle)
+  if (announcementsPollHandle) clearInterval(announcementsPollHandle)
 })
 
 const navItems = computed<AvalonNavItem[]>(() => [
@@ -118,6 +166,16 @@ const bottomNavItems = computed<AvalonNavItem[]>(() =>
 function onSelectNav(to: string) {
   router.push(to)
 }
+
+// Closes a still-open panel when navigation happens some other way (a
+// sidebar click, browser back/forward) rather than through
+// onSelectAnnouncement itself.
+watch(
+  () => route.fullPath,
+  () => {
+    showAnnouncementsPanel.value = false
+  },
+)
 </script>
 
 <template>
@@ -155,9 +213,37 @@ function onSelectNav(to: string) {
             disabled
           />
         </div>
-        <button :class="styles.iconButton" type="button" aria-label="Notifications (coming soon)" disabled>
-          <AvalonIcon name="bell" :size="18" />
-        </button>
+        <div :class="styles.notifications">
+          <button
+            :class="styles.iconButton"
+            type="button"
+            :aria-label="`Guild announcements${unreadAnnouncementCount > 0 ? ` (${unreadAnnouncementCount} unread)` : ''}`"
+            @click="toggleAnnouncementsPanel"
+          >
+            <AvalonIcon name="bell" :size="18" />
+            <span v-if="unreadAnnouncementCount > 0" :class="styles.unreadBadge">{{
+              unreadAnnouncementCount
+            }}</span>
+          </button>
+          <div v-if="showAnnouncementsPanel" :class="styles.announcementsPanel">
+            <p v-if="announcementAlerts.length === 0" :class="styles.announcementsEmpty">
+              No guild announcements yet.
+            </p>
+            <button
+              v-for="alertItem in announcementAlerts"
+              :key="alertItem.message_id"
+              type="button"
+              :class="[
+                styles.announcementItem,
+                { [styles.announcementUnread]: isUnread(alertItem, lastSeenByChannel) },
+              ]"
+              @click="onSelectAnnouncement(alertItem)"
+            >
+              <span :class="styles.announcementChannel">#{{ alertItem.channel_name }}</span>
+              <span :class="styles.announcementBody">{{ previewBody(alertItem.body) }}</span>
+            </button>
+          </div>
+        </div>
         <RouterLink v-if="!loading" to="/profile" :class="styles.userLink">
           <AvalonUserChip :name="displayName" :detail="handle" :avatar-src="avatarUrl" />
         </RouterLink>
