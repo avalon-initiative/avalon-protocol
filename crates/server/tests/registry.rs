@@ -255,3 +255,143 @@ async fn a_integrator_with_activity_at_the_floor_reports_exact_counts() {
     assert_eq!(body["total_players_ever"]["value"], 5);
     assert_eq!(body["total_players_ever"]["exact"], true);
 }
+
+/// Issue #95: the dedicated `GET /registry/{slug}` external read surface —
+/// same handler, same data, as `GET /integrations/{slug}/registry`, but
+/// under its own top-level namespace so it reads as a standalone contract
+/// rather than something buried inside integrator-management routes.
+#[tokio::test]
+#[ignore]
+async fn external_registry_route_matches_the_integrator_scoped_one_field_for_field() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (slug, _) = register_unique_integrator(&http, &base).await;
+
+    let via_integrations: serde_json::Value = http
+        .get(format!("{base}/integrations/{slug}/registry"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let via_registry: serde_json::Value = http
+        .get(format!("{base}/registry/{slug}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        via_integrations, via_registry,
+        "the external route must return byte-for-byte the same contract as the internal one"
+    );
+}
+
+/// Issue #95's contract test: every field in the response carries both a
+/// `definition` and a `class` label — the requirement this whole namespacing
+/// scheme (a separate `{ value, definition, class, exact }` shape rather
+/// than flattening metrics onto `IntegratorPublicResponse`) exists to make
+/// structurally impossible to skip. Fails loudly (naming the field) if any
+/// future metric is ever added without both.
+#[tokio::test]
+#[ignore]
+async fn every_metric_field_carries_a_definition_and_a_class_label() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (slug, _) = register_unique_integrator(&http, &base).await;
+
+    let body: serde_json::Value = http
+        .get(format!("{base}/registry/{slug}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let fields = body.as_object().expect("response must be a JSON object");
+    assert!(
+        !fields.is_empty(),
+        "the registry response must not be empty"
+    );
+    for (name, metric) in fields {
+        assert!(
+            metric["definition"].as_str().is_some_and(|s| !s.is_empty()),
+            "{name} is missing a non-empty definition"
+        );
+        assert!(
+            matches!(
+                metric["class"].as_str(),
+                Some("durable-derived") | Some("realtime") | Some("self-reported")
+            ),
+            "{name}'s class must be one of the three documented labels, got {:?}",
+            metric["class"]
+        );
+        assert!(
+            metric["value"].is_i64() || metric["value"].is_u64(),
+            "{name} must carry a numeric value"
+        );
+        assert!(
+            metric["exact"].is_boolean(),
+            "{name} must carry an exact flag"
+        );
+    }
+}
+
+/// Issue #95's other hard invariant: never per-identity data, regardless of
+/// who's asking. Every field in the response is a `{ value, definition,
+/// class, exact }` metric object — this asserts none of the top-level keys
+/// are anything else (an identity id, a raw list of subjects, etc.), the
+/// structural guarantee behind "never returns per-identity data, ever".
+#[tokio::test]
+#[ignore]
+async fn no_field_in_the_response_carries_per_identity_data() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (slug, _) = register_unique_integrator(&http, &base).await;
+
+    let body: serde_json::Value = http
+        .get(format!("{base}/registry/{slug}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    for (name, metric) in body.as_object().unwrap() {
+        let keys: Vec<&String> = metric.as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys.len(),
+            4,
+            "{name} must be exactly {{ value, definition, class, exact }}, got keys {keys:?}"
+        );
+        for expected in ["value", "definition", "class", "exact"] {
+            assert!(
+                metric.get(expected).is_some(),
+                "{name} is missing the {expected} field"
+            );
+        }
+    }
+}
+
+/// A slug that was never registered 404s on the external route too, same
+/// as `GET /integrations/{slug}/registry` — this is not a route where
+/// "unknown slug" silently reads as zero activity.
+#[tokio::test]
+#[ignore]
+async fn external_registry_route_404s_for_an_unregistered_slug() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http
+        .get(format!("{base}/registry/does-not-exist-{}", Uuid::new_v4()))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}

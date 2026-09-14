@@ -1,9 +1,11 @@
-//! `GET /integrations/{slug}/registry` — the Integrator Registry's derived-metrics read
-//! surface (issue #261, the first concrete slice of the epic-sized #89):
-//! four durable-derived facts about an integrator/issuer, each carrying its own
-//! definition and class label, per `docs/architecture/registry.md`.
-//! No composite score, no ranking — see that doc's "statistics inform
-//! trust; they do not determine it."
+//! `GET /integrations/{slug}/registry` (and, per issue #95, the identical
+//! `GET /registry/{slug}` under a dedicated top-level namespace for
+//! anything that isn't the Hub) — the Integrator Registry's derived-metrics
+//! read surface (issue #261, the first concrete slice of the epic-sized
+//! #89): four durable-derived facts about an integrator/issuer, each
+//! carrying its own definition and class label, per
+//! `docs/architecture/registry.md`. No composite score, no ranking — see
+//! that doc's "statistics inform trust; they do not determine it."
 //!
 //! A separate endpoint rather than folding these fields into `GET
 //! /integrations/{slug}` (`integrators::get_integrator`): the two read models change for
