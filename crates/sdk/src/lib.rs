@@ -26,6 +26,7 @@ pub mod conversations;
 pub mod device_login;
 pub mod guilds;
 pub mod registry;
+pub mod schema;
 pub mod social;
 pub mod submission;
 pub mod sync_journal;

@@ -8,6 +8,8 @@ description = "Rust reference SDK for integrating a game with Avalon. Thin over 
 
 [dependencies]
 avalon-protocol = { path = "../protocol" }
+# Issue #386: #[derive(AvalonSchema)] — re-exported through schema.rs.
+avalon-schema-derive = { path = "../schema-derive" }
 async-trait.workspace = true
 thiserror.workspace = true
 reqwest.workspace = true
