@@ -53,6 +53,28 @@ export function useGuildDetail(guildId: Ref<string>) {
 
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
+  // Issue #391: channels/events are member-only server-side (require_member)
+  // — a 403 here for a non-member browsing a recruiting guild is expected,
+  // not a page-level failure, so (like gameBreakdown/joinRequests above)
+  // these are fetched separately from the Promise.all below.
+  async function refreshChannels() {
+    if (!session.token) return
+    try {
+      channels.value = await api.listChannels(session.token, guildId.value)
+    } catch {
+      channels.value = []
+    }
+  }
+
+  async function refreshEvents() {
+    if (!session.token) return
+    try {
+      events.value = await api.listEvents(session.token, guildId.value)
+    } catch {
+      events.value = []
+    }
+  }
+
   async function refreshGameBreakdown() {
     if (!session.token) return
     try {
@@ -85,24 +107,22 @@ export function useGuildDetail(guildId: Ref<string>) {
   async function refresh() {
     if (!session.token) return
     try {
-      const [guildResp, rolesResp, membersResp, channelsResp, eventsResp] = await Promise.all([
+      const [guildResp, rolesResp, membersResp] = await Promise.all([
         api.getGuild(session.token, guildId.value),
         api.listRoles(session.token, guildId.value),
         listMembersWithPresence(session.token, guildId.value),
-        api.listChannels(session.token, guildId.value),
-        api.listEvents(session.token, guildId.value),
       ])
       guild.value = guildResp
       roles.value = rolesResp
       members.value = membersResp
-      channels.value = channelsResp
-      events.value = eventsResp
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
     // Independent of the Promise.all above: a permission rejection here
     // must never surface as the page-level `error` the template already
     // treats as fatal.
+    await refreshChannels()
+    await refreshEvents()
     await refreshGameBreakdown()
     await refreshJoinRequests()
     await refreshMyJoinRequest()
