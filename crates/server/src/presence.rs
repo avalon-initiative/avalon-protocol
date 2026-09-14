@@ -8,10 +8,10 @@
 //! until their next heartbeat, which is the correct failure mode for state
 //! nobody needs to prove later.
 //!
-//! **Publishing.** `PUT /me/presence` is a player publishing their own
+//! **Publishing.** `PUT /me/presence` is a user publishing their own
 //! status under their own session (`crate::handlers::authenticate`) — it
 //! can never set `playing`. `PUT /presence/:identity_id` is a game
-//! publishing on behalf of a bound player, authenticated via
+//! publishing on behalf of a bound user, authenticated via
 //! `crate::authz::authenticate_caller`/`require_capability` (issue #28's
 //! guard, resolving issues #26/#83's `GameCredential`/`GameBinding`
 //! machinery, which — contrary to an earlier version of this doc comment —
@@ -50,8 +50,8 @@
 //! store's existing everything-resets-on-restart posture rather than
 //! adding a durable exception to it.
 //!
-//! **Player opt-out.** Independent of any game's capability grant, a
-//! player can opt out of `playing` being shown at all
+//! **User opt-out.** Independent of any game's capability grant, a
+//! user can opt out of `playing` being shown at all
 //! (`presence_preferences.hide_playing`, set via `PUT /me/presence`) —
 //! [`hide_playing_for`] is the one place that preference is read; every
 //! caller of it treats a missing row as "not hidden" (the default), the
@@ -310,7 +310,7 @@ pub struct UpdatePresenceRequest {
     pub hide_playing: Option<bool>,
 }
 
-/// `PUT /me/presence` — a player publishing their own status. Deliberately
+/// `PUT /me/presence` — a user publishing their own status. Deliberately
 /// cannot set `playing`: that's reserved for a game's own credential
 /// (`update_game_presence` below).
 pub async fn update_my_presence(
@@ -353,9 +353,9 @@ pub struct UpdateGamePresenceRequest {
 }
 
 /// `PUT /presence/:identity_id` — a game publishing presence on behalf of
-/// a player it's bound to. Authenticated via `crate::authz`'s
+/// a user it's bound to. Authenticated via `crate::authz`'s
 /// `Caller`/`require_capability` (issue #28): the caller must be
-/// `Caller::Game` (a player session hitting this route is rejected — that
+/// `Caller::Game` (a user session hitting this route is rejected — that
 /// endpoint is `PUT /me/presence` above), the path `identity_id` must
 /// match the identity the game claims to act for
 /// (`x-avalon-identity-id`, resolved by `authenticate_caller` — see

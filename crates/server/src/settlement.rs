@@ -364,7 +364,7 @@ pub async fn list_entries(
 /// **Auth: a shared-secret bearer token (`AVALON_SETTLEMENT_SUBMIT_KEY`).**
 /// Nothing more specific for trusted node-to-node calls already existed in
 /// this codebase to reuse (every other authenticated route here checks a
-/// player's own session or a game's own registered credential, neither of
+/// user's own session or a game's own registered credential, neither of
 /// which fits "one operator's own two nodes talking to each other"), and
 /// the ticket left the exact mechanism open with this as its suggested
 /// default. If this node has no `AVALON_SETTLEMENT_SUBMIT_KEY` configured

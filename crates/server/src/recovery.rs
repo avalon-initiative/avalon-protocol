@@ -4,7 +4,7 @@
 //!
 //! Three phases, each its own set of endpoints:
 //!
-//!   1. **Configuration** (session-authenticated). A player designates a
+//!   1. **Configuration** (session-authenticated). A user designates a
 //!      guardian set drawn from their friends (`friends::friend_partners`)
 //!      and a threshold M-of-N. Changing this requires the identity's
 //!      *current* valid session — never reachable by an attacker who has
@@ -91,7 +91,7 @@ const RECOVERY_START_CEREMONY_KIND: &str = "recovery_start";
 const DEFAULT_RECOVERY_DELAY_HOURS: i64 = 48;
 
 /// An M-of-N scheme with more than this many guardians stops being
-/// reviewable by a player choosing them ("who are all these people") and
+/// reviewable by a user choosing them ("who are all these people") and
 /// starts looking like a mistake rather than a deliberate trust decision.
 /// Not a protocol-level limit, just a sane UX ceiling.
 const MAX_GUARDIANS: usize = 10;

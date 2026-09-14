@@ -1,7 +1,7 @@
 //! Guild creation, roles, ownership transfer, and game association
 //! (issue #20).
 //!
-//! Every mutation here requires the caller's own player session — same
+//! Every mutation here requires the caller's own user session — same
 //! "no game-credential auth path exists in this repo" reasoning
 //! `crates/server/src/friends.rs`'s module doc comment already lays out,
 //! so "a game cannot act on a guild's behalf" is satisfied simply by these

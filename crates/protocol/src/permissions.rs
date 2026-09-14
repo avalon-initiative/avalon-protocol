@@ -1,6 +1,6 @@
 //! Explicit, capability-based permissions.
 //!
-//! Least privilege by default: a game receives only the capabilities a player
+//! Least privilege by default: a game receives only the capabilities a user
 //! has actually authorized, never everything associated with an identity.
 //! See `Proposal.md` §13.
 
@@ -50,7 +50,7 @@ pub enum Capability {
     AchievementsIssue,
     /// #324/#325: the Milestone equivalent of `AchievementsIssue`, for
     /// `Issuer::App`/`Issuer::Service` — a distinct wire string so a
-    /// player's consent grant reads correctly for the issuer's own
+    /// user's consent grant reads correctly for the issuer's own
     /// vocabulary rather than granting something literally called
     /// "achievements.issue" to a non-game integrator.
     MilestonesIssue,
@@ -180,10 +180,10 @@ impl<'de> Deserialize<'de> for Capability {
     }
 }
 
-/// A capability a player has actually granted to a specific game.
+/// A capability a user has actually granted to a specific game.
 ///
 /// Revocable and scoped: this record is the entire answer to "can Game X do
-/// Y for Player Z," not an implicit `game_has_access_to_player = true`.
+/// Y for User Z," not an implicit `game_has_access_to_user = true`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionGrant {
     pub identity_id: IdentityId,

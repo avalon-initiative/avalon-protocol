@@ -6,7 +6,7 @@
 //! Registering never grants access by itself (see this module's own
 //! invariant tests below and #27, which owns the actual grant/consent
 //! logic); `requested_capabilities` is only ever a declaration presented to
-//! players.
+//! users.
 //!
 //! **`/integrations` is the canonical public API path (#293)**, generalizing
 //! #282's Hub-internal `/games` → `/integrations` route rename onto the
@@ -41,7 +41,7 @@
 //! `crates/server/src/friends.rs` and `handlers::update_profile` already use
 //! for their own events — `issuer`/`subject` both name the game itself
 //! (`game_ref`, mirroring `guilds.rs`'s `guild_ref` helper), attributed to
-//! the registering request rather than to a player identity or a proven
+//! the registering request rather than to a user identity or a proven
 //! device key. The row insert and the event enqueue happen in one
 //! transaction via the outbox pattern (`crates/server/src/outbox.rs`),
 //! closing #71's gap for this path too.
@@ -64,7 +64,7 @@
 //! `GET /games/{slug}` ([`get_game`]) is a public, unauthenticated read of
 //! a game's registration — no credential fields, unlike the one-time
 //! [`GameResponse`] `register_game` itself returns. `crate::connections`
-//! reads it to validate a player's approved capabilities against what the
+//! reads it to validate a user's approved capabilities against what the
 //! game actually declared, and the Hub's consent view reads it to render
 //! the game's name/developer/requested capabilities.
 //!
@@ -285,7 +285,7 @@ pub async fn register_game(
 
     // Normalized through `Capability` so an unrecognized string round-trips
     // rather than erroring (see `crates/protocol/src/permissions.rs`'s own
-    // doc comment) — a declaration presented to players, never validated
+    // doc comment) — a declaration presented to users, never validated
     // against a closed vocabulary here.
     let requested_capabilities: Vec<String> = body
         .requested_capabilities

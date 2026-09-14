@@ -1,23 +1,23 @@
 //! The capability-enforcement extractor and guard (issue #28) — resolves
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
 //! specific capability" (`require_capability`), so a future endpoint that
-//! lets a game act on a player's behalf never has to hand-roll either
+//! lets a game act on a user's behalf never has to hand-roll either
 //! question.
 //!
 //! **First real caller: `crate::presence::update_game_presence`** (issue
 //! #16's `PUT /presence/:identity_id`) — a game publishing presence on
-//! behalf of a bound player, gated on an active `presence.publish` grant.
-//! Every other endpoint in this repo is still either player-session-only
-//! (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is a player
+//! behalf of a bound user, gated on an active `presence.publish` grant.
+//! Every other endpoint in this repo is still either user-session-only
+//! (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is a user
 //! action, a game never grants itself anything) or game-credential-only
-//! with nothing player-specific to check (`games::game_whoami`, which only
+//! with nothing user-specific to check (`games::game_whoami`, which only
 //! proves the game's own identity); `Caller`/`require_capability` remain
 //! the infrastructure any *future* game-calling-the-API endpoint
 //! (achievement issuance, etc.) should reuse rather than reinventing — see
 //! this module's own test matrix below and its `live_tests` submodule.
-//! **Any endpoint that lets a game act on a player's behalf must call
+//! **Any endpoint that lets a game act on a user's behalf must call
 //! [`require_capability`] rather than inventing its own check** — a
-//! hand-rolled `game_has_access_to_player` boolean is exactly the failure
+//! hand-rolled `game_has_access_to_user` boolean is exactly the failure
 //! mode issue #28 exists to close off.
 //!
 //! The DB-backed proof that this guard reads live state correctly (seed a
@@ -35,16 +35,16 @@
 //!
 //! ## Two caller kinds, one extractor
 //!
-//! [`Caller::Player`] is the existing bearer-session flow
-//! (`crate::handlers::authenticate`) — unchanged, just wrapped. A player
+//! [`Caller::User`] is the existing bearer-session flow
+//! (`crate::handlers::authenticate`) — unchanged, just wrapped. A user
 //! always has full access to their own resources; [`require_capability`]
 //! passes trivially for this variant, since this guard is specifically
-//! about *game* access to *player* data, not about a player's access to
+//! about *game* access to *user* data, not about a user's access to
 //! themselves.
 //!
 //! [`Caller::Game`] is `games::authenticate_game`'s existing
 //! challenge-response game-credential proof, plus one more thing a game
-//! credential alone can never supply: *which player* the game is acting
+//! credential alone can never supply: *which user* the game is acting
 //! for. A game's signature only proves the game's own identity — it says
 //! nothing about which identity granted it anything. This extractor reads
 //! that from a new `x-avalon-identity-id` header, sent alongside the
@@ -61,7 +61,7 @@
 //! is or *which game* it belongs to — reintroducing exactly the kind of
 //! implicit trust ("this id must be legitimate, since it parses") this
 //! ticket exists to remove. Resolving by `(identity_id, game_id)` instead
-//! means the lookup itself enforces "a game can't use one player's
+//! means the lookup itself enforces "a game can't use one user's
 //! binding-to-Game-A to claim access via Game B" — there is no `bindings`
 //! row to find under a mismatched game, full stop, rather than a row being
 //! found and then rejected after the fact.
@@ -104,12 +104,12 @@ const CALLER_IDENTITY_ID_HEADER: &str = "x-avalon-identity-id";
 /// Who is calling, resolved by [`authenticate_caller`]. A handler matches
 /// on this to decide what it's allowed to assume about the request, and
 /// (for [`Caller::Game`]) calls [`require_capability`] naming the exact
-/// capability it needs before touching anything player-owned.
+/// capability it needs before touching anything user-owned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Caller {
-    /// A player's own authenticated session — full access to their own
+    /// A user's own authenticated session — full access to their own
     /// resources, no grant needed (see module doc comment).
-    Player(Uuid),
+    User(Uuid),
     /// A game, authenticated via challenge-response
     /// (`games::authenticate_game`), acting on behalf of `identity_id`.
     /// Nothing about this variant alone implies access to anything —
@@ -118,13 +118,13 @@ pub(crate) enum Caller {
     Game { game_id: Uuid, identity_id: Uuid },
 }
 
-/// Resolves [`Caller`] from a request: a player bearer session
+/// Resolves [`Caller`] from a request: a user bearer session
 /// (`Authorization: Bearer <token>`) if present, otherwise the game
 /// challenge-response credential plus the identity header, otherwise
-/// `AppError::Unauthorized`. Player session takes priority — a request
-/// carrying both a player bearer token and game challenge-response headers
+/// `AppError::Unauthorized`. User session takes priority — a request
+/// carrying both a user bearer token and game challenge-response headers
 /// (not a real scenario today, but not forbidden by the header shapes
-/// alone) is treated as the player, since that's the stronger, more
+/// alone) is treated as the user, since that's the stronger, more
 /// specific proof and there's no ambiguity to resolve either way.
 pub(crate) async fn authenticate_caller(
     state: &AppState,
@@ -132,7 +132,7 @@ pub(crate) async fn authenticate_caller(
 ) -> Result<Caller, AppError> {
     if headers.contains_key(axum::http::header::AUTHORIZATION) {
         let identity_id = authenticate(state, headers).await?;
-        return Ok(Caller::Player(identity_id));
+        return Ok(Caller::User(identity_id));
     }
 
     let game_id = authenticate_game(state, headers).await?;
@@ -170,7 +170,7 @@ struct GrantFacts {
 /// requested capability exists and is active (not revoked). Every other
 /// combination — no binding, an ended binding, a binding for a different
 /// game, no grant at all, a revoked grant — is false. This is the one and
-/// only check; there is no separate `game_has_access_to_player` boolean
+/// only check; there is no separate `game_has_access_to_user` boolean
 /// anywhere in this module.
 fn capability_authorized(
     caller_game_id: Uuid,
@@ -240,12 +240,12 @@ async fn fetch_grant(
 }
 
 /// Whether an active `bindings` row exists for `(identity_id, game_id)`,
-/// with no specific capability grant required — the player-consent check
+/// with no specific capability grant required — the user-consent check
 /// `game_data::publish_instance` (#384) uses, matching
 /// `issue_attestation`'s "an active binding to this issuer" language but
 /// without a capability grant on top (#384 doesn't define one; publishing
-/// instance data about a bound player is closer to schema/achievement
-/// *definition* than to acting on a player's other resources). Reuses
+/// instance data about a bound user is closer to schema/achievement
+/// *definition* than to acting on a user's other resources). Reuses
 /// [`fetch_binding`] rather than a second hand-rolled query, same posture
 /// this module's own doc comment insists on for every other binding check.
 pub(crate) async fn has_active_binding(
@@ -260,8 +260,8 @@ pub(crate) async fn has_active_binding(
 
 /// The guard: does `caller` have `capability`? `capability` is mandatory
 /// (not `Option`, no default) so a call site can never accidentally check
-/// nothing — see module doc comment. `Caller::Player` always passes
-/// (a player always has full access to their own data); `Caller::Game`
+/// nothing — see module doc comment. `Caller::User` always passes
+/// (a user always has full access to their own data); `Caller::Game`
 /// resolves its active binding and the specific grant for `capability`
 /// fresh from `permission_grants` (see module doc comment on why there's
 /// no cache yet) and returns `AppError::Forbidden` unless both are active
@@ -275,7 +275,7 @@ pub(crate) async fn require_capability(
     state: &AppState,
 ) -> Result<(), AppError> {
     match caller {
-        Caller::Player(_) => Ok(()),
+        Caller::User(_) => Ok(()),
         Caller::Game {
             game_id,
             identity_id,
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn a_binding_for_a_different_game_is_rejected() {
         // The binding is real and active, but it belongs to Game A while
-        // the caller authenticated as Game B — using one player's
+        // the caller authenticated as Game B — using one user's
         // binding-to-Game-A to claim access via Game B must never work.
         let game_a = Uuid::new_v4();
         let game_b = Uuid::new_v4();
@@ -392,13 +392,13 @@ mod tests {
     }
 
     #[test]
-    fn player_caller_is_a_distinct_variant_never_fed_into_capability_authorized() {
-        // `require_capability`'s `Caller::Player` arm short-circuits to
+    fn user_caller_is_a_distinct_variant_never_fed_into_capability_authorized() {
+        // `require_capability`'s `Caller::User` arm short-circuits to
         // `Ok(())` before `capability_authorized` (a `Caller::Game`-only
         // helper) is ever called — this documents that shape rather than
         // calling the helper with meaningless inputs.
-        let caller = Caller::Player(Uuid::new_v4());
-        assert!(matches!(caller, Caller::Player(_)));
+        let caller = Caller::User(Uuid::new_v4());
+        assert!(matches!(caller, Caller::User(_)));
     }
 }
 
@@ -622,16 +622,16 @@ mod live_tests {
 
     #[tokio::test]
     #[ignore]
-    async fn player_caller_always_passes_regardless_of_any_grant_state() {
+    async fn user_caller_always_passes_regardless_of_any_grant_state() {
         let pool = test_pool().await;
         let seeded = seed(&pool).await;
         let state = test_state(pool).await;
 
-        // The player themself, not a game — passes trivially even though
+        // The user themself, not a game — passes trivially even though
         // no game-side binding/grant check is relevant at all.
-        let caller = Caller::Player(seeded.identity_id);
+        let caller = Caller::User(seeded.identity_id);
         require_capability(&caller, Capability::WalletWrite, &state)
             .await
-            .expect("a player always has full access to their own data");
+            .expect("a user always has full access to their own data");
     }
 }

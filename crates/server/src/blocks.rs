@@ -5,7 +5,7 @@
 //! and `docs/architecture/social-graph.md` for the full "why" (privacy: the
 //! settlement log is a public transparency log anyone can mirror, and
 //! nobody ever needs to verify a block the way a game verifies an
-//! attestation). Losing this table means players re-block people — the
+//! attestation). Losing this table means users re-block people — the
 //! same acceptable failure mode presence already has (ADR #78), not a fact
 //! anyone needs to prove later.
 //!

@@ -9,15 +9,15 @@
 //!
 //! **Auth — the exact `achievements.rs` pattern, reused rather than
 //! reinvented.** Publishing a schema is something a game does about its own
-//! catalogue, not something that touches player data — the same reasoning
+//! catalogue, not something that touches user data — the same reasoning
 //! `achievements.rs`'s module doc comment gives for why *defining* an
 //! achievement needs nothing beyond the game proving its own identity
 //! (`games::authenticate_game`'s challenge-response scheme), never a
-//! player-granted capability. That's why this module does **not** use
+//! user-granted capability. That's why this module does **not** use
 //! `crate::authz::require_capability` — that guard exists specifically for
-//! a game acting *on behalf of a player* (e.g. `presence::update_game_presence`,
-//! gated on a capability the player granted); nothing here reads or writes
-//! anything belonging to a player at all. [`authenticate_owning_game`]
+//! a game acting *on behalf of a user* (e.g. `presence::update_game_presence`,
+//! gated on a capability the user granted); nothing here reads or writes
+//! anything belonging to a user at all. [`authenticate_owning_game`]
 //! mirrors `achievements.rs`'s function of the same name: resolve the
 //! `{slug}` path segment's own game id, authenticate the caller via
 //! `games::authenticate_game`, and 403

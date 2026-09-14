@@ -6,7 +6,7 @@
 //! proves it (`authenticate_owning_game`, so `{slug}` names the caller,
 //! never a request body field) — submits a JSON `instance` for a `subject`
 //! identity. Two more checks beyond that self-authentication, mirroring
-//! `achievements::issue_attestation`'s "the player's own consent: an
+//! `achievements::issue_attestation`'s "the user's own consent: an
 //! active binding to this issuer" pattern: `subject` must have an active
 //! binding to the calling game (`authz::has_active_binding`), and the
 //! instance must actually conform to the schema's parsed protobuf root
@@ -110,7 +110,7 @@ pub async fn publish_instance(
         return Err(AppError::GameDataSchemaOwnershipMismatch);
     }
 
-    // The player's own consent: an active binding to this issuer
+    // The user's own consent: an active binding to this issuer
     // (`achievements::issue_attestation`'s pattern, #384's own text) — no
     // specific capability grant beyond that, since #384 doesn't define
     // one for this action.

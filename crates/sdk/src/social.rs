@@ -149,7 +149,7 @@ impl Session {
             .collect())
     }
 
-    /// The calling player's own presence, as the server currently has it.
+    /// The calling user's own presence, as the server currently has it.
     /// Requires `presence.read`.
     pub async fn presence(&self) -> Result<Presence, SdkError> {
         self.require(Capability::PresenceRead)?;

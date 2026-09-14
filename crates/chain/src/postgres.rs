@@ -886,7 +886,7 @@ impl PostgresSettlementProvider {
     /// Deliberately a narrower, unverified read than [`Self::list_entries`]:
     /// no hash/chain-link recomputation, since that's only meaningful
     /// against the *full*, sequential ledger — a per-issuer slice is a
-    /// convenience projection for a player looking at their own history,
+    /// convenience projection for a user looking at their own history,
     /// not a tamper-evidence check. `issuer_prefix` is caller-controlled
     /// but always server-constructed from an authenticated identity id, not
     /// arbitrary user input — see `handlers::my_history`.

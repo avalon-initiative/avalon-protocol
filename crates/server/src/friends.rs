@@ -1,8 +1,8 @@
 //! Friend requests, friendships, and their durable events (issue #15).
 //!
-//! Every mutation here requires the caller's own player session — there is
+//! Every mutation here requires the caller's own user session — there is
 //! no game-credential auth path in this repo yet (see `crates/server/src/auth.rs`),
-//! so "a game cannot act on a player's behalf" is enforced simply by these
+//! so "a game cannot act on a user's behalf" is enforced simply by these
 //! routes only ever accepting a session bearer token in the first place, not
 //! by an explicit per-request check against a credential kind.
 //!

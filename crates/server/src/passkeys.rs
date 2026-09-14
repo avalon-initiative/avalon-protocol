@@ -139,7 +139,7 @@ pub async fn register_start(
 pub struct AddPasskeyFinishRequest {
     pub ticket_id: Uuid,
     pub webauthn_credential: RegisterPublicKeyCredential,
-    /// A player-chosen label for the passkey being added (e.g. "Work
+    /// A user-chosen label for the passkey being added (e.g. "Work
     /// laptop's fingerprint sensor") — purely descriptive, same convention
     /// as `identity_signing_keys.label` / `handlers::RegisterFinishRequest::device_label`.
     pub label: Option<String>,

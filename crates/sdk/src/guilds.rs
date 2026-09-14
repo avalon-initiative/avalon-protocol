@@ -69,7 +69,7 @@ use uuid::Uuid;
 
 use crate::{SdkError, Session};
 
-/// The calling player's own membership in a guild — `guild` is the full
+/// The calling user's own membership in a guild — `guild` is the full
 /// guild record (fetched from `GET /guilds/{id}`, since `GET /me/guilds`
 /// only returns the guild id, role, and join timestamp per membership, not
 /// the guild itself).
@@ -258,7 +258,7 @@ struct SendMessageRequest<'a> {
 /// counts reads them off the raw JSON today; there is no SDK-side RSVP
 /// surface yet (issue #169 ships server + protocol + Hub; the ticket's
 /// "sdk" scope is limited to this read-only `events()` list, mirroring
-/// `channels()`, not create/update/delete/rsvp — those stay player-authority
+/// `channels()`, not create/update/delete/rsvp — those stay user-authority
 /// Hub-only actions, same posture channel management already has).
 #[derive(Deserialize)]
 struct EventResponse {

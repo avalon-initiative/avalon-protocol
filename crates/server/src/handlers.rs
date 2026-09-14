@@ -207,7 +207,7 @@ pub struct RegisterFinishRequest {
     /// Base64-encoded Ed25519 signature over
     /// `identity_created_signing_bytes(identity_id, display_name)`.
     pub event_signature: String,
-    /// A player-chosen label for the device completing this ceremony (e.g.
+    /// A user-chosen label for the device completing this ceremony (e.g.
     /// "Work laptop") — purely descriptive, never part of what's signed.
     /// Issue #145: previously the first device's `identity_signing_keys`
     /// row was always unlabeled, unlike every device added later through
@@ -510,7 +510,7 @@ pub struct ProfileResponse {
     /// stored: always computed from the two columns so it can never drift
     /// out of sync with a display-name change.
     pub handle: String,
-    /// Small, player-optional self-description fields (issue #155) — same
+    /// Small, user-optional self-description fields (issue #155) — same
     /// promised-durable tier and same public exposure level as
     /// `display_name`/`avatar_url` above (no capability gate, no game ever
     /// sees more of it than `GET /me`/`GET /identities/profiles` already
@@ -848,7 +848,7 @@ pub struct UpdateProfileRequest {
 
 /// Nothing renders `avatar_url` as an actual image anywhere in the Hub
 /// today, so there's no live XSS path yet — but that's incidental, not a
-/// guarantee: the field exists so a player-supplied avatar shows up
+/// guarantee: the field exists so a user-supplied avatar shows up
 /// somewhere later (friends list, guild roster), and an unvalidated
 /// `javascript:`/`data:`-scheme string sitting in storage is exactly the
 /// kind of thing that becomes a real problem the moment something renders
@@ -860,7 +860,7 @@ const MAX_AVATAR_URL_LEN: usize = 2048;
 /// characters, and parses as an `http`/`https` URL. Used by
 /// [`validate_avatar_url`] below and, since issue #153, by
 /// `crates/server/src/guilds.rs`'s guild `banner` validation — same rule,
-/// same reasoning ("a player/guild-supplied URL sitting in storage becomes
+/// same reasoning ("a user/guild-supplied URL sitting in storage becomes
 /// a real problem the moment something renders it with `<img :src>` without
 /// re-checking this"), so the check lives in one place rather than being
 /// copied.
@@ -1049,7 +1049,7 @@ async fn validate_main_guild(
 /// on its own, but if the *new* name collides under it, a fresh one has to
 /// be picked so `(display_name, discriminator)` stays unique. No collision
 /// (the common case) keeps the identity's existing discriminator, so a
-/// player's handle doesn't churn just because they tweaked their name.
+/// user's handle doesn't churn just because they tweaked their name.
 async fn discriminator_for_rename(
     state: &AppState,
     identity_id: Uuid,
@@ -1263,7 +1263,7 @@ pub async fn update_profile(
 
     // `discoverable` (#205) is deliberately handled outside the
     // transaction below, the same way `presence::update_my_presence`
-    // handles `hide_playing`: it's a player preference, not durable
+    // handles `hide_playing`: it's a user preference, not durable
     // protocol history, so it has no `profile.updated` payload and needs
     // no atomicity with the rest of this request's changes. Applied only
     // now, after every fallible validation above has already succeeded —

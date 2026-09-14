@@ -1,10 +1,10 @@
-//! Player discovery: both halves of #129's decided shape
+//! User discovery: both halves of #129's decided shape
 //! (`docs/architecture/social-graph.md`).
 //!
 //! * Scoped, always-on surfacing (issue #204): friends-of-friends and
 //!   mutual-guild — see [`discover_people`] below.
 //! * Opt-in, reversible global name/handle search (issue #205): a
-//!   player-controlled `discoverable` preference
+//!   user-controlled `discoverable` preference
 //!   (`discovery_preferences.discoverable`,
 //!   `crates/server/db/migrations/0026_discovery_preferences`, same shape
 //!   as `presence_preferences.hide_playing`) gates
@@ -173,7 +173,7 @@ pub async fn discover_people(
 /// Upserts `identity_id`'s own `discoverable` preference — the same
 /// "insert lazily on first toggle, `ON CONFLICT` update after" shape
 /// `presence::set_hide_playing` established. Not transactional with any
-/// other write: this is a player preference, not durable protocol
+/// other write: this is a user preference, not durable protocol
 /// history, so there's nothing else it needs to stay atomic with (see the
 /// module doc comment). Takes effect immediately — the very next
 /// `search_identities` call (run against `&state.pool`, not a snapshot)

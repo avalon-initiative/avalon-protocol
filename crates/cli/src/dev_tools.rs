@@ -217,7 +217,7 @@ pub(crate) async fn create_identity() {
         std::process::exit(1);
     }
 
-    // The event-signing key: nothing in this milestone lets a player carry
+    // The event-signing key: nothing in this milestone lets a user carry
     // it between sessions except a local file, so it's saved here for later
     // reuse (e.g. a future `profile.updated`-signing command, issue #86).
     let key_dir = key_dir();
@@ -364,7 +364,7 @@ pub(crate) async fn login(identity_id: Uuid) {
 /// `avalon pair-device` (issue #307) — drives the `start`/`poll` side of
 /// cross-device pairing, standing in for a real WebAuthn-incapable client
 /// (a console, a headless game engine) so the flow is testable end to end
-/// without one. Prints the `user_code` for a player to enter on the Hub's
+/// without one. Prints the `user_code` for a user to enter on the Hub's
 /// pairing page, then polls until the pairing is approved, denied, or
 /// expires.
 pub(crate) async fn pair_device() {
