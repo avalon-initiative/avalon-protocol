@@ -16,4 +16,16 @@
     <Description>Flagship external SDK for integrating a game with Avalon Protocol. Targets game engines (Unity, and anything else on a netstandard2.1-compatible runtime) as the primary developer-facing surface — see docs/stakeholders/Proposal.md §24.</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- netstandard2.1 has no built-in JSON/channel/websocket-client types; these three
+         are the smallest dependency set that covers social/guilds/conversations/sync_journal
+         without pulling in a full web framework. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AvalonSdk.Tests" />
+  </ItemGroup>
+
 </Project>

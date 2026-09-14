@@ -224,8 +224,27 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `NotConversationParticipant`.
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
-- `bindings/csharp/AvalonSdk/` — `AvalonClient.cs`, `Session.cs` skeleton; no
-  verified build.
+- `bindings/csharp/AvalonSdk/` — a real, building C# port of the friends/
+  presence, guilds, conversations, and sync-journal surface (issue #396):
+  `Social.cs` (`FriendsAsync`/`PresenceAsync`/`PresenceOfAsync`/
+  `UpdatePresenceAsync`/`SubscribePresenceAsync`, the last over
+  `ClientWebSocket` and a `System.Threading.Channels.ChannelReader<Presence>`),
+  `Guilds.cs` (`GuildsAsync`, `Guild(id)` → `GuildHandle` with `RosterAsync`/
+  `ChannelsAsync`/`EventsAsync`, `ChannelHandle` with `MessagesAsync`/
+  `SendAsync`), `Conversations.cs` (`ConversationsAsync`, `Conversation(id)` →
+  `ConversationHandle`, `DmAsync`), and `SyncJournal.cs` (an `ISyncJournal`
+  interface plus `FileJournal`, the same append-only `fsync`-per-write
+  JSON-lines reference implementation and crash-recovery behavior as the Rust
+  `FileJournal`, unit-tested against the same scenarios). `Session.cs`/
+  `AvalonClient.cs` grew the HTTP/token plumbing (`AuthenticateAsync` now
+  calls a real `GET /me` + `GET /me/grants`) the rest of the port needs — the
+  achievements stub from #51 is left as-is, out of #396's scope. Same
+  capability-check-before-any-request and no-visibility-scoping-yet (#87)
+  posture as the Rust SDK throughout. `AvalonSdk.Tests/` covers it with
+  `HttpMessageHandler`-stubbed unit tests plus opt-in live tests
+  (`AVALON_SERVER_URL`/`DATABASE_URL`) mirroring `crates/sdk/tests/social.rs`,
+  `guilds.rs`, and `conversations.rs`. `make csharp-build`/`make csharp-test`
+  pass.
 
 ## Decisions and tickets
 
