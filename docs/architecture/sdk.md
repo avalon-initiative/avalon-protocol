@@ -189,6 +189,23 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `SdkError::NotConversationParticipant`, mapped from the server's identical
   `403` for both cases without inspecting the response body, so the SDK
   never has more to leak than the server does.
+- `crates/sdk/src/device_login.rs` (#398) — `AvalonClient::login()` wraps
+  #307's cross-device pairing (`POST /auth/device/start`) for a client with
+  no WebAuthn surface of its own (a game engine, a console), returning a
+  `DeviceLogin` carrying `user_code`/`verification_uri` — everything needed
+  to render a code or QR, with no QR library forced on the caller.
+  `DeviceLogin::wait()` drives `POST /auth/device/poll` to completion,
+  sleeping the server's own `poll_interval` between polls and doubling it
+  (capped at 60s) on `slow_down` rather than treating it as plain `pending`.
+  Resolves to a real `Session` on `approved` by feeding the minted token
+  through `AvalonClient::authenticate` — the same path a normal WebAuthn
+  login already uses — or a typed `SdkError::DeviceLoginDenied`/
+  `DeviceLoginExpired` on `denied`/`expired`.
+- `crates/sdk/tests/device_login.rs` — live tests (`make test-live`)
+  covering `wait()` resolving to a session matching the approving
+  identity's profile once `POST /auth/device/approve` is called against
+  the seeded `user_code`, and `wait()` surfacing `DeviceLoginDenied` once
+  `POST /auth/device/deny` is called instead.
 - `crates/sdk/tests/authenticate.rs` — live test (`make test-live`) covering a
   successful authenticate, an invalid token, and a capability being rejected.
 - `crates/sdk/tests/social.rs` — live tests (`make test-live`) covering

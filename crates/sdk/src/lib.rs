@@ -5,7 +5,11 @@
 //! `authenticate()` is wired to a real `avalon-server`: `GET /me` for
 //! identity/profile, `GET /me/grants` (issue #27) for this integrator's own
 //! active capability grants for the authenticating identity, identified via
-//! `AvalonConfig::game_credential_key_id`. Achievements (issue #34, see
+//! `AvalonConfig::game_credential_key_id`. `AvalonClient::login()` (issue
+//! #398, see `device_login`) is the other way to end up with a `Session`,
+//! for a client with no WebAuthn surface of its own — it wraps #307's
+//! cross-device pairing and resolves to the same `Session` `authenticate()`
+//! does. Achievements (issue #34, see
 //! `achievements`) and friends/presence (issue #17, see `social`) and
 //! guild membership/roster/channels/chat (issue #23, see `guilds`) are all
 //! wired to live endpoints rather than stubbed. `sync_journal` (issue #110)
@@ -19,6 +23,7 @@
 
 pub mod achievements;
 pub mod conversations;
+pub mod device_login;
 pub mod guilds;
 pub mod social;
 pub mod submission;
@@ -61,6 +66,15 @@ pub enum SdkError {
     /// when a caller reaches for issuance without having supplied them.
     #[error("this integrator's game_slug/signing_key were not configured")]
     MissingIssuerCredentials,
+    /// `device_login::DeviceLogin::wait` (#398): the user explicitly denied
+    /// the pairing from the approving device (`POST /auth/device/deny`).
+    #[error("device pairing was denied")]
+    DeviceLoginDenied,
+    /// `device_login::DeviceLogin::wait` (#398): the pairing's ~10-minute
+    /// TTL (`crates/server/src/device_pairing.rs`) elapsed before it was
+    /// approved or denied.
+    #[error("device pairing expired before it was approved")]
+    DeviceLoginExpired,
 }
 
 pub struct AvalonConfig {
