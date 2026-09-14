@@ -7,7 +7,7 @@
 //! WebAuthn registration and login ceremonies directly over HTTP, using a
 //! virtual/software authenticator (`passkey-authenticator`'s `testable`
 //! feature) to simulate what a browser+passkey will do once the Hub (#55)
-//! exists — then uses the SDK only for the game-side `authenticate()` call.
+//! exists — then uses the SDK only for the integrator-side `authenticate()` call.
 //! See `docs/architecture/identity.md` for the two-key model this drives:
 //! a WebAuthn passkey for login, a separate raw Ed25519 key for signing the
 //! `identity.created` event.
@@ -40,7 +40,7 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
 
 /// Registers a brand-new identity via the real HTTP ceremony, then logs it
 /// in, returning the session token — everything a real client (the Hub,
-/// eventually) would do before a game ever calls `AvalonClient::authenticate()`.
+/// eventually) would do before an integrator ever calls `AvalonClient::authenticate()`.
 async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &str) -> String {
     let identity_id = Uuid::new_v4();
     let origin_str = webauthn_origin();
@@ -155,8 +155,8 @@ async fn authenticate_against_a_real_server() {
 
     let client = AvalonClient::new(AvalonConfig {
         server_url: base,
-        game_credential_key_id: "sdk-test".to_string(),
-        game_slug: None,
+        integrator_credential_key_id: "sdk-test".to_string(),
+        integrator_slug: None,
         signing_key: None,
     });
     let session = client
@@ -180,8 +180,8 @@ async fn authenticate_against_a_real_server() {
 async fn authenticate_rejects_an_invalid_token() {
     let client = AvalonClient::new(AvalonConfig {
         server_url: server_url(),
-        game_credential_key_id: "sdk-test".to_string(),
-        game_slug: None,
+        integrator_credential_key_id: "sdk-test".to_string(),
+        integrator_slug: None,
         signing_key: None,
     });
 

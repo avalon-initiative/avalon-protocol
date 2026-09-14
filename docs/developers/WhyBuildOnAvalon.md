@@ -108,7 +108,7 @@ is an island — cross-game achievements (a boss kill in Game A unlocking a
 title in Game B, if Game B chooses to recognize it — see
 [`../architecture/trust-model.md`](../architecture/trust-model.md)), durable
 tournament and game-event results
-([`../architecture/game-events.md`](../architecture/game-events.md)), and
+([`../architecture/cross-integrator-events.md`](../architecture/cross-integrator-events.md)), and
 guild challenges that span multiple games at once. None of it requires Game B
 to trust Game A blindly — recognition is always the receiving game's choice.
 
@@ -116,7 +116,7 @@ to trust Game A blindly — recognition is always the receiving game's choice.
 
 Avalon does not require every game to share a character model. A user's
 identity stays consistent; their characters stay entirely game-specific
-([`../architecture/game-bindings.md`](../architecture/game-bindings.md)):
+([`../architecture/bindings.md`](../architecture/bindings.md)):
 
 ```
 Avalon Identity

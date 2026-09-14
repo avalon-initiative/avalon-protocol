@@ -4,7 +4,7 @@
 //!
 //! Setup mirrors real usage: a real WebAuthn ceremony creates the user
 //! identity (same helper `authenticate.rs` uses, duplicated here rather
-//! than shared — see that file's own comment on why), a real game
+//! than shared — see that file's own comment on why), a real integrator
 //! registers and the user consents to it, then the SDK — never the raw
 //! HTTP API — issues an achievement to itself and reads its own history
 //! back.
@@ -138,13 +138,13 @@ async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &s
         .to_string()
 }
 
-struct RegisteredGame {
+struct RegisteredIntegrator {
     signing_key: SigningKey,
     slug: String,
     key_id: String,
 }
 
-async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
+async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIntegrator {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
@@ -152,7 +152,7 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
     let body = json!({
         "slug": slug,
         "name": format!("SDK Achievements Test {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": ["achievements.issue", "achievements.read"],
         "initial_key": {
             "algorithm": "ed25519",
@@ -160,14 +160,14 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     let registered: serde_json::Value = response.json().await.unwrap();
-    RegisteredGame {
+    RegisteredIntegrator {
         signing_key,
         slug,
         key_id: registered["credential"]["key_id"]
@@ -177,9 +177,14 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
     }
 }
 
-async fn define_achievement(http: &reqwest::Client, base: &str, game: &RegisteredGame, key: &str) {
+async fn define_achievement(
+    http: &reqwest::Client,
+    base: &str,
+    integrator: &RegisteredIntegrator,
+    key: &str,
+) {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{}/challenge", game.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -188,11 +193,14 @@ async fn define_achievement(http: &reqwest::Client, base: &str, game: &Registere
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature = game.signing_key.sign(&nonce);
+    let signature = integrator.signing_key.sign(&nonce);
 
     let response = http
-        .post(format!("{base}/games/{}/achievements", game.slug))
-        .header("x-avalon-integrator-key-id", &game.key_id)
+        .post(format!(
+            "{base}/integrations/{}/achievements",
+            integrator.slug
+        ))
+        .header("x-avalon-integrator-key-id", &integrator.key_id)
         .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(
             "x-avalon-integrator-signature",
@@ -217,13 +225,13 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
     let display_name = format!("sdk-achv-{}", Uuid::new_v4());
 
     let token = register_and_login(&http, &base, &display_name).await;
-    let game = register_game(&http, &base).await;
-    define_achievement(&http, &base, &game, "dragon_slayer").await;
+    let integrator = register_integrator(&http, &base).await;
+    define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
     // The user's own consent: an active binding plus grants for both
     // capabilities the SDK's two calls below each require.
     let connect = http
-        .post(format!("{base}/games/{}/connect", game.slug))
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
         .send()
@@ -233,9 +241,9 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
 
     let client = AvalonClient::new(AvalonConfig {
         server_url: base,
-        game_credential_key_id: game.key_id.clone(),
-        game_slug: Some(game.slug.clone()),
-        signing_key: Some(game.signing_key.to_bytes()),
+        integrator_credential_key_id: integrator.key_id.clone(),
+        integrator_slug: Some(integrator.slug.clone()),
+        signing_key: Some(integrator.signing_key.to_bytes()),
     });
     let session = client
         .authenticate(&token)
@@ -273,11 +281,11 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
     let base = server_url();
     let display_name = format!("sdk-achv-nokey-{}", Uuid::new_v4());
     let token = register_and_login(&http, &base, &display_name).await;
-    let game = register_game(&http, &base).await;
-    define_achievement(&http, &base, &game, "dragon_slayer").await;
+    let integrator = register_integrator(&http, &base).await;
+    define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
     let connect = http
-        .post(format!("{base}/games/{}/connect", game.slug))
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&json!({ "capabilities": ["achievements.issue"] }))
         .send()
@@ -285,13 +293,13 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
         .unwrap();
     assert!(connect.status().is_success(), "{:?}", connect.status());
 
-    // No `game_slug`/`signing_key` configured — the SDK never even
+    // No `integrator_slug`/`signing_key` configured — the SDK never even
     // attempts an HTTP call in this case (see `SdkError::MissingIssuerCredentials`'s
     // own doc comment).
     let client = AvalonClient::new(AvalonConfig {
         server_url: base,
-        game_credential_key_id: game.key_id.clone(),
-        game_slug: None,
+        integrator_credential_key_id: integrator.key_id.clone(),
+        integrator_slug: None,
         signing_key: None,
     });
     let session = client.authenticate(&token).await.unwrap();

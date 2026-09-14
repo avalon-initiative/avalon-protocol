@@ -10,16 +10,16 @@
 //! here** — that's `avalon_protocol::achievements::recognize`, evaluated
 //! by this integrator against its own `TrustRelationship`, matching ADR
 //! #76's "recognition is contextual" rule. This SDK doesn't compute a
-//! recognition verdict on the caller's behalf either; a game that wants
+//! recognition verdict on the caller's behalf either; an integrator that wants
 //! one filters [`VerifiedAttestation`]s through its own policy.
 //!
 //! **Issuing** (`Session::issue_achievement`) needs this integrator's own
 //! signing key — the server never sees it, only a detached signature
-//! (`AvalonConfig::game_slug`/`signing_key`). Two independent proofs go
+//! (`AvalonConfig::integrator_slug`/`signing_key`). Two independent proofs go
 //! out, mirroring every other issuer-credentialed endpoint in this repo
-//! (`docs/architecture/games-and-issuers.md`): an ephemeral
+//! (`docs/architecture/issuers.md`): an ephemeral
 //! challenge-response proving *this key* is making the HTTP call right now
-//! (`POST /games/{slug}/challenge`), and a separate signature embedded in
+//! (`POST /integrations/{slug}/challenge`), and a separate signature embedded in
 //! the request body over the attestation's own canonical bytes, proving
 //! *this key* specifically authorized *this* attestation — checked
 //! independently server-side
@@ -135,7 +135,7 @@ impl Session {
 
     pub(crate) async fn submit_achievement_issuance(&self, key: &str) -> Result<Uuid, SdkError> {
         let slug = self
-            .game_slug
+            .integrator_slug
             .as_deref()
             .ok_or(SdkError::MissingIssuerCredentials)?;
         let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
@@ -148,7 +148,10 @@ impl Session {
         // Proof one: this key is making this HTTP call, right now.
         let challenge: ChallengeResponse = self
             .http
-            .post(format!("{}/games/{}/challenge", self.server_url, slug))
+            .post(format!(
+                "{}/integrations/{}/challenge",
+                self.server_url, slug
+            ))
             .send()
             .await?
             .json()
@@ -170,7 +173,7 @@ impl Session {
         let response = self
             .http
             .post(format!(
-                "{}/games/{}/achievements/{}/issue",
+                "{}/integrations/{}/achievements/{}/issue",
                 self.server_url, slug, key
             ))
             .header("x-avalon-integrator-key-id", &self.integrator_key_id)

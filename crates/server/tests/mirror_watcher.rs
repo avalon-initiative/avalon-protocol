@@ -43,13 +43,13 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
+async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> String {
     let suffix = Uuid::new_v4().simple().to_string();
     let slug = format!("test-mirror-{}", &suffix[..12]);
     let body = serde_json::json!({
         "slug": slug,
-        "name": "Mirror Watcher Test Game",
-        "developer": "Test Studio",
+        "name": "Mirror Watcher Test Integrator",
+        "owner_name": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
             "algorithm": "ed25519",
@@ -60,11 +60,11 @@ async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     format!("game:{slug}:self:registered")
 }
@@ -141,7 +141,7 @@ async fn bulk_entries_endpoint_returns_real_content_in_seq_order_since_a_cursor(
     let http = reqwest::Client::new();
     let pool = test_pool().await;
 
-    let issuer = register_throwaway_game(&http, &base).await;
+    let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
 
     // Ask for everything strictly after the entry just before this one —
@@ -198,7 +198,7 @@ async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
     let http = reqwest::Client::new();
     let pool = test_pool().await;
 
-    let issuer = register_throwaway_game(&http, &base).await;
+    let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
     let rank = entry_rank(&pool, seq).await;
     let tree_size = wait_for_covering_sth(&pool, rank).await;

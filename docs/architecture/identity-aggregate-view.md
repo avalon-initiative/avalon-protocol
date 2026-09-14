@@ -12,7 +12,7 @@ of it, the shape an indexer, an SDK, or a public API would hand back.
 
 No single existing endpoint returns exactly the shape below today — it is
 assembled conceptually from several real, separate reads (`GET /me`, the
-guild-membership list, the friends list, per-subject attestations, game
+guild-membership list, the friends list, per-subject attestations, integrator
 bindings). Treat the shape as the intended target for a future aggregate
 read, not a literal endpoint response — every field in it is a real,
 cited field from an existing type; the *assembly* is illustrative.
@@ -24,18 +24,18 @@ direct control of the identity's own owner (with two narrow exceptions:
 guild role changes go through guild governance, per
 [`./guilds.md`](./guilds.md); friendship requires both parties' consent,
 per [`./social-graph.md`](./social-graph.md)). This is the data that
-follows the identity across every game, app, and service it ever touches —
+follows the identity across every integrator, app, and service it ever touches —
 identity, profile self-description, friends, guild memberships. See
 [`./identity.md`](./identity.md)'s "Self-described metadata is
 self-expression, not fact."
 
 **Layer 2 — integrator block space.** Everything scoped to one specific
 game, app, or service — a *binding* (the identity's opt-in connection to
-that integrator, [`./game-bindings.md`](./game-bindings.md)) plus whatever
+that integrator, [`./bindings.md`](./bindings.md)) plus whatever
 attestations that integrator has issued about the identity under its own
 issuer key ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)).
 Game, App, and Service are one unified concept —
-`avalon_protocol::games::IntegratorCategory` (issue #282, decided #275) —
+`avalon_protocol::integrators::IntegratorCategory` (issue #282, decided #275) —
 not three separate systems; a "layer 2" entry is always shaped the same
 way regardless of which category it belongs to, distinguished only by its
 `type`.
@@ -114,10 +114,10 @@ The field-by-field table — every field's real Rust type and what it's for,
 for both layers — lives in its own file so it doesn't crowd out the rest of
 this document: [`./identity-aggregate-view-fields.md`](./identity-aggregate-view-fields.md).
 
-## A made-up game's full shape, illustrated
+## A made-up integrator's full shape, illustrated
 
 The `integrations` example above is deliberately minimal. Here is one entry
-fleshed all the way out for a hypothetical game, **"Emberfall Online"**, to
+fleshed all the way out for a hypothetical integrator, **"Emberfall Online"**, to
 make the two genuinely different mechanisms layer 2 contains impossible to
 confuse: canonical attestations (real, built, uniform across every
 integrator) versus an integrator's own custom-shaped data (partially real
@@ -153,11 +153,11 @@ integrator) versus an integrator's own custom-shaped data (partially real
     }
   ],
   "characters": {
-    "_status": "BUILT — #384, decided #381; GET /identities/{id}/game-data",
+    "_status": "BUILT — #384, decided #381; GET /identities/{id}/integrator-data",
     "instances": [
       {
         "schema": "game:emberfall-online:schema:character:v1",
-        "game_id": "11111111-1111-1111-1111-111111111111",
+        "integrator_id": "11111111-1111-1111-1111-111111111111",
         "published_at": "2027-06-01T14:35:00Z",
         "fields": {
           "name": "Vesryn",
@@ -177,38 +177,38 @@ schema's `default_visibility: "private"` plus a `field_visibility` override
 naming only `name`/`level`/`class` as `"public"` means the read endpoint
 drops `race` and `titles` from the response entirely — not null, not
 present-but-redacted, just absent, per the bidirectional visibility rule in
-`crate::game_data::resolve_visible_fields`.
+`crate::integrator_data::resolve_visible_fields`.
 
 Three distinct pieces, three different rules:
 
 - **`attestations`** — real, built, and the only one of the three that is
   *canonical across every integrator*. Emberfall Online cannot invent its
   own shape for these; every entry is a `GlobalId` +
-  `AchievementAttestation`, identical in structure to any other game's,
+  `AchievementAttestation`, identical in structure to any other integrator's,
   app's, or service's attestations. This is what makes a generic "show me
   this user's achievements from anywhere" view possible at all.
 - **`published_schemas`** — real, built (`game_schema.published`, issue
   #255; see
-  [`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-games-own-custom-fact-looks-like-in-the-same-ledger)),
+  [`./worked-ledger-example.md`](./worked-ledger-example.md#what-an-integrators-own-custom-fact-looks-like-in-the-same-ledger)),
   now also carrying `default_visibility`/`field_visibility` (#381/#384).
   Emberfall Online *can* define its own arbitrary `Character` shape here —
   this is genuinely integrator-custom, by design, because nothing outside
   Emberfall Online is expected to know what a "Character" means for this
-  specific game — but that shape is now actually parsed and validated
+  specific integrator — but that shape is now actually parsed and validated
   (real protobuf, not stored opaquely), not just accepted as an opaque
   string, so a malformed schema is rejected cleanly rather than silently
   stored.
 - **`characters`** — **decided (#381) and built (#384).** This is what
-  `GET /identities/{id}/game-data` actually returns: every current
+  `GET /identities/{id}/integrator-data` actually returns: every current
   (non-superseded) instance published about Nova, across every
-  game/schema, each already filtered to only the fields that instance's
+  integrator/schema, each already filtered to only the fields that instance's
   schema currently makes visible — the caller never sees the full raw
   instance and never has to apply the visibility rule itself. Deliberately
   narrow by design, not by limitation: the intent is small, portable,
-  *fun-to-carry-across-games* flavor data — name, level, race, class,
+  *fun-to-carry-across-integrators* flavor data — name, level, race, class,
   titles — never a character's full mechanical state (inventory, skills,
   stats used for game balance). That heavier, genuinely game-critical data
-  has no reason to ever leave a game's own database; publishing it here
+  has no reason to ever leave an integrator's own database; publishing it here
   would be a design mistake even once this mechanism exists, not just
   noise. Its read-access model is decided and built: see "Read access is
   not one uniform rule" below, which now states the real policy rather
@@ -225,7 +225,7 @@ Avalon vouching for it. Issuer keys follow a decided two-tier model (issue
 keys) and one or more **operational keys** it actually signs with day to
 day — a compromised operational key is revocable by the root without
 touching the integrator's identity itself. See
-[`./games-and-issuers.md`](./games-and-issuers.md) for the full key
+[`./issuers.md`](./issuers.md) for the full key
 lifecycle.
 
 This document's `integrations` array depends on a clean write boundary
@@ -287,7 +287,7 @@ is a genuinely open question rather than a settled "yes":
   default; it's explicitly still being decided.
 - **An integrator's own custom, non-attestation data about a user,
   explicitly published as schema instance data, defaults to
-  network-readable — decided in #381, built in #384.** A game
+  network-readable — decided in #381, built in #384.** An integrator
   publishing instance data against its own schema is the same shape of
   deliberate opt-in that already governs attestations, so it inherits the
   same default: public unless the publishing integrator says otherwise.
@@ -296,21 +296,21 @@ is a genuinely open question rather than a settled "yes":
   regardless of the schema's own default, an individual field can flip
   its own visibility the other way — a private schema can still expose a
   few flavor fields, and a public schema can still hide one sensitive
-  field. `docs/architecture/game-bindings.md`'s "Avalon stores none of
+  field. `docs/architecture/bindings.md`'s "Avalon stores none of
   \[a character's] attributes" statement has been amended accordingly: it
   now names this as a second explicit path alongside attestations, not
-  the only one. This does **not** change anything about a game's own
+  the only one. This does **not** change anything about an integrator's own
   *unpublished, internal* profile of a user (its own database) — that
   stays exactly as closed as it always was; this is specifically about
-  data the integrator chose to publish through Game Space.
+  data the integrator chose to publish through Integrator Space.
 
 So: write isolation is a hard invariant everywhere in layer 2. Read access
 varies by *what* the data is — a known attestation id is public, browsing
 a subject's full attestation set is undecided (#295), and an integrator's
 explicitly-published schema instance data defaults to public with a
-schema/field-level opt-out, enforced by `GET /identities/{id}/game-data`
+schema/field-level opt-out, enforced by `GET /identities/{id}/integrator-data`
 (#381/#384) — the only remaining closed-by-
-default case is a game's own *unpublished* internal data, which was never
+default case is an integrator's own *unpublished* internal data, which was never
 reachable through Avalon at all and stays that way.
 
 ## Where the Hub fits
@@ -321,7 +321,7 @@ user session does — it has no issuer key of its own, and nothing in this
 document's `integrations` array represents Hub data, because the Hub has not
 published anything under its own issuer identity (the way Ashen Realms
 publishes `game_schema.published` — see
-[`./worked-ledger-example.md`](./worked-ledger-example.md#what-a-games-own-custom-fact-looks-like-in-the-same-ledger)
+[`./worked-ledger-example.md`](./worked-ledger-example.md#what-an-integrators-own-custom-fact-looks-like-in-the-same-ledger)
 for that pattern).
 
 **As of this writing, there is no Hub-exclusive "block space" to publish**
@@ -331,7 +331,7 @@ data, not something scoped to the Hub itself. The real candidate for genuine
 Hub-local data is issue #87 (visibility/preference store, open, not
 built): a per-user UI preference — which fields are hidden on this
 user's own profile view, feature flags, display settings — that has no
-reason to be portable to another game or exposed to any integrator's SDK
+reason to be portable to another integrator or exposed to any integrator's SDK
 at all. Once #87 lands, *that* is what a Hub block-space entry would
 actually contain, and this document should be updated with a real,
 cited example at that point rather than a speculative one now.
@@ -347,7 +347,7 @@ cited example at that point rather than a speculative one now.
   itself.
 - `IntegratorCategory` (issue #282/#275) is real, implemented, additive —
   defaults to `Game` for any caller that omits it.
-- `GameBinding` and `AchievementAttestation` are real and implemented
+- `IntegratorBinding` and `AchievementAttestation` are real and implemented
   (issues #83, #31/#32/#33/#84/#85).
 - `GET /me/achievements` (`crates/server/src/attestations.rs`) is real but
   unpaginated and unfiltered today — a real gap for an identity with a
@@ -357,9 +357,9 @@ cited example at that point rather than a speculative one now.
   one example, not a fixed concept), and (as of #384) that `.proto` text is
   actually parsed/validated, not stored opaque. Actual per-user instance
   data against a published schema (`game_data.published`), its visibility
-  model, and the read endpoint (`GET /identities/{id}/game-data`) are real
+  model, and the read endpoint (`GET /identities/{id}/integrator-data`) are real
   and built (#384, decided by #381).
-  See [`./game-space.md`](./game-space.md)'s "Schema vs. data exposure."
+  See [`./integrator-space.md`](./integrator-space.md)'s "Schema vs. data exposure."
 - No endpoint or indexer projection assembles the full aggregate shape
   above in one response today — see the intro's caveat. Building one (a
   real "full identity view" read) is unscoped, open work, not tracked as
@@ -370,17 +370,17 @@ cited example at that point rather than a speculative one now.
 
 ## Decisions and tickets
 
-- **Epic #67** — identity vs. game data boundary, the ADR this whole document illustrates.
+- **Epic #67** — identity vs. integrator data boundary, the ADR this whole document illustrates.
 - **#75** — durable history / promised-durable fields.
 - **#76** — authenticity, validity, and recognition kept as separate questions.
 - **#80 / #84** — the two-tier issuer key model.
 - **#282 / #275** — `IntegratorCategory`, unifying game/app/service.
-- **#83** — game bindings.
+- **#83** — integrator bindings.
 - **#31 / #32 / #33 / #84 / #85** — achievement issuance, authenticity, and revocation.
 - **#87** — visibility/preference store; the real candidate for a future Hub block-space example.
 - **#372** — the `banner_url`/`status`/`links`/`timezone`/`theme_color`/`location` profile fields. (`main_guild`/`effective_main_guild` landed with no ticket.)
-- **#255** — `game_schema.published`, the real half of "A made-up game's full shape" above.
+- **#255** — `game_schema.published`, the real half of "A made-up integrator's full shape" above.
 - **#377** — `GET /me/achievements` pagination/filtering; the real gap behind this document's "won't zillions of achievements bog this down" question.
 - **#295** — per-claim attestation visibility. Open; the genuine gap behind "Read access is not one uniform rule" above.
-- **#381** — decided: integrator-published custom schema instance data defaults to network-readable, with a schema-level and bidirectional field-level override. Amended `game-bindings.md` accordingly.
+- **#381** — decided: integrator-published custom schema instance data defaults to network-readable, with a schema-level and bidirectional field-level override. Amended `bindings.md` accordingly.
 - **#384** — implementation of #381, in progress as of this writing: real protobuf parsing/validation, not opaque storage.

@@ -1,23 +1,23 @@
 //! The capability-enforcement extractor and guard (issue #28) — resolves
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
 //! specific capability" (`require_capability`), so a future endpoint that
-//! lets a game act on a user's behalf never has to hand-roll either
+//! lets an integrator act on a user's behalf never has to hand-roll either
 //! question.
 //!
-//! **First real caller: `crate::presence::update_game_presence`** (issue
-//! #16's `PUT /presence/:identity_id`) — a game publishing presence on
+//! **First real caller: `crate::presence::update_integrator_presence`** (issue
+//! #16's `PUT /presence/:identity_id`) — an integrator publishing presence on
 //! behalf of a bound user, gated on an active `presence.publish` grant.
 //! Every other endpoint in this repo is still either user-session-only
 //! (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is a user
-//! action, a game never grants itself anything) or game-credential-only
-//! with nothing user-specific to check (`games::game_whoami`, which only
-//! proves the game's own identity); `Caller`/`require_capability` remain
-//! the infrastructure any *future* game-calling-the-API endpoint
+//! action, an integrator never grants itself anything) or integrator-credential-only
+//! with nothing user-specific to check (`integrators::integrator_whoami`, which only
+//! proves the integrator's own identity); `Caller`/`require_capability` remain
+//! the infrastructure any *future* integrator-calling-the-API endpoint
 //! (achievement issuance, etc.) should reuse rather than reinventing — see
 //! this module's own test matrix below and its `live_tests` submodule.
-//! **Any endpoint that lets a game act on a user's behalf must call
+//! **Any endpoint that lets an integrator act on a user's behalf must call
 //! [`require_capability`] rather than inventing its own check** — a
-//! hand-rolled `game_has_access_to_user` boolean is exactly the failure
+//! hand-rolled `integrator_has_access_to_user` boolean is exactly the failure
 //! mode issue #28 exists to close off.
 //!
 //! The DB-backed proof that this guard reads live state correctly (seed a
@@ -39,38 +39,38 @@
 //! (`crate::handlers::authenticate`) — unchanged, just wrapped. A user
 //! always has full access to their own resources; [`require_capability`]
 //! passes trivially for this variant, since this guard is specifically
-//! about *game* access to *user* data, not about a user's access to
+//! about *integrator* access to *user* data, not about a user's access to
 //! themselves.
 //!
-//! [`Caller::Game`] is `games::authenticate_game`'s existing
-//! challenge-response game-credential proof, plus one more thing a game
-//! credential alone can never supply: *which user* the game is acting
-//! for. A game's signature only proves the game's own identity — it says
+//! [`Caller::Integrator`] is `integrators::authenticate_integrator`'s existing
+//! challenge-response integrator-credential proof, plus one more thing an integrator
+//! credential alone can never supply: *which user* the integrator is acting
+//! for. An integrator's signature only proves the integrator's own identity — it says
 //! nothing about which identity granted it anything. This extractor reads
 //! that from a new `x-avalon-identity-id` header, sent alongside the
-//! existing `x-avalon-game-key-id` / `x-avalon-game-challenge-id` /
-//! `x-avalon-game-signature` headers `authenticate_game` already reads.
+//! existing `x-avalon-integrator-key-id` / `x-avalon-integrator-challenge-id` /
+//! `x-avalon-integrator-signature` headers `authenticate_integrator` already reads.
 //!
-//! **Why `identity_id`, not `binding_id`.** `Caller::Game`'s fields are
-//! `{ game_id, identity_id }` — an identity header keeps that struct
+//! **Why `identity_id`, not `binding_id`.** `Caller::Integrator`'s fields are
+//! `{ integrator_id, identity_id }` — an identity header keeps that struct
 //! self-describing and keeps [`require_capability`] doing the one real
 //! lookup that matters: "is there an active binding **for this
-//! (identity_id, game_id) pair specifically**, and an active grant for
+//! (identity_id, integrator_id) pair specifically**, and an active grant for
 //! this exact capability under it." A `binding_id` header would let a
 //! caller name a row without the guard needing to confirm *whose* row it
-//! is or *which game* it belongs to — reintroducing exactly the kind of
+//! is or *which integrator* it belongs to — reintroducing exactly the kind of
 //! implicit trust ("this id must be legitimate, since it parses") this
-//! ticket exists to remove. Resolving by `(identity_id, game_id)` instead
-//! means the lookup itself enforces "a game can't use one user's
-//! binding-to-Game-A to claim access via Game B" — there is no `bindings`
-//! row to find under a mismatched game, full stop, rather than a row being
+//! ticket exists to remove. Resolving by `(identity_id, integrator_id)` instead
+//! means the lookup itself enforces "an integrator can't use one user's
+//! binding-to-Integrator-A to claim access via Integrator B" — there is no `bindings`
+//! row to find under a mismatched integrator, full stop, rather than a row being
 //! found and then rejected after the fact.
 //!
 //! ## No cache (yet)
 //!
 //! The ticket suggests a short in-process cache keyed by
-//! `(identity, game, capability)`. Not built here: with only one real
-//! caller (`presence::update_game_presence`) so far, there is nothing to
+//! `(identity, integrator, capability)`. Not built here: with only one real
+//! caller (`presence::update_integrator_presence`) so far, there is nothing to
 //! profile a cache against, and a wrong invalidation rule (the one hard
 //! part of any cache) would be actively dangerous for an authorization
 //! check — "revoked is rejected on the next request, no grace window" is
@@ -80,7 +80,7 @@
 //! against.
 //!
 //! `#![allow(dead_code)]`: kept at the module level rather than removed
-//! now that `presence::update_game_presence` is a real caller, since not
+//! now that `presence::update_integrator_presence` is a real caller, since not
 //! every item here is reachable from that one call site alone — keeping
 //! it here (one place) rather than scattering per-item allows across
 //! whichever helper a future compiler pass happens to flag.
@@ -92,37 +92,40 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::games::authenticate_game;
 use crate::handlers::authenticate;
+use crate::integrators::authenticate_integrator;
 use crate::state::AppState;
 
-/// Header naming which identity a `Caller::Game` request acts on behalf of
+/// Header naming which identity a `Caller::Integrator` request acts on behalf of
 /// — see this module's doc comment for why this is an identity, not a
 /// binding, id.
 const CALLER_IDENTITY_ID_HEADER: &str = "x-avalon-identity-id";
 
 /// Who is calling, resolved by [`authenticate_caller`]. A handler matches
 /// on this to decide what it's allowed to assume about the request, and
-/// (for [`Caller::Game`]) calls [`require_capability`] naming the exact
+/// (for [`Caller::Integrator`]) calls [`require_capability`] naming the exact
 /// capability it needs before touching anything user-owned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Caller {
     /// A user's own authenticated session — full access to their own
     /// resources, no grant needed (see module doc comment).
     User(Uuid),
-    /// A game, authenticated via challenge-response
-    /// (`games::authenticate_game`), acting on behalf of `identity_id`.
+    /// An integrator, authenticated via challenge-response
+    /// (`integrators::authenticate_integrator`), acting on behalf of `identity_id`.
     /// Nothing about this variant alone implies access to anything —
     /// [`require_capability`] is what actually authorizes a specific
     /// action.
-    Game { game_id: Uuid, identity_id: Uuid },
+    Integrator {
+        integrator_id: Uuid,
+        identity_id: Uuid,
+    },
 }
 
 /// Resolves [`Caller`] from a request: a user bearer session
-/// (`Authorization: Bearer <token>`) if present, otherwise the game
+/// (`Authorization: Bearer <token>`) if present, otherwise the integrator
 /// challenge-response credential plus the identity header, otherwise
 /// `AppError::Unauthorized`. User session takes priority — a request
-/// carrying both a user bearer token and game challenge-response headers
+/// carrying both a user bearer token and integrator challenge-response headers
 /// (not a real scenario today, but not forbidden by the header shapes
 /// alone) is treated as the user, since that's the stronger, more
 /// specific proof and there's no ambiguity to resolve either way.
@@ -135,26 +138,26 @@ pub(crate) async fn authenticate_caller(
         return Ok(Caller::User(identity_id));
     }
 
-    let game_id = authenticate_game(state, headers).await?;
+    let integrator_id = authenticate_integrator(state, headers).await?;
     let identity_id: Uuid = headers
         .get(CALLER_IDENTITY_ID_HEADER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .ok_or(AppError::Unauthorized)?;
-    Ok(Caller::Game {
-        game_id,
+    Ok(Caller::Integrator {
+        integrator_id,
         identity_id,
     })
 }
 
 /// Everything [`capability_authorized`] needs to know about an identity's
-/// binding to a specific game, decoupled from how it was fetched — the
+/// binding to a specific integrator, decoupled from how it was fetched — the
 /// same decomposition `guilds.rs`'s `has_guild_permission` uses to keep
-/// authorization logic testable without a database. `bound_game_id` is the
-/// game the binding actually belongs to; `capability_authorized` compares
-/// it against the *caller's* game id rather than trusting the caller.
+/// authorization logic testable without a database. `bound_integrator_id` is the
+/// integrator the binding actually belongs to; `capability_authorized` compares
+/// it against the *caller's* integrator id rather than trusting the caller.
 struct BindingFacts {
-    bound_game_id: Uuid,
+    bound_integrator_id: Uuid,
     active: bool,
 }
 
@@ -164,29 +167,29 @@ struct GrantFacts {
     active: bool,
 }
 
-/// The entire authorization decision for `Caller::Game`, pure and
+/// The entire authorization decision for `Caller::Integrator`, pure and
 /// DB-free: true only if a binding exists, it belongs to exactly
-/// `caller_game_id`, it is active (not ended), and a grant for the
+/// `caller_integrator_id`, it is active (not ended), and a grant for the
 /// requested capability exists and is active (not revoked). Every other
 /// combination — no binding, an ended binding, a binding for a different
-/// game, no grant at all, a revoked grant — is false. This is the one and
-/// only check; there is no separate `game_has_access_to_user` boolean
+/// integrator, no grant at all, a revoked grant — is false. This is the one and
+/// only check; there is no separate `integrator_has_access_to_user` boolean
 /// anywhere in this module.
 fn capability_authorized(
-    caller_game_id: Uuid,
+    caller_integrator_id: Uuid,
     binding: Option<&BindingFacts>,
     grant: Option<&GrantFacts>,
 ) -> bool {
     let Some(binding) = binding else {
         return false;
     };
-    if binding.bound_game_id != caller_game_id || !binding.active {
+    if binding.bound_integrator_id != caller_integrator_id || !binding.active {
         return false;
     }
     grant.is_some_and(|g| g.active)
 }
 
-/// The active `bindings` row (if any) for `(identity_id, game_id)`, plus
+/// The active `bindings` row (if any) for `(identity_id, integrator_id)`, plus
 /// its id — same query shape `connections.rs`'s `active_binding` uses
 /// (scoped by both columns, `ended_at IS NULL`), just against the pool
 /// directly rather than an in-flight transaction, since this is a
@@ -194,24 +197,24 @@ fn capability_authorized(
 async fn fetch_binding(
     state: &AppState,
     identity_id: Uuid,
-    game_id: Uuid,
+    integrator_id: Uuid,
 ) -> Result<Option<(Uuid, BindingFacts)>, AppError> {
     let row = sqlx::query(
-        "SELECT id, game_id FROM bindings WHERE identity_id = $1 AND game_id = $2 \
+        "SELECT id, integrator_id FROM bindings WHERE identity_id = $1 AND integrator_id = $2 \
          AND ended_at IS NULL",
     )
     .bind(identity_id)
-    .bind(game_id)
+    .bind(integrator_id)
     .fetch_optional(&state.pool)
     .await?;
     Ok(match row {
         Some(row) => {
             let binding_id: Uuid = row.try_get("id")?;
-            let bound_game_id: Uuid = row.try_get("game_id")?;
+            let bound_integrator_id: Uuid = row.try_get("integrator_id")?;
             Some((
                 binding_id,
                 BindingFacts {
-                    bound_game_id,
+                    bound_integrator_id,
                     active: true, // the WHERE clause already guarantees this
                 },
             ))
@@ -239,9 +242,9 @@ async fn fetch_grant(
     Ok(row.map(|_| GrantFacts { active: true }))
 }
 
-/// Whether an active `bindings` row exists for `(identity_id, game_id)`,
+/// Whether an active `bindings` row exists for `(identity_id, integrator_id)`,
 /// with no specific capability grant required — the user-consent check
-/// `game_data::publish_instance` (#384) uses, matching
+/// `integrator_data::publish_instance` (#384) uses, matching
 /// `issue_attestation`'s "an active binding to this issuer" language but
 /// without a capability grant on top (#384 doesn't define one; publishing
 /// instance data about a bound user is closer to schema/achievement
@@ -251,22 +254,22 @@ async fn fetch_grant(
 pub(crate) async fn has_active_binding(
     state: &AppState,
     identity_id: Uuid,
-    game_id: Uuid,
+    integrator_id: Uuid,
 ) -> Result<bool, AppError> {
-    Ok(fetch_binding(state, identity_id, game_id)
+    Ok(fetch_binding(state, identity_id, integrator_id)
         .await?
-        .is_some_and(|(_, facts)| facts.bound_game_id == game_id && facts.active))
+        .is_some_and(|(_, facts)| facts.bound_integrator_id == integrator_id && facts.active))
 }
 
 /// The guard: does `caller` have `capability`? `capability` is mandatory
 /// (not `Option`, no default) so a call site can never accidentally check
 /// nothing — see module doc comment. `Caller::User` always passes
-/// (a user always has full access to their own data); `Caller::Game`
+/// (a user always has full access to their own data); `Caller::Integrator`
 /// resolves its active binding and the specific grant for `capability`
 /// fresh from `permission_grants` (see module doc comment on why there's
 /// no cache yet) and returns `AppError::Forbidden` unless both are active
 /// right now. The 403 body never says which of "no binding" / "binding
-/// for the wrong game" / "no grant" / "grant revoked" applies — same
+/// for the wrong integrator" / "no grant" / "grant revoked" applies — same
 /// "never leak internal detail" posture `AppError::into_response`
 /// documents for every other variant.
 pub(crate) async fn require_capability(
@@ -276,11 +279,11 @@ pub(crate) async fn require_capability(
 ) -> Result<(), AppError> {
     match caller {
         Caller::User(_) => Ok(()),
-        Caller::Game {
-            game_id,
+        Caller::Integrator {
+            integrator_id,
             identity_id,
         } => {
-            let binding = fetch_binding(state, *identity_id, *game_id).await?;
+            let binding = fetch_binding(state, *identity_id, *integrator_id).await?;
             let grant = match &binding {
                 Some((binding_id, facts)) if facts.active => {
                     fetch_grant(state, *binding_id, capability.as_str()).await?
@@ -288,7 +291,7 @@ pub(crate) async fn require_capability(
                 _ => None,
             };
             let binding_facts = binding.as_ref().map(|(_, facts)| facts);
-            if capability_authorized(*game_id, binding_facts, grant.as_ref()) {
+            if capability_authorized(*integrator_id, binding_facts, grant.as_ref()) {
                 Ok(())
             } else {
                 Err(AppError::Forbidden)
@@ -307,16 +310,16 @@ mod tests {
 
     use super::*;
 
-    fn active_binding(game_id: Uuid) -> BindingFacts {
+    fn active_binding(integrator_id: Uuid) -> BindingFacts {
         BindingFacts {
-            bound_game_id: game_id,
+            bound_integrator_id: integrator_id,
             active: true,
         }
     }
 
-    fn ended_binding(game_id: Uuid) -> BindingFacts {
+    fn ended_binding(integrator_id: Uuid) -> BindingFacts {
         BindingFacts {
-            bound_game_id: game_id,
+            bound_integrator_id: integrator_id,
             active: false,
         }
     }
@@ -327,74 +330,78 @@ mod tests {
 
     #[test]
     fn active_binding_and_active_grant_is_authorized() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         assert!(capability_authorized(
-            game_id,
-            Some(&active_binding(game_id)),
+            integrator_id,
+            Some(&active_binding(integrator_id)),
             Some(&active_grant()),
         ));
     }
 
     #[test]
     fn no_binding_at_all_is_rejected() {
-        let game_id = Uuid::new_v4();
-        assert!(!capability_authorized(game_id, None, Some(&active_grant())));
+        let integrator_id = Uuid::new_v4();
+        assert!(!capability_authorized(
+            integrator_id,
+            None,
+            Some(&active_grant())
+        ));
     }
 
     #[test]
     fn an_ended_binding_is_rejected_even_with_an_active_grant() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         assert!(!capability_authorized(
-            game_id,
-            Some(&ended_binding(game_id)),
+            integrator_id,
+            Some(&ended_binding(integrator_id)),
             Some(&active_grant()),
         ));
     }
 
     #[test]
-    fn a_binding_for_a_different_game_is_rejected() {
-        // The binding is real and active, but it belongs to Game A while
-        // the caller authenticated as Game B — using one user's
-        // binding-to-Game-A to claim access via Game B must never work.
-        let game_a = Uuid::new_v4();
-        let game_b = Uuid::new_v4();
+    fn a_binding_for_a_different_integrator_is_rejected() {
+        // The binding is real and active, but it belongs to Integrator A while
+        // the caller authenticated as Integrator B — using one user's
+        // binding-to-Integrator-A to claim access via Integrator B must never work.
+        let integrator_a = Uuid::new_v4();
+        let integrator_b = Uuid::new_v4();
         assert!(!capability_authorized(
-            game_b,
-            Some(&active_binding(game_a)),
+            integrator_b,
+            Some(&active_binding(integrator_a)),
             Some(&active_grant()),
         ));
     }
 
     #[test]
     fn an_active_binding_with_no_grant_at_all_is_rejected() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         assert!(!capability_authorized(
-            game_id,
-            Some(&active_binding(game_id)),
+            integrator_id,
+            Some(&active_binding(integrator_id)),
             None,
         ));
     }
 
     #[test]
     fn a_revoked_grant_is_rejected() {
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         assert!(!capability_authorized(
-            game_id,
-            Some(&active_binding(game_id)),
+            integrator_id,
+            Some(&active_binding(integrator_id)),
             Some(&GrantFacts { active: false }),
         ));
     }
 
     #[test]
     fn no_binding_and_no_grant_together_is_rejected() {
-        let game_id = Uuid::new_v4();
-        assert!(!capability_authorized(game_id, None, None));
+        let integrator_id = Uuid::new_v4();
+        assert!(!capability_authorized(integrator_id, None, None));
     }
 
     #[test]
     fn user_caller_is_a_distinct_variant_never_fed_into_capability_authorized() {
         // `require_capability`'s `Caller::User` arm short-circuits to
-        // `Ok(())` before `capability_authorized` (a `Caller::Game`-only
+        // `Ok(())` before `capability_authorized` (a `Caller::Integrator`-only
         // helper) is ever called — this documents that shape rather than
         // calling the helper with meaningless inputs.
         let caller = Caller::User(Uuid::new_v4());
@@ -414,7 +421,7 @@ mod live_tests {
     //! database.
     //!
     //! Revokes through `connections::revoke_grant` directly — the exact
-    //! handler function `DELETE /games/{slug}/grants/{capability}` runs,
+    //! handler function `DELETE /integrations/{slug}/grants/{capability}` runs,
     //! called in-process rather than over HTTP — so this proves the guard
     //! reads state a real revoke produced, not a hand-rolled SQL shortcut
     //! that happens to look the same.
@@ -460,13 +467,13 @@ mod live_tests {
     struct Seeded {
         identity_id: Uuid,
         token: String,
-        game_id: Uuid,
+        integrator_id: Uuid,
         slug: String,
     }
 
-    /// Seeds a bare identity + session, a registered game declaring
+    /// Seeds a bare identity + session, a registered integrator declaring
     /// `friends.read`, and an active binding + grant between them —
-    /// direct SQL, same rows `POST /games/{slug}/connect` would produce,
+    /// direct SQL, same rows `POST /integrations/{slug}/connect` would produce,
     /// since this test isn't going over HTTP at all (see module doc
     /// comment).
     async fn seed(pool: &PgPool) -> Seeded {
@@ -492,24 +499,24 @@ mod live_tests {
             .await
             .expect("failed to seed session");
 
-        let game_id = Uuid::new_v4();
+        let integrator_id = Uuid::new_v4();
         let slug = format!("authz-test-{}", Uuid::new_v4().simple());
         sqlx::query(
-            "INSERT INTO games (id, slug, name, developer, registered_at, status) \
+            "INSERT INTO integrators (id, slug, name, owner_name, registered_at, status) \
              VALUES ($1, $2, $3, $4, $5, 'active')",
         )
-        .bind(game_id)
+        .bind(integrator_id)
         .bind(&slug)
-        .bind("Authz Test Game")
+        .bind("Authz Test Integrator")
         .bind("Test Studio")
         .bind(OffsetDateTime::now_utc())
         .execute(pool)
         .await
-        .expect("failed to seed game");
+        .expect("failed to seed integrator");
         sqlx::query(
-            "INSERT INTO game_requested_capabilities (game_id, capability) VALUES ($1, $2)",
+            "INSERT INTO integrator_requested_capabilities (integrator_id, capability) VALUES ($1, $2)",
         )
-        .bind(game_id)
+        .bind(integrator_id)
         .bind("friends.read")
         .execute(pool)
         .await
@@ -517,12 +524,12 @@ mod live_tests {
 
         let binding_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO bindings (id, identity_id, game_id, established_at) \
+            "INSERT INTO bindings (id, identity_id, integrator_id, established_at) \
              VALUES ($1, $2, $3, $4)",
         )
         .bind(binding_id)
         .bind(identity_id)
-        .bind(game_id)
+        .bind(integrator_id)
         .bind(OffsetDateTime::now_utc())
         .execute(pool)
         .await
@@ -542,7 +549,7 @@ mod live_tests {
         Seeded {
             identity_id,
             token,
-            game_id,
+            integrator_id,
             slug,
         }
     }
@@ -554,8 +561,8 @@ mod live_tests {
         let seeded = seed(&pool).await;
         let state = test_state(pool).await;
 
-        let caller = Caller::Game {
-            game_id: seeded.game_id,
+        let caller = Caller::Integrator {
+            integrator_id: seeded.integrator_id,
             identity_id: seeded.identity_id,
         };
 
@@ -592,8 +599,8 @@ mod live_tests {
 
         // `friends.read` was seeded; `presence.read` was never granted at
         // all under this same active binding.
-        let caller = Caller::Game {
-            game_id: seeded.game_id,
+        let caller = Caller::Integrator {
+            integrator_id: seeded.integrator_id,
             identity_id: seeded.identity_id,
         };
         let result = require_capability(&caller, Capability::PresenceRead, &state).await;
@@ -602,18 +609,18 @@ mod live_tests {
 
     #[tokio::test]
     #[ignore]
-    async fn a_binding_to_a_different_game_is_rejected_against_real_seeded_rows() {
+    async fn a_binding_to_a_different_integrator_is_rejected_against_real_seeded_rows() {
         let pool = test_pool().await;
         let seeded = seed(&pool).await;
         let state = test_state(pool).await;
 
-        // A real active binding + grant exist for `seeded.game_id`, but
-        // the caller claims to be a different game entirely — no
-        // `bindings` row exists for `(identity_id, other_game_id)`, so
+        // A real active binding + grant exist for `seeded.integrator_id`, but
+        // the caller claims to be a different integrator entirely — no
+        // `bindings` row exists for `(identity_id, other_integrator_id)`, so
         // this must fail exactly like "no binding at all".
-        let other_game_id = Uuid::new_v4();
-        let caller = Caller::Game {
-            game_id: other_game_id,
+        let other_integrator_id = Uuid::new_v4();
+        let caller = Caller::Integrator {
+            integrator_id: other_integrator_id,
             identity_id: seeded.identity_id,
         };
         let result = require_capability(&caller, Capability::FriendsRead, &state).await;
@@ -627,8 +634,8 @@ mod live_tests {
         let seeded = seed(&pool).await;
         let state = test_state(pool).await;
 
-        // The user themself, not a game — passes trivially even though
-        // no game-side binding/grant check is relevant at all.
+        // The user themself, not an integrator — passes trivially even though
+        // no integrator-side binding/grant check is relevant at all.
         let caller = Caller::User(seeded.identity_id);
         require_capability(&caller, Capability::WalletWrite, &state)
             .await

@@ -28,10 +28,10 @@ export interface GuildMember {
   displayName?: string
   roleIndex: number
   status: PresenceStatus
-  // Mirrors PresenceResponse.playing exactly: a game id, or null/absent.
-  // Always null in practice today (types.ts's own note — no real game
+  // Mirrors PresenceResponse.playing exactly: an integrator id, or null/absent.
+  // Always null in practice today (types.ts's own note — no real integrator
   // publishes presence yet), carried through here so the "members
-  // currently playing" summary (#57) is correct once a game does, rather
+  // currently playing" summary (#57) is correct once an integrator does, rather
   // than needing a second wiring pass later. Optional (not just
   // nullable) so existing fixtures/tests built before #57 don't all need
   // updating — absent is treated identically to null everywhere it's read.
@@ -77,7 +77,7 @@ export async function listMembersWithPresence(token: string, guildId: string): P
     presences.map((p: PresenceResponse) => [p.identity_id, p.status]),
   )
   const presenceByPlaying = new Map<string, string | null>(
-    presences.map((p: PresenceResponse) => [p.identity_id, p.playing]),
+    presences.map((p: PresenceResponse) => [p.identity_id, p.active_in]),
   )
   const displayNameById = new Map<string, string>(
     profiles.map((p: PublicProfileResponse) => [p.identity_id, p.display_name]),
@@ -250,40 +250,40 @@ export function canChangeMemberRole(
   return hasGuildPermission(guild, actorIdentityId, actorPermissions, 'manage_roles')
 }
 
-// "Members currently playing", grouped by game id, counts descending
+// "Members currently playing", grouped by integrator id, counts descending
 // (#57). Pure, unit-testable independent of any fetch. Only members with a
-// non-null `playing` count toward any group — offline/idle/no-game members
+// non-null `playing` count toward any group — offline/idle/no-integrator members
 // are simply absent from the result, not a "null" bucket, since there's
-// nothing true to say about them per-game. This is realtime presence, not
-// a durable guild stat: a game is never "the guild's game" (#74) — a
+// nothing true to say about them per-integrator. This is realtime presence, not
+// a durable guild stat: an integrator is never "the guild's integrator" (#74) — a
 // member merely happens to be playing it right now. `playing` is always
-// null in every guild today (no game has a live presence-publish binding
-// yet, see api/types.ts's own note on PresenceResponse.playing), so this
+// null in every guild today (no integrator has a live presence-publish binding
+// yet, see api/types.ts's own note on PresenceResponse.active_in), so this
 // resolves to an empty list in practice until that changes; the function
 // itself doesn't assume that and works the same either way.
 export interface PlayingGroup {
-  gameId: string
+  integratorId: string
   count: number
 }
 
-export function groupMembersPlayingByGame(members: GuildMember[]): PlayingGroup[] {
+export function groupMembersPlayingByIntegrator(members: GuildMember[]): PlayingGroup[] {
   const counts = new Map<string, number>()
   for (const member of members) {
     if (!member.playing) continue
     counts.set(member.playing, (counts.get(member.playing) ?? 0) + 1)
   }
   return Array.from(counts.entries())
-    .map(([gameId, count]) => ({ gameId, count }))
-    .sort((a, b) => b.count - a.count || a.gameId.localeCompare(b.gameId))
+    .map(([integratorId, count]) => ({ integratorId, count }))
+    .sort((a, b) => b.count - a.count || a.integratorId.localeCompare(b.integratorId))
 }
 
 // Renders one PlayingGroup as "N members playing X" — the #74-safe
 // phrasing the ticket requires verbatim: a member is described as playing
-// a game, a guild is never described as belonging to one ("Game X's
+// an integrator, a guild is never described as belonging to one ("Integrator X's
 // guild" is exactly what this must never read as).
 export function formatPlayingSummary(group: PlayingGroup): string {
   const noun = group.count === 1 ? 'member' : 'members'
-  return `${group.count} ${noun} playing ${group.gameId}`
+  return `${group.count} ${noun} playing ${group.integratorId}`
 }
 
 // Maps a role_index to AvalonRoleBadge's fixed-tier visual variant. Roles
@@ -332,8 +332,8 @@ export function buildDiscoverQueryString(params: DiscoverGuildsParams): string {
   if (params.tag && params.tag.trim()) {
     search.set('tag', params.tag.trim())
   }
-  if (params.game) {
-    search.set('game', params.game)
+  if (params.integrator) {
+    search.set('game', params.integrator)
   }
   if (params.sort) {
     search.set('sort', params.sort)
@@ -348,17 +348,17 @@ export function buildDiscoverQueryString(params: DiscoverGuildsParams): string {
   return query ? `?${query}` : ''
 }
 
-// --- Game affinity breakdown (issue #206, implementing decision #160) -----
+// --- Integrator affinity breakdown (issue #206, implementing decision #160) -----
 
 // Renders one GameBreakdownEntry against the guild's total membership as
-// "N of M members play <game>" — the exact phrasing the ticket's design
+// "N of M members play <integrator>" — the exact phrasing the ticket's design
 // section illustrates ("14 of 22 members play Ashen Realms"). Pure and
 // unit-testable independent of any fetch. `totalMembers` is the response's
 // own `total_members`, not a sum of every entry's `member_count` — a
-// member can be bound to zero, one, or several games, so those two numbers
+// member can be bound to zero, one, or several integrators, so those two numbers
 // are never guaranteed equal.
 export function formatGameBreakdownEntry(entry: GameBreakdownEntry, totalMembers: number): string {
-  return `${entry.member_count} of ${totalMembers} members play ${entry.game_name}`
+  return `${entry.member_count} of ${totalMembers} members play ${entry.integrator_name}`
 }
 
 // True when the breakdown response itself has nothing to show — distinct
@@ -368,7 +368,7 @@ export function hasNoGameBreakdownData(breakdown: GameBreakdownEntry[]): boolean
   return breakdown.length === 0
 }
 
-// --- Favorite games pin list (issue #207, implementing decision #160) -----
+// --- Favorite integrators pin list (issue #207, implementing decision #160) -----
 // Mirrors crates/server/src/guilds.rs::MAX_GUILD_FAVORITE_GAMES exactly —
 // the server is the real authority (a stale client constant here can only
 // ever under- or over-disable the "Pin" button a request would then be
@@ -377,7 +377,7 @@ export function hasNoGameBreakdownData(breakdown: GameBreakdownEntry[]): boolean
 // being wired here yet).
 export const MAX_FAVORITE_GAMES = 5
 
-// A game affinity breakdown entry is eligible to be pinned only while it
+// An integrator affinity breakdown entry is eligible to be pinned only while it
 // isn't already pinned — the server independently re-derives "has real
 // affinity" from the very breakdown this list is built from, so this
 // helper's only job is de-duplication, not re-validating the affinity
@@ -386,8 +386,8 @@ export function pinnableBreakdownEntries(
   breakdown: GameBreakdownEntry[],
   favorites: FavoriteGameEntry[],
 ): GameBreakdownEntry[] {
-  const pinnedIds = new Set(favorites.map((f) => f.game_id))
-  return breakdown.filter((entry) => !pinnedIds.has(entry.game_id))
+  const pinnedIds = new Set(favorites.map((f) => f.integrator_id))
+  return breakdown.filter((entry) => !pinnedIds.has(entry.integrator_id))
 }
 
 export function canPinMoreFavorites(favorites: FavoriteGameEntry[]): boolean {
@@ -398,25 +398,25 @@ export function canPinMoreFavorites(favorites: FavoriteGameEntry[]): boolean {
 // same "resend the whole list" convention crates/server/src/guilds.rs's
 // `SetFavoriteGamesRequest` (and #153's `links` before it) already
 // establishes; this module never does a partial/per-entry patch.
-export function addFavoriteGameId(favorites: FavoriteGameEntry[], gameId: string): string[] {
-  return [...favorites.map((f) => f.game_id), gameId]
+export function addFavoriteGameId(favorites: FavoriteGameEntry[], integratorId: string): string[] {
+  return [...favorites.map((f) => f.integrator_id), integratorId]
 }
 
-export function removeFavoriteGameId(favorites: FavoriteGameEntry[], gameId: string): string[] {
-  return favorites.filter((f) => f.game_id !== gameId).map((f) => f.game_id)
+export function removeFavoriteGameId(favorites: FavoriteGameEntry[], integratorId: string): string[] {
+  return favorites.filter((f) => f.integrator_id !== integratorId).map((f) => f.integrator_id)
 }
 
-// Swaps `gameId` with its neighbor one position earlier/later. A no-op
-// (returns the unchanged order) if `gameId` isn't found or is already at
+// Swaps `integratorId` with its neighbor one position earlier/later. A no-op
+// (returns the unchanged order) if `integratorId` isn't found or is already at
 // that end of the list — callers disable the button in that case, but this
 // stays safe to call regardless.
 export function reorderFavoriteGameIds(
   favorites: FavoriteGameEntry[],
-  gameId: string,
+  integratorId: string,
   direction: 'up' | 'down',
 ): string[] {
-  const ids = favorites.map((f) => f.game_id)
-  const index = ids.indexOf(gameId)
+  const ids = favorites.map((f) => f.integrator_id)
+  const index = ids.indexOf(integratorId)
   if (index === -1) return ids
   const swapWith = direction === 'up' ? index - 1 : index + 1
   if (swapWith < 0 || swapWith >= ids.length) return ids
@@ -430,7 +430,7 @@ export function reorderFavoriteGameIds(
 // Renders one FavoriteGameEntry for display — flags staleness inline
 // rather than hiding it, per #207's "surface, don't silently churn" design.
 export function formatFavoriteGameEntry(entry: FavoriteGameEntry): string {
-  return entry.stale ? `${entry.game_name} (no longer actively played)` : entry.game_name
+  return entry.stale ? `${entry.integrator_name} (no longer actively played)` : entry.integrator_name
 }
 
 // Issue #242: whether the Discover board should offer "Apply to join" for

@@ -512,7 +512,7 @@ pub struct ProfileResponse {
     pub handle: String,
     /// Small, user-optional self-description fields (issue #155) — same
     /// promised-durable tier and same public exposure level as
-    /// `display_name`/`avatar_url` above (no capability gate, no game ever
+    /// `display_name`/`avatar_url` above (no capability gate, no integrator ever
     /// sees more of it than `GET /me`/`GET /identities/profiles` already
     /// expose).
     pub bio: Option<String>,
@@ -841,7 +841,7 @@ pub struct UpdateProfileRequest {
     /// becomes `true`. Not part of `profile.updated`/durable history, and
     /// not written through the same transaction as the rest of this
     /// request's changes — see `discovery::set_discoverable`'s doc
-    /// comment for why, matching `presence_preferences.hide_playing`'s
+    /// comment for why, matching `presence_preferences.hide_active_in`'s
     /// identical precedent.
     pub discoverable: Option<bool>,
 }
@@ -1263,7 +1263,7 @@ pub async fn update_profile(
 
     // `discoverable` (#205) is deliberately handled outside the
     // transaction below, the same way `presence::update_my_presence`
-    // handles `hide_playing`: it's a user preference, not durable
+    // handles `hide_active_in`: it's a user preference, not durable
     // protocol history, so it has no `profile.updated` payload and needs
     // no atomicity with the rest of this request's changes. Applied only
     // now, after every fallible validation above has already succeeded —

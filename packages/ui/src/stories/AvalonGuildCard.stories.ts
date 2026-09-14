@@ -7,7 +7,7 @@ const meta: Meta<typeof AvalonGuildCard> = {
   args: {
     name: 'Ashen Vanguard',
     tag: 'ASHV',
-    description: 'A cross-game community for Ashen Realms and beyond.',
+    description: 'A cross-integrator community for Ashen Realms and beyond.',
     memberCount: 42,
   },
 }

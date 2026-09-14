@@ -1,7 +1,7 @@
 # Security Model
 
-**Authority is scoped. No single actor — not a game, not a node operator, not
-the network itself — is omnipotent.** Users control their identity, games
+**Authority is scoped. No single actor — not an integrator, not a node operator, not
+the network itself — is omnipotent.** Users control their identity, integrators
 control their own worlds and their own attestations, guilds govern themselves,
 and infrastructure transports, indexes, settles, and verifies without owning
 any of it. **Hosted infrastructure is not protocol authority.**
@@ -11,27 +11,27 @@ any of it. **Hosted infrastructure is not protocol authority.**
 | Actor | Controls | Cannot |
 |---|---|---|
 | **User** | identity keys; profile declarations; social actions; permission grants and visibility; guild participation | issue attestations about themselves; rewrite issued history |
-| **Game** | its game profiles/bindings; its game-side characters and progression; attestations under its own issuer key; its recognition policy | touch another game's profile or characters; issue under another issuer's identity; alter an identity's history or unrelated guild history |
+| **Integrator** | its integrator profiles/bindings; its integrator-side characters and progression; attestations under its own issuer key; its recognition policy | touch another integrator's profile or characters; issue under another issuer's identity; alter an identity's history or unrelated guild history |
 | **Guild** | governance, membership, roles, settings, channels | act as an issuer; reach into a member's other data |
-| **Avalon infrastructure** | transport, indexing, settlement, discovery, verification | fabricate an issuer claim; fabricate an identity; silently become the owner of user or game data |
+| **Avalon infrastructure** | transport, indexing, settlement, discovery, verification | fabricate an issuer claim; fabricate an identity; silently become the owner of user or integrator data |
 
 Details per actor: [`./identity.md`](./identity.md),
-[`./game-bindings.md`](./game-bindings.md), [`./guilds.md`](./guilds.md),
+[`./bindings.md`](./bindings.md), [`./guilds.md`](./guilds.md),
 [`./nodes.md`](./nodes.md).
 
 ## Authorization: one capability, one check
 
-Every endpoint a game calls on a user's behalf must check the specific
-capability it needs — never a blanket "does this game have access to this
+Every endpoint an integrator calls on a user's behalf must check the specific
+capability it needs — never a blanket "does this integrator have access to this
 user" boolean. Two caller kinds exist: a **user**, acting on their own
-data (always allowed — this is specifically about *game* access to *user*
-data, not a user's access to themselves), and a **game acting for a
-user**, which needs both an active [binding](./game-bindings.md)
+data (always allowed — this is specifically about *integrator* access to *user*
+data, not a user's access to themselves), and a **integrator acting for a
+user**, which needs both an active [binding](./bindings.md)
 (`#83`) and an active `PermissionGrant` (see [`./privacy.md`](./privacy.md))
 for exactly the capability the endpoint names.
 
 `crates/server/src/authz.rs`'s `Caller` (`Caller::User(identity_id)` /
-`Caller::Game { game_id, identity_id }`) and `require_capability(caller,
+`Caller::Integrator { integrator_id, identity_id }`) and `require_capability(caller,
 capability, state)` (#28) are this check, built as the one place it lives —
 not literal Axum middleware, a plain async fn called explicitly per handler,
 matching how `guilds.rs`'s `has_guild_permission` is already called rather
@@ -40,30 +40,30 @@ mandatory, not optional or defaultable, so a call site can never accidentally
 check nothing. A revoked grant is rejected on the very next request — no
 grace window, since every check reads `permission_grants` fresh (no cache
 yet; see the module's own doc comment for why). Authorization failure for
-`Caller::Game` is `AppError::Forbidden` (403), body identical regardless of
-*why* — no binding, a binding for the wrong game, no grant, or a revoked
+`Caller::Integrator` is `AppError::Forbidden` (403), body identical regardless of
+*why* — no binding, a binding for the wrong integrator, no grant, or a revoked
 grant all read the same to the caller, matching this file's "never leak
 internal detail" posture below.
 
 **No endpoint calls this yet.** As of #28, every real endpoint is either
 user-session-only (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is
-a user action, a game never grants itself anything) or proves only the
-game's own identity with nothing user-specific to check
-(`games::game_whoami`). `Caller`/`require_capability` exist ready for the
-first ticket that adds a real game-calling-the-API endpoint (achievement
+a user action, an integrator never grants itself anything) or proves only the
+integrator's own identity with nothing user-specific to check
+(`integrators::integrator_whoami`). `Caller`/`require_capability` exist ready for the
+first ticket that adds a real integrator-calling-the-API endpoint (achievement
 issuance, etc.) — that ticket should fail review if it builds its own ad-hoc
-game-access check instead of calling this one.
+integrator-access check instead of calling this one.
 
 ## Node authority
 
 ```text
-Game A
+Integrator A
     signs:  Dragon Slayer → User X   (issuer key)
 
 Hosted Avalon node
     transports, indexes, settles that claim
-    cannot replace Game A's signature
-    cannot produce "Game A issued …" when Game A did not
+    cannot replace Integrator A's signature
+    cannot produce "Integrator A issued …" when Integrator A did not
 ```
 
 This holds because every durable claim is signed by the party with authority
@@ -84,7 +84,7 @@ so that gap remains until #86 lands.
 |---|---|---|---|
 | identity passkey (#73) | the identity | attacker can log in as that identity | revoke via a second registered passkey (`POST /me/devices/:id/revoke`, #135) — total loss if it was the only one, recoverable via guardian-based recovery (#99, decided; #201) |
 | identity event-signing key (#73) | the identity | attacker can author events for that identity going forward | rotate from an authenticated session (not built); historical events signed by the old key stay valid, same principle as issuer keys below |
-| issuer key (#80) | the game | attacker can issue authentic-looking claims under that game | revoke key as of T; claims after T rejected, before T untouched |
+| issuer key (#80) | the integrator | attacker can issue authentic-looking claims under that integrator | revoke key as of T; claims after T rejected, before T untouched |
 | log operator key (#39, decided: Signed Tree Heads only, not per-entry) | settlement operator | attacker can sign bogus tree heads | mirrors/witnesses detect divergence via gossiped signed tree heads — no validator set (#186); implementation tracked by #210 |
 
 Keys are never shared across domains. The design for each is a separate open
@@ -98,7 +98,7 @@ a `key_revoked` entry names the key and the time T from which it is no longer
 trusted. Verification of any claim resolves the key set as of that claim's
 `issued_at`. "The legitimate key at the time" and "a compromised key now" are
 different facts and both stay answerable —
-[`./games-and-issuers.md`](./games-and-issuers.md).
+[`./issuers.md`](./issuers.md).
 
 ## Credentials never enter the ledger
 
@@ -131,9 +131,9 @@ deployment blocker, not an optional hardening step.
   real mitigation is witnessed, gossiped signed tree heads catching a
   divergent/dishonest operator — not consensus.
 - **Statistics can be gamed.** Sybil identities can inflate registry numbers;
-  documented, not solved ([`./game-registry.md`](./game-registry.md)).
+  documented, not solved ([`./registry.md`](./registry.md)).
 - **Persistent identity makes harassment persistent.** Blocking and
-  cross-game moderation are open questions (Proposal §31–32) and interact with
+  cross-integrator moderation are open questions (Proposal §31–32) and interact with
   [`./privacy.md`](./privacy.md).
 - **Recovery is decided, not yet fully landed.** A lost passkey with no
   second one registered was total, permanent loss of the identity;
@@ -161,8 +161,8 @@ deployment blocker, not an optional hardening step.
 - `crates/server/src/authz.rs` (#28) — `Caller` / `require_capability`, built
   and exhaustively unit-tested (pure-logic matrix plus a live-Postgres
   matrix gated `--ignored`). No longer unused: `presence.rs`'s
-  `update_game_presence` calls it to gate `presence.publish` (#16), and
-  `game_schemas.rs` reuses it too — every other game-calling-the-API
+  `update_integrator_presence` calls it to gate `presence.publish` (#16), and
+  `integrator_schemas.rs` reuses it too — every other integrator-calling-the-API
   endpoint is still hypothetical and should reuse this rather than
   hand-rolling a check.
 
@@ -189,5 +189,5 @@ deployment blocker, not an optional hardening step.
   long-term settlement backend, decided.
 - [#28](https://github.com/LunarVagabond/avalon-protocol/issues/28) —
   permission enforcement (`Caller` / `require_capability`). Built; no caller
-  yet. Any future endpoint letting a game act on a user's behalf must use
+  yet. Any future endpoint letting an integrator act on a user's behalf must use
   this guard rather than its own check.

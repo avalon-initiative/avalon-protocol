@@ -40,7 +40,7 @@ const guildBase = {
   owner: 'id-owner',
   created_at: 'now',
   member_count: 1,
-  games: [],
+  integrators: [],
   join_policy: 'invite_only',
   motd: null,
   banner: null,

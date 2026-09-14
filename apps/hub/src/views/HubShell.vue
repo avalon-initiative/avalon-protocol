@@ -5,7 +5,7 @@
 // layout (see router/index.ts). Nav entries for features that don't exist
 // yet (chat, discover) are rendered disabled with a "Soon" tag
 // rather than hidden, so the layout reflects the roadmap honestly. Guilds
-// (issue #24) and Games (issue #270) are no longer among them.
+// (issue #24) and Integrators (issue #270) are no longer among them.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
@@ -94,8 +94,8 @@ const navItems = computed<AvalonNavItem[]>(() => [
   {
     label: 'Connected Apps',
     to: '/integrations',
-    icon: 'games',
-    active: route.path.startsWith('/integrations') || route.path.startsWith('/games'),
+    icon: 'integrators',
+    active: route.path.startsWith('/integrations') || route.path.startsWith('/integrations'),
   },
   { label: 'Guilds', to: '/guilds', icon: 'guilds', active: route.path.startsWith('/guilds') },
   { label: 'Friends', to: '/friends', icon: 'friends', active: route.path === '/friends' },
@@ -151,7 +151,7 @@ function onSelectNav(to: string) {
           <input
             :class="styles.searchInput"
             type="search"
-            placeholder="Search games, users, guilds… (coming soon)"
+            placeholder="Search integrators, users, guilds… (coming soon)"
             disabled
           />
         </div>

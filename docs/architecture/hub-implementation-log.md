@@ -28,7 +28,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   `requiresAuth` is set once on the parent route and inherited by every
   child via `vue-router`'s meta-merging. Nav entries for features that
   don't exist yet (Discover) render disabled with a
-  "Soon" tag rather than being hidden. Games (#270), Chat (#105), and
+  "Soon" tag rather than being hidden. Integrators (#270), Chat (#105), and
   Achievements (#35) are no longer among them, same as Guilds (#24) before
   them. The shell also heartbeats `PUT /me/presence` (Online, every 60s,
   inside the server's 120s TTL) so the user actually reads as online to
@@ -38,39 +38,39 @@ the actual code ever disagree, the code is right and this doc is stale.
   reference tokens only.
 - **`Achievements.vue` (#35, landed)** — reads `GET /me/achievements` (#34)
   and merges in two things that endpoint doesn't itself carry: the
-  achievement/milestone's display name (`GET /games/{slug}/achievements` or
+  achievement/milestone's display name (`GET /integrations/{slug}/achievements` or
   `GET /integrations/{slug}/milestones`, keyed by the claim's own GlobalId
   ref) and the issuer's display name (`GET /integrations/{slug}`) — see
   `apps/hub/src/api/achievements.ts`'s module doc comment. Each claim
   renders via a new `packages/ui` component, `AvalonAchievementCard`:
-  achievement name, a clickable issuer chip (routes to the game's profile
+  achievement name, a clickable issuer chip (routes to the integrator's profile
   page, #90), issued date, a `valid`/`invalid` badge with its reason
   (never a score or star rating — ADR #77), and an expandable history list
   that shows a revocation's date and reason alongside the original
-  issuance (#81/#85) rather than replacing it. Filter (by achievement/game
+  issuance (#81/#85) rather than replacing it. Filter (by achievement/integrator
   name, and by a specific issuer via a dropdown scoped to issuers the
-  caller actually has claims from) and sort (date/name/game) are both
+  caller actually has claims from) and sort (date/name/integrator) are both
   client-side and unit-tested (`apps/hub/src/api/achievements.test.ts`).
   **Not built in this pass**: feature/hide (blocked on #87's visibility
   store — no protocol event or preference row exists yet to persist
-  either), and `PUT /games/{slug}/recognition`-backed recognition display
+  either), and `PUT /integrations/{slug}/recognition`-backed recognition display
   (trust-model.md's own tracked gap — this view shows authenticity/validity
   only, per ADR #76).
 - `Home.vue` (#148, all six mock sections landed for #312) — the landing page
   after login: welcome header, "Recently Connected" (the most recently
-  connected app/game — `GameBindingResponse` has no last-played/session data,
+  connected app/integrator — `IntegratorBindingResponse` has no last-played/session data,
   so that's the only honest ordering available, not a curated pick), "Your
-  Apps & Games" (a name/icon grid of every connected binding), Quick Actions
+  Apps & Integrators" (a name/icon grid of every connected binding), Quick Actions
   (add a friend, set up this device, edit profile), Friends Online, Guilds (a
   compact panel of the caller's guilds with member counts), Latest Messages
   (each guild's most recent message from its first non-archived channel —
   not a full cross-channel merge, which `Guild.vue`'s own channel list
   already covers), and the six most recent entries from `GET /me/history`
   with a "View all" link to `/activity`. All four of the newer sections
-  reuse `apps/hub/src/api/games.ts`/`guilds.ts`/`guildChat.ts` as they
-  already existed for `GameDirectory.vue`/`Guilds.vue`/guild chat — no new
+  reuse `apps/hub/src/api/integrations.ts`/`guilds.ts`/`guildChat.ts` as they
+  already existed for `IntegrationDirectory.vue`/`Guilds.vue`/guild chat — no new
   endpoints. Every section has its own empty state with a next action
-  (Explore Games / Find a Guild / Find friends), and
+  (Explore Integrators / Find a Guild / Find friends), and
   `summarizeActivityEntry` covers all twelve `guild.*` event kinds the
   server emits so Recent Activity doesn't fall back to a raw event-kind
   string for guild events. Friends + live presence loading is shared with
@@ -108,7 +108,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   since `createFriendRequest` always targets an identity id on the wire; the
   identity header in `HubShell.vue` shows the caller's own handle as the
   shareable form. One remaining scope cut, documented not silent: there is
-  no "Playing &lt;game&gt;" label (no game registry exists, `Presence.playing`
+  no "Playing &lt;integrator&gt;" label (no integrator registry exists, `Presence.playing`
   is always `null` in practice today).
 - `Messages.vue` (#105) — direct/small-group conversations
   ([communication.md](./communication.md)): a conversation-list sidebar next
@@ -163,8 +163,8 @@ the actual code ever disagree, the code is right and this doc is stale.
   the caller's own pending guild invites) rather than working around them
   with a Hub-only endpoint. **Issue #57** completed this view rather than
   starting it over: a "Currently playing" card on `Guild.vue` groups the
-  roster's merged presence by game (`apps/hub/src/api/guilds.ts`'s
-  `groupMembersPlayingByGame`/`formatPlayingSummary`, "N members playing
+  roster's merged presence by integrator (`apps/hub/src/api/guilds.ts`'s
+  `groupMembersPlayingByIntegrator`/`formatPlayingSummary`, "N members playing
   X" per #74), and a "History" card states plainly that guild event
   history isn't available yet rather than fabricating one from the
   current roster (no `GET /guilds/{id}/history` endpoint or indexer
@@ -190,39 +190,39 @@ the actual code ever disagree, the code is right and this doc is stale.
   /rank badges (star, rare, epic, legendary, …) get their own component per
   #311's design rather than being forced through `AvalonIcon`'s
   single-color `currentColor` model — tracked on the concurrent #332.
-- `GameDirectory.vue` / `GameProfile.vue` (#270, first buildable slice of
-  #90) — `/integrations` (a search box + name/newest sort over `GET /games`,
-  `apps/hub/src/composables/useDiscoverGames.ts`, same server-side
+- `IntegrationDirectory.vue` / `IntegrationProfile.vue` (#270, first buildable slice of
+  #90) — `/integrations` (a search box + name/newest sort over `GET /integrations`,
+  `apps/hub/src/composables/useDiscoverIntegrations.ts`, same server-side
   cursor-pagination-on-filter-change pattern `useDiscoverGuilds.ts`
   established for #154) and `/integrations/:slug` (the profile page: `GET
-  /games/{slug}`'s public fields plus `GET /games/{slug}/registry`'s five
+  /integrations/{slug}`'s public fields plus `GET /integrations/{slug}/registry`'s five
   metrics, each rendered through `AvalonMetricTile` with its definition
-  and class label — never a bare number). `/games` and `/games/:slug`
+  and class label — never a bare number). `/integrations` and `/integrations/:slug`
   redirect to the routes above (`apps/hub/src/router/index.ts`), so
   existing deep links don't 404. The nav entry (`HubShell.vue`) reads
   "Connected Apps", not "Games" — per #282/#275, `category` tabs
-  (Games/Apps/Services) filter the fetched list client-side, though only
-  Games has real registrants today. Both public, unauthenticated reads —
+  (Integrators/Apps/Services) filter the fetched list client-side, though only
+  Integrators has real registrants today. Both public, unauthenticated reads —
   no session token required, matching the endpoints' own visibility (#273).
   `status` renders through a badge that's visibly distinct whenever it
   isn't `"active"`. No ranking, no score, no "recommended" ordering
   anywhere in either view, per #89's invariant —
-  `apps/hub/src/views/GameDirectory.test.ts` and `GameProfile.test.ts`
+  `apps/hub/src/views/IntegrationDirectory.test.ts` and `IntegrationProfile.test.ts`
   assert every metric's label renders and that no score/ranking element
-  exists. `GameProfile.vue` also renders `GET /games/{slug}/keys`'s
+  exists. `IntegrationProfile.vue` also renders `GET /integrations/{slug}/keys`'s
   full issuer key history (#90, #80/#84 now decided/closed) — every key
   ever registered, root or operational, with its revoked status — and,
   only when the viewer is logged in, a "Your access" section reusing
-  `AvalonConnectionCard`/`revokeGrant`/`disconnectGame` exactly as
-  `Connections.vue` does, scoped to just this game's binding. Recognition
+  `AvalonConnectionCard`/`revokeGrant`/`disconnectIntegrator` exactly as
+  `Connections.vue` does, scoped to just this integrator's binding. Recognition
   relationships (which other issuers recognize this one) remain unbuilt —
   no server-side concept of that exists yet; recognition today is scoped
-  per-attestation (#33), not a game-level relationship graph — tracked as
+  per-attestation (#33), not an integrator-level relationship graph — tracked as
   the one open item left on #90.
 - `Connections.vue` (`/connections`, #27/#83) — lists the caller's own
-  `GameBinding`s with a revoke action. `ConnectGame.vue` (`/connect/:slug`,
-  #27) — the capability-consent flow a user lands on to authorize a game,
-  posting to `POST /games/{slug}/connect`.
+  `IntegratorBinding`s with a revoke action. `ConnectIntegration.vue` (`/connect/:slug`,
+  #27) — the capability-consent flow a user lands on to authorize an integrator,
+  posting to `POST /integrations/{slug}/connect`.
 - `RecoverIdentity.vue` (`/recover-identity`, #201) — the guardian-based
   recovery flow's entry point for a device with no registered passkey; see
   [identity](./identity.md)'s "Today in the repo" for the server-side
@@ -233,7 +233,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   small inline-SVG set, no icon library), `AvalonSidebarNav`,
   `AvalonBottomNav`, `AvalonUserChip`, `AvalonGuildCard`,
   `AvalonGuildMemberRow`, `AvalonRoleBadge`, `AvalonChannelList`,
-  `AvalonChatMessage`, `AvalonChatComposer` (#24), `AvalonGameCard`,
+  `AvalonChatMessage`, `AvalonChatComposer` (#24), `AvalonIntegratorCard`,
   `AvalonMetricTile` (#270) — all presentational (props in,
   events out; the nav components take `{ label, to, icon, active, disabled }[]`
   and emit which entry was picked, never emitting for a disabled one) in
@@ -247,7 +247,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   mobile-only fork** (#61's invariant, generalized library-wide by #310).
   `HubShell.vue` already collapses sidebar → `AvalonBottomNav` and hides the
   header search/footer at `768px` (`apps/hub/src/views/HubShell.module.scss`);
-  `Home.vue`'s grid and `GameProfile.vue`'s metrics grid have their own
+  `Home.vue`'s grid and `IntegrationProfile.vue`'s metrics grid have their own
   breakpoints. #310's audit covered every `packages/ui` component the mock's
   Home/Login/CreateIdentity/Profile/Friends/`NetworkStatus` screens actually
   use (`AvalonAuthCard`, `AvalonForm`, `AvalonTextField`, `AvalonButton`,
@@ -270,15 +270,15 @@ the actual code ever disagree, the code is right and this doc is stale.
   A second #310 pass audited the guild (`AvalonGuildCard`,
   `AvalonGuildMemberRow`, `AvalonChannelList`, `AvalonChatMessage`,
   `AvalonChatComposer`), event (`AvalonEventCard`, `AvalonRsvpControl`,
-  `AvalonRsvpRosterPanel`), and game-directory (`AvalonGameCard`,
+  `AvalonRsvpRosterPanel`), and integrator-directory (`AvalonIntegratorCard`,
   `AvalonMetricTile`, `AvalonFilterBar`, `AvalonConnectionCard`) components
   the same way, and this time found real gaps, all the same shape: a
-  truncating `.name` (`AvalonGuildCard`, `AvalonGameCard`,
+  truncating `.name` (`AvalonGuildCard`, `AvalonIntegratorCard`,
   `AvalonConnectionCard`) sitting in a `min-width: 0` flex row next to a
   `flex-shrink: 0` sibling (a status badge, a slug) but missing `min-width:
   0` on itself — without it a flex item's default `min-width: auto` floors
   it at its own content width, so `text-overflow: ellipsis` never actually
-  triggers and a long guild/game name pushes the badge/slug out and
+  triggers and a long guild/integrator name pushes the badge/slug out and
   overflows the card at phone width. Fixed by adding `min-width: 0` to each
   `.name`. Two more real ones: `AvalonGuildMemberRow`'s row (avatar + name +
   role badge + presence badge + up to two action buttons) had no
@@ -314,7 +314,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   for identity, not the plain-credential shape earlier drafts of this doc
   set implied. Since #24: `GET|POST /guilds`, `GET|PATCH /guilds/:id`,
   `GET|POST /guilds/:id/roles`, `PATCH /guilds/:id/roles/:idx`,
-  `POST /guilds/:id/transfer-ownership`, `POST /guilds/:id/games/:game_id`,
+  `POST /guilds/:id/transfer-ownership`, `POST /guilds/:id/integrations/:integrator_id`,
   `POST /guilds/:id/invites`, `POST /guilds/:id/invites/:invite_id/accept`
   + `/decline`, `POST /guilds/:id/join` + `/leave`,
   `GET /guilds/:id/members`, `PATCH|DELETE /guilds/:id/members/:identity_id`,
@@ -322,9 +322,9 @@ the actual code ever disagree, the code is right and this doc is stale.
   `PATCH /guilds/:id/channels/:cid`, `POST /guilds/:id/channels/:cid/archive`,
   `GET|POST /guilds/:id/channels/:cid/messages`,
   `DELETE /guilds/:id/channels/:cid/messages/:mid`. Since #270:
-  `GET /games`, `GET /games/:slug/registry`. Also called, not yet listed
-  above: `POST|DELETE /games/:slug/connect` (bind/unbind), `GET
+  `GET /integrations`, `GET /integrations/:slug/registry`. Also called, not yet listed
+  above: `POST|DELETE /integrations/:slug/connect` (bind/unbind), `GET
   /me/connections`, `GET /me/grants`, and `DELETE
-  /games/:slug/grants/:capability` (#27/#83), used by
-  `Connections.vue`/`ConnectGame.vue`.
+  /integrations/:slug/grants/:capability` (#27/#83), used by
+  `Connections.vue`/`ConnectIntegration.vue`.
 

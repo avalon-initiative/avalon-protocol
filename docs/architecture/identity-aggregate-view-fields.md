@@ -45,23 +45,23 @@ response shape, never in storage or in a `profile.updated` payload. See
 
 ## Layer 2 — one entry per integrator binding
 
-Backed by `avalon_protocol::games::{GameBinding, IntegratorCategory}` and
+Backed by `avalon_protocol::integrators::{IntegratorBinding, IntegratorCategory}` and
 `avalon_protocol::achievements::AchievementAttestation`.
 
 | Field | Type | Used for |
 |---|---|---|
 | `type` | `IntegratorCategory` (game/app/service) | Which category this integrator registered as — a label, not a different mechanism; see #282/#275. |
 | `integrator_id` | string/slug | Which game/app/service this entry describes. |
-| `binding.established_at` | timestamp | When the identity opted into this integrator (consent-driven, identity-initiated — `game-bindings.md`). |
+| `binding.established_at` | timestamp | When the identity opted into this integrator (consent-driven, identity-initiated — `bindings.md`). |
 | `binding.ended_at` | `Option<timestamp>` | When the binding ended, if ever — history stays intact either way. |
 | `attestations[].achievement` | `GlobalId` | Which claim (`game:<slug>:achievement:<key>` or `app\|service:<slug>:milestone:<key>`) this attestation is about — see #324's category-driven vocabulary decision. |
 | `attestations[].issued_at` | timestamp | When the issuing integrator signed this claim. |
 | `attestations[].issuer_key_id` | string | Which of the issuer's operational keys signed it (#80/#84's two-tier model) — lets a compromised key be pinpointed/revoked without implicating the whole integrator. |
 | `published_schemas[]` | `game_schema.published` payload (#255) | An integrator's own declared shape for its custom data (e.g. `Character`) — schema only, real and built. |
-| *(instance data, e.g. `characters`)* | decided (#381), built (#384) | Actual per-user instance data against a published schema, read via `GET /identities/{id}/game-data` — `characters` is one example; a schema can declare any shape. Public by default once published, with a schema-level `private` opt-out and a bidirectional field-level override (#381), enforced server-side before a caller ever sees the data. See [`./identity-aggregate-view.md`](./identity-aggregate-view.md#a-made-up-games-full-shape-illustrated) and `game-space.md`. |
+| *(instance data, e.g. `characters`)* | decided (#381), built (#384) | Actual per-user instance data against a published schema, read via `GET /identities/{id}/integrator-data` — `characters` is one example; a schema can declare any shape. Public by default once published, with a schema-level `private` opt-out and a bidirectional field-level override (#381), enforced server-side before a caller ever sees the data. See [`./identity-aggregate-view.md`](./identity-aggregate-view.md#a-made-up-integrators-full-shape-illustrated) and `integrator-space.md`. |
 
 **Not layer 1 or layer 2 at all**: presence (`status`, "last seen," current
-game/server) is a third, deliberately ephemeral tier — never a
+integrator/server) is a third, deliberately ephemeral tier — never a
 `ProtocolEvent`, never in scope here. See [`./presence.md`](./presence.md);
 don't add presence fields to either table above even though presence
 describes "this identity, right now" in a colloquial sense.

@@ -14,11 +14,11 @@
 //! Test identities are seeded directly via SQL rather than through a real
 //! WebAuthn ceremony — same approach as `crates/server/tests/friends.rs`,
 //! since presence doesn't care how a session was established. The
-//! game-side tests below reuse `crates/server/tests/connections.rs` and
-//! `crates/server/tests/games.rs`'s own patterns for registering a game
+//! integrator-side tests below reuse `crates/server/tests/connections.rs` and
+//! `crates/server/tests/integrations.rs`'s own patterns for registering an integrator
 //! and completing its challenge-response auth over real HTTP, since
 //! `PUT /presence/:identity_id` is authenticated the same way
-//! `crate::authz::authenticate_caller` authenticates any `Caller::Game`.
+//! `crate::authz::authenticate_caller` authenticates any `Caller::Integrator`.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -99,23 +99,23 @@ async fn publishing_presence_is_visible_via_get() {
     let entries = read.as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["status"], "Online");
-    assert_eq!(entries[0]["playing"], serde_json::Value::Null);
+    assert_eq!(entries[0]["active_in"], serde_json::Value::Null);
 }
 
 #[tokio::test]
 #[ignore]
-async fn a_user_cannot_claim_to_be_playing_a_game() {
+async fn a_user_cannot_claim_to_be_playing_a_integrator() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
 
-    // The request body has no `playing` field at all in the wire format —
+    // The request body has no `active_in` field at all in the wire format —
     // this is enforced by `UpdatePresenceRequest` only ever deserializing
     // `status`, not by rejecting an extra field, so this just confirms the
-    // response never echoes a `playing` value regardless of what's sent.
+    // response never echoes an `active_in` value regardless of what's sent.
     auth(http.put(format!("{base}/me/presence")), &alice_token)
-        .json(&serde_json::json!({ "status": "Online", "playing": Uuid::new_v4() }))
+        .json(&serde_json::json!({ "status": "Online", "active_in": Uuid::new_v4() }))
         .send()
         .await
         .unwrap();
@@ -130,7 +130,7 @@ async fn a_user_cannot_claim_to_be_playing_a_game() {
     .json()
     .await
     .unwrap();
-    assert_eq!(read[0]["playing"], serde_json::Value::Null);
+    assert_eq!(read[0]["active_in"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -312,10 +312,10 @@ async fn explicitly_setting_online_clears_a_sticky_override_and_resumes_ttl_trac
     assert_eq!(read[0]["status"], "Offline");
 }
 
-/// Registers a fresh game via the real `POST /games` endpoint declaring
+/// Registers a fresh integrator via the real `POST /integrations` endpoint declaring
 /// `presence.publish` — same pattern
-/// `crates/server/tests/connections.rs::register_unique_game` uses.
-async fn register_unique_game(
+/// `crates/server/tests/connections.rs::register_unique_integrator` uses.
+async fn register_unique_integrator(
     http: &reqwest::Client,
     base: &str,
 ) -> (serde_json::Value, SigningKey) {
@@ -323,8 +323,8 @@ async fn register_unique_game(
     let signing_key = SigningKey::generate(&mut rand::rng());
     let body = serde_json::json!({
         "slug": format!("presence-test-{}", &suffix[..12]),
-        "name": format!("Presence Test Game {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "name": format!("Presence Test Integrator {}", &suffix[..8]),
+        "owner_name": "Test Studio",
         "requested_capabilities": ["presence.publish"],
         "initial_key": {
             "algorithm": "ed25519",
@@ -333,22 +333,22 @@ async fn register_unique_game(
     });
 
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     (response.json().await.unwrap(), signing_key)
 }
 
-/// Completes one round of the challenge-response game-auth handshake
-/// (`crate::games::authenticate_game`) and returns a request builder
+/// Completes one round of the challenge-response integrator-auth handshake
+/// (`crate::integrators::authenticate_integrator`) and returns a request builder
 /// carrying every header `crate::authz::authenticate_caller` needs to
-/// resolve a `Caller::Game { game_id, identity_id }` — the three
-/// `x-avalon-game-*` headers plus `x-avalon-identity-id`, same shape
-/// `crates/server/tests/games.rs`'s own round-trip test builds by hand.
-async fn game_auth_request(
+/// resolve a `Caller::Integrator { integrator_id, identity_id }` — the three
+/// `x-avalon-integrator-*` headers plus `x-avalon-identity-id`, same shape
+/// `crates/server/tests/integrations.rs`'s own round-trip test builds by hand.
+async fn integrator_auth_request(
     http: &reqwest::Client,
     base: &str,
     slug: &str,
@@ -358,7 +358,7 @@ async fn game_auth_request(
     request: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{slug}/challenge"))
+        .post(format!("{base}/integrations/{slug}/challenge"))
         .send()
         .await
         .unwrap()
@@ -370,10 +370,10 @@ async fn game_auth_request(
     let signature = signing_key.sign(&nonce);
 
     request
-        .header("x-avalon-game-key-id", key_id)
-        .header("x-avalon-game-challenge-id", challenge_id)
+        .header("x-avalon-integrator-key-id", key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
         .header(
-            "x-avalon-game-signature",
+            "x-avalon-integrator-signature",
             BASE64.encode(signature.to_bytes()),
         )
         .header("x-avalon-identity-id", identity_id.to_string())
@@ -381,18 +381,18 @@ async fn game_auth_request(
 
 #[tokio::test]
 #[ignore]
-async fn a_bound_game_can_publish_its_own_playing_claim() {
+async fn a_bound_integrator_can_publish_its_own_playing_claim() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
-    let (game, signing_key) = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
-    let game_id = game["id"].as_str().unwrap();
-    let key_id = game["credential"]["key_id"].as_str().unwrap();
+    let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
+    let integrator_id = integrator["id"].as_str().unwrap();
+    let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
     auth(
-        http.post(format!("{base}/games/{slug}/connect")),
+        http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
     .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
@@ -400,7 +400,7 @@ async fn a_bound_game_can_publish_its_own_playing_claim() {
     .await
     .unwrap();
 
-    let request = game_auth_request(
+    let request = integrator_auth_request(
         &http,
         &base,
         slug,
@@ -411,7 +411,7 @@ async fn a_bound_game_can_publish_its_own_playing_claim() {
     )
     .await;
     let response = request
-        .json(&serde_json::json!({ "status": "Online", "playing": game_id }))
+        .json(&serde_json::json!({ "status": "Online", "active_in": integrator_id }))
         .send()
         .await
         .unwrap();
@@ -428,25 +428,25 @@ async fn a_bound_game_can_publish_its_own_playing_claim() {
     .await
     .unwrap();
     assert_eq!(read[0]["status"], "Online");
-    assert_eq!(read[0]["playing"].as_str().unwrap(), game_id);
+    assert_eq!(read[0]["active_in"].as_str().unwrap(), integrator_id);
 }
 
-/// The ticket's own explicit ask: a game publishing `playing` for a game
+/// The ticket's own explicit ask: an integrator publishing `active_in` for an integrator
 /// id that isn't its own — even one it's otherwise fully bound and
 /// granted against — is rejected.
 #[tokio::test]
 #[ignore]
-async fn a_game_cannot_claim_to_be_playing_a_different_game() {
+async fn a_integrator_cannot_claim_to_be_playing_a_different_integrator() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
-    let (game, signing_key) = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
-    let key_id = game["credential"]["key_id"].as_str().unwrap();
+    let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
+    let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
     auth(
-        http.post(format!("{base}/games/{slug}/connect")),
+        http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
     .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
@@ -454,8 +454,8 @@ async fn a_game_cannot_claim_to_be_playing_a_different_game() {
     .await
     .unwrap();
 
-    let some_other_game_id = Uuid::new_v4();
-    let request = game_auth_request(
+    let some_other_integrator_id = Uuid::new_v4();
+    let request = integrator_auth_request(
         &http,
         &base,
         slug,
@@ -466,30 +466,30 @@ async fn a_game_cannot_claim_to_be_playing_a_different_game() {
     )
     .await;
     let response = request
-        .json(&serde_json::json!({ "status": "Online", "playing": some_other_game_id }))
+        .json(&serde_json::json!({ "status": "Online", "active_in": some_other_integrator_id }))
         .send()
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
-/// The ticket's other explicit ask: a game with no active binding to the
+/// The ticket's other explicit ask: an integrator with no active binding to the
 /// target identity at all — never connected, or connected without
 /// `presence.publish` — cannot publish presence for them.
 #[tokio::test]
 #[ignore]
-async fn a_game_cannot_publish_presence_for_an_unbound_identity() {
+async fn a_integrator_cannot_publish_presence_for_an_unbound_identity() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
     let (alice_id, _alice_token) = seed_identity_session(&pool).await;
-    let (game, signing_key) = register_unique_game(&http, &base).await;
-    let slug = game["slug"].as_str().unwrap();
-    let key_id = game["credential"]["key_id"].as_str().unwrap();
+    let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
+    let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
-    // Deliberately never calls `POST /games/{slug}/connect` — no binding,
+    // Deliberately never calls `POST /integrations/{slug}/connect` — no binding,
     // no grant, at all.
-    let request = game_auth_request(
+    let request = integrator_auth_request(
         &http,
         &base,
         slug,

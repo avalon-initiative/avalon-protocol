@@ -1,7 +1,7 @@
 # For Maintainers
 
 Documentation for people maintaining or contributing to this repository
-itself — distinct from people building games *on* Avalon (see
+itself — distinct from people building *on* Avalon (see
 [`../developers/`](../developers/)).
 
 ## Start here

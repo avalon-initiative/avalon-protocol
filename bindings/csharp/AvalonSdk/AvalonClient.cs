@@ -22,11 +22,10 @@ namespace Avalon.Sdk
         public string ServerUrl { get; }
 
         /// <summary>
-        /// Sent as the <c>x-avalon-integrator-key-id</c> header (the
-        /// generic name the server now documents as canonical; it still
-        /// accepts the older <c>x-avalon-game-key-id</c> too) once this
-        /// client is wired to a real server — mirrors
-        /// <c>avalon-sdk</c>'s <c>game_credential_key_id</c>.
+        /// Sent as the <c>x-avalon-integrator-key-id</c> header — the only
+        /// spelling the server accepts since #290 — once this client is
+        /// wired to a real server. Mirrors <c>avalon-sdk</c>'s
+        /// <c>integrator_credential_key_id</c>.
         /// </summary>
         public string IntegratorCredentialKeyId { get; }
     }

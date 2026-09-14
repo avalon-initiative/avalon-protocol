@@ -36,18 +36,18 @@ async fn test_pool() -> PgPool {
         .expect("failed to connect to Postgres — is it reachable?")
 }
 
-/// Registers a throwaway game via the real, unauthenticated `POST /games`
+/// Registers a throwaway integrator via the real, unauthenticated `POST /integrations`
 /// endpoint — the simplest real write in this codebase that goes through
-/// the outbox into the ledger (`crates/server/src/games.rs::register_game`),
+/// the outbox into the ledger (`crates/server/src/integrations.rs::register_integrator`),
 /// with no WebAuthn ceremony required. Returns the ledger `issuer` string
 /// (`game:<slug>:self:registered`) this test polls `ledger_entries` for.
-async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
+async fn register_throwaway_integrator(http: &reqwest::Client, base: &str) -> String {
     let suffix = Uuid::new_v4().simple().to_string();
     let slug = format!("test-settlement-{}", &suffix[..12]);
     let body = serde_json::json!({
         "slug": slug,
-        "name": "Settlement Proof Test Game",
-        "developer": "Test Studio",
+        "name": "Settlement Proof Test Integrator",
+        "owner_name": "Test Studio",
         "requested_capabilities": [],
         "initial_key": {
             "algorithm": "ed25519",
@@ -58,11 +58,11 @@ async fn register_throwaway_game(http: &reqwest::Client, base: &str) -> String {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     format!("game:{slug}:self:registered")
 }
@@ -160,7 +160,7 @@ async fn inclusion_proof_for_a_real_entry_verifies_client_side_against_its_sth()
     let http = reqwest::Client::new();
     let pool = test_pool().await;
 
-    let issuer = register_throwaway_game(&http, &base).await;
+    let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
     let rank = entry_rank(&pool, seq).await;
     let tree_size = wait_for_covering_sth(&pool, rank).await;
@@ -308,7 +308,7 @@ async fn tree_size_and_inclusion_proofs_stay_correct_across_a_seq_gap() {
 
     // Commit a real entry through the normal API — its seq lands strictly
     // after the burned one.
-    let issuer = register_throwaway_game(&http, &base).await;
+    let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
     assert!(
         seq > burned_seq,
@@ -408,7 +408,7 @@ async fn consistency_proof_between_two_real_tree_sizes_verifies_client_side() {
     .map(|row| row.try_get("tree_size").unwrap())
     .expect("expected at least one existing signed_tree_heads row — run the inclusion-proof test first, or seed the ledger");
 
-    let issuer = register_throwaway_game(&http, &base).await;
+    let issuer = register_throwaway_integrator(&http, &base).await;
     let seq = wait_for_committed_seq(&pool, &issuer).await;
     let rank = entry_rank(&pool, seq).await;
     let second_tree_size = wait_for_covering_sth(&pool, rank).await;

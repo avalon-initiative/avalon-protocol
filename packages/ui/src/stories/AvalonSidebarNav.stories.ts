@@ -3,7 +3,7 @@ import AvalonSidebarNav from '../components/AvalonSidebarNav.vue'
 
 const items = [
   { label: 'Home', to: '/home', icon: 'home', active: true },
-  { label: 'Games', to: '/games', icon: 'games', active: false, disabled: true },
+  { label: 'Integrators', to: '/integrations', icon: 'integrators', active: false, disabled: true },
   { label: 'Guilds', to: '/guilds', icon: 'guilds', active: false, disabled: true },
   { label: 'Friends', to: '/friends', icon: 'friends', active: false },
   { label: 'Chat', to: '/chat', icon: 'chat', active: false, disabled: true },

@@ -19,12 +19,12 @@ Responsibilities:
 - consuming durable protocol events, in order, idempotently
 - building queryable projections (current state) and historical views
 - maintaining the Postgres read models `avalon-server` serves
-- aggregating network statistics for the game registry
-  ([`./game-registry.md`](./game-registry.md))
+- aggregating network statistics for the integrator registry
+  ([`./registry.md`](./registry.md))
 - exposing data to the server, and through it to the SDK and the Hub
 
 What it serves: profiles, friends lists, guild rosters and history, achievement
-lists and attestation status, game discovery, game and issuer statistics,
+lists and attestation status, integrator discovery, integrator and issuer statistics,
 recognition relationships, aggregate network analytics, and point-in-time
 historical queries.
 
@@ -92,7 +92,7 @@ a first-class scaling dimension — see
   `crates/indexer/src/projections/`); `Indexer::apply` is a thin wrapper that
   opens its own transaction around the same call. `crates/indexer/src/projections/`
   has one module per read model — `profiles`, `friendships`, `guild_rosters`,
-  `attestations`, `game_bindings` (#261), `game_schemas` (#255) — each a
+  `attestations`, `integrator_bindings` (#261), `integrator_schemas` (#255) — each a
   pure `decode` (event → typed write, unit-tested without Postgres) plus an
   `apply` (typed write → an upsert keyed by its natural key).
 - `profiles` is the one projection retargeted onto its *existing* table
@@ -120,10 +120,10 @@ a first-class scaling dimension — see
   `crates/indexer/tests/postgres_indexer.rs`'s `--ignored`
   `apply_is_idempotent_per_projection` / `unknown_kind_is_skipped_not_error`
   tests, not yet driven by a worker replaying the full ledger.
-- **Registry projections now exist**: `game_bindings` (`indexer_game_bindings`,
+- **Registry projections now exist**: `integrator_bindings` (`indexer_integrator_bindings`,
   migration `0039_indexer_game_bindings`) backs the `players`/`total players
-  ever` metrics (#261); `game_schemas` (#255) backs schema-version discovery
-  — see [`./game-registry.md`](./game-registry.md). No history projections
+  ever` metrics (#261); `integrator_schemas` (#255) backs schema-version discovery
+  — see [`./registry.md`](./registry.md). No history projections
   yet.
 
 ## Decisions and tickets
@@ -135,7 +135,7 @@ a first-class scaling dimension — see
 - [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43)
   rebuild-from-events + idempotency guarantee
 - #44 server reads go through the indexer, not the ledger
-- [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) game
+- [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) integrator
   registry read model
 - #75 durable history is canonical;
   [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) the event

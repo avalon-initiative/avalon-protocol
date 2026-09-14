@@ -1,6 +1,6 @@
 // Issue #332: the small, fixed built-in icon set a definition falls back
 // to when it has no integrator-hosted `iconUrl` — generic enough to cover
-// games/apps/services alike. A subset of AvalonIcon's own AvalonIconName
+// integrators/apps/services alike. A subset of AvalonIcon's own AvalonIconName
 // (packages/ui/src/components/AvalonIcon.types.ts), kept as its own
 // narrower union here since not every nav/status icon makes sense as an
 // achievement's visual identity.
@@ -21,7 +21,7 @@ export interface AvalonAchievementHistoryEntry {
 // One claim on the achievements view (#35). Issuer name/slug come in
 // separate so this card can render a provenance chip without owning
 // routing itself — same "props in, event out, caller owns navigation"
-// split AvalonGameCard/AvalonGuildCard already use.
+// split AvalonIntegratorCard/AvalonGuildCard already use.
 export interface AvalonAchievementCardProps {
   achievementName: string
   // Both optional (#332): `iconUrl`, when present, always wins over

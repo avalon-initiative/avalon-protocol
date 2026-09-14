@@ -46,22 +46,22 @@ const router = createRouter({
           name: 'achievements',
           component: () => import('../views/Achievements.vue'),
         },
-        // #282: generalized off /games; old paths redirect below. #273: public/unauthenticated,
+        // #282: generalized off /integrations; old paths redirect below. #273: public/unauthenticated,
         // so requiresAuth: false overrides HubShell's inherited requiresAuth: true.
         {
           path: 'integrations',
           name: 'integrations',
-          component: () => import('../views/GameDirectory.vue'),
+          component: () => import('../views/IntegrationDirectory.vue'),
           meta: { requiresAuth: false },
         },
         {
           path: 'integrations/:slug',
           name: 'integration-profile',
-          component: () => import('../views/GameProfile.vue'),
+          component: () => import('../views/IntegrationProfile.vue'),
           meta: { requiresAuth: false },
         },
-        { path: 'games', redirect: { name: 'integrations' } },
-        { path: 'games/:slug', redirect: (to) => ({ name: 'integration-profile', params: to.params }) },
+        { path: 'integrators', redirect: { name: 'integrations' } },
+        { path: 'integrators/:slug', redirect: (to) => ({ name: 'integration-profile', params: to.params }) },
         { path: 'guilds', name: 'guilds', component: () => import('../views/Guilds.vue') },
         // Issue #241: the Channels tab lives inside Guild.vue itself now
         // (a persistent channel sidebar, no route hop to switch channels),
@@ -84,7 +84,7 @@ const router = createRouter({
           name: 'conversation',
           component: () => import('../views/Messages.vue'),
         },
-        { path: 'connect/:slug', name: 'connect-game', component: () => import('../views/ConnectGame.vue') },
+        { path: 'connect/:slug', name: 'connect-integrator', component: () => import('../views/ConnectIntegration.vue') },
         { path: 'connections', name: 'connections', component: () => import('../views/Connections.vue') },
         // #307: cross-device pairing — matches `verification_uri`'s
         // `/pair?user_code=...` shape (see crates/server/src/device_pairing.rs).

@@ -31,7 +31,7 @@ async function onSubmit() {
 
 <template>
   <AuthLayout>
-    <AvalonAuthCard title="Welcome to Avalon" subtitle="Your identity. Your games. Your community.">
+    <AvalonAuthCard title="Welcome to Avalon" subtitle="Your identity. Your integrators. Your community.">
       <AvalonForm submit-label="Log in with passkey" :submitting="submitting" :error="error" @submit="onSubmit">
         <AvalonTextField v-model="identityId" label="Identity id" placeholder="Your identity id" />
       </AvalonForm>

@@ -23,7 +23,7 @@ import {
   AvalonForm,
   AvalonFriendRequestRow,
   AvalonFriendRow,
-  AvalonGameCard,
+  AvalonIntegratorCard,
   AvalonGuildCard,
   AvalonGuildMemberRow,
   AvalonIcon,
@@ -40,7 +40,7 @@ import {
 } from '@avalon/ui'
 
 const ALL_ICON_NAMES: AvalonIconName[] = [
-  'home', 'games', 'guilds', 'friends', 'chat', 'discover', 'profile', 'search',
+  'home', 'integrators', 'guilds', 'friends', 'chat', 'discover', 'profile', 'search',
   'bell', 'plus', 'device', 'activity', 'logo', 'alert', 'pencil', 'check', 'close',
   'settings', 'voice', 'video', 'messages', 'calendar', 'achievements', 'library',
   'wallet', 'more', 'community', 'faction', 'event', 'reward', 'leaderboards', 'map',
@@ -213,7 +213,7 @@ describe('AvalonCard', () => {
 
 const navItems = [
   { label: 'Home', to: '/home', icon: 'home', active: true },
-  { label: 'Games', to: '/games', icon: 'games', active: false, disabled: true },
+  { label: 'Integrators', to: '/integrations', icon: 'integrators', active: false, disabled: true },
   { label: 'Friends', to: '/friends', icon: 'friends', active: false },
 ] as const
 
@@ -221,7 +221,7 @@ describe('AvalonSidebarNav', () => {
   it('renders every label and a Soon tag on disabled items', () => {
     const wrapper = mount(AvalonSidebarNav, { props: { items: [...navItems] } })
     expect(wrapper.text()).toContain('Home')
-    expect(wrapper.text()).toContain('Games')
+    expect(wrapper.text()).toContain('Integrators')
     expect(wrapper.text()).toContain('Soon')
   })
 
@@ -320,36 +320,36 @@ describe('AvalonGuildCard', () => {
   })
 })
 
-describe('AvalonGameCard', () => {
+describe('AvalonIntegratorCard', () => {
   const baseProps = {
     name: 'Ashen Realms',
     slug: 'ashen-realms',
-    developer: 'Ashen Studios',
+    ownerName: 'Ashen Studios',
     status: 'active',
     registeredAt: 'Jan 12, 2026',
   }
 
-  it('renders name, developer, and registration date', () => {
-    const wrapper = mount(AvalonGameCard, { props: baseProps })
+  it('renders name, owner, and registration date', () => {
+    const wrapper = mount(AvalonIntegratorCard, { props: baseProps })
     expect(wrapper.text()).toContain('Ashen Realms')
     expect(wrapper.text()).toContain('Ashen Studios')
     expect(wrapper.text()).toContain('Jan 12, 2026')
   })
 
   it('emits select when clicked', async () => {
-    const wrapper = mount(AvalonGameCard, { props: baseProps })
+    const wrapper = mount(AvalonIntegratorCard, { props: baseProps })
     await wrapper.trigger('click')
     expect(wrapper.emitted('select')).toHaveLength(1)
   })
 
   it('shows no status badge for "active", a visible badge otherwise', () => {
-    const active = mount(AvalonGameCard, { props: baseProps })
+    const active = mount(AvalonIntegratorCard, { props: baseProps })
     expect(active.text()).not.toContain('active')
 
-    const suspended = mount(AvalonGameCard, { props: { ...baseProps, status: 'suspended' } })
+    const suspended = mount(AvalonIntegratorCard, { props: { ...baseProps, status: 'suspended' } })
     expect(suspended.text()).toContain('suspended')
 
-    const revoked = mount(AvalonGameCard, { props: { ...baseProps, status: 'revoked' } })
+    const revoked = mount(AvalonIntegratorCard, { props: { ...baseProps, status: 'revoked' } })
     expect(revoked.text()).toContain('revoked')
   })
 })
@@ -358,14 +358,14 @@ describe('AvalonMetricTile', () => {
   const baseProps = {
     label: 'Players',
     value: 2481392,
-    definition: 'Distinct identities with an active GameBinding.',
+    definition: 'Distinct identities with an active IntegratorBinding.',
     metricClass: 'durable-derived',
   }
 
   it('renders the label, definition, and class alongside the value — never a bare number', () => {
     const wrapper = mount(AvalonMetricTile, { props: baseProps })
     expect(wrapper.text()).toContain('Players')
-    expect(wrapper.text()).toContain('Distinct identities with an active GameBinding.')
+    expect(wrapper.text()).toContain('Distinct identities with an active IntegratorBinding.')
     expect(wrapper.text()).toContain('durable-derived')
     expect(wrapper.text()).toContain('2,481,392')
   })
@@ -729,13 +729,13 @@ describe('AvalonCapabilityConsentRow', () => {
 
 describe('AvalonConnectionCard', () => {
   const baseProps = {
-    gameName: 'Ashen Realms',
+    integratorName: 'Ashen Realms',
     slug: 'ashen-realms',
     establishedAt: '2026-09-01',
     grants: [{ capability: 'friends.read', description: 'See your friends list' }],
   }
 
-  it('renders the game name, slug, and grant descriptions', () => {
+  it('renders the integrator name, slug, and grant descriptions', () => {
     const wrapper = mount(AvalonConnectionCard, { props: baseProps })
     expect(wrapper.text()).toContain('Ashen Realms')
     expect(wrapper.text()).toContain('ashen-realms')
@@ -879,7 +879,7 @@ describe('AvalonAchievementCard', () => {
   })
 
   // Three same-named claims from three different issuers (a real scenario
-  // — nothing stops three games from each having their own "Dragon
+  // — nothing stops three integrators from each having their own "Dragon
   // Slayer") must render as three distinct issuer chips, never merged or
   // deduplicated by name (issue #35's own invariant).
   it('renders distinct issuer chips for three same-named claims from different issuers', () => {

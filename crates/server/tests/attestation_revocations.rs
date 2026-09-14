@@ -51,13 +51,13 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-struct RegisteredGame {
+struct RegisteredIntegrator {
     signing_key: SigningKey,
     slug: String,
     key_id: String,
 }
 
-async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
+async fn register_integrator(http: &reqwest::Client, base: &str) -> RegisteredIntegrator {
     let suffix = Uuid::new_v4().simple().to_string();
     let mut csprng = rand::rng();
     let signing_key = SigningKey::generate(&mut csprng);
@@ -65,7 +65,7 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
     let body = serde_json::json!({
         "slug": slug,
         "name": format!("Revoke Test {}", &suffix[..8]),
-        "developer": "Test Studio",
+        "owner_name": "Test Studio",
         "requested_capabilities": ["achievements.issue"],
         "initial_key": {
             "algorithm": "ed25519",
@@ -73,14 +73,14 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
         },
     });
     let response = http
-        .post(format!("{base}/games"))
+        .post(format!("{base}/integrations"))
         .json(&body)
         .send()
         .await
-        .expect("register game failed — is `make start` running?");
+        .expect("register integrator failed — is `make start` running?");
     assert!(response.status().is_success(), "{:?}", response.status());
     let registered: serde_json::Value = response.json().await.unwrap();
-    RegisteredGame {
+    RegisteredIntegrator {
         signing_key,
         slug,
         key_id: registered["credential"]["key_id"]
@@ -90,9 +90,13 @@ async fn register_game(http: &reqwest::Client, base: &str) -> RegisteredGame {
     }
 }
 
-async fn auth_headers(http: &reqwest::Client, base: &str, game: &RegisteredGame) -> HeaderMap {
+async fn auth_headers(
+    http: &reqwest::Client,
+    base: &str,
+    integrator: &RegisteredIntegrator,
+) -> HeaderMap {
     let challenge: serde_json::Value = http
-        .post(format!("{base}/games/{}/challenge", game.slug))
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
         .send()
         .await
         .unwrap()
@@ -101,10 +105,13 @@ async fn auth_headers(http: &reqwest::Client, base: &str, game: &RegisteredGame)
         .unwrap();
     let challenge_id = challenge["challenge_id"].as_str().unwrap();
     let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let signature = game.signing_key.sign(&nonce);
+    let signature = integrator.signing_key.sign(&nonce);
 
     let mut headers = HeaderMap::new();
-    headers.insert("x-avalon-integrator-key-id", game.key_id.parse().unwrap());
+    headers.insert(
+        "x-avalon-integrator-key-id",
+        integrator.key_id.parse().unwrap(),
+    );
     headers.insert(
         "x-avalon-integrator-challenge-id",
         challenge_id.parse().unwrap(),
@@ -135,20 +142,23 @@ fn revocation_signing_bytes(
         .into_bytes()
 }
 
-/// Full setup shared by every test below: register a game, define an
-/// achievement, connect + grant, issue it. Returns the game and the new
+/// Full setup shared by every test below: register an integrator, define an
+/// achievement, connect + grant, issue it. Returns the integrator and the new
 /// attestation's id.
 async fn issue_one(
     http: &reqwest::Client,
     base: &str,
     pool: &PgPool,
-) -> (RegisteredGame, String, Uuid) {
+) -> (RegisteredIntegrator, String, Uuid) {
     let (identity_id, token) = seed_identity_session(pool).await;
-    let game = register_game(http, base).await;
+    let integrator = register_integrator(http, base).await;
 
-    let headers = auth_headers(http, base, &game).await;
+    let headers = auth_headers(http, base, &integrator).await;
     let define = http
-        .post(format!("{base}/games/{}/achievements", game.slug))
+        .post(format!(
+            "{base}/integrations/{}/achievements",
+            integrator.slug
+        ))
         .headers(headers)
         .json(&serde_json::json!({
             "key": "dragon_slayer",
@@ -163,31 +173,31 @@ async fn issue_one(
         .unwrap()
         .to_string();
 
-    http.post(format!("{base}/games/{}/connect", game.slug))
+    http.post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
         .send()
         .await
         .unwrap();
 
-    let issuer_ref = format!("game:{}", game.slug);
+    let issuer_ref = format!("game:{}", integrator.slug);
     let signing_bytes =
         attestation_signing_bytes("achievement", &issuer_ref, identity_id, &achievement_id);
-    let signature = game.signing_key.sign(&signing_bytes);
+    let signature = integrator.signing_key.sign(&signing_bytes);
 
-    let mut headers = auth_headers(http, base, &game).await;
+    let mut headers = auth_headers(http, base, &integrator).await;
     headers.insert(
         "x-avalon-identity-id",
         identity_id.to_string().parse().unwrap(),
     );
     let issue = http
         .post(format!(
-            "{base}/games/{}/achievements/dragon_slayer/issue",
-            game.slug
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
+            integrator.slug
         ))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game.key_id,
+            "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
         }))
         .send()
@@ -200,7 +210,7 @@ async fn issue_one(
         .parse()
         .unwrap();
 
-    (game, issuer_ref, attestation_id)
+    (integrator, issuer_ref, attestation_id)
 }
 
 #[tokio::test]
@@ -209,7 +219,7 @@ async fn scenario_c_issue_then_revoke_flips_validity_and_history_shows_both() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (game, issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
+    let (integrator, issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
     let before = http
         .get(format!("{base}/attestations/{attestation_id}"))
@@ -225,14 +235,14 @@ async fn scenario_c_issue_then_revoke_flips_validity_and_history_shows_both() {
     let reason_code = "cheating_detected";
     let signing_bytes =
         revocation_signing_bytes("achievement", &issuer_ref, attestation_id, reason_code);
-    let signature = game.signing_key.sign(&signing_bytes);
+    let signature = integrator.signing_key.sign(&signing_bytes);
 
-    let headers = auth_headers(&http, &base, &game).await;
+    let headers = auth_headers(&http, &base, &integrator).await;
     let revoke = http
         .post(format!("{base}/attestations/{attestation_id}/revoke"))
         .headers(headers)
         .json(&serde_json::json!({
-            "key_id": game.key_id,
+            "key_id": integrator.key_id,
             "signature": BASE64.encode(signature.to_bytes()),
             "reason_code": reason_code,
             "reason": "User used unauthorized tooling",
@@ -267,14 +277,14 @@ async fn revoking_twice_is_rejected_not_silently_accepted() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (game, issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
+    let (integrator, issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
     let revoke_once = |reason_code: &'static str| {
         let http = http.clone();
         let base = base.clone();
         let issuer_ref = issuer_ref.clone();
-        let key_id = game.key_id.clone();
-        let signing_key_bytes = game.signing_key.to_bytes();
+        let key_id = integrator.key_id.clone();
+        let signing_key_bytes = integrator.signing_key.to_bytes();
         async move {
             let signing_key = SigningKey::from_bytes(&signing_key_bytes);
             let signing_bytes =
@@ -282,7 +292,7 @@ async fn revoking_twice_is_rejected_not_silently_accepted() {
             let signature = signing_key.sign(&signing_bytes);
             let challenge: serde_json::Value = http
                 .post(format!(
-                    "{base}/games/{}/challenge",
+                    "{base}/integrations/{}/challenge",
                     issuer_ref.strip_prefix("game:").unwrap()
                 ))
                 .send()
@@ -325,10 +335,10 @@ async fn only_the_original_issuer_may_revoke() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_original_game, _issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
+    let (_original_integrator, _issuer_ref, attestation_id) = issue_one(&http, &base, &pool).await;
 
-    // A completely unrelated game tries to revoke it.
-    let intruder = register_game(&http, &base).await;
+    // A completely unrelated integrator tries to revoke it.
+    let intruder = register_integrator(&http, &base).await;
     let headers = auth_headers(&http, &base, &intruder).await;
     let attempt = http
         .post(format!("{base}/attestations/{attestation_id}/revoke"))

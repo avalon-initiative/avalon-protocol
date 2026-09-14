@@ -3,7 +3,7 @@
 **Authenticity, validity, and recognition are three separate questions, and
 Avalon never collapses them.** A signature proves who signed a claim; it does
 not prove the claim is meaningful. **Authenticity is universal. Recognition is
-contextual.** Consuming games choose what they recognize; the network never
+contextual.** Consuming integrators choose what they recognize; the network never
 chooses for them.
 
 This is the normative statement of
@@ -11,7 +11,7 @@ This is the normative statement of
 Narrative: [`../stakeholders/Proposal.md` §9](../stakeholders/Proposal.md#9-trust-and-attestations).
 
 This trust model is domain-agnostic — it applies to any issuer and consumer of
-attestations, not only games — and is illustrated below with gaming examples
+attestations, not only integrators — and is illustrated below with gaming examples
 because gaming is Avalon's first live use case.
 
 ## The three questions
@@ -27,8 +27,8 @@ relevant time, not signed by a key already revoked at issuance, well-formed
 against its declared schema and version, not expired. Also universal, computed
 from protocol history at a point in time.
 
-**Recognized** — does a particular consuming game choose to honor this claim?
-Entirely contextual, expressed as that game's own policy. Two games can look at
+**Recognized** — does a particular consuming integrator choose to honor this claim?
+Entirely contextual, expressed as that integrator's own policy. Two integrators can look at
 the same authentic, valid claim and decide differently, and both are correct.
 
 | | Who decides | Varies by observer? | Where it lives |
@@ -39,10 +39,10 @@ the same authentic, valid claim and decide differently, and both are correct.
 
 ## The limitation, stated plainly
 
-There is no cryptographic mechanism that can stop a game from issuing a
-meaningless but authentic claim. If Game C controls its own issuer key and
+There is no cryptographic mechanism that can stop an integrator from issuing a
+meaningless but authentic claim. If Integrator C controls its own issuer key and
 signs `Dragon Slayer` for every user who clicks a button, the signature
-proves Game C issued it. It cannot prove Game C made it difficult, fair, or
+proves Integrator C issued it. It cannot prove Integrator C made it difficult, fair, or
 prestigious. Avalon does not claim otherwise, and no future feature should
 imply it does.
 
@@ -51,24 +51,24 @@ imply it does.
 Recognition is a consumer-side policy, scoped however the consumer needs:
 
 ```text
-Game B — recognition policy
+Integrator B — recognition policy
 
   issuer game:ashen-realms
       achievements            RECOGNIZED
-      game event results     RECOGNIZED
+      integrator event results     RECOGNIZED
       asset provenance        RECOGNIZED
       currency claims         NOT RECOGNIZED
 
   issuer game:worldzero
       achievements            RECOGNIZED  (schema achievement.v1+, since 2027-01)
-      game event results     RECOGNIZED  (game_event:avalon-championship-* only)
+      integrator event results     RECOGNIZED  (integrator_event:avalon-championship-* only)
 
   issuer game:random-mmo-47
       everything              NOT RECOGNIZED
 ```
 
 Scoping dimensions: issuer, claim type, achievement schema and version, time
-period, specific game event, asset class, or any other dimension the consumer
+period, specific integrator event, asset class, or any other dimension the consumer
 cares about. Avalon may offer standard policy mechanisms later; it never
 imposes a network-wide trust list.
 
@@ -81,19 +81,19 @@ issuer, or something else. No default is imposed.
 
 ## Statistics inform; they never determine
 
-The [game registry](./game-registry.md) publishes derived facts — observed
-identities, attestations issued, games that publicly recognize an issuer. A
-consumer may write "accept game event results from issuers with at least N
-observed identities and M recognizing games". That is the consumer's rule. Avalon
-never enforces "games above N are trusted", never publishes a composite game
-score, and never turns the recognition graph into a verdict. A ten-player game
-is not automatically malicious; a ten-million-player game is not automatically
+The [integrator registry](./registry.md) publishes derived facts — observed
+identities, attestations issued, integrators that publicly recognize an issuer. A
+consumer may write "accept integrator event results from issuers with at least N
+observed identities and M recognizing integrators". That is the consumer's rule. Avalon
+never enforces "integrators above N are trusted", never publishes a composite integrator
+score, and never turns the recognition graph into a verdict. A ten-player integrator
+is not automatically malicious; a ten-million-player integrator is not automatically
 trustworthy.
 
 ## Recognition relationships are facts
 
-A game may publish its policy: "Game A recognizes Game B's achievements and
-game event results." Avalon records that as a fact, and the registry can show
+An integrator may publish its policy: "Integrator A recognizes Integrator B's achievements and
+integrator event results." Avalon records that as a fact, and the registry can show
 it. A claim can be valid without being recognized by anyone, and recognized
 without being especially meaningful. Recognition is never the same thing as
 validity.
@@ -117,7 +117,7 @@ validity.
   takes a second parameter as of #85: `Invalid` immediately if the
   attestation's own `AttestationStatus` (computed by
   `attestation_status_at(revoked_at, at)` — never a stored flag) is
-  `Revoked`, otherwise `Valid` iff the issuer's current `GameStatus` is
+  `Revoked`, otherwise `Valid` iff the issuer's current `IntegratorStatus` is
   `Active`. Individual-attestation revocation (scenario C) is real now.
   Still deliberately less than the full design above: no supersession
   check (no protocol event kind exists yet for it), no point-in-time
@@ -150,10 +150,10 @@ validity.
   name reads as `Authentic`/`Valid` from the endpoint, then
   `NotRecognized` when evaluated against that reader's own policy
   client-side) — `crates/server/tests/attestation_reads.rs`.
-- **Not built in this pass**: `PUT /games/{slug}/recognition` (publishing
+- **Not built in this pass**: `PUT /integrations/{slug}/recognition` (publishing
   a policy so #89's registry can show recognition relationships as
   facts) — `recognize()` exists and is fully usable by any consumer
-  (SDK, a game's own code) today, just not yet exposed as a
+  (SDK, an integrator's own code) today, just not yet exposed as a
   server-stored, publicly-readable declaration. Tracked as a follow-up,
   not silently dropped.
 
@@ -166,7 +166,7 @@ validity.
   recognition, and a partial validity — see above.
 - [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
   decision, closed: issuer signing keys and lifecycle (the authenticity
-  input) — see [games-and-issuers.md](games-and-issuers.md). Implementation
+  input) — see [issuers.md](issuers.md). Implementation
   #84, landed for root/operational key add/revoke; issuer-status-transition
   (suspend/revoke/deprecate) authorization model still open.
 - [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
@@ -177,4 +177,4 @@ validity.
   `validity()`'s partial scope above.
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry
   read model, including recognition relationships — needs the deferred
-  `PUT /games/{slug}/recognition` above before it has anything to read.
+  `PUT /integrations/{slug}/recognition` above before it has anything to read.

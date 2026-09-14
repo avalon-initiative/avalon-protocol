@@ -22,11 +22,11 @@ milestone-1 stand-in until actor signatures exist.
 | `identity.recovery_cancelled` | identity (owner or guardian) → identity | request id, cancelled by, reason | recovery requests | network (milestone-1 stand-in, #201, done) |
 | `identity.recovered` | identity → identity | request id, new device label | identity keys | network (milestone-1 stand-in, #201, done) |
 | `profile.updated` | identity → identity | changed promised-durable fields (`display_name`, `discriminator`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`) | profiles | identity key |
-| `game.registered` | game → game | slug, name, developer, requested capabilities, initial key | games, registry | game key |
-| `game.binding_established` | identity → game | identity, game | bindings, registry identities | identity key |
-| `game.binding_ended` | identity → game | binding ref | bindings | identity key |
-| `permission.granted` | identity → game (per capability) | binding, capability | permission grants | identity key |
-| `permission.revoked` | identity → game (per capability) | binding, capability, reason | permission grants | identity key |
+| `game.registered` | integrator → integrator | slug, name, developer, requested capabilities, initial key | integrators, registry | integrator key |
+| `game.binding_established` | identity → integrator | identity, integrator | bindings, registry identities | identity key |
+| `game.binding_ended` | identity → integrator | binding ref | bindings | identity key |
+| `permission.granted` | identity → integrator (per capability) | binding, capability | permission grants | identity key |
+| `permission.revoked` | identity → integrator (per capability) | binding, capability, reason | permission grants | identity key |
 | `issuer.registered` | issuer → issuer | issuer id, initial key set | issuers | issuer key |
 | `issuer.key_added` | issuer → issuer | key id, public key, algorithm, validity window | issuer keys | existing issuer key |
 | `issuer.key_revoked` | issuer → issuer | key id, reason (`rotated`, `compromised`, …) | issuer keys | issuer key |
@@ -39,23 +39,23 @@ milestone-1 stand-in until actor signatures exist.
 | `guild.member_added` / `.member_removed` | guild → identity | role, actor | rosters, history | acting member's key |
 | `guild.role_changed` | guild → identity | old role, new role, actor | rosters, history | acting member's key |
 | `guild.owner_transferred` | guild → identity | old owner, new owner, actor | guilds | acting owner's key |
-| `guild.game_associated` | guild → game | guild, game | associations | guild officer key |
+| `guild.game_associated` | guild → integrator | guild, integrator | associations | guild officer key |
 | `guild.favorite_games_updated` | guild → guild | favorited game ids, actor | favorites | acting officer's key |
 | `guild.channel_created` / `.channel_renamed` / `.channel_archived` | guild → channel | channel id, name, actor | channels | acting officer's key |
-| `game_schema.published` | game → schema | game id, version, `.proto` source, superseded_by | schema discovery (#255) | game key |
-| `achievement.defined` | game → achievement id | name, description, schema | definitions | game key |
-| `achievement.definition_updated` | game → achievement id | name, description, schema, version | definitions | game key |
-| `achievement.definition_retired` | game → achievement id | achievement id | definitions | game key |
-| `achievement.issued` | game → identity | achievement id, attestation id, evidence ref | attestations | issuer key |
-| `achievement.revoked` | game → attestation | attestation ref, reason code, reason | attestation status | issuer key |
+| `game_schema.published` | integrator → schema | integrator id, version, `.proto` source, superseded_by | schema discovery (#255) | integrator key |
+| `achievement.defined` | integrator → achievement id | name, description, schema | definitions | integrator key |
+| `achievement.definition_updated` | integrator → achievement id | name, description, schema, version | definitions | integrator key |
+| `achievement.definition_retired` | integrator → achievement id | achievement id | definitions | integrator key |
+| `achievement.issued` | integrator → identity | achievement id, attestation id, evidence ref | attestations | issuer key |
+| `achievement.revoked` | integrator → attestation | attestation ref, reason code, reason | attestation status | issuer key |
 | `milestone.defined` / `.definition_updated` / `.definition_retired` | app/service → milestone id | same fields as the `achievement.*` row above | definitions | app/service key |
 | `milestone.issued` / `.revoked` | app/service → identity / attestation | same fields as `achievement.issued`/`.revoked` above | attestations | issuer key |
-| `attestation.superseded` | game → attestation | old ref, new ref | attestation status | issuer key |
-| `game_event.result_issued` | game → identity | `achievement.issued` with the game-event schema | attestations, registry | issuer key |
-| `recognition.published` | game → issuer | recognized claim types / scopes | recognition graph | game key |
+| `attestation.superseded` | integrator → attestation | old ref, new ref | attestation status | issuer key |
+| `game_event.result_issued` | integrator → identity | `achievement.issued` with the game-event schema | attestations, registry | issuer key |
+| `recognition.published` | integrator → issuer | recognized claim types / scopes | recognition graph | integrator key |
 
 Conventions: `issuer` and `subject` are `GlobalId`s
 (`crates/protocol/src/ids.rs`) — namespaced, e.g.
-`game:ashen-realms:achievement:dragon_slayer`, so two games' `dragon_slayer`
+`game:ashen-realms:achievement:dragon_slayer`, so two integrators' `dragon_slayer`
 never collide ([`./provenance.md`](./provenance.md)). Each kind has exactly one
 payload schema per version.

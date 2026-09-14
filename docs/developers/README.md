@@ -4,7 +4,7 @@ Documentation for developers integrating Avalon into their own game, app, or
 service — the audience the SDKs (`crates/sdk`, `bindings/csharp`) exist for.
 
 Start with [`WhyBuildOnAvalon.md`](WhyBuildOnAvalon.md) for the case for
-integrating your game with Avalon at all. It's a vision document, not an
+integrating your game, app, or service with Avalon at all. It's a vision document, not an
 integration guide — there's no stable, documented SDK to integrate against
 yet. `crates/sdk` now has real implementations for authentication, friends/
 presence, guilds, conversations, and offline sync/submission — achievement

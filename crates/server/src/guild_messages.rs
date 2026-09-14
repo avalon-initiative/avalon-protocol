@@ -4,7 +4,7 @@
 //! `guild_messages` table and never touch the ledger commit path or the
 //! outbox module — same "ephemeral/non-ledger" reasoning `crate::presence`
 //! already documents for presence, applied here to ordinary chat: it's
-//! high-volume, non-interoperable state, not something a game or another
+//! high-volume, non-interoperable state, not something an integrator or another
 //! identity ever needs to *prove* was said. No protocol event kind for an
 //! individual chat message exists anywhere, on purpose. This is enforced
 //! two ways: by construction (this module never imports the outbox or the

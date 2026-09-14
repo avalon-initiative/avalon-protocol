@@ -7,7 +7,7 @@
 //!   user-controlled `discoverable` preference
 //!   (`discovery_preferences.discoverable`,
 //!   `crates/server/db/migrations/0026_discovery_preferences`, same shape
-//!   as `presence_preferences.hide_playing`) gates
+//!   as `presence_preferences.hide_active_in`) gates
 //!   [`search_identities`]. Off by default for every identity, no
 //!   exceptions — absence of a row means "not discoverable", matching
 //!   `presence.rs`'s "missing means the default, never invented" posture.
@@ -172,7 +172,7 @@ pub async fn discover_people(
 
 /// Upserts `identity_id`'s own `discoverable` preference — the same
 /// "insert lazily on first toggle, `ON CONFLICT` update after" shape
-/// `presence::set_hide_playing` established. Not transactional with any
+/// `presence::set_hide_active_in` established. Not transactional with any
 /// other write: this is a user preference, not durable protocol
 /// history, so there's nothing else it needs to stay atomic with (see the
 /// module doc comment). Takes effect immediately — the very next

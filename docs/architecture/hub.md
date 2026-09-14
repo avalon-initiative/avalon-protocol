@@ -2,14 +2,14 @@
 
 **The Avalon Hub is a client of the network. It is not the network.** It talks
 to `avalon-server` through the same API, authentication, and capability model as
-any game or third-party client, has no backend of its own, and holds no
+any integrator or third-party client, has no backend of its own, and holds no
 privilege another authorized client couldn't have. Decided in
 [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77); narrative in
 [Proposal §6](../stakeholders/Proposal.md#6-avalon-hub).
 
-## The world outside the games
+## The world outside the integrators
 
-The Hub is where a user interacts with the network itself, with no game open:
+The Hub is where a user interacts with the network itself, with no integrator open:
 
 - create and manage a persistent identity; connect keys or a wallet where that
   applies ([identity](./identity.md))
@@ -17,23 +17,23 @@ The Hub is where a user interacts with the network itself, with no game open:
 - friends and presence
 - guilds and guild chat
 - achievements, attestations, and history
-- game discovery and per-game profiles
-- permissions: which games have which capabilities, and revoking them
-- connected games (bindings)
+- integrator discovery and per-integrator profiles
+- permissions: which integrators have which capabilities, and revoking them
+- connected integrators (bindings)
 - recognition preferences (which issuers' claims to feature)
-- game event history
+- integrator event history
 - later: asset ownership
 
-It is not a launcher, a store, a distribution platform, or a game authority. It
-does not own the games it lists. Steam + Roblox + universal launcher is the shape
+It is not a launcher, a store, a distribution platform, or an integrator authority. It
+does not own the integrators it lists. Steam + Roblox + universal launcher is the shape
 to avoid ([Proposal §28](../stakeholders/Proposal.md#28-difference-from-roblox)).
 
 ## One client among several
 
 Because the Hub uses only the public API, other clients are possible by
-construction: web, mobile, desktop, a Discord integration, a game's native UI, a
+construction: web, mobile, desktop, a Discord integration, an integrator's native UI, a
 third-party application. `apps/mobile-hub` is the first proof — the same UI in a
-Tauri shell for desktop and mobile, for guild chat and presence without a game
+Tauri shell for desktop and mobile, for guild chat and presence without an integrator
 running ([Proposal §22](../stakeholders/Proposal.md#22-companion-apps-presence-beyond-the-game)).
 A user who never installs any Hub loses nothing at the protocol level.
 
@@ -48,7 +48,7 @@ Rules that keep this true:
 ## Hub and achievements
 
 The Hub shows every authentic, valid claim with its provenance, regardless of
-whether any game recognizes it:
+whether any integrator recognizes it:
 
 ```text
 Your History
@@ -73,14 +73,14 @@ with its history, not as a gap. See the [trust model](./trust-model.md) and
 ## Hub and guilds
 
 Guilds are network primitives, so the Hub is their natural client: create, join,
-leave, manage roles, chat, see members and their presence, see which games
-members are playing, view history, coordinate across games. A guild is unaffected
-by any game shutting down. See [guilds](./guilds.md).
+leave, manage roles, chat, see members and their presence, see which integrators
+members are playing, view history, coordinate across integrators. A guild is unaffected
+by any integrator shutting down. See [guilds](./guilds.md).
 
-## Hub and game discovery
+## Hub and integrator discovery
 
-A directory of games connected to Avalon and a profile page per game, rendering
-[registry](./game-registry.md) facts with their definitions and class labels
+A directory of integrators connected to Avalon and a profile page per integrator, rendering
+[registry](./registry.md) facts with their definitions and class labels
 (durable-derived / realtime / self-reported), issuer status and key history, and
 recognition relationships. Sort options are explicit and neutral; there is no
 score and no trust-derived "recommended" ordering. A suspended or revoked issuer
@@ -112,10 +112,10 @@ below is real and implemented unless noted otherwise.
   `Messages.vue` #105, `Activity.vue` #121, `Guilds.vue`/`Guild.vue` #24).
   Nothing on a logged-in page is an open input by default — read-only until
   an explicit edit action.
-- **Game discovery** (`GameDirectory.vue`/`GameProfile.vue`, #270),
+- **Integrator discovery** (`IntegrationDirectory.vue`/`IntegrationProfile.vue`, #270),
   **connections** (`Connections.vue`, #27/#83), and **guardian-based
   recovery** (`RecoverIdentity.vue`, #201) round out the unauthenticated and
-  cross-game surfaces.
+  cross-integrator surfaces.
 - **`packages/ui/`** (`@avalon/ui`) — the shared component library
   (`AvalonButton`, `AvalonTextField`, and the rest); responsive layout is
   CSS-only, living in each component's own files, never a separate
@@ -133,11 +133,11 @@ components, endpoints, and gaps behind every item above.
   identity/login, [#56](https://github.com/LunarVagabond/avalon-protocol/issues/56)
   friends/presence, [#57](https://github.com/LunarVagabond/avalon-protocol/issues/57)
   guilds + chat, [#58](https://github.com/LunarVagabond/avalon-protocol/issues/58)
-  achievements + connected games/permissions,
-  [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) game discovery
+  achievements + connected integrators/permissions,
+  [#90](https://github.com/LunarVagabond/avalon-protocol/issues/90) integrator discovery
   ([#270](https://github.com/LunarVagabond/avalon-protocol/issues/270) is its
-  first buildable slice: `GET /games`, the game directory, and the
-  per-game profile page; [#273](https://github.com/LunarVagabond/avalon-protocol/issues/273)
+  first buildable slice: `GET /integrations`, the integrator directory, and the
+  per-integrator profile page; [#273](https://github.com/LunarVagabond/avalon-protocol/issues/273)
   made the directory and profile page render without auth;
   [#275](https://github.com/LunarVagabond/avalon-protocol/issues/275)/[#282](https://github.com/LunarVagabond/avalon-protocol/issues/282)
   generalized the nav/routes to "Connected Apps"/`/integrations` with

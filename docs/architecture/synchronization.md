@@ -3,7 +3,7 @@
 **Avalon connectivity should be eventually available, not continuously
 required.** A game stays playable, and able to keep recording what its
 user is doing, when Avalon is unreachable — a genuinely offline
-single-player game, a handheld with no signal, bad rural internet, or a
+single-player integrator, a handheld with no signal, bad rural internet, or a
 temporary Avalon outage. The SDK owns this complexity, not each
 developer.
 
@@ -70,7 +70,7 @@ operation ticket rather than each re-deriving its own answer:
 | Operation | Offline? | Behavior |
 |---|---|---|
 | Read cached profile / roster / friends list | Yes | Serve from local cache; label staleness |
-| Game-local achievement earned | Yes, queued | Recorded locally; see below for what it's worth before submission |
+| Integrator-local achievement earned | Yes, queued | Recorded locally; see below for what it's worth before submission |
 | Chat / conversation message | Yes, queued | Stored `pending`; UI shows it, never silent loss |
 | Friend request / accept | Deferred, queued | Submitted on reconnect; may be rejected on reconciliation |
 | Guild join / leave request | Deferred, queued | A *request*, not a grant — nothing is unilaterally true until confirmed |
@@ -85,7 +85,7 @@ An offline single-player game has no live server to attest anything while
 disconnected — but its *client* could still record "the user defeated the
 dragon" locally. Treating that queued claim as equivalent to a normal
 `Issuer::Game` attestation the moment it's submitted is a real hole: it
-implies the game's live issuer signing key exists somewhere the client can
+implies the integrator's live issuer signing key exists somewhere the client can
 reach, and a key reachable from a shipped client is a key that can be
 extracted — a solved, common reverse-engineering problem. Whoever extracts
 it can forge arbitrary achievements for any user, retroactively, and
@@ -94,12 +94,12 @@ its old validity window.
 
 This is the trust model ([trust-model.md](./trust-model.md), ADR #76 —
 authentic, valid, and recognized are separate) applied to a new axis: *how*
-a claim came to exist changes what a receiving game should be willing to
+a claim came to exist changes what a receiving integrator should be willing to
 believe, even when the signature checks out. [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112)
 (closed) decided **deferred requests, not deferred attestations**: the
 offline period queues an unsigned local record of intent, not a valid
 attestation — no issuer key exists client-side at all. On reconnect the
-request goes to the game's *own* server, which independently decides
+request goes to the integrator's *own* server, which independently decides
 whether to believe its own client's record and only then issues a normal,
 fully-authoritative attestation through the existing online path.
 
@@ -109,8 +109,8 @@ exactly what it already means everywhere else in the protocol; the offline
 period is a queuing convenience for *requests*, never a new class of
 cryptographic claim. The alternative considered and rejected as the
 default — a distinct, lower-trust issuer variant with a separate,
-explicitly lower-privilege key a game embeds client-side — is a real option
-some games may still want later (a genuinely offline-only game with no
+explicitly lower-privilege key an integrator embeds client-side — is a real option
+some integrators may still want later (a genuinely offline-only integrator with no
 server of its own at all), but it's a strictly bigger, riskier addition and
 isn't where this defaults.
 
@@ -141,7 +141,7 @@ isn't where this defaults.
   buckets specifically for a `401`. A retryable failure schedules the next
   attempt using `BackoffPolicy` — exponential, capped, tracked in memory per
   `EntryId` (not persisted; a process restart resets backoff, which is
-  fine). `SubmissionEngine` owns no journal or transport itself; a game
+  fine). `SubmissionEngine` owns no journal or transport itself; an integrator
   calls `drain(&journal, &transport)` from whatever loop/timer/reconnect-hook
   it wants, so draining never blocks gameplay.
   - **A `401` is not a terminal rejection.** `HttpTransport` classifies a
@@ -155,7 +155,7 @@ isn't where this defaults.
     `AvalonClient::authenticate()` call, i.e. a new `Session` and
     `submission_transport()`, fixes it), and reported to the caller as
     `DrainOutcome::AuthenticationRequired` so it knows to re-authenticate
-    before its next `drain()`. Before this, a game that queued messages
+    before its next `drain()`. Before this, an integrator that queued messages
     offline and later drained with an expired token would have every one of
     those messages permanently discarded as `Rejected`.
   - A `403` on `POST /conversations/{id}/messages`, by contrast, stays a
@@ -186,7 +186,7 @@ isn't where this defaults.
   caller.
 - **Sync status** ([#113](https://github.com/LunarVagabond/avalon-protocol/issues/113)) —
   a read-only, local-only API (`pending_count`, `status_of(entry_id)`, a
-  subscription for transitions) so a game can render "🕓 Pending" for a
+  subscription for transitions) so an integrator can render "🕓 Pending" for a
   queued message the same way it would for anything else, per
   [communication.md](./communication.md)'s direct-message example.
 
@@ -199,7 +199,7 @@ isn't where this defaults.
   answers authentic/valid/recognized — deferring *when* something reaches
   Avalon never changes *what* it's allowed to claim about itself.
 - Not a one-call-whether-online-or-offline wrapper yet. `SubmissionEngine`
-  is a drain/retry/reconciliation *mechanism* a game drives explicitly
+  is a drain/retry/reconciliation *mechanism* an integrator drives explicitly
   (construct a `FileJournal` and a `SubmissionEngine`, call `drain(...)`);
   no `AvalonClient`/`Session` method appends to the journal on its own or
   calls `drain` for you. Wiring that convenience in — so
@@ -224,14 +224,14 @@ isn't where this defaults.
   exactly one journal `kind` end-to-end: `CONVERSATION_MESSAGE_KIND`
   (`"chat.message"`), submitted via
   `Session::conversation(id).send_with_client_entry_id(...)` — the same
-  `crates/sdk/src/conversations.rs` code path a game's own direct
+  `crates/sdk/src/conversations.rs` code path an integrator's own direct
   `Session::conversation(id).send()` call uses for
   `POST /conversations/{id}/messages`, rather than `HttpTransport` building
   a second, parallel `reqwest` request of its own. `HttpTransport` borrows
   the `Session` it was built from (`Session::submission_transport()`) so it
   can call through it. One consequence: a missing `messages.send` grant now
   fails identically (an instant local `SdkError`/`SubmitOutcome::Rejected`,
-  no request sent) whichever path a game uses, instead of the direct path
+  no request sent) whichever path an integrator uses, instead of the direct path
   rejecting locally and the submission-engine path only discovering the
   same problem after a round trip through the server. Every other `kind`
   gets `SubmitError::UnsupportedKind` from `HttpTransport` — left pending,

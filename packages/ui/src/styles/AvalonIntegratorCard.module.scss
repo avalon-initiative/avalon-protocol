@@ -1,0 +1,58 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-2);
+  padding: var(--av-space-4);
+  border-radius: var(--av-radius-lg);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-surface);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+    border-color: var(--av-color-border-strong);
+  }
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--av-space-2);
+  min-width: 0;
+}
+
+.name {
+  min-width: 0;
+  font-size: var(--av-text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Visibly distinct from the default "active" state (no badge at all) —
+// issue #270's own acceptance criterion: a suspended/revoked integrator must not
+// read the same as an active one.
+.statusBadge {
+  font-size: var(--av-text-xs);
+  font-weight: 600;
+  color: var(--av-color-danger);
+  background: var(--av-color-danger-soft);
+  border-radius: var(--av-radius-pill);
+  padding: 0.125rem 0.5rem;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.ownerName {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+}
+
+.registeredAt {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+}

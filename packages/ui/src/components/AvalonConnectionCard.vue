@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// One connected game (#83's GameBinding) + its active grants (#27), with a
+// One connected integrator (#83's IntegratorBinding) + its active grants (#27), with a
 // per-grant revoke button and a disconnect button. Emits capability
 // strings / no payload — the caller (Connections.vue) owns the actual API
 // calls and the slug this card belongs to.
@@ -14,7 +14,7 @@ defineEmits<{ 'revoke-grant': [capability: string]; disconnect: [] }>()
 <template>
   <div :class="styles.card">
     <header :class="styles.header">
-      <span :class="styles.name">{{ gameName }}</span>
+      <span :class="styles.name">{{ integratorName }}</span>
       <span :class="styles.slug">{{ slug }}</span>
     </header>
     <p :class="styles.since">Connected since {{ establishedAt }}</p>

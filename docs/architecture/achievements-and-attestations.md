@@ -1,14 +1,14 @@
 # Achievements and Attestations
 
 **An achievement is an issuer attestation, not a `user_id → achievement_id`
-row.** The durable fact is "Game A asserts that Identity X accomplished Y", signed
-by Game A's key, with a timestamp and a schema. Avalon records that claim and
-its provenance. **It never dictates what another game does with it.**
+row.** The durable fact is "Integrator A asserts that Identity X accomplished Y", signed
+by Integrator A's key, with a timestamp and a schema. Avalon records that claim and
+its provenance. **It never dictates what another integrator does with it.**
 
 Narrative: [`../stakeholders/Proposal.md` §8](../stakeholders/Proposal.md#8-achievements-and-history) and
 [§9](../stakeholders/Proposal.md#9-trust-and-attestations).
 
-The attestation mechanism itself is domain-agnostic — any issuer, game or
+The attestation mechanism itself is domain-agnostic — any issuer, integrator or
 otherwise, can assert a claim about an identity — and is illustrated below with
 gaming examples because gaming is Avalon's first live use case.
 
@@ -29,20 +29,20 @@ the label can never drift from what the issuer actually is. One shared term
 across both non-game categories, not a third word for services: a service
 issuer's "user completed onboarding" and an app issuer's "user hit their
 100th session" are the same kind of fact from Avalon's point of view.
-Cross-issuer reading (a game reading an app's claims, or vice versa) works
+Cross-issuer reading (an integrator reading an app's claims, or vice versa) works
 by construction, not convention — a consumer verifies a claim without ever
 caring what it's called.
 
 An issuer that wants to attach a custom shape to its own claims (a
 `schema` reference) already can, for any category — see
-[game-space.md](./game-space.md)'s schema-publication mechanism (#181/#255),
+[integrator-space.md](./integrator-space.md)'s schema-publication mechanism (#181/#255),
 itself already category-agnostic despite its still-gaming-flavored name
 (tracked as a pending rename under #290, not re-decided here).
 
 ## Shape
 
 ```text
-Issuer (Game A, signing key k1)
+Issuer (Integrator A, signing key k1)
     │
     ▼
 Attestation
@@ -55,14 +55,14 @@ Attestation
     └── status          derived: Active | Revoked | Superseded
 ```
 
-The signature answers "did Game A issue this". Nothing in the attestation
+The signature answers "did Integrator A issue this". Nothing in the attestation
 answers "was this hard", and nothing can — see
 [`./trust-model.md`](./trust-model.md).
 
 ## Namespacing
 
 Human-readable names are never globally unique. Achievement ids are namespaced
-under the issuing game via `GlobalId`:
+under the issuing integrator via `GlobalId`:
 
 ```text
 game:ashen-realms:achievement:dragon_slayer
@@ -75,32 +75,32 @@ Three distinct claims that happen to share a title. The display name stays
 
 ## Same title, different provenance
 
-- Game A issues Dragon Slayer after a brutal endgame raid.
-- Game B issues Dragon Slayer after a different hard achievement.
-- Game C lets every user click a button labelled Dragon Slayer.
+- Integrator A issues Dragon Slayer after a brutal endgame raid.
+- Integrator B issues Dragon Slayer after a different hard achievement.
+- Integrator C lets every user click a button labelled Dragon Slayer.
 
 All three are cryptographically authentic. Avalon does not pretend they are
 semantically identical, and it does not rank them. The Hub shows each with its
-issuer; a consuming game recognizes whichever it chooses; an identity's owner
+issuer; a consuming integrator recognizes whichever it chooses; an identity's owner
 features or hides whichever they like.
 
-## The receiving game decides meaning
+## The receiving integrator decides meaning
 
-Game A: "User X defeated the Dragon Lord."
-Game B may unlock a title. Game C may unlock a quest. Game D may ignore it.
+Integrator A: "User X defeated the Dragon Lord."
+Integrator B may unlock a title. Integrator C may unlock a quest. Integrator D may ignore it.
 
-A consuming game verifies authenticity and validity (universal) and then
+A consuming integrator verifies authenticity and validity (universal) and then
 applies its own recognition policy (contextual). The SDK exposes those three
-results separately so a game can *display* claims it doesn't *recognize*.
+results separately so an integrator can *display* claims it doesn't *recognize*.
 
 ## Definitions
 
-A game defines its achievements before it issues them. An
+An integrator defines its achievements before it issues them. An
 `AchievementDefinition` carries the namespaced id, the issuer, a name, a
 description, an optional `schema` reference, a `version`, and an optional
 visual identity (`icon`/`icon_url`, #332). Definitions are
 durable (`achievement.defined`) so the registry and the Hub can render an
-issued attestation even after the game is gone. `version` is bumped by
+issued attestation even after the integrator is gone. `version` is bumped by
 `achievement.definition_updated`; the id never changes, so a consumer can
 notice a definition evolved without losing track of what it is. A definition
 can be retired (`achievement.definition_retired`) — no new issuances against
@@ -128,16 +128,16 @@ achievement.defined  →  achievement.issued  →  (achievement.revoked | attest
 ```
 
 Every step is an appended protocol event. Revocation never removes the issuance
-— see [`./revocation.md`](./revocation.md). Game event results (tournaments,
+— see [`./revocation.md`](./revocation.md). Integrator event results (tournaments,
 seasonal championships, community campaigns, ...) are attestations with a
 game-event schema, not a separate mechanism — see
-[`./game-events.md`](./game-events.md).
+[`./cross-integrator-events.md`](./cross-integrator-events.md).
 
 ## Issuance is signed, not merely authenticated (#32)
 
 Two independent proofs, doing different jobs, both required:
 
-1. **The HTTP-level challenge-response** (`games::authenticate_game`, #26)
+1. **The HTTP-level challenge-response** (`integrators::authenticate_integrator`, #26)
    proves "this request came from whoever holds this issuer's key" — the
    same mechanism every other issuer-credentialed endpoint in this repo
    uses.
@@ -153,15 +153,15 @@ Two independent proofs, doing different jobs, both required:
    attestation for an issuer it doesn't control.
 
 Issuing also requires the **subject user's own consent**: an active
-`GameBinding` plus an active grant for `achievements.issue` (Game) or
+`IntegratorBinding` plus an active grant for `achievements.issue` (Integrator) or
 `milestones.issue` (App/Service) — #28's `Caller`/`require_capability`
-guard, the same infrastructure `presence::update_game_presence` already
+guard, the same infrastructure `presence::update_integrator_presence` already
 uses. Neither proof substitutes for the other.
 
 ## Today in the repo
 
 - `crates/protocol/src/achievements.rs` — `AchievementDefinition`,
-  `Issuer::Game(GameId)`/`App`/`Service` (`Issuer::claim_kind()` — #324),
+  `Issuer::Game(IntegratorId)`/`App`/`Service` (`Issuer::claim_kind()` — #324),
   `Signature { key_id, algorithm, bytes }`, `AchievementAttestation { id,
   issuer, subject, achievement, issued_at, proof: Signature }` — **no
   `revoked_at`** (#32, per #81's decided revocation mechanics: a mutable
@@ -178,7 +178,7 @@ uses. Neither proof substitutes for the other.
   `issue_achievement()` check the capability, then return `NotImplemented`
   — still true; #32 landed the server endpoint, not the SDK client (#34).
 - `crates/server/src/achievements.rs` (#32) — `POST
-  /games/{slug}/achievements/{key}/issue` /
+  /integrations/{slug}/achievements/{key}/issue` /
   `POST /integrations/{slug}/milestones/{key}/issue`: verifies the caller
   is a game/app/service (never a user session), that the subject user
   has an active binding + grant for the route's issue capability, that the
@@ -194,12 +194,12 @@ uses. Neither proof substitutes for the other.
 - `crates/server/src/achievements.rs` (#31, generalized to App/Service by
   #324/#325) — claim-definition CRUD, one shared implementation for both
   vocabularies (thin per-route wrappers over a shared core — see the
-  module's own doc comment): `POST /games/{slug}/achievements` /
+  module's own doc comment): `POST /integrations/{slug}/achievements` /
   `POST /integrations/{slug}/milestones` (create, 409 on a duplicate key
   for that issuer), the matching `PATCH .../{key}` (update
   name/description/schema and bump `version`, and/or retire), and the
   matching `GET` (public listing). Write endpoints are
-  issuer-credential-authenticated (`games::authenticate_game`, #26's
+  issuer-credential-authenticated (`integrators::authenticate_integrator`, #26's
   challenge-response scheme) and reject an issuer acting under another
   issuer's slug with 403 — and, new for #324/#325, reject an issuer whose
   actual registered category doesn't match the route's claim vocabulary
@@ -238,7 +238,7 @@ uses. Neither proof substitutes for the other.
 - [#30](https://github.com/LunarVagabond/avalon-protocol/issues/30) — Epic:
   Achievements & Attestations.
 - [#31](https://github.com/LunarVagabond/avalon-protocol/issues/31) —
-  definition CRUD per game. Its App/Service (Milestone) equivalent is
+  definition CRUD per integrator. Its App/Service (Milestone) equivalent is
   #325, landed.
 - [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue
   an achievement/milestone → signed attestation, landed for both claim
@@ -256,5 +256,5 @@ uses. Neither proof substitutes for the other.
   attestation trust model.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
   catalogue (the `achievement.*` kinds).
-- [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — game
+- [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — integrator
   event result attestations.

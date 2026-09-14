@@ -1360,42 +1360,42 @@ async fn pagination_does_not_skip_or_duplicate_rows_across_pages() {
     }
 }
 
-// -- Issue #206 (implementing decision #160): game affinity breakdown --
+// -- Issue #206 (implementing decision #160): integrator affinity breakdown --
 
-/// Seeds a `games` row directly (bypassing the game registration ceremony,
+/// Seeds a `integrators` row directly (bypassing the integrator registration ceremony,
 /// same "seed via SQL, endpoint behavior doesn't depend on how the row got
 /// there" reasoning `seed_identity_session` above already documents) and
 /// returns its id.
-async fn seed_game(pool: &PgPool, name: &str) -> Uuid {
-    let game_id = Uuid::new_v4();
+async fn seed_integrator(pool: &PgPool, name: &str) -> Uuid {
+    let integrator_id = Uuid::new_v4();
     let slug = format!(
         "{}-{}",
         name.to_lowercase().replace(' ', "-"),
         Uuid::new_v4().simple()
     );
     sqlx::query(
-        "INSERT INTO games (id, slug, name, developer, registered_at, status) \
+        "INSERT INTO integrators (id, slug, name, owner_name, registered_at, status) \
          VALUES ($1, $2, $3, 'test developer', now(), 'active')",
     )
-    .bind(game_id)
+    .bind(integrator_id)
     .bind(&slug[..slug.len().min(64)])
     .bind(name)
     .execute(pool)
     .await
-    .expect("failed to seed game");
-    game_id
+    .expect("failed to seed integrator");
+    integrator_id
 }
 
-/// Seeds an active `bindings` row directly — see `seed_game`'s own note.
-async fn seed_binding(pool: &PgPool, identity_id: Uuid, game_id: Uuid) -> Uuid {
+/// Seeds an active `bindings` row directly — see `seed_integrator`'s own note.
+async fn seed_binding(pool: &PgPool, identity_id: Uuid, integrator_id: Uuid) -> Uuid {
     let binding_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO bindings (id, identity_id, game_id, established_at) \
+        "INSERT INTO bindings (id, identity_id, integrator_id, established_at) \
          VALUES ($1, $2, $3, now())",
     )
     .bind(binding_id)
     .bind(identity_id)
-    .bind(game_id)
+    .bind(integrator_id)
     .execute(pool)
     .await
     .expect("failed to seed binding");
@@ -1448,8 +1448,8 @@ async fn invite_and_accept(
 }
 
 /// #206's core acceptance criteria: the breakdown is computed from real
-/// `GameBinding` (#83) data only, updates as bindings change, and is never
-/// something a manager can add for a game with zero bound members (there's
+/// `IntegratorBinding` (#83) data only, updates as bindings change, and is never
+/// something a manager can add for an integrator with zero bound members (there's
 /// no add action at all — this test never calls one).
 #[tokio::test]
 #[ignore]
@@ -1478,11 +1478,11 @@ async fn game_breakdown_reflects_active_bindings_and_updates_as_they_change() {
     )
     .await;
 
-    let ashen = seed_game(&pool, "Ashen Realms").await;
-    let ocean = seed_game(&pool, "Ocean World").await;
+    let ashen = seed_integrator(&pool, "Ashen Realms").await;
+    let ocean = seed_integrator(&pool, "Ocean World").await;
 
     // Owner and member both play Ashen Realms; only the member plays Ocean
-    // World. No game association is ever declared — the breakdown must
+    // World. No integrator association is ever declared — the breakdown must
     // fall entirely out of these bindings.
     let owner_ashen_binding = seed_binding(&pool, owner_id, ashen).await;
     seed_binding(&pool, member_id, ashen).await;
@@ -1495,7 +1495,7 @@ async fn game_breakdown_reflects_active_bindings_and_updates_as_they_change() {
         let token = owner_token.clone();
         async move {
             auth(
-                http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+                http.get(format!("{base}/guilds/{guild_id}/integrator-breakdown")),
                 &token,
             )
             .send()
@@ -1508,19 +1508,19 @@ async fn game_breakdown_reflects_active_bindings_and_updates_as_they_change() {
     assert!(resp.status().is_success(), "{:?}", resp.status());
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["total_members"].as_i64().unwrap(), 2);
-    let by_game: std::collections::HashMap<String, i64> = body["breakdown"]
+    let by_integrator: std::collections::HashMap<String, i64> = body["breakdown"]
         .as_array()
         .unwrap()
         .iter()
         .map(|e| {
             (
-                e["game_name"].as_str().unwrap().to_string(),
+                e["integrator_name"].as_str().unwrap().to_string(),
                 e["member_count"].as_i64().unwrap(),
             )
         })
         .collect();
-    assert_eq!(by_game.get("Ashen Realms"), Some(&2));
-    assert_eq!(by_game.get("Ocean World"), Some(&1));
+    assert_eq!(by_integrator.get("Ashen Realms"), Some(&2));
+    assert_eq!(by_integrator.get("Ocean World"), Some(&1));
 
     // Ending the owner's Ashen Realms binding drops that count to 1 — the
     // breakdown is live-computed, not a stale/cached association.
@@ -1529,24 +1529,24 @@ async fn game_breakdown_reflects_active_bindings_and_updates_as_they_change() {
     let resp = fetch_breakdown().await;
     assert!(resp.status().is_success(), "{:?}", resp.status());
     let body: serde_json::Value = resp.json().await.unwrap();
-    let by_game: std::collections::HashMap<String, i64> = body["breakdown"]
+    let by_integrator: std::collections::HashMap<String, i64> = body["breakdown"]
         .as_array()
         .unwrap()
         .iter()
         .map(|e| {
             (
-                e["game_name"].as_str().unwrap().to_string(),
+                e["integrator_name"].as_str().unwrap().to_string(),
                 e["member_count"].as_i64().unwrap(),
             )
         })
         .collect();
-    assert_eq!(by_game.get("Ashen Realms"), Some(&1));
-    assert_eq!(by_game.get("Ocean World"), Some(&1));
+    assert_eq!(by_integrator.get("Ashen Realms"), Some(&1));
+    assert_eq!(by_integrator.get("Ocean World"), Some(&1));
 
     // A plain member (no manage_guild) cannot fetch the breakdown while
     // the guild hasn't opted into public exposure.
     let member_view = auth(
-        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        http.get(format!("{base}/guilds/{guild_id}/integrator-breakdown")),
         &member_token,
     )
     .send()
@@ -1578,12 +1578,12 @@ async fn game_breakdown_public_toggle_gates_exposure_to_non_members() {
     let guild_id = guild["id"].as_str().unwrap();
     assert!(!guild["game_breakdown_public"].as_bool().unwrap());
 
-    let ashen = seed_game(&pool, "Ashen Realms").await;
+    let ashen = seed_integrator(&pool, "Ashen Realms").await;
     seed_binding(&pool, owner_id, ashen).await;
 
     // Not public yet: a non-member (and non-manager) is rejected.
     let before = auth(
-        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        http.get(format!("{base}/guilds/{guild_id}/integrator-breakdown")),
         &stranger_token,
     )
     .send()
@@ -1593,7 +1593,7 @@ async fn game_breakdown_public_toggle_gates_exposure_to_non_members() {
 
     // The owner can always see it regardless of the toggle.
     let owner_view = auth(
-        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        http.get(format!("{base}/guilds/{guild_id}/integrator-breakdown")),
         &owner_token,
     )
     .send()
@@ -1619,7 +1619,7 @@ async fn game_breakdown_public_toggle_gates_exposure_to_non_members() {
 
     // Now public: the same stranger can fetch it.
     let after = auth(
-        http.get(format!("{base}/guilds/{guild_id}/game-breakdown")),
+        http.get(format!("{base}/guilds/{guild_id}/integrator-breakdown")),
         &stranger_token,
     )
     .send()
@@ -1628,15 +1628,15 @@ async fn game_breakdown_public_toggle_gates_exposure_to_non_members() {
     assert!(after.status().is_success(), "{:?}", after.status());
     let body: serde_json::Value = after.json().await.unwrap();
     assert_eq!(
-        body["breakdown"][0]["game_name"].as_str().unwrap(),
+        body["breakdown"][0]["integrator_name"].as_str().unwrap(),
         "Ashen Realms"
     );
 }
 
-// --- Issue #207: favorite games pin list ------------------------------
+// --- Issue #207: favorite integrators pin list ------------------------------
 
 /// #207's core round-trip: a `manage_guild` holder (the owner here) pins,
-/// reorders, and unpins games, always drawing from real #206 affinity data.
+/// reorders, and unpins integrators, always drawing from real #206 affinity data.
 /// Also covers the cap and the zero-bound-members rejection at the HTTP
 /// layer (unit tests in `crates/server/src/guilds.rs` cover the same
 /// invariants against the pure validator directly).
@@ -1656,37 +1656,37 @@ async fn pin_reorder_and_unpin_round_trip() {
     let guild: serde_json::Value = create.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
-    let ashen = seed_game(&pool, "Ashen Realms").await;
-    let ocean = seed_game(&pool, "Ocean World").await;
-    let unbound = seed_game(&pool, "Unbound Game").await;
+    let ashen = seed_integrator(&pool, "Ashen Realms").await;
+    let ocean = seed_integrator(&pool, "Ocean World").await;
+    let unbound = seed_integrator(&pool, "Unbound Integrator").await;
 
     // The owner is bound to both Ashen Realms and Ocean World — both have
     // real affinity — but never binds to `unbound`.
     seed_binding(&pool, owner_id, ashen).await;
     seed_binding(&pool, owner_id, ocean).await;
 
-    let put_favorites = |game_ids: Vec<Uuid>| {
+    let put_favorites = |integrator_ids: Vec<Uuid>| {
         let http = http.clone();
         let base = base.clone();
         let guild_id = guild_id.to_string();
         let token = owner_token.clone();
         async move {
             auth(
-                http.put(format!("{base}/guilds/{guild_id}/favorite-games")),
+                http.put(format!("{base}/guilds/{guild_id}/favorite-integrators")),
                 &token,
             )
-            .json(&serde_json::json!({ "game_ids": game_ids }))
+            .json(&serde_json::json!({ "integrator_ids": integrator_ids }))
             .send()
             .await
             .unwrap()
         }
     };
 
-    // Pinning a game with zero bound members is rejected outright.
+    // Pinning an integrator with zero bound members is rejected outright.
     let rejected = put_favorites(vec![unbound]).await;
     assert_eq!(rejected.status(), reqwest::StatusCode::FORBIDDEN);
 
-    // Pinning both real-affinity games in order succeeds.
+    // Pinning both real-affinity integrators in order succeeds.
     let pinned = put_favorites(vec![ashen, ocean]).await;
     assert!(pinned.status().is_success(), "{:?}", pinned.status());
     let body: serde_json::Value = pinned.json().await.unwrap();
@@ -1694,7 +1694,7 @@ async fn pin_reorder_and_unpin_round_trip() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["game_name"].as_str().unwrap())
+        .map(|e| e["integrator_name"].as_str().unwrap())
         .collect();
     assert_eq!(names, vec!["Ashen Realms", "Ocean World"]);
     assert!(!body["favorites"][0]["stale"].as_bool().unwrap());
@@ -1708,12 +1708,12 @@ async fn pin_reorder_and_unpin_round_trip() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["game_name"].as_str().unwrap())
+        .map(|e| e["integrator_name"].as_str().unwrap())
         .collect();
     assert_eq!(names, vec!["Ocean World", "Ashen Realms"]);
 
     let get = auth(
-        http.get(format!("{base}/guilds/{guild_id}/favorite-games")),
+        http.get(format!("{base}/guilds/{guild_id}/favorite-integrators")),
         &owner_token,
     )
     .send()
@@ -1725,7 +1725,7 @@ async fn pin_reorder_and_unpin_round_trip() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["game_name"].as_str().unwrap())
+        .map(|e| e["integrator_name"].as_str().unwrap())
         .collect();
     assert_eq!(names, vec!["Ocean World", "Ashen Realms"]);
 
@@ -1741,7 +1741,7 @@ async fn pin_reorder_and_unpin_round_trip() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["game_name"].as_str().unwrap())
+        .map(|e| e["integrator_name"].as_str().unwrap())
         .collect();
     assert_eq!(names, vec!["Ocean World", "Ashen Realms"]);
 
@@ -1753,7 +1753,7 @@ async fn pin_reorder_and_unpin_round_trip() {
 }
 
 /// A 6th pin is rejected server-side even if the caller has real affinity
-/// for all six games.
+/// for all six integrators.
 #[tokio::test]
 #[ignore]
 async fn a_sixth_pin_is_rejected_over_http() {
@@ -1770,25 +1770,25 @@ async fn a_sixth_pin_is_rejected_over_http() {
     let guild: serde_json::Value = create.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
-    let mut game_ids = Vec::new();
+    let mut integrator_ids = Vec::new();
     for i in 0..6 {
-        let game_id = seed_game(&pool, &format!("Game {i}")).await;
-        seed_binding(&pool, owner_id, game_id).await;
-        game_ids.push(game_id);
+        let integrator_id = seed_integrator(&pool, &format!("Integrator {i}")).await;
+        seed_binding(&pool, owner_id, integrator_id).await;
+        integrator_ids.push(integrator_id);
     }
 
     let resp = auth(
-        http.put(format!("{base}/guilds/{guild_id}/favorite-games")),
+        http.put(format!("{base}/guilds/{guild_id}/favorite-integrators")),
         &owner_token,
     )
-    .json(&serde_json::json!({ "game_ids": game_ids }))
+    .json(&serde_json::json!({ "integrator_ids": integrator_ids }))
     .send()
     .await
     .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
 }
 
-/// #207's staleness invariant: when a pinned game's last bound member
+/// #207's staleness invariant: when a pinned integrator's last bound member
 /// unbinds, the pin is NOT auto-removed, but the read response flags it
 /// `stale: true` so a `manage_guild` holder can choose to unpin it.
 #[tokio::test]
@@ -1807,14 +1807,14 @@ async fn a_stale_pin_is_flagged_but_not_auto_removed() {
     let guild: serde_json::Value = create.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
-    let ashen = seed_game(&pool, "Ashen Realms").await;
+    let ashen = seed_integrator(&pool, "Ashen Realms").await;
     let binding_id = seed_binding(&pool, owner_id, ashen).await;
 
     let pin = auth(
-        http.put(format!("{base}/guilds/{guild_id}/favorite-games")),
+        http.put(format!("{base}/guilds/{guild_id}/favorite-integrators")),
         &owner_token,
     )
-    .json(&serde_json::json!({ "game_ids": [ashen] }))
+    .json(&serde_json::json!({ "integrator_ids": [ashen] }))
     .send()
     .await
     .unwrap();
@@ -1825,7 +1825,7 @@ async fn a_stale_pin_is_flagged_but_not_auto_removed() {
     end_binding(&pool, binding_id).await;
 
     let get = auth(
-        http.get(format!("{base}/guilds/{guild_id}/favorite-games")),
+        http.get(format!("{base}/guilds/{guild_id}/favorite-integrators")),
         &owner_token,
     )
     .send()

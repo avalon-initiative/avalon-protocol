@@ -1,10 +1,10 @@
 # Identity
 
-**An Avalon identity is self-owned and game-independent.** It is the one
-thing that survives any single game, server, or database disappearing. A game
-never owns it, never defines it, and never gets to rewrite its history. Games
+**An Avalon identity is self-owned and integrator-independent.** It is the one
+thing that survives any single integrator, server, or database disappearing. An integrator
+never owns it, never defines it, and never gets to rewrite its history. Integrators
 establish their own scoped participation under it (see
-[`./game-bindings.md`](./game-bindings.md)); the identity itself stays the same
+[`./bindings.md`](./bindings.md)); the identity itself stays the same
 across all of them.
 
 Narrative: [`../stakeholders/Proposal.md` §7](../stakeholders/Proposal.md#7-persistent-identity)
@@ -19,9 +19,9 @@ Avalon Identity
     ├── Guild memberships             ./guilds.md
     ├── Achievements / attestations   ./achievements-and-attestations.md
     ├── Permission grants             ./privacy.md
-    └── Game bindings                 ./game-bindings.md
-          ├── Game A → characters (game-owned)
-          └── Game B → characters (game-owned)
+    └── Integrator bindings                 ./bindings.md
+          ├── Integrator A → characters (integrator-owned)
+          └── Integrator B → characters (integrator-owned)
 ```
 
 An identity is an opaque, stable handle (`IdentityId`, a UUID). It is never
@@ -37,7 +37,7 @@ vocabulary — `avalon_protocol::identity::Genre` — not free text, so it stays
 useful for matching/filtering later), and pronouns (issue #155), plus a
 banner image, a short status line, a small list of self-reported links, a
 self-reported timezone, an accent color, and a free-text location (issue
-#372). None of it is an authoritative game fact — `location` in particular is
+#372). None of it is an authoritative integrator fact — `location` in particular is
 self-described text only ("Pacific Northwest," say), never IP-derived or
 geocoded; nothing in this protocol infers where a user physically is.
 
@@ -53,7 +53,7 @@ validated for shape; and unlike every other field here, `null` doesn't mean
 guild membership joined, never written back into `main_guild` itself.
 
 Someone writing "I am an Avion" in their bio does not make Avion a
-network-level race. A game can display that, interpret it, or ignore it. Facts
+network-level race. An integrator can display that, interpret it, or ignore it. Facts
 about what an identity *has done* come from issuer attestations with
 provenance (see [`./provenance.md`](./provenance.md)), never from the profile.
 
@@ -125,7 +125,7 @@ once):
   `issuer` on that event is `identity:<id>:self:created`, not
   `network:avalon-server:...` — so a hosted node can no longer fabricate an
   identity that never actually registered, the same guarantee that stops a
-  node fabricating a game's attestation (see
+  node fabricating an integrator's attestation (see
   [`./security-model.md`](./security-model.md)). Losing this key alone is not
   catastrophic the way losing every passkey is: the identity still logs in,
   and can rotate to a new signing key from an authenticated session — that
@@ -185,7 +185,7 @@ stand-in incapable client, for testing this without a real console/engine.
 (`crates/sdk/src/device_login.rs`, #398) is the real, required integration
 surface for that same waiting side — #307 had left an SDK-side wrapper as
 optional scope-creep, but hand-sequencing `start`/`poll` per integrator
-risked every game getting backoff/expiry handling slightly wrong, so #398
+risked every integrator getting backoff/expiry handling slightly wrong, so #398
 promoted it to a first-class helper that resolves straight to a `Session`.
 
 
@@ -407,10 +407,10 @@ its invariants.
 
 ## What identity is not
 
-- Not a universal game account. A game asks for scoped capabilities and gets
+- Not a universal integrator account. An integrator asks for scoped capabilities and gets
   only those.
 - Not a universal character. See
-  [`./game-bindings.md`](./game-bindings.md).
+  [`./bindings.md`](./bindings.md).
 - Not a platform identity in the Steam/Xbox sense. No single operator owns it;
   see [`./nodes.md`](./nodes.md).
 - **Not a real-world or government identity system, and not headed toward
@@ -570,7 +570,7 @@ its invariants.
   ceremony later, printing a session token — a dev/test convenience, not a
   pattern for real deployment. `avalon outbox-status`.
 - `crates/sdk/src/lib.rs` — `AvalonClient::authenticate()` exchanges an identity
-  token for a game-scoped `Session`, unchanged by any of this — a game never
+  token for an integrator-scoped `Session`, unchanged by any of this — an integrator never
   creates identities or logs an identity in itself.
 - `apps/hub/src/crypto/webauthn.ts` — the real browser WebAuthn ceremonies via
   `@simplewebauthn/browser`, verified field-for-field against

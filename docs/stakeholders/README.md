@@ -1,7 +1,7 @@
 # For Stakeholders
 
 Documentation written for people evaluating Avalon from the outside — whether
-this is worth backing, partnering with, or building a game against — rather
+this is worth backing, partnering with, or building a game, app, or service against — rather
 than people writing code against it or contributing to it.
 
 Start with:

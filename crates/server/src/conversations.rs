@@ -1,10 +1,10 @@
 //! Direct/small-group conversations (issue #102).
 //!
 //! A `Conversation` (`crates/protocol/src/social.rs`) is the
-//! identity-to-identity sibling of `GuildChannel` — pure structure, no game
+//! identity-to-identity sibling of `GuildChannel` — pure structure, no integrator
 //! reference anywhere. Its messages follow `crate::guild_messages`'s exact
 //! precedent (issue #22): **not protocol history**, high-volume,
-//! non-interoperable, nothing a receiving game ever needs to verify.
+//! non-interoperable, nothing a receiving integrator ever needs to verify.
 //! `conversation_messages` rows never go through the outbox or the
 //! settlement/ledger commit path, and no `conversation.message_*` event
 //! kind exists anywhere — enforced by construction (this module never

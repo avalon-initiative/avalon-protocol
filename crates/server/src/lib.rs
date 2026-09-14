@@ -11,13 +11,13 @@ pub mod devices;
 pub mod discovery;
 pub mod error;
 pub mod friends;
-pub mod game_data;
-pub mod game_schemas;
-pub mod games;
 pub mod guild_events;
 pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
+pub mod integrator_data;
+pub mod integrator_schemas;
+pub mod integrators;
 pub mod migrate;
 pub mod mirror_watcher;
 pub mod outbox;
@@ -98,7 +98,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me/presence", put(presence::update_my_presence))
         .route(
             "/presence/{identity_id}",
-            put(presence::update_game_presence),
+            put(presence::update_integrator_presence),
         )
         .route("/presence", get(presence::get_presence))
         .route("/ws/presence", get(presence::presence_ws))
@@ -191,61 +191,55 @@ pub fn router(state: AppState) -> Router {
             "/identities/{id}/recovery/status",
             get(recovery::identity_recovery_status),
         )
-        // #293: `/integrations` is the canonical public API path
-        // (generalizing #282's Hub-internal `/games` -> `/integrations`
-        // route rename onto the server's public API). `/games` keeps
-        // working identically: reads redirect to `/integrations`, and
-        // registration (`POST`, non-redirectable) dual-routes to the same
-        // handler.
+        // #290: `/integrations` is the single canonical path for every
+        // integrator endpoint. #293 introduced it alongside a `/games`
+        // back-compat alias; #290 generalized the whole vocabulary, so the
+        // alias (and its read-redirect handlers) is gone rather than left
+        // as the one remaining games-only spelling in the public API.
         .route(
             "/integrations",
-            post(games::register_game).get(games::list_games),
+            post(integrators::register_integrator).get(integrators::list_integrators),
         )
-        .route("/integrations/{slug}", get(games::get_game))
+        .route("/integrations/{slug}", get(integrators::get_integrator))
         .route(
-            "/games",
-            post(games::register_game).get(games::redirect_list_games),
+            "/integrations/{slug}/challenge",
+            post(integrators::create_integrator_challenge),
         )
-        .route("/games/{slug}", get(games::redirect_get_game))
-        .route(
-            "/games/{slug}/challenge",
-            post(games::create_game_challenge),
-        )
-        .route("/games/whoami", get(games::game_whoami))
+        .route("/integrations/whoami", get(integrators::integrator_whoami))
         // #84 (implementing #80's decided two-tier key model): key-set
-        // management, both root-key-authenticated. Deliberately under
-        // `/games/{slug}/keys`, not `/integrations/{slug}/keys` — #293's
-        // generalized alias covers registration/read routes, not every
-        // future game-specific endpoint.
+        // management, both root-key-authenticated.
         .route(
-            "/games/{slug}/keys",
-            post(games::add_issuer_key).get(games::list_issuer_keys),
+            "/integrations/{slug}/keys",
+            post(integrators::add_issuer_key).get(integrators::list_issuer_keys),
         )
         .route(
-            "/games/{slug}/keys/{key_id}/revoke",
-            post(games::revoke_issuer_key),
+            "/integrations/{slug}/keys/{key_id}/revoke",
+            post(integrators::revoke_issuer_key),
         )
-        .route("/games/{slug}/registry", get(registry::get_game_registry))
         .route(
-            "/games/{slug}/achievements",
+            "/integrations/{slug}/registry",
+            get(registry::get_integrator_registry),
+        )
+        .route(
+            "/integrations/{slug}/achievements",
             get(achievements::list_achievement_definitions)
                 .post(achievements::create_achievement_definition),
         )
         .route(
-            "/games/{slug}/achievements/{key}",
+            "/integrations/{slug}/achievements/{key}",
             patch(achievements::update_achievement_definition),
         )
         // #32: issuance — a signed AchievementAttestation, gated on the
         // subject user's own achievements.issue grant (#28), not just
-        // the game's own credential.
+        // the integrator's own credential.
         .route(
-            "/games/{slug}/achievements/{key}/issue",
+            "/integrations/{slug}/achievements/{key}/issue",
             post(achievements::issue_achievement),
         )
         // #324/#325: the same claim-definition mechanism, App/Service's
-        // own vocabulary ("milestone", not "achievement") — under
-        // `/integrations/{slug}/...` since it's explicitly not
-        // game-specific, unlike `/games/{slug}/achievements` above.
+        // own vocabulary ("milestone", not "achievement"). The claim
+        // vocabulary is what stays category-specific here, not the path
+        // prefix — both hang off the same `/integrations/{slug}` resource.
         .route(
             "/integrations/{slug}/milestones",
             get(achievements::list_milestone_definitions)
@@ -270,30 +264,31 @@ pub fn router(state: AppState) -> Router {
             post(attestations::revoke_attestation),
         )
         .route(
-            "/games/{slug}/schemas",
-            get(game_schemas::list_schema_versions).post(game_schemas::publish_schema_version),
+            "/integrations/{slug}/schemas",
+            get(integrator_schemas::list_schema_versions)
+                .post(integrator_schemas::publish_schema_version),
         )
         .route(
-            "/games/{slug}/schemas/{version}",
-            get(game_schemas::get_schema_version),
+            "/integrations/{slug}/schemas/{version}",
+            get(integrator_schemas::get_schema_version),
         )
         // #384 (implementing #381's decided policy): real instance data
         // against a published schema, and the read endpoint that enforces
         // the schema's (and any per-field override's) visibility.
         .route(
-            "/games/{slug}/schemas/{version}/data",
-            post(game_data::publish_instance),
+            "/integrations/{slug}/schemas/{version}/data",
+            post(integrator_data::publish_instance),
         )
         .route(
-            "/identities/{id}/game-data",
-            get(game_data::get_identity_game_data),
+            "/identities/{id}/integrator-data",
+            get(integrator_data::get_identity_integrator_data),
         )
         .route(
-            "/games/{slug}/connect",
+            "/integrations/{slug}/connect",
             post(connections::connect).delete(connections::disconnect),
         )
         .route(
-            "/games/{slug}/grants/{capability}",
+            "/integrations/{slug}/grants/{capability}",
             delete(connections::revoke_grant),
         )
         .route("/me/connections", get(connections::list_my_connections))
@@ -324,10 +319,16 @@ pub fn router(state: AppState) -> Router {
             "/guilds/{id}/transfer-ownership",
             post(guilds::transfer_ownership),
         )
-        .route("/guilds/{id}/games/{game_id}", post(guilds::associate_game))
-        .route("/guilds/{id}/game-breakdown", get(guilds::game_breakdown))
         .route(
-            "/guilds/{id}/favorite-games",
+            "/guilds/{id}/integrations/{integrator_id}",
+            post(guilds::associate_integrator),
+        )
+        .route(
+            "/guilds/{id}/integrator-breakdown",
+            get(guilds::game_breakdown),
+        )
+        .route(
+            "/guilds/{id}/favorite-integrators",
             get(guilds::list_favorite_games).put(guilds::set_favorite_games),
         )
         .route("/guilds/{id}/invites", post(guilds::create_invite))

@@ -5,7 +5,7 @@ const meta: Meta<typeof AvalonConnectionCard> = {
   title: 'Avalon/ConnectionCard',
   component: AvalonConnectionCard,
   args: {
-    gameName: 'Ashen Realms',
+    integratorName: 'Ashen Realms',
     slug: 'ashen-realms',
     establishedAt: '2026-09-01',
     grants: [

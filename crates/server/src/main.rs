@@ -1,12 +1,12 @@
 //! Avalon's network-facing service: identity, auth, social, guilds,
-//! achievement verification, game registration.
+//! achievement verification, integrator registration.
 //!
 //! This is the one thing `hub` and `mobile-hub` are clients of — per the
 //! decision that Hub is frontend-only and never becomes its own backend.
-//! Games integrate against this service through `avalon-sdk`, not directly.
+//! Integrators integrate against this service through `avalon-sdk`, not directly.
 //!
 //! Milestone 1, Epic: Identity & Player Profile — identity/auth endpoints
-//! only. Social/guilds/achievements/games come with their own epics.
+//! only. Social/guilds/achievements/integrations come with their own epics.
 
 use std::path::Path;
 use std::sync::Arc;

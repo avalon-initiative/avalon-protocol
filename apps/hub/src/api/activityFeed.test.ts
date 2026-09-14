@@ -70,7 +70,7 @@ describe('summarizeActivityEntry', () => {
       'You transferred guild ownership.',
     )
     expect(summarizeActivityEntry(makeEntry('guild.game_associated'))).toBe(
-      'You associated a game with your guild.',
+      'You associated an integrator with your guild.',
     )
     expect(summarizeActivityEntry(makeEntry('guild.member_added'))).toBe('You joined a guild.')
     expect(summarizeActivityEntry(makeEntry('guild.member_removed', { reason: 'left' }))).toBe(
@@ -80,7 +80,7 @@ describe('summarizeActivityEntry', () => {
       'You removed a member from a guild.',
     )
     expect(summarizeActivityEntry(makeEntry('guild.favorite_games_updated'))).toBe(
-      "You updated your guild's favorite games.",
+      "You updated your guild's favorite integrators.",
     )
     expect(summarizeActivityEntry(makeEntry('guild.channel_created', { name: 'raids' }))).toBe(
       'You created the channel #raids.',

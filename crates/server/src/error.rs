@@ -31,8 +31,8 @@ pub enum AppError {
     NotFriends,
     #[error("invalid presence query")]
     InvalidPresenceQuery,
-    #[error("a game may only publish presence claiming to be its own game id")]
-    PresencePlayingMismatch,
+    #[error("an integrator may only publish presence claiming to be its own integrator id")]
+    PresenceActiveInMismatch,
     #[error("invalid profile query")]
     InvalidProfileQuery,
     #[error("no profile matches that handle")]
@@ -163,35 +163,35 @@ pub enum AppError {
     InvalidPermission,
     #[error("permission override not found")]
     PermissionOverrideNotFound,
-    #[error("game slug must be lowercase and match [a-z0-9-], 2-64 characters")]
-    InvalidGameSlug,
-    #[error("game slug is already taken")]
-    GameSlugTaken,
+    #[error("integrator slug must be lowercase and match [a-z0-9-], 2-64 characters")]
+    InvalidIntegratorSlug,
+    #[error("integrator slug is already taken")]
+    IntegratorSlugTaken,
     #[error("unsupported or invalid initial signing key")]
-    InvalidGameKey,
-    #[error("category must be one of game, app, service")]
-    InvalidGameCategory,
-    #[error("game not found")]
-    GameNotFound,
-    #[error("invalid games list query: sort must be one of newest, name")]
-    InvalidGamesListQuery,
-    #[error("game challenge not found or already used")]
-    GameChallengeNotFound,
-    #[error("game challenge has expired")]
-    GameChallengeExpired,
-    #[error("game signing key not found")]
-    GameKeyNotFound,
-    #[error("game signature verification failed")]
-    InvalidGameSignature,
+    InvalidIntegratorKey,
+    #[error("category must be one of integrator, app, service")]
+    InvalidIntegratorCategory,
+    #[error("integrator not found")]
+    IntegratorNotFound,
+    #[error("invalid integrators list query: sort must be one of newest, name")]
+    InvalidIntegratorsListQuery,
+    #[error("integrator challenge not found or already used")]
+    IntegratorChallengeNotFound,
+    #[error("integrator challenge has expired")]
+    IntegratorChallengeExpired,
+    #[error("integrator signing key not found")]
+    IntegratorKeyNotFound,
+    #[error("integrator signature verification failed")]
+    InvalidIntegratorSignature,
     #[error("this action requires the issuer's root key, not an operational key")]
     IssuerKeyNotRoot,
     #[error("key role must be one of root, operational")]
     InvalidIssuerKeyRole,
-    #[error("issuer key not found, already revoked, or not owned by this game")]
+    #[error("issuer key not found, already revoked, or not owned by this integrator")]
     IssuerKeyForbidden,
-    #[error("requested capability was not declared by the game at registration")]
+    #[error("requested capability was not declared by the integrator at registration")]
     CapabilityNotRequested,
-    #[error("no active binding to this game")]
+    #[error("no active binding to this integrator")]
     BindingNotFound,
     #[error("no active grant for that capability")]
     GrantNotFound,
@@ -199,7 +199,7 @@ pub enum AppError {
     Forbidden,
     #[error("achievement key must be lowercase and match [a-z0-9_]+, 2-128 characters")]
     InvalidAchievementKey,
-    #[error("an achievement definition with this key already exists for this game")]
+    #[error("an achievement definition with this key already exists for this integrator")]
     AchievementKeyTaken,
     #[error("achievement definition not found")]
     AchievementDefinitionNotFound,
@@ -225,11 +225,11 @@ pub enum AppError {
         "invalid guild discovery query: sort must be one of newest, alphabetical, most_members"
     )]
     InvalidDiscoverQuery,
-    #[error("a guild may pin at most 5 favorite games")]
+    #[error("a guild may pin at most 5 favorite integrators")]
     TooManyFavoriteGames,
-    #[error("favorite_games contains the same game more than once")]
+    #[error("favorite_games contains the same integrator more than once")]
     DuplicateFavoriteGame,
-    #[error("a game can only be pinned as a favorite while it has at least one actively-bound guild member")]
+    #[error("an integrator can only be pinned as a favorite while it has at least one actively-bound guild member")]
     FavoriteGameNotBound,
     #[error("no signed tree head exists at that tree_size")]
     SignedTreeHeadNotFound,
@@ -241,7 +241,7 @@ pub enum AppError {
     ProofVerificationFailed,
     #[error("invalid entries query: since_seq must be non-negative and limit must be a positive integer")]
     InvalidEntriesQuery,
-    #[error("a game may only create or change its own achievement definitions")]
+    #[error("an integrator may only create or change its own achievement definitions")]
     AchievementDefinitionForbidden,
     #[error("guardian set must be 1-10 distinct friends (excluding yourself), with threshold between 1 and the guardian count")]
     InvalidGuardianSet,
@@ -280,19 +280,19 @@ pub enum AppError {
     #[error("guild join request not found")]
     GuildJoinRequestNotFound,
     #[error("proto_source must be non-empty")]
-    InvalidGameSchema,
+    InvalidIntegratorSchema,
     #[error("published schema version not found")]
-    GameSchemaNotFound,
-    #[error("a game may only publish schemas attributed to its own id")]
-    GameSchemaForbidden,
+    IntegratorSchemaNotFound,
+    #[error("an integrator may only publish schemas attributed to its own id")]
+    IntegratorSchemaForbidden,
     #[error("invalid proto schema: {detail}")]
     InvalidProtoSchema { detail: String },
     #[error("instance does not conform to its schema: {detail}")]
     InstanceSchemaMismatch { detail: String },
-    #[error("game data instance not found")]
-    GameDataInstanceNotFound,
-    #[error("a game may only publish instance data against its own published schemas")]
-    GameDataSchemaOwnershipMismatch,
+    #[error("integrator data instance not found")]
+    IntegratorDataInstanceNotFound,
+    #[error("an integrator may only publish instance data against its own published schemas")]
+    IntegratorDataSchemaOwnershipMismatch,
     #[error(
         "participants must include yourself plus at least one other distinct existing identity"
     )]
@@ -331,13 +331,13 @@ impl IntoResponse for AppError {
             AppError::SelfFriendRequest
             | AppError::InvalidPresenceQuery
             | AppError::InvalidProfileQuery => StatusCode::BAD_REQUEST,
-            // A game authenticated fine and even holds `presence.publish`
+            // An integrator authenticated fine and even holds `presence.publish`
             // under an active binding — this is a distinct, narrower
             // rejection than `Forbidden` below: the one thing a capability
             // grant can never authorize is claiming to be a *different*
-            // game. Still a 403: the request is well-formed, the caller
+            // integrator. Still a 403: the request is well-formed, the caller
             // just isn't allowed to make this particular claim.
-            AppError::PresencePlayingMismatch => StatusCode::FORBIDDEN,
+            AppError::PresenceActiveInMismatch => StatusCode::FORBIDDEN,
             AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
@@ -409,38 +409,38 @@ impl IntoResponse for AppError {
             | AppError::InvalidResourceKind
             | AppError::InvalidPermission => StatusCode::BAD_REQUEST,
             AppError::PermissionOverrideNotFound => StatusCode::NOT_FOUND,
-            AppError::InvalidGameSlug
-            | AppError::InvalidGameKey
-            | AppError::InvalidGameCategory => StatusCode::BAD_REQUEST,
-            AppError::GameSlugTaken => StatusCode::CONFLICT,
-            AppError::GameNotFound => StatusCode::NOT_FOUND,
-            AppError::InvalidGamesListQuery => StatusCode::BAD_REQUEST,
-            // Auth-failure reasons for the game challenge-response scheme
+            AppError::InvalidIntegratorSlug
+            | AppError::InvalidIntegratorKey
+            | AppError::InvalidIntegratorCategory => StatusCode::BAD_REQUEST,
+            AppError::IntegratorSlugTaken => StatusCode::CONFLICT,
+            AppError::IntegratorNotFound => StatusCode::NOT_FOUND,
+            AppError::InvalidIntegratorsListQuery => StatusCode::BAD_REQUEST,
+            // Auth-failure reasons for the integrator challenge-response scheme
             // (#26) all collapse to 401, same as `WebauthnFailed`/
             // `InvalidEventSignature` above — the specific reason is useful
             // for a legitimate caller debugging its own integration, not
             // something worth a different status code for.
-            AppError::GameChallengeNotFound
-            | AppError::GameChallengeExpired
-            | AppError::GameKeyNotFound
-            | AppError::InvalidGameSignature
+            AppError::IntegratorChallengeNotFound
+            | AppError::IntegratorChallengeExpired
+            | AppError::IntegratorKeyNotFound
+            | AppError::InvalidIntegratorSignature
             | AppError::IssuerKeyNotRoot => StatusCode::UNAUTHORIZED,
             AppError::InvalidIssuerKeyRole => StatusCode::BAD_REQUEST,
             AppError::IssuerKeyForbidden => StatusCode::FORBIDDEN,
             AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,
             AppError::BindingNotFound | AppError::GrantNotFound => StatusCode::NOT_FOUND,
-            // Issue #28's guard: authenticated (as *some* game), but that
-            // game lacks the specific capability it needs for this
+            // Issue #28's guard: authenticated (as *some* integrator), but that
+            // integrator lacks the specific capability it needs for this
             // request. Generic 403 body, same as every other authorization
             // (as opposed to authentication) failure in this file — see
             // `require_capability`'s own doc comment for why the body
-            // never says *which* of "no binding" / "wrong game" / "no
+            // never says *which* of "no binding" / "wrong integrator" / "no
             // grant" / "revoked grant" applied.
             AppError::Forbidden => StatusCode::FORBIDDEN,
             AppError::InvalidAchievementKey => StatusCode::BAD_REQUEST,
             AppError::AchievementKeyTaken => StatusCode::CONFLICT,
             AppError::AchievementDefinitionNotFound => StatusCode::NOT_FOUND,
-            // A route mismatch (a Game hitting the milestones route, or
+            // A route mismatch (an Integrator hitting the milestones route, or
             // vice versa) is caught by checking the issuer's own real
             // registered category, same "authenticated fine as *some*
             // issuer, but not authorized for this specific action" shape
@@ -474,19 +474,19 @@ impl IntoResponse for AppError {
             AppError::InvalidJoinRequestMessage => StatusCode::BAD_REQUEST,
             AppError::GuildJoinRequestNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidDiscoverQuery => StatusCode::BAD_REQUEST,
-            AppError::InvalidGameSchema => StatusCode::BAD_REQUEST,
-            AppError::GameSchemaNotFound => StatusCode::NOT_FOUND,
+            AppError::InvalidIntegratorSchema => StatusCode::BAD_REQUEST,
+            AppError::IntegratorSchemaNotFound => StatusCode::NOT_FOUND,
             // Same shape as `AchievementDefinitionForbidden`: authenticated
-            // fine as *some* game, but that game isn't the one named by
+            // fine as *some* integrator, but that integrator isn't the one named by
             // the `{slug}` path segment — never allowed to publish a
-            // schema attributed to another game's id.
-            AppError::GameSchemaForbidden => StatusCode::FORBIDDEN,
+            // schema attributed to another integrator's id.
+            AppError::IntegratorSchemaForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidProtoSchema { .. } => StatusCode::BAD_REQUEST,
             AppError::InstanceSchemaMismatch { .. } => StatusCode::BAD_REQUEST,
-            AppError::GameDataInstanceNotFound => StatusCode::NOT_FOUND,
-            // Same "authenticated fine as *some* game, but not allowed to
-            // make this specific claim" shape as `GameSchemaForbidden`.
-            AppError::GameDataSchemaOwnershipMismatch => StatusCode::FORBIDDEN,
+            AppError::IntegratorDataInstanceNotFound => StatusCode::NOT_FOUND,
+            // Same "authenticated fine as *some* integrator, but not allowed to
+            // make this specific claim" shape as `IntegratorSchemaForbidden`.
+            AppError::IntegratorDataSchemaOwnershipMismatch => StatusCode::FORBIDDEN,
             AppError::InvalidConversationParticipants => StatusCode::BAD_REQUEST,
             // Same status as `NotGuildMember`: an authorization fact, not a
             // missing resource, and — per this variant's own doc comment —
@@ -501,8 +501,8 @@ impl IntoResponse for AppError {
             // The affinity this would-be pin claims doesn't currently exist
             // (zero actively-bound members) — a well-formed request the
             // caller isn't allowed to make, same "authenticated fine, just
-            // not allowed to claim this" shape as `PresencePlayingMismatch`
-            // above, not a 404 (the game itself may well exist).
+            // not allowed to claim this" shape as `PresenceActiveInMismatch`
+            // above, not a 404 (the integrator itself may well exist).
             AppError::FavoriteGameNotBound => StatusCode::FORBIDDEN,
             AppError::SignedTreeHeadNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidProofQuery => StatusCode::BAD_REQUEST,

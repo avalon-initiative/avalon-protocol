@@ -1,6 +1,6 @@
 export type AvalonIconName =
   | 'home'
-  | 'games'
+  | 'integrators'
   | 'guilds'
   | 'friends'
   | 'chat'
@@ -28,7 +28,7 @@ export type AvalonIconName =
   | 'library'
   | 'wallet'
   | 'more'
-  // Game & community
+  // Integrator & community
   | 'community'
   | 'faction'
   | 'event'

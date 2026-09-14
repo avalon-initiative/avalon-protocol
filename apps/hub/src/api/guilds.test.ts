@@ -12,7 +12,7 @@ import {
   formatGameBreakdownEntry,
   formatPlayingSummary,
   groupMembersByRole,
-  groupMembersPlayingByGame,
+  groupMembersPlayingByIntegrator,
   hasGuildPermission,
   hasNoGameBreakdownData,
   MAX_FAVORITE_GAMES,
@@ -93,7 +93,7 @@ describe('mergeGuildMember', () => {
     expect(mergeGuildMember(member, new Map()).playing).toBeNull()
   })
 
-  it('carries the playing game id through when present (#57)', () => {
+  it('carries the playing integrator id through when present (#57)', () => {
     const member: GuildMemberResponse = {
       guild_id: 'g1',
       identity_id: MEMBER,
@@ -318,17 +318,17 @@ describe('sortMembers', () => {
   })
 })
 
-describe('groupMembersPlayingByGame', () => {
-  it('groups by game id, counts descending', () => {
+describe('groupMembersPlayingByIntegrator', () => {
+  it('groups by integrator id, counts descending', () => {
     const members: GuildMember[] = [
       { identityId: 'a', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'ashen-realms' },
       { identityId: 'b', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'worldzero' },
       { identityId: 'c', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'ashen-realms' },
       { identityId: 'd', roleIndex: 2, status: 'Offline', joinedAt: 't', playing: null },
     ]
-    expect(groupMembersPlayingByGame(members)).toEqual([
-      { gameId: 'ashen-realms', count: 2 },
-      { gameId: 'worldzero', count: 1 },
+    expect(groupMembersPlayingByIntegrator(members)).toEqual([
+      { integratorId: 'ashen-realms', count: 2 },
+      { integratorId: 'worldzero', count: 1 },
     ])
   })
 
@@ -337,25 +337,25 @@ describe('groupMembersPlayingByGame', () => {
       { identityId: 'a', roleIndex: 2, status: 'Online', joinedAt: 't', playing: null },
       { identityId: 'b', roleIndex: 2, status: 'Offline', joinedAt: 't' },
     ]
-    expect(groupMembersPlayingByGame(members)).toEqual([])
+    expect(groupMembersPlayingByIntegrator(members)).toEqual([])
   })
 
-  it('breaks ties alphabetically by game id', () => {
+  it('breaks ties alphabetically by integrator id', () => {
     const members: GuildMember[] = [
       { identityId: 'a', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'worldzero' },
       { identityId: 'b', roleIndex: 2, status: 'Online', joinedAt: 't', playing: 'ashen-realms' },
     ]
-    expect(groupMembersPlayingByGame(members).map((g) => g.gameId)).toEqual(['ashen-realms', 'worldzero'])
+    expect(groupMembersPlayingByIntegrator(members).map((g) => g.integratorId)).toEqual(['ashen-realms', 'worldzero'])
   })
 })
 
 describe('formatPlayingSummary', () => {
-  it('uses the #74-safe "N members playing X" phrasing, never "Game X\'s guild"', () => {
-    expect(formatPlayingSummary({ gameId: 'Ashen Realms', count: 42 })).toBe('42 members playing Ashen Realms')
+  it('uses the #74-safe "N members playing X" phrasing, never "Integrator X\'s guild"', () => {
+    expect(formatPlayingSummary({ integratorId: 'Ashen Realms', count: 42 })).toBe('42 members playing Ashen Realms')
   })
 
   it('uses singular "member" for a count of one', () => {
-    expect(formatPlayingSummary({ gameId: 'WorldZero', count: 1 })).toBe('1 member playing WorldZero')
+    expect(formatPlayingSummary({ integratorId: 'WorldZero', count: 1 })).toBe('1 member playing WorldZero')
   })
 })
 
@@ -411,7 +411,7 @@ describe('buildDiscoverQueryString', () => {
       q: 'dragons',
       recruiting: true,
       tag: 'ASHV',
-      game: 'game-1',
+      integrator: 'integrator-1',
       sort: 'alphabetical',
       limit: 10,
       cursor: 'guild-9',
@@ -420,7 +420,7 @@ describe('buildDiscoverQueryString', () => {
     expect(params.get('q')).toBe('dragons')
     expect(params.get('recruiting')).toBe('true')
     expect(params.get('tag')).toBe('ASHV')
-    expect(params.get('game')).toBe('game-1')
+    expect(params.get('game')).toBe('integrator-1')
     expect(params.get('sort')).toBe('alphabetical')
     expect(params.get('limit')).toBe('10')
     expect(params.get('cursor')).toBe('guild-9')
@@ -428,25 +428,25 @@ describe('buildDiscoverQueryString', () => {
 })
 
 describe('formatGameBreakdownEntry', () => {
-  it('renders "N of M members play <game>" verbatim', () => {
+  it('renders "N of M members play <integrator>" verbatim', () => {
     const entry: GameBreakdownEntry = {
-      game_id: 'game-1',
-      game_slug: 'ashen-realms',
-      game_name: 'Ashen Realms',
+      integrator_id: 'integrator-1',
+      integrator_slug: 'ashen-realms',
+      integrator_name: 'Ashen Realms',
       member_count: 14,
     }
     expect(formatGameBreakdownEntry(entry, 22)).toBe('14 of 22 members play Ashen Realms')
   })
 
   it('total_members is the denominator, not a sum of member_count entries', () => {
-    // A member can be bound to zero, one, or several games, so
+    // A member can be bound to zero, one, or several integrators, so
     // total_members (guild membership) and a single entry's member_count
     // are independent numbers — this just pins that the function uses the
     // total passed in, not anything derived from the entry itself.
     const entry: GameBreakdownEntry = {
-      game_id: 'game-2',
-      game_slug: 'ocean-world',
-      game_name: 'Ocean World',
+      integrator_id: 'integrator-2',
+      integrator_slug: 'ocean-world',
+      integrator_name: 'Ocean World',
       member_count: 3,
     }
     expect(formatGameBreakdownEntry(entry, 3)).toBe('3 of 3 members play Ocean World')
@@ -458,29 +458,29 @@ describe('hasNoGameBreakdownData', () => {
     expect(hasNoGameBreakdownData([])).toBe(true)
   })
 
-  it('is false once at least one game has a bound member', () => {
+  it('is false once at least one integrator has a bound member', () => {
     const entry: GameBreakdownEntry = {
-      game_id: 'game-1',
-      game_slug: 'ashen-realms',
-      game_name: 'Ashen Realms',
+      integrator_id: 'integrator-1',
+      integrator_slug: 'ashen-realms',
+      integrator_name: 'Ashen Realms',
       member_count: 1,
     }
     expect(hasNoGameBreakdownData([entry])).toBe(false)
   })
 })
 
-// --- Issue #207: favorite games pin list -----------------------------------
+// --- Issue #207: favorite integrators pin list -----------------------------------
 
-function favorite(gameId: string, name: string, position: number, stale = false): FavoriteGameEntry {
-  return { game_id: gameId, game_slug: gameId, game_name: name, position, stale }
+function favorite(integratorId: string, name: string, position: number, stale = false): FavoriteGameEntry {
+  return { integrator_id: integratorId, integrator_slug: integratorId, integrator_name: name, position, stale }
 }
 
-function breakdownEntry(gameId: string, name: string): GameBreakdownEntry {
-  return { game_id: gameId, game_slug: gameId, game_name: name, member_count: 1 }
+function breakdownEntry(integratorId: string, name: string): GameBreakdownEntry {
+  return { integrator_id: integratorId, integrator_slug: integratorId, integrator_name: name, member_count: 1 }
 }
 
 describe('pinnableBreakdownEntries', () => {
-  it('excludes games already pinned', () => {
+  it('excludes integrators already pinned', () => {
     const breakdown = [breakdownEntry('g1', 'Ashen Realms'), breakdownEntry('g2', 'Ocean World')]
     const favorites = [favorite('g1', 'Ashen Realms', 0)]
     expect(pinnableBreakdownEntries(breakdown, favorites)).toEqual([breakdownEntry('g2', 'Ocean World')])
@@ -499,7 +499,7 @@ describe('canPinMoreFavorites', () => {
   })
 
   it('rejects pinning at the cap', () => {
-    const favorites = Array.from({ length: MAX_FAVORITE_GAMES }, (_, i) => favorite(`g${i}`, `Game ${i}`, i))
+    const favorites = Array.from({ length: MAX_FAVORITE_GAMES }, (_, i) => favorite(`g${i}`, `Integrator ${i}`, i))
     expect(favorites.length).toBe(5)
     expect(canPinMoreFavorites(favorites)).toBe(false)
   })
@@ -544,7 +544,7 @@ describe('reorderFavoriteGameIds', () => {
 })
 
 describe('formatFavoriteGameEntry', () => {
-  it('renders the plain game name when not stale', () => {
+  it('renders the plain integrator name when not stale', () => {
     expect(formatFavoriteGameEntry(favorite('g1', 'Ashen Realms', 0))).toBe('Ashen Realms')
   })
 

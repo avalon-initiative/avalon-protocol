@@ -34,7 +34,7 @@
 //! Nothing outside this crate should depend on *how* commitments are
 //! produced — only on this trait — so that evolving the implementation
 //! toward that design doesn't ripple into `protocol`, `server`, `sdk`, or any
-//! game integration.
+//! integrator integration.
 
 pub mod attestations;
 pub mod incremental_merkle;

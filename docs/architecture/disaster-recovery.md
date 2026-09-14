@@ -13,12 +13,12 @@ rebuildable from those facts
 | Promised durable — must rebuild from history | Source events |
 |---|---|
 | identity existence and the metadata Avalon promises (display name, avatar) | `identity.created`, `profile.updated` |
-| game bindings (which identities participate in which games) | `game.binding_*` |
-| game and issuer registrations | `game.registered`, `issuer.registered` |
+| integrator bindings (which identities participate in which integrators) | `game.binding_*` |
+| integrator and issuer registrations | `game.registered`, `issuer.registered` |
 | issuer key lifecycle and status | `issuer.key_*`, `issuer.suspended` / `.reinstated` / `.revoked` |
 | achievement definitions, issuance, revocation, supersession | `achievement.*`, `attestation.superseded` |
-| guild existence, membership history, roles, game associations | `guild.*` |
-| game event results (tournaments, seasonal events, ...) | `game_event.result_issued` |
+| guild existence, membership history, roles, integrator associations | `guild.*` |
+| integrator event results (tournaments, seasonal events, ...) | `game_event.result_issued` |
 | recognition relationships | `recognition.published` |
 | ownership and provenance (later phase) | asset events, when they exist |
 
@@ -90,7 +90,7 @@ answer for the current code is: partly, and not yet provably.
 - **No rebuild test exists** (#43). A concrete `Indexer` now does exist —
   `crates/indexer/src/postgres.rs::PostgresIndexer` (#42), dispatching by
   `event.kind` to per-projection modules under `crates/indexer/src/projections/`
-  (`profiles`, `friendships`, `game_bindings`, `game_schemas`, `guild_rosters`,
+  (`profiles`, `friendships`, `integrator_bindings`, `integrator_schemas`, `guild_rosters`,
   `attestations`), guarded by an `indexer_applied_events(event_id)` dedup
   table so a replayed event is a no-op the second time — but nothing yet
   drives `Indexer::rebuild` end to end against it and diffs the result, so

@@ -64,8 +64,8 @@ async fn seed_identity_session(pool: &PgPool, display_name: &str) -> (Uuid, Stri
 fn client() -> AvalonClient {
     AvalonClient::new(AvalonConfig {
         server_url: server_url(),
-        game_credential_key_id: "sdk-test".to_string(),
-        game_slug: None,
+        integrator_credential_key_id: "sdk-test".to_string(),
+        integrator_slug: None,
         signing_key: None,
     })
 }

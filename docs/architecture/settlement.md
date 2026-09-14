@@ -11,7 +11,7 @@ consensus layer, because nothing written to it is ever contested (ADR #186).**
 
 Settlement is responsible for durable commitments, provenance, canonical protocol
 history, verifiable attestations, ownership history, durable identity facts,
-guild history, game/issuer registration, and key lifecycle. It is not
+guild history, integrator/issuer registration, and key lifecycle. It is not
 responsible for fast reads — that is [`./query-and-indexing.md`](./query-and-indexing.md).
 A mutable Postgres row is never the ultimate authority for something Avalon
 promises to preserve forever ([#75](https://github.com/LunarVagabond/avalon-protocol/issues/75)).
@@ -63,7 +63,7 @@ pub trait SettlementProvider: Send + Sync {
 ```
 
 This trait is the only thing outside `chain` may depend on. `protocol`, `server`,
-`sdk`, and every game integration are indifferent to how a commitment is
+`sdk`, and every integrator integration are indifferent to how a commitment is
 produced. Consensus, block production, and P2P networking do not belong on this
 trait. Interfaces beyond it are introduced only when an actual implementation
 needs them.
@@ -80,7 +80,7 @@ needs them.
   durable fact is a signed, hash-chained, append-only entry; anyone can verify
   an entry and its position without permission; anyone can mirror the log and
   serve reads. **Federation is rejected** — visibility must not depend on which
-  server a game trusts. **Avalon does not run mining, or consensus staked on a
+  server an integrator trusts. **Avalon does not run mining, or consensus staked on a
   currency,** to referee write ordering; Avalon's writes are already
   unambiguous because each actor signs its own — which is also why no
   validator consensus is needed either, currency-free or not (ADR #186).
@@ -103,7 +103,7 @@ needs them.
   `friend.requested`, `guild.created`, `game.registered` are each a fact
   asserted by exactly one authoritative signer about something only that
   signer has authority over. No native currency or token at launch, and no
-  validator set to run one — a cross-game currency layer remains an
+  validator set to run one — a cross-integrator currency layer remains an
   explicitly later, optional, *separately decided* phase
   ([`../stakeholders/Proposal.md` §15](../stakeholders/Proposal.md#15-economy-and-currency)):
   only if that's ever actually proposed does consensus become a real

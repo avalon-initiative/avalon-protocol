@@ -12,7 +12,7 @@ binaries.**
 Settlement   — validates and stores durable history (the log)
 Indexer      — consumes history, serves query projections
 Realtime     — presence and ephemeral connections
-Gateway/API  — the SDK/API surface games and clients talk to
+Gateway/API  — the SDK/API surface integrators and clients talk to
 ```
 
 An operator may run all four in one process, only Indexer + Gateway, only
@@ -115,9 +115,9 @@ resolved here.
 
 A hosted node is not protocol authority. The concrete guarantees:
 
-- A node **cannot fabricate** "Game A issued this achievement". Attestations are
-  signed by Game A's registered issuer key
-  ([`./games-and-issuers.md`](./games-and-issuers.md)); a node that stores an
+- A node **cannot fabricate** "Integrator A issued this achievement". Attestations are
+  signed by Integrator A's registered issuer key
+  ([`./issuers.md`](./issuers.md)); a node that stores an
   unsigned or wrongly-signed claim has stored something every verifier rejects.
 - A node **cannot replace** a signature, alter a settled entry, or drop one
   without detection — the log is hash-chained and, once
@@ -138,8 +138,8 @@ order, store, index, serve, and mirror.
 Multiple operators is a goal. It is achieved by **mirroring one public,
 verifiable log** — the Certificate Transparency pattern
 ([#70](https://github.com/LunarVagabond/avalon-protocol/issues/70)) — not by
-federation. Under federation, whether Game B can see an identity would
-depend on which servers Game B's server peers with; that recreates the walled
+federation. Under federation, whether Integrator B can see an identity would
+depend on which servers Integrator B's server peers with; that recreates the walled
 gardens Avalon exists to remove. Under mirroring, a client does not pick "which
 server to trust": any mirror that misrepresents the log is detectable, because
 the log is self-verifying. The log *is* Avalon's own chain, not an anchor into someone else's
@@ -169,7 +169,7 @@ instance both "self-host" the same code — they are not the same thing; see
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
 presence for identities on that node lapses until their next heartbeat
-([`./presence.md`](./presence.md)); nothing a game had already verified becomes
+([`./presence.md`](./presence.md)); nothing an integrator had already verified becomes
 unverifiable.
 
 ## Version rollout
@@ -191,6 +191,19 @@ alias) already practiced without naming it. Never remove, rename, or
 repurpose a field or endpoint outright; add alongside and deprecate slowly.
 This is a code-review discipline expectation starting now, not gated on
 any further ticket.
+
+**One deliberate exception, taken once, before the repo went public: #290.**
+The terminology generalization renamed the request/response field names, and
+dropped the `/games` route family and the `x-avalon-game-*` headers that #293
+had kept as compatibility paths. That is squarely a break of the rule above,
+made knowingly on the grounds the rule itself depends on: the rule exists
+because operators who cannot be forced to upgrade are running independent
+nodes, and at the time of #290 there were none — the repo was private with
+zero external integrators, and every consumer of these shapes lived in this
+monorepo and was updated in the same change. Once the repo is public that
+argument is gone permanently, and the additive-only rule applies without
+exception. Any future proposal to rename a wire field or endpoint needs its
+own decision issue; it does not get to cite #290 as precedent.
 
 **Cross-cutting invariant, applies to every future piece of this**: a
 version claim is never trusted for anything *cryptographic* or used to
