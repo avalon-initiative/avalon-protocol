@@ -9,8 +9,9 @@
 //! ## Storage backend: append-only JSON-lines file, not embedded SQLite
 //!
 //! [`FileJournal`] is a flat, append-only file of newline-delimited JSON
-//! records (an `Append`, `Submitted`, or `Failed` op per line), replayed in
-//! full on [`FileJournal::open`] to reconstitute in-memory state. Chosen
+//! records (an `Append`, `Submitted`, `Rejected`, or `Failed` op per line),
+//! replayed in full on [`FileJournal::open`] to reconstitute in-memory
+//! state. Chosen
 //! over `rusqlite`/embedded SQLite for this reference implementation
 //! because:
 //!
@@ -62,9 +63,14 @@ pub enum JournalError {
 
 /// A single recorded offline-capable operation. `id` is client-generated at
 /// [`SyncJournal::append`] time and never changes. `submitted_at` is `None`
-/// until [`SyncJournal::mark_submitted`] — the journal itself carries no
-/// opinion about *whether* an entry should be believed once submitted; see
-/// the offline-trust-model decision (#112) for that.
+/// until [`SyncJournal::mark_submitted`], `rejected_at`/`rejection_reason`
+/// are `None` until [`SyncJournal::mark_rejected`] — the journal itself
+/// carries no opinion about *whether* an entry should be believed once
+/// submitted; see the offline-trust-model decision (#112) for that.
+/// `submitted_at` and `rejected_at` are mutually exclusive in practice (an
+/// entry reaches exactly one terminal state) but both are plain `Option`s
+/// rather than a combined enum so the on-disk/wire shape stays additive —
+/// see issue #113's own scope note on why this wasn't a bigger refactor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalEntry {
     pub id: EntryId,
@@ -74,6 +80,47 @@ pub struct JournalEntry {
     pub recorded_at: OffsetDateTime,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub submitted_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub rejected_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub rejection_reason: Option<String>,
+}
+
+impl JournalEntry {
+    /// Whether this entry has reached either terminal state — the same
+    /// check [`SyncJournal::pending`]'s default backing logic and
+    /// [`SyncJournal::status`]/[`SyncJournal::status_of`] all need, kept in
+    /// one place so they can never drift against each other.
+    fn is_terminal(&self) -> bool {
+        self.submitted_at.is_some() || self.rejected_at.is_some()
+    }
+}
+
+/// A snapshot of overall sync progress (issue #113) — the cheap, synchronous
+/// local read a game renders "N pending" / "last synced 2 minutes ago" from,
+/// never a network call itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncStatus {
+    pub pending_count: usize,
+    /// `recorded_at` of the oldest still-pending entry, if any — how long
+    /// the longest-queued operation has been waiting.
+    pub oldest_pending_at: Option<OffsetDateTime>,
+    /// The most recent successful submission across *every* entry, pending
+    /// or not — `None` only if nothing has ever been submitted through this
+    /// journal.
+    pub last_synced_at: Option<OffsetDateTime>,
+}
+
+/// One entry's status (issue #113) — what a game renders per-message/
+/// per-request rather than re-rendering everything from [`SyncStatus`]
+/// alone. [`Self::Rejected`] always carries the reason a game can surface
+/// to its player, matching this ticket's own invariant: never a bare
+/// failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryStatus {
+    Pending,
+    Submitted,
+    Rejected { reason: String },
 }
 
 /// A durable local queue of offline-capable operations, behind a trait so
@@ -90,27 +137,77 @@ pub trait SyncJournal {
     /// ticket's.
     fn append(&self, kind: String, payload: serde_json::Value) -> Result<EntryId, JournalError>;
 
-    /// All entries not yet marked submitted, oldest first.
+    /// All entries not yet reaching a terminal state, oldest first.
     fn pending(&self) -> Result<Vec<JournalEntry>, JournalError>;
 
-    /// Marks an entry submitted. Idempotent: calling it more than once for
-    /// the same id is a no-op after the first call, never an error.
+    /// Every entry this journal has ever recorded, pending or terminal,
+    /// oldest first — the backing read [`SyncJournal::status`] and
+    /// [`SyncJournal::status_of`]'s default implementations need but
+    /// [`SyncJournal::pending`] alone can't answer (it deliberately excludes
+    /// terminal entries).
+    fn all(&self) -> Result<Vec<JournalEntry>, JournalError>;
+
+    /// One entry by id, if it exists — the read [`SyncJournal::status_of`]'s
+    /// default implementation is built on.
+    fn entry(&self, id: EntryId) -> Result<Option<JournalEntry>, JournalError>;
+
+    /// Marks an entry submitted (a genuine, successful terminal outcome).
+    /// Idempotent: calling it more than once for the same id is a no-op
+    /// after the first call, never an error.
     fn mark_submitted(&self, id: EntryId) -> Result<(), JournalError>;
+
+    /// Marks an entry rejected — the other terminal outcome
+    /// ([`SubmitOutcome::Rejected`](crate::submission::SubmitOutcome), the
+    /// server was reached and gave a final "no"). Idempotent, same posture
+    /// as [`Self::mark_submitted`]: a second call for an already-terminal
+    /// id is a no-op, never an error, and never overwrites an existing
+    /// [`SyncJournal::mark_submitted`] outcome or vice versa.
+    fn mark_rejected(&self, id: EntryId, reason: String) -> Result<(), JournalError>;
 
     /// Records that a submission attempt for `id` failed, with a reason for
     /// diagnostics. Does not remove the entry from [`SyncJournal::pending`]
     /// — retry/backoff policy belongs to the submission engine (#111), not
-    /// the journal. Diagnostics-only: unlike [`SyncJournal::mark_submitted`],
-    /// this does not check whether `id` is already submitted, and never
-    /// touches `submitted_at` either way — calling it after a successful
-    /// submission just appends a harmless, ignored `Failed` record.
+    /// the journal. Diagnostics-only: unlike [`SyncJournal::mark_submitted`]/
+    /// [`SyncJournal::mark_rejected`], this does not check whether `id` is
+    /// already terminal, and never touches `submitted_at`/`rejected_at`
+    /// either way — calling it after a terminal outcome just appends a
+    /// harmless, ignored `Failed` record. This is for a *retryable* failure
+    /// (a network error, a 5xx); a *terminal* rejection is
+    /// [`Self::mark_rejected`], not this.
     fn mark_failed(&self, id: EntryId, reason: String) -> Result<(), JournalError>;
+
+    /// A cheap, synchronous snapshot of overall progress (issue #113) —
+    /// never a network call, reflects only what this journal already knows.
+    fn status(&self) -> Result<SyncStatus, JournalError> {
+        let all = self.all()?;
+        let pending: Vec<&JournalEntry> = all.iter().filter(|e| !e.is_terminal()).collect();
+        let oldest_pending_at = pending.iter().map(|e| e.recorded_at).min();
+        let last_synced_at = all.iter().filter_map(|e| e.submitted_at).max();
+        Ok(SyncStatus {
+            pending_count: pending.len(),
+            oldest_pending_at,
+            last_synced_at,
+        })
+    }
+
+    /// One entry's status (issue #113), by id.
+    fn status_of(&self, id: EntryId) -> Result<EntryStatus, JournalError> {
+        let entry = self.entry(id)?.ok_or(JournalError::NotFound(id))?;
+        Ok(if let Some(reason) = entry.rejection_reason {
+            EntryStatus::Rejected { reason }
+        } else if entry.submitted_at.is_some() {
+            EntryStatus::Submitted
+        } else {
+            EntryStatus::Pending
+        })
+    }
 }
 
 /// One line of the on-disk log. `Append` carries a full entry; `Submitted`/
-/// `Failed` are small follow-up records referencing an id already appended
-/// earlier in the file. Replaying the file in order reconstitutes state —
-/// this is intentionally *not* a random-access format.
+/// `Rejected`/`Failed` are small follow-up records referencing an id
+/// already appended earlier in the file. Replaying the file in order
+/// reconstitutes state — this is intentionally *not* a random-access
+/// format.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum LogRecord {
@@ -125,6 +222,12 @@ enum LogRecord {
         id: Uuid,
         #[serde(with = "time::serde::rfc3339")]
         at: OffsetDateTime,
+    },
+    Rejected {
+        id: Uuid,
+        #[serde(with = "time::serde::rfc3339")]
+        at: OffsetDateTime,
+        reason: String,
     },
     Failed {
         id: Uuid,
@@ -241,12 +344,20 @@ impl FileJournal {
                             payload,
                             recorded_at,
                             submitted_at: None,
+                            rejected_at: None,
+                            rejection_reason: None,
                         },
                     );
                 }
                 LogRecord::Submitted { id, at } => {
                     if let Some(entry) = entries.get_mut(&id) {
                         entry.submitted_at = Some(at);
+                    }
+                }
+                LogRecord::Rejected { id, at, reason } => {
+                    if let Some(entry) = entries.get_mut(&id) {
+                        entry.rejected_at = Some(at);
+                        entry.rejection_reason = Some(reason);
                     }
                 }
                 LogRecord::Failed { .. } => {
@@ -318,6 +429,8 @@ impl SyncJournal for FileJournal {
                 payload,
                 recorded_at,
                 submitted_at: None,
+                rejected_at: None,
+                rejection_reason: None,
             },
         );
         Ok(id)
@@ -329,24 +442,35 @@ impl SyncJournal for FileJournal {
             .order
             .iter()
             .filter_map(|id| state.entries.get(id))
-            .filter(|entry| entry.submitted_at.is_none())
+            .filter(|entry| !entry.is_terminal())
             .cloned()
             .collect())
     }
 
+    fn all(&self) -> Result<Vec<JournalEntry>, JournalError> {
+        let state = self.state.lock().expect("journal mutex poisoned");
+        Ok(state
+            .order
+            .iter()
+            .filter_map(|id| state.entries.get(id))
+            .cloned()
+            .collect())
+    }
+
+    fn entry(&self, id: EntryId) -> Result<Option<JournalEntry>, JournalError> {
+        let state = self.state.lock().expect("journal mutex poisoned");
+        Ok(state.entries.get(&id).cloned())
+    }
+
     fn mark_submitted(&self, id: EntryId) -> Result<(), JournalError> {
         let mut state = self.state.lock().expect("journal mutex poisoned");
-        if !state.entries.contains_key(&id) {
+        let Some(existing) = state.entries.get(&id) else {
             return Err(JournalError::NotFound(id));
-        }
-        // Idempotent: already submitted, nothing to do — no error, no
-        // second log record, no state change.
-        if state
-            .entries
-            .get(&id)
-            .and_then(|e| e.submitted_at)
-            .is_some()
-        {
+        };
+        // Idempotent: already terminal (submitted or rejected), nothing to
+        // do — no error, no second log record, no state change. Never
+        // overwrites an existing rejection with a later submission.
+        if existing.is_terminal() {
             return Ok(());
         }
 
@@ -354,6 +478,33 @@ impl SyncJournal for FileJournal {
         Self::write_record(&mut state.file, &LogRecord::Submitted { id, at })?;
         if let Some(entry) = state.entries.get_mut(&id) {
             entry.submitted_at = Some(at);
+        }
+        Ok(())
+    }
+
+    fn mark_rejected(&self, id: EntryId, reason: String) -> Result<(), JournalError> {
+        let mut state = self.state.lock().expect("journal mutex poisoned");
+        let Some(existing) = state.entries.get(&id) else {
+            return Err(JournalError::NotFound(id));
+        };
+        // Idempotent, same posture as `mark_submitted` — including never
+        // overwriting an existing submission with a later rejection.
+        if existing.is_terminal() {
+            return Ok(());
+        }
+
+        let at = OffsetDateTime::now_utc();
+        Self::write_record(
+            &mut state.file,
+            &LogRecord::Rejected {
+                id,
+                at,
+                reason: reason.clone(),
+            },
+        )?;
+        if let Some(entry) = state.entries.get_mut(&id) {
+            entry.rejected_at = Some(at);
+            entry.rejection_reason = Some(reason);
         }
         Ok(())
     }
@@ -619,6 +770,154 @@ mod tests {
 
         let err = journal.mark_submitted(Uuid::new_v4()).unwrap_err();
         assert!(matches!(err, JournalError::NotFound(_)));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn status_of_reflects_pending_submitted_and_rejected() {
+        let path = temp_journal_path("status-of");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let pending_id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        let submitted_id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        let rejected_id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+
+        journal.mark_submitted(submitted_id).unwrap();
+        journal
+            .mark_rejected(rejected_id, "conversation is gone".to_string())
+            .unwrap();
+
+        assert_eq!(journal.status_of(pending_id).unwrap(), EntryStatus::Pending);
+        assert_eq!(
+            journal.status_of(submitted_id).unwrap(),
+            EntryStatus::Submitted
+        );
+        assert_eq!(
+            journal.status_of(rejected_id).unwrap(),
+            EntryStatus::Rejected {
+                reason: "conversation is gone".to_string()
+            }
+        );
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn status_of_unknown_id_errors() {
+        let path = temp_journal_path("status-of-unknown");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let err = journal.status_of(Uuid::new_v4()).unwrap_err();
+        assert!(matches!(err, JournalError::NotFound(_)));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn status_counts_pending_and_tracks_oldest_pending_and_last_synced() {
+        let path = temp_journal_path("status-summary");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let first_pending = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        let submitted = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        let _second_pending = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        journal.mark_submitted(submitted).unwrap();
+
+        let status = journal.status().unwrap();
+        assert_eq!(status.pending_count, 2);
+        let first_pending_recorded_at = journal.entry(first_pending).unwrap().unwrap().recorded_at;
+        assert_eq!(status.oldest_pending_at, Some(first_pending_recorded_at));
+        assert!(status.last_synced_at.is_some());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn status_with_nothing_recorded_is_all_zero() {
+        let path = temp_journal_path("status-empty");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let status = journal.status().unwrap();
+        assert_eq!(status.pending_count, 0);
+        assert_eq!(status.oldest_pending_at, None);
+        assert_eq!(status.last_synced_at, None);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn mark_rejected_is_idempotent_and_removes_the_entry_from_pending() {
+        let path = temp_journal_path("mark-rejected-idempotent");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        journal
+            .mark_rejected(id, "first reason".to_string())
+            .unwrap();
+        // Second call: must not error, must not overwrite the first reason.
+        journal
+            .mark_rejected(id, "second reason".to_string())
+            .unwrap();
+
+        assert!(journal.pending().unwrap().is_empty());
+        assert_eq!(
+            journal.status_of(id).unwrap(),
+            EntryStatus::Rejected {
+                reason: "first reason".to_string()
+            }
+        );
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn mark_rejected_never_overwrites_an_existing_submission() {
+        let path = temp_journal_path("mark-rejected-after-submitted");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        journal.mark_submitted(id).unwrap();
+        journal.mark_rejected(id, "too late".to_string()).unwrap();
+
+        assert_eq!(journal.status_of(id).unwrap(), EntryStatus::Submitted);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn all_returns_both_pending_and_terminal_entries() {
+        let path = temp_journal_path("all-entries");
+        let journal = FileJournal::open(&path).unwrap();
+
+        let pending_id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        let submitted_id = journal
+            .append("chat.message".to_string(), serde_json::json!({}))
+            .unwrap();
+        journal.mark_submitted(submitted_id).unwrap();
+
+        let all = journal.all().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|e| e.id == pending_id));
+        assert!(all.iter().any(|e| e.id == submitted_id));
 
         let _ = fs::remove_file(&path);
     }

@@ -205,18 +205,35 @@ isn't where this defaults.
   calls `drain` for you. Wiring that convenience in — so
   `avalon.achievements().issue(...)` really is one call either way — is
   future SDK polish, not part of #111's scope.
-- Sync status is still an open ticket ([#113](https://github.com/LunarVagabond/avalon-protocol/issues/113)):
-  no `pending_count`/`status_of`/subscription API in any SDK yet. A caller
-  of `SubmissionEngine::drain` gets its `Vec<DrainReport>` return value in
-  the moment, but nothing persists or exposes sync status beyond that.
+- Sync status (#113, done) is Rust-only so far — `SyncJournal::status`/
+  `status_of` and `SubmissionEngine::subscribe` exist in `crates/sdk`; the
+  C# mirror is deferred, same "settle the Rust surface first" posture
+  `bindings/csharp` has taken for #398/#396's other additions.
 
 ## Today in the repo
 
 - The local durable journal (#110, done) — `SyncJournal` trait and
   `FileJournal` reference implementation in `crates/sdk/src/sync_journal.rs`
-  — `append`/`pending`/`mark_submitted`/`mark_failed`, crash-recovery tested
-  by dropping a `FileJournal` mid-session (no clean-shutdown method exists
-  to call) and reopening it from the same path.
+  — `append`/`pending`/`all`/`entry`/`mark_submitted`/`mark_rejected`/
+  `mark_failed`, crash-recovery tested by dropping a `FileJournal`
+  mid-session (no clean-shutdown method exists to call) and reopening it
+  from the same path.
+- Sync status (#113, done, Rust only) — `SyncJournal::status() ->
+  SyncStatus { pending_count, oldest_pending_at, last_synced_at }` and
+  `SyncJournal::status_of(id) -> EntryStatus { Pending, Submitted, Rejected
+  { reason } }`, both default trait methods built on `all`/`entry`, so
+  every `SyncJournal` implementation gets them for free. Required
+  `mark_rejected` as a genuine third terminal state distinct from
+  `mark_submitted` — before #113, `SubmissionEngine` recorded a rejection
+  as a diagnostic `Failed` entry and then called `mark_submitted` on it as
+  a workaround to remove it from `pending()`, which meant a rejected entry
+  and a truly-submitted one were indistinguishable after the fact. No
+  subscription mechanism on the journal itself: `SubmissionEngine::subscribe`
+  (`crates/sdk/src/submission.rs`) registers a synchronous, in-process
+  callback that fires exactly once per entry, inline within `drain`, the
+  moment it produces a terminal `DrainOutcome::Applied`/`Rejected` — no
+  polling, no background thread, no async channel built in (an integrator
+  wanting async delivery sends into its own channel from the callback).
 - The deferred submission engine (#111, done) —
   `crates/sdk/src/submission.rs`: `SubmissionEngine::drain` (per-kind
   ordering, in-memory capped exponential backoff via `BackoffPolicy`), the
