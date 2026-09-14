@@ -6,17 +6,32 @@
 // registration ceremony for a device that ends up owning no valid
 // credential until the guardian threshold and time-delay both clear (see
 // api/recovery.ts::startRecovery / crates/server/src/recovery.rs).
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
-import { getIdentityRecoveryStatus, startRecovery } from '../api/recovery'
+import { login } from '../api/identity'
+import { finalizeRecoveryRequest, getIdentityRecoveryStatus, startRecovery } from '../api/recovery'
 import type { RecoveryRequestResponse } from '../api/types'
+import { useSessionStore } from '../stores/session'
 import AuthLayout from './AuthLayout.vue'
 import styles from './CreateIdentity.module.scss'
+
+const router = useRouter()
+const session = useSessionStore()
 
 const identityId = ref('')
 const submitting = ref(false)
 const error = ref('')
 const request = ref<RecoveryRequestResponse | null>(null)
+
+// Mirrors the server's own `guard_can_finalize` (crates/server/src/recovery.rs):
+// only a `delay`-status request whose delay has actually elapsed may finalize.
+// This is purely a UI gate — the server re-checks the same condition and
+// `onFinalize` surfaces whatever it says either way.
+const canFinalize = computed(() => {
+  if (!request.value || request.value.status !== 'delay' || !request.value.delay_ends_at) return false
+  return new Date(request.value.delay_ends_at).getTime() <= Date.now()
+})
 
 async function onSubmit() {
   error.value = ''
@@ -46,6 +61,29 @@ async function onRefreshStatus() {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     refreshing.value = false
+  }
+}
+
+// Completes recovery once guardians have approved and the delay has
+// elapsed: finalizing on the server activates this device's passkey
+// credential, then a normal `login` (WebAuthn assertion ceremony) signs it
+// in exactly the way any other device does.
+const finalizing = ref(false)
+
+async function onFinalize() {
+  if (!request.value) return
+  error.value = ''
+  finalizing.value = true
+  try {
+    const identityId = request.value.identity_id
+    request.value = await finalizeRecoveryRequest(request.value.id)
+    const { token } = await login(identityId)
+    session.login(token)
+    await router.push({ name: 'home' })
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    finalizing.value = false
   }
 }
 </script>
@@ -78,9 +116,16 @@ async function onRefreshStatus() {
         <p v-if="error" :class="styles.hint">{{ error }}</p>
         <div :class="styles.actions">
           <AvalonButton
-            :label="refreshing ? 'Checking…' : 'Refresh status'"
+            v-if="canFinalize"
+            :label="finalizing ? 'Finishing…' : 'Finish recovery'"
             variant="primary"
-            :disabled="refreshing"
+            :disabled="finalizing"
+            @click="onFinalize"
+          />
+          <AvalonButton
+            :label="refreshing ? 'Checking…' : 'Refresh status'"
+            variant="secondary"
+            :disabled="refreshing || finalizing"
             @click="onRefreshStatus"
           />
         </div>

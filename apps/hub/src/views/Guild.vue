@@ -136,7 +136,26 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'settings', label: 'Settings' },
 ]
 
+// Issue #391: channels/events are member-only server-side — hide those tabs
+// (and Calendar, which is just another view of events) for a non-member
+// browsing a recruiting guild's public page, rather than showing an
+// always-empty tab.
+const MEMBER_ONLY_TABS: TabKey[] = ['channels', 'events', 'calendar']
+const visibleTabs = computed(() => TABS.filter((tab) => isMember.value || !MEMBER_ONLY_TABS.includes(tab.key)))
+
 const activeTab = ref<TabKey>(route.name === 'guild-channel' ? 'channels' : 'overview')
+
+// A non-member landed here via a deep link into a member-only tab (e.g.
+// `/guilds/:id/channels/:cid`) — once membership is known, fall back to the
+// always-visible Overview tab instead of a hidden one. Gated on `loading`
+// (rather than `isMember` directly) so this doesn't fire on mount, before
+// membership is known, and wrongly bounce an actual member away from a
+// deep-linked channel.
+watch(loading, (isLoading) => {
+  if (!isLoading && !isMember.value && MEMBER_ONLY_TABS.includes(activeTab.value)) {
+    activeTab.value = 'overview'
+  }
+})
 
 function selectTab(tab: TabKey) {
   activeTab.value = tab
@@ -1095,7 +1114,7 @@ const {
 
     <div :class="local.tabs">
       <button
-        v-for="tab in TABS"
+        v-for="tab in visibleTabs"
         :key="tab.key"
         type="button"
         :class="[local.tab, activeTab === tab.key && local.tabActive]"

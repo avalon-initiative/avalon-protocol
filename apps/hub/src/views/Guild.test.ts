@@ -325,4 +325,55 @@ describe('Guild', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Invite sent (id inv1)')
   })
+
+  // Issue #391: channels/events are member-only server-side (403 for a
+  // non-member), but that must never blank the whole page — only the
+  // member-only tabs should disappear.
+  it('renders a recruiting guild for a non-member despite 403s on channels/events', async () => {
+    useSessionStore().login('a-token')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        const path = new URL(url, 'http://test').pathname
+        const routes: Record<string, unknown> = {
+          ...baseRoutes(),
+          '/me': { ...profile, identity_id: 'id-outsider' },
+          '/guilds/g1': { ...guild, join_policy: 'open', recruiting: true },
+        }
+        if (path === '/guilds/g1/channels' || path === '/guilds/g1/events') {
+          return Promise.resolve({
+            ok: false,
+            status: 403,
+            json: () => Promise.resolve({ error: 'forbidden' }),
+            text: () => Promise.resolve('forbidden'),
+          })
+        }
+        const body = path in routes ? routes[path] : undefined
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body)),
+        })
+      }),
+    )
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    // Public info renders despite the 403s.
+    expect(wrapper.text()).toContain('Dragon Hunters')
+    expect(wrapper.text()).not.toContain('Something went wrong')
+
+    // Member-only tabs are hidden for a non-member rather than shown blank.
+    const tabLabels = wrapper.findAll('button').map((b) => b.text())
+    expect(tabLabels).not.toContain('Channels')
+    expect(tabLabels).not.toContain('Events')
+    expect(tabLabels).not.toContain('Calendar')
+    expect(tabLabels).toContain('Overview')
+    expect(tabLabels).toContain('Members')
+  })
 })
