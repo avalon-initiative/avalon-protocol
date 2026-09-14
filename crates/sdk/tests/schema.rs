@@ -226,6 +226,7 @@ async fn derives_and_publishes_a_schema_then_an_instance_and_reads_it_back() {
         integrator_credential_key_id: integrator.key_id.clone(),
         integrator_slug: Some(integrator.slug.clone()),
         signing_key: Some(integrator.signing_key.to_bytes()),
+        retry: Default::default(),
     });
     let session = client
         .authenticate(&token)

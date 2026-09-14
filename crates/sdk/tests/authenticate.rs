@@ -158,6 +158,7 @@ async fn authenticate_against_a_real_server() {
         integrator_credential_key_id: "sdk-test".to_string(),
         integrator_slug: None,
         signing_key: None,
+        retry: Default::default(),
     });
     let session = client
         .authenticate(&token)
@@ -183,11 +184,9 @@ async fn authenticate_rejects_an_invalid_token() {
         integrator_credential_key_id: "sdk-test".to_string(),
         integrator_slug: None,
         signing_key: None,
+        retry: Default::default(),
     });
 
     let result = client.authenticate("not-a-real-token").await;
-    assert!(matches!(
-        result,
-        Err(avalon_sdk::SdkError::AuthenticationFailed)
-    ));
+    assert!(matches!(result, Err(avalon_sdk::SdkError::Unauthorized)));
 }

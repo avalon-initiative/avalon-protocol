@@ -43,6 +43,11 @@ url = { version = "2", features = ["serde"] }
 passkey-types = "0.5"
 passkey-client = "0.5"
 passkey-authenticator = { version = "0.5", features = ["testable"] }
+# A local mock HTTP server for the SDK's own retry/error-mapping tests
+# (issue #47) — these need to control exact response sequences (a 503 then
+# a 200, a hung connection for the timeout case) that no `--ignored` test
+# against the real `avalon-server` could deterministically produce.
+wiremock = "0.6"
 # passkey-client's default `Client<S, U, P, F>` TLD-verifier type parameter
 # (`public_suffix::PublicSuffixList`) isn't re-exported from passkey-client
 # itself — naming the full virtual-client type in an integration test (see

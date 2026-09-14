@@ -87,6 +87,43 @@ build doesn't know about yet rather than erroring — the wire string, not the
 Rust variant name, is the permanent identifier. The starting capability list
 is in [Proposal §13](../stakeholders/Proposal.md#13-permission-model).
 
+## Error handling and retries (issue #47)
+
+`SdkError` is a small, stable, protocol-level taxonomy — `Unauthorized`,
+`CapabilityNotGranted`, `NotFound`, `Conflict`, `Rejected`, `Unavailable`,
+plus `Protocol` for a genuinely unexpected response — never a raw
+`reqwest::Error`/`StatusCode` a game would have to know HTTP to interpret.
+The bucket a non-success response maps into is chosen by HTTP status (a
+small, stable, always-present signal every one of `AppError`'s variants
+funnels through); the message text carried inside that bucket is
+`AppError::code` (a stable, machine-readable identifier, one per server
+error variant) whenever the response has one, never the free-text `error`
+message, which stays free to reword without being a breaking change.
+
+**Retries.** Connection errors, timeouts, and 502/503/504 — the transient
+class a node hiccup produces — are retried with exponential backoff and
+full jitter, *but only for a call that opts in as idempotent*: every read
+opts in automatically; a write opts in only when it carries something
+that makes a retry provably safe — an `Idempotency-Key` header the server
+honors (achievement issuance, the concrete case wired up so far — see
+below), or an endpoint-specific dedup key a write already had for other
+reasons (`ConversationHandle::send`'s `client_entry_id`, #111's own
+submission-engine dedup), or the write's own HTTP method already
+guarantees it (`PUT /me/presence`). A write with none of those gets
+exactly one attempt — retrying it blind risks applying it twice.
+`AvalonConfig::retry` (`RetryConfig { max_retries, base_delay,
+request_timeout }`) tunes this per integration; `RetryConfig::default()`
+is 3 retries, 200ms base, 10s per-request timeout.
+
+**Idempotency-Key coverage is intentionally partial in this first pass.**
+Only `Session::issue_achievement` carries one — the ticket's own named
+example, and the write where a duplicate is worst (a second, spurious
+attestation). Every other unkeyed write (`dm`, `ConversationHandle::send`
+with no `client_entry_id`, `AvalonClient::login`,
+`Session::publish_schema_version`/`publish_instance`) stays single-attempt
+rather than being retried unsafely; extending real key coverage to those
+is a documented follow-up, not silently assumed done.
+
 ## Languages
 
 - **Rust** (`crates/sdk`) — the reference implementation.
@@ -287,6 +324,25 @@ protocol and the domain model in `crates/protocol`; they never pull in
   parses against the generated proto's own snake_case field names, and
   that the private field is actually redacted from an unauthenticated
   read (`crates/sdk/tests/schema.rs`).
+- `crates/sdk/src/http.rs` (#47) — `send`/`map_error_response`/
+  `retry_write`, the shared machinery behind the "Error handling and
+  retries" section above; every HTTP call site in this crate (achievements,
+  conversations, device_login, guilds, registry, schema, social) goes
+  through it now instead of a raw `reqwest` call with ad hoc status
+  matching. `crates/server/src/error.rs::AppError::code` gives every
+  variant a stable, mechanically-generated (one per Rust variant name)
+  machine-readable identifier alongside the existing free-text `error`
+  message. `crates/server/src/idempotency.rs`
+  (`db/migrations/0054_idempotency_keys`) is the server-side cache
+  `achievements::issue_attestation` checks/writes when an
+  `Idempotency-Key` header is present — see this section's own note on
+  why only that one write has real key coverage so far. Unit-tested with
+  a local `wiremock` server (`crates/sdk/src/http.rs`'s own test module —
+  status-to-variant mapping, 503-then-success retry, a non-idempotent
+  write staying single-attempt, a keyed write reusing the same key across
+  retries, and a timeout) and live-verified end to end
+  (`crates/sdk/tests/achievements.rs`: a repeated `Idempotency-Key`
+  replays the same attestation id rather than minting a second one).
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — a real, building C# port of the friends/

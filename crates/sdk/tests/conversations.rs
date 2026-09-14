@@ -74,6 +74,7 @@ fn client() -> AvalonClient {
         integrator_credential_key_id: "sdk-test".to_string(),
         integrator_slug: None,
         signing_key: None,
+        retry: Default::default(),
     })
 }
 

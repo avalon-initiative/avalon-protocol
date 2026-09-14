@@ -244,6 +244,7 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
         integrator_credential_key_id: integrator.key_id.clone(),
         integrator_slug: Some(integrator.slug.clone()),
         signing_key: Some(integrator.signing_key.to_bytes()),
+        retry: Default::default(),
     });
     let session = client
         .authenticate(&token)
@@ -274,6 +275,102 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
     assert_eq!(attestation.history[0].event, "issued");
 }
 
+/// Issue #47's own acceptance criterion, verified against a real server:
+/// two issuance requests carrying the *same* `Idempotency-Key` must
+/// resolve to the same attestation, never two. Drives the raw HTTP
+/// request twice (rather than through `Session::issue_achievement`, which
+/// generates a fresh key per call) so the key is deliberately reused,
+/// simulating exactly the "client retried after a dropped response"
+/// scenario the key exists for.
+#[tokio::test]
+#[ignore]
+async fn a_repeated_idempotency_key_replays_the_first_issuance_not_a_second_one() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let display_name = format!("sdk-achv-idem-{}", Uuid::new_v4());
+
+    let token = register_and_login(&http, &base, &display_name).await;
+    let integrator = register_integrator(&http, &base).await;
+    define_achievement(&http, &base, &integrator, "dragon_slayer").await;
+
+    let connect = http
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&token)
+        .json(&json!({ "capabilities": ["achievements.issue"] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let me: serde_json::Value = http
+        .get(format!("{base}/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let subject = me["identity_id"].as_str().unwrap().to_string();
+    let signing_bytes = format!(
+        "avalon:achievement.issued:v1:game:{}:{subject}:game:{}:achievement:dragon_slayer",
+        integrator.slug, integrator.slug
+    );
+    let signature = BASE64.encode(
+        integrator
+            .signing_key
+            .sign(signing_bytes.as_bytes())
+            .to_bytes(),
+    );
+
+    let issue_once = || async {
+        let challenge: serde_json::Value = http
+            .post(format!("{base}/integrations/{}/challenge", integrator.slug))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let challenge_id = challenge["challenge_id"].as_str().unwrap();
+        let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
+        let challenge_signature = integrator.signing_key.sign(&nonce);
+
+        http.post(format!(
+            "{base}/integrations/{}/achievements/dragon_slayer/issue",
+            integrator.slug
+        ))
+        .header("x-avalon-integrator-key-id", &integrator.key_id)
+        .header("x-avalon-integrator-challenge-id", challenge_id)
+        .header(
+            "x-avalon-integrator-signature",
+            BASE64.encode(challenge_signature.to_bytes()),
+        )
+        .header("x-avalon-identity-id", &subject)
+        .header("idempotency-key", "fixed-test-key")
+        .json(&json!({
+            "key_id": integrator.key_id,
+            "signature": signature.clone(),
+        }))
+        .send()
+        .await
+        .unwrap()
+    };
+
+    let first = issue_once().await;
+    assert!(first.status().is_success(), "{:?}", first.status());
+    let first_body: serde_json::Value = first.json().await.unwrap();
+
+    let second = issue_once().await;
+    assert!(second.status().is_success(), "{:?}", second.status());
+    let second_body: serde_json::Value = second.json().await.unwrap();
+
+    assert_eq!(
+        first_body["id"], second_body["id"],
+        "a repeated Idempotency-Key must replay the same attestation id, not mint a second one"
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
@@ -301,6 +398,7 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
         integrator_credential_key_id: integrator.key_id.clone(),
         integrator_slug: None,
         signing_key: None,
+        retry: Default::default(),
     });
     let session = client.authenticate(&token).await.unwrap();
 

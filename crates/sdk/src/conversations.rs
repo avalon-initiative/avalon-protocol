@@ -116,13 +116,22 @@ struct SendMessageRequest<'a> {
 /// same `403 Forbidden` (issue #97) — this maps that one status to
 /// [`SdkError::NotConversationParticipant`] without inspecting the response
 /// body, so the SDK never has more to leak than the server already refused
-/// to provide. Every other status still becomes the generic
-/// [`SdkError::ServerError`].
+/// to provide. Every other status falls back to the same status-bucket
+/// mapping `crate::http::map_error_response` uses (kept a synchronous,
+/// body-free function here rather than that shared helper specifically so
+/// it stays unit-testable with a bare `StatusCode`, no response/server
+/// needed — this module's own established pattern).
 fn conversation_error(status: reqwest::StatusCode) -> SdkError {
-    if status == reqwest::StatusCode::FORBIDDEN {
-        SdkError::NotConversationParticipant
-    } else {
-        SdkError::ServerError(status)
+    use reqwest::StatusCode;
+    match status {
+        StatusCode::FORBIDDEN => SdkError::NotConversationParticipant,
+        StatusCode::UNAUTHORIZED => SdkError::Unauthorized,
+        StatusCode::NOT_FOUND => SdkError::NotFound(status.to_string()),
+        StatusCode::CONFLICT => SdkError::Conflict(status.to_string()),
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => SdkError::Rejected {
+            reason: status.to_string(),
+        },
+        _ => SdkError::Protocol(status.to_string()),
     }
 }
 
@@ -133,16 +142,18 @@ impl Session {
     pub async fn conversations(&self) -> Result<Vec<Conversation>, SdkError> {
         self.require(Capability::MessagesRead)?;
 
-        let response = self
-            .http
-            .get(format!("{}/conversations", self.server_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.get(format!("{}/conversations", self.server_url))
+                .bearer_auth(&self.token)
+        })
+        .await?;
         if !response.status().is_success() {
             return Err(conversation_error(response.status()));
         }
-        let conversations: Vec<ConversationResponse> = response.json().await?;
+        let conversations: Vec<ConversationResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(conversations.into_iter().map(Conversation::from).collect())
     }
 
@@ -170,19 +181,28 @@ impl Session {
     ) -> Result<ConversationHandle<'_>, SdkError> {
         self.require(Capability::MessagesSend)?;
 
-        let response = self
-            .http
-            .post(format!("{}/conversations", self.server_url))
-            .bearer_auth(&self.token)
-            .json(&CreateConversationRequest {
-                participants: vec![other_identity_id.0],
-            })
-            .send()
-            .await?;
+        // No idempotency key on this write — `POST /conversations` is
+        // itself naturally idempotent server-side on the participant set
+        // (see `crates/server/src/conversations.rs`'s module doc comment,
+        // "creates, or returns the existing" above), so a plain retry
+        // would still be safe in practice, but this SDK doesn't special-
+        // case that; it follows the same "no key, no automatic retry"
+        // rule as every other write here.
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!("{}/conversations", self.server_url))
+                .bearer_auth(&self.token)
+                .json(&CreateConversationRequest {
+                    participants: vec![other_identity_id.0],
+                })
+        })
+        .await?;
         if !response.status().is_success() {
             return Err(conversation_error(response.status()));
         }
-        let body: ConversationResponse = response.json().await?;
+        let body: ConversationResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(self.conversation(body.id))
     }
 }
@@ -222,21 +242,22 @@ impl ConversationHandle<'_> {
             query.push(("limit", limit.to_string()));
         }
 
-        let response = self
-            .session
-            .http
-            .get(format!(
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
                 "{}/conversations/{}/messages",
                 self.session.server_url, self.conversation_id
             ))
             .query(&query)
             .bearer_auth(&self.session.token)
-            .send()
-            .await?;
+        })
+        .await?;
         if !response.status().is_success() {
             return Err(conversation_error(response.status()));
         }
-        let messages: Vec<MessageResponse> = response.json().await?;
+        let messages: Vec<MessageResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(messages
             .into_iter()
             .map(ConversationMessage::from)
@@ -268,24 +289,34 @@ impl ConversationHandle<'_> {
     ) -> Result<ConversationMessage, SdkError> {
         self.session.require(Capability::MessagesSend)?;
 
-        let response = self
-            .session
-            .http
-            .post(format!(
-                "{}/conversations/{}/messages",
-                self.session.server_url, self.conversation_id
-            ))
-            .bearer_auth(&self.session.token)
-            .json(&SendMessageRequest {
-                body,
-                client_entry_id,
+        // A caller-supplied `client_entry_id` is this endpoint's own
+        // idempotency key (`crates/server/src/conversations.rs`'s
+        // `find_message_by_client_entry_id` dedup) — when present, a retry
+        // is provably safe, so it opts into the same automatic retry a
+        // real `Idempotency-Key` header would (#47); a direct `send()`
+        // call (no `client_entry_id`) gets exactly one attempt, same as
+        // every other unkeyed write.
+        let idempotent = client_entry_id.is_some();
+        let response =
+            crate::http::send(&self.session.http, &self.session.retry, idempotent, |c| {
+                c.post(format!(
+                    "{}/conversations/{}/messages",
+                    self.session.server_url, self.conversation_id
+                ))
+                .bearer_auth(&self.session.token)
+                .json(&SendMessageRequest {
+                    body,
+                    client_entry_id,
+                })
             })
-            .send()
             .await?;
         if !response.status().is_success() {
             return Err(conversation_error(response.status()));
         }
-        let message: MessageResponse = response.json().await?;
+        let message: MessageResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(message.into())
     }
 }
@@ -332,6 +363,7 @@ mod tests {
             integrator_key_id: "test-key".to_string(),
             integrator_slug: None,
             signing_key: None,
+            retry: crate::RetryConfig::default(),
         }
     }
 
@@ -405,7 +437,7 @@ mod tests {
     fn conversation_error_leaves_other_statuses_generic() {
         assert!(matches!(
             conversation_error(reqwest::StatusCode::NOT_FOUND),
-            SdkError::ServerError(status) if status == reqwest::StatusCode::NOT_FOUND
+            SdkError::NotFound(_)
         ));
     }
 }

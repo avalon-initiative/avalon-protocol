@@ -27,6 +27,8 @@ tokio = { workspace = true, features = ["sync", "time"] }
 # signature.
 ed25519-dalek.workspace = true
 base64.workspace = true
+# Full jitter on retry backoff (issue #47).
+rand.workspace = true
 
 [features]
 # Exposes Session::grant_for_testing, a capability-grant escape hatch that
@@ -43,3 +45,4 @@ passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
 url.workspace = true
+wiremock.workspace = true

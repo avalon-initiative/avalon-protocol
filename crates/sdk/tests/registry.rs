@@ -18,6 +18,7 @@ fn client() -> AvalonClient {
         integrator_credential_key_id: String::new(),
         integrator_slug: None,
         signing_key: None,
+        retry: Default::default(),
     })
 }
 
@@ -80,7 +81,5 @@ async fn registry_errors_for_an_unregistered_slug() {
         .registry(&format!("does-not-exist-{}", Uuid::new_v4()))
         .await
         .expect_err("an unregistered slug must not succeed");
-    assert!(
-        matches!(err, avalon_sdk::SdkError::ServerError(status) if status == reqwest::StatusCode::NOT_FOUND)
-    );
+    assert!(matches!(err, avalon_sdk::SdkError::NotFound(_)));
 }

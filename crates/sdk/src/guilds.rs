@@ -301,16 +301,18 @@ impl Session {
     pub async fn guilds(&self) -> Result<Vec<GuildMembership>, SdkError> {
         self.require(Capability::GuildsRead)?;
 
-        let response = self
-            .http
-            .get(format!("{}/me/guilds", self.server_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.get(format!("{}/me/guilds", self.server_url))
+                .bearer_auth(&self.token)
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let memberships: Vec<MyGuildMembershipResponse> = response.json().await?;
+        let memberships: Vec<MyGuildMembershipResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
 
         let mut result = Vec::with_capacity(memberships.len());
         for membership in memberships {
@@ -332,16 +334,18 @@ impl Session {
     /// (which already required `guilds.read`) and [`GuildHandle`] methods
     /// (which require their own capability before calling this).
     async fn fetch_guild(&self, id: Uuid) -> Result<Guild, SdkError> {
-        let response = self
-            .http
-            .get(format!("{}/guilds/{}", self.server_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.get(format!("{}/guilds/{}", self.server_url, id))
+                .bearer_auth(&self.token)
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let body: GuildResponse = response.json().await?;
+        let body: GuildResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(body.into())
     }
 
@@ -372,20 +376,21 @@ impl<'a> GuildHandle<'a> {
     pub async fn roster(&self) -> Result<Vec<GuildRosterMember>, SdkError> {
         self.session.require(Capability::GuildsRead)?;
 
-        let response = self
-            .session
-            .http
-            .get(format!(
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
                 "{}/guilds/{}/members",
                 self.session.server_url, self.guild_id.0
             ))
             .bearer_auth(&self.session.token)
-            .send()
-            .await?;
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let members: Vec<GuildMemberResponse> = response.json().await?;
+        let members: Vec<GuildMemberResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         let members: Vec<GuildMember> = members.into_iter().map(GuildMember::from).collect();
 
         let presence_by_id =
@@ -413,20 +418,21 @@ impl<'a> GuildHandle<'a> {
     pub async fn channels(&self) -> Result<Vec<GuildChannel>, SdkError> {
         self.session.require(Capability::GuildsChat)?;
 
-        let response = self
-            .session
-            .http
-            .get(format!(
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
                 "{}/guilds/{}/channels",
                 self.session.server_url, self.guild_id.0
             ))
             .bearer_auth(&self.session.token)
-            .send()
-            .await?;
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let channels: Vec<ChannelResponse> = response.json().await?;
+        let channels: Vec<ChannelResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(channels.into_iter().map(GuildChannel::from).collect())
     }
 
@@ -439,20 +445,21 @@ impl<'a> GuildHandle<'a> {
     pub async fn events(&self) -> Result<Vec<GuildEvent>, SdkError> {
         self.session.require(Capability::GuildsRead)?;
 
-        let response = self
-            .session
-            .http
-            .get(format!(
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
                 "{}/guilds/{}/events",
                 self.session.server_url, self.guild_id.0
             ))
             .bearer_auth(&self.session.token)
-            .send()
-            .await?;
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let events: Vec<EventResponse> = response.json().await?;
+        let events: Vec<EventResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(events.into_iter().map(GuildEvent::from).collect())
     }
 
@@ -495,21 +502,22 @@ impl ChannelHandle<'_> {
             query.push(("limit", limit.to_string()));
         }
 
-        let response = self
-            .session
-            .http
-            .get(format!(
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
                 "{}/guilds/{}/channels/{}/messages",
                 self.session.server_url, self.guild_id.0, self.channel_id
             ))
             .query(&query)
             .bearer_auth(&self.session.token)
-            .send()
-            .await?;
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let messages: Vec<MessageResponse> = response.json().await?;
+        let messages: Vec<MessageResponse> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(messages.into_iter().map(GuildMessage::from).collect())
     }
 
@@ -519,21 +527,25 @@ impl ChannelHandle<'_> {
     pub async fn send(&self, body: &str) -> Result<GuildMessage, SdkError> {
         self.session.require(Capability::GuildsChat)?;
 
-        let response = self
-            .session
-            .http
-            .post(format!(
+        // No idempotency key on this write — a direct `send()` call always
+        // gets exactly one attempt, same posture as
+        // `conversations.rs::ConversationHandle::send`.
+        let response = crate::http::send(&self.session.http, &self.session.retry, false, |c| {
+            c.post(format!(
                 "{}/guilds/{}/channels/{}/messages",
                 self.session.server_url, self.guild_id.0, self.channel_id
             ))
             .bearer_auth(&self.session.token)
             .json(&SendMessageRequest { body })
-            .send()
-            .await?;
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let message: MessageResponse = response.json().await?;
+        let message: MessageResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(message.into())
     }
 }
@@ -576,6 +588,7 @@ mod tests {
             integrator_key_id: "test-key".to_string(),
             integrator_slug: None,
             signing_key: None,
+            retry: crate::RetryConfig::default(),
         }
     }
 

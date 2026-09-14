@@ -42,21 +42,23 @@ pub struct Registry {
 
 impl AvalonClient {
     /// `GET /registry/{slug}` — an integrator/issuer's public,
-    /// durable-derived metrics. Returns [`SdkError::ServerError`] (404) for
-    /// a slug that doesn't exist; an integrator with no activity at all
-    /// gets zeros for every field, not an error, same as the server side.
+    /// durable-derived metrics. Returns [`SdkError::NotFound`] for a slug
+    /// that doesn't exist; an integrator with no activity at all gets
+    /// zeros for every field, not an error, same as the server side.
     pub async fn registry(&self, slug: &str) -> Result<Registry, SdkError> {
-        let response = self
-            .http
-            .get(format!("{}/registry/{slug}", self.config.server_url))
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!("{}/registry/{slug}", self.config.server_url))
+        })
+        .await?;
 
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
 
-        Ok(response.json().await?)
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
     }
 }
 

@@ -110,6 +110,12 @@ use crate::state::AppState;
 /// silently render as a blank/broken slot in the Hub.
 const BUILTIN_ICONS: &[&str] = &["trophy", "star", "shield", "sword"];
 
+/// The `endpoint` component of this write's idempotency-cache key (issue
+/// #47) — shared by `achievements`/`milestones` routes since both go
+/// through [`issue_attestation`], the one place an idempotency key is
+/// actually honored today.
+const ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.issue";
+
 /// A definition with neither `icon` nor `icon_url` set still renders
 /// *something* (issue #332's invariant) — this is what every reader falls
 /// back to.
@@ -712,14 +718,14 @@ pub struct IssueAttestationRequest {
     pub evidence: Option<serde_json::Value>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AttestationSignatureResponse {
     pub key_id: Uuid,
     pub algorithm: String,
     pub bytes: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AttestationResponse {
     pub id: Uuid,
     pub issuer: String,
@@ -763,6 +769,24 @@ async fn issue_attestation(
     let path_integrator_id = fetch_integrator_id_by_slug(state, slug).await?;
     if integrator_id != path_integrator_id {
         return Err(AppError::AchievementDefinitionForbidden);
+    }
+
+    // Issue #47: a caller that supplied an `Idempotency-Key` gets exactly
+    // the same response replayed on a retry, never a second issuance — see
+    // `crate::idempotency`'s own doc comment for why this endpoint is
+    // where that first lands.
+    let idempotency_key = crate::idempotency::read_idempotency_key(headers);
+    if let Some(key) = &idempotency_key {
+        if let Some(cached) = crate::idempotency::find_cached::<AttestationResponse>(
+            state,
+            integrator_id,
+            key,
+            ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT,
+        )
+        .await?
+        {
+            return Ok(Json(cached));
+        }
     }
 
     // The issuer's actual registered category must match this route's
@@ -878,7 +902,7 @@ async fn issue_attestation(
 
     tx.commit().await?;
 
-    Ok(Json(AttestationResponse {
+    let response = AttestationResponse {
         id: attestation_id,
         issuer: issuer_str,
         subject: subject_id,
@@ -889,7 +913,20 @@ async fn issue_attestation(
             algorithm: signing_key.algorithm.clone(),
             bytes: body.signature,
         },
-    }))
+    };
+
+    if let Some(key) = &idempotency_key {
+        crate::idempotency::store(
+            state,
+            integrator_id,
+            key,
+            ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT,
+            &response,
+        )
+        .await?;
+    }
+
+    Ok(Json(response))
 }
 
 /// `POST /integrations/{slug}/achievements/{key}/issue` (#32).

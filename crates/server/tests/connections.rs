@@ -225,6 +225,7 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
         integrator_credential_key_id: key_id,
         integrator_slug: None,
         signing_key: None,
+        retry: Default::default(),
     });
     let session = client
         .authenticate(&token)

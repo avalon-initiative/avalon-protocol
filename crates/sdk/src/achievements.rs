@@ -140,22 +140,47 @@ impl Session {
         // pagination landed, though a caller with more than 200
         // attestations from a single identity now genuinely needs the
         // (not yet built) paginated entry point to see the rest.
-        let response = self
-            .http
-            .get(format!("{}/me/achievements?limit=200", self.server_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.get(format!("{}/me/achievements?limit=200", self.server_url))
+                .bearer_auth(&self.token)
+        })
+        .await?;
 
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
 
-        let page: ListMyAchievementsResponse = response.json().await?;
+        let page: ListMyAchievementsResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(page.achievements)
     }
 
+    /// Issue #47's own named example: this write carries a fresh
+    /// `Idempotency-Key`, generated once per logical call and reused
+    /// across every retry attempt of it (never regenerated per attempt —
+    /// that would defeat the point), so a retried issuance replays the
+    /// first attempt's result instead of minting a second attestation —
+    /// see `crate::idempotency` server-side. The retry unit is the *whole*
+    /// challenge-then-issue exchange, not just the final POST: a
+    /// challenge is single-use, so retrying only the issue request with a
+    /// possibly-already-consumed challenge id would fail differently
+    /// rather than actually retry (`crate::http::retry_write`'s own doc
+    /// comment).
     pub(crate) async fn submit_achievement_issuance(&self, key: &str) -> Result<Uuid, SdkError> {
+        let idempotency_key = Uuid::new_v4().to_string();
+        crate::http::retry_write(&self.retry, || {
+            self.attempt_achievement_issuance(key, &idempotency_key)
+        })
+        .await
+    }
+
+    async fn attempt_achievement_issuance(
+        &self,
+        key: &str,
+        idempotency_key: &str,
+    ) -> Result<Uuid, SdkError> {
         let slug = self
             .integrator_slug
             .as_deref()
@@ -167,17 +192,24 @@ impl Session {
             .parse()
             .map_err(|_| SdkError::MissingIssuerCredentials)?;
 
-        // Proof one: this key is making this HTTP call, right now.
-        let challenge: ChallengeResponse = self
-            .http
-            .post(format!(
+        // Proof one: this key is making this HTTP call, right now. Not
+        // retried by `http::send` itself — a failed attempt here means
+        // `retry_write` redoes this whole function, fetching a fresh
+        // challenge along with it.
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
                 "{}/integrations/{}/challenge",
                 self.server_url, slug
             ))
-            .send()
-            .await?
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
             .json()
-            .await?;
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         let nonce = BASE64
             .decode(&challenge.nonce)
             .map_err(|_| SdkError::MissingIssuerCredentials)?;
@@ -192,9 +224,8 @@ impl Session {
         let signing_bytes = attestation_signing_bytes(&issuer_ref, subject, &achievement);
         let signature = signing_key.sign(&signing_bytes);
 
-        let response = self
-            .http
-            .post(format!(
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
                 "{}/integrations/{}/achievements/{}/issue",
                 self.server_url, slug, key
             ))
@@ -208,18 +239,22 @@ impl Session {
                 BASE64.encode(challenge_signature.to_bytes()),
             )
             .header("x-avalon-identity-id", subject.to_string())
+            .header("idempotency-key", idempotency_key)
             .json(&IssueRequest {
                 key_id,
                 signature: BASE64.encode(signature.to_bytes()),
             })
-            .send()
-            .await?;
+        })
+        .await?;
 
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
 
-        let body: IssueResponse = response.json().await?;
+        let body: IssueResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(body.id)
     }
 }
