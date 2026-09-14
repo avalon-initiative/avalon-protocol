@@ -251,7 +251,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   (`crates/server/src/settlement.rs::submit_ledger_batch`) — chosen because
   nothing more specific for trusted node-to-node calls already existed in
   this codebase to reuse (every other authenticated route checks a
-  player's session or a game's registered credential, neither of which
+  user's session or a game's registered credential, neither of which
   fits "one operator's own two nodes talking to each other"). A node with
   no `AVALON_SETTLEMENT_SUBMIT_KEY` configured refuses every request to
   this endpoint outright, rather than leaving it open.

@@ -36,7 +36,7 @@ Each document below links the ones that govern it.
 | Game events | [game-events.md](game-events.md) | Durable cross-game/special-event results as attestations — tournaments are one example |
 | Game registry | [game-registry.md](game-registry.md) | Derived facts with explicit definitions; never a score |
 | Protocol events | [protocol-events.md](protocol-events.md) | Durable event catalogue, versioning, history vs current state |
-| Worked ledger example | [worked-ledger-example.md](worked-ledger-example.md) | One hypothetical player's ledger as real, ordered `ProtocolEvent` JSON — and what never appears on it |
+| Worked ledger example | [worked-ledger-example.md](worked-ledger-example.md) | One hypothetical user's ledger as real, ordered `ProtocolEvent` JSON — and what never appears on it |
 | Identity aggregate view | [identity-aggregate-view.md](identity-aggregate-view.md) | One identity's full current-state JSON shape: Avalon-native layer-1 data vs. per-integrator layer-2 block space, and why one can't shape another's |
 | Settlement | [settlement.md](settlement.md) | Batched commitments; transparency log on Postgres, no blockchain/validator consensus |
 | Network trust anchors | [network-trust-anchors.md](network-trust-anchors.md) | Pinning `network_id` to the settlement operator's real key; `network_id` alone proves nothing |

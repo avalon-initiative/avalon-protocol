@@ -1,8 +1,8 @@
-# A Worked Example: One Player's Ledger
+# A Worked Example: One User's Ledger
 
 [`./protocol-events.md`](./protocol-events.md) catalogues every event kind
 with its payload shape in the abstract; this document renders one
-hypothetical player's ledger as a real, ordered sequence of `ProtocolEvent`
+hypothetical user's ledger as a real, ordered sequence of `ProtocolEvent`
 JSON instances, in the actual envelope every event uses
 (`id`/`kind`/`issuer`/`subject`/`payload`/`timestamp`/`version` —
 `crates/protocol/src/events.rs`). It exists for anyone who needs to see
@@ -17,7 +17,7 @@ right and this doc is stale.
 
 ## The cast
 
-- **Nova** — a player, identity id `a1b2c3d4-...-000001`.
+- **Nova** — a user, identity id `a1b2c3d4-...-000001`.
 - **Ashen Realms** (`ashen-realms`) — a `Game`-category issuer Nova plays.
 - **The Wandering Blades** — a guild Nova founds.
 
@@ -226,7 +226,7 @@ actual instance of Nova's in-game character. Data exposure (a real
 `character` instance, e.g. Nova's own level/skills, entering the ledger)
 is [Game Space](./game-space.md)'s explicitly unbuilt half — see that
 doc's own "Schema vs. data exposure" section. A game-defined *fact about a
-specific player* that does land on the ledger today only ever does so
+specific user* that does land on the ledger today only ever does so
 through the achievement/milestone mechanism above (optionally carrying an
 issuer-declared `schema` reference in its own definition, matching a
 published schema's `GlobalId`), not through some other, more general
@@ -238,7 +238,7 @@ on hold.
 
 ## What never appears here
 
-None of the following are protocol events, on this or any player's
+None of the following are protocol events, on this or any user's
 ledger, by design — see
 [`./protocol-events.md`](./protocol-events.md#hot-gameplay-vs-durable-events)
 and [`./privacy.md`](./privacy.md):
@@ -264,7 +264,7 @@ exactly the seven events above for Nova's part of this story — nothing
 about her online status right now, nothing she said in guild chat, nothing
 about how she actually fights dragons mechanically. That boundary is the
 whole point: Avalon durably remembers facts that matter *across* games and
-*to* the player's own portable identity, and stays out of everything that's
+*to* the user's own portable identity, and stays out of everything that's
 just one game being a game.
 
 ## Today in the repo

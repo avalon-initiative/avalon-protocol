@@ -41,7 +41,7 @@ the same authentic, valid claim and decide differently, and both are correct.
 
 There is no cryptographic mechanism that can stop a game from issuing a
 meaningless but authentic claim. If Game C controls its own issuer key and
-signs `Dragon Slayer` for every player who clicks a button, the signature
+signs `Dragon Slayer` for every user who clicks a button, the signature
 proves Game C issued it. It cannot prove Game C made it difficult, fair, or
 prestigious. Avalon does not claim otherwise, and no future feature should
 imply it does.

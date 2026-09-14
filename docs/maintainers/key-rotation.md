@@ -10,7 +10,7 @@ that judgment call) or alerting/paging (also #315, blocked on nothing now
 that #265's structured logging has landed, but not built yet).
 
 This is the settlement/log operator key specifically (`crates/chain/src/sth.rs`)
-— a different key domain from issuer keys (#80/#84) or player keys (#73).
+— a different key domain from issuer keys (#80/#84) or user keys (#73).
 Nothing here rotates those.
 
 ## Why this needs a procedure at all

@@ -14,7 +14,7 @@ and the durable-history rule in
 
 ```text
 achievement.issued          (Game A, key k1, 2027-03-14)
-    Dragon Slayer → Player X
+    Dragon Slayer → User X
         │
         ▼
 achievement.revoked         (Game A, key k1, 2027-05-02)
@@ -26,7 +26,7 @@ achievement.revoked         (Game A, key k1, 2027-05-02)
 Current state, as a projection:
 
 ```text
-Player X — Dragon Slayer (Ashen Realms)
+User X — Dragon Slayer (Ashen Realms)
     status:  REVOKED
     issued:  2027-03-14
     revoked: 2027-05-02 — cheating_detected

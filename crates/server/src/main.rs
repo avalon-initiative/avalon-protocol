@@ -5,7 +5,7 @@
 //! decision that Hub is frontend-only and never becomes its own backend.
 //! Games integrate against this service through `avalon-sdk`, not directly.
 //!
-//! Milestone 1, Epic: Identity & User Profile — identity/auth endpoints
+//! Milestone 1, Epic: Identity & Player Profile — identity/auth endpoints
 //! only. Social/guilds/achievements/games come with their own epics.
 
 use std::path::Path;

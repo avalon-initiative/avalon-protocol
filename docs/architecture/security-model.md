@@ -1,7 +1,7 @@
 # Security Model
 
 **Authority is scoped. No single actor — not a game, not a node operator, not
-the network itself — is omnipotent.** Players control their identity, games
+the network itself — is omnipotent.** Users control their identity, games
 control their own worlds and their own attestations, guilds govern themselves,
 and infrastructure transports, indexes, settles, and verifies without owning
 any of it. **Hosted infrastructure is not protocol authority.**
@@ -10,7 +10,7 @@ any of it. **Hosted infrastructure is not protocol authority.**
 
 | Actor | Controls | Cannot |
 |---|---|---|
-| **Player** | identity keys; profile declarations; social actions; permission grants and visibility; guild participation | issue attestations about themselves; rewrite issued history |
+| **User** | identity keys; profile declarations; social actions; permission grants and visibility; guild participation | issue attestations about themselves; rewrite issued history |
 | **Game** | its game profiles/bindings; its game-side characters and progression; attestations under its own issuer key; its recognition policy | touch another game's profile or characters; issue under another issuer's identity; alter an identity's history or unrelated guild history |
 | **Guild** | governance, membership, roles, settings, channels | act as an issuer; reach into a member's other data |
 | **Avalon infrastructure** | transport, indexing, settlement, discovery, verification | fabricate an issuer claim; fabricate an identity; silently become the owner of user or game data |
@@ -21,16 +21,16 @@ Details per actor: [`./identity.md`](./identity.md),
 
 ## Authorization: one capability, one check
 
-Every endpoint a game calls on a player's behalf must check the specific
+Every endpoint a game calls on a user's behalf must check the specific
 capability it needs — never a blanket "does this game have access to this
-player" boolean. Two caller kinds exist: a **player**, acting on their own
-data (always allowed — this is specifically about *game* access to *player*
-data, not a player's access to themselves), and a **game acting for a
-player**, which needs both an active [binding](./game-bindings.md)
+user" boolean. Two caller kinds exist: a **user**, acting on their own
+data (always allowed — this is specifically about *game* access to *user*
+data, not a user's access to themselves), and a **game acting for a
+user**, which needs both an active [binding](./game-bindings.md)
 (`#83`) and an active `PermissionGrant` (see [`./privacy.md`](./privacy.md))
 for exactly the capability the endpoint names.
 
-`crates/server/src/authz.rs`'s `Caller` (`Caller::Player(identity_id)` /
+`crates/server/src/authz.rs`'s `Caller` (`Caller::User(identity_id)` /
 `Caller::Game { game_id, identity_id }`) and `require_capability(caller,
 capability, state)` (#28) are this check, built as the one place it lives —
 not literal Axum middleware, a plain async fn called explicitly per handler,
@@ -46,9 +46,9 @@ grant all read the same to the caller, matching this file's "never leak
 internal detail" posture below.
 
 **No endpoint calls this yet.** As of #28, every real endpoint is either
-player-session-only (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is
-a player action, a game never grants itself anything) or proves only the
-game's own identity with nothing player-specific to check
+user-session-only (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is
+a user action, a game never grants itself anything) or proves only the
+game's own identity with nothing user-specific to check
 (`games::game_whoami`). `Caller`/`require_capability` exist ready for the
 first ticket that adds a real game-calling-the-API endpoint (achievement
 issuance, etc.) — that ticket should fail review if it builds its own ad-hoc
@@ -58,7 +58,7 @@ game-access check instead of calling this one.
 
 ```text
 Game A
-    signs:  Dragon Slayer → Player X       (issuer key)
+    signs:  Dragon Slayer → User X   (issuer key)
 
 Hosted Avalon node
     transports, indexes, settles that claim
@@ -156,7 +156,7 @@ deployment blocker, not an optional hardening step.
 - `crates/chain/src/postgres.rs` — hash-chained entries, content re-verified
   on read; signed at the tree-head level, not per-entry (#39, decided;
   #210, implementation).
-- Player passkeys and event-signing keys exist (#73). No issuer keys yet
+- User passkeys and event-signing keys exist (#73). No issuer keys yet
   (#80/#84), no TLS (#72), no visibility scopes (#87).
 - `crates/server/src/authz.rs` (#28) — `Caller` / `require_capability`, built
   and exhaustively unit-tested (pure-logic matrix plus a live-Postgres
@@ -189,5 +189,5 @@ deployment blocker, not an optional hardening step.
   long-term settlement backend, decided.
 - [#28](https://github.com/LunarVagabond/avalon-protocol/issues/28) —
   permission enforcement (`Caller` / `require_capability`). Built; no caller
-  yet. Any future endpoint letting a game act on a player's behalf must use
+  yet. Any future endpoint letting a game act on a user's behalf must use
   this guard rather than its own check.

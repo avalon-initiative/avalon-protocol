@@ -15,7 +15,7 @@ This is direction, not the current API:
 ```rust
 let avalon = Avalon::connect().await?;
 
-let identity = avalon.identity(player_id).await?;
+let identity = avalon.identity(user_id).await?;
 
 let friends = identity.friends().await?;
 let guilds = identity.guilds().await?;
@@ -25,7 +25,7 @@ avalon.presence().publish(...).await?;
 
 avalon
     .achievement("dragon_slayer")
-    .issue(player_id)
+    .issue(user_id)
     .await?;
 ```
 

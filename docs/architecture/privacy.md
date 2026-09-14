@@ -40,7 +40,7 @@ answers (viewer, subject, resource); no endpoint does its own ad-hoc check.
 
 ## Proposed defaults
 
-Player-controlled, changeable through the API and the Hub. To be finalized in
+User-controlled, changeable through the API and the Hub. To be finalized in
 [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87), not by
 accident:
 
@@ -52,7 +52,7 @@ accident:
 | friends list | private |
 | guild membership | guild-visible |
 | achievement history | public, individually hideable |
-| game bindings (which games a player plays) | private |
+| game bindings (which games a user plays) | private |
 
 Visibility settings are identity state, not durable protocol history, unless a
 later decision promotes them.

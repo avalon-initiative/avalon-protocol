@@ -39,13 +39,13 @@ banner image, a short status line, a small list of self-reported links, a
 self-reported timezone, an accent color, and a free-text location (issue
 #372). None of it is an authoritative game fact — `location` in particular is
 self-described text only ("Pacific Northwest," say), never IP-derived or
-geocoded; nothing in this protocol infers where a player physically is.
+geocoded; nothing in this protocol infers where a user physically is.
 
 It also carries `main_guild` (no ticket): a self-chosen pointer to one of the
 identity's own current guild memberships, so an integrator building a
 guild-chat-style UI has one guild to default to instead of having to support
 arbitrarily-many simultaneous memberships — see
-[`./guilds.md`](./guilds.md#a-players-main-guild). Unlike the fields above,
+[`./guilds.md`](./guilds.md#a-users-main-guild). Unlike the fields above,
 setting it is checked against a real fact (current membership), not just
 validated for shape; and unlike every other field here, `null` doesn't mean
 "no guild" — a caller wanting a default in that case reads
@@ -150,9 +150,9 @@ obtains that token in the first place*. Cross-device pairing
 (`crates/server/src/device_pairing.rs`) solves it the way platform account
 systems solve the identical problem: the incapable client requests a
 pairing (`POST /auth/device/start`, unauthenticated) and gets back a short,
-human-typeable `user_code` (shown to the player, e.g. as a QR code pointing
+human-typeable `user_code` (shown to the user, e.g. as a QR code pointing
 at `verification_uri`) plus an opaque `device_code` it alone holds. The
-player completes a real WebAuthn login on a capable device — the Hub, in a
+user completes a real WebAuthn login on a capable device — the Hub, in a
 browser — and approves the pairing there (`POST /auth/device/approve`,
 `apps/hub/src/views/PairDevice.vue`); the waiting client polls
 (`POST /auth/device/poll`, bearer = `device_code`) until it receives an
@@ -400,7 +400,7 @@ its invariants.
   can bulk-collect. Exposing those fields there, if ever wanted, is a
   scoping decision for its own ticket.
 - `apps/hub/src/views/Profile.vue` (#277) — surfaces and edits
-  `bio`/`favorite_genres`/`pronouns` on the player's own profile, closing
+  `bio`/`favorite_genres`/`pronouns` on the user's own profile, closing
   the gap #155 left open: the server has supported all three fields since
   #155, but the Hub's own type layer (`apps/hub/src/api/types.ts`) never
   declared them and `Profile.vue` never rendered them, so they were only
@@ -560,7 +560,7 @@ its invariants.
   `start`/`poll` side of the flow as a stand-in incapable client.
 - `apps/hub/src/views/PairDevice.vue` (#307), routed at `/pair` (matching
   `verification_uri`'s `?user_code=` shape) — a `user_code` field plus
-  approve/deny buttons, using the player's existing authenticated Hub
+  approve/deny buttons, using the user's existing authenticated Hub
   session; `apps/hub/src/api/client.ts`'s `approvePairing`/`denyPairing`.
 
 ## Decisions and tickets

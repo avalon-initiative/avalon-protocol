@@ -87,7 +87,7 @@ in [`../developers/WhyBuildOnAvalon.md`](../developers/WhyBuildOnAvalon.md)
 compounds with the size of the *public* network, not with how many private
 forks of the code exist. A studio is always welcome to run their own
 instance; we'd just rather have their games on the actual network, where
-their players' identities and communities are worth something beyond that
+their users' identities and communities are worth something beyond that
 one studio's games. If a private deployment starts asking "how do we
 eventually connect this to the real network" — the honest answer today is
 "there isn't one yet beyond re-registering games and re-issuing attestations

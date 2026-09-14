@@ -115,7 +115,7 @@ going forward.
 
 A channel belongs to the guild. It is visible through the Hub, the mobile-hub
 companion app, a game that chooses to render it, a web client, and later a
-Discord bridge or other authorized client. Player A in Game A and Player B in
+Discord bridge or other authorized client. User A in Game A and User B in
 Game B talk in the same channel. See
 [Proposal §12](../stakeholders/Proposal.md#12-communication).
 
@@ -146,17 +146,17 @@ Both are useful. The history is reconstructable from
 [indexer](./query-and-indexing.md). Nothing about a guild that Avalon promises to
 preserve lives only in a mutable row — see [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75).
 
-## A player's main guild
+## A user's main guild
 
-A player may belong to several guilds at once, but an integrator building a
+A user may belong to several guilds at once, but an integrator building a
 guild-chat-style UI often wants just one to build around rather than
 supporting arbitrarily-many simultaneous memberships in its own interface.
-`main_guild` (no ticket) is a self-chosen pointer to one of a player's own
+`main_guild` (no ticket) is a self-chosen pointer to one of a user's own
 current memberships, living on the identity's profile, not on the guild —
 see [`./identity.md`](./identity.md#what-is-promised-durable) for the full
 spec (validation, three-state PATCH semantics, the earliest-joined default
 when unset). It never affects guild-side data: no guild is ever "the" main
-guild, only a player's own pointer at one of their memberships.
+guild, only a user's own pointer at one of their memberships.
 
 ## Analytics phrasing
 

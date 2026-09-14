@@ -300,7 +300,7 @@ guarantee is actually needed, following the same discipline
   caller must *be* `{slug}`, same guard `publish_schema_version` uses); an
   active binding from the subject identity to that game
   (`authz::has_active_binding`, mirroring `achievements::issue_attestation`'s
-  "the player's own consent" pattern); and the resolved schema's own
+  "the user's own consent" pattern); and the resolved schema's own
   `game_id` matching the caller. The submitted `instance` JSON is then
   validated against the schema's parsed root message via
   `protobuf-json-mapping` (`proto_schema::validate_instance_json`) — unknown

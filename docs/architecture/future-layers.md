@@ -69,7 +69,7 @@ If economic interoperability is ever introduced, the developer-facing shape is
 an abstraction, not a wallet:
 
 ```rust
-store.purchase(player, "premium_mount").await?;
+store.purchase(user, "premium_mount").await?;
 ```
 
 with no smart contracts, chain transactions, signing, or settlement visible to

@@ -124,7 +124,7 @@ docs/
     Proposal.md  the living design document (narrative)
   WhyAvalon.md   the case for why this needs to exist
   architecture/  the normative architecture reference, one file per topic
-  players/       docs for people playing games that use Avalon
+  users/         docs for people using games/apps/services that integrate Avalon
   developers/    docs for developers integrating the SDKs
   maintainers/   docs for contributors to this repo
   stakeholders/  docs for people evaluating Avalon from the outside
