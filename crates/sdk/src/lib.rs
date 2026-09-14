@@ -25,27 +25,71 @@ pub mod achievements;
 pub mod conversations;
 pub mod device_login;
 pub mod guilds;
+mod http;
 pub mod registry;
 pub mod schema;
 pub mod social;
 pub mod submission;
 pub mod sync_journal;
 
+pub use http::RetryConfig;
+
 use avalon_protocol::identity::{Identity, Profile};
 use avalon_protocol::ids::{GuildId, IdentityId};
 use avalon_protocol::permissions::Capability;
 use serde::Deserialize;
 
+/// Every outcome a `Session`/`AvalonClient` method can return talking to a
+/// real `avalon-server` (issue #47) — protocol-level, never a raw
+/// `reqwest::Error`/`StatusCode` a game would have to know HTTP to
+/// interpret. `crate::http` is where every call site actually produces
+/// these; see that module's doc comment for the retry/mapping rules
+/// behind them.
 #[derive(Debug, thiserror::Error)]
 pub enum SdkError {
+    /// The session token itself was rejected (expired, unknown, malformed)
+    /// — distinct from [`Self::CapabilityNotGranted`], which means the
+    /// token is fine but this integrator hasn't been granted what the
+    /// request needs.
+    #[error("unauthorized")]
+    Unauthorized,
+    /// Either a capability grant this session's own `require()` check
+    /// found present is nonetheless rejected server-side (a stale/revoked
+    /// grant, or `require()` not covering an endpoint's real requirement
+    /// yet), or the server's own 403 means something else it doesn't
+    /// expose more specifically over this API — see `crate::http`'s doc
+    /// comment on why every 403 maps here.
     #[error("capability not granted: {0}")]
     CapabilityNotGranted(String),
-    #[error("authentication failed")]
-    AuthenticationFailed,
-    #[error("request to avalon-server failed: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("avalon-server returned {0}")]
-    ServerError(reqwest::StatusCode),
+    /// A referenced resource doesn't exist — carries the server's own
+    /// message text (not a structured resource kind/id; see #47's own
+    /// scope note in `docs/architecture/sdk.md`).
+    #[error("not found: {0}")]
+    NotFound(String),
+    /// The request conflicts with existing state (already exists, already
+    /// in that state, etc).
+    #[error("conflict: {0}")]
+    Conflict(String),
+    /// The server understood the request and made a final decision not to
+    /// apply it — malformed input, a signature that doesn't verify, a
+    /// business-rule violation. Never retried; a caller changing nothing
+    /// about the request would get this again.
+    #[error("rejected: {reason}")]
+    Rejected { reason: String },
+    /// A connection error, timeout, or 502/503/504 — either this call
+    /// wasn't retried (a non-idempotent write with no `Idempotency-Key`)
+    /// or it was retried `retried` times and still didn't succeed. A node
+    /// hiccup, not this request being wrong; safe to surface as "try again
+    /// later," never as a gameplay-level failure.
+    #[error("avalon-server unavailable after {retried} retries: {detail}")]
+    Unavailable { retried: u32, detail: String },
+    /// The response didn't parse as the shape this call expected, or the
+    /// transport failed in a way that isn't connectivity (see
+    /// [`Self::Unavailable`] for that case) — a malformed/unexpected
+    /// server response, not a protocol-level outcome the caller can act
+    /// on.
+    #[error("unexpected response from avalon-server: {0}")]
+    Protocol(String),
     #[error("presence websocket connection failed: {0}")]
     WebSocket(String),
     /// The server rejected a conversation read or send with "not a
@@ -58,8 +102,6 @@ pub enum SdkError {
     /// so would defeat the server-side protection this type is mirroring.
     #[error("not a participant in this conversation")]
     NotConversationParticipant,
-    #[error("not yet implemented")]
-    NotImplemented,
     /// `Session::issue_achievement` (#34) needs this integrator's own slug
     /// and signing key (`AvalonConfig::integrator_slug`/`signing_key`) to
     /// authenticate the issuing request and sign the attestation locally —
@@ -92,6 +134,10 @@ pub struct AvalonConfig {
     /// signature (#34's design). `None` for a read-only integration;
     /// required by `Session::issue_achievement`.
     pub signing_key: Option<[u8; 32]>,
+    /// Retry/backoff/timeout tuning for every request this SDK makes
+    /// (issue #47) — `RetryConfig::default()` for sensible out-of-the-box
+    /// behavior.
+    pub retry: RetryConfig,
 }
 
 pub struct AvalonClient {
@@ -130,18 +176,20 @@ impl AvalonClient {
     /// the Hub or a direct login, not by this SDK — an integrator never
     /// creates identities itself) for a `Session` scoped to this integrator.
     pub async fn authenticate(&self, identity_token: &str) -> Result<Session, SdkError> {
-        let response = self
-            .http
-            .get(format!("{}/me", self.config.server_url))
-            .bearer_auth(identity_token)
-            .send()
-            .await?;
+        let response = http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!("{}/me", self.config.server_url))
+                .bearer_auth(identity_token)
+        })
+        .await?;
 
         if !response.status().is_success() {
-            return Err(SdkError::AuthenticationFailed);
+            return Err(http::map_error_response(response).await);
         }
 
-        let body: MeResponse = response.json().await?;
+        let body: MeResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
 
         // Permission grants (#27) — `GET /me/grants` returns this
         // integrator's own active grants for the authenticating identity,
@@ -183,26 +231,29 @@ impl AvalonClient {
             integrator_key_id: self.config.integrator_credential_key_id.clone(),
             integrator_slug: self.config.integrator_slug.clone(),
             signing_key: self.config.signing_key,
+            retry: self.config.retry.clone(),
         })
     }
 
     async fn fetch_granted(&self, identity_token: &str) -> Result<Vec<Capability>, SdkError> {
-        let response = self
-            .http
-            .get(format!("{}/me/grants", self.config.server_url))
-            .bearer_auth(identity_token)
-            .header(
-                "x-avalon-integrator-key-id",
-                &self.config.integrator_credential_key_id,
-            )
-            .send()
-            .await?;
+        let response = http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!("{}/me/grants", self.config.server_url))
+                .bearer_auth(identity_token)
+                .header(
+                    "x-avalon-integrator-key-id",
+                    &self.config.integrator_credential_key_id,
+                )
+        })
+        .await?;
 
         if !response.status().is_success() {
             return Ok(Vec::new());
         }
 
-        let body: MyGrantsResponse = response.json().await?;
+        let body: MyGrantsResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(body
             .capabilities
             .into_iter()
@@ -239,6 +290,8 @@ pub struct Session {
     integrator_slug: Option<String>,
     /// See `AvalonConfig::signing_key`.
     signing_key: Option<[u8; 32]>,
+    /// See `AvalonConfig::retry`.
+    retry: RetryConfig,
 }
 
 impl Session {

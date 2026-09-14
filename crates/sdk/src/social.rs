@@ -117,16 +117,18 @@ impl Session {
     pub async fn friends(&self) -> Result<Vec<Friend>, SdkError> {
         self.require(Capability::FriendsRead)?;
 
-        let response = self
-            .http
-            .get(format!("{}/friends", self.server_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.get(format!("{}/friends", self.server_url))
+                .bearer_auth(&self.token)
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let friendships: Vec<Friendship> = response.json().await?;
+        let friendships: Vec<Friendship> = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
 
         let presence_by_id =
             if self.require(Capability::PresenceRead).is_ok() && !friendships.is_empty() {
@@ -177,17 +179,19 @@ impl Session {
             .map(|id| id.0.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        let response = self
-            .http
-            .get(format!("{}/presence", self.server_url))
-            .query(&[("ids", ids_param)])
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.get(format!("{}/presence", self.server_url))
+                .query(&[("ids", ids_param.clone())])
+                .bearer_auth(&self.token)
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        Ok(response.json().await?)
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
     }
 
     /// `PUT /me/presence` — an identity publishing their own status. See the
@@ -197,15 +201,17 @@ impl Session {
     /// implemented, not the integrator-credential design #17 originally
     /// described.
     pub async fn update_presence(&self, status: PresenceStatus) -> Result<(), SdkError> {
-        let response = self
-            .http
-            .put(format!("{}/me/presence", self.server_url))
-            .bearer_auth(&self.token)
-            .json(&UpdatePresenceRequest { status })
-            .send()
-            .await?;
+        // `PUT` is idempotent by its own HTTP semantics — replacing "my
+        // status" with the same value twice is safe with no separate
+        // dedup key needed, unlike `POST` writes elsewhere in this crate.
+        let response = crate::http::send(&self.http, &self.retry, true, |c| {
+            c.put(format!("{}/me/presence", self.server_url))
+                .bearer_auth(&self.token)
+                .json(&UpdatePresenceRequest { status })
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
         Ok(())
     }
@@ -323,6 +329,7 @@ mod tests {
             integrator_key_id: "test-key".to_string(),
             integrator_slug: None,
             signing_key: None,
+            retry: crate::RetryConfig::default(),
         }
     }
 

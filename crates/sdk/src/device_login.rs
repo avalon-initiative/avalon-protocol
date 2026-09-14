@@ -78,15 +78,21 @@ impl AvalonClient {
     /// a session token obtained some other way, and an approved
     /// [`DeviceLogin::wait`] is one way to get one.
     pub async fn login(&self) -> Result<DeviceLogin<'_>, SdkError> {
-        let response = self
-            .http
-            .post(format!("{}/auth/device/start", self.config.server_url))
-            .send()
-            .await?;
+        // No idempotency key: a retried start would just mint a second,
+        // independent pairing code rather than replay the first one, so
+        // this gets exactly one attempt, same as every other unkeyed
+        // write.
+        let response = crate::http::send(&self.http, &self.config.retry, false, |c| {
+            c.post(format!("{}/auth/device/start", self.config.server_url))
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        let body: StartPairingResponse = response.json().await?;
+        let body: StartPairingResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
 
         Ok(DeviceLogin {
             client: self,
@@ -119,20 +125,25 @@ impl DeviceLogin<'_> {
         loop {
             tokio::time::sleep(Duration::from_secs(interval as u64)).await;
 
-            let response = self
-                .client
-                .http
-                .post(format!(
-                    "{}/auth/device/poll",
-                    self.client.config.server_url
-                ))
-                .bearer_auth(&self.device_code)
-                .send()
+            // Polling is naturally safe to retry — it reads status, it
+            // doesn't consume the pairing (only the eventual `approved`
+            // token delivery is single-use, per the doc comment below).
+            let response =
+                crate::http::send(&self.client.http, &self.client.config.retry, true, |c| {
+                    c.post(format!(
+                        "{}/auth/device/poll",
+                        self.client.config.server_url
+                    ))
+                    .bearer_auth(&self.device_code)
+                })
                 .await?;
             if !response.status().is_success() {
-                return Err(SdkError::ServerError(response.status()));
+                return Err(crate::http::map_error_response(response).await);
             }
-            let body: PollPairingResponse = response.json().await?;
+            let body: PollPairingResponse = response
+                .json()
+                .await
+                .map_err(|e| SdkError::Protocol(e.to_string()))?;
 
             match body.status.as_str() {
                 "pending" => continue,
@@ -147,7 +158,9 @@ impl DeviceLogin<'_> {
                     // response already lost a consumption race, which the
                     // server surfaces as `expired`, not `approved` with no
                     // token — treat it the same as a malformed response.
-                    let token = body.token.ok_or(SdkError::AuthenticationFailed)?;
+                    let token = body.token.ok_or_else(|| {
+                        SdkError::Protocol("approved poll response was missing a token".to_string())
+                    })?;
                     return self.client.authenticate(&token).await;
                 }
                 // "expired" and anything unrecognized both mean this

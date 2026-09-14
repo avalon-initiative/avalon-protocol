@@ -258,42 +258,34 @@ fn classify_send_result(
             reason: "not a participant in this conversation".to_string(),
         }),
 
-        // A network-level failure, or a response whose body didn't even
-        // parse — the request itself was never definitively answered.
-        Err(SdkError::Request(e)) => Err(SubmitError::Retryable(format!("request failed: {e}"))),
+        // See the module docs' "A stale session token must not discard
+        // queued work" section.
+        Err(SdkError::Unauthorized) => Err(SubmitError::AuthenticationRequired),
 
-        Err(SdkError::ServerError(status)) => {
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                // See the module docs' "A stale session token must not
-                // discard queued work" section.
-                Err(SubmitError::AuthenticationRequired)
-            } else if status.as_u16() == 429 || status.is_server_error() {
-                // Rate-limited or a server-side failure — the request
-                // itself was fine, try again later.
-                Err(SubmitError::Retryable(format!("server returned {status}")))
-            } else if status == reqwest::StatusCode::NOT_FOUND {
-                // See the module docs' "A retried submission that lost
-                // the race and was already pruned isn't a real
-                // rejection" section: on this endpoint, with
-                // `client_entry_id` always set by this transport, a 404
-                // can only mean the message was already applied by an
-                // earlier attempt and then pruned before this retry's
-                // idempotency lookup found it.
-                Ok(SubmitOutcome::Applied)
-            } else {
-                // Any other 4xx: the request is now invalid (payload
-                // rejected, etc.) — terminal.
-                Ok(SubmitOutcome::Rejected {
-                    reason: format!("server returned {status}"),
-                })
-            }
-        }
+        // A network-level failure, a timeout, or a 502/503/504 —
+        // `crate::http::send` itself already retried this once
+        // (`send_with_client_entry_id` always sets `client_entry_id`, so
+        // this call is idempotent), so this is what's left after those
+        // retries were exhausted. The request itself was fine; try again
+        // later at the journal level.
+        Err(SdkError::Unavailable { detail, .. }) => Err(SubmitError::Retryable(format!(
+            "avalon-server unavailable: {detail}"
+        ))),
 
-        // Not reachable through this call today (`AuthenticationFailed`,
-        // `WebSocket`, `NotImplemented` are never produced by
-        // `ConversationHandle::send_with_client_entry_id`) — handled
-        // conservatively rather than matched away, so a future variant
-        // added to that path doesn't silently misclassify.
+        // See the module docs' "A retried submission that lost the race
+        // and was already pruned isn't a real rejection" section: on this
+        // endpoint, with `client_entry_id` always set by this transport, a
+        // 404 can only mean the message was already applied by an earlier
+        // attempt and then pruned before this retry's idempotency lookup
+        // found it.
+        Err(SdkError::NotFound(_)) => Ok(SubmitOutcome::Applied),
+
+        // Any other mapped outcome (`Conflict`, `Rejected`, `Protocol`,
+        // and anything else not explicitly reachable through this call
+        // today) — the request is now invalid or was answered in a way
+        // this transport doesn't special-case: terminal, not retried.
+        // Handled conservatively rather than matched away, so a future
+        // variant added to that path doesn't silently misclassify.
         Err(other) => Ok(SubmitOutcome::Rejected {
             reason: other.to_string(),
         }),
@@ -1164,9 +1156,7 @@ mod tests {
         // The regression this fix targets: an expired/invalid session token
         // must leave the entry pending for a later retry, never permanently
         // discard it as `Rejected`.
-        let result = classify_send_result(Err(SdkError::ServerError(
-            reqwest::StatusCode::UNAUTHORIZED,
-        )));
+        let result = classify_send_result(Err(SdkError::Unauthorized));
         assert!(matches!(result, Err(SubmitError::AuthenticationRequired)));
     }
 
@@ -1191,30 +1181,24 @@ mod tests {
     fn a_404_on_this_endpoint_is_treated_as_already_applied() {
         // See the module docs' "A retried submission that lost the race and
         // was already pruned isn't a real rejection" section.
-        let result =
-            classify_send_result(Err(SdkError::ServerError(reqwest::StatusCode::NOT_FOUND)));
+        let result = classify_send_result(Err(SdkError::NotFound("message".to_string())));
         assert!(matches!(result, Ok(SubmitOutcome::Applied)));
     }
 
     #[test]
     fn a_429_and_5xx_stay_retryable() {
-        for status in [
-            reqwest::StatusCode::TOO_MANY_REQUESTS,
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-            reqwest::StatusCode::SERVICE_UNAVAILABLE,
-        ] {
-            let result = classify_send_result(Err(SdkError::ServerError(status)));
-            assert!(
-                matches!(result, Err(SubmitError::Retryable(_))),
-                "{status} should be retryable"
-            );
-        }
+        let result = classify_send_result(Err(SdkError::Unavailable {
+            retried: 0,
+            detail: "rate limited or server error".to_string(),
+        }));
+        assert!(matches!(result, Err(SubmitError::Retryable(_))));
     }
 
     #[test]
     fn any_other_4xx_stays_a_terminal_rejection() {
-        let result =
-            classify_send_result(Err(SdkError::ServerError(reqwest::StatusCode::BAD_REQUEST)));
+        let result = classify_send_result(Err(SdkError::Rejected {
+            reason: "bad request".to_string(),
+        }));
         assert!(matches!(result, Ok(SubmitOutcome::Rejected { .. })));
     }
 

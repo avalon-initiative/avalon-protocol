@@ -15,6 +15,7 @@ pub mod guild_events;
 pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
+pub mod idempotency;
 pub mod integrator_data;
 pub mod integrator_schemas;
 pub mod integrators;

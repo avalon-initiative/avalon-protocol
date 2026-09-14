@@ -119,13 +119,17 @@ impl Session {
         let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
         let signing_key = SigningKey::from_bytes(&signing_key_bytes);
 
-        let challenge: ChallengeResponse = self
-            .http
-            .post(format!("{}/integrations/{slug}/challenge", self.server_url))
-            .send()
-            .await?
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!("{}/integrations/{slug}/challenge", self.server_url))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
             .json()
-            .await?;
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
         let nonce = BASE64
             .decode(&challenge.nonce)
             .map_err(|_| SdkError::MissingIssuerCredentials)?;
@@ -162,19 +166,25 @@ impl Session {
             field_visibility: T::field_visibility(),
         };
 
-        let mut request = self
-            .http
-            .post(format!("{}/integrations/{slug}/schemas", self.server_url))
-            .json(&body);
-        for (name, value) in headers {
-            request = request.header(name, value);
-        }
-
-        let response = request.send().await?;
+        // No idempotency key on this write yet (documented follow-up, see
+        // this module's doc comment) — one attempt, no automatic retry.
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .post(format!("{}/integrations/{slug}/schemas", self.server_url))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        Ok(response.json().await?)
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
     }
 
     /// `POST /integrations/{slug}/schemas/{version}/data` — publishes (or
@@ -199,21 +209,27 @@ impl Session {
             instance,
         };
 
-        let mut request = self
-            .http
-            .post(format!(
-                "{}/integrations/{slug}/schemas/{version}/data",
-                self.server_url
-            ))
-            .json(&body);
-        for (name, value) in headers {
-            request = request.header(name, value);
-        }
-
-        let response = request.send().await?;
+        // Same posture as `publish_schema_version` above: no idempotency
+        // key yet, one attempt only.
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .post(format!(
+                    "{}/integrations/{slug}/schemas/{version}/data",
+                    self.server_url
+                ))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
         if !response.status().is_success() {
-            return Err(SdkError::ServerError(response.status()));
+            return Err(crate::http::map_error_response(response).await);
         }
-        Ok(response.json().await?)
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
     }
 }
