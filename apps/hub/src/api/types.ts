@@ -385,6 +385,29 @@ export interface PublicProfileResponse {
   avatar_url: string | null
 }
 
+// GET /identities/:id/profile (issue #403) — a single identity's full
+// self-description fields, same exposure level as ProfileResponse (GET
+// /me) above, minus `discoverable` (that's the viewed identity's own
+// search-visibility setting, not something the viewer needs).
+export interface PublicIdentityProfileResponse {
+  identity_id: string
+  identity_created_at: string
+  display_name: string
+  avatar_url: string | null
+  handle: string
+  bio: string | null
+  favorite_genres: Genre[]
+  pronouns: string | null
+  banner_url: string | null
+  status: string | null
+  links: string[]
+  timezone: string | null
+  theme_color: string | null
+  location: string | null
+  main_guild: string | null
+  effective_main_guild: string | null
+}
+
 // Guild/roster/channel/message wire types (issue #24), matching
 // crates/server/src/guilds.rs, crates/server/src/channels.rs, and
 // crates/server/src/guild_messages.rs field-for-field.

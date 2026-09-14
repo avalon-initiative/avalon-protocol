@@ -95,6 +95,10 @@ pub fn router(state: AppState) -> Router {
         .route("/me/history", get(handlers::my_history))
         .route("/me/achievements", get(attestations::list_my_achievements))
         .route("/identities/profiles", get(handlers::list_profiles))
+        .route(
+            "/identities/{id}/profile",
+            get(handlers::get_identity_profile),
+        )
         .route("/me/presence", put(presence::update_my_presence))
         .route(
             "/presence/{identity_id}",

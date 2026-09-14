@@ -51,6 +51,7 @@ import type {
   PermissionOverrideResponse,
   PresenceResponse,
   ProfileResponse,
+  PublicIdentityProfileResponse,
   PublicProfileResponse,
   RecoveryFinishRequest,
   RecoveryRequestResponse,
@@ -330,6 +331,16 @@ export function getProfiles(token: string, ids: string[]): Promise<PublicProfile
   }
   const params = new URLSearchParams({ ids: ids.join(',') })
   return request(`/identities/profiles?${params.toString()}`, { token })
+}
+
+// GET /identities/:id/profile (issue #403) — a single identity's full
+// self-description profile, same exposure level as GET /me, for a real
+// profile-card view rather than a roster resolve.
+export function getIdentityProfile(
+  token: string,
+  identityId: string,
+): Promise<PublicIdentityProfileResponse> {
+  return request(`/identities/${identityId}/profile`, { token })
 }
 
 // Device-registration / linked-device grant model (issue #135).

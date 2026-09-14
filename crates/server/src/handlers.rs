@@ -21,7 +21,7 @@ use avalon_protocol::identity::{
     MAX_PRONOUNS_LEN, MAX_STATUS_LEN, MAX_TIMEZONE_LEN,
 };
 use avalon_protocol::ids::GlobalId;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -681,6 +681,92 @@ pub struct PublicProfileResponse {
     pub display_name: String,
     pub discriminator: String,
     pub avatar_url: Option<String>,
+}
+
+/// Another identity's full self-description profile — issue #403's decided
+/// widening of #393's read-only profile card. Deliberately a **separate,
+/// single-identity endpoint** rather than a widened `list_profiles`: the
+/// batch endpoint above stays exactly as narrow as it already is (any
+/// session can resolve arbitrarily many ids at once, so it only ever
+/// returns the least-sensitive public-face fields), while this endpoint
+/// exposes the same fields `GET /me` already does — `bio`/`favorite_genres`/
+/// `pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/
+/// `theme_color`/`location` (#372) — but only for one identity per request,
+/// matching a real profile-card view rather than a roster resolve. Omits
+/// `discoverable`: that field describes the *viewed* identity's own search
+/// settings, not something the viewer needs once they've already found the
+/// profile.
+#[derive(Serialize)]
+pub struct PublicIdentityProfileResponse {
+    pub identity_id: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    pub identity_created_at: OffsetDateTime,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub handle: String,
+    pub bio: Option<String>,
+    pub favorite_genres: Vec<Genre>,
+    pub pronouns: Option<String>,
+    pub banner_url: Option<String>,
+    pub status: Option<String>,
+    pub links: Vec<String>,
+    pub timezone: Option<String>,
+    pub theme_color: Option<String>,
+    pub location: Option<String>,
+    pub main_guild: Option<Uuid>,
+    pub effective_main_guild: Option<Uuid>,
+}
+
+/// `GET /identities/{id}/profile` — issue #403. Session-authenticated, no
+/// further visibility gating (same posture as `list_profiles`): every field
+/// here is already unauthenticated-readable on the viewed identity's own
+/// `GET /me`, so a single-identity read of the same fields adds no new
+/// exposure, only a more convenient shape than "batch-resolve one id."
+pub async fn get_identity_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<PublicIdentityProfileResponse>, AppError> {
+    authenticate(&state, &headers).await?;
+
+    let row = sqlx::query(PROFILE_SELECT)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::IdentityNotFound)?;
+
+    let main_guild: Option<Uuid> = row.try_get("main_guild")?;
+    let effective_main_guild = match main_guild {
+        Some(guild_id) => Some(guild_id),
+        None => earliest_joined_guild(&state.pool, id).await?,
+    };
+
+    let display_name: String = row.try_get("display_name")?;
+    let discriminator: String = row.try_get("discriminator")?;
+    let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
+    let links: Vec<String> = row.try_get("links")?;
+
+    Ok(Json(PublicIdentityProfileResponse {
+        identity_id: id,
+        identity_created_at: row.try_get("created_at")?,
+        handle: format!("{display_name}#{discriminator}"),
+        display_name,
+        avatar_url: row.try_get("avatar_url")?,
+        bio: row.try_get("bio")?,
+        favorite_genres: favorite_genres
+            .iter()
+            .filter_map(|g| Genre::parse(g))
+            .collect(),
+        pronouns: row.try_get("pronouns")?,
+        banner_url: row.try_get("banner_url")?,
+        status: row.try_get("status")?,
+        links,
+        timezone: row.try_get("timezone")?,
+        theme_color: row.try_get("theme_color")?,
+        location: row.try_get("location")?,
+        main_guild,
+        effective_main_guild,
+    }))
 }
 
 /// `GET /identities/profiles?ids=…` — issue #161. Closes the gap every

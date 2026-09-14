@@ -31,3 +31,40 @@
   color: var(--av-color-text-muted);
   font-size: var(--av-text-sm);
 }
+
+.pronouns {
+  color: var(--av-color-text-muted);
+  font-size: var(--av-text-sm);
+}
+
+.status {
+  margin-top: var(--av-space-3);
+  font-style: italic;
+  color: var(--av-color-text-secondary);
+}
+
+.bio {
+  margin-top: var(--av-space-2);
+  white-space: pre-wrap;
+}
+
+.meta {
+  margin-top: var(--av-space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--av-space-4);
+  list-style: none;
+  padding: 0;
+  color: var(--av-color-text-secondary);
+  font-size: var(--av-text-sm);
+}
+
+.links {
+  margin-top: var(--av-space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+  list-style: none;
+  padding: 0;
+  font-size: var(--av-text-sm);
+}

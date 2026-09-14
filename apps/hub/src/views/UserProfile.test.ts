@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
 import UserProfile from './UserProfile.vue'
 import { useSessionStore } from '../stores/session'
-import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
+import { FakeWebSocket, MockErrorResponse, mockFetchByPath } from '../testing/fakes'
 
 const selfProfile = {
   identity_id: 'id-self',
@@ -75,9 +75,24 @@ describe('UserProfile', () => {
   it("shows the user's public profile fields and live presence", async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
-      '/identities/profiles': [
-        { identity_id: 'id-friend', display_name: 'Ilya', discriminator: '1122', avatar_url: null },
-      ],
+      '/identities/id-friend/profile': {
+        identity_id: 'id-friend',
+        identity_created_at: 'now',
+        display_name: 'Ilya',
+        avatar_url: null,
+        handle: 'Ilya#1122',
+        bio: 'raid leader',
+        favorite_genres: ['fantasy'],
+        pronouns: 'they/them',
+        banner_url: null,
+        status: 'raiding tonight',
+        links: ['https://example.com'],
+        timezone: null,
+        theme_color: null,
+        location: 'Pacific Northwest',
+        main_guild: null,
+        effective_main_guild: null,
+      },
       '/presence': [{ identity_id: 'id-friend', status: 'DoNotDisturb', playing: null, updated_at: 'now' }],
     })
 
@@ -89,14 +104,20 @@ describe('UserProfile', () => {
 
     expect(wrapper.text()).toContain('Ilya#1122')
     expect(wrapper.text()).toContain('Do Not Disturb')
-    // #403 (open decision): bio/self-description fields are deliberately
-    // not requested/shown here yet.
+    // Issue #403: self-description fields now show on another identity's
+    // profile card, same exposure level as their own GET /me.
+    expect(wrapper.text()).toContain('they/them')
+    expect(wrapper.text()).toContain('raiding tonight')
+    expect(wrapper.text()).toContain('raid leader')
+    expect(wrapper.text()).toContain('Pacific Northwest')
+    expect(wrapper.text()).toContain('fantasy')
+    expect(wrapper.find('a[href="https://example.com"]').exists()).toBe(true)
   })
 
   it("shows a not-found message when the user doesn't resolve", async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
-      '/identities/profiles': [],
+      '/identities/id-missing/profile': new MockErrorResponse(404),
       '/presence': [],
     })
 

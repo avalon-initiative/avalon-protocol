@@ -382,3 +382,65 @@ async fn a_request_that_changes_nothing_emits_nothing() {
         "a no-op update must not emit profile.updated"
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn get_identity_profile_exposes_the_same_fields_get_me_does() {
+    // Issue #403: viewing another identity's profile card sees the same
+    // self-description fields the identity's own GET /me already exposes —
+    // a single-identity read, not the narrower batch list_profiles shape.
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (viewed_id, viewed_token) = seed_identity_session(&pool).await;
+    let (_viewer_id, viewer_token) = seed_identity_session(&pool).await;
+
+    let update = http
+        .patch(format!("{base}/me"))
+        .bearer_auth(&viewed_token)
+        .json(&serde_json::json!({
+            "bio": "raid leader",
+            "pronouns": "she/her",
+            "status": "raiding tonight",
+            "location": "Pacific Northwest",
+        }))
+        .send()
+        .await
+        .expect("update request failed — is `make start` running?");
+    assert!(update.status().is_success(), "{:?}", update.status());
+
+    let profile: serde_json::Value = http
+        .get(format!("{base}/identities/{viewed_id}/profile"))
+        .bearer_auth(&viewer_token)
+        .send()
+        .await
+        .expect("profile request failed — is `make start` running?")
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(profile["identity_id"], viewed_id.to_string());
+    assert_eq!(profile["bio"], "raid leader");
+    assert_eq!(profile["pronouns"], "she/her");
+    assert_eq!(profile["status"], "raiding tonight");
+    assert_eq!(profile["location"], "Pacific Northwest");
+    assert!(profile.get("discoverable").is_none());
+}
+
+#[tokio::test]
+#[ignore]
+async fn get_identity_profile_404s_for_an_identity_that_does_not_exist() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_viewer_id, viewer_token) = seed_identity_session(&pool).await;
+
+    let response = http
+        .get(format!("{base}/identities/{}/profile", Uuid::new_v4()))
+        .bearer_auth(&viewer_token)
+        .send()
+        .await
+        .expect("profile request failed — is `make start` running?");
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}

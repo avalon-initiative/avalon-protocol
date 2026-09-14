@@ -476,18 +476,26 @@ its invariants.
   `avatar_url` already use; `favorite_genres` is a fixed checkbox picker
   over the closed `Genre` vocabulary (capped at 5 client-side, matching
   `MAX_FAVORITE_GENRES`) with its own explicit Save, mirroring the
-  recovery-guardians picker on the same page. Own-profile view only — per
-  `list_profiles`'s note just above, these three fields stay deliberately
-  absent from any other identity's profile view.
-- `apps/hub/src/views/UserProfile.vue` (#393) — a read-only profile card
-  for *another* identity, reachable by clicking a friend row or a guild
-  member row (neither had anywhere to link to before this). Shows only
-  `list_profiles`'s fields (display name, handle, avatar) plus live
-  presence — no `bio`/`favorite_genres`/`pronouns`/`banner_url`/etc., and no
-  shared-guilds list (no endpoint exposes another identity's guild
-  memberships at all yet). Whether/how to widen exposure for this specific
-  use case is tracked as its own open decision, issue #403 — not resolved
-  here as a side effect of adding the view.
+  recovery-guardians picker on the same page. Editable here on one's own
+  profile only; readable on another identity's profile card via
+  `get_identity_profile` below (#403), never editable there.
+- `crates/server/src/handlers.rs`'s `get_identity_profile`
+  (`GET /identities/{id}/profile`, issue #403 — decided) — a **separate,
+  single-identity** endpoint from `list_profiles` above, deliberately not a
+  widening of it: exposes the same fields `GET /me` already does
+  (`bio`/`favorite_genres`/`pronouns`/`banner_url`/`status`/`links`/
+  `timezone`/`theme_color`/`location`/`main_guild`/`effective_main_guild`)
+  for exactly one identity per request, so `list_profiles`'s batch-lookup
+  exposure stays exactly as narrow as it was. Omits `discoverable` — that
+  field is the *viewed* identity's own search-visibility setting, not
+  something the viewer needs. 404s via `AppError::IdentityNotFound` for an
+  id that doesn't exist.
+- `apps/hub/src/views/UserProfile.vue` (#393, widened by #403) — a
+  read-only profile card for *another* identity, reachable by clicking a
+  friend row or a guild member row. Now calls `get_identity_profile` above
+  and renders the full self-description fields plus live presence. Still
+  no shared-guilds list — no endpoint exposes another identity's guild
+  memberships at all yet, out of #403's scope.
 - `crates/server/src/auth.rs` — builds the `Webauthn` instance
   (`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`), verifies Ed25519 event
   signatures, and still generates opaque session tokens (that part never
