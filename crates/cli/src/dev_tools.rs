@@ -438,6 +438,17 @@ pub(crate) async fn pair_device() {
     }
 }
 
+/// What `register_integrator` saves alongside the raw private-key file, so
+/// `issue_achievement` (issue #48) can resolve `--integrator <slug>` to a
+/// `key_id` without the operator having to paste it back in from
+/// registration's one-time printout.
+#[derive(Serialize, Deserialize)]
+struct IntegratorCredentialsFile {
+    #[allow(dead_code)]
+    integrator_id: String,
+    key_id: String,
+}
+
 pub(crate) const REGISTER_INTEGRATOR_USAGE: &str = "usage: avalon register-integrator --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]";
 
 /// Parsed `avalon register-integrator` arguments. Hand-rolled to match this file's
@@ -566,6 +577,22 @@ pub(crate) async fn register_integrator(args: RegisterIntegratorArgs) {
     let key_path = key_dir.join(format!("integrator-{}.signing-key", args.slug));
     std::fs::write(&key_path, &private_key_base64).expect("failed to write signing key file");
 
+    // `key_id` itself (as opposed to the private key) is otherwise only
+    // ever printed once, below — save it too (issue #48's own
+    // `issue-achievement` needs it) so a later command can look it up by
+    // `--integrator <slug>` alone instead of requiring the operator to
+    // paste it back in. See `load_integrator_credentials`.
+    let credentials_path = key_dir.join(format!("integrator-{}.json", args.slug));
+    std::fs::write(
+        &credentials_path,
+        serde_json::to_string(&IntegratorCredentialsFile {
+            integrator_id: integrator_id.clone(),
+            key_id: key_id.clone(),
+        })
+        .expect("IntegratorCredentialsFile should serialize"),
+    )
+    .expect("failed to write integrator credentials file");
+
     println!();
     println!("Integrator registered: {} ({integrator_id})", args.slug);
     println!("Key ID:               {key_id}");
@@ -653,6 +680,153 @@ async fn register_integrator_auth_sanity_check(
         .as_str()
         .ok_or("whoami response missing integrator_id")?
         .to_string())
+}
+
+pub(crate) const ISSUE_ACHIEVEMENT_USAGE: &str = "usage: avalon issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]";
+
+/// Parsed `avalon issue-achievement` arguments — same hand-rolled style as
+/// [`RegisterIntegratorArgs`]. `--token` is a session bearer token for the
+/// identity the achievement is issued *to*; this CLI never creates or
+/// chooses that identity itself, matching `avalon_sdk::Session::issue_achievement`'s
+/// own "issues to the session's own identity" design (see that method's
+/// doc comment) — get one with `avalon login <identity_id>` first. `--key`
+/// and `--key-id` default to what `register_integrator` saved for
+/// `--integrator`; pass them explicitly for an integrator registered
+/// elsewhere (or before this file started saving the sidecar credentials
+/// file).
+#[derive(Debug)]
+pub(crate) struct IssueAchievementArgs {
+    integrator: String,
+    achievement: String,
+    token: String,
+    key_path: Option<String>,
+    key_id: Option<String>,
+    server: Option<String>,
+}
+
+impl IssueAchievementArgs {
+    pub(crate) fn parse(args: &[String]) -> Result<Self, String> {
+        let mut integrator = None;
+        let mut achievement = None;
+        let mut token = None;
+        let mut key_path = None;
+        let mut key_id = None;
+        let mut server = None;
+
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--integrator" => {
+                    integrator = Some(iter.next().ok_or("--integrator requires a value")?.clone())
+                }
+                "--achievement" => {
+                    achievement = Some(iter.next().ok_or("--achievement requires a value")?.clone())
+                }
+                "--token" => token = Some(iter.next().ok_or("--token requires a value")?.clone()),
+                "--key" => key_path = Some(iter.next().ok_or("--key requires a value")?.clone()),
+                "--key-id" => {
+                    key_id = Some(iter.next().ok_or("--key-id requires a value")?.clone())
+                }
+                "--server" => {
+                    server = Some(iter.next().ok_or("--server requires a value")?.clone())
+                }
+                other => return Err(format!("unrecognized argument: {other}")),
+            }
+        }
+
+        Ok(Self {
+            integrator: integrator.ok_or("--integrator is required")?,
+            achievement: achievement.ok_or("--achievement is required")?,
+            token: token.ok_or("--token is required")?,
+            key_path,
+            key_id,
+            server,
+        })
+    }
+}
+
+/// `avalon issue-achievement` (issue #48) — issues `--achievement` (already
+/// defined against `--integrator` via `POST /integrations/{slug}/achievements`,
+/// a step this command doesn't do itself) to the identity behind `--token`,
+/// through `avalon-sdk` exactly the way a real game/app/service would
+/// (`Session::issue_achievement`, #34) — never a raw HTTP request built by
+/// hand, per this ticket's own "developer-facing commands go through the
+/// SDK/API" invariant. Resolves `--key`/`--key-id` from what
+/// `register_integrator` saved for `--integrator` when not given
+/// explicitly.
+pub(crate) async fn issue_achievement(args: IssueAchievementArgs) {
+    let base = args.server.clone().unwrap_or_else(server_url);
+
+    let key_path = args
+        .key_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| key_dir().join(format!("integrator-{}.signing-key", args.integrator)));
+    let key_base64 = std::fs::read_to_string(&key_path).unwrap_or_else(|_| {
+        eprintln!(
+            "no signing key found at {} — pass --key <path>, or run `avalon register-integrator` first.",
+            key_path.display()
+        );
+        std::process::exit(1);
+    });
+    let key_bytes: [u8; 32] = BASE64
+        .decode(key_base64.trim())
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .unwrap_or_else(|| {
+            eprintln!(
+                "{} did not contain a valid base64-encoded 32-byte Ed25519 key.",
+                key_path.display()
+            );
+            std::process::exit(1);
+        });
+
+    let key_id = match args.key_id {
+        Some(key_id) => key_id,
+        None => {
+            let credentials_path = key_dir().join(format!("integrator-{}.json", args.integrator));
+            let credentials_json = std::fs::read_to_string(&credentials_path).unwrap_or_else(|_| {
+                eprintln!(
+                    "no saved credentials at {} — pass --key-id <uuid> explicitly, or run `avalon register-integrator` first.",
+                    credentials_path.display()
+                );
+                std::process::exit(1);
+            });
+            let credentials: IntegratorCredentialsFile = serde_json::from_str(&credentials_json)
+                .expect("saved integrator credentials file was not valid JSON");
+            credentials.key_id
+        }
+    };
+
+    let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
+        server_url: base,
+        integrator_credential_key_id: key_id,
+        integrator_slug: Some(args.integrator.clone()),
+        signing_key: Some(key_bytes),
+        retry: Default::default(),
+    });
+
+    let session = client.authenticate(&args.token).await.unwrap_or_else(|e| {
+        eprintln!("authenticate() failed: {e}");
+        eprintln!("is --token a valid, unexpired session token? get one with `avalon login <identity_id>`.");
+        std::process::exit(1);
+    });
+
+    match session.issue_achievement(&args.achievement).await {
+        Ok(attestation_id) => {
+            println!();
+            println!(
+                "Issued '{}' (integrator: {}) to identity {}.",
+                args.achievement,
+                args.integrator,
+                session.identity().id.0
+            );
+            println!("Attestation id: {attestation_id}");
+        }
+        Err(e) => {
+            eprintln!("issue_achievement failed: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -803,6 +977,75 @@ mod tests {
             "Ashen Realms",
             "--developer",
             "Ashen Studios",
+            "--bogus",
+            "value",
+        ]))
+        .expect_err("an unrecognized flag should fail to parse");
+        assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn issue_achievement_args_parses_required_fields() {
+        let parsed = IssueAchievementArgs::parse(&args(&[
+            "--integrator",
+            "ashen-realms",
+            "--achievement",
+            "dragon_slayer",
+            "--token",
+            "test-token",
+        ]))
+        .expect("should parse with only required args");
+
+        assert_eq!(parsed.integrator, "ashen-realms");
+        assert_eq!(parsed.achievement, "dragon_slayer");
+        assert_eq!(parsed.token, "test-token");
+        assert_eq!(parsed.key_path, None);
+        assert_eq!(parsed.key_id, None);
+        assert_eq!(parsed.server, None);
+    }
+
+    #[test]
+    fn issue_achievement_args_accepts_key_and_key_id_and_server_overrides() {
+        let parsed = IssueAchievementArgs::parse(&args(&[
+            "--integrator",
+            "ashen-realms",
+            "--achievement",
+            "dragon_slayer",
+            "--token",
+            "test-token",
+            "--key",
+            "/tmp/my.key",
+            "--key-id",
+            "11111111-1111-1111-1111-111111111111",
+            "--server",
+            "http://example.test",
+        ]))
+        .expect("should parse with all overrides");
+
+        assert_eq!(parsed.key_path.as_deref(), Some("/tmp/my.key"));
+        assert_eq!(
+            parsed.key_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+        assert_eq!(parsed.server.as_deref(), Some("http://example.test"));
+    }
+
+    #[test]
+    fn issue_achievement_args_rejects_missing_required_args() {
+        let err = IssueAchievementArgs::parse(&args(&["--integrator", "ashen-realms"]))
+            .expect_err("missing --achievement and --token should fail to parse");
+        assert!(err.contains("--achievement"));
+    }
+
+    #[test]
+    fn issue_achievement_args_rejects_unrecognized_flags() {
+        let err = IssueAchievementArgs::parse(&args(&[
+            "--integrator",
+            "ashen-realms",
+            "--achievement",
+            "dragon_slayer",
+            "--token",
+            "test-token",
             "--bogus",
             "value",
         ]))
