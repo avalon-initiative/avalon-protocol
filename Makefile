@@ -14,6 +14,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
 	csharp-build csharp-test \
 	inspect-ledger inspect-ledger-full create-identity login outbox-status \
+	register-integrator issue-achievement \
 	check-all clean-all
 
 help:
@@ -58,6 +59,8 @@ help:
 	@echo "  make create-identity  register a new self-custodied (passkey) identity via avalon-cli"
 	@echo "  make login IDENTITY_ID=<uuid>  log in an identity create-identity saved locally, print a session token"
 	@echo "  make outbox-status    pending/oldest-pending count for the settlement outbox (issue #71)"
+	@echo "  make register-integrator SLUG=<slug> NAME=<name> OWNER=<owner>  register a test integrator, save its key locally"
+	@echo "  make issue-achievement INTEGRATOR=<slug> ACHIEVEMENT=<key> TOKEN=<session-token>  issue an already-defined achievement to the identity behind TOKEN"
 	@echo ""
 	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
@@ -227,6 +230,12 @@ login:
 
 outbox-status:
 	cargo run -p avalon-cli -- outbox-status
+
+register-integrator:
+	cargo run -p avalon-cli -- register-integrator --slug $(SLUG) --name $(NAME) --owner-name $(OWNER)
+
+issue-achievement:
+	cargo run -p avalon-cli -- issue-achievement --integrator $(INTEGRATOR) --achievement $(ACHIEVEMENT) --token $(TOKEN)
 
 # --- Everything -------------------------------------------------------------
 

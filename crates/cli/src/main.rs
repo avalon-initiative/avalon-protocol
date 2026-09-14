@@ -18,12 +18,13 @@
 //! `avalon pair-device`
 //! (issue #307 — drives the `start`/`poll` side of cross-device pairing,
 //! standing in for a real WebAuthn-incapable client so that flow is
-//! testable without a real console/engine). A build compiled with
-//! `--no-default-features` doesn't merely refuse these commands at
-//! runtime — they, and every dependency only they need, are absent from the
-//! binary entirely. `issue-achievement` (per `docs/stakeholders/Proposal.md` §23's
-//! milestone-1 vertical slice) isn't wired up yet either way — it depends
-//! on the Achievements epic, still unbuilt.
+//! testable without a real console/engine), and `avalon issue-achievement`
+//! (issue #48 — issues an already-defined achievement to the identity
+//! behind `--token`, through `avalon-sdk`, resolving the issuer's
+//! signing key/key id from what `register-integrator` saved unless
+//! overridden). A build compiled with `--no-default-features` doesn't
+//! merely refuse these commands at runtime — they, and every dependency
+//! only they need, are absent from the binary entirely.
 
 #[cfg(feature = "dev-tools")]
 mod dev_tools;
@@ -77,11 +78,23 @@ async fn main() {
                 }
             }
         }
+        #[cfg(feature = "dev-tools")]
+        Some("issue-achievement") => {
+            let raw_args: Vec<String> = args.collect();
+            match dev_tools::IssueAchievementArgs::parse(&raw_args) {
+                Ok(parsed) => dev_tools::issue_achievement(parsed).await,
+                Err(message) => {
+                    eprintln!("{message}");
+                    eprintln!("{}", dev_tools::ISSUE_ACHIEVEMENT_USAGE);
+                    std::process::exit(1);
+                }
+            }
+        }
         _ => {
             eprintln!(
                 "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
-                    "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|pair-device"
+                    "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|pair-device"
                 } else {
                     ""
                 }
