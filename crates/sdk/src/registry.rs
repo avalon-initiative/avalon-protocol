@@ -23,9 +23,15 @@ use crate::{AvalonClient, SdkError};
 /// `false`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Metric {
+    /// The metric's value — a coarsened floor, not the real count, when
+    /// `exact` is `false`.
     pub value: i64,
+    /// A human-readable definition of exactly what's being counted.
     pub definition: String,
+    /// A short label naming this metric's own class/category.
     pub class: String,
+    /// `false` means `value` is coarsened (#96) — render as "fewer than
+    /// `value`", never as an exact count.
     pub exact: bool,
 }
 
@@ -33,10 +39,16 @@ pub struct Metric {
 /// the wire level.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Registry {
+    /// Current player count.
     pub players: Metric,
+    /// Total distinct players ever, including since-departed ones.
     pub total_players_ever: Metric,
+    /// Achievements issued, cumulative.
     pub achievements_issued: Metric,
+    /// Achievements revoked, cumulative.
     pub achievements_revoked: Metric,
+    /// Distinct identities holding at least one achievement from this
+    /// integrator.
     pub unique_achievement_holders: Metric,
 }
 

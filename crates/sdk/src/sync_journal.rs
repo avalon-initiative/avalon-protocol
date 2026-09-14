@@ -51,12 +51,16 @@ use uuid::Uuid;
 /// the future submission engine, #111, depends on this for idempotency).
 pub type EntryId = Uuid;
 
+/// Everything a [`SyncJournal`] implementation can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
+    /// The underlying storage (e.g. a file) failed.
     #[error("journal io error: {0}")]
     Io(#[from] std::io::Error),
+    /// A record couldn't be (de)serialized.
     #[error("failed to serialize journal record: {0}")]
     Serialize(#[from] serde_json::Error),
+    /// The given [`EntryId`] has no entry in this journal.
     #[error("no journal entry with id {0}")]
     NotFound(Uuid),
 }
@@ -73,15 +77,24 @@ pub enum JournalError {
 /// see issue #113's own scope note on why this wasn't a bigger refactor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalEntry {
+    /// Client-generated, stable identifier — see [`EntryId`].
     pub id: EntryId,
+    /// What kind of operation this is (e.g.
+    /// [`crate::submission::CONVERSATION_MESSAGE_KIND`]) — determines how a
+    /// [`crate::submission::Transport`] submits it.
     pub kind: String,
+    /// The operation's own data, shaped per its `kind`.
     pub payload: serde_json::Value,
+    /// When this entry was appended.
     #[serde(with = "time::serde::rfc3339")]
     pub recorded_at: OffsetDateTime,
+    /// When [`SyncJournal::mark_submitted`] was called, if it has been.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub submitted_at: Option<OffsetDateTime>,
+    /// When [`SyncJournal::mark_rejected`] was called, if it has been.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub rejected_at: Option<OffsetDateTime>,
+    /// Why, if [`SyncJournal::mark_rejected`] has been called.
     #[serde(default)]
     pub rejection_reason: Option<String>,
 }
@@ -101,6 +114,7 @@ impl JournalEntry {
 /// never a network call itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncStatus {
+    /// How many entries are currently pending.
     pub pending_count: usize,
     /// `recorded_at` of the oldest still-pending entry, if any — how long
     /// the longest-queued operation has been waiting.
@@ -118,9 +132,15 @@ pub struct SyncStatus {
 /// failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryStatus {
+    /// Not yet submitted, or submitted but not yet answered.
     Pending,
+    /// The server accepted it.
     Submitted,
-    Rejected { reason: String },
+    /// Terminally rejected.
+    Rejected {
+        /// Why, safe to surface to the player.
+        reason: String,
+    },
 }
 
 /// A durable local queue of offline-capable operations, behind a trait so
@@ -392,6 +412,7 @@ impl FileJournal {
         })
     }
 
+    /// The file this journal is backed by.
     pub fn path(&self) -> &Path {
         &self.path
     }

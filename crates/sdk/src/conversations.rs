@@ -2,7 +2,7 @@
 //! [`crate::Session`] (issue #104), wired to the real `avalon-server`
 //! conversation endpoints from #102 (`crates/server/src/conversations.rs`).
 //!
-//! Every method here calls [`crate::Session::require`] with its exact
+//! Every method here calls `Session::require` with its exact
 //! capability *before* making any request — same convention `social.rs`
 //! (#17) and `guilds.rs` (#23) already established. The server enforces the
 //! same capabilities again once #26–#28 land; this check is a convenience
@@ -35,7 +35,7 @@
 //! ## Shared with the deferred submission engine (#111)
 //!
 //! `crate::submission::HttpTransport` submits queued `chat.message` journal
-//! entries through [`Session::conversation`]/[`ConversationHandle::send_with_client_entry_id`]
+//! entries through [`Session::conversation`]/`ConversationHandle::send_with_client_entry_id`
 //! rather than building its own request — one request-building path, so a
 //! capability check (or any other classification) behaves the same whether
 //! an integrator calls [`ConversationHandle::send`] directly or drains a
@@ -103,7 +103,7 @@ struct SendMessageRequest<'a> {
     body: &'a str,
     /// See `crates/server/src/conversations.rs::SendMessageRequest`'s own
     /// doc comment — set only by
-    /// [`ConversationHandle::send_with_client_entry_id`], which the
+    /// `ConversationHandle::send_with_client_entry_id`, which the
     /// submission engine (`crate::submission::HttpTransport`, issue #111)
     /// uses so a retried submission dedupes server-side instead of posting
     /// twice. A direct [`ConversationHandle::send`] call always sends
@@ -159,7 +159,7 @@ impl Session {
 
     /// A handle scoped to a conversation id already known to the caller
     /// (e.g. from [`Session::conversations`] or [`Session::dm`]) — an
-    /// ungated local constructor, same as [`crate::guilds::Session::guild`]:
+    /// ungated local constructor, same as [`crate::Session::guild`]:
     /// it makes no request of its own, only the methods called through it
     /// do.
     pub fn conversation(&self, id: Uuid) -> ConversationHandle<'_> {

@@ -2,6 +2,14 @@
 //! crate, never on `avalon-server` or `avalon-chain` directly — see
 //! `docs/stakeholders/Proposal.md` §17 and `docs/architecture/sdk.md`.
 //!
+//! Every public item is documented (issue #49) — `#![deny(missing_docs)]`
+//! below enforces that mechanically rather than by convention alone. See
+//! `docs/developers/` for task-oriented guides (`getting-started.md`,
+//! `achievements.md`, `capabilities.md`, `guilds-and-friends.md`,
+//! `errors-and-retries.md`, `local-development.md`) and `crates/sdk/examples/`
+//! for runnable, `make check`-compiled examples; this rustdoc is the
+//! reference, not a tutorial.
+//!
 //! `authenticate()` is wired to a real `avalon-server`: `GET /me` for
 //! identity/profile, `GET /me/grants` (issue #27) for this integrator's own
 //! active capability grants for the authenticating identity, identified via
@@ -20,6 +28,8 @@
 //! its own. An integrator constructs a `FileJournal` and `SubmissionEngine`
 //! itself and drives them explicitly; `Session::submission_transport`
 //! supplies the `Transport` the engine submits through.
+
+#![deny(missing_docs)]
 
 pub mod achievements;
 pub mod conversations;
@@ -75,14 +85,26 @@ pub enum SdkError {
     /// business-rule violation. Never retried; a caller changing nothing
     /// about the request would get this again.
     #[error("rejected: {reason}")]
-    Rejected { reason: String },
+    Rejected {
+        /// The server's own stable `code` (or, failing that, its `error`
+        /// message) explaining why — see `crate::http`'s doc comment.
+        reason: String,
+    },
     /// A connection error, timeout, or 502/503/504 — either this call
     /// wasn't retried (a non-idempotent write with no `Idempotency-Key`)
     /// or it was retried `retried` times and still didn't succeed. A node
     /// hiccup, not this request being wrong; safe to surface as "try again
     /// later," never as a gameplay-level failure.
     #[error("avalon-server unavailable after {retried} retries: {detail}")]
-    Unavailable { retried: u32, detail: String },
+    Unavailable {
+        /// How many retry attempts (beyond the first) this call made
+        /// before giving up — `0` if it was never eligible to retry at
+        /// all (a non-idempotent write).
+        retried: u32,
+        /// The last attempt's error message or the underlying transport
+        /// error's own `Display` text.
+        detail: String,
+    },
     /// The response didn't parse as the shape this call expected, or the
     /// transport failed in a way that isn't connectivity (see
     /// [`Self::Unavailable`] for that case) — a malformed/unexpected
@@ -90,6 +112,8 @@ pub enum SdkError {
     /// on.
     #[error("unexpected response from avalon-server: {0}")]
     Protocol(String),
+    /// `Session::subscribe_presence` (#136): the websocket handshake or
+    /// connection itself failed — carries the underlying error's message.
     #[error("presence websocket connection failed: {0}")]
     WebSocket(String),
     /// The server rejected a conversation read or send with "not a
@@ -121,8 +145,16 @@ pub enum SdkError {
     DeviceLoginExpired,
 }
 
+/// Everything an integrator supplies to construct an [`AvalonClient`] — the
+/// server to talk to, this integrator's own credential, and (optionally)
+/// what it needs to issue attestations on its own behalf.
 pub struct AvalonConfig {
+    /// Base URL of the `avalon-server` this client talks to, e.g.
+    /// `http://127.0.0.1:8080` for local dev.
     pub server_url: String,
+    /// This integrator's own registered credential key id
+    /// (`x-avalon-integrator-key-id`) — identifies which integrator's grants
+    /// `authenticate()` fetches via `GET /me/grants`.
     pub integrator_credential_key_id: String,
     /// This integrator's own registered slug — required only by methods
     /// that issue attestations on this integrator's own behalf
@@ -140,6 +172,10 @@ pub struct AvalonConfig {
     pub retry: RetryConfig,
 }
 
+/// The entry point: construct one with [`AvalonClient::new`], then call
+/// [`AvalonClient::authenticate`] (or [`AvalonClient::login`] —
+/// `device_login`) to get a [`Session`] scoped to a real identity and its
+/// granted capabilities.
 pub struct AvalonClient {
     config: AvalonConfig,
     http: reqwest::Client,
@@ -165,6 +201,8 @@ struct MeResponse {
 }
 
 impl AvalonClient {
+    /// Builds a client from `config`. Does not itself talk to the network —
+    /// see [`AvalonClient::authenticate`].
     pub fn new(config: AvalonConfig) -> Self {
         Self {
             config,
@@ -352,10 +390,15 @@ impl Session {
         crate::submission::HttpTransport::new(self)
     }
 
+    /// This session's own identity (id and creation time) — no network
+    /// call, populated once by `authenticate()`.
     pub fn identity(&self) -> &Identity {
         &self.identity
     }
 
+    /// This session's own profile, as it was when `authenticate()` ran —
+    /// not re-fetched automatically after a subsequent profile edit made
+    /// through another client (e.g. the Hub).
     pub fn profile(&self) -> &Profile {
         &self.profile
     }

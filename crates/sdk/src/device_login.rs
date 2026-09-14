@@ -112,7 +112,7 @@ impl AvalonClient {
 impl DeviceLogin<'_> {
     /// Drives `POST /auth/device/poll` to completion. Sleeps
     /// `poll_interval` seconds between polls, doubling that interval (up to
-    /// [`MAX_POLL_INTERVAL_SECONDS`]) whenever the server answers
+    /// `MAX_POLL_INTERVAL_SECONDS`) whenever the server answers
     /// `slow_down` — the same backoff shape the standard OAuth
     /// device-authorization grant uses — rather than treating `slow_down`
     /// as just another `pending`. Resolves to a real [`Session`] on

@@ -48,16 +48,33 @@ use crate::{SdkError, Session};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Authenticity {
-    Authentic { key_id: String },
-    NotAuthentic { reason: String },
+    /// The embedded signature verifies against one of the issuer's keys.
+    Authentic {
+        /// Which of the issuer's keys verified it.
+        key_id: String,
+    },
+    /// The embedded signature does not verify against any of the issuer's
+    /// currently-known keys.
+    NotAuthentic {
+        /// Why — never used to make an authorization decision, only to
+        /// explain a rejection to a developer.
+        reason: String,
+    },
 }
 
 /// Mirrors `avalon_protocol::achievements::Validity` at the wire level.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Validity {
+    /// Not revoked, and its definition isn't retired in a way that
+    /// invalidates already-issued attestations.
     Valid,
-    Invalid { reason: String },
+    /// Revoked, or otherwise no longer honored.
+    Invalid {
+        /// Why — see `crate::attestations::Validity` server-side for the
+        /// exact set of reasons.
+        reason: String,
+    },
 }
 
 /// One entry in an attestation's history (`"issued"`, plus `"revoked"` if
@@ -65,10 +82,14 @@ pub enum Validity {
 /// server-side.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AttestationHistoryEntry {
+    /// `"issued"` or `"revoked"`.
     pub event: String,
+    /// When this history event happened.
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
+    /// A machine-readable reason code, present on a `"revoked"` entry.
     pub reason_code: Option<String>,
+    /// A human-readable reason, present on a `"revoked"` entry.
     pub reason: Option<String>,
 }
 
@@ -77,14 +98,23 @@ pub struct AttestationHistoryEntry {
 /// field, see module doc comment.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VerifiedAttestation {
+    /// This attestation's own id.
     pub id: Uuid,
+    /// The issuer that issued it, e.g. `"game:<slug>"`.
     pub issuer: String,
+    /// The identity this attestation is about.
     pub subject: Uuid,
+    /// The achievement/milestone definition this attestation claims,
+    /// e.g. `"game:<slug>:achievement:<key>"`.
     pub achievement: String,
+    /// When it was issued.
     #[serde(with = "time::serde::rfc3339")]
     pub issued_at: OffsetDateTime,
+    /// Whether the embedded signature actually verifies.
     pub authenticity: Authenticity,
+    /// Whether it's still in force (not revoked).
     pub validity: Validity,
+    /// Its full history — issuance, and revocation if any.
     pub history: Vec<AttestationHistoryEntry>,
 }
 
