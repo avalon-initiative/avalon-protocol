@@ -87,6 +87,7 @@ function testRouter() {
       { path: '/guilds/:id', name: 'guild', component: Guild },
       { path: '/guilds/:id/channels/:cid', name: 'guild-channel', component: Guild },
       { path: '/guilds', name: 'guilds', component: Guild },
+      { path: '/players/:id', name: 'player-profile', component: Guild },
     ],
   })
 }
@@ -375,5 +376,32 @@ describe('Guild', () => {
     expect(tabLabels).not.toContain('Calendar')
     expect(tabLabels).toContain('Overview')
     expect(tabLabels).toContain('Members')
+  })
+
+  // Issue #393: clicking a member's row opens their read-only profile card.
+  // `router.push` is intercepted (rather than letting the navigation
+  // actually complete) since this test mounts Guild.vue directly rather
+  // than via a <RouterView> — a real route change would otherwise leave
+  // this same, still-mounted instance reacting to its own `watch(guildId,
+  // load)` with a guild id that's really a player id.
+  it('navigates to a member profile card when their row is clicked', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+    const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined)
+
+    const membersTab = wrapper.findAll('button').find((b) => b.text() === 'Members')!
+    await membersTab.trigger('click')
+    await flushPromises()
+
+    const memberButton = wrapper.findAll('button').find((b) => b.text().includes('id-owner'))!
+    await memberButton.trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'player-profile', params: { id: 'id-owner' } })
   })
 })
