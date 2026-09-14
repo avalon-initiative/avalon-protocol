@@ -215,6 +215,19 @@ export interface HistoryEntryResponse {
   timestamp: string
 }
 
+// GET /me/guild-announcements (issue #280) — recent posts to any
+// announcement-only channel in any guild the caller currently belongs to,
+// matching crates/server/src/guild_messages.rs's GuildAnnouncementAlert.
+export interface GuildAnnouncementAlert {
+  message_id: string
+  channel_id: string
+  channel_name: string
+  guild_id: string
+  author: string
+  body: string
+  sent_at: string
+}
+
 // Device-registration / linked-device grant model (issue #135), matching
 // crates/server/src/devices.rs field-for-field.
 

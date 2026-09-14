@@ -463,6 +463,82 @@ pub async fn delete_message(
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
+/// The per-channel cap [`list_my_guild_announcements`]'s `LATERAL` join
+/// takes — keeps one chatty announcement channel from crowding out every
+/// other guild's posts in the aggregate, same reasoning a page-size cap
+/// exists anywhere else in this crate.
+const ANNOUNCEMENT_ALERTS_PER_CHANNEL: i64 = 10;
+/// The overall cap across every channel/guild combined.
+const ANNOUNCEMENT_ALERTS_TOTAL: i64 = 50;
+
+#[derive(Serialize)]
+pub struct GuildAnnouncementAlert {
+    pub message_id: Uuid,
+    pub channel_id: Uuid,
+    pub channel_name: String,
+    pub guild_id: Uuid,
+    pub author: Uuid,
+    pub body: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub sent_at: OffsetDateTime,
+}
+
+/// `GET /me/guild-announcements` (issue #280) — the most recent posts to
+/// any announcement-only channel in any guild the caller currently belongs
+/// to, newest first. This is a plain read, not a notification/unread
+/// tracker: read/unread state is the Hub's own client-local concern (see
+/// `docs/architecture/guilds.md`'s "Guild announcement alerts" section),
+/// matching #22/#74/#253's "chat is operational-tier, not protocol
+/// history" posture — there is nothing here to promote to durable state,
+/// so there is nothing here to track server-side either.
+///
+/// Scoped to *current* membership by construction: the `JOIN guild_members`
+/// below means a guild the caller has left simply produces no rows for
+/// that guild, the same "no historical-membership machinery for
+/// non-durable data" posture `list_archive`'s own doc comment already
+/// takes, applied here without needing a separate cleanup step — a member
+/// who leaves a guild stops seeing its announcements on their very next
+/// poll, automatically.
+pub async fn list_my_guild_announcements(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<GuildAnnouncementAlert>>, AppError> {
+    let identity_id = authenticate(&state, &headers).await?;
+
+    let rows = sqlx::query(
+        "SELECT gm.id AS message_id, gc.id AS channel_id, gc.name AS channel_name, \
+                gc.guild_id, gm.author, gm.body, gm.sent_at \
+         FROM guild_channels gc \
+         JOIN guild_members mem ON mem.guild_id = gc.guild_id AND mem.identity_id = $1 \
+         JOIN LATERAL ( \
+             SELECT id, author, body, sent_at FROM guild_messages \
+             WHERE channel_id = gc.id ORDER BY sent_at DESC, id DESC LIMIT $2 \
+         ) gm ON true \
+         WHERE gc.announcement_only = true AND gc.archived_at IS NULL \
+         ORDER BY gm.sent_at DESC, gm.id DESC \
+         LIMIT $3",
+    )
+    .bind(identity_id)
+    .bind(ANNOUNCEMENT_ALERTS_PER_CHANNEL)
+    .bind(ANNOUNCEMENT_ALERTS_TOTAL)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut alerts = Vec::with_capacity(rows.len());
+    for row in rows {
+        alerts.push(GuildAnnouncementAlert {
+            message_id: row.try_get("message_id")?,
+            channel_id: row.try_get("channel_id")?,
+            channel_name: row.try_get("channel_name")?,
+            guild_id: row.try_get("guild_id")?,
+            author: row.try_get("author")?,
+            body: row.try_get("body")?,
+            sent_at: row.try_get("sent_at")?,
+        });
+    }
+    Ok(Json(alerts))
+}
+
 /// Pure model of [`prune_channel`]'s "keep newest `cap`, ordered by
 /// `sent_at` desc with `id` desc as a tiebreak" semantics, given messages
 /// in arbitrary order. Returns the ids that would be pruned. This mirrors

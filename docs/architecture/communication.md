@@ -105,9 +105,42 @@ happens:
 A thin delivery concern, not a new domain: telling a connected client that a
 message arrived, a friend came online, or a guild event happened. Not
 durable, not queryable history in its own right — it's a signal about
-state that already lives in chat, presence, or guild history. No design
-exists yet; when it's picked up, it should be a delivery mechanism on top of
-the realtime vertical, not a store of its own.
+state that already lives in chat, presence, or guild history.
+
+**Guild announcement alerts (#280, done)** are the first real slice: `GET
+/me/guild-announcements` is a plain, read-only aggregate — the most recent
+posts to any announcement-only channel (#250) in any guild the caller
+currently belongs to, scoped to current membership by construction (a
+`JOIN guild_members` on the read, not a subscription that has to be
+explicitly torn down when someone leaves). The Hub polls it on the same
+15s cadence #389 already established elsewhere, no WebSocket needed for
+this volume. Read/unread state is **entirely client-local** — a per-channel
+"last seen" timestamp kept in the Hub's own `localStorage`
+(`apps/hub/src/api/guildAnnouncements.ts`), never server state: matching
+this document's own posture that a notification is a signal about state
+that already lives elsewhere, there is nothing here durable enough to be
+worth tracking server-side, and #22/#74/#253 already established guild
+chat itself as operational-tier, not protocol history. A channel is marked
+seen when a member actually opens it from the alert (not merely by the
+alert panel being open) — matching the ticket's own "opening the channel
+implicitly clears it" resolution over requiring an explicit dismiss.
+
+**MOTD-change alerts were explicitly deferred**, not built — the ticket's
+own "decide as part of this pass" question. `guild.updated`'s payload
+already distinguishes which fields changed (#153), so detecting "the MOTD
+changed" specifically is feasible whenever there's real demand for it; it
+wasn't clear an MOTD-change alert is actually valuable versus noisy
+(unlike an announcement post, which is inherently something a guild's
+leadership chose to broadcast), and this ticket's own concrete ask —
+manual-testing feedback about missing announcement-post alerts — didn't
+ask for it. Revisit if a real request for it shows up, the same "don't
+build ahead of demand" posture the rest of this document takes for
+notifications generally.
+
+Beyond this one slice, a general delivery mechanism (a bell across every
+notification-worthy event, not just guild announcements) is still
+unbuilt; when it's picked up, it should be a delivery layer on top of the
+realtime vertical, not a store of its own.
 
 ## Avalon is not Discord
 

@@ -48,6 +48,7 @@ beforeEach(() => {
     '/friends': [],
     '/friends/requests': [],
     '/presence': [],
+    '/me/guild-announcements': [],
     '/ledger/sth/latest': {
       tree_size: 1,
       root_hash: 'ab'.repeat(32),

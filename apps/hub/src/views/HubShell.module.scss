@@ -118,8 +118,13 @@
   }
 }
 
-.iconButton {
+.notifications {
+  position: relative;
   margin-left: auto;
+}
+
+.iconButton {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -129,8 +134,86 @@
   border: 1px solid var(--av-color-border);
   background: var(--av-color-surface);
   color: var(--av-color-text-secondary);
-  cursor: not-allowed;
-  opacity: 0.7;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--av-color-text);
+  }
+}
+
+.unreadBadge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--av-color-danger);
+  color: white;
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.1rem;
+  text-align: center;
+}
+
+.announcementsPanel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  margin-top: var(--av-space-2);
+  width: 20rem;
+  max-width: calc(100vw - 2 * var(--av-space-4));
+  max-height: 24rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--av-radius-lg);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 20%);
+}
+
+.announcementsEmpty {
+  padding: var(--av-space-4);
+  color: var(--av-color-text-muted);
+  font-size: var(--av-text-sm);
+}
+
+.announcementItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--av-space-1);
+  padding: var(--av-space-3) var(--av-space-4);
+  border: none;
+  border-bottom: 1px solid var(--av-color-border);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: var(--av-color-surface-hover);
+  }
+}
+
+.announcementUnread {
+  background: var(--av-color-primary-soft);
+}
+
+.announcementChannel {
+  font-size: var(--av-text-sm);
+  font-weight: 600;
+  color: var(--av-color-text-secondary);
+}
+
+.announcementBody {
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text);
 }
 
 .userLink {

@@ -35,6 +35,7 @@ import type {
   IntegratorResponse,
   GuardianRequestSummary,
   GuardianSettingsResponse,
+  GuildAnnouncementAlert,
   GuildInviteResponse,
   GuildJoinRequestResponse,
   GuildMemberResponse,
@@ -227,6 +228,13 @@ export function updateProfile(token: string, body: UpdateProfileRequest): Promis
 
 export function getMyHistory(token: string): Promise<HistoryEntryResponse[]> {
   return request('/me/history', { token })
+}
+
+// Issue #280: recent announcement-only channel posts across every guild
+// the caller currently belongs to. Read-only — no unread/seen tracking
+// server-side, see api/guildAnnouncements.ts.
+export function getMyGuildAnnouncements(token: string): Promise<GuildAnnouncementAlert[]> {
+  return request('/me/guild-announcements', { token })
 }
 
 // Issue #34/#35/#377: the caller's own attestation history across every
