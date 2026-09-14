@@ -14,7 +14,7 @@
     "vue": "^3.5.0"
   },
   "devDependencies": {
-    "@storybook/vue3": "^8.3.0",
+    "@storybook/vue3": "^10.6.0",
     "@storybook/vue3-vite": "^8.3.0",
     "sass": "^1.79.0",
     "storybook": "^10.6.0",
