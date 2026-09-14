@@ -243,6 +243,50 @@ protocol and the domain model in `crates/protocol`; they never pull in
   capability grant being rejected before any request, and a non-participant
   reading or sending into someone else's conversation being rejected with
   `NotConversationParticipant`.
+- `crates/schema-derive` (`avalon-schema-derive`, #386) —
+  `#[derive(AvalonSchema)]`, a proc-macro generating the `.proto` message
+  text and `default_visibility`/`field_visibility` maps an Integrator
+  Space schema publication (#255/#381/#384) needs, from an ordinary Rust
+  struct — an integrator writes `#[derive(AvalonSchema, Serialize)]` once
+  and never hand-writes protobuf syntax or a request body by hand. Split
+  into a thin `lib.rs` entry point plus a pure `codegen.rs` operating on
+  `syn::DeriveInput`, unit-tested directly (`cargo test -p
+  avalon-schema-derive`, 8 tests) without a second compiling crate or
+  `trybuild`. Supports `String`/`bool`/the integer and float scalar
+  types, and `Option<T>`/`Vec<T>` of any of those (`optional`/`repeated`
+  in the generated proto); anything else is a compile error naming the
+  field, not a silently wrong schema. Field numbers are sequential in
+  declaration order, starting at 1 — safe because a schema version is
+  immutable once published (#255), so there's no in-place field-number
+  evolution to design around. `#[avalon(default_visibility = "private")]`
+  (struct-level) and `#[avalon(visibility = "private")]` (field-level,
+  either direction) map to #381's visibility model; a field without the
+  attribute is simply omitted from `field_visibility` rather than listed
+  redundantly, so there's nothing that can drift from the struct's actual
+  fields.
+- `crates/sdk/src/schema.rs` (#386) — the `AvalonSchema` trait (re-exported
+  from `avalon-schema-derive`) plus `Session::publish_schema_version::<T>()`
+  (`POST /integrations/{slug}/schemas`) and
+  `Session::publish_instance::<T>(version, &instance)` (`POST
+  /integrations/{slug}/schemas/{version}/data`), both authenticated via the
+  same integrator challenge-response ceremony
+  `achievements.rs::submit_achievement_issuance` uses — proof the caller's
+  key is making this call right now — but, unlike achievement issuance,
+  with no second content-specific signature, matching those two endpoints'
+  own server-side `authenticate_owning_integrator` guard (no
+  `permission_grants` capability check either; `publish_instance` only
+  requires the subject have an active binding to the calling integrator).
+  `publish_instance` always targets the session's own identity as
+  `subject`, the same "issue to the session's own identity" simplification
+  `issue_achievement` already takes. Live-verified end to end: deriving
+  `AvalonSchema` on a struct with a scalar, an `Option`, a `Vec`, and one
+  `#[avalon(visibility = "private")]` field; publishing the schema;
+  publishing an instance; and reading it back through the public `GET
+  /identities/{id}/integrator-data` — proving both that plain
+  `serde_json::to_value` of the struct (snake_case, no `rename_all` needed)
+  parses against the generated proto's own snake_case field names, and
+  that the private field is actually redacted from an unauthenticated
+  read (`crates/sdk/tests/schema.rs`).
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
 - `bindings/csharp/AvalonSdk/` — a real, building C# port of the friends/

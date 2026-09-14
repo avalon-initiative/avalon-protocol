@@ -6,6 +6,7 @@ members = [
     "crates/server",
     "crates/indexer",
     "crates/sdk",
+    "crates/schema-derive",
     "crates/cli",
 ]
 
@@ -53,6 +54,12 @@ public-suffix = "0.1"
 protobuf = "3.7.2"
 protobuf-parse = "3.7.2"
 protobuf-json-mapping = "3.7.2"
+# issue #386: `avalon-schema-derive`'s `#[derive(AvalonSchema)]`
+# proc-macro, generating `.proto` text from a Rust struct's own fields
+# (syn parses the struct, quote emits the generated `impl` block).
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 # `protobuf_parse::Parser`'s only public API reads `.proto` source from a
 # filesystem path (its in-memory `ProtoPathResolver` trait is crate-private,
 # not usable from a dependent crate) — a scoped, auto-cleaned temp file per

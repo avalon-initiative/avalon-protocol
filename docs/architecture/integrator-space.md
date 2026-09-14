@@ -319,6 +319,14 @@ guarantee is actually needed, following the same discipline
   is `"private"` and the field is marked `"public"`. Only literal top-level
   JSON key matching — no nested-field visibility in this pass (documented
   limitation, not silently attempted).
+- **Rust SDK codegen** (#386): `#[derive(AvalonSchema)]`
+  (`crates/schema-derive`, `avalon-schema-derive`) generates a struct's
+  `.proto` message text plus its `default_visibility`/`field_visibility`
+  maps, so an integrator using the Rust SDK never hand-writes `.proto`
+  source or the raw publish request — see
+  [sdk.md](./sdk.md)'s own "Today in the repo" entry for the macro's
+  supported-type scope and `Session::publish_schema_version`/
+  `publish_instance`.
 - **In-process parse cache.** `proto_schema` caches each schema's parsed
   root message (keyed by schema id, which is permanently immutable once
   published) so repeated instance-data writes against the same schema
