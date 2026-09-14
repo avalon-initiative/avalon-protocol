@@ -191,6 +191,29 @@ uses. Neither proof substitutes for the other.
   Verified live against a real Postgres, including the tampered-signature,
   non-bound-subject, and retired-definition rejection paths
   (`crates/server/tests/attestations.rs`).
+- `crates/server/src/attestations.rs::list_my_achievements` (#34, paginated
+  and filtered per #377) — `GET
+  /me/achievements?integrator_id=&claim_kind=&before=&limit=`, cursor-paginated
+  newest-first (`issued_at`, `id` composite, same `before`/`limit` shape
+  `guild_messages::list_messages`/`integrators::list_integrators` already
+  established), optionally scoped to one issuer (`integrator_id`, the real
+  indexed foreign key, not the `"<category>:<slug>"` wire string) or one
+  claim vocabulary (`claim_kind=achievement`/`milestone`, joining
+  `integrators` only when this filter is actually used). Fixes the N+1 the
+  unfiltered, unpaginated version had — one integrator-category/status
+  query, one issuer-keys query, and one revocation query batched across the
+  whole page (`integrators::fetch_integrator_category_and_status_batch`/
+  `fetch_issuer_keys_batch`, `attestations::fetch_revocations_batch`),
+  instead of four queries per attestation row. `crates/server/db/migrations/
+  0053_achievement_attestations_pagination_indexes` adds the composite
+  `(subject, issued_at, id)` and `(subject, integrator_id)` indexes this
+  actually needs to stay indexed rather than falling back to a per-subject
+  scan. The response is now `{ achievements, next_cursor }`, not a bare
+  array — `crates/sdk/src/achievements.rs::Session::achievements()` and
+  the Hub's `api/achievements.ts::listMyAchievements` both request the
+  server's max page size (200) and unwrap the envelope rather than exposing
+  pagination themselves; a real paginated/filtered entry point on either
+  client is a follow-up, not built here.
 - `crates/server/src/achievements.rs` (#31, generalized to App/Service by
   #324/#325) — claim-definition CRUD, one shared implementation for both
   vocabularies (thin per-route wrappers over a shared core — see the

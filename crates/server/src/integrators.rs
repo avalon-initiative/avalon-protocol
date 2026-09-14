@@ -99,6 +99,8 @@
 //! into them — the network-level authorization model for that is
 //! explicitly out of scope for #84, a separate follow-up.
 
+use std::collections::HashMap;
+
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey, KeyRole};
@@ -201,6 +203,41 @@ pub(crate) async fn fetch_integrator_status(
         .ok_or(AppError::IntegratorNotFound)?;
     let status_raw: String = row.try_get("status")?;
     Ok(IntegratorStatus::parse(&status_raw).unwrap_or(IntegratorStatus::Active))
+}
+
+/// The batched sibling of [`fetch_integrator_category`]/
+/// [`fetch_integrator_status`] — one query for every id in `integrator_ids`
+/// instead of two queries per id, for a caller (issue #377's
+/// `list_my_achievements`) building a response across many attestations at
+/// once. An id with no matching row is simply absent from the result map,
+/// same "caller decides how to handle a miss" posture
+/// [`crate::handlers::list_profiles`] already takes for its own batch read.
+pub(crate) async fn fetch_integrator_category_and_status_batch(
+    state: &AppState,
+    integrator_ids: &[Uuid],
+) -> Result<HashMap<Uuid, (IntegratorCategory, IntegratorStatus)>, AppError> {
+    if integrator_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query("SELECT id, category, status FROM integrators WHERE id = ANY($1)")
+        .bind(integrator_ids)
+        .fetch_all(&state.pool)
+        .await?;
+
+    let mut result = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let id: Uuid = row.try_get("id")?;
+        let category_raw: String = row.try_get("category")?;
+        let status_raw: String = row.try_get("status")?;
+        result.insert(
+            id,
+            (
+                IntegratorCategory::parse(&category_raw).unwrap_or(IntegratorCategory::Game),
+                IntegratorStatus::parse(&status_raw).unwrap_or(IntegratorStatus::Active),
+            ),
+        );
+    }
+    Ok(result)
 }
 
 /// Lowercase `[a-z0-9-]`, 2-64 characters. Deliberately rejects rather than
@@ -684,6 +721,35 @@ pub(crate) async fn fetch_issuer_keys(
     .fetch_all(&state.pool)
     .await?;
     rows.iter().map(issuer_key_from_row).collect()
+}
+
+/// The batched sibling of [`fetch_issuer_keys`] — one query for every id in
+/// `integrator_ids` instead of one query per id, same reasoning as
+/// [`fetch_integrator_category_and_status_batch`] above.
+pub(crate) async fn fetch_issuer_keys_batch(
+    state: &AppState,
+    integrator_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<IssuerKey>>, AppError> {
+    if integrator_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT integrator_id, key_id, algorithm, public_key, role, created_at, valid_until, revoked_at \
+         FROM issuer_keys WHERE integrator_id = ANY($1)",
+    )
+    .bind(integrator_ids)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut result: HashMap<Uuid, Vec<IssuerKey>> = HashMap::new();
+    for row in &rows {
+        let integrator_id: Uuid = row.try_get("integrator_id")?;
+        result
+            .entry(integrator_id)
+            .or_default()
+            .push(issuer_key_from_row(row)?);
+    }
+    Ok(result)
 }
 
 /// `GET /integrations/{slug}/keys` (#90) — public, unauthenticated: an issuer's

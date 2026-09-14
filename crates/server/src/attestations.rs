@@ -28,14 +28,16 @@
 //! not built — see [`avalon_protocol::achievements::AttestationStatus`]'s
 //! own doc comment for why.
 
-use axum::extract::{Path, State};
+use std::collections::HashMap;
+
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -43,13 +45,14 @@ use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenti
 use avalon_protocol::achievements::validity as compute_validity;
 use avalon_protocol::achievements::{attestation_status_at, revocation_signing_bytes};
 use avalon_protocol::ids::AttestationId;
+use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey};
 
 use avalon_protocol::events::ProtocolEvent;
 
 use crate::error::AppError;
 use crate::integrators::{
-    authenticate_integrator, fetch_integrator_category, fetch_integrator_status, fetch_issuer_keys,
-    issuer_ref,
+    authenticate_integrator, fetch_integrator_category, fetch_integrator_category_and_status_batch,
+    fetch_integrator_status, fetch_issuer_keys, fetch_issuer_keys_batch, issuer_ref,
 };
 use crate::outbox;
 use crate::state::AppState;
@@ -150,132 +153,387 @@ pub async fn get_attestation(
     Ok(Json(build_attestation_response(&state, row).await?))
 }
 
-/// `GET /me/achievements` (#34) — bearer-authenticated as the reading
-/// identity, returning that identity's own full attestation history
-/// (every issuer, active and revoked alike): the identity reading its own
-/// record, not a per-consumer trust question, so no additional
-/// authorization beyond "this is genuinely you" is needed — matching
-/// `GET /attestations/{id}`'s own "authenticity/validity are facts, never
-/// gated behind a specific issuer's permission" posture. Also the read
-/// path `crates/sdk/src/achievements.rs::Session::achievements` (#34) and
-/// the Hub's achievements view (#35) are designed against.
-pub async fn list_my_achievements(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<AttestationReadResponse>>, AppError> {
-    let identity_id = crate::handlers::authenticate(&state, &headers).await?;
-
-    let rows = sqlx::query(
-        "SELECT id, integrator_id, issuer, subject, achievement, issued_at, \
-                proof_key_id, proof_algorithm, proof_bytes \
-         FROM achievement_attestations \
-         WHERE subject = $1 ORDER BY issued_at DESC",
-    )
-    .bind(identity_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let mut attestations = Vec::with_capacity(rows.len());
-    for row in rows {
-        attestations.push(build_attestation_response(&state, row).await?);
-    }
-    Ok(Json(attestations))
+/// Everything [`assemble_attestation_response`] needs from an
+/// `achievement_attestations` row, decoupled from how it was fetched — the
+/// same decomposition `authz.rs`'s `BindingFacts` uses to keep the
+/// assembly logic pure and testable without a database.
+struct AttestationRowData {
+    id: Uuid,
+    integrator_id: Uuid,
+    issuer: String,
+    subject: Uuid,
+    achievement: String,
+    issued_at: OffsetDateTime,
+    proof_key_id: Uuid,
+    proof_algorithm: String,
+    proof_bytes: Vec<u8>,
 }
 
-async fn build_attestation_response(
-    state: &AppState,
-    row: PgRow,
+fn parse_attestation_row(row: &PgRow) -> Result<AttestationRowData, AppError> {
+    Ok(AttestationRowData {
+        id: row.try_get("id")?,
+        integrator_id: row.try_get("integrator_id")?,
+        issuer: row.try_get("issuer")?,
+        subject: row.try_get("subject")?,
+        achievement: row.try_get("achievement")?,
+        issued_at: row.try_get("issued_at")?,
+        proof_key_id: row.try_get("proof_key_id")?,
+        proof_algorithm: row.try_get("proof_algorithm")?,
+        proof_bytes: row.try_get("proof_bytes")?,
+    })
+}
+
+#[derive(Clone)]
+struct RevocationData {
+    revoked_at: OffsetDateTime,
+    reason_code: String,
+    reason: String,
+}
+
+fn revocation_data_from_row(row: &PgRow) -> Result<RevocationData, AppError> {
+    Ok(RevocationData {
+        revoked_at: row.try_get("revoked_at")?,
+        reason_code: row.try_get("reason_code")?,
+        reason: row.try_get("reason")?,
+    })
+}
+
+/// The pure assembly step every attestation read (single or batched) goes
+/// through once its inputs are in hand — no I/O here, so this is the piece
+/// a future test can exercise directly without a database.
+fn assemble_attestation_response(
+    data: AttestationRowData,
+    category: IntegratorCategory,
+    status: IntegratorStatus,
+    issuer_keys: &[IssuerKey],
+    revocation: Option<RevocationData>,
 ) -> Result<AttestationReadResponse, AppError> {
-    let id: Uuid = row.try_get("id")?;
-    let integrator_id: Uuid = row.try_get("integrator_id")?;
-    let issuer: String = row.try_get("issuer")?;
-    let subject: Uuid = row.try_get("subject")?;
-    let achievement: String = row.try_get("achievement")?;
-    let issued_at: OffsetDateTime = row.try_get("issued_at")?;
-    let proof_key_id: Uuid = row.try_get("proof_key_id")?;
-    let proof_algorithm: String = row.try_get("proof_algorithm")?;
-    let proof_bytes: Vec<u8> = row.try_get("proof_bytes")?;
-
-    let category = fetch_integrator_category(state, integrator_id).await?;
-    let status = fetch_integrator_status(state, integrator_id).await?;
-    let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
-
     let attestation = avalon_protocol::achievements::AchievementAttestation {
-        id: avalon_protocol::ids::AttestationId(id),
+        id: avalon_protocol::ids::AttestationId(data.id),
         issuer: match category {
-            avalon_protocol::integrators::IntegratorCategory::Game => {
-                avalon_protocol::achievements::Issuer::Game(avalon_protocol::ids::IntegratorId(
-                    integrator_id,
-                ))
-            }
-            avalon_protocol::integrators::IntegratorCategory::App => {
-                avalon_protocol::achievements::Issuer::App(avalon_protocol::ids::IntegratorId(
-                    integrator_id,
-                ))
-            }
-            avalon_protocol::integrators::IntegratorCategory::Service => {
-                avalon_protocol::achievements::Issuer::Service(avalon_protocol::ids::IntegratorId(
-                    integrator_id,
-                ))
-            }
+            IntegratorCategory::Game => avalon_protocol::achievements::Issuer::Game(
+                avalon_protocol::ids::IntegratorId(data.integrator_id),
+            ),
+            IntegratorCategory::App => avalon_protocol::achievements::Issuer::App(
+                avalon_protocol::ids::IntegratorId(data.integrator_id),
+            ),
+            IntegratorCategory::Service => avalon_protocol::achievements::Issuer::Service(
+                avalon_protocol::ids::IntegratorId(data.integrator_id),
+            ),
         },
-        subject: avalon_protocol::ids::IdentityId(subject),
-        achievement: global_id_from_str(&achievement).ok_or(AppError::AttestationNotFound)?,
-        issued_at,
+        subject: avalon_protocol::ids::IdentityId(data.subject),
+        achievement: global_id_from_str(&data.achievement).ok_or(AppError::AttestationNotFound)?,
+        issued_at: data.issued_at,
         proof: avalon_protocol::achievements::Signature {
-            key_id: proof_key_id.to_string(),
-            algorithm: proof_algorithm.clone(),
-            bytes: proof_bytes,
+            key_id: data.proof_key_id.to_string(),
+            algorithm: data.proof_algorithm.clone(),
+            bytes: data.proof_bytes,
         },
     };
 
-    let authenticity =
-        verify_authenticity(&attestation, category.claim_kind(), &issuer, &issuer_keys);
+    let authenticity = verify_authenticity(
+        &attestation,
+        category.claim_kind(),
+        &data.issuer,
+        issuer_keys,
+    );
 
-    let revocation_row = sqlx::query(
-        "SELECT revoked_at, reason_code, reason FROM attestation_revocations \
-         WHERE attestation_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let revoked_at: Option<OffsetDateTime> = match &revocation_row {
-        Some(row) => Some(row.try_get("revoked_at")?),
-        None => None,
-    };
+    let revoked_at = revocation.as_ref().map(|r| r.revoked_at);
     let now = OffsetDateTime::now_utc();
     let attestation_status = attestation_status_at(revoked_at, now);
     let validity = compute_validity(status, attestation_status);
 
     let mut history = vec![AttestationHistoryEntry {
         event: "issued".to_string(),
-        at: issued_at,
+        at: data.issued_at,
         reason_code: None,
         reason: None,
     }];
-    if let Some(row) = revocation_row {
+    if let Some(r) = revocation {
         history.push(AttestationHistoryEntry {
             event: "revoked".to_string(),
-            at: row.try_get("revoked_at")?,
-            reason_code: Some(row.try_get("reason_code")?),
-            reason: Some(row.try_get("reason")?),
+            at: r.revoked_at,
+            reason_code: Some(r.reason_code),
+            reason: Some(r.reason),
         });
     }
 
     Ok(AttestationReadResponse {
-        id,
-        issuer,
-        subject,
-        achievement,
-        issued_at,
+        id: data.id,
+        issuer: data.issuer,
+        subject: data.subject,
+        achievement: data.achievement,
+        issued_at: data.issued_at,
         proof: AttestationProofResponse {
-            key_id: proof_key_id.to_string(),
-            algorithm: proof_algorithm,
+            key_id: data.proof_key_id.to_string(),
+            algorithm: data.proof_algorithm,
         },
         authenticity: authenticity.into(),
         validity: validity.into(),
         history,
     })
+}
+
+async fn build_attestation_response(
+    state: &AppState,
+    row: PgRow,
+) -> Result<AttestationReadResponse, AppError> {
+    let data = parse_attestation_row(&row)?;
+    let category = fetch_integrator_category(state, data.integrator_id).await?;
+    let status = fetch_integrator_status(state, data.integrator_id).await?;
+    let issuer_keys = fetch_issuer_keys(state, data.integrator_id).await?;
+
+    let revocation_row = sqlx::query(
+        "SELECT revoked_at, reason_code, reason FROM attestation_revocations \
+         WHERE attestation_id = $1",
+    )
+    .bind(data.id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let revocation = revocation_row
+        .as_ref()
+        .map(revocation_data_from_row)
+        .transpose()?;
+
+    assemble_attestation_response(data, category, status, &issuer_keys, revocation)
+}
+
+const DEFAULT_ACHIEVEMENTS_PAGE_SIZE: i64 = 50;
+const MAX_ACHIEVEMENTS_PAGE_SIZE: i64 = 200;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimKindFilter {
+    Achievement,
+    Milestone,
+}
+
+impl ClaimKindFilter {
+    fn parse(raw: Option<&str>) -> Result<Option<ClaimKindFilter>, AppError> {
+        Ok(match raw {
+            None => None,
+            Some("achievement") => Some(ClaimKindFilter::Achievement),
+            Some("milestone") => Some(ClaimKindFilter::Milestone),
+            Some(_) => return Err(AppError::InvalidAchievementsListQuery),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ListMyAchievementsQuery {
+    /// Restrict to one issuer, by its `integrators.id` — the actual
+    /// indexed foreign key `achievement_attestations.integrator_id` names,
+    /// rather than parsing the `issuer` column's `"<category>:<slug>"`
+    /// wire string back apart.
+    pub integrator_id: Option<Uuid>,
+    /// `"achievement"` (Game-category issuers) or `"milestone"` (App/
+    /// Service), matching `IntegratorCategory::claim_kind()`.
+    pub claim_kind: Option<String>,
+    /// Cursor: an attestation id already seen by the caller. Results are
+    /// the next page strictly older than it (`issued_at` desc, `id` as
+    /// tiebreak) — same `before`/`limit` shape
+    /// `guild_messages::ListMessagesQuery` and
+    /// `integrators::ListIntegratorsQuery` already established.
+    pub before: Option<Uuid>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct ListMyAchievementsResponse {
+    pub achievements: Vec<AttestationReadResponse>,
+    /// `Some(id)` when another page exists — pass it back as `before=` to
+    /// fetch it. `None` means this was the last page.
+    pub next_cursor: Option<Uuid>,
+}
+
+/// Builds the `GET /me/achievements` query — split out from
+/// [`list_my_achievements`] so the filter/pagination shape can be
+/// unit-tested (via [`sqlx::QueryBuilder::sql`]) without a live Postgres
+/// connection, same pattern `integrators::build_integrators_list_query`
+/// already established. Only joins `integrators` when `claim_kind` is
+/// actually filtered on — the common, unfiltered case stays the same
+/// single-table scan it always was.
+fn build_my_achievements_query(
+    subject: Uuid,
+    integrator_id: Option<Uuid>,
+    claim_kind: Option<ClaimKindFilter>,
+    before: Option<Uuid>,
+    limit: i64,
+) -> QueryBuilder<Postgres> {
+    let needs_join = claim_kind.is_some();
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(if needs_join {
+        "SELECT a.id, a.integrator_id, a.issuer, a.subject, a.achievement, a.issued_at, \
+                a.proof_key_id, a.proof_algorithm, a.proof_bytes \
+         FROM achievement_attestations a JOIN integrators i ON i.id = a.integrator_id \
+         WHERE a.subject = "
+    } else {
+        "SELECT id, integrator_id, issuer, subject, achievement, issued_at, \
+                proof_key_id, proof_algorithm, proof_bytes \
+         FROM achievement_attestations WHERE subject = "
+    });
+    builder.push_bind(subject);
+
+    let col = if needs_join { "a." } else { "" };
+
+    if let Some(integrator_id) = integrator_id {
+        builder.push(format!(" AND {col}integrator_id = "));
+        builder.push_bind(integrator_id);
+    }
+
+    match claim_kind {
+        Some(ClaimKindFilter::Achievement) => {
+            builder.push(" AND i.category = ");
+            builder.push_bind("game".to_string());
+        }
+        Some(ClaimKindFilter::Milestone) => {
+            builder.push(" AND i.category IN (");
+            builder.push_bind("app".to_string());
+            builder.push(", ");
+            builder.push_bind("service".to_string());
+            builder.push(")");
+        }
+        None => {}
+    }
+
+    if let Some(cursor_id) = before {
+        builder.push(format!(
+            " AND ({col}issued_at, {col}id) < (SELECT issued_at, id \
+              FROM achievement_attestations WHERE id = "
+        ));
+        builder.push_bind(cursor_id);
+        builder.push(" AND subject = ");
+        builder.push_bind(subject);
+        builder.push(")");
+    }
+
+    builder.push(format!(
+        " ORDER BY {col}issued_at DESC, {col}id DESC LIMIT "
+    ));
+    // Fetch one extra row past the page size, purely to know whether a
+    // next page exists — same convention
+    // `integrators::build_integrators_list_query` uses.
+    builder.push_bind(limit + 1);
+
+    builder
+}
+
+/// `GET /me/achievements?integrator_id=&claim_kind=&before=&limit=` (#34,
+/// paginated/filtered per #377) — bearer-authenticated as the reading
+/// identity, returning that identity's own attestation history (every
+/// issuer, active and revoked alike): the identity reading its own
+/// record, not a per-consumer trust question, so no additional
+/// authorization beyond "this is genuinely you" is needed — matching
+/// `GET /attestations/{id}`'s own "authenticity/validity are facts, never
+/// gated behind a specific issuer's permission" posture. Also the read
+/// path `crates/sdk/src/achievements.rs::Session::achievements` (#34) and
+/// the Hub's achievements view (#35) are designed against.
+///
+/// The N+1 `build_attestation_response` had (one integrator-category, one
+/// integrator-status, one issuer-keys, one revocation query — *per row*)
+/// is fixed here by batching all four lookups across the whole page: a
+/// fixed four queries regardless of how many attestations are on the
+/// page, not `1 + 4*page_size`.
+pub async fn list_my_achievements(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ListMyAchievementsQuery>,
+) -> Result<Json<ListMyAchievementsResponse>, AppError> {
+    let identity_id = crate::handlers::authenticate(&state, &headers).await?;
+    let claim_kind = ClaimKindFilter::parse(query.claim_kind.as_deref())?;
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_ACHIEVEMENTS_PAGE_SIZE)
+        .clamp(1, MAX_ACHIEVEMENTS_PAGE_SIZE);
+
+    let mut builder = build_my_achievements_query(
+        identity_id,
+        query.integrator_id,
+        claim_kind,
+        query.before,
+        limit,
+    );
+    let rows = builder.build().fetch_all(&state.pool).await?;
+    let has_more = rows.len() as i64 > limit;
+
+    let page: Vec<AttestationRowData> = rows
+        .iter()
+        .take(limit as usize)
+        .map(parse_attestation_row)
+        .collect::<Result<_, _>>()?;
+
+    let integrator_ids: Vec<Uuid> = {
+        let mut ids: Vec<Uuid> = page.iter().map(|d| d.integrator_id).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    let attestation_ids: Vec<Uuid> = page.iter().map(|d| d.id).collect();
+
+    let category_status =
+        fetch_integrator_category_and_status_batch(&state, &integrator_ids).await?;
+    let issuer_keys_by_integrator = fetch_issuer_keys_batch(&state, &integrator_ids).await?;
+    let revocations = fetch_revocations_batch(&state, &attestation_ids).await?;
+
+    let mut achievements = Vec::with_capacity(page.len());
+    for data in page {
+        // A row here always has a matching `integrators` row — the
+        // foreign key enforces it — so the `Game`/`Active` fallback is
+        // unreachable in practice, same "can't actually happen" posture
+        // `fetch_integrator_category`'s own default takes.
+        let (category, status) = category_status
+            .get(&data.integrator_id)
+            .copied()
+            .unwrap_or((IntegratorCategory::Game, IntegratorStatus::Active));
+        let empty_keys: Vec<IssuerKey> = Vec::new();
+        let issuer_keys = issuer_keys_by_integrator
+            .get(&data.integrator_id)
+            .unwrap_or(&empty_keys);
+        let revocation = revocations.get(&data.id).cloned();
+        achievements.push(assemble_attestation_response(
+            data,
+            category,
+            status,
+            issuer_keys,
+            revocation,
+        )?);
+    }
+
+    let next_cursor = if has_more {
+        achievements.last().map(|a| a.id)
+    } else {
+        None
+    };
+
+    Ok(Json(ListMyAchievementsResponse {
+        achievements,
+        next_cursor,
+    }))
+}
+
+/// The batched sibling of the per-attestation revocation lookup
+/// `build_attestation_response` still does — one query for every id in
+/// `attestation_ids` instead of one query per id, same reasoning as
+/// `integrators::fetch_issuer_keys_batch`.
+async fn fetch_revocations_batch(
+    state: &AppState,
+    attestation_ids: &[Uuid],
+) -> Result<HashMap<Uuid, RevocationData>, AppError> {
+    if attestation_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT attestation_id, revoked_at, reason_code, reason FROM attestation_revocations \
+         WHERE attestation_id = ANY($1)",
+    )
+    .bind(attestation_ids)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut result = HashMap::with_capacity(rows.len());
+    for row in &rows {
+        let attestation_id: Uuid = row.try_get("attestation_id")?;
+        result.insert(attestation_id, revocation_data_from_row(row)?);
+    }
+    Ok(result)
 }
 
 #[derive(Deserialize)]
@@ -416,4 +674,100 @@ pub async fn revoke_attestation(
         reason_code: body.reason_code,
         reason: body.reason,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pure-logic checks for #377's filter/pagination query shape and
+    //! `claim_kind` parsing — no live Postgres needed, same pattern
+    //! `integrators::build_integrators_list_query`'s own tests already
+    //! established.
+
+    use super::*;
+
+    #[test]
+    fn claim_kind_parses_achievement_and_milestone() {
+        assert_eq!(
+            ClaimKindFilter::parse(Some("achievement")).unwrap(),
+            Some(ClaimKindFilter::Achievement)
+        );
+        assert_eq!(
+            ClaimKindFilter::parse(Some("milestone")).unwrap(),
+            Some(ClaimKindFilter::Milestone)
+        );
+        assert_eq!(ClaimKindFilter::parse(None).unwrap(), None);
+    }
+
+    #[test]
+    fn claim_kind_rejects_anything_else() {
+        assert!(matches!(
+            ClaimKindFilter::parse(Some("quest")),
+            Err(AppError::InvalidAchievementsListQuery)
+        ));
+    }
+
+    #[test]
+    fn no_filters_stays_a_single_table_scan() {
+        let builder = build_my_achievements_query(Uuid::new_v4(), None, None, None, 50);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("FROM achievement_attestations WHERE subject ="));
+        assert!(!sql.contains("JOIN integrators"));
+    }
+
+    #[test]
+    fn integrator_filter_adds_a_column_check_without_joining() {
+        let builder =
+            build_my_achievements_query(Uuid::new_v4(), Some(Uuid::new_v4()), None, None, 50);
+        let sql = builder.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("AND integrator_id ="));
+        assert!(!sql.contains("JOIN integrators"));
+    }
+
+    #[test]
+    fn claim_kind_filter_joins_integrators_and_checks_category() {
+        let achievement = build_my_achievements_query(
+            Uuid::new_v4(),
+            None,
+            Some(ClaimKindFilter::Achievement),
+            None,
+            50,
+        );
+        let sql = achievement.sql();
+        let sql = sql.as_str();
+        assert!(sql.contains("JOIN integrators i ON i.id = a.integrator_id"));
+        assert!(sql.contains("AND i.category ="));
+
+        let milestone = build_my_achievements_query(
+            Uuid::new_v4(),
+            None,
+            Some(ClaimKindFilter::Milestone),
+            None,
+            50,
+        );
+        assert!(milestone.sql().as_str().contains("AND i.category IN ("));
+    }
+
+    #[test]
+    fn cursor_adds_keyset_pagination_clause() {
+        let builder =
+            build_my_achievements_query(Uuid::new_v4(), None, None, Some(Uuid::new_v4()), 50);
+        assert!(builder.sql().as_str().contains(
+            "AND (issued_at, id) < (SELECT issued_at, id \
+              FROM achievement_attestations WHERE id ="
+        ));
+    }
+
+    #[test]
+    fn no_cursor_means_no_keyset_pagination_clause() {
+        let builder = build_my_achievements_query(Uuid::new_v4(), None, None, None, 50);
+        assert!(!builder.sql().as_str().contains("WHERE id ="));
+    }
+
+    #[test]
+    fn limit_fetches_one_extra_row_to_detect_a_next_page() {
+        let builder = build_my_achievements_query(Uuid::new_v4(), None, None, None, 50);
+        assert!(builder.sql().as_str().contains(" LIMIT "));
+    }
 }

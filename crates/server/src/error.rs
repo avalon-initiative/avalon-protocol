@@ -175,6 +175,8 @@ pub enum AppError {
     IntegratorNotFound,
     #[error("invalid integrators list query: sort must be one of newest, name")]
     InvalidIntegratorsListQuery,
+    #[error("invalid achievements list query: claim_kind must be one of achievement, milestone")]
+    InvalidAchievementsListQuery,
     #[error("integrator challenge not found or already used")]
     IntegratorChallengeNotFound,
     #[error("integrator challenge has expired")]
@@ -415,6 +417,7 @@ impl IntoResponse for AppError {
             AppError::IntegratorSlugTaken => StatusCode::CONFLICT,
             AppError::IntegratorNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidIntegratorsListQuery => StatusCode::BAD_REQUEST,
+            AppError::InvalidAchievementsListQuery => StatusCode::BAD_REQUEST,
             // Auth-failure reasons for the integrator challenge-response scheme
             // (#26) all collapse to 401, same as `WebauthnFailed`/
             // `InvalidEventSignature` above — the specific reason is useful

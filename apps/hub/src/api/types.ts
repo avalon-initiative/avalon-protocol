@@ -961,6 +961,19 @@ export interface AttestationResponse {
   // recognition is the consumer's own policy call, never the server's).
 }
 
+// GET /me/achievements's response envelope (issue #377) — matching
+// crates/server/src/attestations.rs::ListMyAchievementsResponse. Wraps
+// what used to be a bare array so the endpoint could gain cursor
+// pagination without silently truncating a caller that isn't ready for
+// it. `next_cursor` isn't consumed by the Hub yet — see
+// api/achievements.ts::listMyAchievements, which requests the server's
+// max page size instead of wiring up real "load more" UI, matching the
+// same scope decision the Rust SDK made for #377.
+export interface ListMyAchievementsResponse {
+  achievements: AttestationResponse[]
+  next_cursor: string | null
+}
+
 // GET /integrations/{slug}/achievements and GET /integrations/{slug}/milestones
 // (#31/#324/#325), matching crates/server/src/achievements.rs's
 // AchievementDefinitionResponse field-for-field. `id` is the definition's

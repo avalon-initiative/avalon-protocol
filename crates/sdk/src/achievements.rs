@@ -117,11 +117,32 @@ fn attestation_signing_bytes(issuer_ref: &str, subject: Uuid, achievement: &str)
     format!("avalon:achievement.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
+/// Mirrors `crate::attestations::ListMyAchievementsResponse` at the wire
+/// level — issue #377 wrapped what was a bare array in a
+/// `{ achievements, next_cursor }` envelope so `GET /me/achievements`
+/// could be paginated. `fetch_achievements` below unwraps this and returns
+/// just the first page's attestations, matching `Session::achievements`'s
+/// existing, unpaginated public shape; a paginated/filtered entry point is
+/// a follow-up, not built here (see issue #377's own PR for why the SDK
+/// side was scoped out).
+#[derive(Deserialize)]
+struct ListMyAchievementsResponse {
+    achievements: Vec<VerifiedAttestation>,
+    #[allow(dead_code)]
+    next_cursor: Option<Uuid>,
+}
+
 impl Session {
     pub(crate) async fn fetch_achievements(&self) -> Result<Vec<VerifiedAttestation>, SdkError> {
+        // `limit=200` (the server's own max page size,
+        // `attestations::MAX_ACHIEVEMENTS_PAGE_SIZE`) rather than the
+        // default 50 — minimizes the behavior change from before #377's
+        // pagination landed, though a caller with more than 200
+        // attestations from a single identity now genuinely needs the
+        // (not yet built) paginated entry point to see the rest.
         let response = self
             .http
-            .get(format!("{}/me/achievements", self.server_url))
+            .get(format!("{}/me/achievements?limit=200", self.server_url))
             .bearer_auth(&self.token)
             .send()
             .await?;
@@ -130,7 +151,8 @@ impl Session {
             return Err(SdkError::ServerError(response.status()));
         }
 
-        Ok(response.json().await?)
+        let page: ListMyAchievementsResponse = response.json().await?;
+        Ok(page.achievements)
     }
 
     pub(crate) async fn submit_achievement_issuance(&self, key: &str) -> Result<Uuid, SdkError> {

@@ -1,0 +1,2 @@
+DROP INDEX achievement_attestations_subject_integrator_idx;
+DROP INDEX achievement_attestations_subject_issued_at_idx;

@@ -111,7 +111,7 @@ export function mergeAchievement(
 }
 
 export async function listMyAchievements(token: string): Promise<Achievement[]> {
-  const attestations = await api.getMyAchievements(token)
+  const { achievements: attestations } = await api.getMyAchievements(token)
   if (attestations.length === 0) {
     return []
   }
