@@ -549,6 +549,11 @@ pub struct ProfileResponse {
     /// with the actual `discovery_preferences` row — same reasoning
     /// `handle` is derived rather than separately fetched.
     pub discoverable: bool,
+    /// Issue #87 — this identity's own presence-visibility setting
+    /// (`"public"`/`"authenticated_only"`/`"friends"`/`"guild_members"`/`"private"`).
+    /// Self-only, same posture `discoverable` takes — see this endpoint's
+    /// own doc comment on why `PublicIdentityProfileResponse` omits both.
+    pub presence_visibility: String,
 }
 
 fn profile_row_to_response(
@@ -586,6 +591,7 @@ fn profile_row_to_response(
         main_guild,
         effective_main_guild,
         discoverable: row.try_get("discoverable")?,
+        presence_visibility: row.try_get("presence_visibility")?,
     })
 }
 
@@ -624,6 +630,7 @@ const PROFILE_SELECT: &str = r#"
     SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
            p.favorite_genres, p.pronouns, p.banner_url, p.status, p.links,
            p.timezone, p.theme_color, p.location, p.main_guild, i.created_at,
+           p.presence_visibility,
            COALESCE(dp.discoverable, false) AS discoverable
     FROM profiles p
     JOIN identities i ON i.id = p.identity_id
@@ -693,9 +700,9 @@ pub struct PublicProfileResponse {
 /// `pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/
 /// `theme_color`/`location` (#372) — but only for one identity per request,
 /// matching a real profile-card view rather than a roster resolve. Omits
-/// `discoverable`: that field describes the *viewed* identity's own search
-/// settings, not something the viewer needs once they've already found the
-/// profile.
+/// `discoverable` and `presence_visibility`: both describe the *viewed*
+/// identity's own settings preferences, not something the viewer needs
+/// once they've already found the profile.
 #[derive(Serialize)]
 pub struct PublicIdentityProfileResponse {
     pub identity_id: Uuid,
@@ -930,6 +937,14 @@ pub struct UpdateProfileRequest {
     /// comment for why, matching `presence_preferences.hide_active_in`'s
     /// identical precedent.
     pub discoverable: Option<bool>,
+    /// Issue #87. `"public"`/`"authenticated_only"`/`"friends"` (the
+    /// default)/`"private"` — who may read this identity's presence via
+    /// `GET /presence`. `"guild_members"` is accepted (presence has no
+    /// guild context, so it behaves like `"private"` — nobody but the
+    /// subject — see `crate::presence::presence_visible`). Same
+    /// not-durable-history treatment as `discoverable`: applied outside
+    /// this request's transaction, no `profile.updated` payload entry.
+    pub presence_visibility: Option<String>,
 }
 
 /// Nothing renders `avatar_url` as an actual image anywhere in the Hub
@@ -1362,6 +1377,11 @@ pub async fn update_profile(
     // `PROFILE_SELECT` read further down, so that read already reflects it.
     if let Some(discoverable) = body.discoverable {
         crate::discovery::set_discoverable(&state, identity_id, discoverable).await?;
+    }
+    if let Some(raw) = &body.presence_visibility {
+        raw.parse::<avalon_protocol::permissions::Visibility>()
+            .map_err(|_| AppError::InvalidVisibility)?;
+        crate::visibility::set_presence_visibility(&state, identity_id, raw).await?;
     }
 
     // `display_name`, `avatar_url`, `bio`, `favorite_genres`, and `pronouns`

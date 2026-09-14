@@ -111,6 +111,10 @@ pub enum AppError {
     InvalidGuildIcon,
     #[error("join_policy must be \"invite_only\" or \"open\"")]
     InvalidJoinPolicy,
+    #[error(
+        "roster_visibility must be one of \"public\", \"authenticated_only\", \"friends\", \"guild_members\", \"private\""
+    )]
+    InvalidVisibility,
     #[error("links may contain at most 5 entries")]
     TooManyGuildLinks,
     #[error("each link's label must be 1-60 characters and url must be an http(s) URL of 2048 characters or fewer")]
@@ -385,6 +389,7 @@ impl AppError {
             AppError::InvalidGuildBanner => "INVALID_GUILD_BANNER",
             AppError::InvalidGuildIcon => "INVALID_GUILD_ICON",
             AppError::InvalidJoinPolicy => "INVALID_JOIN_POLICY",
+            AppError::InvalidVisibility => "INVALID_VISIBILITY",
             AppError::TooManyGuildLinks => "TOO_MANY_GUILD_LINKS",
             AppError::InvalidGuildLink => "INVALID_GUILD_LINK",
             AppError::CannotModifyOwnerRole => "CANNOT_MODIFY_OWNER_ROLE",
@@ -542,6 +547,7 @@ impl IntoResponse for AppError {
             | AppError::InvalidGuildBanner
             | AppError::InvalidGuildIcon
             | AppError::InvalidJoinPolicy
+            | AppError::InvalidVisibility
             | AppError::TooManyGuildLinks
             | AppError::InvalidGuildLink => StatusCode::BAD_REQUEST,
             AppError::CannotModifyOwnerRole | AppError::MissingGuildPermission => {

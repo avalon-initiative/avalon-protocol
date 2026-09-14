@@ -30,6 +30,7 @@ pub mod registry;
 pub mod retention;
 pub mod settlement;
 pub mod state;
+pub mod visibility;
 
 use axum::http::{HeaderValue, Method};
 use axum::routing::{delete, get, patch, post, put};

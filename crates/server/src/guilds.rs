@@ -467,11 +467,20 @@ struct GuildRow {
     /// discovery card. Always visible to a `manage_guild` holder
     /// regardless of this flag; it only gates *public* exposure.
     game_breakdown_public: bool,
+    /// Issue #87 — gates `GET /guilds/{id}/members` (`list_members`), a
+    /// `Visibility` wire string (`"public"`/`"guild_members"`/`"private"`
+    /// are the only values a real setting should ever be; anything else
+    /// falls back to `Visibility::Public` on read, see
+    /// `crate::visibility::parse_visibility`). Not modeled in
+    /// `avalon_protocol::guilds::Guild`/the Rust SDK yet — same documented
+    /// gap `GuildChannel.archived` already has (`crates/sdk/src/guilds.rs`'s
+    /// own module doc comment), not silently worked around.
+    roster_visibility: String,
 }
 
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, icon, links, recruiting, game_breakdown_public FROM guilds WHERE id = $1",
+        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, icon, links, recruiting, game_breakdown_public, roster_visibility FROM guilds WHERE id = $1",
     )
     .bind(guild_id)
     .fetch_optional(&state.pool)
@@ -499,6 +508,7 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
         links,
         recruiting: row.try_get("recruiting")?,
         game_breakdown_public: row.try_get("game_breakdown_public")?,
+        roster_visibility: row.try_get("roster_visibility")?,
     })
 }
 
@@ -536,6 +546,9 @@ pub struct GuildResponse {
     /// the guild's own deliberate choice of what to show, same "always
     /// public" treatment `links`/`motd` already get.
     pub favorite_games: Vec<FavoriteGameEntry>,
+    /// Issue #87. `"public"`/`"guild_members"`/`"private"` — who may read
+    /// `GET /guilds/{id}/members`. Defaults to `"guild_members"`.
+    pub roster_visibility: String,
 }
 
 async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildResponse, AppError> {
@@ -575,6 +588,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         recruiting: guild.recruiting,
         game_breakdown_public: guild.game_breakdown_public,
         favorite_games,
+        roster_visibility: guild.roster_visibility,
     })
 }
 
@@ -704,6 +718,7 @@ pub async fn create_guild(
                 links: Vec::new(),
                 recruiting: false,
                 game_breakdown_public: false,
+                roster_visibility: "guild_members".to_string(),
             },
         )
         .await?,
@@ -754,6 +769,11 @@ pub struct UpdateGuildRequest {
     /// integrator affinity breakdown is shown on this guild's *public* profile —
     /// a `manage_guild` holder can always see it internally either way.
     pub game_breakdown_public: Option<bool>,
+    /// Issue #87. `"public"` (anyone), `"guild_members"` (only current
+    /// members), or `"private"` (nobody, via this endpoint, but a
+    /// `manage_guild` holder — see `update_guild`'s own permission check —
+    /// can always change it back). Omitted leaves it untouched.
+    pub roster_visibility: Option<String>,
 }
 
 pub async fn update_guild(
@@ -809,13 +829,27 @@ pub async fn update_guild(
     let new_game_breakdown_public = body
         .game_breakdown_public
         .unwrap_or(guild.game_breakdown_public);
+    let new_roster_visibility = match &body.roster_visibility {
+        Some(raw) => {
+            // Validated against the fixed `Visibility` vocabulary, not
+            // silently stored as free text — a typo here would otherwise
+            // fall back to `Public` on read (`parse_visibility`'s own
+            // forward/backward-compat fallback), which is exactly the
+            // "exposed because nobody named the scope" outcome issue #87's
+            // own invariant rules out.
+            raw.parse::<avalon_protocol::permissions::Visibility>()
+                .map_err(|_| AppError::InvalidVisibility)?;
+            raw.clone()
+        }
+        None => guild.roster_visibility.clone(),
+    };
     let new_links_json =
         serde_json::to_value(&new_links).expect("GuildLink always serializes to JSON");
 
     let mut tx = state.pool.begin().await?;
 
     let updated = sqlx::query(
-        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, game_breakdown_public = $10, join_policy = $11 WHERE id = $1",
+        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, game_breakdown_public = $10, join_policy = $11, roster_visibility = $12 WHERE id = $1",
     )
     .bind(guild_id)
     .bind(&new_name)
@@ -828,6 +862,7 @@ pub async fn update_guild(
     .bind(new_recruiting)
     .bind(new_game_breakdown_public)
     .bind(new_join_policy.as_str())
+    .bind(&new_roster_visibility)
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &updated {
@@ -862,6 +897,7 @@ pub async fn update_guild(
             "recruiting": new_recruiting,
             "game_breakdown_public": new_game_breakdown_public,
             "join_policy": new_join_policy.as_str(),
+            "roster_visibility": new_roster_visibility,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -888,6 +924,7 @@ pub async fn update_guild(
                 links: new_links,
                 recruiting: new_recruiting,
                 game_breakdown_public: new_game_breakdown_public,
+                roster_visibility: new_roster_visibility,
             },
         )
         .await?,
@@ -1561,6 +1598,7 @@ pub async fn transfer_ownership(
                 links: guild.links,
                 recruiting: guild.recruiting,
                 game_breakdown_public: guild.game_breakdown_public,
+                roster_visibility: guild.roster_visibility,
             },
         )
         .await?,
@@ -2543,10 +2581,26 @@ pub async fn list_members(
     headers: HeaderMap,
     Path(guild_id): Path<Uuid>,
 ) -> Result<Json<Vec<GuildMemberResponse>>, AppError> {
-    authenticate(&state, &headers).await?;
-    // 404s if the guild doesn't exist, same as GET /guilds/{id}. No
-    // presence yet (see ticket) — just identity_id + role + joined_at.
-    fetch_guild(&state, guild_id).await?;
+    let caller = authenticate(&state, &headers).await?;
+    // 404s if the guild doesn't exist, same as GET /guilds/{id}.
+    let guild = fetch_guild(&state, guild_id).await?;
+
+    // Issue #87: the guild's own `roster_visibility` setting gates this
+    // read — previously any authenticated session could read any guild's
+    // full roster, unscoped. The owner always sees it regardless of the
+    // setting — same "always visible to the guild's own management"
+    // exception `game_breakdown_public`'s doc comment already establishes
+    // for a different guild-level visibility toggle; `private` gates
+    // *outside* exposure, it was never meant to lock the guild out of its
+    // own roster.
+    if caller != guild.owner {
+        let visibility = crate::visibility::parse_visibility(&guild.roster_visibility);
+        if !crate::visibility::is_visible(&state, visibility, Some(caller), None, Some(guild_id))
+            .await?
+        {
+            return Err(AppError::Forbidden);
+        }
+    }
 
     let rows = sqlx::query(
         "SELECT guild_id, identity_id, role_index, joined_at FROM guild_members WHERE guild_id = $1 ORDER BY joined_at",

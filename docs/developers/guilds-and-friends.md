@@ -32,10 +32,14 @@ let mine_and_others = session.presence_of(&[id1, id2]).await?;
 session.update_presence(PresenceStatus::Away).await?; // no capability required — you publish your own
 ```
 
-`presence_of` performs **no visibility filtering yet** (a documented gap,
-[`../architecture/privacy.md`](../architecture/privacy.md)/issue #87) —
-any valid session can look up presence for any identity id it names. Don't
-build a feature that depends on this being scoped; it isn't yet.
+`presence_of` is filtered server-side by each subject's own presence
+visibility setting (issue #87, default `friends`) — a caller only sees a
+real status back for an identity that's currently friends with them (or
+themselves), public, or authenticated-only; everyone else reads as
+`Offline`, indistinguishable from a genuinely missing entry, the same
+posture a block already gets (issue #97). See
+[`../architecture/privacy.md`](../architecture/privacy.md) for the full
+scope model — this is real and enforced, not a documented gap.
 
 `session.subscribe_presence(&ids)` opens a live-push websocket channel,
 additive to the point-in-time reads above — see the method's own rustdoc
@@ -75,10 +79,12 @@ blocked one — surfaces as the same `SdkError::NotConversationParticipant`
 either way, deliberately: revealing which case applied would leak that a
 block exists (issue #97's "never reveal you've been blocked" rule).
 
-## Visibility scoping is a known, tracked gap
+## Visibility scoping: what's real, what isn't yet
 
-None of the reads above (`presence_of`, guild roster/channels/messages) are
-scoped to what the caller is actually allowed to see yet — see issue #87.
-They return exactly what the server returns. Don't build a
-production-facing feature that assumes otherwise; this page will be updated
-once #87 lands.
+Presence (`presence_of`/`presence`/`subscribe_presence`) and guild rosters
+(`roster()`) are both scoped server-side now (issue #87) — see the sections
+above and [`../architecture/privacy.md`](../architecture/privacy.md).
+Guild `channels()`/`messages()` are **not** — any member with `guilds.chat`
+sees every channel regardless of any per-channel visibility a guild might
+eventually want, and there's no such setting yet. Don't build a
+production-facing feature that assumes channel-level scoping exists.
