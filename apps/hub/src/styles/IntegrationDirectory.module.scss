@@ -24,3 +24,17 @@
   border-color: var(--av-color-primary);
   color: var(--av-color-on-primary, #fff);
 }
+
+/* Issue #467: the card stays the existing single-button "open profile"
+   click target; Connect renders as its own sibling control alongside it,
+   not nested inside the card's own button. */
+.cardRow {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-3);
+
+  > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+}

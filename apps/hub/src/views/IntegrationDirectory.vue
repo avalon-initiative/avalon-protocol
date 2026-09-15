@@ -6,13 +6,25 @@ import { useRouter } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonIntegratorCard } from '@avalon/ui'
 import type { AvalonFilterBarSortOption } from '@avalon/ui'
 import { useDiscoverIntegrations } from '../composables/useDiscoverIntegrations'
+import { useMyConnections } from '../composables/useMyConnections'
+import { useSessionStore } from '../stores/session'
 import type { IntegratorCategory } from '../api/types'
 import integratorDirectoryStyles from '../styles/IntegrationDirectory.module.scss'
 import styles from '../styles/page.module.scss'
 
 const router = useRouter()
+const session = useSessionStore()
 const discover = useDiscoverIntegrations()
 discover.refresh()
+// Issue #467: which cards get a "Connect" action — only when there's a
+// session to bind with, and only for integrators not already connected.
+const myConnections = useMyConnections()
+function isConnected(slug: string): boolean {
+  return myConnections.bindings.value.some((b) => b.slug === slug)
+}
+function onConnect(slug: string) {
+  router.push({ name: 'connect-integrator', params: { slug } })
+}
 
 const sortOptions: AvalonFilterBarSortOption[] = [
   { value: 'newest', label: 'Newest' },
@@ -74,16 +86,26 @@ function openIntegrator(slug: string) {
       <p v-else-if="!discover.loading.value && visibleIntegrators.length === 0" :class="styles.empty">
         No {{ categoryTabs.find((t) => t.value === activeCategory)?.label.toLowerCase() }} match your search.
       </p>
-      <AvalonIntegratorCard
+      <div
         v-for="integrator in visibleIntegrators"
         :key="integrator.id"
-        :name="integrator.name"
-        :slug="integrator.slug"
-        :owner-name="integrator.owner_name"
-        :status="integrator.status"
-        :registered-at="formatRegisteredAt(integrator.registered_at)"
-        @select="openIntegrator(integrator.slug)"
-      />
+        :class="integratorDirectoryStyles.cardRow"
+      >
+        <AvalonIntegratorCard
+          :name="integrator.name"
+          :slug="integrator.slug"
+          :owner-name="integrator.owner_name"
+          :status="integrator.status"
+          :registered-at="formatRegisteredAt(integrator.registered_at)"
+          @select="openIntegrator(integrator.slug)"
+        />
+        <AvalonButton
+          v-if="session.isAuthenticated() && !isConnected(integrator.slug)"
+          label="Connect"
+          variant="secondary"
+          @click="onConnect(integrator.slug)"
+        />
+      </div>
       <AvalonButton
         v-if="discover.nextCursor.value"
         label="Load more"
