@@ -951,6 +951,10 @@ export interface EventResponse {
   // Issue #448. false (the default) keeps this event member-only even in
   // a public guild (GuildResponse.public).
   public: boolean
+  // Issue #463. The caller's own RSVP status, or null if they haven't
+  // responded — never another member's. Lets AvalonRsvpControl pre-select
+  // correctly without a separate roster fetch.
+  my_rsvp: RsvpStatusValue | null
 }
 
 export interface CreateEventRequest {

@@ -229,6 +229,10 @@ and implemented unless noted otherwise.
   never manager-declared.
 - **Guild events calendar + RSVP** (#169), plus **per-member RSVP roster**
   (#248) — who's going/maybe/can't-go, not just aggregate counts.
+  `EventResponse` also includes the caller's own RSVP status (`my_rsvp`,
+  #463) alongside the aggregate `rsvp_counts`, so a client can pre-select
+  its RSVP control without a separate roster fetch — always the caller's
+  own row, never another member's.
 - **Per-event public visibility** (#448) — a `public` flag on each
   `GuildEvent`, defaulted `false` (member-only, unchanged from before this
   shipped). A non-member of a `public` guild (#449) sees only that guild's
