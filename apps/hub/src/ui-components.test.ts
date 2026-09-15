@@ -16,6 +16,7 @@ import {
   AvalonChannelList,
   AvalonChatComposer,
   AvalonChatMessage,
+  AvalonColorPicker,
   AvalonConnectionCard,
   AvalonDateTimeField,
   AvalonEventCard,
@@ -922,5 +923,28 @@ describe('AvalonAchievementCard', () => {
     expect(wrapper.find('[class*="score" i]').exists()).toBe(false)
     expect(wrapper.find('[class*="rank" i]').exists()).toBe(false)
     expect(wrapper.text().toLowerCase()).not.toMatch(/\bscore\b|\brank(ed|ing)?\b/)
+  })
+})
+
+describe('AvalonColorPicker', () => {
+  it('keeps the native color swatch and hex input in sync', async () => {
+    const wrapper = mount(AvalonColorPicker, {
+      props: { label: 'Theme color', modelValue: '#a1b2c3' },
+    })
+    const swatch = wrapper.find('input[type="color"]')
+    const hex = wrapper.find('input[type="text"]')
+    expect((swatch.element as HTMLInputElement).value).toBe('#a1b2c3')
+    expect((hex.element as HTMLInputElement).value).toBe('#a1b2c3')
+
+    await hex.setValue('#112233')
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['#112233'])
+  })
+
+  it('falls back the swatch to a neutral color while the hex field is invalid', () => {
+    const wrapper = mount(AvalonColorPicker, {
+      props: { label: 'Theme color', modelValue: 'not-a-color' },
+    })
+    const swatch = wrapper.find('input[type="color"]')
+    expect((swatch.element as HTMLInputElement).value).toBe('#888888')
   })
 })

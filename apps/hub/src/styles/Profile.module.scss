@@ -176,6 +176,38 @@
   font: inherit;
 }
 
+// Issue #451: timezone dropdown + theme color picker, each with its own
+// explicit Save button rather than AvalonEditableField's edit-toggle shell.
+.fieldWithAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--av-space-2);
+}
+
+.fieldLabel {
+  font-size: var(--av-text-sm);
+  font-weight: 500;
+  color: var(--av-color-text-secondary);
+}
+
+.timezoneInput {
+  width: 100%;
+  max-width: 20rem;
+  border-radius: var(--av-radius-md);
+  border: 1px solid var(--av-color-border);
+  background: var(--av-color-bg);
+  color: var(--av-color-text);
+  padding: 0.625rem var(--av-space-3);
+  font-size: var(--av-text-base);
+
+  &:focus {
+    outline: none;
+    border-color: var(--av-color-primary);
+    box-shadow: 0 0 0 3px var(--av-color-primary-soft);
+  }
+}
+
 // Issue #372's links list — one URL input per slot, up to MAX_LINKS.
 .linkInput {
   flex: 1;

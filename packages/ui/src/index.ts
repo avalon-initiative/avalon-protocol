@@ -32,6 +32,7 @@ export { default as AvalonRsvpRosterPanel } from './components/AvalonRsvpRosterP
 export { default as AvalonIntegratorCard } from './components/AvalonIntegratorCard.vue'
 export { default as AvalonMetricTile } from './components/AvalonMetricTile.vue'
 export { default as AvalonAchievementCard } from './components/AvalonAchievementCard.vue'
+export { default as AvalonColorPicker } from './components/AvalonColorPicker.vue'
 export type { AvalonIconName } from './types/AvalonIcon.types'
 export type { AvalonNavItem } from './types/AvalonNav.types'
 export type { PresenceStatus } from './types/AvalonPresenceBadge.types'
