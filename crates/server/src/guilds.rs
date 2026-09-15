@@ -421,6 +421,9 @@ struct GuildRow {
     links: Vec<GuildLink>,
     /// Issue #153.
     recruiting: bool,
+    /// Issue #449 — independent of `recruiting`, see
+    /// `avalon_protocol::guilds::Guild::public`'s doc comment.
+    public: bool,
     /// Issue #206 — whether the integrator affinity breakdown (see
     /// [`game_breakdown`]) is shown on this guild's public profile /
     /// discovery card. Always visible to a `manage_guild` holder
@@ -439,7 +442,7 @@ struct GuildRow {
 
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, icon, links, recruiting, game_breakdown_public, roster_visibility FROM guilds WHERE id = $1",
+        r#"SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, icon, links, recruiting, "public", game_breakdown_public, roster_visibility FROM guilds WHERE id = $1"#,
     )
     .bind(guild_id)
     .fetch_optional(&state.pool)
@@ -466,6 +469,7 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
         icon: row.try_get("icon")?,
         links,
         recruiting: row.try_get("recruiting")?,
+        public: row.try_get("public")?,
         game_breakdown_public: row.try_get("game_breakdown_public")?,
         roster_visibility: row.try_get("roster_visibility")?,
     })
@@ -493,6 +497,9 @@ pub struct GuildResponse {
     pub links: Vec<GuildLink>,
     /// Issue #153.
     pub recruiting: bool,
+    /// Issue #449 — see `avalon_protocol::guilds::Guild::public`'s doc
+    /// comment. Independent of `recruiting`.
+    pub public: bool,
     /// Issue #206. Whether the integrator affinity breakdown
     /// (`GET /guilds/{id}/integrator-breakdown`) is shown on this guild's public
     /// profile — a `manage_guild` holder can always fetch the breakdown
@@ -545,6 +552,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         icon: guild.icon,
         links: guild.links,
         recruiting: guild.recruiting,
+        public: guild.public,
         game_breakdown_public: guild.game_breakdown_public,
         favorite_games,
         roster_visibility: guild.roster_visibility,
@@ -676,6 +684,7 @@ pub async fn create_guild(
                 icon: None,
                 links: Vec::new(),
                 recruiting: false,
+                public: false,
                 game_breakdown_public: false,
                 roster_visibility: "guild_members".to_string(),
             },
@@ -719,6 +728,10 @@ pub struct UpdateGuildRequest {
     pub links: Option<Vec<GuildLinkRequest>>,
     /// Issue #153. Omitted leaves it untouched.
     pub recruiting: Option<bool>,
+    /// Issue #449. Omitted leaves it untouched. Independent of
+    /// `recruiting` — see `avalon_protocol::guilds::Guild::public`'s doc
+    /// comment.
+    pub public: Option<bool>,
     /// "invite_only" or "open" (see [`JoinPolicy`]) — omitted leaves it
     /// untouched. `Open` lets any authenticated identity join instantly via
     /// `POST /guilds/{id}/join` (`can_join_directly`/`join_guild`), bypassing
@@ -781,6 +794,7 @@ pub async fn update_guild(
         None => guild.links.clone(),
     };
     let new_recruiting = body.recruiting.unwrap_or(guild.recruiting);
+    let new_public = body.public.unwrap_or(guild.public);
     let new_join_policy = match &body.join_policy {
         Some(raw) => JoinPolicy::parse(raw).ok_or(AppError::InvalidJoinPolicy)?,
         None => guild.join_policy,
@@ -808,7 +822,7 @@ pub async fn update_guild(
     let mut tx = state.pool.begin().await?;
 
     let updated = sqlx::query(
-        "UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, game_breakdown_public = $10, join_policy = $11, roster_visibility = $12 WHERE id = $1",
+        r#"UPDATE guilds SET name = $2, tag = $3, description = $4, motd = $5, banner = $6, icon = $7, links = $8, recruiting = $9, "public" = $13, game_breakdown_public = $10, join_policy = $11, roster_visibility = $12 WHERE id = $1"#,
     )
     .bind(guild_id)
     .bind(&new_name)
@@ -822,6 +836,7 @@ pub async fn update_guild(
     .bind(new_game_breakdown_public)
     .bind(new_join_policy.as_str())
     .bind(&new_roster_visibility)
+    .bind(new_public)
     .execute(&mut *tx)
     .await;
     if let Err(sqlx::Error::Database(db_err)) = &updated {
@@ -854,6 +869,7 @@ pub async fn update_guild(
             "icon": new_icon,
             "links": new_links,
             "recruiting": new_recruiting,
+            "public": new_public,
             "game_breakdown_public": new_game_breakdown_public,
             "join_policy": new_join_policy.as_str(),
             "roster_visibility": new_roster_visibility,
@@ -882,6 +898,7 @@ pub async fn update_guild(
                 icon: new_icon,
                 links: new_links,
                 recruiting: new_recruiting,
+                public: new_public,
                 game_breakdown_public: new_game_breakdown_public,
                 roster_visibility: new_roster_visibility,
             },
@@ -1556,6 +1573,7 @@ pub async fn transfer_ownership(
                 icon: guild.icon,
                 links: guild.links,
                 recruiting: guild.recruiting,
+                public: guild.public,
                 game_breakdown_public: guild.game_breakdown_public,
                 roster_visibility: guild.roster_visibility,
             },
@@ -2602,13 +2620,14 @@ pub async fn list_members(
     // *outside* exposure, it was never meant to lock the guild out of its
     // own roster.
     //
-    // A `recruiting` guild's roster is additionally always visible to any
-    // authenticated identity, regardless of `roster_visibility` — the
-    // point of recruiting is letting a prospective member see who they'd
-    // be joining before they apply/accept an invite; a guild that wants
-    // its roster hidden from prospects should stop recruiting rather than
-    // recruit with a roster nobody considering joining can see.
-    if caller != guild.owner && !guild.recruiting {
+    // A `public` guild's roster is additionally always visible to any
+    // authenticated identity, regardless of `roster_visibility` (issue
+    // #449, decided: `public` is independent of `recruiting` — a
+    // recruiting guild that wants its roster private until someone
+    // actually applies sets `recruiting` without `public`; a full guild
+    // that still wants a public presence sets `public` without
+    // `recruiting`).
+    if caller != guild.owner && !guild.public {
         let visibility = crate::visibility::parse_visibility(&guild.roster_visibility);
         if !crate::visibility::is_visible(&state, visibility, Some(caller), None, Some(guild_id))
             .await?

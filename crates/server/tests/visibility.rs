@@ -232,6 +232,21 @@ async fn guild_roster_visibility_matrix() {
     assert!(!can_list_members(&http, &base, &outsider_token, guild_id).await);
 }
 
+async fn set_guild_public(
+    http: &reqwest::Client,
+    base: &str,
+    owner_token: &str,
+    guild_id: Uuid,
+    value: bool,
+) {
+    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+        .json(&serde_json::json!({ "public": value }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+}
+
 async fn set_recruiting(
     http: &reqwest::Client,
     base: &str,
@@ -247,13 +262,14 @@ async fn set_recruiting(
     assert!(response.status().is_success(), "{:?}", response.status());
 }
 
-/// A recruiting guild's roster is visible to any authenticated identity
-/// regardless of `roster_visibility` — the point of recruiting is letting a
-/// prospect see who they'd be joining. Turning recruiting off restores
-/// whatever `roster_visibility` was already set to.
+/// A `public` guild's roster is visible to any authenticated identity
+/// regardless of `roster_visibility`, independent of `recruiting` (issue
+/// #449, decided: these are separate settings — see
+/// `crates/server/src/guilds.rs::list_members`). Turning `public` off
+/// restores whatever `roster_visibility` was already set to.
 #[tokio::test]
 #[ignore]
-async fn a_recruiting_guilds_roster_is_visible_despite_a_private_setting() {
+async fn a_public_guilds_roster_is_visible_despite_a_private_roster_setting() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
@@ -265,18 +281,50 @@ async fn a_recruiting_guilds_roster_is_visible_despite_a_private_setting() {
     set_roster_visibility(&http, &base, &owner_token, guild_id, "private").await;
     assert!(
         !can_list_members(&http, &base, &outsider_token, guild_id).await,
-        "a non-recruiting private guild must stay hidden from an outsider"
+        "a non-public private guild must stay hidden from an outsider"
     );
 
-    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+    set_guild_public(&http, &base, &owner_token, guild_id, true).await;
     assert!(
         can_list_members(&http, &base, &outsider_token, guild_id).await,
-        "recruiting must override roster_visibility for an outsider"
+        "public must override roster_visibility for an outsider"
     );
 
-    set_recruiting(&http, &base, &owner_token, guild_id, false).await;
+    set_guild_public(&http, &base, &owner_token, guild_id, false).await;
     assert!(
         !can_list_members(&http, &base, &outsider_token, guild_id).await,
-        "turning recruiting back off must restore the private setting"
+        "turning public back off must restore the private setting"
+    );
+}
+
+/// #449's whole point: `recruiting` and `public` are independent. A guild
+/// can recruit (discovery board + join requests) without exposing its
+/// roster, and can expose its roster without actively recruiting.
+#[tokio::test]
+#[ignore]
+async fn recruiting_and_public_are_independent_settings() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
+
+    let guild_id = create_guild(&http, &base, &owner_token).await;
+    set_roster_visibility(&http, &base, &owner_token, guild_id, "private").await;
+
+    // Recruiting alone no longer implies roster visibility.
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+    assert!(
+        !can_list_members(&http, &base, &outsider_token, guild_id).await,
+        "recruiting alone must not expose a private roster post-#449"
+    );
+
+    // Public alone, without recruiting, still exposes the roster.
+    set_recruiting(&http, &base, &owner_token, guild_id, false).await;
+    set_guild_public(&http, &base, &owner_token, guild_id, true).await;
+    assert!(
+        can_list_members(&http, &base, &outsider_token, guild_id).await,
+        "public alone (no recruiting) must still expose the roster"
     );
 }

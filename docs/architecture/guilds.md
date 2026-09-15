@@ -215,6 +215,13 @@ and implemented unless noted otherwise.
   with a documented visibility gap tracked under #87.
 - **Guild MOTD, banner, links, recruiting metadata** (#153), and **guild
   icon** (#246) as an independent image slot.
+- **Independent `recruiting`/`public` settings** (#449, decided; #455,
+  implemented) — `recruiting` governs the Discover board and join-request
+  eligibility only; `public` independently governs whether the roster (and,
+  once event visibility ships, public events) is visible to any
+  authenticated identity, regardless of recruiting status. Before #449,
+  `recruiting` alone controlled roster visibility; a guild can now be
+  public without recruiting, or recruiting without a public roster.
 - **Guild discovery board** (#154) — browse/search recruiting guilds; a
   milestone-1 server-side stand-in pending the indexer projection (#44/#42).
 - **Guild integrator affinity view** (#206, implementing decision #160) and
@@ -304,5 +311,24 @@ exact types, endpoints, and migrations behind every item above.
   takedown can't be defeated by pruning timing.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
+- [#449](https://github.com/LunarVagabond/avalon-protocol/issues/449) —
+  decided: `recruiting` and `public` are independent guild settings, not one
+  boolean doing both jobs. Implemented by
+  [#455](https://github.com/LunarVagabond/avalon-protocol/issues/455), done:
+  `Guild.public`, `list_members`'s roster-visibility override re-keyed from
+  `recruiting` to `public`, a second "Public" toggle in the Hub's guild
+  settings tab.
+- [#450](https://github.com/LunarVagabond/avalon-protocol/issues/450) —
+  decided: an integrator reads a guild's already-public data (per its own
+  visibility settings) the same way `GET /guilds/{id}` works today —
+  authenticate only, no `Capability` binding — and at resource-level
+  granularity (a flag per roster/event), not a per-field mask. Not yet
+  implemented as an SDK-facing read path.
+- [#454](https://github.com/LunarVagabond/avalon-protocol/issues/454) — open
+  decision: a binary public/private flag per resource isn't enough for
+  guild events/chat specifically (a public "community mixer" vs. an
+  officers-only meeting is an audience question, not on/off). Surfaced
+  while deciding #450; doesn't block #448/#449/#450's binary-flag approach
+  in the meantime.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild
   ownership, leadership transfer.

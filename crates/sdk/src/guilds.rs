@@ -85,6 +85,9 @@ struct GuildResponse {
     /// Issue #153.
     #[serde(default)]
     recruiting: bool,
+    /// Issue #449.
+    #[serde(default)]
+    public: bool,
 }
 
 impl From<GuildResponse> for Guild {
@@ -106,6 +109,7 @@ impl From<GuildResponse> for Guild {
             icon: response.icon,
             links: response.links,
             recruiting: response.recruiting,
+            public: response.public,
         }
     }
 }
