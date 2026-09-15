@@ -20,6 +20,7 @@ import {
 } from '../api/guildAnnouncements'
 import type { GuildAnnouncementAlert } from '../api/types'
 import NetworkStatus from '../components/NetworkStatus.vue'
+import { useNotificationSummary } from '../composables/useNotificationSummary'
 import { useSessionStore } from '../stores/session'
 import styles from '../styles/HubShell.module.scss'
 
@@ -63,6 +64,51 @@ async function refreshAnnouncements() {
 
 function toggleAnnouncementsPanel() {
   showAnnouncementsPanel.value = !showAnnouncementsPanel.value
+}
+
+// Issue #466 — one aggregate badge across every other pending-action
+// source (friend requests, guild join requests/invites, device-grant
+// approvals, guardian requests/designations, unread DMs). Deliberately a
+// separate bell from the announcements one above: announcements are
+// ambient chat activity, this is "something is waiting on you."
+const {
+  totalCount: pendingActionCount,
+  incomingFriendRequestCount,
+  guildJoinRequestCount,
+  guildInviteCount,
+  deviceGrantCount,
+  guardianRequestCount,
+  newGuardianOfCount,
+  unreadDmCount,
+} = useNotificationSummary()
+const showPendingActionsPanel = ref(false)
+
+function togglePendingActionsPanel() {
+  showPendingActionsPanel.value = !showPendingActionsPanel.value
+}
+
+interface PendingActionRow {
+  key: string
+  label: string
+  count: number
+  to: string
+}
+
+const pendingActionRows = computed<PendingActionRow[]>(() =>
+  [
+    { key: 'friends', label: 'Friend requests', count: incomingFriendRequestCount.value, to: '/friends' },
+    { key: 'join-requests', label: 'Guild join requests', count: guildJoinRequestCount.value, to: '/guilds' },
+    { key: 'invites', label: 'Guild invites', count: guildInviteCount.value, to: '/guilds' },
+    { key: 'device-grants', label: 'Device approval requests', count: deviceGrantCount.value, to: '/profile' },
+    { key: 'guardian-requests', label: 'Recovery requests to approve', count: guardianRequestCount.value, to: '/profile' },
+    { key: 'guardian-of', label: 'New guardian designations', count: newGuardianOfCount.value, to: '/profile' },
+    { key: 'messages', label: 'Unread messages', count: unreadDmCount.value, to: '/messages' },
+  ].filter((row) => row.count > 0),
+)
+
+function onSelectPendingAction(to: string) {
+  showPendingActionsPanel.value = false
+  router.push(to)
 }
 
 // Opening a specific alert is what "reads" it (see
@@ -214,34 +260,62 @@ watch(
           />
         </div>
         <div :class="styles.notifications">
-          <button
-            :class="styles.iconButton"
-            type="button"
-            :aria-label="`Guild announcements${unreadAnnouncementCount > 0 ? ` (${unreadAnnouncementCount} unread)` : ''}`"
-            @click="toggleAnnouncementsPanel"
-          >
-            <AvalonIcon name="bell" :size="18" />
-            <span v-if="unreadAnnouncementCount > 0" :class="styles.unreadBadge">{{
-              unreadAnnouncementCount
-            }}</span>
-          </button>
-          <div v-if="showAnnouncementsPanel" :class="styles.announcementsPanel">
-            <p v-if="announcementAlerts.length === 0" :class="styles.announcementsEmpty">
-              No guild announcements yet.
-            </p>
+          <div :class="styles.notificationGroup">
             <button
-              v-for="alertItem in announcementAlerts"
-              :key="alertItem.message_id"
+              :class="styles.iconButton"
               type="button"
-              :class="[
-                styles.announcementItem,
-                { [styles.announcementUnread]: isUnread(alertItem, lastSeenByChannel) },
-              ]"
-              @click="onSelectAnnouncement(alertItem)"
+              :aria-label="`Guild announcements${unreadAnnouncementCount > 0 ? ` (${unreadAnnouncementCount} unread)` : ''}`"
+              @click="toggleAnnouncementsPanel"
             >
-              <span :class="styles.announcementChannel">#{{ alertItem.channel_name }}</span>
-              <span :class="styles.announcementBody">{{ previewBody(alertItem.body) }}</span>
+              <AvalonIcon name="bell" :size="18" />
+              <span v-if="unreadAnnouncementCount > 0" :class="styles.unreadBadge">{{
+                unreadAnnouncementCount
+              }}</span>
             </button>
+            <div v-if="showAnnouncementsPanel" :class="styles.announcementsPanel">
+              <p v-if="announcementAlerts.length === 0" :class="styles.announcementsEmpty">
+                No guild announcements yet.
+              </p>
+              <button
+                v-for="alertItem in announcementAlerts"
+                :key="alertItem.message_id"
+                type="button"
+                :class="[
+                  styles.announcementItem,
+                  { [styles.announcementUnread]: isUnread(alertItem, lastSeenByChannel) },
+                ]"
+                @click="onSelectAnnouncement(alertItem)"
+              >
+                <span :class="styles.announcementChannel">#{{ alertItem.channel_name }}</span>
+                <span :class="styles.announcementBody">{{ previewBody(alertItem.body) }}</span>
+              </button>
+            </div>
+          </div>
+          <div :class="styles.notificationGroup">
+            <button
+              :class="styles.iconButton"
+              type="button"
+              :aria-label="`Pending actions${pendingActionCount > 0 ? ` (${pendingActionCount} waiting)` : ''}`"
+              @click="togglePendingActionsPanel"
+            >
+              <AvalonIcon name="activity" :size="18" />
+              <span v-if="pendingActionCount > 0" :class="styles.unreadBadge">{{ pendingActionCount }}</span>
+            </button>
+            <div v-if="showPendingActionsPanel" :class="styles.announcementsPanel">
+              <p v-if="pendingActionRows.length === 0" :class="styles.announcementsEmpty">
+                Nothing waiting on you.
+              </p>
+              <button
+                v-for="row in pendingActionRows"
+                :key="row.key"
+                type="button"
+                :class="[styles.announcementItem, styles.announcementUnread]"
+                @click="onSelectPendingAction(row.to)"
+              >
+                <span :class="styles.announcementChannel">{{ row.label }}</span>
+                <span :class="styles.announcementBody">{{ row.count }}</span>
+              </button>
+            </div>
           </div>
         </div>
         <RouterLink v-if="!loading" to="/profile" :class="styles.userLink">

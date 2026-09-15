@@ -36,6 +36,7 @@ import type {
 } from '../api/types'
 import { listFriendsWithPresence, type Friend } from '../api/friends'
 import { listBlockedUsersWithNames, type BlockedUser } from '../api/blocks'
+import { markGuardianOfSeen } from '../api/notifications'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
@@ -866,6 +867,11 @@ async function refreshGuardianOf() {
     // Same "never leave this as anything but a real array" guard as
     // refreshGuardianRequests above — this is a polled, supplementary list.
     guardianOf.value = Array.isArray(summaries) ? summaries : []
+    // Issue #466: actually rendering this section is what "reads" a new
+    // guardian designation — mirrors markConversationSeen/
+    // onSelectAnnouncement's own "visiting the real feature clears it"
+    // idiom, not a poll succeeding in the background.
+    markGuardianOfSeen(guardianOf.value.map((g) => g.identity_id))
   } catch {
     // Same non-fatal treatment as refreshGuardianRequests above.
   }
