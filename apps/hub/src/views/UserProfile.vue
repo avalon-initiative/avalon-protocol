@@ -8,12 +8,16 @@
 // GET /identities/profiles shape used elsewhere for roster resolution.
 // Issue #460 added an actions row (add/remove friend, block/unblock) and
 // rendering of effective_main_guild/banner_url, which this card already
-// fetched but never showed.
+// fetched but never showed. Issue #465 added a "Published by connected
+// apps" card: GET /identities/:id/integrator-data (#384) already resolves
+// everything a connected integrator has published about this identity,
+// pre-filtered to visible fields, but nothing in the Hub read it.
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard, AvalonPresenceBadge } from '@avalon/ui'
 import { AvalonApiError } from '../api/errors'
 import * as api from '../api/client'
+import { listPublishedIntegratorData, type PublishedIntegratorData } from '../api/integratorData'
 import type {
   FriendRequestResponse,
   PresenceStatus,
@@ -41,6 +45,12 @@ const isBlocked = ref(false)
 const mainGuildName = ref('')
 const actionError = ref('')
 const actionPending = ref(false)
+
+// Issue #465. Empty when nothing is published, or nothing is visible to
+// the caller specifically — the two are indistinguishable by design, same
+// posture the rest of this visibility model already takes elsewhere.
+const publishedData = ref<PublishedIntegratorData[]>([])
+const publishedDataError = ref('')
 
 // Never true for the caller's own identity id — Add friend/Remove
 // friend/Block only ever make sense against someone else.
@@ -85,6 +95,12 @@ async function load() {
       }
     }
     await loadRelationship()
+    try {
+      publishedData.value = await listPublishedIntegratorData(identityId.value)
+    } catch (e) {
+      // A secondary card — not worth failing the whole profile load over.
+      publishedDataError.value = e instanceof Error ? e.message : 'Something went wrong.'
+    }
   } catch (e) {
     if (e instanceof AvalonApiError && e.status === 404) {
       profile.value = null
@@ -278,6 +294,23 @@ async function onUnblock() {
       </ul>
 
       <p :class="styles.note">Presence only shows if this user has made it visible to you.</p>
+    </AvalonCard>
+
+    <AvalonCard
+      v-if="profile"
+      title="Published by connected apps"
+      subtitle="Whatever a connected game, app, or service has chosen to make visible about this player."
+    >
+      <p v-if="publishedDataError" :class="page.error">{{ publishedDataError }}</p>
+      <p v-else-if="publishedData.length === 0" :class="page.empty">Nothing published here yet.</p>
+      <div v-for="entry in publishedData" :key="entry.schema" :class="styles.publishedEntry">
+        <h3 :class="styles.subheading">{{ entry.integratorName ?? entry.integratorSlug }}</h3>
+        <ul :class="styles.publishedFields">
+          <li v-for="(value, field) in entry.fields" :key="field">
+            {{ field }}: {{ value }}
+          </li>
+        </ul>
+      </div>
     </AvalonCard>
 
     <p v-else :class="page.empty">That user couldn't be found.</p>

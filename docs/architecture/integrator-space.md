@@ -318,7 +318,14 @@ guarantee is actually needed, following the same discipline
   `"public"` and the field isn't marked `"private"`, or `default_visibility`
   is `"private"` and the field is marked `"public"`. Only literal top-level
   JSON key matching — no nested-field visibility in this pass (documented
-  limitation, not silently attempted).
+  limitation, not silently attempted). The Hub reads this endpoint too
+  ([#465](https://github.com/LunarVagabond/avalon-protocol/issues/465),
+  done): `UserProfile.vue`'s "Published by connected apps" card, rendering
+  each visible instance generically (field name -> value, no per-schema
+  custom rendering yet) — a profile with nothing published, and one with
+  published data none of it currently visible to the caller, render
+  identically (an empty state), matching this endpoint's own
+  by-design "can't tell those two apart" posture.
 - **Rust SDK codegen** (#386): `#[derive(AvalonSchema)]`
   (`crates/schema-derive`, `avalon-schema-derive`) generates a struct's
   `.proto` message text plus its `default_visibility`/`field_visibility`

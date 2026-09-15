@@ -244,4 +244,56 @@ describe('UserProfile', () => {
     const body = JSON.parse((blockCall![1] as RequestInit).body as string)
     expect(body.identity_id).toBe('id-friend')
   })
+
+  // Issue #465.
+  it('renders published integrator data with its resolved integrator name', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': selfProfile,
+      '/friends': [],
+      '/friends/requests': [],
+      '/blocks': [],
+      '/identities/id-friend/profile': otherProfile(),
+      '/presence': [],
+      '/identities/id-friend/integrator-data': [
+        {
+          schema: 'game:ashen-realms:schema:1',
+          integrator_id: 'int-1',
+          published_at: '2026-01-01T00:00:00Z',
+          fields: { level: 42, guild: 'Dragon Hunters' },
+        },
+      ],
+      '/integrations/ashen-realms': { id: 'int-1', slug: 'ashen-realms', name: 'Ashen Realms' },
+    })
+
+    const router = testRouterForCard()
+    router.push('/users/id-friend')
+    await router.isReady()
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
+
+    expect(wrapper.text()).toContain('level: 42')
+    expect(wrapper.text()).toContain('guild: Dragon Hunters')
+  })
+
+  it('shows an empty state when nothing is published', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': selfProfile,
+      '/friends': [],
+      '/friends/requests': [],
+      '/blocks': [],
+      '/identities/id-friend/profile': otherProfile(),
+      '/presence': [],
+      '/identities/id-friend/integrator-data': [],
+    })
+
+    const router = testRouterForCard()
+    router.push('/users/id-friend')
+    await router.isReady()
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ilya'))
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Nothing published here yet.'))
+  })
 })

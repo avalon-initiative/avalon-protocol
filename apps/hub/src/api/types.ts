@@ -435,6 +435,18 @@ export interface PublicProfileResponse {
 // self-description fields, same exposure level as ProfileResponse (GET
 // /me) above, minus `discoverable` (that's the viewed identity's own
 // search-visibility setting, not something the viewer needs).
+// GET /identities/:id/integrator-data (issue #384/#465) — matches
+// crates/server/src/integrator_data.rs::VisibleIntegratorDataInstanceResponse
+// field-for-field. `fields` is already filtered server-side to only what
+// the schema currently makes visible; the Hub must never attempt its own
+// field-level filtering on top.
+export interface VisibleIntegratorDataInstanceResponse {
+  schema: string
+  integrator_id: string
+  published_at: string
+  fields: Record<string, unknown>
+}
+
 export interface PublicIdentityProfileResponse {
   identity_id: string
   identity_created_at: string
