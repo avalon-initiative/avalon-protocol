@@ -12,13 +12,15 @@ defineEmits<{ remove: []; message: []; view: [] }>()
 </script>
 
 <template>
-  <div :class="styles.row">
-    <button :class="styles.viewTrigger" type="button" @click="$emit('view')">
-      <AvalonAvatar :src="avatarUrl" :name="displayName ?? identityId" size="md" />
-      <span :class="styles.name">{{ displayName ?? identityId }}</span>
-    </button>
-    <AvalonPresenceBadge :status="status" />
-    <button :class="styles.message" type="button" @click="$emit('message')">Message</button>
-    <button :class="styles.remove" type="button" @click="$emit('remove')">Remove</button>
+  <div :class="styles.container">
+    <div :class="styles.row">
+      <button :class="styles.viewTrigger" type="button" @click="$emit('view')">
+        <AvalonAvatar :src="avatarUrl" :name="displayName ?? identityId" size="md" />
+        <span :class="styles.name">{{ displayName ?? identityId }}</span>
+      </button>
+      <AvalonPresenceBadge :status="status" />
+      <button :class="styles.message" type="button" @click="$emit('message')">Message</button>
+      <button :class="styles.remove" type="button" @click="$emit('remove')">Remove</button>
+    </div>
   </div>
 </template>
