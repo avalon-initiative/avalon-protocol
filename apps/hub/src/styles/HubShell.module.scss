@@ -119,8 +119,16 @@
 }
 
 .notifications {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
   margin-left: auto;
+}
+
+/* Issue #466: each bell (announcements, pending actions) anchors its own
+   dropdown panel independently, so two open at once don't overlap. */
+.notificationGroup {
+  position: relative;
 }
 
 .iconButton {

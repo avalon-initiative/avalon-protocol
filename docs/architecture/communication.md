@@ -137,10 +137,31 @@ ask for it. Revisit if a real request for it shows up, the same "don't
 build ahead of demand" posture the rest of this document takes for
 notifications generally.
 
-Beyond this one slice, a general delivery mechanism (a bell across every
-notification-worthy event, not just guild announcements) is still
-unbuilt; when it's picked up, it should be a delivery layer on top of the
-realtime vertical, not a store of its own.
+**A second slice landed on top of this** ([#466](https://github.com/LunarVagabond/avalon-protocol/issues/466),
+done): `useNotificationSummary` (`apps/hub/src/composables/`) aggregates
+seven pending-action sources into one badge in `HubShell.vue` — incoming
+friend requests, guild join requests awaiting a manager's review, guild
+invites received, device-grant approval requests, recovery requests a
+guardian can approve, new guardian designations, and unread direct
+messages. It's a read-only aggregator over each source's own existing
+endpoint, not a new server-side notification store — same posture this
+section already takes. Direct messages had no unread tracking at all
+before this; they now get the identical client-local "last seen"
+treatment guild announcements already established
+(`apps/hub/src/api/notifications.ts`'s `markConversationSeen`/
+`isConversationUnread`, mirroring `guildAnnouncements.ts` exactly), marked
+seen the moment a thread is actually opened
+(`useConversationThread.ts`), not by the aggregate panel merely being
+open. Being named a recovery guardian (#443) gets the same "have I seen
+this" local tracking, since it has no accept/decline of its own to
+naturally clear it. The other five sources are genuinely actionable
+pending state — their count only drops by resolving the item (accepting,
+approving, rejecting), not by visiting the page, since that's the correct
+signal for something the caller must actually act on.
+
+Beyond this, a true delivery mechanism (server-pushed, not
+client-polled) is still unbuilt; when it's picked up, it should be a
+delivery layer on top of the realtime vertical, not a store of its own.
 
 ## Avalon is not Discord
 

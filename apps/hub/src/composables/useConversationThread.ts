@@ -13,6 +13,7 @@
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import * as api from '../api/client'
 import { toOldestFirst } from '../api/conversations'
+import { markConversationSeen } from '../api/notifications'
 import type { ConversationMessageResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
@@ -53,6 +54,11 @@ export function useConversationThread(conversationId: Ref<string>) {
     if (isStaleFor(targetId)) return
     messages.value = toOldestFirst(page)
     hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
+    // Opening a conversation is what "reads" it (issue #466's unread-DM
+    // tracking) — mirrors HubShell.vue's onSelectAnnouncement marking a
+    // guild announcement's channel seen the moment it's actually opened.
+    const newest = messages.value[messages.value.length - 1]
+    if (newest) markConversationSeen(targetId, newest.sent_at)
   }
 
   // Opens the live socket for `targetId` (issue #438) — closes whatever
@@ -65,6 +71,9 @@ export function useConversationThread(conversationId: Ref<string>) {
       if (isStaleFor(targetId)) return
       if (messages.value.some((m) => m.id === message.id)) return
       messages.value = [...messages.value, message]
+      // The reader has this thread open right now — a message arriving
+      // live counts as seen immediately, same as loadLatestMessages above.
+      markConversationSeen(targetId, message.sent_at)
     })
   }
 
