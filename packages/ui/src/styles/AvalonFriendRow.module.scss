@@ -1,8 +1,21 @@
+.container {
+  container-type: inline-size;
+}
+
 .row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--av-space-3);
   padding: var(--av-space-2) 0;
+}
+
+/* Below this width, avatar+name no longer fit on the same line as the
+   presence badge and both action buttons — give the name its own row. */
+@container (max-width: 22rem) {
+  .viewTrigger {
+    flex-basis: 100%;
+  }
 }
 
 .viewTrigger {
