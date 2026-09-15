@@ -68,13 +68,20 @@ describe('UserProfile', () => {
   function testRouterForCard() {
     return createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/users/:id', name: 'user-profile', component: UserProfile }],
+      routes: [
+        { path: '/users/:id', name: 'user-profile', component: UserProfile },
+        { path: '/guilds/:id', name: 'guild', component: UserProfile },
+      ],
     })
   }
 
   it("shows the user's public profile fields and live presence", async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': selfProfile,
+      '/friends': [],
+      '/friends/requests': [],
+      '/blocks': [],
       '/identities/id-friend/profile': {
         identity_id: 'id-friend',
         identity_created_at: 'now',
@@ -117,6 +124,7 @@ describe('UserProfile', () => {
   it("shows a not-found message when the user doesn't resolve", async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': selfProfile,
       '/identities/id-missing/profile': new MockErrorResponse(404),
       '/presence': [],
     })
@@ -126,5 +134,114 @@ describe('UserProfile', () => {
     await router.isReady()
     const wrapper = mount(UserProfile, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain("couldn't be found"))
+  })
+
+  // Issue #460.
+  function otherProfile(overrides: Record<string, unknown> = {}) {
+    return {
+      identity_id: 'id-friend',
+      identity_created_at: 'now',
+      display_name: 'Ilya',
+      avatar_url: null,
+      handle: 'Ilya#1122',
+      bio: null,
+      favorite_genres: [],
+      pronouns: null,
+      banner_url: null,
+      status: null,
+      links: [],
+      timezone: null,
+      theme_color: null,
+      location: null,
+      main_guild: null,
+      effective_main_guild: null,
+      ...overrides,
+    }
+  }
+
+  it('renders a banner and links the effective main guild', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': selfProfile,
+      '/friends': [],
+      '/friends/requests': [],
+      '/blocks': [],
+      '/identities/id-friend/profile': otherProfile({
+        banner_url: 'https://example.com/banner.png',
+        effective_main_guild: 'g1',
+      }),
+      '/presence': [],
+      '/guilds/g1': { id: 'g1', name: 'Dragon Hunters' },
+    })
+
+    const router = testRouterForCard()
+    router.push('/users/id-friend')
+    await router.isReady()
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ilya'))
+
+    expect(wrapper.find('img[src="https://example.com/banner.png"]').exists()).toBe(true)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+  })
+
+  it('sends a friend request from the actions row', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': selfProfile,
+      '/friends': [],
+      '/friends/requests': [],
+      '/blocks': [],
+      '/identities/id-friend/profile': otherProfile(),
+      '/presence': [],
+      '/friends/requests-created': { id: 'r1', from: 'id-self', to: 'id-friend', requested_at: 'now' },
+    })
+
+    const router = testRouterForCard()
+    router.push('/users/id-friend')
+    await router.isReady()
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ilya'))
+
+    const addButton = wrapper.findAll('button').find((b) => b.text() === 'Add friend')!
+    await addButton.trigger('click')
+    await flushPromises()
+
+    const requestCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      return String(url).endsWith('/friends/requests') && method === 'POST'
+    })
+    expect(requestCall).toBeTruthy()
+    const body = JSON.parse((requestCall![1] as RequestInit).body as string)
+    expect(body.to).toBe('id-friend')
+  })
+
+  it('blocks and then unblocks the viewed identity', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me': selfProfile,
+      '/friends': [],
+      '/friends/requests': [],
+      '/blocks': [],
+      '/identities/id-friend/profile': otherProfile(),
+      '/presence': [],
+    })
+
+    const router = testRouterForCard()
+    router.push('/users/id-friend')
+    await router.isReady()
+    const wrapper = mount(UserProfile, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ilya'))
+
+    const blockButton = wrapper.findAll('button').find((b) => b.text() === 'Block')!
+    await blockButton.trigger('click')
+    await flushPromises()
+
+    const blockCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      return String(url).endsWith('/blocks') && method === 'POST'
+    })
+    expect(blockCall).toBeTruthy()
+    const body = JSON.parse((blockCall![1] as RequestInit).body as string)
+    expect(body.identity_id).toBe('id-friend')
   })
 })
