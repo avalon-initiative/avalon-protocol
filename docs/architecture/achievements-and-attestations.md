@@ -191,6 +191,28 @@ uses. Neither proof substitutes for the other.
   Verified live against a real Postgres, including the tampered-signature,
   non-bound-subject, and retired-definition rejection paths
   (`crates/server/tests/attestations.rs`).
+- **Per-network issuer registration gate** (#481, implementing the ADR
+  decided in #479) — `crates/server/src/issuer_registration.rs`. Signatures
+  themselves stay network-agnostic (`attestation_signing_bytes` above never
+  binds `network_id`); network isolation is enforced by a second,
+  independent check layered after the signature-authenticity check in the
+  write path above: is this exact public key admitted to write on *this
+  server's own network*? A new `issuer_network_registrations` table
+  (migration `0059_issuer_network_registrations`) is the admission list —
+  deliberately not the same table as `issuer_keys` (integrator key custody/
+  rotation, #80/#84), which has no network concept at all. `POST
+  /issuers/registration-challenge` + `POST /issuers/register` are the
+  explicit, self-service, never-reviewed registration path (a short-lived
+  nonce, then an Ed25519 proof-of-possession signature over
+  `issuer_ref`+`declared_network_id`+the nonce). Admission policy differs
+  by network tier, not by the handler: `avalon-dev-*`/`avalon-int-*`
+  networks also auto-register a key the first time it's seen on a valid
+  signed write (so calling the registration endpoint explicitly is
+  optional there); `avalon-mainnet-*` (and any unrecognized `network_id`,
+  failing closed) never does — an unregistered key's write is rejected
+  outright. Verified live, including the auto-registration path, the
+  explicit registration round trip, single-use-challenge enforcement, and
+  both rejection paths (`crates/server/tests/issuer_registration.rs`).
 - `crates/server/src/attestations.rs::list_my_achievements` (#34, paginated
   and filtered per #377) — `GET
   /me/achievements?integrator_id=&claim_kind=&before=&limit=`, cursor-paginated

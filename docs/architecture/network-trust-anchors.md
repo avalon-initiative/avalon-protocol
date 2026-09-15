@@ -129,6 +129,17 @@ verification belongs there once [#91](https://github.com/LunarVagabond/avalon-pr
 node-discovery work is active. #91 is about *finding* a node; this document
 is about *trusting* one once found — related, not the same problem.
 
+Nor does this solve, or attempt to solve, the reverse direction: whether a
+given *issuer's key* should be allowed to write on a given network. This
+document is entirely about a client verifying which network a server
+actually belongs to; [#481](https://github.com/LunarVagabond/avalon-protocol/issues/481)
+(implementing the ADR decided in [#479](https://github.com/LunarVagabond/avalon-protocol/issues/479))
+is the server-side admission gate for the opposite question — see
+`docs/architecture/achievements-and-attestations.md`'s "Today in the repo"
+section. The two are related only in that both exist because `network_id`
+identity has to be established and enforced somewhere once `dev`/`int`/
+`mainnet` are real, separate deployments; neither implements the other.
+
 ## Today in the repo
 
 - `docs/trusted-networks.json` — the canonical list (one `local-dev`

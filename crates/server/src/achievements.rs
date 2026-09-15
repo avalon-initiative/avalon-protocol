@@ -28,6 +28,7 @@ use crate::integrators::{
     authenticate_integrator, fetch_integrator_category, fetch_integrator_id_by_slug,
     fetch_issuer_keys, issuer_ref,
 };
+use crate::issuer_registration::ensure_issuer_registered;
 use crate::outbox;
 use crate::state::AppState;
 
@@ -785,6 +786,21 @@ async fn issue_attestation(
         .expect("verify_authenticity already resolved this key successfully");
 
     let mut tx = state.pool.begin().await?;
+
+    // #481: authenticity (just verified above) and network-admission are
+    // two independent checks — a signature valid against the issuer's own
+    // key history still isn't enough to write here unless this exact key
+    // has also been admitted on this network (explicitly, or implicitly
+    // via dev/int auto-registration on this first valid write). Runs
+    // inside this same transaction so an auto-registration and the write
+    // it admits commit atomically together.
+    ensure_issuer_registered(
+        &mut tx,
+        state.chain.network_id(),
+        &signing_key.public_key,
+        &issuer_str,
+    )
+    .await?;
 
     sqlx::query(
         "INSERT INTO achievement_attestations \

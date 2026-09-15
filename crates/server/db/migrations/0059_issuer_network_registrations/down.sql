@@ -1,0 +1,2 @@
+DROP TABLE issuer_registration_challenges;
+DROP TABLE issuer_network_registrations;
