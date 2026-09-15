@@ -53,10 +53,26 @@ export function useGuildDetail(guildId: Ref<string>) {
 
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
-  // Issue #391: channels/events are member-only server-side (require_member)
+  // Issue #391 (and this same bug's own regression against it): channels/
+  // events/members can all 403 for a non-member server-side
+  // (require_member, or #87's roster_visibility for members specifically)
   // — a 403 here for a non-member browsing a recruiting guild is expected,
-  // not a page-level failure, so (like integratorBreakdown/joinRequests above)
-  // these are fetched separately from the Promise.all below.
+  // not a page-level failure. `members` used to be bundled into the
+  // Promise.all below alongside guild/roles, so an expected roster-403
+  // rejected the whole thing and `guild`/`roles` never got set either,
+  // breaking the entire page (including the Join button) for exactly the
+  // "browsing a guild I'm not in yet" case this is supposed to support —
+  // fetched separately here for the same reason channels/events already
+  // are.
+  async function refreshMembers() {
+    if (!session.token) return
+    try {
+      members.value = await listMembersWithPresence(session.token, guildId.value)
+    } catch {
+      members.value = []
+    }
+  }
+
   async function refreshChannels() {
     if (!session.token) return
     try {
@@ -107,20 +123,19 @@ export function useGuildDetail(guildId: Ref<string>) {
   async function refresh() {
     if (!session.token) return
     try {
-      const [guildResp, rolesResp, membersResp] = await Promise.all([
+      const [guildResp, rolesResp] = await Promise.all([
         api.getGuild(session.token, guildId.value),
         api.listRoles(session.token, guildId.value),
-        listMembersWithPresence(session.token, guildId.value),
       ])
       guild.value = guildResp
       roles.value = rolesResp
-      members.value = membersResp
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
     // Independent of the Promise.all above: a permission rejection here
     // must never surface as the page-level `error` the template already
     // treats as fatal.
+    await refreshMembers()
     await refreshChannels()
     await refreshEvents()
     await refreshGameBreakdown()
