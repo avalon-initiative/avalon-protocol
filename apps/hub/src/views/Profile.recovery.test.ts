@@ -3,7 +3,7 @@
 // mounting approach Profile.test.ts already established.
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Profile from './Profile.vue'
 import { useSessionStore } from '../stores/session'
@@ -38,6 +38,7 @@ async function mountProfile(responses: Record<string, unknown>) {
     '/me/recovery/guardians': { guardian_ids: [], threshold: 0, updated_at: null },
     '/me/recovery/status': null,
     '/me/recovery/guardian-requests': [],
+    '/me/recovery/guardian-of': [],
     ...responses,
   })
 
@@ -89,5 +90,39 @@ describe('In-progress recovery notice', () => {
   it('shows nothing extra when no recovery is in progress', async () => {
     const wrapper = await mountProfile({})
     expect(wrapper.text()).not.toContain('A recovery attempt is in progress')
+  })
+})
+
+describe('Guardian-of card (issue #443)', () => {
+  it('lists identities relying on this identity as a guardian, and can resign', async () => {
+    const wrapper = await mountProfile({
+      '/me/recovery/guardian-of': [
+        {
+          identity_id: 'owner-1',
+          display_name: 'Bramble',
+          discriminator: '0001',
+          added_at: 'now',
+        },
+      ],
+    })
+    await vi.waitFor(() => expect(wrapper.text()).toContain("You're a recovery guardian for"))
+    expect(wrapper.text()).toContain('Bramble#0001')
+
+    const resignButton = wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'Stop being a guardian')!
+    await resignButton.trigger('click')
+    await flushPromises()
+
+    const resignCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) =>
+      String(url).includes('/me/recovery/guardian-of/owner-1') &&
+      (init as RequestInit | undefined)?.method === 'DELETE',
+    )
+    expect(resignCall).toBeTruthy()
+  })
+
+  it('shows nothing when this identity is not a guardian for anyone', async () => {
+    const wrapper = await mountProfile({})
+    expect(wrapper.text()).not.toContain("You're a recovery guardian for")
   })
 })

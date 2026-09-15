@@ -324,7 +324,7 @@ describe('Guild', () => {
     await inviteField.setValue('Nova#4821')
     await inviteForm.trigger('submit')
     await flushPromises()
-    expect(wrapper.text()).toContain('Invite sent (id inv1)')
+    expect(wrapper.text()).toContain('Invite sent — they\'ll see it on their Guilds page.')
   })
 
   // Issue #391: channels/events are member-only server-side (403 for a

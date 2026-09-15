@@ -18,15 +18,18 @@ import { addPasskey, listPasskeys, renamePasskey, revokePasskey } from '../api/p
 import {
   approveRecoveryRequest,
   cancelRecoveryRequest,
+  getGuardianOf,
   getGuardianRequests,
   getGuardians,
   getMyRecoveryStatus,
+  resignAsGuardian,
   setGuardians,
 } from '../api/recovery'
 import type {
   DeviceGrantResponse,
   DeviceResponse,
   Genre,
+  GuardianOfSummary,
   GuardianRequestSummary,
   PasskeyResponse,
   RecoveryRequestResponse,
@@ -166,7 +169,12 @@ onMounted(async () => {
       await refreshDevicesAndPendingGrants()
     }
     await refreshPasskeys()
-    await Promise.all([refreshGuardianSettings(), refreshMyRecoveryStatus(), refreshGuardianRequests()])
+    await Promise.all([
+      refreshGuardianSettings(),
+      refreshMyRecoveryStatus(),
+      refreshGuardianRequests(),
+      refreshGuardianOf(),
+    ])
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -182,6 +190,7 @@ onMounted(async () => {
     // device-grant flow above.
     refreshMyRecoveryStatus()
     refreshGuardianRequests()
+    refreshGuardianOf()
   }, POLL_INTERVAL_MS)
 })
 
@@ -746,6 +755,39 @@ async function onCancelGuardianRequest(requestId: string) {
     actingOnRequestId.value = ''
   }
 }
+
+// Issue #443: identities that currently name this identity as one of
+// *their* guardians — visibility into a responsibility the owner-side
+// config (above) can otherwise hand out without the guardian ever knowing.
+const guardianOf = ref<GuardianOfSummary[]>([])
+const guardianOfError = ref('')
+const resigningFrom = ref('')
+
+async function refreshGuardianOf() {
+  if (!session.token) return
+  try {
+    const summaries = await getGuardianOf(session.token)
+    // Same "never leave this as anything but a real array" guard as
+    // refreshGuardianRequests above — this is a polled, supplementary list.
+    guardianOf.value = Array.isArray(summaries) ? summaries : []
+  } catch {
+    // Same non-fatal treatment as refreshGuardianRequests above.
+  }
+}
+
+async function onResignGuardian(identityId: string) {
+  if (!session.token) return
+  guardianOfError.value = ''
+  resigningFrom.value = identityId
+  try {
+    await resignAsGuardian(session.token, identityId)
+    await refreshGuardianOf()
+  } catch (e) {
+    guardianOfError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    resigningFrom.value = ''
+  }
+}
 </script>
 
 <template>
@@ -1152,6 +1194,28 @@ async function onCancelGuardianRequest(requestId: string) {
                   @click="onCancelGuardianRequest(summary.request.id)"
                 />
               </div>
+            </li>
+          </ul>
+        </AvalonCard>
+
+        <AvalonCard
+          v-if="guardianOf.length > 0"
+          title="You're a recovery guardian for"
+          subtitle="These people have named you as a trusted guardian — your approval counts toward the threshold that can recover their identity. You can stop being a guardian at any time, without their cooperation."
+        >
+          <p v-if="guardianOfError" :class="page.error">{{ guardianOfError }}</p>
+          <ul :class="styles.list">
+            <li v-for="entry in guardianOf" :key="entry.identity_id" :class="styles.listRow">
+              <span :class="styles.listText">
+                <span :class="styles.listLabel">{{ entry.display_name }}#{{ entry.discriminator }}</span>
+                <span :class="styles.listDetail">guardian since {{ entry.added_at }}</span>
+              </span>
+              <AvalonButton
+                :label="resigningFrom === entry.identity_id ? 'Removing…' : 'Stop being a guardian'"
+                variant="danger"
+                :disabled="resigningFrom === entry.identity_id"
+                @click="onResignGuardian(entry.identity_id)"
+              />
             </li>
           </ul>
         </AvalonCard>

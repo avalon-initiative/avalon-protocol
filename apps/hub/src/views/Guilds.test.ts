@@ -67,4 +67,36 @@ describe('Guilds', () => {
     expect(images[0].attributes('src')).toBe('https://example.com/icon.png')
     expect(wrapper.text()).toContain('Silent Order')
   })
+
+  it('surfaces a pending guild invite and accepts it (issue #442)', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me/guilds': [],
+      '/me/guild-invites': [
+        { id: 'inv1', guild_id: 'g1', guild_name: 'Dragon Hunters', from: 'id-owner', created_at: 'now' },
+      ],
+      '/identities/profiles': [
+        { identity_id: 'id-owner', display_name: 'Nova', discriminator: '4821', avatar_url: null },
+      ],
+      '/guilds/g1/invites/inv1/accept': { guild_id: 'g1', identity_id: 'id-1', role_index: 1, joined_at: 'now' },
+    })
+
+    const router = testRouter()
+    router.push('/guilds')
+    await router.isReady()
+    const wrapper = mount(Guilds, { global: { plugins: [router] } })
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('invited you to'))
+    expect(wrapper.text()).toContain('Nova#4821')
+    expect(wrapper.text()).toContain('Dragon Hunters')
+
+    const acceptButton = wrapper.findAll('button').find((b) => b.text() === 'Accept')!
+    await acceptButton.trigger('click')
+    await flushPromises()
+
+    const acceptCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url]) =>
+      String(url).includes('/guilds/g1/invites/inv1/accept'),
+    )
+    expect(acceptCall).toBeTruthy()
+  })
 })

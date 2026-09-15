@@ -1793,6 +1793,55 @@ pub async fn create_invite(
     }))
 }
 
+#[derive(Serialize)]
+pub struct MyGuildInviteResponse {
+    pub id: Uuid,
+    pub guild_id: Uuid,
+    pub guild_name: String,
+    pub from: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// `GET /me/guild-invites` — every unresolved invite where the caller is
+/// the invitee (issue #442). Without this, the only way an invitee learns
+/// an invite exists at all is being told its raw id out of band by the
+/// sender — this is the "receiving end" listing `Guild.vue`'s invite flow
+/// has been missing since #21, mirroring the shape
+/// `recovery::guardian_requests` already established for the same "every
+/// active thing where the caller is on the receiving end" need.
+pub async fn my_guild_invites(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<MyGuildInviteResponse>>, AppError> {
+    let caller = authenticate(&state, &headers).await?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT gi.id, gi.guild_id, g.name AS guild_name, gi."from", gi.created_at
+        FROM guild_invites gi
+        JOIN guilds g ON g.id = gi.guild_id
+        WHERE gi."to" = $1 AND gi.resolved_at IS NULL
+        ORDER BY gi.created_at DESC
+        "#,
+    )
+    .bind(caller)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut invites = Vec::with_capacity(rows.len());
+    for row in rows {
+        invites.push(MyGuildInviteResponse {
+            id: row.try_get("id")?,
+            guild_id: row.try_get("guild_id")?,
+            guild_name: row.try_get("guild_name")?,
+            from: row.try_get("from")?,
+            created_at: row.try_get("created_at")?,
+        });
+    }
+    Ok(Json(invites))
+}
+
 struct PendingGuildInvite {
     to: Uuid,
 }

@@ -302,6 +302,102 @@ async fn fetch_guardian_settings(
     })
 }
 
+#[derive(Serialize)]
+pub struct GuardianOfSummary {
+    pub identity_id: Uuid,
+    pub display_name: String,
+    pub discriminator: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub added_at: OffsetDateTime,
+}
+
+/// `GET /me/recovery/guardian-of` — every identity that currently names the
+/// caller as one of their recovery guardians (issue #443's opt-out consent
+/// model: a guardian can always see who's relying on them and self-remove
+/// via [`resign_guardian`] below, without the owner's cooperation — there is
+/// no accept step, matching `set_guardians`'s existing "active the moment
+/// the owner names you" behavior).
+pub async fn guardian_of(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<GuardianOfSummary>>, AppError> {
+    let caller = authenticate(&state, &headers).await?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT g.identity_id, g.added_at, p.display_name, p.discriminator
+        FROM recovery_guardians g
+        JOIN profiles p ON p.identity_id = g.identity_id
+        WHERE g.guardian_identity_id = $1
+        ORDER BY g.added_at
+        "#,
+    )
+    .bind(caller)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut summaries = Vec::with_capacity(rows.len());
+    for row in rows {
+        summaries.push(GuardianOfSummary {
+            identity_id: row.try_get("identity_id")?,
+            display_name: row.try_get("display_name")?,
+            discriminator: row.try_get("discriminator")?,
+            added_at: row.try_get("added_at")?,
+        });
+    }
+    Ok(Json(summaries))
+}
+
+/// `DELETE /me/recovery/guardian-of/{identity_id}` — a guardian removing
+/// themselves from someone else's guardian set, without that owner's
+/// cooperation (issue #443). If this drops the owner's guardian count below
+/// their configured threshold, the threshold is clamped down to the new
+/// count instead — the same "recovery must stay satisfiable" invariant
+/// [`validate_guardian_settings`] enforces on the owner's own writes, kept
+/// true here too rather than left as a silent trap the owner discovers only
+/// when trying to actually recover.
+pub async fn resign_guardian(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(identity_id): Path<Uuid>,
+) -> Result<Json<()>, AppError> {
+    let caller = authenticate(&state, &headers).await?;
+
+    let mut tx = state.pool.begin().await?;
+
+    let removed = sqlx::query(
+        "DELETE FROM recovery_guardians WHERE identity_id = $1 AND guardian_identity_id = $2",
+    )
+    .bind(identity_id)
+    .bind(caller)
+    .execute(&mut *tx)
+    .await?;
+    if removed.rows_affected() == 0 {
+        return Err(AppError::NotAGuardian);
+    }
+
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM recovery_guardians WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE recovery_guardian_settings
+        SET threshold = LEAST(threshold, $2), updated_at = now()
+        WHERE identity_id = $1 AND threshold > $2
+        "#,
+    )
+    .bind(identity_id)
+    .bind(remaining as i32)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(()))
+}
+
 async fn current_guardian_set(
     state: &AppState,
     identity_id: Uuid,

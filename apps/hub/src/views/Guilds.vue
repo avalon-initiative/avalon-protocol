@@ -16,6 +16,7 @@ import {
 import * as api from '../api/client'
 import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
+import { useMyGuildInvites } from '../composables/useMyGuildInvites'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useSessionStore } from '../stores/session'
 import local from '../styles/Guilds.module.scss'
@@ -24,6 +25,45 @@ import styles from '../styles/page.module.scss'
 const router = useRouter()
 const session = useSessionStore()
 const { guilds, loading, error, refresh } = useMyGuilds()
+
+// Issue #442: pending invites the caller has received, actionable right
+// from the landing page.
+const {
+  invites: pendingInvites,
+  inviterNames,
+  refresh: refreshInvites,
+} = useMyGuildInvites()
+const respondingToInvite = ref<string | null>(null)
+const inviteError = ref('')
+
+async function onAcceptInvite(invite: (typeof pendingInvites.value)[number]) {
+  if (!session.token) return
+  inviteError.value = ''
+  respondingToInvite.value = invite.id
+  try {
+    await api.acceptGuildInvite(session.token, invite.guild_id, invite.id)
+    await Promise.all([refreshInvites(), refresh()])
+    router.push({ name: 'guild', params: { id: invite.guild_id } })
+  } catch (e) {
+    inviteError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    respondingToInvite.value = null
+  }
+}
+
+async function onDeclineInvite(invite: (typeof pendingInvites.value)[number]) {
+  if (!session.token) return
+  inviteError.value = ''
+  respondingToInvite.value = invite.id
+  try {
+    await api.declineGuildInvite(session.token, invite.guild_id, invite.id)
+    await refreshInvites()
+  } catch (e) {
+    inviteError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    respondingToInvite.value = null
+  }
+}
 
 const guildQuery = ref('')
 const visibleGuilds = computed(() => filterGuildsByNameOrTag(guilds.value, guildQuery.value))
@@ -117,6 +157,30 @@ async function onApplyToJoin(guildId: string) {
       <p :class="styles.subtitle">Communities you belong to, wherever their members are playing.</p>
     </header>
     <p v-if="error" :class="styles.error">{{ error }}</p>
+
+    <AvalonCard v-if="pendingInvites.length > 0" title="Guild invites" :class="local.invitesCard">
+      <p v-if="inviteError" :class="styles.error">{{ inviteError }}</p>
+      <div v-for="invite in pendingInvites" :key="invite.id" :class="local.inviteRow">
+        <span>
+          <strong>{{ inviterNames[invite.from] ?? invite.from }}</strong>
+          invited you to <strong>{{ invite.guild_name }}</strong>
+        </span>
+        <div :class="local.inviteActions">
+          <AvalonButton
+            label="Accept"
+            variant="primary"
+            :disabled="respondingToInvite === invite.id"
+            @click="onAcceptInvite(invite)"
+          />
+          <AvalonButton
+            label="Decline"
+            variant="secondary"
+            :disabled="respondingToInvite === invite.id"
+            @click="onDeclineInvite(invite)"
+          />
+        </div>
+      </div>
+    </AvalonCard>
 
     <div :class="local.tabs">
       <button

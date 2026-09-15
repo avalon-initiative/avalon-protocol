@@ -223,6 +223,9 @@ and implemented unless noted otherwise.
 - **Guild events calendar + RSVP** (#169), plus **per-member RSVP roster**
   (#248) — who's going/maybe/can't-go, not just aggregate counts.
 - **Guild join requests** (#242) and **withdrawing your own request** (#256).
+- **Invite discovery** (#442) — `GET /me/guild-invites` lists every
+  unresolved invite where the caller is the invitee, so accepting/declining
+  no longer depends on the sender sharing the raw invite id out of band.
 - **Role name uniqueness, open-guild joining, and role deletion** — the
   smaller correctness rules tying the rest of this together.
 

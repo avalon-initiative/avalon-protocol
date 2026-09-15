@@ -7,6 +7,7 @@
 import { runRegistrationCeremony } from '../crypto/webauthn'
 import * as api from './client'
 import type {
+  GuardianOfSummary,
   GuardianRequestSummary,
   GuardianSettingsResponse,
   RecoveryRequestResponse,
@@ -30,6 +31,16 @@ export function getMyRecoveryStatus(token: string): Promise<RecoveryRequestRespo
 
 export function getGuardianRequests(token: string): Promise<GuardianRequestSummary[]> {
   return api.getGuardianRequests(token)
+}
+
+// Issue #443: identities relying on the caller as a guardian, and the
+// caller's own opt-out self-removal from one of those designations.
+export function getGuardianOf(token: string): Promise<GuardianOfSummary[]> {
+  return api.getGuardianOf(token)
+}
+
+export function resignAsGuardian(token: string, identityId: string): Promise<void> {
+  return api.resignAsGuardian(token, identityId)
 }
 
 export function approveRecoveryRequest(

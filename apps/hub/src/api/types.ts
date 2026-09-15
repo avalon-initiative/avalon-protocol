@@ -374,6 +374,15 @@ export interface GuardianRequestSummary {
   already_approved: boolean
 }
 
+// Issue #443: identities that currently name the caller as one of their
+// recovery guardians.
+export interface GuardianOfSummary {
+  identity_id: string
+  display_name: string
+  discriminator: string
+  added_at: string
+}
+
 export type PresenceStatus = 'Online' | 'Away' | 'DoNotDisturb' | 'Offline'
 
 export interface UpdatePresenceRequest {
@@ -579,6 +588,17 @@ export interface GuildInviteResponse {
   id: string
   guild_id: string
   to: string
+  from: string
+  created_at: string
+}
+
+// Issue #442: the invitee's own view of a pending invite — includes the
+// guild's name since the invitee (unlike the sender) may not have visited
+// the guild yet.
+export interface MyGuildInviteResponse {
+  id: string
+  guild_id: string
+  guild_name: string
   from: string
   created_at: string
 }

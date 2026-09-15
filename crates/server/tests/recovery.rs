@@ -670,3 +670,104 @@ async fn a_racing_approval_never_resurrects_a_cancelled_request() {
         );
     }
 }
+
+/// Issue #443: a guardian can discover every identity that currently names
+/// them, and only those identities.
+#[tokio::test]
+#[ignore]
+async fn guardian_of_lists_only_identities_naming_the_caller() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (guardian_id, guardian_token) = seed_identity_session(&pool).await;
+    let (bystander_id, bystander_token) = seed_identity_session(&pool).await;
+    let _ = bystander_id;
+
+    seed_friendship(&pool, owner_id, guardian_id).await;
+    configure_guardians(&http, &base, &owner_token, &[guardian_id], 1).await;
+
+    let mine: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/me/recovery/guardian-of")),
+        &guardian_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(
+        mine[0]["identity_id"].as_str().unwrap(),
+        owner_id.to_string()
+    );
+
+    let bystanders: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/me/recovery/guardian-of")),
+        &bystander_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(bystanders.is_empty());
+}
+
+/// Issue #443: a guardian can resign without the owner's cooperation, and
+/// only from their own designation — never on behalf of another guardian.
+#[tokio::test]
+#[ignore]
+async fn a_guardian_can_resign_without_the_owners_cooperation() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (g1_id, g1_token) = seed_identity_session(&pool).await;
+    let (g2_id, g2_token) = seed_identity_session(&pool).await;
+
+    seed_friendship(&pool, owner_id, g1_id).await;
+    seed_friendship(&pool, owner_id, g2_id).await;
+    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+
+    // A guardian resigning from a designation they don't hold is a no-op
+    // failure, not a way to remove someone else.
+    let wrong_target = auth(
+        http.delete(format!("{base}/me/recovery/guardian-of/{g1_id}")),
+        &g2_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(!wrong_target.status().is_success());
+
+    let resign = auth(
+        http.delete(format!("{base}/me/recovery/guardian-of/{owner_id}")),
+        &g1_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(resign.status().is_success(), "{:?}", resign.status());
+
+    let settings: serde_json::Value = auth(
+        http.get(format!("{base}/me/recovery/guardians")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let remaining_guardians = settings["guardian_ids"].as_array().unwrap();
+    assert_eq!(remaining_guardians.len(), 1);
+    assert_eq!(remaining_guardians[0].as_str().unwrap(), g2_id.to_string());
+    // Threshold was 2 against 2 guardians; dropping to 1 guardian must clamp
+    // the threshold down rather than leave an unsatisfiable 2-of-1 config.
+    assert_eq!(settings["threshold"].as_i64().unwrap(), 1);
+}

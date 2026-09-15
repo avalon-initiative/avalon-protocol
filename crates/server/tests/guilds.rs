@@ -659,6 +659,21 @@ async fn invite_accept_join_and_leave_flow() {
     let duplicate_body: serde_json::Value = duplicate.json().await.unwrap();
     assert_eq!(duplicate_body["id"].as_str().unwrap(), invite_id);
 
+    // Issue #442: the invitee can discover the invite themselves, without
+    // being told its id out of band.
+    let my_invites: serde_json::Value =
+        auth(http.get(format!("{base}/me/guild-invites")), &invitee_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let my_invites = my_invites.as_array().unwrap();
+    assert_eq!(my_invites.len(), 1);
+    assert_eq!(my_invites[0]["id"].as_str().unwrap(), invite_id);
+    assert_eq!(my_invites[0]["guild_id"].as_str().unwrap(), guild_id);
+
     let accept = auth(
         http.post(format!(
             "{base}/guilds/{guild_id}/invites/{invite_id}/accept"
@@ -669,6 +684,17 @@ async fn invite_accept_join_and_leave_flow() {
     .await
     .unwrap();
     assert!(accept.status().is_success(), "{:?}", accept.status());
+
+    // Resolved invites must not linger in the "receiving end" listing.
+    let my_invites_after: serde_json::Value =
+        auth(http.get(format!("{base}/me/guild-invites")), &invitee_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert!(my_invites_after.as_array().unwrap().is_empty());
 
     let members: serde_json::Value = auth(
         http.get(format!("{base}/guilds/{guild_id}/members")),
