@@ -1,12 +1,15 @@
 // The caller's own conversation list (issue #105) — loads once, then polls,
-// same "no WebSocket needed for milestone 1" shape useMyConnections.ts and
-// useGuildChat.ts already establish. Also resolves display names for every
-// participant seen across the list (via GET /identities/profiles, issue
-// #161), so Messages.vue never has to know an identity by its raw id.
+// same "no WebSocket needed for milestone 1" shape useMyConnections.ts
+// establishes. Also resolves display names for every participant seen
+// across the list (via GET /identities/profiles, issue #161), so
+// Messages.vue never has to know an identity by its raw id, and — same
+// live-presence pattern useFriendsPresence.ts uses — subscribes to every
+// participant's presence so a chat message can show their current status.
 import { onMounted, onUnmounted, ref } from 'vue'
 import * as api from '../api/client'
+import type { PresenceSocket } from '../api/client'
 import { otherParticipants } from '../api/conversations'
-import type { ConversationResponse } from '../api/types'
+import type { ConversationResponse, PresenceResponse, PresenceStatus } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
 const POLL_INTERVAL_MS = 15_000
@@ -16,11 +19,17 @@ export function useConversations() {
 
   const conversations = ref<ConversationResponse[]>([])
   const participantNames = ref<Record<string, string>>({})
+  const participantPresence = ref<Record<string, PresenceStatus>>({})
   const selfId = ref('')
   const loading = ref(true)
   const error = ref('')
 
   let pollHandle: ReturnType<typeof setInterval> | undefined
+  let presenceSocket: PresenceSocket | undefined
+
+  function onPresenceUpdate(presence: PresenceResponse) {
+    participantPresence.value = { ...participantPresence.value, [presence.identity_id]: presence.status }
+  }
 
   async function resolveParticipantNames(list: ConversationResponse[]) {
     if (!session.token) return
@@ -54,6 +63,10 @@ export function useConversations() {
       }
       conversations.value = await api.listConversations(session.token)
       await resolveParticipantNames(conversations.value)
+      const otherIds = [
+        ...new Set(conversations.value.flatMap((c) => otherParticipants(c, selfId.value))),
+      ]
+      presenceSocket?.subscribe(otherIds)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
@@ -72,10 +85,14 @@ export function useConversations() {
       conversations.value = [conversation, ...conversations.value]
     }
     await resolveParticipantNames([conversation])
+    presenceSocket?.subscribe(otherParticipants(conversation, selfId.value))
     return conversation
   }
 
   onMounted(async () => {
+    if (session.token) {
+      presenceSocket = api.openPresenceSocket(session.token, onPresenceUpdate)
+    }
     await refresh()
     loading.value = false
     pollHandle = setInterval(refresh, POLL_INTERVAL_MS)
@@ -83,7 +100,17 @@ export function useConversations() {
 
   onUnmounted(() => {
     if (pollHandle) clearInterval(pollHandle)
+    presenceSocket?.close()
   })
 
-  return { conversations, participantNames, selfId, loading, error, refresh, startConversation }
+  return {
+    conversations,
+    participantNames,
+    participantPresence,
+    selfId,
+    loading,
+    error,
+    refresh,
+    startConversation,
+  }
 }

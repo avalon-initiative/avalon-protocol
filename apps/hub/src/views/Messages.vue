@@ -21,6 +21,7 @@ const router = useRouter()
 const {
   conversations,
   participantNames,
+  participantPresence,
   selfId,
   loading: listLoading,
   error: listError,
@@ -52,15 +53,21 @@ function conversationLabel(id: string): string {
 
 const activeLabel = computed(() => (selectedId.value ? conversationLabel(selectedId.value) : ''))
 
-// Same scroll-reset-on-switch behavior Guild.vue's channel sidebar uses —
-// this scroll container is reused across conversation switches, not
-// remounted.
+// Same persistent-scroll-container reasoning as Guild.vue's Channels tab —
+// reused across conversation switches, not remounted.
 const messageScrollEl = ref<HTMLElement | null>(null)
-watch(selectedId, () => {
-  nextTick(() => {
-    if (messageScrollEl.value) messageScrollEl.value.scrollTop = 0
-  })
-})
+
+const NEAR_BOTTOM_THRESHOLD_PX = 120
+
+function isNearBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
+}
+
+function scrollToBottom() {
+  if (messageScrollEl.value) {
+    messageScrollEl.value.scrollTop = messageScrollEl.value.scrollHeight
+  }
+}
 
 const {
   messages,
@@ -74,6 +81,31 @@ const {
   loadOlder,
   sendMessage,
 } = useConversationThread(selectedId)
+
+// Same "force bottom on switch, follow only if already at the bottom"
+// shape Guild.vue's Channels tab uses — see that view's own comment for
+// why this is a plain flag rather than watching `threadLoading` directly.
+let forceScrollOnNextMessages = false
+watch(selectedId, () => {
+  forceScrollOnNextMessages = true
+})
+
+watch(
+  () => messages.value.length,
+  (newLen, oldLen) => {
+    const el = messageScrollEl.value
+    const wasNearBottom = !el || isNearBottom(el)
+    if (forceScrollOnNextMessages) {
+      if (newLen === 0) return
+      forceScrollOnNextMessages = false
+      nextTick(scrollToBottom)
+      return
+    }
+    if (newLen > oldLen && wasNearBottom) {
+      nextTick(scrollToBottom)
+    }
+  },
+)
 
 const draft = ref('')
 
@@ -136,6 +168,8 @@ function onMessageScroll(event: Event) {
                 :author-display-name="participantNames[message.author]"
                 :body="message.body"
                 :sent-at-label="new Date(message.sent_at).toLocaleString()"
+                :is-own="message.author === selfId"
+                :presence-status="participantPresence[message.author]"
               />
             </div>
 

@@ -183,7 +183,11 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     sending.value = true
     try {
       const message = await api.sendMessage(session.token, guildId.value, targetChannelId, { body })
-      if (!isStaleFor(targetChannelId)) {
+      // The websocket push for this same message can arrive before this
+      // response does (the server broadcasts right after the DB insert,
+      // before this HTTP round trip completes) — dedup against it, same
+      // guard subscribeToChannel's onMessage uses.
+      if (!isStaleFor(targetChannelId) && !messages.value.some((m) => m.id === message.id)) {
         messages.value = [...messages.value, message]
         await resolveAuthorNames([message])
       }

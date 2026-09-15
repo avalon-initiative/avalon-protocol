@@ -17,6 +17,7 @@ type Story = StoryObj<typeof AvalonChatMessage>
 export const Default: Story = {}
 export const WithDisplayName: Story = { args: { authorDisplayName: 'Avalon User' } }
 export const Deletable: Story = { args: { canDelete: true } }
+export const Own: Story = { args: { isOwn: true, body: 'On my way, give me five minutes!' } }
 export const LongMessage: Story = {
   args: {
     body: 'This is a much longer message meant to demonstrate how the chat bubble wraps text across multiple lines without breaking the layout of the surrounding channel view, even with a very long unbroken run of content.',

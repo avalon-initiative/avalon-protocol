@@ -118,6 +118,18 @@ const canManageChannels = computed(
 )
 const isMember = computed(() => members.value.some((m) => m.identityId === selfId.value))
 
+// Author presence for chat messages (issue #438 follow-up) — `members`
+// already carries each member's presence via `listMembersWithPresence`
+// (useGuildDetail.ts), refreshed on that composable's own poll cadence
+// rather than a separate live subscription just for chat.
+const memberPresence = computed(() => {
+  const map: Record<string, (typeof members.value)[number]['status']> = {}
+  for (const member of members.value) {
+    map[member.identityId] = member.status
+  }
+  return map
+})
+
 // --- Tabs (issue #241) ---------------------------------------------------
 // Overview/Members/Events/Roles/Settings are plain client-side state, same
 // as Guilds.vue's "My guilds"/"Discover" tabs — no route involved. Channels
@@ -206,16 +218,23 @@ function selectChannel(channelId: string) {
 }
 
 // The scroll container below is a persistent DOM node reused across
-// channel switches (#241 — no remount per channel anymore), so its
-// scrollTop from the previous channel would otherwise carry over. Reset
-// it whenever the selected channel changes, matching the old per-channel
-// route's remount behavior.
+// channel switches (#241 — no remount per channel anymore).
 const messageScrollEl = ref<HTMLElement | null>(null)
-watch(selectedChannelId, () => {
-  nextTick(() => {
-    if (messageScrollEl.value) messageScrollEl.value.scrollTop = 0
-  })
-})
+
+// Within this many px of the bottom counts as "at the bottom" for
+// auto-scroll purposes — a reader doesn't have to be pixel-perfect at the
+// very edge to keep following new messages live.
+const NEAR_BOTTOM_THRESHOLD_PX = 120
+
+function isNearBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
+}
+
+function scrollToBottom() {
+  if (messageScrollEl.value) {
+    messageScrollEl.value.scrollTop = messageScrollEl.value.scrollHeight
+  }
+}
 
 const {
   channel: activeChannel,
@@ -232,6 +251,41 @@ const {
   sendMessage,
   deleteMessage,
 } = useGuildChat(guildId, selectedChannelId)
+
+// Opening a channel (first load or a switch) always lands at the bottom —
+// the same behavior a fresh chat window opening to its latest messages
+// has everywhere else. Tracked as a plain flag rather than watching
+// `chatLoading` directly: `messages` and `loading` both change inside the
+// same async `load()` call, and which reactive flush order they land in
+// isn't something to depend on — this flag is set synchronously on every
+// channel switch and consumed the next time `messages` actually
+// repopulates, regardless of flush timing.
+let forceScrollOnNextMessages = false
+watch(selectedChannelId, () => {
+  forceScrollOnNextMessages = true
+})
+
+// A message arriving (send or live push) only pulls the view down if the
+// reader was already at the bottom — someone scrolled up into history
+// keeps reading exactly where they are; this watcher runs before Vue
+// patches the DOM for the new message (default 'pre' flush), so
+// `messageScrollEl`'s measurements here are still the pre-append ones.
+watch(
+  () => messages.value.length,
+  (newLen, oldLen) => {
+    const el = messageScrollEl.value
+    const wasNearBottom = !el || isNearBottom(el)
+    if (forceScrollOnNextMessages) {
+      if (newLen === 0) return // cleared, waiting for the real repopulation
+      forceScrollOnNextMessages = false
+      nextTick(scrollToBottom)
+      return
+    }
+    if (newLen > oldLen && wasNearBottom) {
+      nextTick(scrollToBottom)
+    }
+  },
+)
 
 const draft = ref('')
 
@@ -1543,6 +1597,8 @@ const {
                 :body="message.body"
                 :sent-at-label="new Date(message.sent_at).toLocaleString()"
                 :can-delete="canDeleteMessage"
+                :is-own="message.author === selfId"
+                :presence-status="memberPresence[message.author]"
                 @delete="deleteMessage(message.id)"
               />
             </div>
