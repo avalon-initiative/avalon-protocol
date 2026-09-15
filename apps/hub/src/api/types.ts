@@ -120,6 +120,10 @@ export interface ProfileResponse {
   // identity; drives the "you are currently publicly searchable" indicator
   // on Profile.vue.
   discoverable: boolean
+  // Issue #87 — who can see this identity's presence status. One of
+  // "public" | "authenticated_only" | "friends" | "guild_members" |
+  // "private", same vocabulary GuildResponse.roster_visibility uses.
+  presence_visibility: string
 }
 
 export interface UpdateProfileRequest {
@@ -150,6 +154,8 @@ export interface UpdateProfileRequest {
   main_guild?: string
   // Issue #205. Omitted leaves the existing preference untouched.
   discoverable?: boolean
+  // Issue #87. Omitted leaves it untouched.
+  presence_visibility?: string
 }
 
 // GET /identities/search?q=&limit= (issue #205) — the opt-in counterpart to
@@ -477,6 +483,11 @@ export interface GuildResponse {
   // order — always part of the public profile (unlike the full
   // breakdown, which stays behind game_breakdown_public).
   favorite_games: FavoriteGameEntry[]
+  // Issue #87. Who can see this guild's member list, independent of the
+  // recruiting/public overrides (#449/#455) that can widen it further —
+  // one of "public" | "authenticated_only" | "friends" | "guild_members" |
+  // "private".
+  roster_visibility: string
 }
 
 export interface CreateGuildRequest {
@@ -509,6 +520,10 @@ export interface UpdateGuildRequest {
   // authenticated identity join instantly via POST /guilds/{id}/join,
   // bypassing the invite and join-request/approval flows entirely.
   join_policy?: 'invite_only' | 'open'
+  // Issue #87. Omitted leaves it untouched. The recruiting/public overrides
+  // (#449/#455) can still widen roster exposure beyond whatever this is
+  // set to; this only controls the underlying baseline.
+  roster_visibility?: string
 }
 
 // GET /guilds/{id}/integrator-breakdown (issue #206, implementing decision #160):

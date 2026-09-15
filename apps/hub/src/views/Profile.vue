@@ -138,6 +138,35 @@ const discoverable = ref(false)
 const savingDiscoverable = ref(false)
 const discoverableError = ref('')
 
+// Issue #87 — who can see this identity's presence status, same fixed
+// Visibility vocabulary the guild roster-visibility control below uses.
+const VISIBILITY_OPTIONS = [
+  { value: 'public', label: 'Anyone' },
+  { value: 'authenticated_only', label: 'Any signed-in user' },
+  { value: 'friends', label: 'Friends only' },
+  { value: 'guild_members', label: 'Guild members only' },
+  { value: 'private', label: 'Only me' },
+]
+const presenceVisibility = ref('public')
+const savingPresenceVisibility = ref(false)
+const presenceVisibilityError = ref('')
+
+async function onSavePresenceVisibility() {
+  if (!session.token) return
+  presenceVisibilityError.value = ''
+  savingPresenceVisibility.value = true
+  try {
+    const profile = await api.updateProfile(session.token, {
+      presence_visibility: presenceVisibility.value,
+    })
+    presenceVisibility.value = profile.presence_visibility
+  } catch (e) {
+    presenceVisibilityError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingPresenceVisibility.value = false
+  }
+}
+
 // #134: this device has no signing key for the current identity — either
 // it's brand new, or storage was cleared. Recovering from a saved phrase
 // is one fallback; requesting a grant from another trusted device (#135,
@@ -166,6 +195,7 @@ onMounted(async () => {
     links.value = profile.links?.length ? [...profile.links] : ['']
     selectedGenres.value = new Set(profile.favorite_genres)
     discoverable.value = profile.discoverable
+    presenceVisibility.value = profile.presence_visibility
     hasSigningKey.value = loadSigningKey(profile.identity_id) !== null
     if (hasSigningKey.value) {
       await refreshDevicesAndPendingGrants()
@@ -856,6 +886,30 @@ async function onResignGuardian(identityId: string) {
       <p v-if="discoverableError" :class="page.error">{{ discoverableError }}</p>
     </AvalonCard>
 
+    <AvalonCard
+      title="Online status visibility"
+      subtitle="Who can see whether you're online, away, or offline."
+    >
+      <select
+        v-model="presenceVisibility"
+        :class="styles.linkInput"
+        aria-label="Online status visibility"
+      >
+        <option v-for="opt in VISIBILITY_OPTIONS" :key="opt.value" :value="opt.value">
+          {{ opt.label }}
+        </option>
+      </select>
+      <div :class="styles.actions">
+        <AvalonButton
+          :label="savingPresenceVisibility ? 'Saving…' : 'Save'"
+          variant="primary"
+          :disabled="savingPresenceVisibility"
+          @click="onSavePresenceVisibility"
+        />
+      </div>
+      <p v-if="presenceVisibilityError" :class="page.error">{{ presenceVisibilityError }}</p>
+    </AvalonCard>
+
     <div :class="page.grid">
       <div :class="page.mainColumn">
         <AvalonCard title="Profile" subtitle="How other users see you.">
@@ -964,7 +1018,7 @@ async function onResignGuardian(identityId: string) {
               you joined earliest<span v-if="effectiveMainGuildName"> ({{ effectiveMainGuildName }})</span>.
             </p>
             <p v-if="mainGuildError" :class="page.error">{{ mainGuildError }}</p>
-            <select v-model="mainGuild" :class="styles.linkInput">
+            <select v-model="mainGuild" :class="styles.linkInput" aria-label="Main guild">
               <option value="">No main guild set</option>
               <option v-for="guild in myGuilds" :key="guild.id" :value="guild.id">
                 {{ guild.name }}
