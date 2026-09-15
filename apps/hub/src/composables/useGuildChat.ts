@@ -2,10 +2,9 @@
 // folded out of the standalone GuildChannel.vue route by #241): cursor-
 // paginated history (`before`/`limit`, matching
 // crates/server/src/guild_messages.rs), newest at the bottom, load-older on
-// demand. No WebSocket for milestone 1 (the ticket's own design note) — new
-// messages are picked up by re-fetching the latest page on a short poll and
-// merging in anything not already known, since the server only exposes an
-// older-page cursor (`before`), not a "since" one.
+// demand. New messages arrive live over the /ws/messages socket (issue
+// #438) rather than a poll — a channel that used to be milestone-1 poll-only
+// per its own now-outdated design note; see docs/architecture/communication.md.
 //
 // `channelId` is expected to change while this composable stays mounted —
 // the Channels tab sidebar swaps it as the reader picks a different channel,
@@ -22,10 +21,6 @@ import type { ChannelResponse, GuildResponse, MessageResponse } from '../api/typ
 import { useSessionStore } from '../stores/session'
 
 const MESSAGE_PAGE_SIZE = 50
-// Chat should feel more live than the 5-minute friend/guild-membership
-// polls elsewhere in the Hub, but still comfortably above the server's
-// own rate of change for a milestone-1, no-WebSocket poll.
-const POLL_INTERVAL_MS = 15_000
 
 export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   const session = useSessionStore()
@@ -47,7 +42,12 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   const sendError = ref('')
   const sending = ref(false)
 
-  let pollHandle: ReturnType<typeof setInterval> | undefined
+  let chatSocket: api.ChatSocket | undefined
+
+  function closeChatSocket() {
+    chatSocket?.close()
+    chatSocket = undefined
+  }
 
   // Every async operation below reads channelId.value again after its
   // awaited work returns and bails if it's changed — the reader may have
@@ -121,23 +121,27 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     await resolveAuthorNames(messages.value)
   }
 
-  async function pollNewMessages() {
-    const targetChannelId = channelId.value
+  // Opens the live socket for `targetChannelId` (issue #438) — closes
+  // whatever was subscribed before, so a channel switch never leaves a
+  // stale connection pushing updates for a channel the reader left.
+  function subscribeToChannel(targetChannelId: string) {
+    closeChatSocket()
     if (!session.token || !targetChannelId) return
-    try {
-      const page = await api.listMessages(session.token, guildId.value, targetChannelId, {
-        limit: MESSAGE_PAGE_SIZE,
-      })
-      if (isStaleFor(targetChannelId)) return
-      const known = new Set(messages.value.map((m) => m.id))
-      const fresh = toOldestFirst(page).filter((m) => !known.has(m.id))
-      if (fresh.length > 0) {
-        messages.value = [...messages.value, ...fresh]
-        await resolveAuthorNames(fresh)
-      }
-    } catch {
-      // Best-effort poll — the next tick retries.
-    }
+    chatSocket = api.openChannelMessageSocket(
+      session.token,
+      guildId.value,
+      targetChannelId,
+      (message) => {
+        if (isStaleFor(targetChannelId)) return
+        if (messages.value.some((m) => m.id === message.id)) return
+        messages.value = [...messages.value, message]
+        resolveAuthorNames([message])
+      },
+      (messageId) => {
+        if (isStaleFor(targetChannelId)) return
+        messages.value = messages.value.filter((m) => m.id !== messageId)
+      },
+    )
   }
 
   async function loadOlder() {
@@ -218,6 +222,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       messages.value = []
       channel.value = null
       loading.value = false
+      closeChatSocket()
       return
     }
     loading.value = true
@@ -226,6 +231,8 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       await loadChannelMeta(targetChannelId)
       if (isStaleFor(targetChannelId)) return
       await loadLatestMessages(targetChannelId)
+      if (isStaleFor(targetChannelId)) return
+      subscribeToChannel(targetChannelId)
     } catch (e) {
       if (!isStaleFor(targetChannelId)) {
         error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -243,13 +250,10 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   // at all when the reader picks a different channel from the sidebar.
   watch([guildId, channelId], load)
 
-  onMounted(() => {
-    load()
-    pollHandle = setInterval(pollNewMessages, POLL_INTERVAL_MS)
-  })
+  onMounted(load)
 
   onUnmounted(() => {
-    if (pollHandle) clearInterval(pollHandle)
+    closeChatSocket()
   })
 
   return {

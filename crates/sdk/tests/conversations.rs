@@ -151,6 +151,59 @@ async fn dm_then_send_then_messages_round_trips_across_two_sessions() {
     assert_eq!(bob_messages.len(), 2);
 }
 
+/// Issue #438: a conversation subscription receives a new message pushed
+/// by the other participant's send, without polling — same shape
+/// `tests/guilds.rs`'s `subscribe_messages_receives_a_message_pushed_by_another_member`
+/// exercises for guild chat.
+#[tokio::test]
+#[ignore]
+async fn subscribe_messages_receives_a_message_pushed_by_the_other_participant() {
+    let pool = test_pool().await;
+    let client = client();
+
+    let (alice_id, alice_token) =
+        seed_identity_session(&pool, &format!("sdk-conv-ws-alice-{}", Uuid::new_v4())).await;
+    let (bob_id, bob_token) =
+        seed_identity_session(&pool, &format!("sdk-conv-ws-bob-{}", Uuid::new_v4())).await;
+    seed_friendship(&pool, alice_id, bob_id).await;
+
+    let alice = client
+        .authenticate(&alice_token)
+        .await
+        .unwrap()
+        .grant_for_testing("messages.send")
+        .grant_for_testing("messages.read");
+    let bob = client
+        .authenticate(&bob_token)
+        .await
+        .unwrap()
+        .grant_for_testing("messages.send")
+        .grant_for_testing("messages.read");
+
+    let conversation = alice
+        .dm(IdentityId(bob_id))
+        .await
+        .expect("dm() should succeed");
+
+    let mut updates = conversation
+        .subscribe_messages()
+        .await
+        .expect("subscribe_messages should connect");
+
+    let bob_handle = bob.conversation(conversation.conversation_id());
+    bob_handle
+        .send("hello from bob")
+        .await
+        .expect("bob's send should succeed");
+
+    let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), updates.recv())
+        .await
+        .expect("a pushed message should arrive without polling")
+        .expect("channel should still be open");
+    assert_eq!(pushed.body, "hello from bob");
+    assert_eq!(pushed.author.0, bob_id);
+}
+
 #[tokio::test]
 #[ignore]
 async fn dm_without_grant_is_rejected_before_any_request_live() {

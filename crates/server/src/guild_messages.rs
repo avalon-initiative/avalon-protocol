@@ -65,7 +65,7 @@ fn validate_message_body(body: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub channel_id: Uuid,
@@ -262,13 +262,19 @@ pub async fn send_message(
 
     prune_channel(&state, channel_id).await?;
 
-    Ok(Json(MessageResponse {
+    let response = MessageResponse {
         id: message_id,
         channel_id,
         author: actor,
         body: body.body,
         sent_at,
-    }))
+    };
+    // Issue #438: pushes the new message to every websocket connection
+    // subscribed to this channel — see `crate::chat`. Best-effort (a lossy
+    // broadcast, no receivers is not an error); a client falls back to the
+    // paginated `GET` above if it misses this.
+    state.chat.publish_channel_message(response.clone());
+    Ok(Json(response))
 }
 
 /// Keeps at most `message_cap()` newest messages in `channel_id` (ordered
@@ -400,6 +406,9 @@ pub async fn delete_message(
         return Err(AppError::MessageNotFound);
     }
 
+    state
+        .chat
+        .publish_channel_message_deleted(channel_id, message_id);
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 

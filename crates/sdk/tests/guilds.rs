@@ -216,6 +216,87 @@ async fn send_then_messages_round_trips_a_message() {
     assert_eq!(messages[0].body, "hello from the sdk");
 }
 
+/// Issue #438: a channel subscription receives a new message pushed by
+/// another member's send, without polling — same shape
+/// `tests/social.rs`'s `subscribe_presence_receives_a_live_update_pushed_by_another_identity`
+/// exercises for presence.
+#[tokio::test]
+#[ignore]
+async fn subscribe_messages_receives_a_message_pushed_by_another_member() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let client = client();
+
+    let (_alice_id, alice_token) =
+        seed_identity_session(&pool, &format!("sdk-chat-ws-alice-{}", Uuid::new_v4())).await;
+    let (_bob_id, bob_token) =
+        seed_identity_session(&pool, &format!("sdk-chat-ws-bob-{}", Uuid::new_v4())).await;
+    let tag = format!("W{}", &Uuid::new_v4().simple().to_string()[..4]);
+    let guild_id = create_guild(&http, &base, &alice_token, &tag).await;
+
+    // Bob needs a real guild_members row to send — seeded directly, same
+    // as `crates/server/tests/guild_channels.rs::seed_membership`, since
+    // there's no invite-flow helper in this test file.
+    sqlx::query(
+        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
+         VALUES ($1, $2, 2, now())",
+    )
+    .bind(guild_id)
+    .bind(_bob_id)
+    .execute(&pool)
+    .await
+    .expect("failed to seed bob's membership");
+
+    let alice_session = client
+        .authenticate(&alice_token)
+        .await
+        .unwrap()
+        .grant_for_testing("guilds.chat");
+    let bob_session = client
+        .authenticate(&bob_token)
+        .await
+        .unwrap()
+        .grant_for_testing("guilds.chat");
+
+    let channels = alice_session
+        .guild(GuildId(guild_id))
+        .channels()
+        .await
+        .expect("channels() should succeed");
+    let general = channels
+        .iter()
+        .find(|c| c.name == "general")
+        .expect("every guild is seeded with a default general channel");
+
+    let mut updates = alice_session
+        .guild(GuildId(guild_id))
+        .channel(general.id)
+        .subscribe_messages()
+        .await
+        .expect("subscribe_messages should connect");
+
+    bob_session
+        .guild(GuildId(guild_id))
+        .channel(general.id)
+        .send("hello from bob")
+        .await
+        .expect("bob's send should succeed");
+
+    let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), updates.recv())
+        .await
+        .expect("a pushed message should arrive without polling")
+        .expect("channel should still be open");
+    match pushed {
+        avalon_sdk::guilds::GuildChatEvent::New(message) => {
+            assert_eq!(message.body, "hello from bob");
+        }
+        avalon_sdk::guilds::GuildChatEvent::Deleted { .. } => {
+            panic!("expected a new-message event, not a deletion");
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn channels_without_guilds_chat_is_rejected_even_with_guilds_read() {

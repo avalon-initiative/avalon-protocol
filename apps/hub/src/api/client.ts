@@ -1044,3 +1044,77 @@ export function openPresenceSocket(
     },
   }
 }
+
+// GET /ws/messages (issue #438) — live push for guild channel and
+// conversation messages, additive to listMessages'/listConversationMessages'
+// point-in-time reads. Mirrors openPresenceSocket's shape (a plain browser
+// WebSocket, additive subscribe, queued until `open`), one connection per
+// subscription — a caller viewing a different channel/conversation closes
+// this one and opens a fresh one, same as `useGuildChat`/
+// `useConversationThread` already do for their poll-based predecessor.
+export interface ChatSocket {
+  close(): void
+}
+
+type ChatUpdate =
+  | { type: 'channel_message'; data: MessageResponse }
+  | { type: 'channel_message_deleted'; data: { channel_id: string; message_id: string } }
+  | { type: 'conversation_message'; data: ConversationMessageResponse }
+
+// Subscribes to one guild channel's messages. onMessage fires for every new
+// message pushed; onDeleted fires with the deleted message's id when a
+// moderator removes one — additive to, not a replacement for, the
+// cursor-paginated GET .../messages a caller should still reconcile
+// against after a reconnect.
+export function openChannelMessageSocket(
+  token: string,
+  guildId: string,
+  channelId: string,
+  onMessage: (message: MessageResponse) => void,
+  onDeleted: (messageId: string) => void,
+): ChatSocket {
+  const socket = new WebSocket(websocketUrl(`/ws/messages?token=${encodeURIComponent(token)}`))
+  socket.addEventListener('open', () => {
+    socket.send(
+      JSON.stringify({ type: 'subscribe_channel', guild_id: guildId, channel_id: channelId }),
+    )
+  })
+  socket.addEventListener('message', (event) => {
+    const update = JSON.parse(event.data as string) as ChatUpdate
+    if (update.type === 'channel_message') {
+      onMessage(update.data)
+    } else if (update.type === 'channel_message_deleted') {
+      onDeleted(update.data.message_id)
+    }
+  })
+  return {
+    close() {
+      socket.close()
+    },
+  }
+}
+
+// Subscribes to one conversation's messages — same shape as
+// openChannelMessageSocket, minus deletion (conversations have no
+// moderation-delete endpoint).
+export function openConversationMessageSocket(
+  token: string,
+  conversationId: string,
+  onMessage: (message: ConversationMessageResponse) => void,
+): ChatSocket {
+  const socket = new WebSocket(websocketUrl(`/ws/messages?token=${encodeURIComponent(token)}`))
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'subscribe_conversation', conversation_id: conversationId }))
+  })
+  socket.addEventListener('message', (event) => {
+    const update = JSON.parse(event.data as string) as ChatUpdate
+    if (update.type === 'conversation_message') {
+      onMessage(update.data)
+    }
+  })
+  return {
+    close() {
+      socket.close()
+    },
+  }
+}

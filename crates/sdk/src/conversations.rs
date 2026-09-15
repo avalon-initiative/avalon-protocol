@@ -8,9 +8,12 @@
 use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Capability;
 use avalon_protocol::social::{Conversation, ConversationMessage};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
+use crate::http::websocket_url;
 use crate::{SdkError, Session};
 
 #[derive(Deserialize)]
@@ -53,6 +56,22 @@ impl From<MessageResponse> for ConversationMessage {
             sent_at: response.sent_at,
         }
     }
+}
+
+/// Mirrors `crates/server/src/chat.rs`'s `ChatUpdate` wire shape — only the
+/// one variant a conversation subscription can ever receive (a connection
+/// that only ever sends `subscribe_conversation` never gets a
+/// `channel_message`/`channel_message_deleted` back).
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum ConversationWireUpdate {
+    ConversationMessage(MessageResponse),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SubscribeConversationMessage {
+    SubscribeConversation { conversation_id: Uuid },
 }
 
 #[derive(Serialize)]
@@ -275,6 +294,58 @@ impl ConversationHandle<'_> {
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(message.into())
+    }
+
+    /// `GET /ws/messages?token=…`, subscribed to this conversation —
+    /// requires `messages.read`. Sends one `subscribe_conversation`
+    /// message, then spawns a background task forwarding every pushed
+    /// [`ConversationMessage`] into the returned channel — same "drop the
+    /// receiver to end the task" shape `Session::subscribe_presence` uses
+    /// (issue #438). Additive to [`Self::messages`], not a replacement:
+    /// reconcile against that paginated read after a reconnect rather than
+    /// trusting this stream alone to never have missed anything.
+    pub async fn subscribe_messages(
+        &self,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<ConversationMessage>, SdkError> {
+        self.session.require(Capability::MessagesRead)?;
+
+        let url = websocket_url(
+            &self.session.server_url,
+            &format!("/ws/messages?token={}", self.session.token),
+        );
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .map_err(|e| SdkError::WebSocket(e.to_string()))?;
+        let (mut write, mut read) = ws_stream.split();
+
+        let subscribe =
+            serde_json::to_string(&SubscribeConversationMessage::SubscribeConversation {
+                conversation_id: self.conversation_id,
+            })
+            .expect("SubscribeConversationMessage always serializes");
+        write
+            .send(WsMessage::Text(subscribe.into()))
+            .await
+            .map_err(|e| SdkError::WebSocket(e.to_string()))?;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(Ok(message)) = read.next().await {
+                let WsMessage::Text(text) = message else {
+                    continue;
+                };
+                let Ok(ConversationWireUpdate::ConversationMessage(m)) =
+                    serde_json::from_str::<ConversationWireUpdate>(&text)
+                else {
+                    continue;
+                };
+                if tx.send(m.into()).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
     }
 }
 

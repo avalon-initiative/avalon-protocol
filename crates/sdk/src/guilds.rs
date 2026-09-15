@@ -13,10 +13,13 @@ use avalon_protocol::guilds::{
 use avalon_protocol::ids::{GuildId, IdentityId};
 use avalon_protocol::permissions::Capability;
 use avalon_protocol::social::Presence;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
+use crate::http::websocket_url;
 use crate::{SdkError, Session};
 
 /// The calling user's own membership in a guild — `guild` is the full
@@ -202,6 +205,40 @@ impl From<MessageResponse> for GuildMessage {
 #[derive(Serialize)]
 struct SendMessageRequest<'a> {
     body: &'a str,
+}
+
+/// A pushed update for a channel subscribed via
+/// [`ChannelHandle::subscribe_messages`] (issue #438) — a new message, or a
+/// moderator deleting one. Not a replacement for [`ChannelHandle::messages`]:
+/// a client should still reconcile against that paginated read after a
+/// reconnect, the same way `Session::subscribe_presence`'s push is additive
+/// to `presence_of`.
+#[derive(Debug, Clone)]
+pub enum GuildChatEvent {
+    /// A new message was posted to the subscribed channel.
+    New(GuildMessage),
+    /// A moderator deleted a message from the subscribed channel.
+    Deleted {
+        /// The deleted message's id.
+        message_id: Uuid,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SubscribeChannelMessage {
+    SubscribeChannel { guild_id: Uuid, channel_id: Uuid },
+}
+
+/// Mirrors `crates/server/src/chat.rs`'s `ChatUpdate` wire shape — only the
+/// two variants a channel subscription can ever receive (a connection that
+/// only ever sends `subscribe_channel` never gets a `conversation_message`
+/// back).
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum ChannelWireUpdate {
+    ChannelMessage(MessageResponse),
+    ChannelMessageDeleted { message_id: Uuid },
 }
 
 /// Mirrors `crates/server/src/guild_events.rs::EventResponse`.
@@ -501,6 +538,63 @@ impl ChannelHandle<'_> {
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(message.into())
+    }
+
+    /// `GET /ws/messages?token=…`, subscribed to this channel — requires
+    /// `guilds.chat`, same as [`Self::messages`]/[`Self::send`]. Sends one
+    /// `subscribe_channel` message, then spawns a background task
+    /// forwarding every pushed [`GuildChatEvent`] into the returned
+    /// channel — same "drop the receiver to end the task" shape
+    /// `Session::subscribe_presence` uses (issue #438). Additive to
+    /// [`Self::messages`], not a replacement: reconcile against that
+    /// paginated read after a reconnect rather than trusting this stream
+    /// alone to never have missed anything.
+    pub async fn subscribe_messages(
+        &self,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<GuildChatEvent>, SdkError> {
+        self.session.require(Capability::GuildsChat)?;
+
+        let url = websocket_url(
+            &self.session.server_url,
+            &format!("/ws/messages?token={}", self.session.token),
+        );
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .map_err(|e| SdkError::WebSocket(e.to_string()))?;
+        let (mut write, mut read) = ws_stream.split();
+
+        let subscribe = serde_json::to_string(&SubscribeChannelMessage::SubscribeChannel {
+            guild_id: self.guild_id.0,
+            channel_id: self.channel_id,
+        })
+        .expect("SubscribeChannelMessage always serializes");
+        write
+            .send(WsMessage::Text(subscribe.into()))
+            .await
+            .map_err(|e| SdkError::WebSocket(e.to_string()))?;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(Ok(message)) = read.next().await {
+                let WsMessage::Text(text) = message else {
+                    continue;
+                };
+                let Ok(wire) = serde_json::from_str::<ChannelWireUpdate>(&text) else {
+                    continue;
+                };
+                let event = match wire {
+                    ChannelWireUpdate::ChannelMessage(m) => GuildChatEvent::New(m.into()),
+                    ChannelWireUpdate::ChannelMessageDeleted { message_id } => {
+                        GuildChatEvent::Deleted { message_id }
+                    }
+                };
+                if tx.send(event).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
     }
 }
 

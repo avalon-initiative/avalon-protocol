@@ -4,6 +4,7 @@ pub mod auth;
 pub mod authz;
 pub mod blocks;
 pub mod channels;
+pub mod chat;
 pub mod connections;
 pub mod conversations;
 pub mod device_pairing;
@@ -113,6 +114,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/presence", get(presence::get_presence))
         .route("/ws/presence", get(presence::presence_ws))
+        .route("/ws/messages", get(chat::chat_ws))
         .route(
             "/friends/requests",
             get(friends::list_friend_requests).post(friends::create_friend_request),

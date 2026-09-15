@@ -245,6 +245,20 @@ pub(crate) async fn map_error_response(response: Response) -> SdkError {
     }
 }
 
+/// `http(s)://` -> `ws(s)://` for a websocket endpoint on the same server —
+/// shared by every `subscribe_*` method (`social::subscribe_presence`,
+/// `guilds::ChannelHandle::subscribe_messages`,
+/// `conversations::ConversationHandle::subscribe_messages`, issue #438).
+pub(crate) fn websocket_url(server_url: &str, path: &str) -> String {
+    if let Some(rest) = server_url.strip_prefix("https://") {
+        format!("wss://{rest}{path}")
+    } else if let Some(rest) = server_url.strip_prefix("http://") {
+        format!("ws://{rest}{path}")
+    } else {
+        format!("{server_url}{path}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! A real local server (`wiremock`), not hand-built `reqwest::Response`
@@ -473,5 +487,21 @@ mod tests {
             result,
             Err(SdkError::Unavailable { retried: 0, .. })
         ));
+    }
+
+    #[test]
+    fn websocket_url_swaps_http_scheme_for_ws() {
+        assert_eq!(
+            websocket_url("http://127.0.0.1:8080", "/ws/presence?token=abc"),
+            "ws://127.0.0.1:8080/ws/presence?token=abc"
+        );
+    }
+
+    #[test]
+    fn websocket_url_swaps_https_scheme_for_wss() {
+        assert_eq!(
+            websocket_url("https://avalon.example", "/ws/presence?token=abc"),
+            "wss://avalon.example/ws/presence?token=abc"
+        );
     }
 }

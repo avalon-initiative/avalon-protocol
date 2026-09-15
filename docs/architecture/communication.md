@@ -195,13 +195,25 @@ into a Hub-only or integrator-only corner.
   nonexistent id can't satisfy the relationship check either, so it's
   rejected the same way as an existing-but-unrelated id, never distinguishably.
 - No voice module, session type, or transport of any kind exists.
-- No notification delivery mechanism exists. `avalon-server` does have a
-  websocket/push path now (`GET /ws/presence`, #136) — see
-  [presence.md](./presence.md#today-in-the-repo) — but it's wired up for
-  presence only; guild chat and DMs still poll (see
+- No voice/notification-delivery transport exists beyond chat/presence
+  (voice is deferred, see below; a generic "tell a connected client
+  something happened" notification layer doesn't exist as its own thing —
+  see the Notifications section above).
+- **`GET /ws/messages` (issue #438, `crates/server/src/chat.rs`)** — live
+  push for new guild channel messages, deleted guild channel messages, and
+  new conversation messages, extending the transport
   [ADR #437](https://github.com/LunarVagabond/avalon-protocol/issues/437)'s
-  freshness-tier policy and the tracking ticket that extends the transport
-  to them, [#438](https://github.com/LunarVagabond/avalon-protocol/issues/438)).
+  freshness-tier policy calls for and #119 originally intended (guild chat
+  and DMs were always meant to ride the same websocket presence rides on,
+  per #119's decision — #136 only wired presence up first). Same shape as
+  `presence::presence_ws`: `?token=` query param auth, a single broadcast
+  fanned out and filtered per-connection by what the client subscribed to
+  (`subscribe_channel`/`subscribe_conversation`), lossy on a slow consumer
+  (the paginated `GET .../messages` is always there to reconcile against,
+  same tradeoff `presence.md` documents for its own push). SDK:
+  `GuildHandle::channel(id).subscribe_messages()` and
+  `ConversationHandle::subscribe_messages()` (`crates/sdk/src/guilds.rs`,
+  `crates/sdk/src/conversations.rs`), mirroring `Session::subscribe_presence`.
 - **Hub UI ([#105](https://github.com/LunarVagabond/avalon-protocol/issues/105)),
   landed**: `apps/hub/src/views/Messages.vue` — a conversation-list sidebar
   next to the active thread, the same "swap selection in place, no remount"
@@ -209,15 +221,18 @@ into a Hub-only or integrator-only corner.
   set for Guild.vue's Channels tab. Reuses `AvalonChatMessage`/
   `AvalonChatComposer` unmodified (both already wire-shape-agnostic —
   neither carries a guild/channel field) — no new `packages/ui` component.
-  `useConversations`/`useConversationThread`
-  (`apps/hub/src/composables/`) mirror `useGuildChat.ts`'s
-  load-once-then-poll/cursor-pagination shape, minus everything
-  guild-specific (no roles/permissions, no delete — conversations have no
-  moderation-delete endpoint). Starting a conversation is a friend-row
-  action (`AvalonFriendRow`'s new `message` emit) rather than a separate
-  "new message" flow, per this ticket's own design note — `POST
-  /conversations`'s idempotent-on-participant-set behavior is what makes
-  "start or open" a single call.
+  `useConversations`/`useConversationThread`/`useGuildChat`
+  (`apps/hub/src/composables/`) subscribe to `GET /ws/messages` for new
+  messages as of #438 (previously a 15s poll — see git history if that
+  era's shape matters); `apps/hub/src/api/client.ts`'s
+  `openChannelMessageSocket`/`openConversationMessageSocket` are the Hub's
+  own plain-`WebSocket` clients for it, the same "Hub doesn't consume the
+  Rust SDK directly" posture `openPresenceSocket` already established.
+  Starting a conversation is a friend-row action (`AvalonFriendRow`'s
+  `message` emit) rather than a separate "new message" flow, per this
+  ticket's own design note — `POST /conversations`'s
+  idempotent-on-participant-set behavior is what makes "start or open" a
+  single call.
 
 ## Decisions and tickets
 
@@ -251,6 +266,8 @@ into a Hub-only or integrator-only corner.
 - [ADR #437](https://github.com/LunarVagabond/avalon-protocol/issues/437) —
   decision: three-tier data-freshness policy (realtime push / poll /
   stale-until-refetch) applied across the Hub. Guild chat and DMs are tier
-  1 (must feel real-time) but still poll — closing that gap against #119's
-  original transport-choice intent is
-  [#438](https://github.com/LunarVagabond/avalon-protocol/issues/438).
+  1 (must feel real-time).
+- [#438](https://github.com/LunarVagabond/avalon-protocol/issues/438) —
+  done: closed the gap against #119's original transport-choice intent by
+  extending `GET /ws/messages` to guild chat and DMs (see "Today in the
+  repo" above) instead of their previous 15s poll.
