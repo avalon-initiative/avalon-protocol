@@ -22,7 +22,7 @@ versioned, publicly-published trust-anchor list. Each entry:
 | `network_id` | The exact string a server sets `AVALON_NETWORK_ID` to and bakes into its ledger's genesis ([#173](https://github.com/LunarVagabond/avalon-protocol/issues/173)). |
 | `verify_key` | Hex-encoded Ed25519 public key — the public half of that network's settlement operator signing key (`AVALON_SETTLEMENT_VERIFY_KEY`, see `crates/chain/src/sth.rs` and `.env.example`). |
 | `signing_key_id` | Which key generation this is, matching `SignedTreeHead.signing_key_id` — informational; a rotated key gets a new entry (or a documented rotation), not a silent overwrite of this one. |
-| `environment` | Which tier this deployment is: `local-dev` (no real deployment — a freely-generated key checked in only to exercise the mechanism end to end), `dev` (a real but non-production deployment), or `prod` (a real mainnet deployment). The Hub only calls out non-`prod` entries in its UI. |
+| `environment` | Which tier this deployment is: `local-dev` (no real deployment — a freely-generated key checked in only to exercise the mechanism end to end), `dev` (a real, non-production, single-node deployment — infra on one machine), `int` (a real, non-production, 1-5 node interconnected test bed used to verify changes actually integrate across nodes before they reach mainnet), or `prod` (a real mainnet deployment, whose validator set is expected to grow and shrink over time — see [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)). The Hub only calls out non-`prod` entries in its UI. |
 
 Being a committed file in this repo *is* the integrity story: changing a
 trusted entry goes through the same PR review and git history as any other
@@ -46,7 +46,23 @@ no real server behind it — checked in so the mechanism (file → README → Hu
 verification) is exercised for real, not left as an unfilled stub. Adding a
 second, real network later is the same PR-reviewed edit: append an entry with
 the real `network_id`, that deployment's actual `AVALON_SETTLEMENT_VERIFY_KEY`
-hex, and `environment` set to `dev` or `prod` as appropriate.
+hex, and `environment` set to `dev`, `int`, or `prod` as appropriate.
+
+Three real deployment tiers are supported, one `network_id` prefix each:
+`avalon-dev-<name>` (`dev`, single-node), `avalon-int-<name>` (`int`, a 1-5
+node interconnected test bed), and `avalon-mainnet-N` (`prod`). None of the
+three has a real deployment behind it yet — `avalon-dev-local` above remains
+the only entry in this file until one does.
+
+`avalon-mainnet-N` is not a namespace open to multiple concurrent networks —
+there is exactly one canonical mainnet at a time. `N` only increments for a
+deliberate genesis reset of that one canonical chain, decided and merged by
+the maintainers; it is never a way to stand up a second, competing mainnet.
+Nothing stops a third party from running a server that claims
+`AVALON_NETWORK_ID=avalon-mainnet-2` on its own — `network_id` has zero
+authority by itself (see above) — but unless that exact `network_id` and its
+real `verify_key` are merged into this file by the maintainers, a pinned
+client shows it as an unknown/unverified network, not mainnet.
 
 ## Hub enforcement
 
