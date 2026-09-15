@@ -12,8 +12,8 @@ import { AvalonCard, AvalonChatComposer, AvalonChatMessage } from '@avalon/ui'
 import { otherParticipants, MESSAGE_BODY_MAX_CHARS } from '../api/conversations'
 import { useConversations } from '../composables/useConversations'
 import { useConversationThread } from '../composables/useConversationThread'
-import styles from './page.module.scss'
-import local from './Messages.module.scss'
+import styles from '../styles/page.module.scss'
+import local from '../styles/Messages.module.scss'
 
 const route = useRoute()
 const router = useRouter()

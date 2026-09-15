@@ -4,7 +4,7 @@
 // yet — router/index.ts sends unauthenticated `/` here instead of
 // redirecting straight into the create-identity flow.
 import { AvalonButton, AvalonCard, AvalonIcon } from '@avalon/ui'
-import styles from './Landing.module.scss'
+import styles from '../styles/Landing.module.scss'
 
 const audiences = [
   {

@@ -11,8 +11,8 @@
 // Same read-only-until-Edit behavior either way; less DOM churn on a field
 // a user might toggle repeatedly.
 import styles from '../styles/AvalonEditableField.module.scss'
-import type { AvalonEditableFieldProps } from './AvalonEditableField.types'
-import { useEditableField } from './AvalonEditableField.state'
+import type { AvalonEditableFieldProps } from '../types/AvalonEditableField.types'
+import { useEditableField } from '../state/AvalonEditableField.state'
 
 const props = withDefaults(defineProps<AvalonEditableFieldProps>(), {
   emptyText: 'Not set',

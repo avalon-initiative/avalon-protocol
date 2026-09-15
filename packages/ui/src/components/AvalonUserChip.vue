@@ -2,7 +2,7 @@
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 import AvalonAvatar from './AvalonAvatar.vue'
 import styles from '../styles/AvalonUserChip.module.scss'
-import type { AvalonUserChipProps } from './AvalonUserChip.types'
+import type { AvalonUserChipProps } from '../types/AvalonUserChip.types'
 
 withDefaults(defineProps<AvalonUserChipProps>(), {
   avatarSrc: null,

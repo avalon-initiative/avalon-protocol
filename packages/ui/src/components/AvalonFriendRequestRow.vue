@@ -6,7 +6,7 @@
 // which from who's calling), so this component does too rather than
 // inventing a distinction the API doesn't have.
 import styles from '../styles/AvalonFriendRequestRow.module.scss'
-import type { AvalonFriendRequestRowProps } from './AvalonFriendRequestRow.types'
+import type { AvalonFriendRequestRowProps } from '../types/AvalonFriendRequestRow.types'
 
 defineProps<AvalonFriendRequestRowProps>()
 defineEmits<{ accept: []; remove: [] }>()

@@ -4,7 +4,7 @@
 // title row with an `action` slot on the right (e.g. a "View all" link),
 // then whatever the caller puts in the default slot.
 import styles from '../styles/AvalonCard.module.scss'
-import type { AvalonCardProps } from './AvalonCard.types'
+import type { AvalonCardProps } from '../types/AvalonCard.types'
 
 defineProps<AvalonCardProps>()
 </script>

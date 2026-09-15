@@ -13,8 +13,8 @@ import { AvalonApiError } from '../api/errors'
 import { getIdentityProfile, getPresence } from '../api/client'
 import type { PresenceStatus, PublicIdentityProfileResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
-import page from './page.module.scss'
-import styles from './UserProfile.module.scss'
+import page from '../styles/page.module.scss'
+import styles from '../styles/UserProfile.module.scss'
 
 const route = useRoute()
 const router = useRouter()

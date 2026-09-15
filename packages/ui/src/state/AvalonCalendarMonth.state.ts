@@ -2,7 +2,7 @@
 // this package's glue-only-script convention.
 import { computed } from 'vue'
 import { MONTH_NAMES, monthGrid } from '../utils/calendarGrid'
-import type { AvalonCalendarMonthProps } from './AvalonCalendarMonth.types'
+import type { AvalonCalendarMonthProps } from '../types/AvalonCalendarMonth.types'
 
 export function useCalendarMonth(props: AvalonCalendarMonthProps) {
   const grid = computed(() => monthGrid(props.year, props.month))

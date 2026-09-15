@@ -5,7 +5,7 @@
 // stays a plain layout primitive rather than a "swap the credential step"
 // abstraction).
 import styles from '../styles/AvalonAuthCard.module.scss'
-import type { AvalonAuthCardProps } from './AvalonAuthCard.types'
+import type { AvalonAuthCardProps } from '../types/AvalonAuthCard.types'
 
 defineProps<AvalonAuthCardProps>()
 </script>

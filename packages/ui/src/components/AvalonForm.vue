@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 import styles from '../styles/AvalonForm.module.scss'
-import type { AvalonFormProps } from './AvalonForm.types'
+import type { AvalonFormProps } from '../types/AvalonForm.types'
 
 withDefaults(defineProps<AvalonFormProps>(), {
   submitting: false,

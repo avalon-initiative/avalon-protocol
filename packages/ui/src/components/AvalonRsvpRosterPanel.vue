@@ -7,7 +7,7 @@
 // than each tab building its own roster UI.
 import AvalonModal from './AvalonModal.vue'
 import styles from '../styles/AvalonRsvpRosterPanel.module.scss'
-import type { AvalonRsvpRosterPanelProps } from './AvalonRsvpRosterPanel.types'
+import type { AvalonRsvpRosterPanelProps } from '../types/AvalonRsvpRosterPanel.types'
 
 withDefaults(defineProps<AvalonRsvpRosterPanelProps>(), {
   loading: false,

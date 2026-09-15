@@ -6,8 +6,8 @@
 // HH:MM entry + AM/PM beside it — not a native <input type="datetime-local">,
 // browser-native date/time widgets vary too much across browsers.
 import styles from '../styles/AvalonDateTimeField.module.scss'
-import type { AvalonDateTimeFieldProps } from './AvalonDateTimeField.types'
-import { MONTH_NAMES, WEEKDAY_LABELS, useDateTimeField } from './AvalonDateTimeField.state'
+import type { AvalonDateTimeFieldProps } from '../types/AvalonDateTimeField.types'
+import { MONTH_NAMES, WEEKDAY_LABELS, useDateTimeField } from '../state/AvalonDateTimeField.state'
 
 const props = defineProps<AvalonDateTimeFieldProps>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()

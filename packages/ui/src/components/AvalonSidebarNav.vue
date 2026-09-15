@@ -5,7 +5,7 @@
 // A disabled item never emits: it's a roadmap marker, not a link.
 import AvalonIcon from './AvalonIcon.vue'
 import styles from '../styles/AvalonSidebarNav.module.scss'
-import type { AvalonNavProps } from './AvalonNav.types'
+import type { AvalonNavProps } from '../types/AvalonNav.types'
 
 defineProps<AvalonNavProps>()
 defineEmits<{ select: [to: string] }>()

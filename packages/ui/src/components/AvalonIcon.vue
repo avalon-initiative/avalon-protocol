@@ -4,7 +4,7 @@
 // (issue #148); every glyph is a 24x24 stroke path using currentColor, so
 // it takes the color of whatever text it sits in.
 import styles from '../styles/AvalonIcon.module.scss'
-import type { AvalonIconProps } from './AvalonIcon.types'
+import type { AvalonIconProps } from '../types/AvalonIcon.types'
 
 withDefaults(defineProps<AvalonIconProps>(), {
   size: 20,

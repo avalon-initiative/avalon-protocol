@@ -15,8 +15,8 @@ import {
 } from '../api/achievements'
 import type { Achievement, AchievementSort } from '../api/achievements'
 import { useSessionStore } from '../stores/session'
-import page from './page.module.scss'
-import styles from './Achievements.module.scss'
+import page from '../styles/page.module.scss'
+import styles from '../styles/Achievements.module.scss'
 
 // Issue #389: this view used to load once on mount and never refresh —
 // polling on the same interval useConversations/useGuildChat already

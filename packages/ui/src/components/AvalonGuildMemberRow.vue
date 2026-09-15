@@ -7,7 +7,7 @@ import styles from '../styles/AvalonGuildMemberRow.module.scss'
 import AvalonAvatar from './AvalonAvatar.vue'
 import AvalonPresenceBadge from './AvalonPresenceBadge.vue'
 import AvalonRoleBadge from './AvalonRoleBadge.vue'
-import type { AvalonGuildMemberRowProps } from './AvalonGuildMemberRow.types'
+import type { AvalonGuildMemberRowProps } from '../types/AvalonGuildMemberRow.types'
 
 const props = withDefaults(defineProps<AvalonGuildMemberRowProps>(), {
   canChangeRole: false,

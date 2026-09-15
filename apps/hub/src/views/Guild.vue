@@ -59,8 +59,8 @@ import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useRsvpRoster } from '../composables/useRsvpRoster'
 import { useSessionStore } from '../stores/session'
-import local from './Guild.module.scss'
-import styles from './page.module.scss'
+import local from '../styles/Guild.module.scss'
+import styles from '../styles/page.module.scss'
 
 // Issue #250 added `event_manage` (split out of `manage_channels`) and
 // `channel_post` (the announcement-only-channels proof point) to the base

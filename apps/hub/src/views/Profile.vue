@@ -45,8 +45,8 @@ import {
   AvalonTextField,
   AvalonWarningBanner,
 } from '@avalon/ui'
-import page from './page.module.scss'
-import styles from './Profile.module.scss'
+import page from '../styles/page.module.scss'
+import styles from '../styles/Profile.module.scss'
 
 // #135's device-grant flow polls rather than pushes (identity-management
 // events don't need #136's presence-grade latency). Used both for a

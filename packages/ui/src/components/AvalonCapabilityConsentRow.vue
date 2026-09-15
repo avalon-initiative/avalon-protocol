@@ -7,7 +7,7 @@
 // checked set) — this component only reports toggles, never defaults
 // itself to checked.
 import styles from '../styles/AvalonCapabilityConsentRow.module.scss'
-import type { AvalonCapabilityConsentRowProps } from './AvalonCapabilityConsentRow.types'
+import type { AvalonCapabilityConsentRowProps } from '../types/AvalonCapabilityConsentRow.types'
 
 defineProps<AvalonCapabilityConsentRowProps>()
 defineEmits<{ 'update:checked': [value: boolean] }>()

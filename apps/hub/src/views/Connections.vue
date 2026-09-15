@@ -9,7 +9,7 @@ import * as api from '../api/client'
 import { capabilityDescription } from '../api/connections'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../stores/session'
-import styles from './page.module.scss'
+import styles from '../styles/page.module.scss'
 
 const session = useSessionStore()
 const { bindings, loading, error, refresh } = useMyConnections()

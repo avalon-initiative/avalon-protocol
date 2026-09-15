@@ -4,7 +4,7 @@
 // action buttons via the optional #actions slot — the caller owns its own
 // form/fields and submit/cancel logic entirely.
 import styles from '../styles/AvalonModal.module.scss'
-import type { AvalonModalProps } from './AvalonModal.types'
+import type { AvalonModalProps } from '../types/AvalonModal.types'
 
 defineProps<AvalonModalProps>()
 defineEmits<{ close: [] }>()

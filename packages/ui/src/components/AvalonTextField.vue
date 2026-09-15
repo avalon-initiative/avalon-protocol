@@ -3,7 +3,7 @@
 // Styling lives in src/styles/ (CSS Modules); prop/behavior types live in
 // the co-located .types.ts. This block stays glue-only.
 import styles from '../styles/AvalonTextField.module.scss'
-import type { AvalonTextFieldProps } from './AvalonTextField.types'
+import type { AvalonTextFieldProps } from '../types/AvalonTextField.types'
 
 withDefaults(defineProps<AvalonTextFieldProps>(), {
   type: 'text',

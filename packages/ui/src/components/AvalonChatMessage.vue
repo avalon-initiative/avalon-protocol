@@ -2,7 +2,7 @@
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 import styles from '../styles/AvalonChatMessage.module.scss'
 import AvalonAvatar from './AvalonAvatar.vue'
-import type { AvalonChatMessageProps } from './AvalonChatMessage.types'
+import type { AvalonChatMessageProps } from '../types/AvalonChatMessage.types'
 
 withDefaults(defineProps<AvalonChatMessageProps>(), {
   canDelete: false,

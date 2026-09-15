@@ -20,7 +20,7 @@ import type { Suggestion } from '../api/discovery'
 import type { SearchResultIdentity } from '../api/types'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useSessionStore } from '../stores/session'
-import styles from './page.module.scss'
+import styles from '../styles/page.module.scss'
 
 const session = useSessionStore()
 const router = useRouter()

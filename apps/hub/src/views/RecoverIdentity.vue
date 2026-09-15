@@ -14,7 +14,7 @@ import { finalizeRecoveryRequest, getIdentityRecoveryStatus, startRecovery } fro
 import type { RecoveryRequestResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 import AuthLayout from './AuthLayout.vue'
-import styles from './CreateIdentity.module.scss'
+import styles from '../styles/CreateIdentity.module.scss'
 
 const router = useRouter()
 const session = useSessionStore()

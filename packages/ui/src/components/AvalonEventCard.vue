@@ -6,7 +6,7 @@
 // AvalonGuildCard/AvalonChannelList already use).
 import { computed } from 'vue'
 import styles from '../styles/AvalonEventCard.module.scss'
-import type { AvalonEventCardProps } from './AvalonEventCard.types'
+import type { AvalonEventCardProps } from '../types/AvalonEventCard.types'
 
 const props = defineProps<AvalonEventCardProps>()
 

@@ -6,7 +6,7 @@
 // registered") is true, not just until someone acknowledges it once.
 import styles from '../styles/AvalonWarningBanner.module.scss'
 import AvalonIcon from './AvalonIcon.vue'
-import type { AvalonWarningBannerProps } from './AvalonWarningBanner.types'
+import type { AvalonWarningBannerProps } from '../types/AvalonWarningBanner.types'
 
 withDefaults(defineProps<AvalonWarningBannerProps>(), {
   tone: 'warning',

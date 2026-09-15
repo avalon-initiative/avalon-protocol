@@ -6,8 +6,8 @@
 // guild calendar tab needs) — distinct from AvalonDateTimeField's compact
 // popover picker, though both build on the same calendarGrid utility.
 import styles from '../styles/AvalonCalendarMonth.module.scss'
-import type { AvalonCalendarMonthProps } from './AvalonCalendarMonth.types'
-import { useCalendarMonth, prevMonth, nextMonth } from './AvalonCalendarMonth.state'
+import type { AvalonCalendarMonthProps } from '../types/AvalonCalendarMonth.types'
+import { useCalendarMonth, prevMonth, nextMonth } from '../state/AvalonCalendarMonth.state'
 import { WEEKDAY_LABELS } from '../utils/calendarGrid'
 
 const props = defineProps<AvalonCalendarMonthProps>()

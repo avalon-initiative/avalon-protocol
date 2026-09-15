@@ -4,7 +4,7 @@
 // first letter on a tinted circle — a caller never has to special-case
 // "no avatar yet" (issue #148).
 import styles from '../styles/AvalonAvatar.module.scss'
-import type { AvalonAvatarProps } from './AvalonAvatar.types'
+import type { AvalonAvatarProps } from '../types/AvalonAvatar.types'
 
 withDefaults(defineProps<AvalonAvatarProps>(), {
   src: null,

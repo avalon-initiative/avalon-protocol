@@ -21,7 +21,7 @@ import {
 import type { GuildAnnouncementAlert } from '../api/types'
 import NetworkStatus from '../components/NetworkStatus.vue'
 import { useSessionStore } from '../stores/session'
-import styles from './HubShell.module.scss'
+import styles from '../styles/HubShell.module.scss'
 
 // Re-publish well inside the server's 120s presence TTL so the user
 // stays Online to their friends for as long as the Hub is open.

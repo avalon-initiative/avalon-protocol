@@ -7,7 +7,7 @@
 // friend request itself.
 import styles from '../styles/AvalonSuggestionRow.module.scss'
 import AvalonAvatar from './AvalonAvatar.vue'
-import type { AvalonSuggestionRowProps } from './AvalonSuggestionRow.types'
+import type { AvalonSuggestionRowProps } from '../types/AvalonSuggestionRow.types'
 
 defineProps<AvalonSuggestionRowProps>()
 defineEmits<{ add: [] }>()
