@@ -96,6 +96,7 @@ import type {
   UpdateProfileRequest,
   UpdateRoleRequest,
   UserCodeRequest,
+  VisibleIntegratorDataInstanceResponse,
 } from './types'
 
 // Issue #232's network selector needs to switch which server the Hub talks
@@ -374,6 +375,17 @@ export function getIdentityProfile(
   identityId: string,
 ): Promise<PublicIdentityProfileResponse> {
   return request(`/identities/${identityId}/profile`, { token })
+}
+
+// GET /identities/:id/integrator-data (#384) — public, unauthenticated
+// (no token param, matching getIntegratorPublic's own posture below):
+// every current instance a connected integrator has published about this
+// identity, already filtered server-side to only the fields that
+// integrator's schema currently makes visible.
+export function getIdentityIntegratorData(
+  identityId: string,
+): Promise<VisibleIntegratorDataInstanceResponse[]> {
+  return request(`/identities/${identityId}/integrator-data`)
 }
 
 // Device-registration / linked-device grant model (issue #135).
