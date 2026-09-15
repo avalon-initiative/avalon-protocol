@@ -195,8 +195,13 @@ into a Hub-only or integrator-only corner.
   nonexistent id can't satisfy the relationship check either, so it's
   rejected the same way as an existing-but-unrelated id, never distinguishably.
 - No voice module, session type, or transport of any kind exists.
-- No notification delivery mechanism exists; `avalon-server` has no
-  websocket/push path yet (same gap noted in [presence.md](./presence.md)).
+- No notification delivery mechanism exists. `avalon-server` does have a
+  websocket/push path now (`GET /ws/presence`, #136) — see
+  [presence.md](./presence.md#today-in-the-repo) — but it's wired up for
+  presence only; guild chat and DMs still poll (see
+  [ADR #437](https://github.com/LunarVagabond/avalon-protocol/issues/437)'s
+  freshness-tier policy and the tracking ticket that extends the transport
+  to them, [#438](https://github.com/LunarVagabond/avalon-protocol/issues/438)).
 - **Hub UI ([#105](https://github.com/LunarVagabond/avalon-protocol/issues/105)),
   landed**: `apps/hub/src/views/Messages.vue` — a conversation-list sidebar
   next to the active thread, the same "swap selection in place, no remount"
@@ -243,3 +248,9 @@ into a Hub-only or integrator-only corner.
   Offline & Deferred Protocol Synchronization
   ([`./synchronization.md`](./synchronization.md)) — direct-message queuing
   while offline is this epic's job, consumed by #102, not reinvented here.
+- [ADR #437](https://github.com/LunarVagabond/avalon-protocol/issues/437) —
+  decision: three-tier data-freshness policy (realtime push / poll /
+  stale-until-refetch) applied across the Hub. Guild chat and DMs are tier
+  1 (must feel real-time) but still poll — closing that gap against #119's
+  original transport-choice intent is
+  [#438](https://github.com/LunarVagabond/avalon-protocol/issues/438).
