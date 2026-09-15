@@ -6,7 +6,7 @@
 // not a real validation rule (the app's own validateComposerBody owns
 // that; this component just reflects the cap it's given).
 import styles from '../styles/AvalonChatComposer.module.scss'
-import type { AvalonChatComposerProps } from './AvalonChatComposer.types'
+import type { AvalonChatComposerProps } from '../types/AvalonChatComposer.types'
 
 const props = withDefaults(defineProps<AvalonChatComposerProps>(), {
   sending: false,

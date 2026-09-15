@@ -1,14 +1,14 @@
 <script setup lang="ts">
 // Issue #232: the always-visible "which network am I actually talking to"
 // indicator — replaces HubShell's old static "Connected to Avalon" text.
-// Convention: no <style> blocks, styling lives in the co-located
+// Convention: no <style> blocks, styling lives in the sibling styles/
 // .module.scss; this file's script stays glue over useNetworkTrust plus one
 // tiny local ref for the details toggle.
 import { ref } from 'vue'
 import { useNetworkTrust } from '../composables/useNetworkTrust'
 import { getServerUrl, setServerUrl } from '../api/client'
 import { AvalonModal } from '@avalon/ui'
-import styles from './NetworkStatus.module.scss'
+import styles from '../styles/NetworkStatus.module.scss'
 
 const { state, knownNetworks, refresh } = useNetworkTrust()
 const expanded = ref(false)

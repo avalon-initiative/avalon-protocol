@@ -4,7 +4,7 @@
 // changes back up. No fetching, no filtering/sorting logic — that stays in
 // the page/composable that owns the actual list.
 import styles from '../styles/AvalonFilterBar.module.scss'
-import type { AvalonFilterBarProps } from './AvalonFilterBar.types'
+import type { AvalonFilterBarProps } from '../types/AvalonFilterBar.types'
 
 withDefaults(defineProps<AvalonFilterBarProps>(), {
   placeholder: 'Search…',

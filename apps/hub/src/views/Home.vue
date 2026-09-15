@@ -15,7 +15,7 @@ import { useMyGuilds } from '../composables/useMyGuilds'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useLatestGuildMessages } from '../composables/useLatestGuildMessages'
 import { useSessionStore } from '../stores/session'
-import styles from './Home.module.scss'
+import styles from '../styles/Home.module.scss'
 
 const RECENT_ACTIVITY_LIMIT = 6
 const HOME_GUILDS_LIMIT = 4

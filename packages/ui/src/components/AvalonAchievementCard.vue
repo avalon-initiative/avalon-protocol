@@ -9,7 +9,7 @@
 import { ref } from 'vue'
 import styles from '../styles/AvalonAchievementCard.module.scss'
 import AvalonIcon from './AvalonIcon.vue'
-import type { AvalonAchievementCardProps } from './AvalonAchievementCard.types'
+import type { AvalonAchievementCardProps } from '../types/AvalonAchievementCard.types'
 
 defineProps<AvalonAchievementCardProps>()
 defineEmits<{ 'view-issuer': [] }>()

@@ -32,24 +32,24 @@ export { default as AvalonRsvpRosterPanel } from './components/AvalonRsvpRosterP
 export { default as AvalonIntegratorCard } from './components/AvalonIntegratorCard.vue'
 export { default as AvalonMetricTile } from './components/AvalonMetricTile.vue'
 export { default as AvalonAchievementCard } from './components/AvalonAchievementCard.vue'
-export type { AvalonIconName } from './components/AvalonIcon.types'
-export type { AvalonNavItem } from './components/AvalonNav.types'
-export type { PresenceStatus } from './components/AvalonPresenceBadge.types'
-export type { AvalonRoleBadgeProps } from './components/AvalonRoleBadge.types'
-export type { AvalonChannelListItem } from './components/AvalonChannelList.types'
-export type { AvalonFilterBarSortOption } from './components/AvalonFilterBar.types'
-export type { AvalonConnectionCardGrant } from './components/AvalonConnectionCard.types'
-export type { AvalonEventCardProps } from './components/AvalonEventCard.types'
-export type { AvalonRsvpStatus } from './components/AvalonRsvpControl.types'
+export type { AvalonIconName } from './types/AvalonIcon.types'
+export type { AvalonNavItem } from './types/AvalonNav.types'
+export type { PresenceStatus } from './types/AvalonPresenceBadge.types'
+export type { AvalonRoleBadgeProps } from './types/AvalonRoleBadge.types'
+export type { AvalonChannelListItem } from './types/AvalonChannelList.types'
+export type { AvalonFilterBarSortOption } from './types/AvalonFilterBar.types'
+export type { AvalonConnectionCardGrant } from './types/AvalonConnectionCard.types'
+export type { AvalonEventCardProps } from './types/AvalonEventCard.types'
+export type { AvalonRsvpStatus } from './types/AvalonRsvpControl.types'
 export type {
   AvalonRsvpRosterGroup,
   AvalonRsvpRosterPanelProps,
   AvalonRsvpRosterStatus,
-} from './components/AvalonRsvpRosterPanel.types'
-export type { AvalonIntegratorCardProps } from './components/AvalonIntegratorCard.types'
-export type { AvalonMetricTileProps } from './components/AvalonMetricTile.types'
+} from './types/AvalonRsvpRosterPanel.types'
+export type { AvalonIntegratorCardProps } from './types/AvalonIntegratorCard.types'
+export type { AvalonMetricTileProps } from './types/AvalonMetricTile.types'
 export type {
   AchievementIconName,
   AvalonAchievementCardProps,
   AvalonAchievementHistoryEntry,
-} from './components/AvalonAchievementCard.types'
+} from './types/AvalonAchievementCard.types'

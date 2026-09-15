@@ -10,8 +10,8 @@ import { getMyHistory } from '../api/client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
 import type { HistoryEntryResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
-import page from './page.module.scss'
-import styles from './Activity.module.scss'
+import page from '../styles/page.module.scss'
+import styles from '../styles/Activity.module.scss'
 
 // Issue #389: this view used to load once on mount and never refresh —
 // polling on the same interval useConversations/useGuildChat already

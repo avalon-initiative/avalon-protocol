@@ -4,7 +4,7 @@
 // "disabled never emits" rule, laid out as a fixed bottom bar.
 import AvalonIcon from './AvalonIcon.vue'
 import styles from '../styles/AvalonBottomNav.module.scss'
-import type { AvalonNavProps } from './AvalonNav.types'
+import type { AvalonNavProps } from '../types/AvalonNav.types'
 
 defineProps<AvalonNavProps>()
 defineEmits<{ select: [to: string] }>()

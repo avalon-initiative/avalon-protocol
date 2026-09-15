@@ -5,7 +5,7 @@
 import styles from '../styles/AvalonFriendRow.module.scss'
 import AvalonAvatar from './AvalonAvatar.vue'
 import AvalonPresenceBadge from './AvalonPresenceBadge.vue'
-import type { AvalonFriendRowProps } from './AvalonFriendRow.types'
+import type { AvalonFriendRowProps } from '../types/AvalonFriendRow.types'
 
 defineProps<AvalonFriendRowProps>()
 defineEmits<{ remove: []; message: []; view: [] }>()

@@ -14,12 +14,12 @@
 // permissions matrix) — this component is now purely the role x permission
 // grid.
 //
-// Convention: no <style> block, styling in the co-located .module.scss;
+// Convention: no <style> block, styling in the sibling styles/.module.scss;
 // script stays glue over the api client plus local load/error state.
 import { computed, ref, watch } from 'vue'
 import * as api from '../api/client'
 import type { ChannelResponse, PermissionOverrideResponse, RoleResponse } from '../api/types'
-import styles from './ChannelPermissionOverrides.module.scss'
+import styles from '../styles/ChannelPermissionOverrides.module.scss'
 
 const props = defineProps<{
   token: string

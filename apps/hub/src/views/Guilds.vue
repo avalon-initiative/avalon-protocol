@@ -18,8 +18,8 @@ import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useSessionStore } from '../stores/session'
-import local from './Guilds.module.scss'
-import styles from './page.module.scss'
+import local from '../styles/Guilds.module.scss'
+import styles from '../styles/page.module.scss'
 
 const router = useRouter()
 const session = useSessionStore()

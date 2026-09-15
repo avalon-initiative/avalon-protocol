@@ -8,7 +8,7 @@
 // AvalonConnectionCard already use.
 import { computed } from 'vue'
 import styles from '../styles/AvalonIntegratorCard.module.scss'
-import type { AvalonIntegratorCardProps } from './AvalonIntegratorCard.types'
+import type { AvalonIntegratorCardProps } from '../types/AvalonIntegratorCard.types'
 
 const props = defineProps<AvalonIntegratorCardProps>()
 defineEmits<{ select: [] }>()

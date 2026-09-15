@@ -3,7 +3,7 @@
 // centered card on the dark background. App-level layout, not a library
 // component — it's only ever used by Login and CreateIdentity.
 import { AvalonIcon } from '@avalon/ui'
-import styles from './AuthLayout.module.scss'
+import styles from '../styles/AuthLayout.module.scss'
 </script>
 
 <template>

@@ -5,7 +5,7 @@
 // parent owns the actual PUT .../rsvp call and passes the result back
 // down as `currentStatus`.
 import styles from '../styles/AvalonRsvpControl.module.scss'
-import type { AvalonRsvpControlProps, AvalonRsvpStatus } from './AvalonRsvpControl.types'
+import type { AvalonRsvpControlProps, AvalonRsvpStatus } from '../types/AvalonRsvpControl.types'
 
 withDefaults(defineProps<AvalonRsvpControlProps>(), {
   disabled: false,

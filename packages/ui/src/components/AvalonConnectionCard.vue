@@ -5,7 +5,7 @@
 // strings / no payload — the caller (Connections.vue) owns the actual API
 // calls and the slug this card belongs to.
 import styles from '../styles/AvalonConnectionCard.module.scss'
-import type { AvalonConnectionCardProps } from './AvalonConnectionCard.types'
+import type { AvalonConnectionCardProps } from '../types/AvalonConnectionCard.types'
 
 defineProps<AvalonConnectionCardProps>()
 defineEmits<{ 'revoke-grant': [capability: string]; disconnect: [] }>()

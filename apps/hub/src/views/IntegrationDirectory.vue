@@ -7,8 +7,8 @@ import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonIntegratorCard } from 
 import type { AvalonFilterBarSortOption } from '@avalon/ui'
 import { useDiscoverIntegrations } from '../composables/useDiscoverIntegrations'
 import type { IntegratorCategory } from '../api/types'
-import integratorDirectoryStyles from './IntegrationDirectory.module.scss'
-import styles from './page.module.scss'
+import integratorDirectoryStyles from '../styles/IntegrationDirectory.module.scss'
+import styles from '../styles/page.module.scss'
 
 const router = useRouter()
 const discover = useDiscoverIntegrations()

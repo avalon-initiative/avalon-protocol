@@ -18,8 +18,8 @@ import { capabilityDescription } from '../api/connections'
 import { useIntegrationProfile } from '../composables/useIntegrationProfile'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../stores/session'
-import integratorStyles from './IntegrationProfile.module.scss'
-import styles from './page.module.scss'
+import integratorStyles from '../styles/IntegrationProfile.module.scss'
+import styles from '../styles/page.module.scss'
 
 const route = useRoute()
 const slug = computed(() => route.params.slug as string)

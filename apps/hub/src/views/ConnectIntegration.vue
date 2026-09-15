@@ -11,7 +11,7 @@ import * as api from '../api/client'
 import { capabilityDescription } from '../api/connections'
 import { useIntegrationConsent } from '../composables/useIntegrationConsent'
 import { useSessionStore } from '../stores/session'
-import styles from './page.module.scss'
+import styles from '../styles/page.module.scss'
 
 const route = useRoute()
 const router = useRouter()

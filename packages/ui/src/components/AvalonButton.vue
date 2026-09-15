@@ -3,7 +3,7 @@
 // Styling lives in src/styles/ (CSS Modules); prop/behavior types live in
 // the co-located .types.ts. This block stays glue-only.
 import styles from '../styles/AvalonButton.module.scss'
-import type { AvalonButtonProps } from './AvalonButton.types'
+import type { AvalonButtonProps } from '../types/AvalonButton.types'
 
 withDefaults(defineProps<AvalonButtonProps>(), {
   variant: 'primary',

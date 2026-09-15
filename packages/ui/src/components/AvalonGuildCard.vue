@@ -4,7 +4,7 @@
 // decides what a click does (usually a route push); this component knows
 // nothing about routing.
 import styles from '../styles/AvalonGuildCard.module.scss'
-import type { AvalonGuildCardProps } from './AvalonGuildCard.types'
+import type { AvalonGuildCardProps } from '../types/AvalonGuildCard.types'
 
 defineProps<AvalonGuildCardProps>()
 defineEmits<{ select: [] }>()

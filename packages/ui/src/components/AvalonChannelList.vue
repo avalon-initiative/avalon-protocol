@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 import styles from '../styles/AvalonChannelList.module.scss'
-import type { AvalonChannelListProps } from './AvalonChannelList.types'
+import type { AvalonChannelListProps } from '../types/AvalonChannelList.types'
 
 withDefaults(defineProps<AvalonChannelListProps>(), {
   canManage: false,

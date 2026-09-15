@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files —
-// styling lives in the co-located .module.scss, logic lives in .ts files.
+// styling lives in the sibling .module.scss under styles/, logic lives in .ts files.
 import { AvalonButton } from '@avalon/ui'
-import styles from './App.module.scss'
+import styles from './styles/App.module.scss'
 
 // Companion-app scaffold (Proposal.md §22): guild chat/presence/friends
 // reachable without an integrator open. Same @avalon/ui components as the web hub,
