@@ -14,7 +14,7 @@ function testRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/guilds', component: Guilds },
+      { path: '/guilds', name: 'guilds', component: Guilds },
       { path: '/guilds/:id', component: Guilds },
     ],
   })
@@ -98,5 +98,39 @@ describe('Guilds', () => {
       String(url).includes('/guilds/g1/invites/inv1/accept'),
     )
     expect(acceptCall).toBeTruthy()
+  })
+
+  // Issue #467: a deep link from IntegrationProfile.vue's "Guilds playing
+  // this" opens straight into Discover, pre-filtered to that integrator.
+  it('opens the Discover tab pre-filtered when landing with ?integrator=', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/me/guilds': [],
+      '/guilds/discover': {
+        guilds: [{ ...guildBase, id: 'g1', name: 'Dragon Hunters' }],
+        next_cursor: null,
+      },
+    })
+
+    const router = testRouter()
+    router.push('/guilds?integrator=ashen-realms')
+    await router.isReady()
+    const wrapper = mount(Guilds, { global: { plugins: [router] } })
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    expect(wrapper.text()).toContain('Filtered to guilds playing')
+    expect(wrapper.text()).toContain('ashen-realms')
+
+    const discoverCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url]) =>
+      String(url).includes('/guilds/discover'),
+    )
+    expect(discoverCall).toBeTruthy()
+    expect(String(discoverCall![0])).toContain('game=ashen-realms')
+
+    const clearButton = wrapper.findAll('button').find((b) => b.text() === 'Clear')!
+    await clearButton.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Filtered to guilds playing')
   })
 })

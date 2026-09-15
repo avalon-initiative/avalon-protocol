@@ -18,6 +18,10 @@ export function useDiscoverGuilds() {
   const query = ref('')
   const recruitingOnly = ref(true)
   const tag = ref('')
+  // Issue #467: pre-filters to guilds associated with one integrator,
+  // set from IntegrationProfile.vue's "Guilds playing this" link
+  // (?integrator=<slug> on the Discover tab's route).
+  const integratorSlug = ref('')
 
   const guilds = ref<DiscoverGuildSummary[]>([])
   const nextCursor = ref<string | null>(null)
@@ -29,6 +33,7 @@ export function useDiscoverGuilds() {
       q: query.value.trim() || undefined,
       recruiting: recruitingOnly.value ? true : undefined,
       tag: tag.value.trim() || undefined,
+      integrator: integratorSlug.value.trim() || undefined,
       cursor,
     }
   }
@@ -70,7 +75,18 @@ export function useDiscoverGuilds() {
   // debounce-free for now (milestone-1 stand-in, same posture as the
   // endpoint itself); a real read model (#42) is the point to revisit
   // request-shaping like debouncing too.
-  watch([query, recruitingOnly, tag], refresh)
+  watch([query, recruitingOnly, tag, integratorSlug], refresh)
 
-  return { query, recruitingOnly, tag, guilds, nextCursor, loading, error, refresh, loadMore }
+  return {
+    query,
+    recruitingOnly,
+    tag,
+    integratorSlug,
+    guilds,
+    nextCursor,
+    loading,
+    error,
+    refresh,
+    loadMore,
+  }
 }

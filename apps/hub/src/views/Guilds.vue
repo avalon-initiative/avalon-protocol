@@ -2,8 +2,8 @@
 // "My guilds" landing page (issue #24): every guild the caller belongs to
 // (GET /me/guilds), plus a header-button "create guild" form in a modal
 // (issue #281).
-import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   AvalonButton,
   AvalonCard,
@@ -22,6 +22,7 @@ import { useSessionStore } from '../stores/session'
 import local from '../styles/Guilds.module.scss'
 import styles from '../styles/page.module.scss'
 
+const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 const { guilds, loading, error, refresh } = useMyGuilds()
@@ -80,6 +81,28 @@ watch(activeTab, (tab) => {
     discover.refresh()
   }
 })
+
+// Issue #467: a deep link from IntegrationProfile.vue's "Guilds playing
+// this" (?integrator=<slug>) opens straight into the Discover tab,
+// pre-filtered — rather than landing on "My guilds" with the filter
+// silently unapplied.
+onMounted(() => {
+  const integrator = route.query.integrator
+  if (typeof integrator === 'string' && integrator) {
+    // Marked loaded before the assignments below so the separate
+    // activeTab watcher doesn't also fire a redundant refresh — this
+    // composable's own [query, recruitingOnly, tag, integratorSlug] watch
+    // already re-fetches as soon as integratorSlug changes.
+    discoverLoaded = true
+    discover.integratorSlug.value = integrator
+    activeTab.value = 'discover'
+  }
+})
+
+function clearIntegratorFilter() {
+  discover.integratorSlug.value = ''
+  router.replace({ name: 'guilds' })
+}
 
 const showCreateGuild = ref(false)
 const createName = ref('')
@@ -231,6 +254,12 @@ async function onApplyToJoin(guildId: string) {
 
     <div v-else :class="styles.mainColumn">
       <AvalonCard title="Discover guilds" subtitle="Browse and search guilds that are recruiting new members.">
+        <p v-if="discover.integratorSlug.value" :class="local.integratorFilterBanner">
+          Filtered to guilds playing <strong>{{ discover.integratorSlug.value }}</strong>.
+          <button type="button" :class="local.clearFilterButton" @click="clearIntegratorFilter">
+            Clear
+          </button>
+        </p>
         <div :class="local.discoverFilters">
           <AvalonFilterBar
             label="Search by name, tag, or description"

@@ -1,9 +1,11 @@
 // Issue #270's own invariant: the integrator directory must render integrators from
 // GET /integrations with no score/ranking element anywhere in the DOM.
+import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import IntegrationDirectory from './IntegrationDirectory.vue'
+import { useSessionStore } from '../stores/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
@@ -12,12 +14,14 @@ function testRouter() {
     routes: [
       { path: '/integrations', component: IntegrationDirectory },
       { path: '/integrations/:slug', name: 'integration-profile', component: IntegrationDirectory },
+      { path: '/connect/:slug', name: 'connect-integrator', component: IntegrationDirectory },
     ],
   })
 }
 
 beforeEach(() => {
   localStorage.clear()
+  setActivePinia(createPinia())
 })
 
 describe('IntegrationDirectory', () => {
@@ -108,5 +112,70 @@ describe('IntegrationDirectory', () => {
     await flushPromises()
     expect(wrapper.text()).not.toContain('Ashen Realms')
     expect(wrapper.text()).toContain('No apps match')
+  })
+
+  // Issue #467: a Connect action reachable straight from the directory,
+  // not just after already opening an integrator's own profile.
+  it('reaches ConnectIntegration.vue for a card not yet connected', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      '/integrations': {
+        integrators: [
+          {
+            id: 'g1',
+            slug: 'ashen-realms',
+            name: 'Ashen Realms',
+            owner_name: 'Ashen Studios',
+            registered_at: '2026-01-12T00:00:00Z',
+            status: 'active',
+            category: 'game',
+          },
+        ],
+        next_cursor: null,
+      },
+      '/me/connections': [],
+    })
+
+    const router = testRouter()
+    router.push('/integrations')
+    await router.isReady()
+    const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
+
+    const connectButton = wrapper.findAll('button').find((b) => b.text() === 'Connect')!
+    await connectButton.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('connect-integrator')
+    expect(router.currentRoute.value.params.slug).toBe('ashen-realms')
+  })
+
+  it('hides the Connect action once already connected, and for a logged-out visitor', async () => {
+    mockFetchByPath({
+      '/integrations': {
+        integrators: [
+          {
+            id: 'g1',
+            slug: 'ashen-realms',
+            name: 'Ashen Realms',
+            owner_name: 'Ashen Studios',
+            registered_at: '2026-01-12T00:00:00Z',
+            status: 'active',
+            category: 'game',
+          },
+        ],
+        next_cursor: null,
+      },
+    })
+
+    const router = testRouter()
+    router.push('/integrations')
+    await router.isReady()
+    const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Ashen Realms'))
+
+    expect(wrapper.findAll('button').some((b) => b.text() === 'Connect')).toBe(false)
   })
 })

@@ -9,12 +9,14 @@
 // exactly as Connections.vue does, scoped to just this integrator's binding — the
 // only part of this view with a session dependency; everything else stays
 // public and unauthenticated.
-import { computed, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { AvalonCard, AvalonConnectionCard, AvalonMetricTile } from '@avalon/ui'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { AvalonButton, AvalonCard, AvalonConnectionCard, AvalonGuildCard, AvalonMetricTile } from '@avalon/ui'
 import * as api from '../api/client'
 import { isActiveIntegratorStatus } from '../api/integrations'
 import { capabilityDescription } from '../api/connections'
+import { buildDiscoverQueryString } from '../api/guilds'
+import type { DiscoverGuildSummary } from '../api/types'
 import { useIntegrationProfile } from '../composables/useIntegrationProfile'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../stores/session'
@@ -22,7 +24,12 @@ import integratorStyles from '../styles/IntegrationProfile.module.scss'
 import styles from '../styles/page.module.scss'
 
 const route = useRoute()
+const router = useRouter()
 const slug = computed(() => route.params.slug as string)
+
+function onConnect() {
+  router.push({ name: 'connect-integrator', params: { slug: slug.value } })
+}
 const { integrator, metrics, issuerKeys, loading, error } = useIntegrationProfile(slug)
 
 const session = useSessionStore()
@@ -56,6 +63,32 @@ async function onDisconnect() {
 
 function formatRegisteredAt(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+// Issue #467 — "Guilds playing this": a small preview (GET /guilds/discover
+// is session-authenticated, same gate Guilds.vue's own Discover tab
+// already has) linking through to that tab pre-filtered to the same
+// integrator, rather than duplicating full discovery UI on this page.
+const GUILDS_PLAYING_PREVIEW_LIMIT = 5
+const guildsPlaying = ref<DiscoverGuildSummary[]>([])
+const guildsPlayingError = ref('')
+
+async function refreshGuildsPlaying() {
+  if (!session.token) return
+  try {
+    const response = await api.discoverGuilds(
+      session.token,
+      buildDiscoverQueryString({ integrator: slug.value, limit: GUILDS_PLAYING_PREVIEW_LIMIT }),
+    )
+    guildsPlaying.value = response.guilds
+  } catch (e) {
+    guildsPlayingError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+watch(slug, refreshGuildsPlaying, { immediate: true })
+
+function onSeeAllGuildsPlaying() {
+  router.push({ name: 'guilds', query: { integrator: slug.value } })
 }
 
 function formatKeyDate(iso: string): string {
@@ -100,8 +133,33 @@ function formatKeyDate(iso: string): string {
       </div>
     </AvalonCard>
 
+    <AvalonCard
+      v-if="session.isAuthenticated()"
+      title="Guilds playing this"
+      subtitle="Guilds associated with this integrator, recruiting or not."
+    >
+      <p v-if="guildsPlayingError" :class="styles.error">{{ guildsPlayingError }}</p>
+      <p v-else-if="guildsPlaying.length === 0" :class="styles.empty">No guilds found for this integrator yet.</p>
+      <AvalonGuildCard
+        v-for="guild in guildsPlaying"
+        :key="guild.id"
+        :name="guild.name"
+        :tag="guild.tag"
+        :description="guild.description"
+        :member-count="guild.member_count"
+        :recruiting="guild.recruiting"
+        :icon-url="guild.icon ?? undefined"
+        :banner-url="guild.banner ?? undefined"
+        @select="router.push({ name: 'guild', params: { id: guild.id } })"
+      />
+      <AvalonButton label="See all in Discover" variant="secondary" @click="onSeeAllGuildsPlaying" />
+    </AvalonCard>
+
     <AvalonCard v-if="session.isAuthenticated()" title="Your access" subtitle="What this integrator can see or do with your account.">
-      <p v-if="!myBinding" :class="styles.empty">You haven't connected to this integrator.</p>
+      <template v-if="!myBinding">
+        <p :class="styles.empty">You haven't connected to this integrator.</p>
+        <AvalonButton label="Connect" variant="primary" @click="onConnect" />
+      </template>
       <AvalonConnectionCard
         v-else
         :integrator-name="myBinding.name"

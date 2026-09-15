@@ -33,6 +33,29 @@
   border-bottom-color: var(--av-color-primary);
 }
 
+/* Issue #467: a deep link from an integrator's profile page. */
+.integratorFilterBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+  margin-bottom: var(--av-space-3);
+  color: var(--av-color-text-secondary);
+  font-size: var(--av-text-sm);
+}
+
+.clearFilterButton {
+  border: none;
+  background: transparent;
+  color: var(--av-color-primary);
+  cursor: pointer;
+  font-size: var(--av-text-sm);
+  padding: 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .discoverFilters {
   display: flex;
   flex-wrap: wrap;
