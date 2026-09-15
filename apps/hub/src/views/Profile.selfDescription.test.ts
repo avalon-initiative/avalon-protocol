@@ -86,8 +86,14 @@ describe('Profile self-description fields (issue #277)', () => {
     const wrapper = mount(Profile, { global: { plugins: [router] } })
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('Raiding tonight.'))
-    expect(wrapper.text()).toContain('America/New_York')
-    expect(wrapper.text()).toContain('#a1b2c3')
+    // Issue #451: timezone and theme color render as inputs, not text —
+    // their values live in the DOM's `value` property, not textContent.
+    expect((wrapper.find('#profile-timezone').element as HTMLInputElement).value).toBe(
+      'America/New_York',
+    )
+    expect((wrapper.find('input[type="text"][maxlength="7"]').element as HTMLInputElement).value).toBe(
+      '#a1b2c3',
+    )
     expect(wrapper.text()).toContain('Pacific Northwest')
     const linkInput = wrapper.find('input[type="url"]')
     expect((linkInput.element as HTMLInputElement).value).toBe('https://example.com')
@@ -115,8 +121,10 @@ describe('Profile self-description fields (issue #277)', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('No banner'))
     expect(wrapper.text()).toContain('No status set')
-    expect(wrapper.text()).toContain('No timezone set')
-    expect(wrapper.text()).toContain('No theme color set')
+    expect((wrapper.find('#profile-timezone').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('input[type="text"][maxlength="7"]').element as HTMLInputElement).value).toBe(
+      '',
+    )
     expect(wrapper.text()).toContain('No location set')
   })
 

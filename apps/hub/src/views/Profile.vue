@@ -39,10 +39,12 @@ import { useMyGuilds } from '../composables/useMyGuilds'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
+import { listIanaTimezones } from '../utils/timezones'
 import {
   AvalonAvatar,
   AvalonButton,
   AvalonCard,
+  AvalonColorPicker,
   AvalonEditableField,
   AvalonForm,
   AvalonTextField,
@@ -244,6 +246,14 @@ async function saveProfileField(field: ProfileField, value: string) {
     savingField.value = ''
   }
 }
+
+// Issue #451: timezone and theme_color moved off the generic
+// AvalonEditableField (read-then-click-to-edit) shape — a searchable
+// dropdown and a color picker both want to be their own always-visible
+// control, not text pretending to be editable-in-place. Both still save
+// through `saveProfileField` above, just from an explicit Save button
+// instead of AvalonEditableField's own commit-on-blur.
+const timezoneOptions = listIanaTimezones()
 
 // favorite_genres saves as one explicit action (not per-field like the
 // text fields above) since it's a multi-select list, not a single value —
@@ -902,24 +912,40 @@ async function onResignGuardian(identityId: string) {
               :error="fieldErrors.status"
               @save="saveProfileField('status', $event)"
             />
-            <AvalonEditableField
-              label="Timezone"
-              :value="timezone"
-              empty-text="No timezone set"
-              placeholder="America/New_York"
-              :saving="savingField === 'timezone'"
-              :error="fieldErrors.timezone"
-              @save="saveProfileField('timezone', $event)"
-            />
-            <AvalonEditableField
-              label="Theme color"
-              :value="themeColor"
-              empty-text="No theme color set"
-              placeholder="#a1b2c3"
-              :saving="savingField === 'theme_color'"
-              :error="fieldErrors.theme_color"
-              @save="saveProfileField('theme_color', $event)"
-            />
+            <div :class="styles.fieldWithAction">
+              <label :class="styles.fieldLabel" for="profile-timezone">Timezone</label>
+              <input
+                id="profile-timezone"
+                v-model="timezone"
+                :class="styles.timezoneInput"
+                type="text"
+                list="profile-timezone-options"
+                placeholder="America/New_York"
+              />
+              <datalist id="profile-timezone-options">
+                <option v-for="tz in timezoneOptions" :key="tz" :value="tz" />
+              </datalist>
+              <p v-if="fieldErrors.timezone" :class="page.error">{{ fieldErrors.timezone }}</p>
+              <AvalonButton
+                :label="savingField === 'timezone' ? 'Saving…' : 'Save timezone'"
+                variant="secondary"
+                :disabled="savingField === 'timezone'"
+                @click="saveProfileField('timezone', timezone)"
+              />
+            </div>
+            <div :class="styles.fieldWithAction">
+              <AvalonColorPicker
+                v-model="themeColor"
+                label="Theme color"
+                :error="fieldErrors.theme_color"
+              />
+              <AvalonButton
+                :label="savingField === 'theme_color' ? 'Saving…' : 'Save theme color'"
+                variant="secondary"
+                :disabled="savingField === 'theme_color'"
+                @click="saveProfileField('theme_color', themeColor)"
+              />
+            </div>
             <AvalonEditableField
               label="Location"
               :value="location"
