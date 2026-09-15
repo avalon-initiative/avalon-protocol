@@ -1,43 +1,8 @@
 //! Guild events calendar + RSVP (issue #169) — deliberately NOT protocol
-//! history, same posture as `crate::guild_messages`.
-//!
-//! `GuildEvent`/`GuildEventRsvp` rows (`crates/protocol/src/guilds.rs`)
-//! live in `guild_events`/`guild_event_rsvps` and never touch the ledger
-//! commit path or the outbox module — no `guild.event_*` protocol event
-//! kind exists anywhere, on purpose. This module never imports the outbox
-//! or the chain crate.
-//!
-//! **Durability call, made explicitly (not silently assumed) per the
-//! ticket:** a scheduled event is closer to `guild_messages` than to
-//! `guild_channels`. A channel is durable *structure* — `crate::channels`
-//! writes a `guild.channel_*` event on create/rename/archive because a
-//! channel is something worth reconstructing history for. A guild event is
-//! not: a raid night that gets rescheduled three times and cancelled isn't
-//! history worth preserving the way membership or channel structure is —
-//! it's closer to "hot state" like presence or chat. So both the event row
-//! *and* its RSVPs are plain projections here, unlike channels (durable
-//! structure) vs. messages (ephemeral content) which split that
-//! distinction within a single feature. See
-//! `crates/server/db/migrations/0028_guild_events/up.sql` and
-//! `docs/architecture/guilds.md` for the same call stated for readers of
-//! the migration and the architecture doc respectively.
-//!
-//! **Membership.** Reading, creating, or RSVPing to events requires the
-//! caller to currently be a member of the guild — `crate::channels::
-//! require_member` (issue #21's real `guild_members` table).
-//!
-//! **Authorization.** `event_manage` gates create/update/delete (issue
-//! #250 — its own `GuildPermission` variant, no longer piggybacked on
-//! `manage_channels` the way #169 originally had it, now that #250's
-//! per-resource override layer makes a dedicated permission worth having).
-//! `create_event` has no resource yet to scope to, so it checks the flat
-//! guild-wide `event_manage` grant; `update_event`/`delete_event` already
-//! have a concrete event to scope to, so they go through
-//! `crate::guilds::has_resource_permission` instead — a role can be
-//! granted (or denied) `event_manage` on one specific event via a
-//! per-resource override, on top of (or instead of) holding it guild-wide.
-//! RSVPing is self-service: any current member may set or change their
-//! own RSVP, never anyone else's.
+//! history, same posture as `crate::guild_messages`. See
+//! `docs/architecture/guilds-implementation-log.md`'s "Guild events
+//! calendar + RSVP" section for the durability call, and "`event_manage`
+//! (issue #250)" for the per-resource-override authorization model.
 
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind, RsvpStatus};
 use axum::extract::{Path, Query, State};

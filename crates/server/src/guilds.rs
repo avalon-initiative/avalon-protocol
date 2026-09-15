@@ -1,49 +1,8 @@
-//! Guild creation, roles, ownership transfer, and integrator association
-//! (issue #20).
-//!
-//! Every mutation here requires the caller's own user session — same
-//! "no integrator-credential auth path exists in this repo" reasoning
-//! `crates/server/src/friends.rs`'s module doc comment already lays out,
-//! so "an integrator cannot act on a guild's behalf" is satisfied simply by these
-//! routes only ever accepting a session bearer token.
-//!
-//! A guild is a network-level primitive, not an integrator's (issue #74) — see
-//! `docs/architecture/guilds.md`. `guild.created`, `guild.updated`,
-//! `guild.role_defined`, and `guild.owner_transferred` are promised-durable
-//! history, written into the outbox in the same transaction as the
-//! `guilds`/`guild_roles` projection change, same pattern
-//! `handlers::register_finish` and `friends.rs` already established. The
-//! `guilds`/`guild_roles`/`guild_integrator_associations` tables are projections,
-//! rebuildable from that history — nothing here treats them as canonical.
-//!
-//! **Membership lifecycle (issue #21).** `guild_members`/`guild_invites`
-//! are projections, same durability posture as everything else in this
-//! module: `guild.member_added`, `guild.member_removed`, and
-//! `guild.role_changed` are the durable history, written into the outbox in
-//! the same transaction as the row change. Invites, declines, and
-//! withdrawals are deliberately NOT durable — resolving one is a plain
-//! projection update, no event, same pattern `friends.rs` uses for
-//! declined/withdrawn friend requests. [`actor_role_permissions`] now does
-//! a real `guild_members` JOIN `guild_roles` lookup, so
-//! [`has_guild_permission`] resolves real permissions for non-owner callers
-//! too, not just the owner. `GET /guilds/{id}`'s `member_count` is a real
-//! `COUNT(*)` over `guild_members`.
-//!
-//! Whether a guild is invite-only or open (`join_policy`, on `guilds` and
-//! `avalon_protocol::guilds::Guild`) governs `POST /guilds/{id}/join`; it
-//! is not itself exposed for editing by any route in this module.
-//!
-//! **Discovery (issue #154).** `GET /guilds/discover` is a paged,
-//! filterable/searchable browse over the same public metadata `GET
-//! /guilds/{id}` already exposes (name/tag/description/member_count) —
-//! not a new visibility tier. It's a milestone-1 `server`-side stand-in
-//! (a direct `guilds` query) for the real read model #42's indexer will
-//! eventually own, same pragmatic call #44 documents for reads generally.
-//! Cursor pagination here (`cursor=` holding the last-seen guild id, `(sort
-//! key, id) < (subquery for that id)` keyset comparison) is the same
-//! pattern `guild_messages::list_messages`'s `before=` already established
-//! for #22 — just under the field name this ticket's own endpoint spec
-//! uses.
+//! Guild creation, roles, ownership transfer, membership lifecycle, and
+//! discovery (issues #20/#21/#154). A guild is a network-level primitive,
+//! not an integrator's (#74). See `docs/architecture/guilds.md` and
+//! `guilds-implementation-log.md`'s "Today in the repo" for the durable
+//! event history, role-permission resolution, and discovery-board design.
 
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::guilds::{
@@ -2736,35 +2695,12 @@ pub struct DiscoverGuildsResponse {
 }
 
 /// `GET /guilds/discover?q=&recruiting=&tag=&integrator=&sort=&limit=&cursor=`
-/// (issue #154). Session-authenticated only — any authenticated identity
-/// may browse, no membership requirement, matching #20's existing "guild
-/// name/tag/description/member_count are readable by any authenticated
-/// identity" precedent. Milestone-1 stand-in: a direct query over the
-/// `guilds` projection, not yet #42's real indexer read model (see module
-/// doc comment and `docs/architecture/guilds.md`).
-///
-/// Visibility rule for `recruiting`: a non-recruiting guild must never
-/// appear in a stranger's browse/search results, in any filter combination
-/// — only exact id/tag lookup (`GET /guilds/{id}`) reaches it, same as
-/// before this endpoint existed.
-///
-/// - `recruiting=true` is a plain exact filter: recruiting guilds are
-///   already public-by-design (#20), so no membership gate is needed.
-/// - `recruiting` omitted: "recruiting guilds, plus any guild the caller is
-///   already a member of regardless of its recruiting flag" — a member
-///   always sees their own guilds' discovery card, same as
-///   `GET /guilds/{id}`/`GET /me/guilds` already let them look it up
-///   directly.
-/// - `recruiting=false` explicitly: **still membership-gated**, not a raw
-///   exact filter — it only returns the caller's own non-recruiting
-///   guilds. Without this gate a stranger could pass `recruiting=false` to
-///   bulk-enumerate every non-recruiting guild's public metadata, which is
-///   exactly the "reachable only by exact id/tag" invariant this endpoint
-///   must not violate.
-///
-/// Builds the `guilds.discover` query — split out from [`discover_guilds`]
-/// so the filter/sort/pagination logic can be unit-tested (via
-/// [`sqlx::QueryBuilder::sql`]) without a live Postgres connection.
+/// (issue #154). `recruiting=false` is still membership-gated, not a raw
+/// filter — see `docs/architecture/guilds-implementation-log.md`'s
+/// discovery-board section for the full `recruiting` visibility rule and
+/// why. Builds the `guilds.discover` query — split out from
+/// [`discover_guilds`] so it's unit-testable without a live Postgres
+/// connection.
 fn build_discover_query(
     query: &DiscoverGuildsQuery,
     sort: DiscoverSort,

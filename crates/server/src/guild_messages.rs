@@ -1,69 +1,9 @@
-//! Guild chat messages (issue #22) — deliberately NOT protocol history.
-//!
-//! `GuildMessage` rows (`crates/protocol/src/guilds.rs`) live in the
-//! `guild_messages` table and never touch the ledger commit path or the
-//! outbox module — same "ephemeral/non-ledger" reasoning `crate::presence`
-//! already documents for presence, applied here to ordinary chat: it's
-//! high-volume, non-interoperable state, not something an integrator or another
-//! identity ever needs to *prove* was said. No protocol event kind for an
-//! individual chat message exists anywhere, on purpose. This is enforced
-//! two ways: by construction (this module never imports the outbox or the
-//! chain crate, checked by a source grep in
-//! `crates/server/tests/guild_messages_no_ledger.rs`), and by design —
-//! channel *structure* (`crate::channels`) is durable history, individual
-//! *messages* are not.
-//!
-//! **Retention (issue #253, implementing #193's decision).** Messages are
-//! kept indefinitely up to a configurable cap per channel
-//! (`GUILD_CHANNEL_MESSAGE_CAP` env var, default 10,000 — see
-//! [`message_cap`]); once a channel exceeds it, [`prune_channel`] moves the
-//! oldest rows into `guild_messages_archive` instead of deleting them
-//! outright. The archive itself is held for a much longer, separately
-//! configurable window (`GUILD_MESSAGE_ARCHIVE_RETENTION_DAYS`, default 730
-//! days — see [`archive_retention_days`]); [`expire_archive`] hard-deletes
-//! whatever falls past that window, with nothing recoverable afterward. No
-//! client should assume guild chat history is permanent, in the live table
-//! or the archive.
-//!
-//! **Archive read access.** `GET .../channels/{cid}/messages/archive` requires
-//! *current* guild membership, exactly like [`list_messages`] — not
-//! membership at the time each archived message was sent. `guild_members`
-//! is a live projection with no point-in-time history of its own (that
-//! would require replaying membership through the indexer/ledger, real
-//! infrastructure this ticket doesn't need to build for what is, by
-//! design, non-durable data); current-membership keeps the archive's
-//! access rule identical to the live channel's and avoids inventing new
-//! historical-membership machinery for a tier that explicitly isn't
-//! protocol history.
-//!
-//! **Moderation deletion and the archive.** [`delete_message`] now purges
-//! *both* the live row and any archive copy of the same message id.
-//! Ordinarily a message a moderator deletes is still live (the archive
-//! endpoint is separate from the moderation endpoint, and a message can't
-//! be both), but treating the two as strictly distinct would leave a loophole:
-//! content a moderator hard-deletes for cause (harassment, illegal
-//! content, etc.) could still surface later in the archive if pruning had
-//! already run first. Moderation intent should win regardless of which
-//! tier currently holds the row, so `delete_message` is written to check
-//! both tables rather than assuming the row it's after is always in
-//! `guild_messages`.
-//!
-//! **Membership.** Reading or posting requires current guild membership,
-//! via `crate::channels::require_member` — see that module's doc comment
-//! for the `guild_members` table this depends on and issue #21's status.
-//! Moderation (hard-deleting a message) instead requires `manage_channels`,
-//! resource-aware against the channel it's posted in
-//! (`crate::channels::require_manage_channel_resource`, issue #250), same
-//! as channel management — messages aren't history, so there's nothing to
-//! preserve when one is deleted.
-//!
-//! **Announcement-only channels (issue #250).** When a channel's
-//! `announcement_only` flag is set, posting additionally requires the
-//! `ChannelPost` permission for that specific channel
-//! (`crate::guilds::has_resource_permission`) — membership alone is no
-//! longer sufficient. A regular channel (the default) keeps today's
-//! "any current member may post" behavior unchanged; this is strictly
-//! additive per-channel, not a change to the guild-wide permission model.
+//! Guild chat messages (issue #22) — deliberately NOT protocol history:
+//! never touches the ledger/outbox, high-volume, non-interoperable. See
+//! `docs/architecture/guilds.md` ("Guild chat is a network primitive",
+//! "Today in the repo") and `docs/architecture/guilds-implementation-log.md`
+//! for the archive-tier retention (#253), announcement-only channels
+//! (#250), and moderation-deletion-vs-archive semantics.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;

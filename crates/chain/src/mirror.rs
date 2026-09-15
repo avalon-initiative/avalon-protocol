@@ -1,48 +1,9 @@
 //! Mirror-watcher storage and equivocation detection — issue #299,
-//! implementing #40's decided no-consensus mirror model (see
-//! `docs/architecture/settlement.md`'s "Mirror sync stays minimal"
-//! section): no witness quorum, no BFT consensus. Any mirror that
-//! independently observes and stores every Signed Tree Head it sees for a
-//! network can be compared against another mirror's (or its own past)
-//! observations at the same `tree_size`; two different `root_hash` values
-//! claiming the same `tree_size` from the same operator is cryptographic
-//! proof of equivocation.
-//!
-//! This module owns two things:
-//!
-//! - **Storage** for `observed_sths` (every STH a mirror has fetched and
-//!   signature-verified from a peer, tagged by source) and
-//!   `equivocation_findings` (a detected mismatch), plus `mirrored_entries`
-//!   (verified ledger content a mirror has backfilled — see
-//!   [`crate::postgres::PostgresSettlementProvider::list_entries_since`]
-//!   for the read side this backfills from).
-//! - **Equivocation detection** ([`detect_equivocation`]): a pure function,
-//!   deliberately free of any I/O, so it's directly unit-testable without a
-//!   database or network — the actual security property (`#40`'s own
-//!   invariant that this ticket must "actually test, not just implement")
-//!   lives here, not smeared across the async storage/HTTP plumbing that
-//!   calls it.
-//!
-//! **Surfacing mechanism** (this ticket's own open implementation call,
-//! decided here): both a durable row in `equivocation_findings` *and* a
-//! structured `tracing::error!` — never only one or the other. The durable
-//! row is what a human or monitoring system checks after the fact / queries
-//! programmatically; the log line is what an operator watching the
-//! process's own output (or a log aggregator it forwards to, once #265's
-//! JSON format is in play) sees the moment it happens. Belt and suspenders,
-//! matching how `outbox::drain_once` already handles its own "this must
-//! never fail silently forever" case.
-//!
-//! The log line carries a stable `event` field (`"equivocation_detected"` /
-//! `"equivocation_resolved"`) alongside `network_id`/`tree_size`/the two
-//! disputed sources and root hashes as their own structured fields, not
-//! folded into the message text — so a hoster forwarding
-//! `avalon-server`'s JSON-formatted logs (`AVALON_LOG_FORMAT=json`) to
-//! their own aggregator can alert on `event = "equivocation_detected"`
-//! directly, without parsing message strings that are free to reword later.
-//! No alerting/paging integration ships in this repo itself (issue
-//! #315) — this is the structured signal an operator's own alerting
-//! wires up against.
+//! implementing #40's decided no-consensus mirror model. See
+//! `docs/architecture/settlement-implementation-notes.md`'s equivocation-
+//! detection section for the storage tables, why `detect_equivocation` is
+//! a pure I/O-free function, and the durable-row-plus-structured-log
+//! surfacing mechanism.
 
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;

@@ -45,14 +45,32 @@ yet; see the module's own doc comment for why). Authorization failure for
 grant all read the same to the caller, matching this file's "never leak
 internal detail" posture below.
 
-**No endpoint calls this yet.** As of #28, every real endpoint is either
-user-session-only (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is
-a user action, an integrator never grants itself anything) or proves only the
-integrator's own identity with nothing user-specific to check
-(`integrators::integrator_whoami`). `Caller`/`require_capability` exist ready for the
-first ticket that adds a real integrator-calling-the-API endpoint (achievement
-issuance, etc.) — that ticket should fail review if it builds its own ad-hoc
-integrator-access check instead of calling this one.
+**First real caller: `presence::update_integrator_presence`** (#16's
+`PUT /presence/:identity_id`), gated on an active `presence.publish` grant.
+Every other endpoint is still either user-session-only (`friends.rs`,
+`guilds.rs`, `connections.rs` — a grant is a user action, an integrator
+never grants itself anything) or proves only the integrator's own identity
+with nothing user-specific to check (`integrators::integrator_whoami`).
+`Caller`/`require_capability` remain the infrastructure any future
+integrator-calling-the-API endpoint (achievement issuance, etc.) should
+reuse rather than hand-rolling its own check.
+
+`Caller::Integrator` resolves by `(identity_id, integrator_id)` — read from
+a new `x-avalon-identity-id` header alongside the existing
+`x-avalon-integrator-*` auth headers — rather than by a `binding_id` a
+caller could simply name: naming a row directly would let the guard trust
+"this id must be legitimate, since it parses" instead of confirming *whose*
+row it is and *which* integrator it belongs to. Resolving by the pair means
+there is no `bindings` row to find at all when an integrator tries to use
+one user's binding to a different integrator — a lookup miss, not a
+same-row check that fails after the fact.
+
+No in-process cache: with only one real caller so far there is nothing to
+profile a cache against, and a wrong invalidation rule — the one hard part
+of any cache — would be actively dangerous for an authorization check,
+since "revoked is rejected on the very next request" is the invariant a
+stale entry would silently violate. Revisit once real call volume exists to
+measure against.
 
 ## Node authority
 

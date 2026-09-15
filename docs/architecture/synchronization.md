@@ -123,10 +123,17 @@ isn't where this defaults.
   a `Uuid`) — the idempotency key everything downstream depends on. Shipped
   in `avalon-sdk` (`crates/sdk/src/sync_journal.rs`) with a dependency-light
   reference implementation, `FileJournal`, backed by an append-only,
-  `fsync`-per-write JSON-lines file rather than embedded SQLite — see that
-  module's doc comment for the full trade-off. Nothing calls `append()` from
-  `AvalonClient`/`Session` yet; that wiring, plus draining/submitting what's
-  recorded, is #111.
+  `fsync`-per-write JSON-lines file rather than embedded SQLite: it adds no
+  new dependencies (no C toolchain requirement from a bundled SQLite),
+  crash safety only needs one property an `fsync`'d append gets directly
+  (fully landed or didn't, no transaction machinery needed), and recovery
+  is "replay the file, stop at the first line that doesn't parse" —
+  trivial to reason about for what is deliberately not a hot path. The
+  trade-off (no concurrent-writer story, O(n) replay on open) doesn't
+  matter for a single integrator client's local journal; `SyncJournal` is
+  a trait specifically so another SDK can swap in SQLite or platform
+  storage instead. Nothing calls `append()` from `AvalonClient`/`Session`
+  yet; that wiring, plus draining/submitting what's recorded, is #111.
 - **Deferred submission** ([#111](https://github.com/LunarVagabond/avalon-protocol/issues/111),
   done) — `SubmissionEngine` (`crates/sdk/src/submission.rs`) drains a
   `SyncJournal`'s `pending()` entries, grouped by `kind` and submitted
@@ -276,6 +283,44 @@ isn't where this defaults.
   own yet, so there is no *automatic* end-to-end offline path today, even
   though the local storage and submission halves both now exist and are
   tested end-to-end when driven explicitly.
+- `SubmissionEngine::drain` submits `SyncJournal::pending` entries in
+  `recorded_at` order **within their own `kind`** — entries of different
+  kinds have no ordering relationship to each other, so they're grouped by
+  `kind` first (groups visited in a fixed, deterministic order — sorted by
+  kind name) and each group submitted oldest-first.
+- `Transport::submit` classifies every outcome into one of five cases:
+  `Applied` (marked submitted, never retried), `Rejected { reason }` (a
+  terminal 4xx meaning the request itself is now invalid — marked rejected
+  via `SyncJournal::mark_rejected`, issue #113's genuine terminal state,
+  replacing the old workaround of recording it as `Failed` diagnostics and
+  then calling `mark_submitted`), `Retryable` (network error or 5xx — stays
+  pending, scheduled via `BackoffPolicy`), `UnsupportedKind` (an engine-
+  internal case: this ticket wires up only `CONVERSATION_MESSAGE_KIND`
+  end-to-end, so any other kind is left pending, untouched, no backoff
+  consumed — not a failure), and `AuthenticationRequired` (a stale/expired
+  session token, not an invalid request — left pending with no backoff,
+  since retrying against the same token would fail identically forever;
+  the caller must re-authenticate via a fresh `Session` before its next
+  `drain()`).
+- `HttpTransport` maps HTTP status codes to those cases carefully: a `401`
+  from `crates/server/src/handlers.rs::authenticate_token` becomes
+  `AuthenticationRequired`, not `Rejected`, since the credential (not the
+  request) is stale. A `403` from
+  `crates/server/src/conversations.rs::require_unblocked_participant`
+  stays a terminal `Rejected` — this endpoint has no separate capability/
+  authorization layer a 403 could also mean "re-grant and retry" for
+  (server-side capability enforcement, #26-#28, isn't wired up yet), and a
+  queued message's target conversation/block state isn't expected to
+  change on its own. A `404` from `send_message`'s idempotency lookup
+  (`find_message_by_client_entry_id`) is mapped to `Applied` rather than
+  `Rejected`: on this endpoint the only way to hit it is a retry that lost
+  the `client_entry_id` conflict to an earlier attempt whose row was
+  already pruned (`prune_conversation`) — the message genuinely was
+  applied once, by that earlier attempt.
+- Idempotency plumbing: every submission passes the journal entry's
+  `EntryId` through to `Transport::submit`, which includes it in the
+  request so the receiving endpoint can dedupe — see the conversation-
+  message row above.
 - `crates/server/src/outbox.rs` (issue #71, done) is the *server-side*
   analog of the same pattern — durable local recording before a slower,
   retriable downstream step — applied to the settlement ledger rather than

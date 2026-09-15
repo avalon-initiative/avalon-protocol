@@ -1,89 +1,14 @@
 //! The capability-enforcement extractor and guard (issue #28) — resolves
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
-//! specific capability" (`require_capability`), so a future endpoint that
-//! lets an integrator act on a user's behalf never has to hand-roll either
-//! question.
-//!
-//! **First real caller: `crate::presence::update_integrator_presence`** (issue
-//! #16's `PUT /presence/:identity_id`) — an integrator publishing presence on
-//! behalf of a bound user, gated on an active `presence.publish` grant.
-//! Every other endpoint in this repo is still either user-session-only
-//! (`friends.rs`, `guilds.rs`, `connections.rs` — a grant is a user
-//! action, an integrator never grants itself anything) or integrator-credential-only
-//! with nothing user-specific to check (`integrators::integrator_whoami`, which only
-//! proves the integrator's own identity); `Caller`/`require_capability` remain
-//! the infrastructure any *future* integrator-calling-the-API endpoint
-//! (achievement issuance, etc.) should reuse rather than reinventing — see
-//! this module's own test matrix below and its `live_tests` submodule.
-//! **Any endpoint that lets an integrator act on a user's behalf must call
-//! [`require_capability`] rather than inventing its own check** — a
-//! hand-rolled `integrator_has_access_to_user` boolean is exactly the failure
-//! mode issue #28 exists to close off.
-//!
-//! The DB-backed proof that this guard reads live state correctly (seed a
-//! binding/grant, pass, revoke through issue #27's real handler function,
-//! fail) lives in this module's own `live_tests` submodule below, gated
-//! `--ignored` — **not** a separate file under `crates/server/tests/`, the
-//! pattern every other integration test in this repo follows. Every item
-//! under test here (`Caller`, `require_capability`) is `pub(crate)`, and a
-//! `tests/*.rs` file compiles as its own separate crate that links against
-//! `avalon-server` as a library — it cannot see crate-private items at
-//! all, so it could not call `require_capability` even in principle. Living
-//! inside the crate is what makes calling it possible; everything else
-//! about the test (real Postgres, `--ignored`, not run in this sandbox) is
-//! unchanged from the established pattern.
-//!
-//! ## Two caller kinds, one extractor
-//!
-//! [`Caller::User`] is the existing bearer-session flow
-//! (`crate::handlers::authenticate`) — unchanged, just wrapped. A user
-//! always has full access to their own resources; [`require_capability`]
-//! passes trivially for this variant, since this guard is specifically
-//! about *integrator* access to *user* data, not about a user's access to
-//! themselves.
-//!
-//! [`Caller::Integrator`] is `integrators::authenticate_integrator`'s existing
-//! challenge-response integrator-credential proof, plus one more thing an integrator
-//! credential alone can never supply: *which user* the integrator is acting
-//! for. An integrator's signature only proves the integrator's own identity — it says
-//! nothing about which identity granted it anything. This extractor reads
-//! that from a new `x-avalon-identity-id` header, sent alongside the
-//! existing `x-avalon-integrator-key-id` / `x-avalon-integrator-challenge-id` /
-//! `x-avalon-integrator-signature` headers `authenticate_integrator` already reads.
-//!
-//! **Why `identity_id`, not `binding_id`.** `Caller::Integrator`'s fields are
-//! `{ integrator_id, identity_id }` — an identity header keeps that struct
-//! self-describing and keeps [`require_capability`] doing the one real
-//! lookup that matters: "is there an active binding **for this
-//! (identity_id, integrator_id) pair specifically**, and an active grant for
-//! this exact capability under it." A `binding_id` header would let a
-//! caller name a row without the guard needing to confirm *whose* row it
-//! is or *which integrator* it belongs to — reintroducing exactly the kind of
-//! implicit trust ("this id must be legitimate, since it parses") this
-//! ticket exists to remove. Resolving by `(identity_id, integrator_id)` instead
-//! means the lookup itself enforces "an integrator can't use one user's
-//! binding-to-Integrator-A to claim access via Integrator B" — there is no `bindings`
-//! row to find under a mismatched integrator, full stop, rather than a row being
-//! found and then rejected after the fact.
-//!
-//! ## No cache (yet)
-//!
-//! The ticket suggests a short in-process cache keyed by
-//! `(identity, integrator, capability)`. Not built here: with only one real
-//! caller (`presence::update_integrator_presence`) so far, there is nothing to
-//! profile a cache against, and a wrong invalidation rule (the one hard
-//! part of any cache) would be actively dangerous for an authorization
-//! check — "revoked is rejected on the next request, no grace window" is
-//! the invariant, and a stale cache entry is precisely the shape of bug
-//! that would silently violate it. A plain DB read per check is correct
-//! today; add the cache once real call volume exists to measure it
-//! against.
-//!
-//! `#![allow(dead_code)]`: kept at the module level rather than removed
-//! now that `presence::update_integrator_presence` is a real caller, since not
-//! every item here is reachable from that one call site alone — keeping
-//! it here (one place) rather than scattering per-item allows across
-//! whichever helper a future compiler pass happens to flag.
+//! specific capability" (`require_capability`). See
+//! `docs/architecture/security-model.md`'s "Authorization: one capability,
+//! one check" and "Today in the repo" sections for the caller-kind design,
+//! why lookups key on `(identity_id, integrator_id)` not `binding_id`, and
+//! why there's no cache yet. The DB-backed live proof lives in this
+//! module's own `live_tests` submodule below (gated `--ignored`), not a
+//! separate `crates/server/tests/*.rs` file, since every item under test
+//! here is `pub(crate)` and a `tests/*.rs` file cannot see crate-private
+//! items at all.
 #![allow(dead_code)]
 
 use avalon_protocol::permissions::Capability;

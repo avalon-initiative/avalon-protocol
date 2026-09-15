@@ -1,71 +1,9 @@
-//! The mirror-watcher — issue #299, the actual acting-as-a-mirror piece of
-//! #40's decided design. #211 (closed) already built the read-side API
-//! (`GET /ledger/sth/latest`, `GET /ledger/sth/{tree_size}`, `GET
-//! /ledger/proof/consistency`, `GET /ledger/proof/inclusion`) and this
-//! ticket adds `GET /ledger/entries` (`crate::settlement::list_entries`);
-//! this module is what actually calls those endpoints against one or more
-//! configured peers, verifies what comes back, and stores it.
-//!
-//! **Lives in-process inside `avalon-server`, as a background task spawned
-//! from `main.rs`** (this ticket's own open implementation call, decided
-//! here) — the same shape `crate::outbox::run_worker` and
-//! `crate::retention::run_worker` already use: a `tokio::spawn`ed loop,
-//! gated by whether the relevant env config is even set, sharing the
-//! process's existing `PgPool`/`PostgresSettlementProvider` rather than
-//! standing up a second connection or a separate binary. A `avalon
-//! mirror-watch <peer-url>` CLI subcommand was the other option the ticket
-//! left open, but it would need its own Postgres pool setup, its own
-//! migration-running, and its own long-lived-process lifecycle (`avalon`
-//! today is a short-lived diagnostic tool — `inspect-ledger`,
-//! `outbox-status` — that runs once and exits, not a daemon) duplicating
-//! what `avalon-server` already has. A "2 Settlement nodes" topology is two
-//! `avalon-server` deployments, each against its own Postgres — a "mirror"
-//! is just one of them started with `AVALON_MIRROR_PEERS` pointed at the
-//! other; nothing here requires the watching node to be a pure mirror with
-//! no writes of its own.
-//!
-//! **Multi-peer by design, not just multi-peer-configurable.**
-//! `AVALON_MIRROR_PEERS` accepts more than one URL, and every configured
-//! peer is actually used, not just the first one that answers:
-//!
-//! - Every tick, **every** configured peer is polled independently for its
-//!   latest STH ([`watch_peer_once`]) — one peer being unreachable or
-//!   misbehaving never stops the others from being watched, and every
-//!   peer's observation is stored and equivocation-checked against every
-//!   *other* observation this node has ever recorded for that
-//!   `network_id`/`tree_size`, from any source (`avalon_chain::mirror`'s
-//!   `observed_sths` is not scoped per peer).
-//! - Peers are then grouped by `network_id` and handed to
-//!   [`backfill_network`], which (a) refuses to extend a network's mirrored
-//!   history past any `tree_size` with an already-recorded, unresolved
-//!   equivocation finding — #299 owns *detection*, not automatic
-//!   resolution, and there is no correct automatic pick between two validly
-//!   signed but disagreeing STHs — and (b) picks the tree head **this
-//!   tick's peers most widely agree on** (a majority-agreement gate, not
-//!   "whichever peer answered first") before trusting it for backfill.
-//! - Backfill itself ([`backfill`]) round-robins across every peer that
-//!   corroborated the chosen tree head: if the peer a given page/proof
-//!   request lands on is unreachable, the next one is tried before giving
-//!   up for that tick. Content storage
-//!   (`avalon_chain::mirror::insert_mirrored_entry`) is keyed on
-//!   `(network_id, seq)`, not per peer, so failing over mid-backfill never
-//!   duplicates or restarts progress — any configured peer of the same
-//!   network is an interchangeable source of the same
-//!   independently-verified content.
-//!
-//! This is deliberately not exhaustive N-way verification of every single
-//! entry against every peer (that would multiply request volume by the
-//! peer count for no additional safety once one inclusion proof has
-//! already verified against the trusted root) — it is real multi-source
-//! resilience and real cross-peer corroboration before trust is extended,
-//! not a single hardcoded peer.
-//!
-//! **Never trusts unverified content.** A signature failure, a proof that
-//! doesn't verify, or a returned `root_hash` that doesn't match the
-//! already-verified STH aborts that attempt (logged, never panicked on,
-//! falling over to the next peer where one is available) rather than
-//! accepting anything — see each function's own doc comment for exactly
-//! where that boundary is.
+//! The mirror-watcher (issue #299) — verifies and stores STHs/entries
+//! polled from configured peers, run as a background task inside
+//! `avalon-server`. See `docs/architecture/nodes.md`'s "Today in the
+//! repo" section for the multi-peer polling/backfill/equivocation-
+//! detection design and why it lives in-process rather than as a CLI
+//! daemon.
 
 use std::collections::HashMap;
 use std::time::Duration;

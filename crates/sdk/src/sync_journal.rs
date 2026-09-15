@@ -1,41 +1,10 @@
-//! Local durable event journal (issue #110) — the storage half of offline
-//! participation described in `docs/architecture/synchronization.md`. This
-//! module records *intent* locally and durably; it does not submit
-//! anything, dedupe anything, sign anything, or decide what a recorded
-//! entry is worth. That is #111 (submission engine) and #112 (offline trust
-//! model, already decided: deferred requests, never deferred attestations —
-//! no issuer key exists client-side, full stop).
-//!
-//! ## Storage backend: append-only JSON-lines file, not embedded SQLite
-//!
-//! [`FileJournal`] is a flat, append-only file of newline-delimited JSON
-//! records (an `Append`, `Submitted`, `Rejected`, or `Failed` op per line),
-//! replayed in full on [`FileJournal::open`] to reconstitute in-memory
-//! state. Chosen
-//! over `rusqlite`/embedded SQLite for this reference implementation
-//! because:
-//!
-//! - It adds zero new dependencies — `uuid`, `time`, and `serde_json` are
-//!   already workspace dependencies this crate uses elsewhere. `rusqlite`
-//!   (or a bundled `libsqlite3-sys`) pulls in a C dependency and a
-//!   compiler-toolchain requirement onto every integrator that links this crate,
-//!   which is a heavy ask for what's fundamentally a small local log.
-//! - Crash safety only needs one property: an `fsync`'d append either fully
-//!   landed or didn't. A flat file gets that directly (`write_all` the
-//!   line, then `File::sync_all`) without needing a database engine's
-//!   transaction machinery, WAL checkpointing, or page cache.
-//! - Recovery is "replay the file, stop at the first line that doesn't
-//!   parse" — trivial to reason about and to test deterministically, which
-//!   matters more here than raw throughput; this journal is not a hot path
-//!   (`docs/architecture/synchronization.md`: "local, fast, always-available
-//!   operation", not "high volume").
-//!
-//! The trade-off: no concurrent-writer story (one `FileJournal` per path,
-//! guarded by an internal mutex) and O(n) replay on open. Neither matters
-//! for a single integrator client's local journal. `SyncJournal` is a trait
-//! specifically so an integrator (or another SDK — C#, a future mobile
-//! binding) can swap in SQLite, platform storage, or anything else without
-//! the rest of the SDK caring.
+//! Local durable event journal (issue #110) — the storage half of
+//! offline participation described in
+//! `docs/architecture/synchronization.md`. Records *intent* locally and
+//! durably; submitting, deduping, and signing are #111/#112's job, not
+//! this module's. See that doc's "Mechanism" section for why
+//! `FileJournal` is an append-only JSON-lines file rather than embedded
+//! SQLite.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};

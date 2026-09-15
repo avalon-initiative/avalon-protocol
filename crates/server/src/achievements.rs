@@ -1,80 +1,9 @@
 //! Claim-definition CRUD per issuer (issue #31 for `Game`, generalized to
 //! `App`/`Service` by #324/#325) — an issuer defines its achievements or
-//! milestones before it can issue them (#32).
-//!
-//! **Category-driven vocabulary (#324, decided).** One shared mechanism,
-//! one shared `achievement_definitions` table (the name predates #324 and
-//! is kept — renaming a table that already holds real rows for zero
-//! functional gain isn't worth the churn; see #324's own "same underlying
-//! record shape" reasoning), one shared row/response shape
-//! ([`AchievementDefinitionResponse`], whose field names were already
-//! fully generic before this generalization — nothing in it says
-//! "achievement"). What varies by the issuer's own registered category
-//! (`IntegratorCategory::claim_kind`) is purely the *label*: `Game` issuers
-//! keep `"achievement"` — `POST/PATCH/GET /integrations/{slug}/achievements`,
-//! `game:<slug>:achievement:<key>`, `achievement.defined`/etc., exactly as
-//! #31 shipped, zero churn — while `App`/`Service` issuers get
-//! `"milestone"` — `POST/PATCH/GET /integrations/{slug}/milestones`,
-//! `app:<slug>:milestone:<key>` or `service:<slug>:milestone:<key>`,
-//! `milestone.defined`/etc. [`create_achievement_definition`]/
-//! [`update_achievement_definition`]/[`list_achievement_definitions`] and
-//! their milestone-route siblings ([`create_milestone_definition`]/etc.)
-//! are thin, route-specific entry points over one shared core
-//! ([`create_definition`]/[`update_definition`]/[`list_definitions`]) —
-//! real shared code, not two parallel near-duplicate modules, per #325's
-//! own suggestion.
-//!
-//! **A route's claim vocabulary is never caller-asserted.** Hitting
-//! `/integrations/{slug}/achievements` for an issuer actually registered as
-//! `App`/`Service` (or `/integrations/{slug}/milestones` for a `Game`) is
-//! rejected ([`AppError::ClaimVocabularyMismatch`]) — the label is derived
-//! from the issuer's own real registered category
-//! (`integrators::fetch_integrator_category`), checked server-side, not trusted from
-//! which URL the caller happened to call.
-//!
-//! **Namespacing.** A definition's `GlobalId` is
-//! `<namespace>:<slug>:<claim_kind>:<key>` (`crates/protocol/src/ids.rs`),
-//! minted by [`definition_ref`] the same way `crates/server/src/integrations.rs`'s
-//! `integrator_ref`/`issuer_ref` and `guilds.rs`'s `guild_ref` namespace their own
-//! events — `key` matches `[a-z0-9_]+` ([`validate_key`]), and the slug is
-//! always the caller's own, taken from its registration (#26), never the
-//! caller's choice. `id` is immutable once created; nothing in this module
-//! ever changes it.
-//!
-//! **Auth.** All endpoints are integrator/app/service-credential-authenticated
-//! (`crate::integrators::authenticate_integrator`, the challenge-response scheme #26
-//! established), not a user session — defining a claim is something an
-//! issuer does about its own catalogue, not something a user consents
-//! to. Unlike issuing (#32, gated behind a capability grant), *defining*
-//! needs nothing beyond the issuer proving its own identity. The write
-//! endpoints additionally check that the authenticated issuer is the one
-//! named by the `{slug}` path segment — an issuer authenticated as itself
-//! can never create or change a definition under another issuer's slug
-//! (`AppError::AchievementDefinitionForbidden`, 403). The `GET` list
-//! endpoints are public and unauthenticated, same visibility level
-//! `integrators::get_integrator` and `guilds::get_guild` already use.
-//!
-//! **Durability.** `achievement_definitions` is a projection; the
-//! `<claim_kind>.defined`/`.definition_updated`/`.definition_retired`
-//! family is the durable history, written into the outbox in the same
-//! transaction as the row insert/update, same pattern
-//! `friends.rs`/`guilds.rs`/`integrators.rs` already established for #71.
-//! `issuer` is `<namespace>:<slug>:self:<verb>` (mirroring
-//! `integrators::issuer_ref`); `subject` is the definition's own `GlobalId` —
-//! matching the event-kind catalogue's "issuer → claim id" shape
-//! (`docs/architecture/protocol-events.md`).
-//!
-//! **Update and retirement.** `PATCH .../{key}` updates
-//! `name`/`description`/`schema` and bumps `version`, emitting
-//! `<claim_kind>.definition_updated`; the id never changes. The same
-//! endpoint also supports retiring a definition (`retired: true`) — no new
-//! issuances against it (#32 enforces that), but existing attestations are
-//! never touched and the row is never deleted, matching the ticket's "no
-//! delete endpoint" design. Retiring emits `<claim_kind>.definition_retired`
-//! instead of `.definition_updated` (a status change, not a definition
-//! change) and does not bump `version`; retiring an already-retired
-//! definition is a no-op that emits nothing, and a retired definition can
-//! still have its name/description/schema edited in the same call.
+//! milestones before it can issue them (#32). See
+//! `docs/architecture/achievements-and-attestations.md`'s "Today in the
+//! repo" and "Namespacing" sections for the category-driven claim
+//! vocabulary, auth model, and update/retirement semantics.
 
 use avalon_chain::attestations::{verify_authenticity, Authenticity};
 use avalon_protocol::achievements::{AchievementAttestation, Issuer, Signature};

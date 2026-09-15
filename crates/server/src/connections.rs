@@ -1,49 +1,8 @@
-//! Integrator bindings and capability grants — the user consent flow (issue
-//! #27) that establishes a `IntegratorBinding` (issue #83).
-//!
-//! `POST /integrations/{slug}/connect` is the one endpoint both tickets describe
-//! from two angles: #83 says "a binding is established by the user
-//! through the consent flow (#27)"; #27 says its own connect endpoint is
-//! "also where a IntegratorBinding (#83) is established." Building them as
-//! separate endpoints would mean two code paths fighting over the same
-//! row, so this module owns both.
-//!
-//! **Every mutating endpoint here requires the caller's own user
-//! session** (`crate::handlers::authenticate`), never an integrator credential —
-//! same reasoning `crates/server/src/guilds.rs`'s module doc comment lays
-//! out for guild mutations: a grant is a user action, and no endpoint
-//! lets an integrator grant itself anything. `GET /integrations/{slug}` (in `integrators.rs`)
-//! is the one public, unauthenticated read this module depends on, to
-//! validate an approved capability against what the integrator actually declared
-//! at registration (`integrator_requested_capabilities`).
-//!
-//! `bindings` and `permission_grants` are projections, same posture as
-//! every other table in this repo: `game.binding_established`,
-//! `game.binding_ended`, `permission.granted`, and `permission.revoked` are
-//! the durable history, written into the outbox in the same transaction as
-//! the row change they accompany. All four are network-attributed for now,
-//! not user-signed, for the same reason `integrators.rs`'s `game.registered`
-//! is network-attributed rather than integrator-signed: no general per-event
-//! Ed25519 signing ceremony exists yet beyond `identity.created`
-//! (`crates/server/src/handlers.rs`'s "network as signer" milestone-1
-//! stand-in). `issuer`/`subject` for the binding events are the acting
-//! identity and the integrator, mirroring the event-kind catalogue
-//! (`docs/architecture/protocol-events.md`); for the grant events, the
-//! acting identity and the integrator+capability pair.
-//!
-//! **Invariants enforced here:**
-//! - No grant exists without a binding — every `permission_grants` row
-//!   references a `bindings` row, and a grant is only ever inserted inside
-//!   the same transaction that guarantees an active binding exists.
-//! - Ending a binding ends every grant under it, in the same transaction
-//!   (`end_connection`).
-//! - A user can only grant a capability the integrator declared at registration
-//!   (`integrator_requested_capabilities`) — anything else is a 400
-//!   (`AppError::CapabilityNotRequested`).
-//! - Reconnecting to an already-bound integrator does not duplicate the binding
-//!   or emit a second `game.binding_established` — `connect` only creates a
-//!   binding row (and only emits the event) when no active binding already
-//!   exists.
+//! Integrator bindings and capability grants — the user consent flow
+//! (issue #27) that establishes an `IntegratorBinding` (issue #83). See
+//! `docs/architecture/bindings.md`'s "Today in the repo" for why one
+//! endpoint owns both concerns, the durable event history, and the
+//! no-grant-without-a-binding invariants enforced here.
 
 use std::collections::HashSet;
 

@@ -1,69 +1,8 @@
-//! Presence tracking: publish + read (issue #16).
-//!
-//! Ephemeral realtime state per ADR #78
-//! (docs/architecture/presence.md): presence itself is never a
-//! `ProtocolEvent`, never touches `crate::outbox` or `avalon_chain`, and
-//! never lives in a migrated Postgres table (`PresenceStore` below). It is
-//! intentionally lost on server restart — everyone reads as `Offline`
-//! until their next heartbeat, which is the correct failure mode for state
-//! nobody needs to prove later.
-//!
-//! **Publishing.** `PUT /me/presence` is a user publishing their own
-//! status under their own session (`crate::handlers::authenticate`) — it
-//! can never set `active_in`. `PUT /presence/:identity_id` is an integrator
-//! publishing on behalf of a bound user, authenticated via
-//! `crate::authz::authenticate_caller`/`require_capability` (issue #28's
-//! guard, resolving issues #26/#83's `IntegratorCredential`/`IntegratorBinding`
-//! machinery, which — contrary to an earlier version of this doc comment —
-//! is now built): a `Caller::Integrator` must hold an active
-//! `presence.publish` grant under an active binding to the target
-//! identity, and `active_in`, if set at all, must equal the integrator's own
-//! `integrator_id` — [`validate_integrator_playing`] is the one place that rule lives.
-//!
-//! **Reading.** `GET /presence` and `GET /ws/presence` are gated by each
-//! subject's own `profiles.presence_visibility` setting (issue #87,
-//! `avalon_protocol::permissions::Visibility` — defaults to `friends`,
-//! preserving this endpoint's original hardcoded default from before #87):
-//! the caller always sees their own entry; for anyone else,
-//! [`presence_visible`] evaluates the subject's stored setting against the
-//! caller's relationship to them (`crate::friends::friend_partners` for
-//! `Friends`). A block always wins regardless of setting
-//! (`crate::blocks::block_partners`, issue #97, checked first — a block
-//! hides presence even between friends, or even under a `Public` setting).
-//! [`presence_visible`] takes pre-batched friend/visibility maps rather
-//! than calling `crate::visibility::is_visible` per id — the same
-//! single-query-per-request shape `hide_active_in_for` already uses for
-//! this endpoint, worth keeping now that visibility is a per-subject
-//! lookup too, not a blanket rule.
-//!
-//! **Sticky manual overrides.** `Online` is the only status this store
-//! computes automatically from heartbeat/TTL state. `Away`, `DoNotDisturb`,
-//! and `Offline`, once explicitly published via `PUT /me/presence` (or the
-//! integrator-side `PUT /presence/:identity_id`), stick — they're reported as-is
-//! on every subsequent read regardless of TTL expiry, surviving reconnects
-//! and continued heartbeats, until the caller explicitly publishes `Online`
-//! again, which immediately resumes live TTL tracking. See
-//! [`PresenceStore::get`] for the mechanism. Deliberately kept in the same
-//! in-memory `PresenceStore` as everything else in this file, not a
-//! `presence_preferences` row: a reconnect doesn't touch this store (it's
-//! only ever cleared by a server restart, same as live presence itself),
-//! so in-memory already satisfies "sticky across reconnect" — the tradeoff
-//! is that, like all `PresenceStore` state, a sticky override is lost on
-//! server restart (an identity resumes automatic tracking rather than
-//! coming back "stuck" in the status it had before), which matches this
-//! store's existing everything-resets-on-restart posture rather than
-//! adding a durable exception to it.
-//!
-//! **User opt-out.** Independent of any integrator's capability grant, a
-//! user can opt out of `active_in` being shown at all
-//! (`presence_preferences.hide_active_in`, set via `PUT /me/presence`) —
-//! [`hide_active_in_for`] is the one place that preference is read; every
-//! caller of it treats a missing row as "not hidden" (the default), the
-//! same "absence means the default, never invented" posture
-//! `PresenceStore::get` already uses for a missing presence entry.
-//! Deliberately a durable Postgres row, not part of the ephemeral
-//! in-memory store: it's a standing *preference*, not a realtime fact —
-//! see `crates/server/db/migrations/0017_presence_preferences/up.sql`.
+//! Presence tracking: publish + read (issue #16). Ephemeral realtime
+//! state per ADR #78 — never a `ProtocolEvent`, never durable, lost on
+//! restart. See `docs/architecture/presence.md`'s "Rules" and "Today in
+//! the repo" sections for the publish/read auth model, sticky manual
+//! overrides, and the durable `hide_active_in` opt-out.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};

@@ -1,53 +1,9 @@
-//! Integrator Space schema publication (issue #255, closing the decision made in
-//! #181) — an integrator publishing how its own data is structured, versioned and
-//! immutable once published. See `docs/architecture/integrator-space.md`.
-//!
-//! **Namespacing.** A version's `GlobalId` is `game:<slug>:schema:<version>`
-//! (`crates/protocol/src/ids.rs`), minted by [`schema_ref`] — the same
-//! per-module `integrator_ref`/`definition_ref` precedent `integrators.rs` and
-//! `achievements.rs` already established, applied here to schema versions.
-//!
-//! **Auth — the exact `achievements.rs` pattern, reused rather than
-//! reinvented.** Publishing a schema is something an integrator does about its own
-//! catalogue, not something that touches user data — the same reasoning
-//! `achievements.rs`'s module doc comment gives for why *defining* an
-//! achievement needs nothing beyond the integrator proving its own identity
-//! (`integrators::authenticate_integrator`'s challenge-response scheme), never a
-//! user-granted capability. That's why this module does **not** use
-//! `crate::authz::require_capability` — that guard exists specifically for
-//! an integrator acting *on behalf of a user* (e.g. `presence::update_integrator_presence`,
-//! gated on a capability the user granted); nothing here reads or writes
-//! anything belonging to a user at all. [`authenticate_owning_integrator`]
-//! mirrors `achievements.rs`'s function of the same name: resolve the
-//! `{slug}` path segment's own integrator id, authenticate the caller via
-//! `integrators::authenticate_integrator`, and 403
-//! (`AppError::IntegratorSchemaForbidden`) unless they match — so an integrator
-//! authenticated as itself can never publish a schema attributed to
-//! another integrator's id, structurally (the id used for every insert below is
-//! the *authenticated* integrator id, never anything read from the request body).
-//!
-//! **Immutability + lineage.** `POST /integrations/{slug}/schemas` always inserts
-//! a new row; there is no update/PATCH endpoint for `proto_source`, full
-//! stop. `version` is one more than the integrator's current maximum (1 for a
-//! integrator's first publication). When there is a prior version, its
-//! `superseded_by` is set to the new version's id in the same transaction
-//! — the one, documented exception to "never edit a published row" (see
-//! `crates/protocol/src/integrator_schemas.rs`'s module doc comment): lineage
-//! metadata, not the published text itself. Both facts (the new row, and
-//! the prior row's new `superseded_by`) are captured by one
-//! `game_schema.published` event, so the indexer's projection
-//! (`crates/indexer/src/projections/integrator_schemas.rs`) can derive both
-//! writes by replaying that single event.
-//!
-//! **Durability.** Same outbox pattern (#71) every other write endpoint in
-//! this crate uses: the row insert(s) and the event enqueue happen in one
-//! transaction via `crate::outbox`.
-//!
-//! **Reads.** `GET /integrations/{slug}/schemas` (list, oldest first) and `GET
-//! /integrations/{slug}/schemas/{version}` (one version) are public and
-//! unauthenticated, same visibility level `integrators::get_integrator` and
-//! `achievements::list_achievement_definitions` already use — nothing
-//! about a published schema is sensitive.
+//! Integrator Space schema publication (issue #255, closing the decision
+//! made in #181) — an integrator publishing how its own data is
+//! structured, versioned and immutable once published. See
+//! `docs/architecture/integrator-space.md`'s "Today in the repo" for
+//! namespacing, the owning-integrator auth check, and the
+//! immutable-rows-plus-`superseded_by`-lineage write model.
 
 use std::collections::BTreeMap;
 

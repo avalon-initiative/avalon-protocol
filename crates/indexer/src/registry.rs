@@ -1,47 +1,8 @@
-//! The Integrator Registry's derived-metrics read model — issue #261, the first
-//! concrete slice of the epic-sized #89. See
-//! `docs/architecture/registry.md`.
-//!
-//! Composes two projections this crate already maintains
-//! (`projections::integrator_bindings`, `projections::attestations`) into the
-//! four metrics #261 scopes in: `players`, `total players ever`,
-//! `achievements issued`/`revoked`, and `unique achievement holders`. Every
-//! value carries its definition string and class label — the contract the
-//! whole registry model depends on
-//! (`docs/architecture/registry.md`: "every published metric carries
-//! its definition and a class label"), never a bare number.
-//!
-//! All four are `durable-derived`: computed purely from durable protocol
-//! events (bindings, achievement issue/revoke), never realtime and never
-//! self-reported. `players online now` (realtime — #78 says realtime
-//! numbers are never stored as durable metrics) and self-reported fields
-//! (genre, website) are explicitly deferred, not stubbed here.
-//!
-//! No composite score, no ranking — this module returns five independent
-//! labeled facts and nothing that combines them, matching #89's own
-//! invariant.
-//!
-//! **Minimum cohort size (issue #96).** A raw count is a stable pseudonym's
-//! cardinality, not anonymity — `unique_achievement_holders: 1` on an
-//! obscure achievement identifies a specific real person just as surely as
-//! a name would. [`coarsen`] is the single enforcement point every metric
-//! in [`compute_for_integrator`] passes through: a count at or above
-//! [`min_cohort`] ships exactly as computed (`exact: true`); a count below
-//! it is replaced with the floor itself and `exact: false`, so a caller can
-//! render "fewer than N" rather than a false-precision number. Zero is
-//! never coarsened — "nobody" identifies no one, and reporting a
-//! non-durable-derived-activity integrator's metrics as `0` (rather than
-//! withholding them) is this module's existing "absence means nothing
-//! happened yet" posture, unrelated to privacy. This is enforced once,
-//! centrally, here — never something `server`/`sdk`/the Hub have to
-//! remember to re-check, since they only ever see the already-coarsened
-//! value. There is currently exactly one caller of [`compute_for_integrator`]
-//! (`GET /integrations/{slug}/registry`, no filter parameters at all), so the
-//! "filter chain narrows a cohort below the floor" attack this ticket
-//! names has no live path yet — but [`coarsen`] checks the *final* computed
-//! count regardless of how many projections/filters fed into it, so a
-//! future filtered query composes into the same enforcement point rather
-//! than needing its own.
+//! The Integrator Registry's derived-metrics read model — issue #261,
+//! the first concrete slice of the epic-sized #89. See
+//! `docs/architecture/registry.md`'s "Today in the repo" for the metric
+//! definitions, why nothing is ranked/combined, and the `coarsen`/
+//! `min_cohort` privacy floor (#96) enforced centrally here.
 
 use serde::Serialize;
 use sqlx::PgPool;
