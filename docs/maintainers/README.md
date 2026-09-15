@@ -2,7 +2,8 @@
 
 Documentation for people maintaining or contributing to this repository
 itself — distinct from people building *on* Avalon (see
-[`../developers/`](../developers/)).
+[`../developers/`](../developers/)) and distinct from people hosting a
+node without contributing code (see [`../hosters/`](../hosters/)).
 
 ## Start here
 
@@ -58,15 +59,15 @@ setup, with what "it worked" looks like at each step.
 
 ## Hosting a node
 
-See [`hosting-quickstart.md`](hosting-quickstart.md) for the fastest path to
-a running node — `make stack-up`, no Rust/Node toolchain needed, just
-Docker.
-
-## Deploying beyond localhost
-
-See [`deployment.md`](deployment.md) for putting `avalon-server` behind TLS
-(required before any non-local deployment) — recommended reverse-proxy
-setup, example configs, and which existing env vars need production values.
+See [`../hosters/hosting-quickstart.md`](../hosters/hosting-quickstart.md)
+for the fastest path to a running node — `make stack-up`, no Rust/Node
+toolchain needed, just Docker — and
+[`../hosters/deployment.md`](../hosters/deployment.md) for putting
+`avalon-server` behind TLS (required before any non-local deployment),
+recommended reverse-proxy setup, example configs, and which existing env
+vars need production values. Written for anyone standing up a node, not
+just people contributing to this repository — see
+[`../hosters/README.md`](../hosters/README.md).
 
 If you're running a node that watches peers (`AVALON_MIRROR_PEERS` set) and
 its mirror-watcher reports equivocation, see

@@ -123,7 +123,7 @@ than left at their local-dev defaults:
 None of this is new configuration surface; it's the existing
 `AVALON_SERVER_ADDR`/`AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`/`AVALON_HUB_ORIGIN`
 variables from `.env.example` (see
-[`local-development.md`](local-development.md)) simply pointed at production
+[`../maintainers/local-development.md`](../maintainers/local-development.md)) simply pointed at production
 values instead of the local-dev ones.
 
 ## Today in the repo
