@@ -552,6 +552,25 @@ async function onToggleRecruiting(next: boolean) {
   }
 }
 
+// Issue #449: independent of recruiting — see Guild.public's own doc
+// comment server-side.
+const savingPublic = ref(false)
+const publicError = ref('')
+
+async function onTogglePublic(next: boolean) {
+  if (!session.token) return
+  publicError.value = ''
+  savingPublic.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, { public: next })
+    await refresh()
+  } catch (e) {
+    publicError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingPublic.value = false
+  }
+}
+
 const savingJoinPolicy = ref(false)
 const joinPolicyError = ref('')
 
@@ -1912,7 +1931,7 @@ const {
 
           <AvalonCard title="Recruiting">
             <p :class="styles.empty">
-              Recruiting guilds are discoverable on the "Discover" board:
+              Recruiting guilds are discoverable on the "Discover" board and accept join requests:
               {{ guild.recruiting ? 'yes' : 'no' }}
             </p>
             <AvalonButton
@@ -1921,6 +1940,21 @@ const {
               @click="onToggleRecruiting(!guild.recruiting)"
             />
             <p v-if="recruitingError" :class="styles.error">{{ recruitingError }}</p>
+          </AvalonCard>
+
+          <AvalonCard
+            title="Public"
+            subtitle="Separate from recruiting above: this makes your roster (and, once event visibility ships, your public events) visible to anyone signed in, whether or not you're actively recruiting."
+          >
+            <p :class="styles.empty">
+              Anyone signed in can see this guild's roster: {{ guild.public ? 'yes' : 'no' }}
+            </p>
+            <AvalonButton
+              :label="savingPublic ? 'Saving…' : guild.public ? 'Make private' : 'Make public'"
+              variant="secondary"
+              @click="onTogglePublic(!guild.public)"
+            />
+            <p v-if="publicError" :class="styles.error">{{ publicError }}</p>
           </AvalonCard>
 
           <AvalonCard

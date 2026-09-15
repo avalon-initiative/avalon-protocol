@@ -42,6 +42,16 @@ pub struct Guild {
     /// the discovery board (issue #154) — a real, queryable column, not
     /// derived from anything else.
     pub recruiting: bool,
+    /// Whether this guild is publicly viewable — its roster and (once
+    /// #448 lands) its public events are visible to any authenticated
+    /// identity, independent of whether it's currently [`Guild::recruiting`]
+    /// (issue #449, decided: these are separate concerns — a full guild may
+    /// still want a public presence, and a recruiting guild may want to
+    /// keep its roster private until someone actually applies). Before
+    /// #449, `recruiting` alone controlled roster visibility
+    /// (`crates/server/src/guilds.rs::list_members`); that override now
+    /// keys off `public` instead.
+    pub public: bool,
 }
 
 /// One entry in [`Guild::links`] (issue #153): a human label paired with the

@@ -464,6 +464,10 @@ export interface GuildResponse {
   icon: string | null
   links: GuildLink[]
   recruiting: boolean
+  // Issue #449. Independent of recruiting: gates roster (and, once event
+  // visibility lands, public event) exposure to any authenticated
+  // identity, regardless of recruiting status.
+  public: boolean
   // Issue #206. Whether the integrator affinity breakdown
   // (GET /guilds/{id}/integrator-breakdown) is shown on this guild's public
   // profile — a manage_guild holder can always fetch the breakdown
@@ -497,6 +501,8 @@ export interface UpdateGuildRequest {
   icon?: string
   links?: GuildLink[]
   recruiting?: boolean
+  // Issue #449. Omitted leaves it untouched. Independent of recruiting.
+  public?: boolean
   // Issue #206. Omitted leaves it untouched.
   game_breakdown_public?: boolean
   // "invite_only" or "open" — omitted leaves it untouched. "open" lets any

@@ -36,6 +36,7 @@ const guild = {
   icon: null,
   links: [],
   recruiting: false,
+  public: false,
   game_breakdown_public: false,
   favorite_games: [],
 }
@@ -403,5 +404,35 @@ describe('Guild', () => {
     await memberButton.trigger('click')
 
     expect(pushSpy).toHaveBeenCalledWith({ name: 'user-profile', params: { id: 'id-owner' } })
+  })
+
+  // Issue #449: recruiting and public are independent settings, each with
+  // its own toggle in the Settings tab.
+  it('toggles the Public setting independently of Recruiting', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const settingsTab = wrapper.findAll('button').find((b) => b.text() === 'Settings')!
+    await settingsTab.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain("Anyone signed in can see this guild's roster: no")
+
+    const makePublicButton = wrapper.findAll('button').find((b) => b.text() === 'Make public')!
+    await makePublicButton.trigger('click')
+    await flushPromises()
+
+    const patchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      const body = (init as RequestInit | undefined)?.body
+      return String(url).includes('/guilds/g1') && method === 'PATCH' && String(body).includes('"public":true')
+    })
+    expect(patchCall).toBeTruthy()
   })
 })
