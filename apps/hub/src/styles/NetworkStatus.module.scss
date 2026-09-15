@@ -119,6 +119,11 @@
   border: 1px solid var(--av-color-border);
 }
 
+.knownEnvironment.int {
+  color: var(--av-color-accent-tertiary);
+  border: 1px solid var(--av-color-accent-tertiary);
+}
+
 .refresh {
   align-self: flex-start;
   border: 1px solid var(--av-color-border);

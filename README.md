@@ -163,7 +163,13 @@ a template: a real, freely-generated Ed25519 key with no server behind it,
 checked in so the pinning mechanism is exercised end to end rather than left
 as an unfilled stub. Adding a real network is a normal reviewed PR against
 `docs/trusted-networks.json`: append its `network_id` and the actual hex from
-that deployment's `AVALON_SETTLEMENT_VERIFY_KEY` (see `.env.example`).
+that deployment's `AVALON_SETTLEMENT_VERIFY_KEY` (see `.env.example`). Three
+deployment tiers are supported — `avalon-dev-<name>` (single-node),
+`avalon-int-<name>` (a 1-5 node interconnected test bed for verifying changes
+integrate before mainnet), and `avalon-mainnet-N` (the real, independently
+growing/shrinking validator set) — see
+[`docs/architecture/network-trust-anchors.md`](docs/architecture/network-trust-anchors.md#the-trust-anchor-list)
+for what each tier's `environment` value means.
 
 Avalon Hub bundles this same list at build time and always shows which
 pinned network the current session is connected to, flagging a mismatch or

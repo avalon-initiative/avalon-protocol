@@ -23,8 +23,10 @@ export interface TrustAnchorEntry {
   // Which tier this deployment is: 'local-dev' (no real deployment, a
   // freely-generated key checked in to exercise the mechanism end to end —
   // formerly the boolean `placeholder` flag), 'dev' (a real but non-production
-  // deployment), or 'prod' (a real mainnet deployment).
-  environment: 'local-dev' | 'dev' | 'prod'
+  // single-node deployment), 'int' (a real, non-production multi-node
+  // deployment used to test that changes actually integrate across nodes),
+  // or 'prod' (a real mainnet deployment).
+  environment: 'local-dev' | 'dev' | 'int' | 'prod'
   notes?: string
 }
 
