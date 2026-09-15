@@ -270,6 +270,8 @@ struct EventResponse {
     created_by: Uuid,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    #[serde(default)]
+    public: bool,
 }
 
 impl From<EventResponse> for GuildEvent {
@@ -284,6 +286,7 @@ impl From<EventResponse> for GuildEvent {
             ends_at: response.ends_at,
             created_by: IdentityId(response.created_by),
             created_at: response.created_at,
+            public: response.public,
         }
     }
 }

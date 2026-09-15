@@ -107,6 +107,7 @@ pub(crate) struct EventRow {
     pub ends_at: Option<OffsetDateTime>,
     pub created_by: Uuid,
     pub created_at: OffsetDateTime,
+    pub public: bool,
 }
 
 /// `pub(crate)` re-export of [`fetch_event`]'s existence check, for
@@ -129,8 +130,8 @@ async fn fetch_event(
     event_id: Uuid,
 ) -> Result<EventRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, guild_id, channel_id, title, description, starts_at, ends_at, \
-         created_by, created_at FROM guild_events WHERE id = $1 AND guild_id = $2",
+        r#"SELECT id, guild_id, channel_id, title, description, starts_at, ends_at,
+         created_by, created_at, "public" FROM guild_events WHERE id = $1 AND guild_id = $2"#,
     )
     .bind(event_id)
     .bind(guild_id)
@@ -147,6 +148,7 @@ async fn fetch_event(
         ends_at: row.try_get("ends_at")?,
         created_by: row.try_get("created_by")?,
         created_at: row.try_get("created_at")?,
+        public: row.try_get("public")?,
     })
 }
 
@@ -172,6 +174,9 @@ pub struct EventResponse {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     pub rsvp_counts: RsvpCounts,
+    /// Issue #448. `false` (the default) keeps this event member-only even
+    /// in a [`crate::guilds::GuildResponse::public`] guild.
+    pub public: bool,
 }
 
 async fn rsvp_counts(state: &AppState, event_id: Uuid) -> Result<RsvpCounts, AppError> {
@@ -212,6 +217,7 @@ async fn event_response(state: &AppState, row: EventRow) -> Result<EventResponse
         created_by: row.created_by,
         created_at: row.created_at,
         rsvp_counts,
+        public: row.public,
     })
 }
 
@@ -227,8 +233,15 @@ pub struct ListEventsQuery {
     pub to: Option<OffsetDateTime>,
 }
 
-/// `GET /guilds/{id}/events?from=&to=` — current members only. Optionally
-/// filtered to a `starts_at` date range; omitted bounds are unbounded.
+/// `GET /guilds/{id}/events?from=&to=` — current members see every event.
+/// A non-member of a [`crate::guilds::GuildResponse::public`] guild (issue
+/// #448) sees only `public` events instead of being 403'd outright — the
+/// same "guild-level flag widens exposure of an otherwise-gated resource"
+/// shape `list_members`'s roster override already established for #449,
+/// scoped per-event here since (unlike a roster) some events genuinely
+/// need to stay internal even in a public guild. A non-member of a
+/// non-public guild is still 403'd, unchanged. Optionally filtered to a
+/// `starts_at` date range; omitted bounds are unbounded.
 pub async fn list_events(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -236,19 +249,24 @@ pub async fn list_events(
     Query(query): Query<ListEventsQuery>,
 ) -> Result<Json<Vec<EventResponse>>, AppError> {
     let actor = authenticate(&state, &headers).await?;
-    require_member(&state, guild_id, actor).await?;
+    let is_member = crate::channels::is_guild_member(&state, guild_id, actor).await?;
+    if !is_member && !crate::guilds::is_guild_public(&state, guild_id).await? {
+        return Err(AppError::NotGuildMember);
+    }
 
     let rows = sqlx::query(
-        "SELECT id, guild_id, channel_id, title, description, starts_at, ends_at, \
-         created_by, created_at FROM guild_events \
-         WHERE guild_id = $1 \
-         AND ($2::timestamptz IS NULL OR starts_at >= $2) \
-         AND ($3::timestamptz IS NULL OR starts_at <= $3) \
-         ORDER BY starts_at",
+        r#"SELECT id, guild_id, channel_id, title, description, starts_at, ends_at,
+         created_by, created_at, "public" FROM guild_events
+         WHERE guild_id = $1
+         AND ($2::timestamptz IS NULL OR starts_at >= $2)
+         AND ($3::timestamptz IS NULL OR starts_at <= $3)
+         AND ($4 OR "public" = true)
+         ORDER BY starts_at"#,
     )
     .bind(guild_id)
     .bind(query.from)
     .bind(query.to)
+    .bind(is_member)
     .fetch_all(&state.pool)
     .await?;
 
@@ -264,6 +282,7 @@ pub async fn list_events(
             ends_at: row.try_get("ends_at")?,
             created_by: row.try_get("created_by")?,
             created_at: row.try_get("created_at")?,
+            public: row.try_get("public")?,
         };
         events.push(event_response(&state, event).await?);
     }
@@ -280,6 +299,12 @@ pub struct CreateEventRequest {
     #[serde(default)]
     #[serde(with = "time::serde::rfc3339::option")]
     pub ends_at: Option<OffsetDateTime>,
+    /// Issue #448. Omitted defaults to `false` — member-only, same as
+    /// every event before this field existed. Gated by the same
+    /// `event_manage` check as the rest of this request, no new
+    /// permission needed.
+    #[serde(default)]
+    pub public: bool,
 }
 
 /// `POST /guilds/{id}/events` — requires `event_manage`. No outbox
@@ -306,8 +331,8 @@ pub async fn create_event(
     let event_id = Uuid::new_v4();
     let created_at = OffsetDateTime::now_utc();
     sqlx::query(
-        "INSERT INTO guild_events (id, guild_id, channel_id, title, description, starts_at, \
-         ends_at, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        r#"INSERT INTO guild_events (id, guild_id, channel_id, title, description, starts_at,
+         ends_at, created_by, created_at, "public") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
     )
     .bind(event_id)
     .bind(guild_id)
@@ -318,6 +343,7 @@ pub async fn create_event(
     .bind(body.ends_at)
     .bind(actor)
     .bind(created_at)
+    .bind(body.public)
     .execute(&state.pool)
     .await?;
 
@@ -333,6 +359,7 @@ pub async fn create_event(
             ends_at: body.ends_at,
             created_by: actor,
             created_at,
+            public: body.public,
         },
     )
     .await
@@ -349,6 +376,10 @@ pub struct UpdateEventRequest {
     #[serde(default)]
     #[serde(with = "time::serde::rfc3339::option")]
     pub ends_at: Option<OffsetDateTime>,
+    /// Issue #448. Full replace like the rest of this request — always
+    /// resent, not three-state.
+    #[serde(default)]
+    pub public: bool,
 }
 
 /// `PATCH /guilds/{id}/events/{eid}` — reschedule/edit. Requires
@@ -373,8 +404,8 @@ pub async fn update_event(
 
     let title = body.title.trim().to_string();
     sqlx::query(
-        "UPDATE guild_events SET channel_id = $3, title = $4, description = $5, \
-         starts_at = $6, ends_at = $7 WHERE id = $1 AND guild_id = $2",
+        r#"UPDATE guild_events SET channel_id = $3, title = $4, description = $5,
+         starts_at = $6, ends_at = $7, "public" = $8 WHERE id = $1 AND guild_id = $2"#,
     )
     .bind(event_id)
     .bind(guild_id)
@@ -383,6 +414,7 @@ pub async fn update_event(
     .bind(&body.description)
     .bind(body.starts_at)
     .bind(body.ends_at)
+    .bind(body.public)
     .execute(&state.pool)
     .await?;
 
@@ -398,6 +430,7 @@ pub async fn update_event(
             ends_at: body.ends_at,
             created_by: existing.created_by,
             created_at: existing.created_at,
+            public: body.public,
         },
     )
     .await

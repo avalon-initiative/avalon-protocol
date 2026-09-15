@@ -379,6 +379,52 @@ describe('Guild', () => {
     expect(tabLabels).toContain('Members')
   })
 
+  // Issue #448: a non-member of a `public` guild (independent of
+  // recruiting, #449) sees a read-only Events tab scoped to that guild's
+  // public events, with no RSVP controls.
+  it('shows only public events, read-only, to a non-member of a public guild', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath({
+      ...baseRoutes(),
+      '/me': { ...profile, identity_id: 'id-outsider' },
+      '/guilds/g1': { ...guild, public: true },
+      '/guilds/g1/members': [],
+      '/guilds/g1/events': [
+        {
+          id: 'e1',
+          guild_id: 'g1',
+          channel_id: null,
+          title: 'Community mixer',
+          description: null,
+          starts_at: '2026-09-20T20:00:00Z',
+          ends_at: null,
+          created_by: 'id-owner',
+          created_at: 'now',
+          rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
+          public: true,
+        },
+      ],
+    })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const tabLabels = wrapper.findAll('button').map((b) => b.text())
+    expect(tabLabels).toContain('Events')
+    expect(tabLabels).not.toContain('Channels')
+
+    const eventsTab = wrapper.findAll('button').find((b) => b.text() === 'Events')!
+    await eventsTab.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Community mixer')
+    expect(wrapper.text()).toContain('Join to see everything and RSVP')
+    expect(wrapper.findAll('button').some((b) => b.text() === 'Going')).toBe(false)
+  })
+
   // Issue #393: clicking a member's row opens their read-only profile card.
   // `router.push` is intercepted (rather than letting the navigation
   // actually complete) since this test mounts Guild.vue directly rather
