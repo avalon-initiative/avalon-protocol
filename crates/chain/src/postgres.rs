@@ -1,56 +1,10 @@
-//! Postgres-backed `SettlementProvider` — milestone 1's implementation.
-//!
-//! Two layered tamper-evidence structures, not one (issue #210, implementing
-//! #39/#40's decided design):
-//!
-//! - The original sequential hash chain: each entry commits to the hash of
-//!   the entry before it (`prev_hash`) plus its own content (`entry_hash`).
-//!   Untouched by #210 — still the cheap, no-network, O(1)-per-link check
-//!   `avalon inspect-ledger` walks end-to-end via `list_entries`.
-//! - A real RFC 6962 Merkle tree (`crate::merkle`) over the whole ledger's
-//!   `entry_hash` values, ordered by `seq`. `ledger_batches.batch_root` is
-//!   that tree's Merkle Tree Hash (MTH). A Signed Tree Head (`crate::sth`)
-//!   is produced and stored (`signed_tree_heads`) alongside every batch, in
-//!   the same transaction — STH-only Ed25519 signing per #39, no per-entry
-//!   signatures.
-//!
-//! **`tree_size` is a leaf *count*, never `ledger_entries.seq`'s raw
-//! value.** `seq` is `GENERATED ALWAYS AS IDENTITY` (see
-//! `crates/server/db/migrations/0002_ledger`) — Postgres identity/sequence
-//! values are **not** transactional: a batch commit that fails partway
-//! through and rolls back still permanently burns whatever `seq` values it
-//! had already allocated, so `seq` can and eventually will have gaps once
-//! the outbox worker (`crates/server/src/outbox.rs`) retries a failed
-//! commit. Treating `last_seq` as if it always equals the true number of
-//! committed entries silently corrupts every `tree_size` recorded from that
-//! point on. `commit` therefore derives `tree_size` from the *actual number
-//! of rows fetched* when building the leaf list, never from `last_seq`
-//! directly, and any code translating a `seq` value to a Merkle leaf index
-//! (issue #211's proof endpoints) must rank/count rather than compute
-//! `seq - 1`.
-//!
-//! Uses the same `PgPool` as `avalon-server` rather than its own connection —
-//! milestone 1 has exactly one shared database (see
-//! `crates/server/db/migrations/0002_ledger`).
-//!
-//! Uses runtime-checked `sqlx::query` (not the `query!` macro `avalon-server`
-//! uses elsewhere) on purpose — this sandbox has no reachable live Postgres,
-//! and the macro's compile-time schema check would need one.
-//!
-//! Batching (issue #38): one protocol event is never one settlement action.
-//! `commit` groups every event in an `EventBatch` under one `batch_id`,
-//! inserted in a single transaction; `ledger_entries` stay hash-chained
-//! across batch boundaries (the chain never resets per batch), and
-//! `ledger_batches` holds one row per batch (`first_seq`, `last_seq`,
-//! `batch_root`, `committed_at`).
-//!
-//! Node-tiered retention (issue #208, `crate::retention`): `ledger_entries.payload`
-//! is nullable and may be pruned (`prune_payloads_older_than`) on a
-//! hot-tier node with pruning explicitly enabled — every other column,
-//! including `entry_hash`/`prev_hash`/`seq`, is untouched, so a pruned
-//! row's position in both tamper-evidence structures above survives
-//! intact. `list_entries` and `verify` both treat a missing payload as
-//! "not independently re-verifiable from here," never as "tampered."
+//! Postgres-backed `SettlementProvider` — milestone 1's implementation
+//! (issue #210, implementing #39/#40's decided design): a sequential hash
+//! chain plus a real RFC 6962 Merkle tree with signed tree heads. See
+//! `docs/architecture/settlement.md` and `settlement-implementation-notes.md`
+//! for the two tamper-evidence structures, why `tree_size` is a derived
+//! leaf count rather than raw `seq`, batching (#38), and node-tiered
+//! payload retention (#208).
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
@@ -607,30 +561,12 @@ impl PostgresSettlementProvider {
     }
 
     /// Issue #208's settlement-state checkpoint: a thin, purely-naming
-    /// wrapper over [`Self::latest_signed_tree_head`]. #180 asked for "a
-    /// periodic durable-state checkpoint (an indexer/projection snapshot
-    /// at a known log height) so a hot-tier node — or any new node — can
-    /// bootstrap from 'latest trusted snapshot + subsequent history within
-    /// its configured window' instead of full replay from genesis."
-    ///
-    /// Scoped narrowly to the settlement/Merkle-tree state on purpose (see
-    /// `docs/architecture/nodes.md`'s retention-tier section and this
-    /// ticket's own scope guardrail): the latest `SignedTreeHead` already
-    /// *is* exactly that checkpoint for the commitment layer —
-    /// `(tree_size, root_hash)` at a known, signed log height, produced
-    /// automatically every batch commit (issue #210), no new storage
-    /// needed. A node bootstrapping "latest checkpoint + subsequent
-    /// history within its window" trusts this `SignedTreeHead` (verified
-    /// against `AVALON_SETTLEMENT_VERIFY_KEY`) as the root for everything
-    /// at or before `tree_size`, then only needs to hold/replay
-    /// `ledger_entries` newer than its configured retention window itself.
-    ///
-    /// **Not covered**: an indexer/projection *read-model* snapshot (the
-    /// other half of #180's ask) — `crates/indexer` has real projections
-    /// now (issue #42), but no rebuild-speed work or snapshot format for
-    /// them exists yet (issue #43 remains full-replay-from-genesis). That
-    /// stays an explicit follow-up, not silently invented here — see
-    /// `docs/architecture/disaster-recovery.md`.
+    /// wrapper over [`Self::latest_signed_tree_head`], closing #180's
+    /// "periodic durable-state checkpoint" ask for the commitment layer
+    /// only — not the indexer/projection read-model snapshot half (still
+    /// open, issue #43). See `docs/architecture/nodes.md`'s
+    /// "Settlement-state checkpoint" section for why the latest
+    /// `SignedTreeHead` already satisfies this with no new storage.
     pub async fn checkpoint(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
         self.latest_signed_tree_head().await
     }
@@ -1163,34 +1099,11 @@ impl SettlementProvider for PostgresSettlementProvider {
         })
     }
 
-    /// Two independent checks, both must pass (issue #210 — the Merkle
-    /// check is a layered addition, the hash-chain check below is
-    /// unchanged from #38 in spirit, just no longer compared against
-    /// `commitment.proof` since that now carries a ledger-wide Merkle root
-    /// rather than this batch's own chain tip):
-    ///
-    /// 1. **Hash-chain check.** Replay this batch's own entries' stored
-    ///    content across the sequential hash chain, entry by entry — link
-    ///    (`prev_hash == expected_prev`) always checked, content checked
-    ///    whenever the payload is present. Catches content tampering that
-    ///    left `entry_hash` stale relative to a mutated payload/kind/
-    ///    issuer/etc (same guarantee #38 always had; only the comparison
-    ///    target changed). Issue #208: this is deliberately *per entry*,
-    ///    not an all-or-nothing batch replay — a hot-tier node may have
-    ///    pruned some entries' payloads, and content simply can't be
-    ///    independently re-verified for those (not evidence of tampering,
-    ///    an expected local-retention outcome), but that must never widen
-    ///    into skipping the check for the batch's *other*, still-complete
-    ///    entries. A batch with one pruned entry and one genuinely tampered
-    ///    (still-payload-present) entry must still fail this check.
-    /// 2. **Merkle check.** Recompute the RFC 6962 MTH fresh from every
-    ///    `entry_hash` in the ledger up to this batch's `last_seq` and
-    ///    compare against `commitment.proof` — catches tampering with the
-    ///    ledger's *structure* (an `entry_hash` value itself, entry
-    ///    ordering, a deleted row) anywhere up to this batch, not just
-    ///    within it, which a batch-local chain replay alone can't see.
-    ///    Built entirely from `entry_hash` values, never `payload`, so
-    ///    pruning never affects this check either way.
+    /// Two independent checks, both must pass: a per-entry hash-chain
+    /// replay, and a from-scratch RFC 6962 Merkle recompute against
+    /// `commitment.proof`. See `docs/architecture/settlement-implementation-notes.md`'s
+    /// "`verify`'s two independent checks" bullet for why both exist and
+    /// how pruned payloads (#208) interact with each.
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
         let rows = sqlx::query(
             r#"

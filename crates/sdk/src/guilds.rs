@@ -1,59 +1,9 @@
 //! Guild membership, rosters, channels, and chat — capability-gated
-//! reads/writes on [`crate::Session`] (issue #23), built against the real
-//! `avalon-server` guild endpoints from #20/#21/#22.
-//!
-//! Every method here calls `Session::require` with its exact
-//! capability *before* making any request, same convention `social.rs`
-//! (#17) already established — a `Session` with no grants rejects without
-//! ever touching the network. The server enforces the same capabilities
-//! again once #26–#28 land; this check is a convenience for integrator
-//! developers, not the security boundary. There is no `guilds.*` blanket
-//! check anywhere: reads use `guilds.read`, chat uses `guilds.chat`.
-//!
-//! The SDK never lets an integrator act with guild authority — creating
-//! guilds, inviting, kicking, changing roles, and managing channels all
-//! stay identity-authority-only actions taken through the Hub, not exposed
-//! here. `Session::guild(id).channel(cid).send(body)` posts *as the
-//! identity*, never as the integrator.
-//!
-//! ## Builder handles, not a flat method list
-//!
-//! [`Session::guild`] returns a [`GuildHandle`] (borrows the `Session`,
-//! closes over the guild id) and [`GuildHandle::channel`] returns a
-//! [`ChannelHandle`] the same way — thin ergonomic wrappers over HTTP calls,
-//! not builders that accumulate optional fields.
-//!
-//! ## `roster()` returns a view type, not `GuildMember` directly — deviates
-//! from the ticket's literal signature
-//!
-//! The ticket's design section writes `roster() -> Result<Vec<GuildMember>,
-//! SdkError>`, then separately asks for presence to be merged onto roster
-//! entries "the exact same pattern `social.rs`'s `Session::friends()`
-//! already uses". `friends()` doesn't return the raw protocol
-//! `Friendship` for exactly this reason — it returns the SDK-side `Friend`
-//! view type, because `Friendship` has nowhere to put a `Presence`.
-//! `avalon_protocol::guilds::GuildMember` has the same shape problem, so
-//! `roster()` returns [`GuildRosterMember`] (a thin `{ member, presence }`
-//! wrapper) instead, matching `friends()`'s actual precedent over the
-//! ticket's literal type signature.
-//!
-//! ## `roster()`, `channels()`, and `messages()` have no visibility
-//! scoping yet
-//!
-//! Same #87 gap `social.rs`'s `presence_of` already documents: the server
-//! doesn't scope any of these to what the caller is actually allowed to
-//! see, so these methods return exactly what the server returns. Presence
-//! embedded on a roster entry is additionally gated client-side on
-//! `presence.read` (see `merge_roster_member`), same as `friends()`.
-//!
-//! ## `GuildChannel.archived` is dropped, not modeled
-//!
-//! `GET /guilds/{id}/channels` (`crates/server/src/channels.rs`) returns an
-//! `archived: bool` the protocol `GuildChannel` type has no field for.
-//! [`GuildHandle::channels`] surfaces the protocol type unchanged per the ticket
-//! ("protocol types cross the boundary unchanged"), so archived channels
-//! are still listed but indistinguishable from active ones through this
-//! method today — a real gap, not silently worked around.
+//! reads/writes on [`crate::Session`] (issue #23). See
+//! `docs/architecture/sdk.md`'s "Today in the repo" for the
+//! `GuildRosterMember` view-type rationale, why the SDK never exposes
+//! guild-authority actions, and known gaps (#87 visibility scoping,
+//! dropped `archived` field).
 
 use std::collections::HashMap;
 

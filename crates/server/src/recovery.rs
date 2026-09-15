@@ -1,61 +1,9 @@
 //! Social recovery via an M-of-N set of trusted guardians (issue #201) —
-//! the real answer issue #99 decided on, for the case #200's multi-passkey
-//! registration cannot cover: every registered device is lost at once.
-//!
-//! Three phases, each its own set of endpoints:
-//!
-//!   1. **Configuration** (session-authenticated). A user designates a
-//!      guardian set drawn from their friends (`friends::friend_partners`)
-//!      and a threshold M-of-N. Changing this requires the identity's
-//!      *current* valid session — never reachable by an attacker who has
-//!      compromised only a not-yet-valid new device, satisfying the
-//!      ticket's "changing the guardian set requires the current set of
-//!      valid credentials" invariant by construction (every route here
-//!      that mutates the set calls `handlers::authenticate` first).
-//!   2. **Recovery request** (necessarily *not* session-authenticated —
-//!      the whole point is the caller has no valid session for the
-//!      identity being recovered). Mirrors `handlers::register_start`/
-//!      `register_finish`'s two-step WebAuthn ceremony shape: `start`
-//!      begins passkey registration for the new device, `finish` completes
-//!      it and creates the `recovery_requests` row. Abuse-resistance is
-//!      layered rather than a single check: the identity id must name a
-//!      real identity with guardians actually configured (an unconfigured
-//!      identity can never satisfy any M, so there is nothing to spam
-//!      toward), at most one *active* request may exist per identity at a
-//!      time (`recovery_requests_one_active_per_identity`, so a flood of
-//!      attempts against one identity can never pile up — the first one
-//!      blocks the rest until it resolves), and a rolling-window count
-//!      caps how many requests any identity can have *initiated against
-//!      it* recently (`guard_rate_limit`) — cheaper than a full WebAuthn
-//!      ceremony to check, so it's applied before `start` does any
-//!      ceremony work, not just at `finish`.
-//!   3. **Approval, veto, and finalize.** Each guardian approves
-//!      independently (`approve_request`, session-authenticated, caller
-//!      must be a current guardian). Once approvals reach the threshold
-//!      *captured at request time* (`threshold_at_request` — see
-//!      `finish_request`'s doc comment on why), the mandatory public
-//!      time-delay window opens. The original owner (if they still have
-//!      any session access) or any current guardian may cancel/veto at any
-//!      point before finalization (`cancel_request`). `finalize_request`
-//!      is deliberately public/unauthenticated and idempotent — it does
-//!      nothing but check "has the delay elapsed with no veto," which by
-//!      design requires no one's authority to observe, and only ever
-//!      *adds* the pending passkey as a new, ordinary `identity_keys` row
-//!      (the exact mechanism #200 already established), never touching or
-//!      revoking anything the real owner might still hold.
-//!
-//! The node operator has no endpoint anywhere in this module that bypasses
-//! guardian approval or the delay — `finalize_request` only ever acts on
-//! what `recovery_requests`/`recovery_approvals` already durably recorded.
-//!
-//! Every phase-transition is durable history via the outbox, same pattern
-//! `friends.rs`/`devices.rs` established: `identity.recovery_configured`,
-//! `identity.recovery_requested`, `identity.recovery_approved`,
-//! `identity.recovery_cancelled`, `identity.recovered`. None of these are
-//! individually signed (no general per-event signing ceremony exists yet
-//! beyond `identity.created` — same "network as signer" milestone-1
-//! stand-in `protocol-events.md` documents for every other emitter in this
-//! crate).
+//! the answer #99 decided on for losing every registered device at once.
+//! See `docs/architecture/identity.md`'s "Social recovery via M-of-N
+//! guardians" and "Today in the repo" sections for the full
+//! configure/request/approve/finalize state machine and its abuse-
+//! resistance measures.
 
 use std::collections::HashSet;
 

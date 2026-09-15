@@ -1,52 +1,9 @@
 //! Direct/small-group conversations — capability-gated reads/writes on
-//! [`crate::Session`] (issue #104), wired to the real `avalon-server`
-//! conversation endpoints from #102 (`crates/server/src/conversations.rs`).
-//!
-//! Every method here calls `Session::require` with its exact
-//! capability *before* making any request — same convention `social.rs`
-//! (#17) and `guilds.rs` (#23) already established. The server enforces the
-//! same capabilities again once #26–#28 land; this check is a convenience
-//! for integrator developers, not the security boundary.
-//!
-//! ## Two capabilities, split the same way `achievements()`/
-//! `issue_achievement()` split theirs
-//!
-//! `messages.read` covers discovering and reading conversations an identity is
-//! already in: [`Session::conversations`] (`GET /conversations`) and
-//! [`ConversationHandle::messages`] (`GET /conversations/{id}/messages`).
-//! `messages.send` covers *starting* a conversation and posting into one:
-//! [`Session::dm`] (`POST /conversations`) and [`ConversationHandle::send`]
-//! (`POST /conversations/{id}/messages`).
-//!
-//! `dm(other_identity_id)` is gated on `messages.send`, not `messages.read`,
-//! even though the server's `POST /conversations` also returns the full
-//! participant list: the only thing a caller can *do* with a brand-new
-//! conversation is start it, and an integrator that only has `messages.send`
-//! (e.g. "let an identity reply to a support conversation" without being
-//! able to browse the identity's whole DM list) should still be able to
-//! open one. A `messages.read`-only integrator isn't left without a way to
-//! reach a specific conversation's messages either — it can still learn
-//! conversation ids from
-//! [`Session::conversations`] and open a handle to any of them via
-//! [`Session::conversation`], which — like [`crate::guilds::GuildHandle`] —
-//! is a plain, ungated local constructor that makes no request of its own;
-//! only the methods called through it touch the network.
-//!
-//! ## Shared with the deferred submission engine (#111)
-//!
-//! `crate::submission::HttpTransport` submits queued `chat.message` journal
-//! entries through [`Session::conversation`]/`ConversationHandle::send_with_client_entry_id`
-//! rather than building its own request — one request-building path, so a
-//! capability check (or any other classification) behaves the same whether
-//! an integrator calls [`ConversationHandle::send`] directly or drains a
-//! [`crate::sync_journal::SyncJournal`] through the submission engine.
-//!
-//! ## No conversation content is cached
-//!
-//! Every method here makes a fresh request; nothing is stored on
-//! [`crate::Session`] beyond the bearer token and server URL it already
-//! carries. Matches this issue's own invariant and the same posture
-//! `social.rs`/`guilds.rs` already take.
+//! [`crate::Session`] (issue #104), wired to `crates/server/src/conversations.rs`
+//! (#102). See `docs/architecture/sdk.md`'s "Today in the repo" for the
+//! `messages.read`/`messages.send` capability split and why `dm()` is
+//! gated on `messages.send`; `docs/architecture/synchronization.md` for
+//! how the deferred submission engine (#111) shares this same request path.
 
 use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Capability;

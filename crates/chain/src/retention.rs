@@ -1,54 +1,8 @@
 //! Node-tiered durable history retention — issue #208, implementing #180's
-//! decision (see `docs/architecture/nodes.md`'s "Settlement retention
-//! tiers" section for the decided shape).
-//!
-//! **Settlement commitment vs. durable event storage are separate
-//! retention problems.** The hash-chained/Merkle-committed log itself
-//! (`ledger_entries.entry_hash`/`prev_hash`/`seq`, `ledger_batches`,
-//! `signed_tree_heads`) is never affected by anything in this module — it
-//! stays small and permanent on every node regardless of retention tier.
-//! What this module tiers is the raw signed event *body*
-//! (`ledger_entries.payload`), which is what actually grows without bound
-//! (see `docs/architecture/scalability.md`'s ~3.6 TB/year number).
-//!
-//! Two tiers, per #180:
-//!
-//! - **Full / archive** — retains every payload, forever. The default —
-//!   pruning is opt-in, never assumed.
-//! - **Hot** — retains payloads only for a configurable recent window
-//!   (`AVALON_RETENTION_HOT_WINDOW_DAYS`), *if* pruning is separately and
-//!   explicitly enabled (`AVALON_RETENTION_PRUNING_ENABLED=true`). A
-//!   hot-tier node with pruning left disabled behaves exactly like a full
-//!   node — it just declares an intent to prune later, once the operator
-//!   turns the flag on.
-//!
-//! **This milestone-1 reality check matters and is not glossed over**: per
-//! `docs/architecture/nodes.md` and `docs/architecture/settlement.md`,
-//! there is currently exactly one settlement node/database. #180's
-//! invariant — a hot-tier node may only discard payloads the network still
-//! guarantees availability for elsewhere (an archive-tier mirror, or a
-//! minimum archive-replication factor) — has no real multi-node mirror
-//! network to be gated against yet. Enabling `AVALON_RETENTION_PRUNING_ENABLED`
-//! today, against this single database, means **permanent, real data loss**
-//! for anything outside the configured window: nothing else on the network
-//! retains a second copy. The mechanism here (config, pruning logic, safety
-//! checks around what never gets touched) is built correctly and is meant
-//! to be genuinely safe *once* an archive-tier mirror actually exists; the
-//! network-wide availability guarantee it should be gated on does not yet
-//! exist structurally, so this stays an explicit, off-by-default opt-in an
-//! operator must deliberately flip, with this warning, not a
-//! quietly-defaulted convenience.
-//!
-//! Only `payload` is ever touched by pruning — never `entry_hash`,
-//! `prev_hash`, `seq`, `kind`, `issuer`, `subject`, `event_timestamp`,
-//! `version`, or `batch_id`. The Merkle tree (`crate::merkle`) is built
-//! entirely from `entry_hash` values, never `payload` (issue #210), so a
-//! pruned row stays fully present in, and verifiable against, the
-//! commitment structure — only its content becomes locally unavailable
-//! from *this* node. See [`crate::postgres::PostgresSettlementProvider::prune_payloads_older_than`]
-//! for the actual `UPDATE`, and its `verify`/`list_entries` for how a
-//! pruned row's now-missing content is handled without producing a false
-//! "broken chain" report.
+//! decision. See `docs/architecture/nodes.md`'s "Settlement retention
+//! tiers" section for the two-tier design, the env config, and the
+//! honest milestone-1 caveat that pruning today means real permanent
+//! data loss since no archive-tier mirror network exists yet.
 
 use time::{Duration, OffsetDateTime};
 

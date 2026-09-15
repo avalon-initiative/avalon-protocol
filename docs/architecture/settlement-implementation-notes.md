@@ -180,9 +180,19 @@ the actual code ever disagree, the code is right and this doc is stale.
     `network_id`/`tree_size` — from other peers, and from this node's own
     signed history if it has one (source tag `self:signed-history`). A
     `root_hash` mismatch is durably recorded in `equivocation_findings`
-    *and* logged at what would be error level if this repo had structured
-    logging (issue #265, tracked separately) — both, not just one. This
-    ticket owns **detection only**: there is no automatic "pick the
+    *and* logged via a structured `tracing::error!` — belt and suspenders,
+    matching how `outbox::drain_once` already treats its own "must never
+    fail silently" case: the durable row is what a human or monitoring
+    system checks after the fact, the log line is what an operator watching
+    the process (or a log aggregator it forwards to via #265's
+    `AVALON_LOG_FORMAT=json`) sees the moment it happens. The log line
+    carries a stable `event` field (`"equivocation_detected"` /
+    `"equivocation_resolved"`) plus `network_id`/`tree_size`/the two
+    disputed sources and root hashes as their own structured fields rather
+    than folded into the message text, so an aggregator can alert on
+    `event = "equivocation_detected"` directly without parsing message
+    strings — no alerting/paging integration ships in this repo itself
+    (issue #315). This ticket owns **detection only**: there is no automatic "pick the
     correct STH" resolution logic anywhere in this path, deliberately —
     both STHs in an equivocation are validly signed, so there is no
     automatic correct answer; resolving a real equivocation is a human
@@ -290,6 +300,21 @@ the actual code ever disagree, the code is right and this doc is stale.
   cross this document's "settlement is not the general-purpose query
   database" boundary. Revisit once the indexer (#42/#43) is real — see
   [query-and-indexing.md](./query-and-indexing.md).
+- **`verify`'s two independent checks (#210), both must pass.** (1) A
+  hash-chain check: replay a batch's own entries' stored content across the
+  sequential hash chain, entry by entry (`prev_hash == expected_prev`
+  always checked, content checked whenever the payload is present) —
+  catches content tampering that left `entry_hash` stale. This is
+  deliberately per-entry, not all-or-nothing: a hot-tier node may have
+  pruned some entries' payloads (not evidence of tampering), but that never
+  widens into skipping the check for the batch's other, still-complete
+  entries — a batch with one pruned entry and one genuinely tampered entry
+  must still fail. (2) A Merkle check: recompute the RFC 6962 MTH fresh
+  from every `entry_hash` up to this batch's `last_seq` and compare against
+  `commitment.proof` — catches structural tampering (an `entry_hash` value
+  itself, entry ordering, a deleted row) anywhere up to this batch, which a
+  batch-local chain replay alone can't see. Built entirely from
+  `entry_hash`, never `payload`, so pruning never affects it either way.
 - **Node-tiered durable history retention, implemented (#208, closing
   #180's decision).** Settlement commitment and durable event storage are
   separate retention problems: everything above this bullet — the hash

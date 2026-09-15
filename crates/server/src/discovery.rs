@@ -1,44 +1,9 @@
-//! User discovery: both halves of #129's decided shape
-//! (`docs/architecture/social-graph.md`).
-//!
-//! * Scoped, always-on surfacing (issue #204): friends-of-friends and
-//!   mutual-guild — see [`discover_people`] below.
-//! * Opt-in, reversible global name/handle search (issue #205): a
-//!   user-controlled `discoverable` preference
-//!   (`discovery_preferences.discoverable`,
-//!   `crates/server/db/migrations/0026_discovery_preferences`, same shape
-//!   as `presence_preferences.hide_active_in`) gates
-//!   [`search_identities`]. Off by default for every identity, no
-//!   exceptions — absence of a row means "not discoverable", matching
-//!   `presence.rs`'s "missing means the default, never invented" posture.
-//!   Toggled via `PATCH /me`'s `discoverable` field
-//!   (`crates/server/src/handlers.rs::update_profile`), not a dedicated
-//!   endpoint here — same "extend `PATCH /me`" precedent #153/#155 already
-//!   set for other small profile-adjacent preferences.
-//!
-//! **Never a search.** The only input to [`discover_people`] is the
-//! caller's own session — there is no query parameter, and there must
-//! never be one added to this endpoint. Candidates come exclusively from
-//! relationships that already exist:
-//!
-//!   * friends-of-friends — identities with an existing friendship to at
-//!     least one of the caller's own friends;
-//!   * mutual guild membership — identities who are members of at least
-//!     one guild the caller is also a member of.
-//!
-//! Both sources exclude the caller themselves, anyone already a friend of
-//! the caller, and anyone with a block relationship to the caller in
-//! either direction — reusing `friends::friend_partners` and
-//! `blocks::block_partners` exactly, the same "compute related identities"
-//! precedent `presence.rs` established for issue #16, rather than
-//! reimplementing either check. A candidate reachable via both sources
-//! appears once ([`compute_candidates`] dedupes through a `HashSet`).
-//!
-//! Milestone-1 stand-in, matching #154's `guilds::build_discover_query`
-//! precedent: a direct query over `friendships`/`guild_members`, not the
-//! real indexer read model. Read-only — this never creates or modifies a
-//! friendship; acting on a suggestion still goes through
-//! `POST /friends/requests` (#15).
+//! User discovery: both halves of #129's decided shape — scoped,
+//! always-on friends-of-friends/mutual-guild surfacing (#204) and opt-in
+//! global name/handle search (#205). See
+//! `docs/architecture/social-graph.md`'s "Today in the repo" for the
+//! discoverable-preference default, why `discover_people` never takes a
+//! query parameter, and the shared block/friend-exclusion logic.
 
 use std::collections::HashSet;
 

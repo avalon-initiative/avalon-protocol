@@ -1,43 +1,9 @@
-//! Real protobuf parsing/validation for Integrator Space schemas and instance
-//! data (issue #384's amendment — replacing the original ticket's "store
-//! `proto_source` opaquely, never parse it" stance). Two call sites use
-//! this module: [`integrator_schemas::publish_schema_version`] (parse + resolve
-//! the schema's root message, validate `field_visibility`'s keys against
-//! it) and [`integrator_data::publish_instance`] (validate a submitted JSON
-//! instance against that root message).
-//!
-//! **Toolchain**: `protobuf-parse` (raw `.proto` text -> `FileDescriptorProto`,
-//! pure-Rust parser, no `protoc` binary — required since this parses
-//! untrusted third-party text at request time, not at our own build
-//! time), `protobuf`'s reflection support (`FileDescriptor`/
-//! `MessageDescriptor`, built dynamically from that `FileDescriptorProto`),
-//! and `protobuf-json-mapping` (JSON <-> a dynamic message, per
-//! `MessageDescriptor`). All three are from the same version-aligned
-//! `rust-protobuf` project.
-//!
-//! **Root-type convention**: a schema's `.proto` source must declare
-//! exactly one top-level `message` — that message is the schema's root
-//! type. Zero or more than one top-level message is rejected with a
-//! specific [`AppError::InvalidProtoSchema`] naming the ambiguity, rather
-//! than guessing (e.g. "the first one", or "the one matching the file
-//! name") which message the publisher intended as the schema. Nested
-//! messages inside the root message don't count against this — only
-//! top-level declarations do.
-//!
-//! **Filesystem I/O, scoped to one request.** `protobuf_parse::Parser`'s
-//! only public entry point reads `.proto` source from a path — its
-//! in-memory resolver trait (`ProtoPathResolver`) lives in a
-//! crate-private module and can't be implemented from outside
-//! `protobuf-parse` itself. [`parse_root_message`] writes the submitted
-//! source into a fresh [`tempfile::TempDir`] (auto-deleted on drop, even
-//! on an early error return) rather than anything persistent — no schema
-//! source ever survives on disk past this one parse call.
-//!
-//! **No panics on integrator input, anywhere in this module.** Every
-//! failure mode (malformed `.proto` syntax, zero/multiple top-level
-//! messages, a `field_visibility` key that isn't a real field, a JSON
-//! instance that doesn't conform) maps to a clean [`AppError`] variant,
-//! never an `unwrap`/`expect`/panic.
+//! Real protobuf parsing/validation for Integrator Space schemas and
+//! instance data (issue #384's amendment — replacing the original
+//! "store `proto_source` opaquely, never parse it" stance). See
+//! `docs/architecture/integrator-space.md`'s "Today in the repo" for the
+//! parser toolchain, the single-root-message convention, and why parsing
+//! happens in a scoped `TempDir` with no panics on integrator input.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};

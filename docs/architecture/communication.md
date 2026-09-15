@@ -169,11 +169,24 @@ into a Hub-only or integrator-only corner.
   outbox or `SettlementProvider::commit`, checked both by construction and by
   a source grep (`crates/server/tests/conversations_no_ledger.rs`, mirroring
   `guild_messages_no_ledger.rs`'s approach for #22).
-- Blocking is enforced on send via `crate::blocks::has_block_among`, reused
-  rather than reinvented — the same table and "never reveal" posture
+- Blocking is enforced on send **and read** via `crate::blocks::has_block_among`
+  (`require_unblocked_participant`, the single gate both endpoints call),
+  reused rather than reinvented — the same table and "never reveal" posture
   [#97](https://github.com/LunarVagabond/avalon-protocol/issues/97) already
   established for friend requests and presence, extended here to check every
   pair within a conversation's participant set, not just a fixed pair.
+  `require_unblocked_participant` always runs the participant-membership
+  lookup and the pairwise block check regardless of which one would already
+  fail, so a blocked participant costs the same two queries as a genuine
+  non-participant, and both collapse to the identical
+  `AppError::NotConversationParticipant`. Read access (`GET
+  .../messages`) was fixed to run the same gate after an independent review
+  found it reachable by a blocked-out participant even though posting was
+  already gated: a real participant who could still `GET .../messages` but
+  got a rejected `POST .../messages` had deterministically proven they were
+  blocked, no timing analysis required. `list_my_conversations` applies the
+  same check to its own listing for consistency, though it leaks nothing on
+  its own since the caller already knows the conversation id.
 - **Relationship gate on creation** ([#269](https://github.com/LunarVagabond/avalon-protocol/issues/269)):
   `create_conversation` requires every named participant to already be a
   friend or mutual guild member of the caller, reusing
