@@ -628,6 +628,17 @@ its invariants.
   id, drive the real WebAuthn ceremony, then poll the public
   `GET /identities/:id/recovery/status` for status — no session anywhere
   on this page.
+- **Guardian consent (#443)** — naming a guardian via `PUT
+  /me/recovery/guardians` is still unilateral (opt-out, not opt-in: a named
+  guardian is active immediately, same as before), but a guardian can now
+  discover every identity relying on them (`GET
+  /me/recovery/guardian-of`) and remove themselves from any one of those
+  designations without the owner's cooperation (`DELETE
+  /me/recovery/guardian-of/{identity_id}`). A self-removal that drops the
+  owner below their configured threshold clamps the threshold down to the
+  new guardian count rather than leaving an unsatisfiable M-of-N. Surfaced
+  in the Hub as a "You're a recovery guardian for" card on `Profile.vue`,
+  alongside the existing "Recovery requests to approve" card.
 - `crates/server/db/migrations/0042_device_pairings/` — `device_pairings`
   (#307): `device_code`/`user_code`, `status`
   (`pending`/`approved`/`denied`/`expired`), nullable `identity_id`/

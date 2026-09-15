@@ -1459,7 +1459,7 @@ const {
 
         <AvalonCard v-if="canManageMembers" title="Invite a user">
           <p v-if="inviteSuccessId" :class="styles.empty">
-            Invite sent (id {{ inviteSuccessId }}) — share it with them to accept.
+            Invite sent — they'll see it on their Guilds page.
           </p>
           <AvalonButton
             v-show="!showInvite"

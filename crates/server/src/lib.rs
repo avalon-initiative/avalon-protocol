@@ -185,6 +185,11 @@ pub fn router(state: AppState) -> Router {
             "/me/recovery/guardian-requests",
             get(recovery::guardian_requests),
         )
+        .route("/me/recovery/guardian-of", get(recovery::guardian_of))
+        .route(
+            "/me/recovery/guardian-of/{identity_id}",
+            delete(recovery::resign_guardian),
+        )
         .route("/recovery/requests/start", post(recovery::start_request))
         .route("/recovery/requests/finish", post(recovery::finish_request))
         .route("/recovery/requests/{id}", get(recovery::get_request))
@@ -367,6 +372,7 @@ pub fn router(state: AppState) -> Router {
             "/guilds/{id}/favorite-integrators",
             get(guilds::list_favorite_games).put(guilds::set_favorite_games),
         )
+        .route("/me/guild-invites", get(guilds::my_guild_invites))
         .route("/guilds/{id}/invites", post(guilds::create_invite))
         .route(
             "/guilds/{id}/invites/{invite_id}/accept",

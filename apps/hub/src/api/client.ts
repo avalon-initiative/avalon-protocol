@@ -33,6 +33,7 @@ import type {
   IntegratorRegistryResponse,
   IssuerKeyResponse,
   IntegratorResponse,
+  GuardianOfSummary,
   GuardianRequestSummary,
   GuardianSettingsResponse,
   GuildAnnouncementAlert,
@@ -47,6 +48,7 @@ import type {
   ListMyAchievementsResponse,
   MessageResponse,
   MyConnectionsResponse,
+  MyGuildInviteResponse,
   MyGuildMembershipResponse,
   PasskeyResponse,
   PermissionOverrideResponse,
@@ -465,6 +467,16 @@ export function getGuardianRequests(token: string): Promise<GuardianRequestSumma
   return request('/me/recovery/guardian-requests', { token })
 }
 
+// Issue #443: identities relying on the caller as a guardian, and the
+// caller's own opt-out self-removal from one of those designations.
+export function getGuardianOf(token: string): Promise<GuardianOfSummary[]> {
+  return request('/me/recovery/guardian-of', { token })
+}
+
+export function resignAsGuardian(token: string, identityId: string): Promise<void> {
+  return request(`/me/recovery/guardian-of/${identityId}`, { method: 'DELETE', token })
+}
+
 export function startRecoveryRequest(body: RecoveryStartRequest): Promise<RecoveryStartResponse> {
   return request('/recovery/requests/start', { method: 'POST', body })
 }
@@ -633,6 +645,11 @@ export function setFavoriteGames(
     body: { integrator_ids: integratorIds },
     token,
   })
+}
+
+// Issue #442: the invitee's own pending invites, across every guild.
+export function getMyGuildInvites(token: string): Promise<MyGuildInviteResponse[]> {
+  return request('/me/guild-invites', { token })
 }
 
 export function createGuildInvite(
