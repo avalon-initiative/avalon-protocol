@@ -53,6 +53,13 @@ export type AvalonIconName =
   | 'star'
   | 'shield'
   | 'sword'
+  // Role badge icons (issue #152's RoleBadgeIcon vocabulary, #462) — the
+  // remaining 5 of that fixed 8-icon set not already covered above.
+  | 'crown'
+  | 'wrench'
+  | 'heart'
+  | 'flag'
+  | 'bolt'
 
 export interface AvalonIconProps {
   name: AvalonIconName

@@ -570,20 +570,42 @@ export interface SetFavoriteGamesRequest {
   integrator_ids: string[]
 }
 
+// Issue #152's closed badge vocabulary — matches
+// avalon_protocol::guilds::{RoleBadgeIcon,RoleBadgeColor}::ALL exactly.
+export type RoleBadgeIconId = 'shield' | 'crown' | 'star' | 'sword' | 'wrench' | 'heart' | 'flag' | 'bolt'
+export type RoleBadgeColorId = 'gray' | 'red' | 'orange' | 'gold' | 'green' | 'blue' | 'purple'
+
+export interface RoleBadge {
+  icon: RoleBadgeIconId
+  color: RoleBadgeColorId
+}
+
 export interface RoleResponse {
   name_index: number
   name: string
   permissions: string[]
+  // Issue #152. Empty string when unset.
+  description: string
+  // Issue #152. RoleBadge::DEFAULT (shield/gray) when never explicitly set.
+  badge: RoleBadge
 }
 
 export interface CreateRoleRequest {
   name: string
   permissions?: string[]
+  // Issue #152. Omitted defaults to "" server-side.
+  description?: string
+  // Issue #152. Omitted defaults to RoleBadge::DEFAULT server-side.
+  badge?: RoleBadge
 }
 
 export interface UpdateRoleRequest {
   name?: string
   permissions?: string[]
+  // Issue #152. Omitted leaves it untouched.
+  description?: string
+  // Issue #152. Omitted leaves it untouched.
+  badge?: RoleBadge
 }
 
 export interface TransferOwnershipRequest {
