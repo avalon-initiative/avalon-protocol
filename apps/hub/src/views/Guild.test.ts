@@ -39,6 +39,7 @@ const guild = {
   public: false,
   game_breakdown_public: false,
   favorite_games: [],
+  roster_visibility: 'guild_members',
 }
 
 const roles = [{ name_index: 0, name: 'owner', permissions: ['manage_guild', 'manage_roles', 'manage_members', 'manage_channels'] }]
@@ -478,6 +479,39 @@ describe('Guild', () => {
       const method = (init as RequestInit | undefined)?.method
       const body = (init as RequestInit | undefined)?.body
       return String(url).includes('/guilds/g1') && method === 'PATCH' && String(body).includes('"public":true')
+    })
+    expect(patchCall).toBeTruthy()
+  })
+
+  it('saves a new roster visibility from the Settings tab', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const settingsTab = wrapper.findAll('button').find((b) => b.text() === 'Settings')!
+    await settingsTab.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Roster visibility')
+    const select = wrapper.findAll('select').find((s) => s.text().includes('Anyone'))!
+    await select.setValue('private')
+    const saveButton = wrapper.findAll('button').find((b) => b.text() === 'Save')!
+    await saveButton.trigger('click')
+    await flushPromises()
+
+    const patchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      const body = (init as RequestInit | undefined)?.body
+      return (
+        String(url).includes('/guilds/g1') &&
+        method === 'PATCH' &&
+        String(body).includes('"roster_visibility":"private"')
+      )
     })
     expect(patchCall).toBeTruthy()
   })

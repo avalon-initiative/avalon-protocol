@@ -582,6 +582,44 @@ async function onTogglePublic(next: boolean) {
   }
 }
 
+// Issue #87 — the guild's roster-visibility baseline. Recruiting/Public
+// above (#449/#455) can still widen exposure beyond whatever this is set
+// to; this only controls the underlying value.
+const VISIBILITY_OPTIONS = [
+  { value: 'public', label: 'Anyone' },
+  { value: 'authenticated_only', label: 'Any signed-in user' },
+  { value: 'friends', label: "Members' friends" },
+  { value: 'guild_members', label: 'Guild members only' },
+  { value: 'private', label: 'Owner only' },
+]
+const rosterVisibility = ref('guild_members')
+const savingRosterVisibility = ref(false)
+const rosterVisibilityError = ref('')
+
+watch(
+  () => guild.value?.roster_visibility,
+  (value) => {
+    if (value) rosterVisibility.value = value
+  },
+  { immediate: true },
+)
+
+async function onSaveRosterVisibility() {
+  if (!session.token) return
+  rosterVisibilityError.value = ''
+  savingRosterVisibility.value = true
+  try {
+    await api.updateGuild(session.token, guildId.value, {
+      roster_visibility: rosterVisibility.value,
+    })
+    await refresh()
+  } catch (e) {
+    rosterVisibilityError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    savingRosterVisibility.value = false
+  }
+}
+
 const savingJoinPolicy = ref(false)
 const joinPolicyError = ref('')
 
@@ -1979,6 +2017,24 @@ const {
               @click="onTogglePublic(!guild.public)"
             />
             <p v-if="publicError" :class="styles.error">{{ publicError }}</p>
+          </AvalonCard>
+
+          <AvalonCard
+            title="Roster visibility"
+            subtitle="The baseline for who can see this guild's member list — Recruiting and Public above can still widen it further."
+          >
+            <select v-model="rosterVisibility">
+              <option v-for="opt in VISIBILITY_OPTIONS" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <AvalonButton
+              :label="savingRosterVisibility ? 'Saving…' : 'Save'"
+              variant="secondary"
+              :disabled="savingRosterVisibility"
+              @click="onSaveRosterVisibility"
+            />
+            <p v-if="rosterVisibilityError" :class="styles.error">{{ rosterVisibilityError }}</p>
           </AvalonCard>
 
           <AvalonCard

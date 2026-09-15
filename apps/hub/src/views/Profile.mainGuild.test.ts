@@ -30,6 +30,7 @@ const baseProfile = {
   main_guild: null,
   effective_main_guild: null,
   discoverable: false,
+  presence_visibility: 'public',
 }
 
 const guildBase = {
@@ -47,8 +48,10 @@ const guildBase = {
   icon: null,
   links: [],
   recruiting: false,
+  public: false,
   game_breakdown_public: false,
   favorite_games: [],
+  roster_visibility: 'guild_members',
 }
 
 function testRouter() {
@@ -84,7 +87,7 @@ describe('Profile main guild field', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('Main guild'))
     const select = await vi.waitFor(() => {
-      const el = wrapper.find('select')
+      const el = wrapper.find('select[aria-label="Main guild"]')
       expect(el.exists()).toBe(true)
       return el
     })
@@ -154,14 +157,37 @@ describe('Profile main guild field', () => {
     router.push('/')
     await router.isReady()
     const wrapper = mount(Profile, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.find('select').exists()).toBe(true))
+    await vi.waitFor(() => expect(wrapper.find('select[aria-label="Main guild"]').exists()).toBe(true))
 
-    await wrapper.find('select').setValue('g1')
+    await wrapper.find('select[aria-label="Main guild"]').setValue('g1')
     const saveButton = wrapper.findAll('button').find((b) => b.text().includes('Save main guild'))
     await saveButton!.trigger('click')
 
     await vi.waitFor(() => {
-      expect((wrapper.find('select').element as HTMLSelectElement).value).toBe('g1')
+      expect((wrapper.find('select[aria-label="Main guild"]').element as HTMLSelectElement).value).toBe('g1')
+    })
+  })
+
+  it('saves a new presence visibility and reflects the server response', async () => {
+    mockMeSequence([baseProfile, { ...baseProfile, presence_visibility: 'friends' }])
+    useSessionStore().login('a-token')
+
+    const router = testRouter()
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(Profile, { global: { plugins: [router] } })
+    await vi.waitFor(() =>
+      expect(wrapper.find('select[aria-label="Online status visibility"]').exists()).toBe(true),
+    )
+
+    await wrapper.find('select[aria-label="Online status visibility"]').setValue('friends')
+    const saveButton = wrapper.findAll('button').find((b) => b.text() === 'Save')
+    await saveButton!.trigger('click')
+
+    await vi.waitFor(() => {
+      expect(
+        (wrapper.find('select[aria-label="Online status visibility"]').element as HTMLSelectElement).value,
+      ).toBe('friends')
     })
   })
 })
