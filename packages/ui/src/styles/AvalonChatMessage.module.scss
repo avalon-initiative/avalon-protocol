@@ -1,7 +1,7 @@
 .message {
   display: flex;
-  align-items: flex-start;
-  gap: var(--av-space-3);
+  align-items: flex-end;
+  gap: var(--av-space-2);
   padding: var(--av-space-2) 0;
 
   &:hover .deleteButton {
@@ -9,12 +9,66 @@
   }
 }
 
-.content {
-  flex: 1;
+.other {
+  justify-content: flex-start;
+}
+
+.own {
+  justify-content: flex-end;
+}
+
+.avatarWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+// Same status colors AvalonPresenceBadge.module.scss uses, duplicated
+// rather than imported — packages/ui components don't reach into each
+// other's CSS Modules (each file's classnames are scoped to it).
+.presenceDot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  // Matches AvalonCard's own background — this dot always sits on a chat
+  // message list, which always sits inside an AvalonCard.
+  border: 2px solid var(--av-color-surface);
+}
+
+.Online {
+  background: var(--av-color-success);
+}
+
+.Away {
+  background: var(--av-color-warning);
+}
+
+.DoNotDisturb {
+  background: var(--av-color-danger);
+}
+
+.Offline {
+  background: var(--av-color-text-muted);
+}
+
+// Almost full width of the message list, not quite — leaves visible
+// breathing room on the empty side so a right- or left-aligned bubble
+// still reads as a bubble, not a full-width row.
+.bubble {
+  max-width: 82%;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--av-space-1);
+  padding: var(--av-space-2) var(--av-space-3);
+  border-radius: var(--av-radius-lg);
+  background: var(--av-color-surface-raised);
+}
+
+.own .bubble {
+  background: var(--av-color-primary-soft);
 }
 
 .meta {

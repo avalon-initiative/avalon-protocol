@@ -60,6 +60,25 @@
   gap: var(--av-space-1);
   max-height: 60vh;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--av-color-border-strong) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--av-color-border-strong);
+    border-radius: var(--av-radius-pill);
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--av-color-text-muted);
+  }
 }
 
 /* Header: banner cover image, name + tag inline, single Edit action

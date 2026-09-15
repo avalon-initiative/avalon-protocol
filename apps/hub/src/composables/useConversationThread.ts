@@ -105,7 +105,10 @@ export function useConversationThread(conversationId: Ref<string>) {
     sending.value = true
     try {
       const message = await api.sendConversationMessage(session.token, targetId, { body })
-      if (!isStaleFor(targetId)) {
+      // Same race as useGuildChat.ts's sendMessage: the websocket push for
+      // this message can arrive before this response does — dedup against
+      // it, same guard subscribeToConversation's onMessage uses.
+      if (!isStaleFor(targetId) && !messages.value.some((m) => m.id === message.id)) {
         messages.value = [...messages.value, message]
       }
     } catch (e) {
