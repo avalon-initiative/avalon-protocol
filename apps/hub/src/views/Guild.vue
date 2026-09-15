@@ -96,6 +96,7 @@ const {
   integratorBreakdown,
   integratorBreakdownError,
   joinRequests,
+  applicantNames,
   myJoinRequest,
   refresh,
 } = useGuildDetail(guildId)
@@ -153,7 +154,17 @@ const TABS: { key: TabKey; label: string }[] = [
 // browsing a recruiting guild's public page, rather than showing an
 // always-empty tab.
 const MEMBER_ONLY_TABS: TabKey[] = ['channels', 'events', 'calendar']
-const visibleTabs = computed(() => TABS.filter((tab) => isMember.value || !MEMBER_ONLY_TABS.includes(tab.key)))
+// Settings is different from the member-only tabs above: it's hidden from
+// everyone, members included, unless they can actually act on it
+// (manage_guild, or the owner — canManageGuild already covers both) —
+// showing an always-"only managers can view this" tab to every member
+// isn't useful, it's just a dead end.
+const visibleTabs = computed(() =>
+  TABS.filter((tab) => {
+    if (tab.key === 'settings') return canManageGuild.value
+    return isMember.value || !MEMBER_ONLY_TABS.includes(tab.key)
+  }),
+)
 
 const activeTab = ref<TabKey>(route.name === 'guild-channel' ? 'channels' : 'overview')
 
@@ -165,6 +176,9 @@ const activeTab = ref<TabKey>(route.name === 'guild-channel' ? 'channels' : 'ove
 // deep-linked channel.
 watch(loading, (isLoading) => {
   if (!isLoading && !isMember.value && MEMBER_ONLY_TABS.includes(activeTab.value)) {
+    activeTab.value = 'overview'
+  }
+  if (!isLoading && activeTab.value === 'settings' && !canManageGuild.value) {
     activeTab.value = 'overview'
   }
 })
@@ -1481,21 +1495,35 @@ const {
         -->
         <AvalonCard v-if="canManageMembers" title="Applications">
           <p v-if="joinRequests.length === 0" :class="styles.empty">No pending applications.</p>
-          <div v-for="request in joinRequests" :key="request.id" :class="styles.empty">
-            {{ request.applicant }}
-            <template v-if="request.message">— "{{ request.message }}"</template>
-            <AvalonButton
-              label="Approve"
-              variant="primary"
-              :disabled="decidingRequestId === request.id"
-              @click="onApproveJoinRequest(request.id)"
-            />
-            <AvalonButton
-              label="Reject"
-              variant="danger"
-              :disabled="decidingRequestId === request.id"
-              @click="onRejectJoinRequest(request.id)"
-            />
+          <div v-for="request in joinRequests" :key="request.id" :class="local.applicationRow">
+            <button
+              type="button"
+              :class="local.applicantName"
+              @click="onViewProfile(request.applicant)"
+            >
+              {{ applicantNames[request.applicant] ?? request.applicant }}
+            </button>
+            <span v-if="request.message" :class="styles.empty">— "{{ request.message }}"</span>
+            <span :class="local.applicationActions">
+              <button
+                type="button"
+                :class="local.approveButton"
+                aria-label="Approve"
+                :disabled="decidingRequestId === request.id"
+                @click="onApproveJoinRequest(request.id)"
+              >
+                <AvalonIcon name="check" :size="16" />
+              </button>
+              <button
+                type="button"
+                :class="local.rejectButton"
+                aria-label="Reject"
+                :disabled="decidingRequestId === request.id"
+                @click="onRejectJoinRequest(request.id)"
+              >
+                <AvalonIcon name="close" :size="16" />
+              </button>
+            </span>
           </div>
           <p v-if="joinRequestsError" :class="styles.error">{{ joinRequestsError }}</p>
         </AvalonCard>
@@ -1844,7 +1872,30 @@ const {
             </AvalonForm>
           </div>
         </AvalonCard>
-        <p v-else :class="styles.empty">You don't have permission to manage this guild's roles.</p>
+        <AvalonCard v-else title="Roles" subtitle="Read-only — you don't have permission to manage this guild's roles.">
+          <div :class="local.permissionMatrixScroll">
+            <table :class="local.permissionMatrix">
+              <thead>
+                <tr>
+                  <th>Role</th>
+                  <th v-for="permission in PERMISSION_OPTIONS" :key="permission">{{ permission }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="role in roles" :key="role.name_index">
+                  <td>{{ role.name }}</td>
+                  <td v-for="permission in PERMISSION_OPTIONS" :key="permission">
+                    <AvalonIcon
+                      v-if="role.permissions.includes(permission)"
+                      name="check"
+                      :size="14"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </AvalonCard>
     </div>
 
     <!-- Settings: recruiting toggle, MOTD/banner/links editing, transfer

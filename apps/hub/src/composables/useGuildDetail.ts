@@ -46,6 +46,31 @@ export function useGuildDetail(guildId: Ref<string>) {
   // expected, common outcome, not a page-level error.
   const joinRequests = ref<GuildJoinRequestResponse[]>([])
 
+  // Resolved display names for join-request applicants — `joinRequests`
+  // only carries a raw identity id (`GuildJoinRequestResponse.applicant`),
+  // same "resolve via GET /identities/profiles" pattern
+  // useGuildChat.ts's authorNames and useConversations.ts's
+  // participantNames already use.
+  const applicantNames = ref<Record<string, string>>({})
+
+  async function resolveApplicantNames(requests: GuildJoinRequestResponse[]) {
+    if (!session.token) return
+    const unknown = [...new Set(requests.map((r) => r.applicant))].filter(
+      (id) => !(id in applicantNames.value),
+    )
+    if (unknown.length === 0) return
+    try {
+      const profiles = await api.getProfiles(session.token, unknown)
+      const resolved: Record<string, string> = {}
+      for (const profile of profiles) {
+        resolved[profile.identity_id] = `${profile.display_name}#${profile.discriminator}`
+      }
+      applicantNames.value = { ...applicantNames.value, ...resolved }
+    } catch {
+      // Best-effort — requests still render with the raw id.
+    }
+  }
+
   // Issue #256: the caller's own pending join request for this guild, if
   // any — self-scoped, not manage_members-gated, so (unlike joinRequests
   // above) this is fetched for every caller, not just managers.
@@ -106,6 +131,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     if (!session.token) return
     try {
       joinRequests.value = await api.listJoinRequests(session.token, guildId.value)
+      await resolveApplicantNames(joinRequests.value)
     } catch {
       joinRequests.value = []
     }
@@ -190,6 +216,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     integratorBreakdown,
     integratorBreakdownError,
     joinRequests,
+    applicantNames,
     myJoinRequest,
     refresh,
   }
