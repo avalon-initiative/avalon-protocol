@@ -198,6 +198,74 @@
   }
 }
 
+.applicationRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--av-space-2);
+  padding: var(--av-space-2) 0;
+}
+
+.applicantName {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.applicationActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--av-space-1);
+  margin-left: auto;
+}
+
+.approveButton,
+.rejectButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.approveButton {
+  background: var(--av-color-success-soft);
+  color: var(--av-color-success);
+
+  &:hover:not(:disabled) {
+    background: var(--av-color-success);
+    color: var(--av-color-primary-text);
+  }
+}
+
+.rejectButton {
+  background: var(--av-color-danger-soft);
+  color: var(--av-color-danger);
+
+  &:hover:not(:disabled) {
+    background: var(--av-color-danger);
+    color: var(--av-color-primary-text);
+  }
+}
+
 .roleNameInput {
   min-width: 0;
   border-radius: var(--av-radius-sm);

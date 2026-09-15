@@ -231,3 +231,52 @@ async fn guild_roster_visibility_matrix() {
     assert!(!can_list_members(&http, &base, &member_token, guild_id).await);
     assert!(!can_list_members(&http, &base, &outsider_token, guild_id).await);
 }
+
+async fn set_recruiting(
+    http: &reqwest::Client,
+    base: &str,
+    owner_token: &str,
+    guild_id: Uuid,
+    value: bool,
+) {
+    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+        .json(&serde_json::json!({ "recruiting": value }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+}
+
+/// A recruiting guild's roster is visible to any authenticated identity
+/// regardless of `roster_visibility` — the point of recruiting is letting a
+/// prospect see who they'd be joining. Turning recruiting off restores
+/// whatever `roster_visibility` was already set to.
+#[tokio::test]
+#[ignore]
+async fn a_recruiting_guilds_roster_is_visible_despite_a_private_setting() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
+
+    let guild_id = create_guild(&http, &base, &owner_token).await;
+    set_roster_visibility(&http, &base, &owner_token, guild_id, "private").await;
+    assert!(
+        !can_list_members(&http, &base, &outsider_token, guild_id).await,
+        "a non-recruiting private guild must stay hidden from an outsider"
+    );
+
+    set_recruiting(&http, &base, &owner_token, guild_id, true).await;
+    assert!(
+        can_list_members(&http, &base, &outsider_token, guild_id).await,
+        "recruiting must override roster_visibility for an outsider"
+    );
+
+    set_recruiting(&http, &base, &owner_token, guild_id, false).await;
+    assert!(
+        !can_list_members(&http, &base, &outsider_token, guild_id).await,
+        "turning recruiting back off must restore the private setting"
+    );
+}

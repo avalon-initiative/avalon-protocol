@@ -2552,7 +2552,14 @@ pub async fn list_members(
     // for a different guild-level visibility toggle; `private` gates
     // *outside* exposure, it was never meant to lock the guild out of its
     // own roster.
-    if caller != guild.owner {
+    //
+    // A `recruiting` guild's roster is additionally always visible to any
+    // authenticated identity, regardless of `roster_visibility` — the
+    // point of recruiting is letting a prospective member see who they'd
+    // be joining before they apply/accept an invite; a guild that wants
+    // its roster hidden from prospects should stop recruiting rather than
+    // recruit with a roster nobody considering joining can see.
+    if caller != guild.owner && !guild.recruiting {
         let visibility = crate::visibility::parse_visibility(&guild.roster_visibility);
         if !crate::visibility::is_visible(&state, visibility, Some(caller), None, Some(guild_id))
             .await?
