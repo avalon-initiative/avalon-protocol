@@ -8,8 +8,9 @@ part of the self-hosting epic [#288](https://github.com/LunarVagabond/avalon-pro
 
 This is the "get a node running to see it work, or to actually host for your
 community" path. If you're contributing code to this repository itself, see
-[`local-development.md`](local-development.md) instead — that one runs
-`avalon-server` natively via `cargo` for faster edit/rebuild cycles.
+[`../maintainers/local-development.md`](../maintainers/local-development.md)
+instead — that one runs `avalon-server` natively via `cargo` for faster
+edit/rebuild cycles.
 
 ## One command
 
@@ -70,7 +71,7 @@ file still exists. Back it up somewhere safe — losing the signing key means
 losing the ability to extend this node's ledger under its existing history.
 Never commit `.env` or share the signing key value. Need to replace this key
 later — routine hygiene or a suspected compromise? See
-[`key-rotation.md`](key-rotation.md).
+[`../maintainers/key-rotation.md`](../maintainers/key-rotation.md).
 
 Plain `.env` storage is the accepted floor for a single-operator deployment
 at this project's current scale — see
@@ -95,7 +96,7 @@ applied.
   `migrate` companion binary. Not yet layer-cached for fast incremental
   rebuilds (no `cargo-chef`); a first correct build, not an optimized one.
 - `docker-compose.yml` — `postgres` (also usable standalone for the native
-  dev flow — see `local-development.md`), plus `migrate` and `avalon-server`
+  dev flow — see `../maintainers/local-development.md`), plus `migrate` and `avalon-server`
   behind a `stack` Compose profile so a plain `docker compose up -d` (the
   existing postgres-only flow) doesn't also try to build/start them.
 - `make stack-up`/`stack-down`/`stack-logs` (root `Makefile`) — the
