@@ -7,7 +7,10 @@ import type {
   AddPasskeyFinishRequest,
   AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
+  BlockListEntry,
+  BlockResponse,
   CancelRecoveryRequest,
+  CreateBlockRequest,
   ChannelResponse,
   ConnectIntegratorRequest,
   ConnectIntegratorResponse,
@@ -289,6 +292,21 @@ export function declineOrWithdrawFriendRequest(token: string, requestId: string)
 
 export function removeFriend(token: string, identityId: string): Promise<void> {
   return request(`/friends/${identityId}`, { method: 'DELETE', token })
+}
+
+// Issue #97. `listBlocks` returns only the caller's own outgoing blocks —
+// see crates/server/src/blocks.rs's module doc comment on why the blocked
+// party is never told, through any endpoint.
+export function listBlocks(token: string): Promise<BlockListEntry[]> {
+  return request('/blocks', { token })
+}
+
+export function createBlock(token: string, body: CreateBlockRequest): Promise<BlockResponse> {
+  return request('/blocks', { method: 'POST', body, token })
+}
+
+export function removeBlock(token: string, identityId: string): Promise<void> {
+  return request(`/blocks/${identityId}`, { method: 'DELETE', token })
 }
 
 // Resolves a `display_name#1234` handle (issue #128) to an identity id for

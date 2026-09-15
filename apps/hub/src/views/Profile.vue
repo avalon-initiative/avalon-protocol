@@ -35,6 +35,7 @@ import type {
   RecoveryRequestResponse,
 } from '../api/types'
 import { listFriendsWithPresence, type Friend } from '../api/friends'
+import { listBlockedUsersWithNames, type BlockedUser } from '../api/blocks'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
@@ -167,6 +168,60 @@ async function onSavePresenceVisibility() {
   }
 }
 
+// Issue #97/#460 — the caller's own outgoing blocks. Never lists who has
+// blocked the caller (crates/server/src/blocks.rs's own invariant).
+const blockedUsers = ref<BlockedUser[]>([])
+const blockedUsersError = ref('')
+const unblockingId = ref<string | null>(null)
+const blockByIdInput = ref('')
+const blockByIdError = ref('')
+const blockingById = ref(false)
+
+async function refreshBlockedUsers() {
+  if (!session.token) return
+  try {
+    blockedUsers.value = await listBlockedUsersWithNames(session.token)
+  } catch (e) {
+    blockedUsersError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  }
+}
+
+async function onUnblock(identityId: string) {
+  if (!session.token) return
+  blockedUsersError.value = ''
+  unblockingId.value = identityId
+  try {
+    await api.removeBlock(session.token, identityId)
+    await refreshBlockedUsers()
+  } catch (e) {
+    blockedUsersError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    unblockingId.value = null
+  }
+}
+
+// Accepts either a raw identity id or a `display_name#1234` handle (#128),
+// same convention Friends.vue's onAddFriend already uses for the
+// analogous "add by id/handle" flow.
+async function onBlockById() {
+  if (!session.token) return
+  blockByIdError.value = ''
+  blockingById.value = true
+  try {
+    const input = blockByIdInput.value.trim()
+    const identityId = input.includes('#')
+      ? (await api.resolveHandle(session.token, input)).identity_id
+      : input
+    await api.createBlock(session.token, { identity_id: identityId })
+    blockByIdInput.value = ''
+    await refreshBlockedUsers()
+  } catch (e) {
+    blockByIdError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    blockingById.value = false
+  }
+}
+
 // #134: this device has no signing key for the current identity — either
 // it's brand new, or storage was cleared. Recovering from a saved phrase
 // is one fallback; requesting a grant from another trusted device (#135,
@@ -201,6 +256,7 @@ onMounted(async () => {
       await refreshDevicesAndPendingGrants()
     }
     await refreshPasskeys()
+    await refreshBlockedUsers()
     await Promise.all([
       refreshGuardianSettings(),
       refreshMyRecoveryStatus(),
@@ -908,6 +964,40 @@ async function onResignGuardian(identityId: string) {
         />
       </div>
       <p v-if="presenceVisibilityError" :class="page.error">{{ presenceVisibilityError }}</p>
+    </AvalonCard>
+
+    <AvalonCard
+      title="Blocked users"
+      subtitle="Blocking doesn't tell the other person, and doesn't remove an existing friendship on its own."
+    >
+      <p v-if="blockedUsers.length === 0" :class="page.empty">You haven't blocked anyone.</p>
+      <ul v-else :class="styles.list">
+        <li v-for="blocked in blockedUsers" :key="blocked.identityId" :class="styles.guardianRow">
+          <span>{{ blocked.displayName ?? blocked.identityId }}</span>
+          <AvalonButton
+            :label="unblockingId === blocked.identityId ? 'Unblocking…' : 'Unblock'"
+            variant="secondary"
+            :disabled="unblockingId === blocked.identityId"
+            @click="onUnblock(blocked.identityId)"
+          />
+        </li>
+      </ul>
+      <div :class="styles.stack">
+        <input
+          v-model="blockByIdInput"
+          type="text"
+          placeholder="identity id or handle#1234"
+          :class="styles.linkInput"
+        />
+        <AvalonButton
+          :label="blockingById ? 'Blocking…' : 'Block'"
+          variant="danger"
+          :disabled="blockingById || !blockByIdInput.trim()"
+          @click="onBlockById"
+        />
+      </div>
+      <p v-if="blockedUsersError" :class="page.error">{{ blockedUsersError }}</p>
+      <p v-if="blockByIdError" :class="page.error">{{ blockByIdError }}</p>
     </AvalonCard>
 
     <div :class="page.grid">

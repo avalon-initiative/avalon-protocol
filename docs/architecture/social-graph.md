@@ -174,6 +174,11 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   reads as `Offline`, indistinguishable from a genuinely missing entry), and
   `conversations::send_message` (#102) via the group-aware
   `blocks::has_block_among` — see "Blocking and harassment" above.
+  Reachable from the Hub (#460): `UserProfile.vue`'s actions row
+  (Add/Remove friend, Block/Unblock, mirroring whichever relationship
+  actually exists between the caller and the viewed identity) and a
+  "Blocked users" card on `Profile.vue` (list + unblock, plus block by
+  id/handle directly).
 - **A friendship is promised-durable history**, not server-only state — the
   same reasoning [guilds](./guilds.md) apply, since it's a social fact
   between two identities, not something any integrator owns. `friend.requested`,

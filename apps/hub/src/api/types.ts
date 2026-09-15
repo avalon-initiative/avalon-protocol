@@ -195,6 +195,24 @@ export interface FriendRequestResponse {
   requested_at: string
 }
 
+// Issue #97 — matches crates/server/src/blocks.rs field-for-field.
+// Blocking is unilateral, private application state (never a protocol
+// event, never durable history) — GET /blocks only ever returns the
+// caller's own outgoing blocks, never who has blocked the caller.
+export interface CreateBlockRequest {
+  identity_id: string
+}
+
+export interface BlockResponse {
+  blocked: string
+  created_at: string
+}
+
+export interface BlockListEntry {
+  blocked: string
+  created_at: string
+}
+
 export interface ResolveHandleResponse {
   identity_id: string
 }
