@@ -7,6 +7,7 @@ import type {
   AddPasskeyFinishRequest,
   AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
+  ArchivedMessageResponse,
   BlockListEntry,
   BlockResponse,
   CancelRecoveryRequest,
@@ -811,6 +812,26 @@ export function listMessages(
   return request(`/guilds/${guildId}/channels/${channelId}/messages${query ? `?${query}` : ''}`, {
     token,
   })
+}
+
+// Issue #253/#464 — same before/limit cursor shape as listMessages, over
+// the long-window archive tier the live table's retention cap prunes
+// into instead of hard-deleting. Requires *current* guild membership,
+// same as listMessages (crates/server/src/guild_messages.rs::list_archive).
+export function getMessageArchive(
+  token: string,
+  guildId: string,
+  channelId: string,
+  options: { before?: string; limit?: number } = {},
+): Promise<ArchivedMessageResponse[]> {
+  const params = new URLSearchParams()
+  if (options.before) params.set('before', options.before)
+  if (options.limit) params.set('limit', String(options.limit))
+  const query = params.toString()
+  return request(
+    `/guilds/${guildId}/channels/${channelId}/messages/archive${query ? `?${query}` : ''}`,
+    { token },
+  )
 }
 
 export function sendMessage(

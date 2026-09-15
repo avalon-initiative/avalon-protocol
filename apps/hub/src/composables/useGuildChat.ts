@@ -17,17 +17,40 @@ import * as api from '../api/client'
 import { hasGuildPermission, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
 import { toOldestFirst } from '../api/guildChat'
-import type { ChannelResponse, GuildResponse, MessageResponse } from '../api/types'
+import type { ArchivedMessageResponse, ChannelResponse, GuildResponse, MessageResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
 const MESSAGE_PAGE_SIZE = 50
+
+// Issue #464. A live message and an archived one render identically except
+// for this flag — archived history is read-only (no live-update, no
+// delete), never merged with the live table server-side.
+export interface ChatMessage extends MessageResponse {
+  archived?: boolean
+}
+
+function fromArchive(messages: ArchivedMessageResponse[]): ChatMessage[] {
+  return messages.map((m) => ({
+    id: m.id,
+    channel_id: m.channel_id,
+    author: m.author,
+    body: m.body,
+    sent_at: m.sent_at,
+    archived: true,
+  }))
+}
 
 export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   const session = useSessionStore()
 
   const guild = ref<GuildResponse | null>(null)
   const channel = ref<ChannelResponse | null>(null)
-  const messages = ref<MessageResponse[]>([]) // oldest-first, for newest-at-bottom rendering
+  const messages = ref<ChatMessage[]>([]) // oldest-first, for newest-at-bottom rendering
+  // Issue #464. Once the live table's before-cursor pagination is
+  // exhausted for this channel, further "load older" calls read the
+  // archive tier instead — flipped inside loadOlder, reset by load()
+  // whenever the channel changes.
+  const readingArchive = ref(false)
   // identity id -> "display_name#discriminator", resolved via
   // GET /identities/profiles (issue #161) for whichever authors show up
   // in the currently-loaded messages. Never removed once resolved — an
@@ -116,8 +139,15 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       limit: MESSAGE_PAGE_SIZE,
     })
     if (isStaleFor(targetChannelId)) return
+    readingArchive.value = false
     messages.value = toOldestFirst(page)
-    hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
+    // A full page definitely means more live history remains. A shorter
+    // page (including empty) means the live table is exhausted for this
+    // channel, but the archive tier (#253/#464) might still hold older
+    // history — stays true so a scroll can find out via loadOlder's own
+    // live/archive fallthrough below, rather than assuming "no more"
+    // from the live table alone.
+    hasMoreOlder.value = true
     await resolveAuthorNames(messages.value)
   }
 
@@ -146,27 +176,76 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
 
   async function loadOlder() {
     const targetChannelId = channelId.value
-    if (
-      !session.token ||
-      !targetChannelId ||
-      loadingOlder.value ||
-      !hasMoreOlder.value ||
-      messages.value.length === 0
-    ) {
+    if (!session.token || !targetChannelId || loadingOlder.value || !hasMoreOlder.value) {
       return
     }
     loadingOlder.value = true
     try {
-      const oldestId = messages.value[0].id
-      const page = await api.listMessages(session.token, guildId.value, targetChannelId, {
-        before: oldestId,
+      // Undefined when there are no live messages loaded at all — a
+      // channel whose entire current history has already aged into the
+      // archive tier (issue #253/#464). That's still a valid state to
+      // page from: it just means the very next read has to go straight
+      // to the archive with no cursor, same as the live-exhausted case
+      // below.
+      const oldestId = messages.value[0]?.id
+      const alreadyReadingArchive = readingArchive.value
+
+      if (alreadyReadingArchive) {
+        // oldestId is guaranteed to be an archived message's own id here
+        // (list_archive's before-cursor subquery looks it up in
+        // guild_messages_archive itself, not the live table).
+        const archivePage = await api.getMessageArchive(session.token, guildId.value, targetChannelId, {
+          before: oldestId,
+          limit: MESSAGE_PAGE_SIZE,
+        })
+        if (isStaleFor(targetChannelId)) return
+        hasMoreOlder.value = archivePage.length === MESSAGE_PAGE_SIZE
+        const older = toOldestFirst(fromArchive(archivePage))
+        messages.value = [...older, ...messages.value]
+        await resolveAuthorNames(older)
+        return
+      }
+
+      if (oldestId) {
+        const page = await api.listMessages(session.token, guildId.value, targetChannelId, {
+          before: oldestId,
+          limit: MESSAGE_PAGE_SIZE,
+        })
+        if (isStaleFor(targetChannelId)) return
+
+        if (page.length === MESSAGE_PAGE_SIZE) {
+          // A full page means more live history may remain — no need to
+          // touch the archive tier yet.
+          hasMoreOlder.value = true
+          const older = toOldestFirst(page)
+          messages.value = [...older, ...messages.value]
+          await resolveAuthorNames(older)
+          return
+        }
+
+        const liveOlder = toOldestFirst(page)
+        messages.value = [...liveOlder, ...messages.value]
+        await resolveAuthorNames(liveOlder)
+      }
+
+      // Either the live table's before-cursor pagination just came back
+      // short of a full page (live history exhausted for this channel),
+      // or there was no live message to page from in the first place —
+      // either way, the cap-pruned tail of this channel's history, if
+      // any, lives in the archive tier instead. Continuing into it within
+      // this same call, rather than waiting for a future click that
+      // hasMoreOlder might otherwise never allow. Starts fresh with no
+      // `before`: oldestId, if set, is a live-table id and can't be
+      // reused as the archive's own cursor.
+      readingArchive.value = true
+      const archivePage = await api.getMessageArchive(session.token, guildId.value, targetChannelId, {
         limit: MESSAGE_PAGE_SIZE,
       })
       if (isStaleFor(targetChannelId)) return
-      hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
-      const older = toOldestFirst(page)
-      messages.value = [...older, ...messages.value]
-      await resolveAuthorNames(older)
+      hasMoreOlder.value = archivePage.length === MESSAGE_PAGE_SIZE
+      const archiveOlder = toOldestFirst(fromArchive(archivePage))
+      messages.value = [...archiveOlder, ...messages.value]
+      await resolveAuthorNames(archiveOlder)
     } catch (e) {
       if (!isStaleFor(targetChannelId)) {
         error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -224,6 +303,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       // channel, or the guild has none) — a quiet empty state, not a load
       // in progress.
       messages.value = []
+      readingArchive.value = false
       channel.value = null
       loading.value = false
       closeChatSocket()
@@ -270,6 +350,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     loading,
     loadingOlder,
     hasMoreOlder,
+    readingArchive,
     error,
     sendError,
     sending,

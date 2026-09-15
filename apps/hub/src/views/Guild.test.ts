@@ -175,6 +175,166 @@ describe('Guild', () => {
     expect(wrapper.text()).toContain('raids')
   })
 
+  // Issue #464: once the live table's before-cursor pagination is
+  // exhausted (a page shorter than the page size — here, one message
+  // after a full 50-message first page), "load older" falls through to
+  // the archive tier instead of treating that as the end of history.
+  it('falls through to the archive tier once live message pagination is exhausted', async () => {
+    useSessionStore().login('a-token')
+
+    const liveFirstPage = Array.from({ length: 50 }, (_, i) => ({
+      id: `live-${i}`,
+      channel_id: 'c1',
+      author: 'id-owner',
+      body: `live message ${i}`,
+      sent_at: new Date(2026, 0, 2, 12, 0, 50 - i).toISOString(),
+    }))
+    const liveOlderPartial = [
+      {
+        id: 'live-old-1',
+        channel_id: 'c1',
+        author: 'id-owner',
+        body: 'oldest live message',
+        sent_at: new Date(2026, 0, 1, 11, 0).toISOString(),
+      },
+    ]
+    const archivedPage = [
+      {
+        id: 'archived-1',
+        channel_id: 'c1',
+        author: 'id-owner',
+        body: 'ancient archived message',
+        sent_at: new Date(2025, 0, 1).toISOString(),
+        archived_at: new Date(2025, 6, 1).toISOString(),
+      },
+    ]
+
+    let liveMessagesCallCount = 0
+    const baseTable: Record<string, unknown> = baseRoutes()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        const path = new URL(url, 'http://test').pathname
+        const method = init?.method ?? 'GET'
+        let body: unknown
+
+        if (path === '/guilds/g1/channels/c1/messages' && method === 'GET') {
+          liveMessagesCallCount += 1
+          body = liveMessagesCallCount === 1 ? liveFirstPage : liveOlderPartial
+        } else if (path === '/guilds/g1/channels/c1/messages/archive') {
+          body = archivedPage
+        } else {
+          body = path in baseTable ? baseTable[path] : undefined
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body)),
+        })
+      }),
+    )
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const channelsTab = wrapper.findAll('button').find((b) => b.text() === 'Channels')!
+    await channelsTab.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('live message 0'))
+
+    const scrollContainer = wrapper.find('[class*="messageScroll"]')
+    expect(scrollContainer.exists()).toBe(true)
+    await scrollContainer.trigger('scroll')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('ancient archived message'))
+
+    expect(wrapper.text()).toContain('oldest live message')
+    expect(wrapper.text()).toContain('Start of channel history.')
+  })
+
+  // A channel with nothing in its archive tier behaves exactly as today:
+  // once both the live table and the archive both come back short of a
+  // full page, pagination stops — no repeated failed/empty request loop.
+  it('stops paginating cleanly when a channel has no archived messages either', async () => {
+    useSessionStore().login('a-token')
+
+    const baseTable: Record<string, unknown> = baseRoutes()
+    let liveMessagesCallCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        const path = new URL(url, 'http://test').pathname
+        const method = init?.method ?? 'GET'
+        let body: unknown
+
+        if (path === '/guilds/g1/channels/c1/messages' && method === 'GET') {
+          liveMessagesCallCount += 1
+          body =
+            liveMessagesCallCount === 1
+              ? [
+                  {
+                    id: 'live-1',
+                    channel_id: 'c1',
+                    author: 'id-owner',
+                    body: 'the only message',
+                    sent_at: '2026-01-01T00:00:00Z',
+                  },
+                ]
+              : []
+        } else if (path === '/guilds/g1/channels/c1/messages/archive') {
+          body = []
+        } else {
+          body = path in baseTable ? baseTable[path] : undefined
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body)),
+        })
+      }),
+    )
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const channelsTab = wrapper.findAll('button').find((b) => b.text() === 'Channels')!
+    await channelsTab.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('the only message'))
+
+    // A single message is not a full page, but there's no way to know yet
+    // whether the archive tier holds more — the "load older" affordance
+    // stays available until a scroll actually checks.
+    expect(wrapper.text()).not.toContain('Start of channel history.')
+
+    const scrollContainer = wrapper.find('[class*="messageScroll"]')
+    await scrollContainer.trigger('scroll')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Start of channel history.'))
+
+    const archiveCallsAfterFirstScroll = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([url]) => String(url).includes('/messages/archive'),
+    ).length
+    expect(archiveCallsAfterFirstScroll).toBe(1)
+
+    // hasMoreOlder is now false — a second scroll must not fire another
+    // request at all, live or archive.
+    await scrollContainer.trigger('scroll')
+    await flushPromises()
+    const archiveCallsAfterSecondScroll = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([url]) => String(url).includes('/messages/archive'),
+    ).length
+    expect(archiveCallsAfterSecondScroll).toBe(1)
+  })
+
   it('shows the icon badge in the header when set, and nothing when unset', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())

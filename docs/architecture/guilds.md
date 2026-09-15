@@ -321,7 +321,12 @@ exact types, endpoints, and migrations behind every item above.
   (archive tier, done): `guild_messages_archive` table, archive read access
   scoped to current membership (not membership as of send time), and
   moderation `delete_message` reaching an already-archived row so a
-  takedown can't be defeated by pruning timing.
+  takedown can't be defeated by pruning timing. The Hub reads this tier
+  too ([#464](https://github.com/LunarVagabond/avalon-protocol/issues/464),
+  done): `useGuildChat.ts`'s "load older" falls through to
+  `GET .../messages/archive` once the live table's before-cursor
+  pagination comes up short of a full page, rather than treating that as
+  the end of history.
 - [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
   scopes, including roster visibility.
 - [#449](https://github.com/LunarVagabond/avalon-protocol/issues/449) —
