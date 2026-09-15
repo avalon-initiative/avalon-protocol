@@ -12,10 +12,12 @@ defineProps<AvalonAuthCardProps>()
 
 <template>
   <div :class="styles.card">
-    <h1 :class="styles.title">{{ title }}</h1>
-    <p v-if="subtitle" :class="styles.subtitle">{{ subtitle }}</p>
-    <div :class="styles.body">
-      <slot />
+    <div :class="styles.inner">
+      <h1 :class="styles.title">{{ title }}</h1>
+      <p v-if="subtitle" :class="styles.subtitle">{{ subtitle }}</p>
+      <div :class="styles.body">
+        <slot />
+      </div>
     </div>
   </div>
 </template>
