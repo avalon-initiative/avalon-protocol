@@ -189,6 +189,16 @@ pub enum AppError {
     IntegratorKeyNotFound,
     #[error("integrator signature verification failed")]
     InvalidIntegratorSignature,
+    #[error("issuer registration challenge not found or already used")]
+    IssuerRegistrationChallengeNotFound,
+    #[error("issuer registration challenge has expired")]
+    IssuerRegistrationChallengeExpired,
+    #[error("proof-of-possession signature does not verify against the supplied issuer_pubkey")]
+    InvalidProofOfPossession,
+    #[error("declared_network_id does not match this server's own network")]
+    DeclaredNetworkMismatch,
+    #[error("this issuer key is not registered on this network — see POST /issuers/register")]
+    IssuerNotRegisteredOnNetwork,
     #[error("this action requires the issuer's root key, not an operational key")]
     IssuerKeyNotRoot,
     #[error("key role must be one of root, operational")]
@@ -431,6 +441,13 @@ impl AppError {
             AppError::IntegratorChallengeExpired => "INTEGRATOR_CHALLENGE_EXPIRED",
             AppError::IntegratorKeyNotFound => "INTEGRATOR_KEY_NOT_FOUND",
             AppError::InvalidIntegratorSignature => "INVALID_INTEGRATOR_SIGNATURE",
+            AppError::IssuerRegistrationChallengeNotFound => {
+                "ISSUER_REGISTRATION_CHALLENGE_NOT_FOUND"
+            }
+            AppError::IssuerRegistrationChallengeExpired => "ISSUER_REGISTRATION_CHALLENGE_EXPIRED",
+            AppError::InvalidProofOfPossession => "INVALID_PROOF_OF_POSSESSION",
+            AppError::DeclaredNetworkMismatch => "DECLARED_NETWORK_MISMATCH",
+            AppError::IssuerNotRegisteredOnNetwork => "ISSUER_NOT_REGISTERED_ON_NETWORK",
             AppError::IssuerKeyNotRoot => "ISSUER_KEY_NOT_ROOT",
             AppError::InvalidIssuerKeyRole => "INVALID_ISSUER_KEY_ROLE",
             AppError::IssuerKeyForbidden => "ISSUER_KEY_FORBIDDEN",
@@ -601,6 +618,19 @@ impl IntoResponse for AppError {
             | AppError::IntegratorKeyNotFound
             | AppError::InvalidIntegratorSignature
             | AppError::IssuerKeyNotRoot => StatusCode::UNAUTHORIZED,
+            // Same "collapse to 401" posture as the integrator challenge-
+            // response scheme above — a registration-challenge failure
+            // reason is useful for a legitimate caller debugging its own
+            // integration, not worth a different status code.
+            AppError::IssuerRegistrationChallengeNotFound
+            | AppError::IssuerRegistrationChallengeExpired
+            | AppError::InvalidProofOfPossession => StatusCode::UNAUTHORIZED,
+            AppError::DeclaredNetworkMismatch => StatusCode::BAD_REQUEST,
+            // Signature-authentic but not admitted on this network (#481) —
+            // a real, distinct 403, not folded into the 401s above: the
+            // caller proved key possession just fine, this network simply
+            // hasn't admitted the key.
+            AppError::IssuerNotRegisteredOnNetwork => StatusCode::FORBIDDEN,
             AppError::InvalidIssuerKeyRole => StatusCode::BAD_REQUEST,
             AppError::IssuerKeyForbidden => StatusCode::FORBIDDEN,
             AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,

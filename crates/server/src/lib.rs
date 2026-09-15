@@ -20,6 +20,7 @@ pub mod idempotency;
 pub mod integrator_data;
 pub mod integrator_schemas;
 pub mod integrators;
+pub mod issuer_registration;
 pub mod migrate;
 pub mod mirror_watcher;
 pub mod outbox;
@@ -233,6 +234,19 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/integrations/{slug}/keys/{key_id}/revoke",
             post(integrators::revoke_issuer_key),
+        )
+        // #481 (implementing #479's decided ADR): per-network issuer
+        // registration gate — deliberately not nested under
+        // /integrations/{slug}/... since the wire shape is pubkey-first,
+        // not integrator-id-first (see issuer_registration.rs's module
+        // doc comment for why this is a separate table/concept).
+        .route(
+            "/issuers/registration-challenge",
+            post(issuer_registration::create_registration_challenge),
+        )
+        .route(
+            "/issuers/register",
+            post(issuer_registration::register_issuer),
         )
         .route(
             "/integrations/{slug}/registry",
