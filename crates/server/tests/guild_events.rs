@@ -198,6 +198,66 @@ async fn create_rsvp_as_two_members_and_list_shows_both_responses() {
     assert_eq!(listed["rsvp_counts"]["going"], 1);
     assert_eq!(listed["rsvp_counts"]["maybe"], 1);
     assert_eq!(listed["rsvp_counts"]["not_going"], 0);
+    // Issue #463: the owner's own list sees their own "going" RSVP, never
+    // the member's "maybe" — my_rsvp is always caller-scoped.
+    assert_eq!(listed["my_rsvp"], "going");
+
+    let member_list: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let member_listed = member_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == event_id)
+        .expect("created event should be listed");
+    assert_eq!(member_listed["my_rsvp"], "maybe");
+}
+
+#[tokio::test]
+#[ignore]
+async fn my_rsvp_is_null_until_the_caller_responds() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let (_owner_id, owner_token) = seed_identity_session(&test_pool().await).await;
+    let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
+
+    let create = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body("Scrim night"))
+    .send()
+    .await
+    .unwrap();
+    let event: serde_json::Value = create.json().await.unwrap();
+    let event_id = event["id"].as_str().unwrap();
+    assert_eq!(event["my_rsvp"], serde_json::Value::Null);
+
+    let list: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let listed = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == event_id)
+        .expect("created event should be listed");
+    assert_eq!(listed["my_rsvp"], serde_json::Value::Null);
 }
 
 #[tokio::test]

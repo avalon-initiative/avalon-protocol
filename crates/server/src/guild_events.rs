@@ -177,6 +177,33 @@ pub struct EventResponse {
     /// Issue #448. `false` (the default) keeps this event member-only even
     /// in a [`crate::guilds::GuildResponse::public`] guild.
     pub public: bool,
+    /// Issue #463. The caller's own RSVP status for this event, or `None`
+    /// if they haven't RSVP'd — never another identity's. Lets a client
+    /// pre-select `AvalonRsvpControl` correctly instead of always
+    /// rendering unset, even after the caller has already responded.
+    pub my_rsvp: Option<String>,
+}
+
+/// The caller's own `guild_event_rsvps` row for `event_id`, or `None` if
+/// they haven't RSVP'd — self-only, same posture [`upsert_rsvp`] takes.
+/// Read back as the raw stored string rather than re-parsed through
+/// [`RsvpStatus`]: every write path already validates it, so a read
+/// failure here would mean data corruption, not a client error — same
+/// "never a hard failure on a read path" precedent `guilds::row_badge`
+/// documents for role badges.
+async fn my_rsvp(
+    state: &AppState,
+    event_id: Uuid,
+    actor: Uuid,
+) -> Result<Option<String>, AppError> {
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM guild_event_rsvps WHERE event_id = $1 AND identity_id = $2",
+    )
+    .bind(event_id)
+    .bind(actor)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(status)
 }
 
 async fn rsvp_counts(state: &AppState, event_id: Uuid) -> Result<RsvpCounts, AppError> {
@@ -204,8 +231,13 @@ async fn rsvp_counts(state: &AppState, event_id: Uuid) -> Result<RsvpCounts, App
     Ok(counts)
 }
 
-async fn event_response(state: &AppState, row: EventRow) -> Result<EventResponse, AppError> {
+async fn event_response(
+    state: &AppState,
+    row: EventRow,
+    actor: Uuid,
+) -> Result<EventResponse, AppError> {
     let rsvp_counts = rsvp_counts(state, row.id).await?;
+    let my_rsvp = my_rsvp(state, row.id, actor).await?;
     Ok(EventResponse {
         id: row.id,
         guild_id: row.guild_id,
@@ -218,6 +250,7 @@ async fn event_response(state: &AppState, row: EventRow) -> Result<EventResponse
         created_at: row.created_at,
         rsvp_counts,
         public: row.public,
+        my_rsvp,
     })
 }
 
@@ -284,7 +317,7 @@ pub async fn list_events(
             created_at: row.try_get("created_at")?,
             public: row.try_get("public")?,
         };
-        events.push(event_response(&state, event).await?);
+        events.push(event_response(&state, event, actor).await?);
     }
     Ok(Json(events))
 }
@@ -361,6 +394,7 @@ pub async fn create_event(
             created_at,
             public: body.public,
         },
+        actor,
     )
     .await
     .map(Json)
@@ -432,6 +466,7 @@ pub async fn update_event(
             created_at: existing.created_at,
             public: body.public,
         },
+        actor,
     )
     .await
     .map(Json)

@@ -29,10 +29,10 @@ import {
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
-import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId } from '../api/types'
+import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId, EventResponse } from '../api/types'
 import ChannelPermissionOverrides from '../components/ChannelPermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
-import { localDateKey, sortByStartsAt, validateEventForm } from '../api/guildEvents'
+import { localDateKey, sortByStartsAt, toLocalDateTimeInput, validateEventForm } from '../api/guildEvents'
 import {
   addFavoriteGameId,
   canChangeMemberRole,
@@ -116,6 +116,16 @@ const canManageMembers = computed(
 const canManageChannels = computed(
   () =>
     guild.value !== null && hasGuildPermission(guild.value, selfId.value, selfPermissions.value, 'manage_channels'),
+)
+// Issue #463: events have their own `event_manage` permission (#250) —
+// previously ungated in the Hub, which fell back to reusing
+// canManageChannels for the "+ New event" button. This is still the flat
+// (non-resource-aware) check: a plain member granted event_manage on one
+// specific event via a per-resource override won't see edit/delete on
+// that event either, matching the same limitation canManageChannels
+// already has for channel-level overrides.
+const canManageEvents = computed(
+  () => guild.value !== null && hasGuildPermission(guild.value, selfId.value, selfPermissions.value, 'event_manage'),
 )
 const isMember = computed(() => members.value.some((m) => m.identityId === selfId.value))
 
@@ -1190,15 +1200,31 @@ const newEventEndsAt = ref('')
 const newEventPublic = ref(false)
 const creatingEvent = ref(false)
 const createEventError = ref('')
+// Issue #463. Non-null while the create-event form doubles as the
+// edit-event form for this event id — same form, same fields, a
+// different submit target (updateEvent instead of createEvent).
+const editingEventId = ref<string | null>(null)
 
 function cancelCreateEvent() {
   showCreateEvent.value = false
+  editingEventId.value = null
   newEventTitle.value = ''
   newEventDescription.value = ''
   newEventStartsAt.value = ''
   newEventEndsAt.value = ''
   newEventPublic.value = false
   createEventError.value = ''
+}
+
+function onEditEvent(event: EventResponse) {
+  editingEventId.value = event.id
+  newEventTitle.value = event.title
+  newEventDescription.value = event.description ?? ''
+  newEventStartsAt.value = toLocalDateTimeInput(event.starts_at)
+  newEventEndsAt.value = event.ends_at ? toLocalDateTimeInput(event.ends_at) : ''
+  newEventPublic.value = event.public
+  createEventError.value = ''
+  showCreateEvent.value = true
 }
 
 async function onCreateEvent() {
@@ -1218,19 +1244,46 @@ async function onCreateEvent() {
   }
   creatingEvent.value = true
   try {
-    await api.createEvent(session.token, guildId.value, {
-      title: newEventTitle.value.trim(),
-      description: newEventDescription.value.trim() || undefined,
-      starts_at: startsAtIso,
-      ends_at: endsAtIso || undefined,
-      public: newEventPublic.value,
-    })
+    if (editingEventId.value) {
+      await api.updateEvent(session.token, guildId.value, editingEventId.value, {
+        title: newEventTitle.value.trim(),
+        description: newEventDescription.value.trim() || undefined,
+        starts_at: startsAtIso,
+        ends_at: endsAtIso || undefined,
+        public: newEventPublic.value,
+      })
+    } else {
+      await api.createEvent(session.token, guildId.value, {
+        title: newEventTitle.value.trim(),
+        description: newEventDescription.value.trim() || undefined,
+        starts_at: startsAtIso,
+        ends_at: endsAtIso || undefined,
+        public: newEventPublic.value,
+      })
+    }
     cancelCreateEvent()
     await refresh()
   } catch (e) {
     createEventError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     creatingEvent.value = false
+  }
+}
+
+const deletingEventId = ref<string | null>(null)
+
+async function onDeleteEvent(event: EventResponse) {
+  if (!session.token) return
+  if (!window.confirm(`Delete "${event.title}"? This can't be undone.`)) return
+  actionError.value = ''
+  deletingEventId.value = event.id
+  try {
+    await api.deleteEvent(session.token, guildId.value, event.id)
+    await refresh()
+  } catch (e) {
+    actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    deletingEventId.value = null
   }
 }
 
@@ -1792,11 +1845,9 @@ const {
       Guild events calendar + RSVP (issue #169). Neither an event nor
       an RSVP row is durable protocol history — see
       docs/architecture/guilds.md's "Guild events calendar + RSVP"
-      section — so nothing here claims to be permanent. The list
-      endpoint doesn't currently return the *caller's own* RSVP status
-      per event (only aggregate counts), so AvalonRsvpControl always
-      renders with no pre-selected status today — a real gap, not
-      silently worked around.
+      section — so nothing here claims to be permanent. `EventResponse`
+      includes the caller's own RSVP status (issue #463), so
+      AvalonRsvpControl pre-selects it correctly.
     -->
     <div v-else-if="activeTab === 'events'" :class="styles.mainColumn">
         <AvalonCard title="Events">
@@ -1817,22 +1868,31 @@ const {
               :ends-at="event.ends_at ?? undefined"
               :rsvp-counts="event.rsvp_counts"
             >
-              <template v-if="isMember" #actions>
-                <div @click.stop>
-                  <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+              <template #actions>
+                <div v-if="isMember" @click.stop>
+                  <AvalonRsvpControl :current-status="event.my_rsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
+                </div>
+                <div v-if="canManageEvents" @click.stop :class="local.eventManageActions">
+                  <AvalonButton label="Edit" variant="secondary" @click="onEditEvent(event)" />
+                  <AvalonButton
+                    :label="deletingEventId === event.id ? 'Deleting…' : 'Delete'"
+                    variant="danger"
+                    :disabled="deletingEventId === event.id"
+                    @click="onDeleteEvent(event)"
+                  />
                 </div>
               </template>
             </AvalonEventCard>
           </div>
           <AvalonButton
-            v-if="canManageChannels && !showCreateEvent"
+            v-if="canManageEvents && !showCreateEvent"
             label="+ New event"
             variant="secondary"
             @click="showCreateEvent = true"
           />
           <div v-if="showCreateEvent">
             <AvalonForm
-              submit-label="Create event"
+              :submit-label="editingEventId ? 'Save changes' : 'Create event'"
               :submitting="creatingEvent"
               :error="createEventError"
               @submit="onCreateEvent"
@@ -1894,7 +1954,7 @@ const {
               >
                 <template v-if="isMember" #actions>
                   <div @click.stop>
-                    <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
+                    <AvalonRsvpControl :current-status="event.my_rsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
                   </div>
                 </template>
               </AvalonEventCard>

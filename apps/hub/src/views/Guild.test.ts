@@ -504,6 +504,108 @@ describe('Guild', () => {
     expect(wrapper.text()).toContain('Community mixer')
     expect(wrapper.text()).toContain('Join to see everything and RSVP')
     expect(wrapper.findAll('button').some((b) => b.text() === 'Going')).toBe(false)
+    expect(wrapper.findAll('button').some((b) => b.text() === 'Edit')).toBe(false)
+    expect(wrapper.findAll('button').some((b) => b.text() === 'Delete')).toBe(false)
+  })
+
+  // Issue #463: AvalonRsvpControl pre-selects the caller's own RSVP from
+  // EventResponse.my_rsvp, and edit/delete are reachable for a manager.
+  it("pre-selects the caller's RSVP and allows editing an event", async () => {
+    useSessionStore().login('a-token')
+    const event = {
+      id: 'e1',
+      guild_id: 'g1',
+      channel_id: null,
+      title: 'Raid night',
+      description: null,
+      starts_at: '2026-09-20T20:00:00Z',
+      ends_at: null,
+      created_by: 'id-owner',
+      created_at: 'now',
+      rsvp_counts: { going: 1, maybe: 0, not_going: 0 },
+      public: false,
+      my_rsvp: 'going',
+    }
+    mockFetchByPath({ ...baseRoutes(), '/guilds/g1/events': [event] })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const eventsTab = wrapper.findAll('button').find((b) => b.text() === 'Events')!
+    await eventsTab.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Raid night'))
+
+    const goingButton = wrapper.findAll('button').find((b) => b.text() === 'Going')!
+    expect(goingButton.attributes('aria-pressed')).toBe('true')
+
+    const editButton = wrapper.findAll('button').find((b) => b.text() === 'Edit')!
+    await editButton.trigger('click')
+    await flushPromises()
+
+    expect((wrapper.find('input[placeholder="Raid night"]').element as HTMLInputElement).value).toBe(
+      'Raid night',
+    )
+
+    await wrapper.find('input[placeholder="Raid night"]').setValue('Raid night (rescheduled)')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const patchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      return String(url).includes('/guilds/g1/events/e1') && method === 'PATCH'
+    })
+    expect(patchCall).toBeTruthy()
+    const body = JSON.parse((patchCall![1] as RequestInit).body as string)
+    expect(body.title).toBe('Raid night (rescheduled)')
+  })
+
+  it('deletes an event after confirming', async () => {
+    useSessionStore().login('a-token')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const event = {
+      id: 'e1',
+      guild_id: 'g1',
+      channel_id: null,
+      title: 'Raid night',
+      description: null,
+      starts_at: '2026-09-20T20:00:00Z',
+      ends_at: null,
+      created_by: 'id-owner',
+      created_at: 'now',
+      rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
+      public: false,
+      my_rsvp: null,
+    }
+    mockFetchByPath({
+      ...baseRoutes(),
+      '/guilds/g1/events': [event],
+      '/guilds/g1/events/e1': { deleted: true },
+    })
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const eventsTab = wrapper.findAll('button').find((b) => b.text() === 'Events')!
+    await eventsTab.trigger('click')
+    await flushPromises()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Raid night'))
+
+    const deleteButton = wrapper.findAll('button').find((b) => b.text() === 'Delete')!
+    await deleteButton.trigger('click')
+    await flushPromises()
+
+    const deleteCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      return String(url).includes('/guilds/g1/events/e1') && method === 'DELETE'
+    })
+    expect(deleteCall).toBeTruthy()
   })
 
   // Issue #393: clicking a member's row opens their read-only profile card.

@@ -309,6 +309,13 @@
   }
 }
 
+/* Issue #463: edit/delete actions on an event card, alongside the RSVP
+   control in the same #actions slot. */
+.eventManageActions {
+  display: flex;
+  gap: var(--av-space-sm, 0.5rem);
+}
+
 /* Issue #276: MOTD moved out of the Overview tab's About card into a
    persistent banner above the tab bar, so it actually functions as a
    message-of-the-day (visible regardless of which tab is active) instead

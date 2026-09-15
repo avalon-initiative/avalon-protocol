@@ -7,6 +7,7 @@ import {
   rsvpStatusLabel,
   sortByStartsAt,
   splitUpcoming,
+  toLocalDateTimeInput,
   totalRsvps,
   validateEventForm,
 } from './guildEvents'
@@ -25,6 +26,7 @@ function makeEvent(overrides: Partial<EventResponse> = {}): EventResponse {
     created_at: '2026-09-01T00:00:00Z',
     rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
     public: false,
+    my_rsvp: null,
     ...overrides,
   }
 }
@@ -152,6 +154,21 @@ describe('localDateKey', () => {
   it('pads single-digit months and days', () => {
     const local = new Date(2026, 0, 5, 9, 0) // Jan 5 2026 local
     expect(localDateKey(local.toISOString())).toBe('2026-01-05')
+  })
+})
+
+describe('toLocalDateTimeInput', () => {
+  // Same round-trip-through-a-local-Date approach localDateKey's own tests
+  // take, for the same reason: a hardcoded UTC string's local wall-clock
+  // time depends on the test runner's timezone.
+  it("is the inverse of AvalonDateTimeField's new Date(value).toISOString() convention", () => {
+    const local = new Date(2026, 8, 15, 20, 5) // Sep 15 2026, 8:05pm local
+    expect(toLocalDateTimeInput(local.toISOString())).toBe('2026-09-15T20:05')
+  })
+
+  it('pads single-digit hours and minutes', () => {
+    const local = new Date(2026, 0, 5, 9, 3)
+    expect(toLocalDateTimeInput(local.toISOString())).toBe('2026-01-05T09:03')
   })
 })
 

@@ -74,6 +74,22 @@ export function localDateKey(isoUtc: string): string {
   return `${y}-${m}-${day}`
 }
 
+// "YYYY-MM-DDTHH:mm" in the viewer's local timezone — the exact format
+// AvalonDateTimeField's modelValue expects, and the inverse of
+// onCreateEvent/onSaveEditEvent's `new Date(value).toISOString()`. Used to
+// pre-fill the edit-event form from a server response's UTC starts_at/
+// ends_at, same "store universal, translate for UI" model localDateKey
+// above already documents.
+export function toLocalDateTimeInput(isoUtc: string): string {
+  const d = new Date(isoUtc)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${day}T${h}:${min}`
+}
+
 // Splits a list into "still upcoming" vs. "already started/ended", given
 // the current time — used to fade or section past events in the calendar
 // view without a second server round-trip.
