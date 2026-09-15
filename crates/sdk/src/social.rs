@@ -40,6 +40,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+use crate::http::websocket_url;
 use crate::{SdkError, Session};
 
 /// A friend, from this integrator's point of view.
@@ -97,19 +98,6 @@ struct UpdatePresenceRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum PresenceSubscribeMessage {
     Subscribe { ids: Vec<IdentityId> },
-}
-
-/// `server_url` is `http(s)://…`; the websocket endpoint needs `ws(s)://…`.
-/// A plain scheme swap, not a full URL library round-trip — kept as a free
-/// function, testable without any network call.
-fn websocket_url(server_url: &str, path: &str) -> String {
-    if let Some(rest) = server_url.strip_prefix("https://") {
-        format!("wss://{rest}{path}")
-    } else if let Some(rest) = server_url.strip_prefix("http://") {
-        format!("ws://{rest}{path}")
-    } else {
-        format!("{server_url}{path}")
-    }
 }
 
 impl Session {
@@ -406,22 +394,6 @@ mod tests {
         assert_eq!(
             merge_friend(&friendship_2, self_id, &HashMap::new()).identity_id,
             other_id
-        );
-    }
-
-    #[test]
-    fn websocket_url_swaps_http_scheme_for_ws() {
-        assert_eq!(
-            websocket_url("http://127.0.0.1:8080", "/ws/presence?token=abc"),
-            "ws://127.0.0.1:8080/ws/presence?token=abc"
-        );
-    }
-
-    #[test]
-    fn websocket_url_swaps_https_scheme_for_wss() {
-        assert_eq!(
-            websocket_url("https://avalon.example", "/ws/presence?token=abc"),
-            "wss://avalon.example/ws/presence?token=abc"
         );
     }
 

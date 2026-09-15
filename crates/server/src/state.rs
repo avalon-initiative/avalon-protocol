@@ -5,6 +5,7 @@ use avalon_indexer::postgres::PostgresIndexer;
 use sqlx::PgPool;
 use webauthn_rs::prelude::Webauthn;
 
+use crate::chat::ChatBus;
 use crate::presence::PresenceStore;
 
 #[derive(Clone)]
@@ -23,6 +24,10 @@ pub struct AppState {
     /// In-process, per-node presence state (issue #16). Never persisted —
     /// see `crate::presence` module docs / ADR #78.
     pub presence: PresenceStore,
+    /// Fan-out for guild channel and conversation message push (issue
+    /// #438). Never persisted — Postgres is the source of truth, this only
+    /// wakes up an already-subscribed client. See `crate::chat`.
+    pub chat: ChatBus,
     /// `AVALON_SETTLEMENT_SUBMIT_KEY` (issue #313) — the bearer credential
     /// `POST /ledger/submit` requires. `None` means the endpoint refuses
     /// every request rather than accepting an unauthenticated one; see

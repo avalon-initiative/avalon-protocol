@@ -1,9 +1,10 @@
 // One conversation's message thread (issue #105) — cursor-paginated
 // history (before/limit, matching crates/server/src/conversations.rs),
-// newest at the bottom, load-older on demand, short-poll for new messages.
-// Same shape as useGuildChat.ts, minus everything that's guild-specific
-// (no channel/role/permission lookups, and conversations have no
-// moderation-delete endpoint — see conversations.rs's module doc comment).
+// newest at the bottom, load-older on demand, new messages arrive live over
+// the /ws/messages socket (issue #438) rather than a poll. Same shape as
+// useGuildChat.ts, minus everything that's guild-specific (no channel/role/
+// permission lookups, and conversations have no moderation-delete endpoint
+// — see conversations.rs's module doc comment).
 //
 // `conversationId` is expected to change while this composable stays
 // mounted, the same way useGuildChat's `channelId` does — Messages.vue
@@ -16,7 +17,6 @@ import type { ConversationMessageResponse } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
 const MESSAGE_PAGE_SIZE = 50
-const POLL_INTERVAL_MS = 15_000
 
 export function useConversationThread(conversationId: Ref<string>) {
   const session = useSessionStore()
@@ -29,7 +29,12 @@ export function useConversationThread(conversationId: Ref<string>) {
   const sendError = ref('')
   const sending = ref(false)
 
-  let pollHandle: ReturnType<typeof setInterval> | undefined
+  let chatSocket: api.ChatSocket | undefined
+
+  function closeChatSocket() {
+    chatSocket?.close()
+    chatSocket = undefined
+  }
 
   // Same staleness guard useGuildChat uses: a slow request for a
   // conversation the reader already navigated away from must never
@@ -50,22 +55,17 @@ export function useConversationThread(conversationId: Ref<string>) {
     hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
   }
 
-  async function pollNewMessages() {
-    const targetId = conversationId.value
+  // Opens the live socket for `targetId` (issue #438) — closes whatever
+  // was subscribed before, so switching conversations never leaves a stale
+  // connection pushing updates for one the reader left.
+  function subscribeToConversation(targetId: string) {
+    closeChatSocket()
     if (!session.token || !targetId) return
-    try {
-      const page = await api.listConversationMessages(session.token, targetId, {
-        limit: MESSAGE_PAGE_SIZE,
-      })
+    chatSocket = api.openConversationMessageSocket(session.token, targetId, (message) => {
       if (isStaleFor(targetId)) return
-      const known = new Set(messages.value.map((m) => m.id))
-      const fresh = toOldestFirst(page).filter((m) => !known.has(m.id))
-      if (fresh.length > 0) {
-        messages.value = [...messages.value, ...fresh]
-      }
-    } catch {
-      // Best-effort poll — the next tick retries.
-    }
+      if (messages.value.some((m) => m.id === message.id)) return
+      messages.value = [...messages.value, message]
+    })
   }
 
   async function loadOlder() {
@@ -123,12 +123,15 @@ export function useConversationThread(conversationId: Ref<string>) {
     if (!targetId) {
       messages.value = []
       loading.value = false
+      closeChatSocket()
       return
     }
     loading.value = true
     error.value = ''
     try {
       await loadLatestMessages(targetId)
+      if (isStaleFor(targetId)) return
+      subscribeToConversation(targetId)
     } catch (e) {
       if (!isStaleFor(targetId)) {
         error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -142,13 +145,10 @@ export function useConversationThread(conversationId: Ref<string>) {
 
   watch(conversationId, load)
 
-  onMounted(() => {
-    load()
-    pollHandle = setInterval(pollNewMessages, POLL_INTERVAL_MS)
-  })
+  onMounted(load)
 
   onUnmounted(() => {
-    if (pollHandle) clearInterval(pollHandle)
+    closeChatSocket()
   })
 
   return {

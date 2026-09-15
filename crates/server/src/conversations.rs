@@ -252,7 +252,7 @@ pub async fn list_my_conversations(
     Ok(Json(conversations))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -406,13 +406,19 @@ pub async fn send_message(
 
     prune_conversation(&state, conversation_id).await?;
 
-    Ok(Json(MessageResponse {
+    let response = MessageResponse {
         id: message_id,
         conversation_id,
         author: actor,
         body: body.body,
         sent_at,
-    }))
+    };
+    // Issue #438: pushes the new message to every websocket connection
+    // subscribed to this conversation — see `crate::chat`. Only the
+    // fresh-insert path publishes; the idempotent-retry return above
+    // already published once, on the original send.
+    state.chat.publish_conversation_message(response.clone());
+    Ok(Json(response))
 }
 
 /// Looks up a message already recorded for `(conversation_id,

@@ -103,6 +103,7 @@ async fn main() {
         indexer,
         webauthn,
         presence: avalon_server::presence::PresenceStore::from_env(),
+        chat: avalon_server::chat::ChatBus::new(),
         settlement_submit_key: std::env::var("AVALON_SETTLEMENT_SUBMIT_KEY")
             .ok()
             .filter(|s| !s.is_empty()),

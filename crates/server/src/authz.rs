@@ -385,6 +385,7 @@ mod live_tests {
             indexer,
             webauthn,
             presence: PresenceStore::from_env(),
+            chat: crate::chat::ChatBus::new(),
             settlement_submit_key: None,
         }
     }
