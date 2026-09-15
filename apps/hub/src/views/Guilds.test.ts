@@ -133,4 +133,54 @@ describe('Guilds', () => {
     await flushPromises()
     expect(wrapper.text()).not.toContain('Filtered to guilds playing')
   })
+
+  // Issue #432/ADR #437: a tier-2 browse view — should pick up a newly
+  // created public guild without a manual reload, but only once the
+  // Discover tab is actually opened (it's lazy-loaded).
+  it('polls the Discover board for newly created guilds once opened', async () => {
+    useSessionStore().login('a-token')
+    vi.useFakeTimers()
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        const path = new URL(url, 'http://test').pathname
+        let body: unknown
+        if (path === '/me/guilds') {
+          body = []
+        } else if (path === '/guilds/discover') {
+          call += 1
+          body =
+            call === 1
+              ? { guilds: [], next_cursor: null }
+              : { guilds: [{ ...guildBase, id: 'g1', name: 'Dragon Hunters' }], next_cursor: null }
+        } else {
+          body = undefined
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body)),
+        })
+      }),
+    )
+
+    const router = testRouter()
+    router.push('/guilds')
+    await router.isReady()
+    const wrapper = mount(Guilds, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const discoverTab = wrapper.findAll('button').find((b) => b.text() === 'Discover')!
+    await discoverTab.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('No guilds match your search.')
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Dragon Hunters')
+
+    vi.useRealTimers()
+  })
 })

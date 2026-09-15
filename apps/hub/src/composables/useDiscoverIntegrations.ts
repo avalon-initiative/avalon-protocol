@@ -6,10 +6,21 @@
 // the server's `ORDER BY` matches its own cursor comparison) — but this
 // endpoint is public and unauthenticated, so unlike useDiscoverGuilds this
 // needs no session token at all.
-import { ref, watch } from 'vue'
+//
+// Issue #432/ADR #437: a tier-2 view (a browse list someone might sit on
+// for a while) — polls on the same interval useMyConnections/useMyGuilds
+// already use, same reasoning: a newly published integration should show
+// up without a manual reload. Polling reuses `refresh()` directly rather
+// than a separate silent variant, since `loading` here only ever
+// suppresses the "no results" empty-state message (never hides already-
+// rendered cards), so a poll tick briefly flipping it has no visible
+// effect on a page that already has content.
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../api/client'
 import { buildIntegratorsListQueryString } from '../api/integrations'
 import type { IntegratorSummary, ListIntegratorsParams } from '../api/types'
+
+const POLL_INTERVAL_MS = 5 * 60_000
 
 export function useDiscoverIntegrations() {
   const query = ref('')
@@ -19,6 +30,8 @@ export function useDiscoverIntegrations() {
   const nextCursor = ref<string | null>(null)
   const loading = ref(false)
   const error = ref('')
+
+  let pollHandle: ReturnType<typeof setInterval> | undefined
 
   function currentParams(cursor?: string): ListIntegratorsParams {
     return {
@@ -60,6 +73,15 @@ export function useDiscoverIntegrations() {
   // Re-runs page one whenever a filter changes, same debounce-free
   // milestone-1 stand-in useDiscoverGuilds.ts already takes.
   watch([query, sort], refresh)
+
+  onMounted(async () => {
+    await refresh()
+    pollHandle = setInterval(refresh, POLL_INTERVAL_MS)
+  })
+
+  onUnmounted(() => {
+    if (pollHandle) clearInterval(pollHandle)
+  })
 
   return { query, sort, integrators, nextCursor, loading, error, refresh, loadMore }
 }
