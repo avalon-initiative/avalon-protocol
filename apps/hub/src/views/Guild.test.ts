@@ -42,7 +42,15 @@ const guild = {
   roster_visibility: 'guild_members',
 }
 
-const roles = [{ name_index: 0, name: 'owner', permissions: ['manage_guild', 'manage_roles', 'manage_members', 'manage_channels'] }]
+const roles = [
+  {
+    name_index: 0,
+    name: 'owner',
+    permissions: ['manage_guild', 'manage_roles', 'manage_members', 'manage_channels'],
+    description: '',
+    badge: { icon: 'shield', color: 'gray' },
+  },
+]
 
 const members = [{ guild_id: 'g1', identity_id: 'id-owner', role_index: 0, joined_at: 'now' }]
 
@@ -282,6 +290,78 @@ describe('Guild', () => {
 
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.text()).toContain("always has every permission")
+  })
+
+  it('creates a role with a description and badge', async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const rolesTab = wrapper.findAll('button').find((b) => b.text() === 'Roles')!
+    await rolesTab.trigger('click')
+    await flushPromises()
+
+    const defineButton = wrapper.findAll('button').find((b) => b.text() === 'Define a role')!
+    await defineButton.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('input[type="text"]').setValue('raid leader')
+    await wrapper.find('input[placeholder="Leads scheduled raids"]').setValue('Leads scheduled raids')
+    await wrapper.find('select[aria-label="Badge icon"]').setValue('crown')
+    await wrapper.find('select[aria-label="Badge color"]').setValue('gold')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const createCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      return String(url).includes('/guilds/g1/roles') && method === 'POST'
+    })
+    expect(createCall).toBeTruthy()
+    const body = JSON.parse((createCall![1] as RequestInit).body as string)
+    expect(body.description).toBe('Leads scheduled raids')
+    expect(body.badge).toEqual({ icon: 'crown', color: 'gold' })
+  })
+
+  it("saves an existing role's description and badge", async () => {
+    useSessionStore().login('a-token')
+    mockFetchByPath(baseRoutes())
+
+    const router = testRouter()
+    router.push('/guilds/g1')
+    await router.isReady()
+    const wrapper = mount(Guild, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Dragon Hunters'))
+
+    const rolesTab = wrapper.findAll('button').find((b) => b.text() === 'Roles')!
+    await rolesTab.trigger('click')
+    await flushPromises()
+
+    const unlockButton = wrapper.find('[aria-label="Unlock role to edit"]')
+    await unlockButton.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('input[placeholder="Description"]').setValue('Runs the guild')
+    await wrapper.find('select[aria-label="Badge icon"]').setValue('wrench')
+    await wrapper.find('select[aria-label="Badge color"]').setValue('blue')
+
+    const saveButton = wrapper.findAll('button').find((b) => b.text() === 'Save')!
+    await saveButton.trigger('click')
+    await flushPromises()
+
+    const patchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([url, init]) => {
+      const method = (init as RequestInit | undefined)?.method
+      return String(url).includes('/guilds/g1/roles/0') && method === 'PATCH'
+    })
+    expect(patchCall).toBeTruthy()
+    const body = JSON.parse((patchCall![1] as RequestInit).body as string)
+    expect(body.description).toBe('Runs the guild')
+    expect(body.badge).toEqual({ icon: 'wrench', color: 'blue' })
   })
 
   // Issue #392: the invite field used to send whatever was typed straight

@@ -29,7 +29,7 @@ import {
   AvalonTextField,
 } from '@avalon/ui'
 import * as api from '../api/client'
-import type { RoleResponse } from '../api/types'
+import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId } from '../api/types'
 import ChannelPermissionOverrides from '../components/ChannelPermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, validateEventForm } from '../api/guildEvents'
@@ -672,9 +672,45 @@ async function onRemoveLink(index: number) {
 
 // --- Roles ------------------------------------------------------------
 
+// Issue #152's closed badge vocabulary, matching
+// avalon_protocol::guilds::{RoleBadgeIcon,RoleBadgeColor}::ALL exactly.
+const ROLE_BADGE_ICON_OPTIONS: RoleBadgeIconId[] = [
+  'shield',
+  'crown',
+  'star',
+  'sword',
+  'wrench',
+  'heart',
+  'flag',
+  'bolt',
+]
+const ROLE_BADGE_COLOR_OPTIONS: RoleBadgeColorId[] = [
+  'gray',
+  'red',
+  'orange',
+  'gold',
+  'green',
+  'blue',
+  'purple',
+]
+// Presentational only — no server-side hex vocabulary to match, these
+// just need to visually distinguish the 7 closed color ids.
+const ROLE_BADGE_COLOR_HEX: Record<RoleBadgeColorId, string> = {
+  gray: '#8b95a6',
+  red: '#e5484d',
+  orange: '#f0763a',
+  gold: '#d4a72c',
+  green: '#3cb179',
+  blue: '#3b82f6',
+  purple: '#8b5cf6',
+}
+
 const showAddRole = ref(false)
 const newRoleName = ref('')
 const newRolePermissions = ref<string[]>([])
+const newRoleDescription = ref('')
+const newRoleBadgeIcon = ref<RoleBadgeIconId>('shield')
+const newRoleBadgeColor = ref<RoleBadgeColorId>('gray')
 const addingRole = ref(false)
 const addRoleError = ref('')
 
@@ -682,6 +718,9 @@ function cancelAddRole() {
   showAddRole.value = false
   newRoleName.value = ''
   newRolePermissions.value = []
+  newRoleDescription.value = ''
+  newRoleBadgeIcon.value = 'shield'
+  newRoleBadgeColor.value = 'gray'
   addRoleError.value = ''
 }
 
@@ -693,6 +732,8 @@ async function onAddRole() {
     await api.createRole(session.token, guildId.value, {
       name: newRoleName.value.trim(),
       permissions: newRolePermissions.value,
+      description: newRoleDescription.value.trim(),
+      badge: { icon: newRoleBadgeIcon.value, color: newRoleBadgeColor.value },
     })
     cancelAddRole()
     await refresh()
@@ -751,33 +792,47 @@ async function onTogglePermission(role: RoleResponse, permission: string, event:
 // rather than checkboxes always being live to click by accident.
 const unlockedRoleIndex = ref<number | null>(null)
 const roleNameDraft = ref('')
+const roleDescriptionDraft = ref('')
+const roleBadgeIconDraft = ref<RoleBadgeIconId>('shield')
+const roleBadgeColorDraft = ref<RoleBadgeColorId>('gray')
 const renamingRoleFor = ref<number | null>(null)
 
 function unlockRole(role: RoleResponse) {
   unlockedRoleIndex.value = role.name_index
   roleNameDraft.value = role.name
+  roleDescriptionDraft.value = role.description
+  roleBadgeIconDraft.value = role.badge.icon
+  roleBadgeColorDraft.value = role.badge.color
 }
 
 function lockRole() {
   unlockedRoleIndex.value = null
 }
 
-// Discards any unsaved name draft and re-locks the row. Permission
-// checkbox changes have no "draft" to discard — each toggle already
-// saved immediately on click — so this only ever affects the name field.
+// Discards any unsaved drafts and re-locks the row. Permission checkbox
+// changes have no "draft" to discard — each toggle already saved
+// immediately on click — so this only ever affects name/description/badge.
 function cancelRoleEdit() {
   unlockedRoleIndex.value = null
   roleNameDraft.value = ''
+  roleDescriptionDraft.value = ''
 }
 
-async function onRenameRole(role: RoleResponse) {
+// Saves name, description, and badge together — all three live in the
+// same unlocked-row draft state, so one save covers whichever of them
+// changed rather than a separate round trip per field.
+async function onSaveRoleEdits(role: RoleResponse) {
   if (!session.token) return
   const name = roleNameDraft.value.trim()
-  if (!name || name === role.name) return
+  if (!name) return
   permissionMatrixError.value = ''
   renamingRoleFor.value = role.name_index
   try {
-    await api.updateRole(session.token, guildId.value, role.name_index, { name })
+    await api.updateRole(session.token, guildId.value, role.name_index, {
+      name,
+      description: roleDescriptionDraft.value.trim(),
+      badge: { icon: roleBadgeIconDraft.value, color: roleBadgeColorDraft.value },
+    })
     await refresh()
   } catch (e) {
     permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1891,17 +1946,44 @@ const {
                       >
                         <AvalonIcon name="close" :size="14" />
                       </button>
+                      <span :style="{ color: ROLE_BADGE_COLOR_HEX[role.badge.color] }">
+                        <AvalonIcon :name="role.badge.icon" :size="14" />
+                      </span>
                       <input
                         v-if="unlockedRoleIndex === role.name_index"
                         v-model="roleNameDraft"
                         :class="local.roleNameInput"
                         type="text"
                         :disabled="renamingRoleFor === role.name_index"
-                        @blur="onRenameRole(role)"
-                        @keydown.enter="onRenameRole(role)"
                       />
                       <span v-else>{{ role.name }}</span>
                     </div>
+                    <div v-if="unlockedRoleIndex === role.name_index" :class="local.roleNameCell">
+                      <input
+                        v-model="roleDescriptionDraft"
+                        :class="local.roleNameInput"
+                        type="text"
+                        placeholder="Description"
+                        :disabled="renamingRoleFor === role.name_index"
+                      />
+                      <select v-model="roleBadgeIconDraft" aria-label="Badge icon">
+                        <option v-for="icon in ROLE_BADGE_ICON_OPTIONS" :key="icon" :value="icon">
+                          {{ icon }}
+                        </option>
+                      </select>
+                      <select v-model="roleBadgeColorDraft" aria-label="Badge color">
+                        <option v-for="color in ROLE_BADGE_COLOR_OPTIONS" :key="color" :value="color">
+                          {{ color }}
+                        </option>
+                      </select>
+                      <AvalonButton
+                        :label="renamingRoleFor === role.name_index ? 'Saving…' : 'Save'"
+                        variant="secondary"
+                        :disabled="renamingRoleFor === role.name_index"
+                        @click="onSaveRoleEdits(role)"
+                      />
+                    </div>
+                    <p v-else-if="role.description" :class="styles.empty">{{ role.description }}</p>
                   </td>
                   <td v-for="permission in PERMISSION_OPTIONS" :key="permission">
                     <input
@@ -1941,6 +2023,27 @@ const {
               @submit="onAddRole"
             >
               <AvalonTextField v-model="newRoleName" label="Role name" placeholder="raid leader" />
+              <AvalonTextField
+                v-model="newRoleDescription"
+                label="Description"
+                placeholder="Leads scheduled raids"
+              />
+              <label>
+                Badge icon
+                <select v-model="newRoleBadgeIcon" aria-label="Badge icon">
+                  <option v-for="icon in ROLE_BADGE_ICON_OPTIONS" :key="icon" :value="icon">
+                    {{ icon }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                Badge color
+                <select v-model="newRoleBadgeColor" aria-label="Badge color">
+                  <option v-for="color in ROLE_BADGE_COLOR_OPTIONS" :key="color" :value="color">
+                    {{ color }}
+                  </option>
+                </select>
+              </label>
               <div v-for="permission in PERMISSION_OPTIONS" :key="permission">
                 <label>
                   <input type="checkbox" :value="permission" v-model="newRolePermissions" />
@@ -1964,7 +2067,13 @@ const {
               </thead>
               <tbody>
                 <tr v-for="role in roles" :key="role.name_index">
-                  <td>{{ role.name }}</td>
+                  <td>
+                    <span :style="{ color: ROLE_BADGE_COLOR_HEX[role.badge.color] }">
+                      <AvalonIcon :name="role.badge.icon" :size="14" />
+                    </span>
+                    {{ role.name }}
+                    <p v-if="role.description" :class="styles.empty">{{ role.description }}</p>
+                  </td>
                   <td v-for="permission in PERMISSION_OPTIONS" :key="permission">
                     <AvalonIcon
                       v-if="role.permissions.includes(permission)"

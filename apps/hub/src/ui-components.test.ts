@@ -46,6 +46,7 @@ const ALL_ICON_NAMES: AvalonIconName[] = [
   'settings', 'voice', 'video', 'messages', 'calendar', 'achievements', 'library',
   'wallet', 'more', 'community', 'faction', 'event', 'reward', 'leaderboards', 'map',
   'join', 'leave', 'invite', 'share', 'bookmark', 'follow', 'muted', 'block',
+  'trophy', 'star', 'shield', 'sword', 'crown', 'wrench', 'heart', 'flag', 'bolt',
 ]
 
 describe('AvalonIcon', () => {

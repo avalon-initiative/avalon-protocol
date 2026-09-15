@@ -107,9 +107,9 @@ describe('mergeGuildMember', () => {
 
 describe('groupMembersByRole', () => {
   const roles: RoleResponse[] = [
-    { name_index: 0, name: 'owner', permissions: ['manage_guild'] },
-    { name_index: 1, name: 'officer', permissions: ['manage_members', 'manage_channels'] },
-    { name_index: 2, name: 'member', permissions: [] },
+    { name_index: 0, name: 'owner', permissions: ['manage_guild'], description: '', badge: { icon: 'shield', color: 'gray' } },
+    { name_index: 1, name: 'officer', permissions: ['manage_members', 'manage_channels'], description: '', badge: { icon: 'shield', color: 'gray' } },
+    { name_index: 2, name: 'member', permissions: [], description: '', badge: { icon: 'shield', color: 'gray' } },
   ]
 
   const members: GuildMember[] = [
@@ -161,8 +161,8 @@ describe('hasGuildPermission', () => {
 
 describe('permissionsForMember', () => {
   const roles: RoleResponse[] = [
-    { name_index: 0, name: 'owner', permissions: ['manage_guild'] },
-    { name_index: 1, name: 'officer', permissions: ['manage_members'] },
+    { name_index: 0, name: 'owner', permissions: ['manage_guild'], description: '', badge: { icon: 'shield', color: 'gray' } },
+    { name_index: 1, name: 'officer', permissions: ['manage_members'], description: '', badge: { icon: 'shield', color: 'gray' } },
   ]
   const members: GuildMember[] = [
     { identityId: OFFICER, roleIndex: 1, status: 'Online', joinedAt: 't' },

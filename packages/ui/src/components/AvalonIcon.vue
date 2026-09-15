@@ -215,5 +215,22 @@ withDefaults(defineProps<AvalonIconProps>(), {
       <path d="m6 18 9.5-9.5M13.5 4.5l6 6-2.5 2.5-6-6Z" />
       <path d="M4 20l2.5-1 0.5-2.5-2 0.5Z" />
     </template>
+    <template v-else-if="name === 'crown'">
+      <path d="M4 9.5 8 12l4-6 4 6 4-2.5-1.5 8.5h-13Z" />
+      <path d="M6 18.5h12" />
+    </template>
+    <template v-else-if="name === 'wrench'">
+      <path d="M14.5 6.5a4 4 0 0 1-5.4 5.4L4 17l3 3 5.1-5.1a4 4 0 0 1 5.4-5.4l-2.6 2.6-2-2Z" />
+    </template>
+    <template v-else-if="name === 'heart'">
+      <path d="M12 20.5S4 15.8 4 9.8a4.2 4.2 0 0 1 8-1.8 4.2 4.2 0 0 1 8 1.8c0 6-8 10.7-8 10.7Z" />
+    </template>
+    <template v-else-if="name === 'flag'">
+      <path d="M6 3v18" />
+      <path d="M6 4.5h11l-2.5 3.5L17 11.5H6Z" />
+    </template>
+    <template v-else-if="name === 'bolt'">
+      <path d="M13 3 5 13.5h5.5L11 21l8-10.5h-5.5Z" />
+    </template>
   </svg>
 </template>
