@@ -30,6 +30,7 @@
 }
 
 .title {
+  min-width: 0;
   font-size: var(--av-text-lg);
   font-weight: 600;
   color: var(--av-color-text);
@@ -59,6 +60,7 @@
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--av-space-2);
   padding: var(--av-space-4);
