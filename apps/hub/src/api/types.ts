@@ -781,6 +781,18 @@ export interface MessageResponse {
   sent_at: string
 }
 
+// Issue #253/#464 — same shape as MessageResponse plus archived_at, over
+// guild_messages_archive instead of the live table. Matches
+// crates/server/src/guild_messages.rs::ArchivedMessageResponse.
+export interface ArchivedMessageResponse {
+  id: string
+  channel_id: string
+  author: string
+  body: string
+  sent_at: string
+  archived_at: string
+}
+
 export interface SendMessageRequest {
   body: string
 }
