@@ -217,11 +217,11 @@ and implemented unless noted otherwise.
   icon** (#246) as an independent image slot.
 - **Independent `recruiting`/`public` settings** (#449, decided; #455,
   implemented) — `recruiting` governs the Discover board and join-request
-  eligibility only; `public` independently governs whether the roster (and,
-  once event visibility ships, public events) is visible to any
-  authenticated identity, regardless of recruiting status. Before #449,
-  `recruiting` alone controlled roster visibility; a guild can now be
-  public without recruiting, or recruiting without a public roster.
+  eligibility only; `public` independently governs whether the roster and
+  public events are visible to any authenticated identity, regardless of
+  recruiting status. Before #449, `recruiting` alone controlled roster
+  visibility; a guild can now be public without recruiting, or recruiting
+  without a public roster.
 - **Guild discovery board** (#154) — browse/search recruiting guilds; a
   milestone-1 server-side stand-in pending the indexer projection (#44/#42).
 - **Guild integrator affinity view** (#206, implementing decision #160) and
@@ -229,6 +229,15 @@ and implemented unless noted otherwise.
   never manager-declared.
 - **Guild events calendar + RSVP** (#169), plus **per-member RSVP roster**
   (#248) — who's going/maybe/can't-go, not just aggregate counts.
+- **Per-event public visibility** (#448) — a `public` flag on each
+  `GuildEvent`, defaulted `false` (member-only, unchanged from before this
+  shipped). A non-member of a `public` guild (#449) sees only that guild's
+  `public` events via `GET /guilds/{id}/events`, instead of being 403'd
+  outright; a member always sees every event regardless of the flag.
+  Deliberately per-event rather than all-or-nothing like the roster
+  override — an event can be genuinely internal (officer planning, loot
+  council) even in an otherwise-public guild. RSVP and the RSVP roster stay
+  member-only either way; `public` only ever widens the *list*.
 - **Guild join requests** (#242) and **withdrawing your own request** (#256).
 - **Invite discovery** (#442) — `GET /me/guild-invites` lists every
   unresolved invite where the caller is the invitee, so accepting/declining
@@ -318,6 +327,11 @@ exact types, endpoints, and migrations behind every item above.
   `Guild.public`, `list_members`'s roster-visibility override re-keyed from
   `recruiting` to `public`, a second "Public" toggle in the Hub's guild
   settings tab.
+- [#448](https://github.com/LunarVagabond/avalon-protocol/issues/448) —
+  per-event public visibility, done: a `public` flag on `GuildEvent`, a
+  non-member of a `public` guild (#449) sees only that guild's public
+  events instead of a flat 403, and the Hub's Events/Calendar tabs are
+  reachable read-only for that case (RSVP/roster stay member-only).
 - [#450](https://github.com/LunarVagabond/avalon-protocol/issues/450) —
   decided: an integrator reads a guild's already-public data (per its own
   visibility settings) the same way `GET /guilds/{id}` works today —

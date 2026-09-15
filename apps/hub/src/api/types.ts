@@ -911,6 +911,9 @@ export interface EventResponse {
   created_by: string
   created_at: string
   rsvp_counts: RsvpCounts
+  // Issue #448. false (the default) keeps this event member-only even in
+  // a public guild (GuildResponse.public).
+  public: boolean
 }
 
 export interface CreateEventRequest {
@@ -919,6 +922,8 @@ export interface CreateEventRequest {
   description?: string | null
   starts_at: string
   ends_at?: string | null
+  // Issue #448. Omitted defaults to false.
+  public?: boolean
 }
 
 export interface UpdateEventRequest {
@@ -927,6 +932,8 @@ export interface UpdateEventRequest {
   description?: string | null
   starts_at: string
   ends_at?: string | null
+  // Issue #448. Always resent, full replace like the rest of this request.
+  public?: boolean
 }
 
 export type RsvpStatusValue = 'going' | 'maybe' | 'not_going'

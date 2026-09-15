@@ -198,6 +198,15 @@
   }
 }
 
+/* Issue #448: the create-event form's public/private toggle. */
+.publicEventToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--av-space-2);
+  font-size: var(--av-text-sm);
+  color: var(--av-color-text-secondary);
+}
+
 .applicationRow {
   display: flex;
   flex-wrap: wrap;

@@ -149,11 +149,13 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'settings', label: 'Settings' },
 ]
 
-// Issue #391: channels/events are member-only server-side — hide those tabs
-// (and Calendar, which is just another view of events) for a non-member
-// browsing a recruiting guild's public page, rather than showing an
-// always-empty tab.
-const MEMBER_ONLY_TABS: TabKey[] = ['channels', 'events', 'calendar']
+// Issue #391: channels are member-only server-side — hidden entirely for a
+// non-member. Issue #448 carves events/calendar out of this: a non-member
+// of a public guild (guild.public, #449) now sees a read-only Events/
+// Calendar tab (server-filtered to that guild's public events), so those
+// two are no longer flatly member-only — only channels stays that way.
+const MEMBER_ONLY_TABS: TabKey[] = ['channels']
+const EVENT_TABS: TabKey[] = ['events', 'calendar']
 // Settings is different from the member-only tabs above: it's hidden from
 // everyone, members included, unless they can actually act on it
 // (manage_guild, or the owner — canManageGuild already covers both) —
@@ -162,6 +164,7 @@ const MEMBER_ONLY_TABS: TabKey[] = ['channels', 'events', 'calendar']
 const visibleTabs = computed(() =>
   TABS.filter((tab) => {
     if (tab.key === 'settings') return canManageGuild.value
+    if (EVENT_TABS.includes(tab.key)) return isMember.value || (guild.value?.public ?? false)
     return isMember.value || !MEMBER_ONLY_TABS.includes(tab.key)
   }),
 )
@@ -176,6 +179,14 @@ const activeTab = ref<TabKey>(route.name === 'guild-channel' ? 'channels' : 'ove
 // deep-linked channel.
 watch(loading, (isLoading) => {
   if (!isLoading && !isMember.value && MEMBER_ONLY_TABS.includes(activeTab.value)) {
+    activeTab.value = 'overview'
+  }
+  if (
+    !isLoading &&
+    !isMember.value &&
+    EVENT_TABS.includes(activeTab.value) &&
+    !(guild.value?.public ?? false)
+  ) {
     activeTab.value = 'overview'
   }
   if (!isLoading && activeTab.value === 'settings' && !canManageGuild.value) {
@@ -1080,6 +1091,10 @@ const newEventTitle = ref('')
 const newEventDescription = ref('')
 const newEventStartsAt = ref('')
 const newEventEndsAt = ref('')
+// Issue #448: defaults to false — member-only, same as every event before
+// this field existed. A guild opts an event into public visibility, not
+// the other way around.
+const newEventPublic = ref(false)
 const creatingEvent = ref(false)
 const createEventError = ref('')
 
@@ -1089,6 +1104,7 @@ function cancelCreateEvent() {
   newEventDescription.value = ''
   newEventStartsAt.value = ''
   newEventEndsAt.value = ''
+  newEventPublic.value = false
   createEventError.value = ''
 }
 
@@ -1114,6 +1130,7 @@ async function onCreateEvent() {
       description: newEventDescription.value.trim() || undefined,
       starts_at: startsAtIso,
       ends_at: endsAtIso || undefined,
+      public: newEventPublic.value,
     })
     cancelCreateEvent()
     await refresh()
@@ -1690,12 +1707,15 @@ const {
     -->
     <div v-else-if="activeTab === 'events'" :class="styles.mainColumn">
         <AvalonCard title="Events">
+          <p v-if="!isMember" :class="styles.empty">
+            Showing this guild's public events. Join to see everything and RSVP.
+          </p>
           <p v-if="sortedEvents.length === 0" :class="styles.empty">No upcoming events yet.</p>
           <div
             v-for="event in sortedEvents"
             :key="event.id"
-            :class="local.eventCardClickable"
-            @click="openRsvpRoster(event.id, event.title)"
+            :class="isMember ? local.eventCardClickable : undefined"
+            @click="isMember && openRsvpRoster(event.id, event.title)"
           >
             <AvalonEventCard
               :title="event.title"
@@ -1704,7 +1724,7 @@ const {
               :ends-at="event.ends_at ?? undefined"
               :rsvp-counts="event.rsvp_counts"
             >
-              <template #actions>
+              <template v-if="isMember" #actions>
                 <div @click.stop>
                   <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
                 </div>
@@ -1732,6 +1752,10 @@ const {
               />
               <AvalonDateTimeField v-model="newEventStartsAt" label="Starts at" />
               <AvalonDateTimeField v-model="newEventEndsAt" label="Ends at (optional)" />
+              <label :class="local.publicEventToggle">
+                <input v-model="newEventPublic" type="checkbox" />
+                Visible to prospective members (only matters while this guild is Public — see Settings)
+              </label>
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
               </template>
@@ -1765,8 +1789,8 @@ const {
             <div
               v-for="event in calendarSelectedEvents"
               :key="event.id"
-              :class="local.eventCardClickable"
-              @click="openRsvpRoster(event.id, event.title)"
+              :class="isMember ? local.eventCardClickable : undefined"
+              @click="isMember && openRsvpRoster(event.id, event.title)"
             >
               <AvalonEventCard
                 :title="event.title"
@@ -1775,7 +1799,7 @@ const {
                 :ends-at="event.ends_at ?? undefined"
                 :rsvp-counts="event.rsvp_counts"
               >
-                <template #actions>
+                <template v-if="isMember" #actions>
                   <div @click.stop>
                     <AvalonRsvpControl @rsvp="(status) => onRsvp(event.id, status)" />
                   </div>

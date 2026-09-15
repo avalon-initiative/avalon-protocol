@@ -440,6 +440,20 @@ struct GuildRow {
     roster_visibility: String,
 }
 
+/// True if `guild_id` is currently `public` (issue #449) — a lightweight
+/// single-column check for callers (like `crate::guild_events::list_events`,
+/// issue #448) that only need this one flag rather than the full
+/// [`fetch_guild`] row. 404s if the guild doesn't exist, same as every
+/// other guild lookup.
+pub(crate) async fn is_guild_public(state: &AppState, guild_id: Uuid) -> Result<bool, AppError> {
+    let row = sqlx::query(r#"SELECT "public" FROM guilds WHERE id = $1"#)
+        .bind(guild_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::GuildNotFound)?;
+    Ok(row.try_get("public")?)
+}
+
 async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppError> {
     let row = sqlx::query(
         r#"SELECT id, name, tag, description, owner, created_at, join_policy, motd, banner, icon, links, recruiting, "public", game_breakdown_public, roster_visibility FROM guilds WHERE id = $1"#,

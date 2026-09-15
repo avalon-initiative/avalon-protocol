@@ -24,6 +24,7 @@ function makeEvent(overrides: Partial<EventResponse> = {}): EventResponse {
     created_by: 'u1',
     created_at: '2026-09-01T00:00:00Z',
     rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
+    public: false,
     ...overrides,
   }
 }

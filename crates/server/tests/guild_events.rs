@@ -100,6 +100,28 @@ fn event_body(title: &str) -> serde_json::Value {
     })
 }
 
+/// Same as [`event_body`] but with an explicit `public` flag (issue #448).
+fn event_body_with_public(title: &str, public: bool) -> serde_json::Value {
+    let mut body = event_body(title);
+    body["public"] = serde_json::json!(public);
+    body
+}
+
+async fn set_guild_public(
+    http: &reqwest::Client,
+    base: &str,
+    owner_token: &str,
+    guild_id: &str,
+    value: bool,
+) {
+    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+        .json(&serde_json::json!({ "public": value }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+}
+
 #[tokio::test]
 #[ignore]
 async fn create_rsvp_as_two_members_and_list_shows_both_responses() {
@@ -744,4 +766,147 @@ async fn requesting_another_guilds_event_id_under_a_different_guild_is_not_found
     .await
     .unwrap();
     assert_eq!(cross_guild.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+/// Issue #448: a non-member of a `public` guild (independent of
+/// `recruiting`, #449) sees only that guild's `public` events via
+/// `GET /guilds/{id}/events`, not its member-only ones — and still can't
+/// RSVP or view the roster, since `public` only widens the *list*, never
+/// the RSVP/roster endpoints (those stay member-only per the ticket's
+/// invariants).
+#[tokio::test]
+#[ignore]
+async fn a_non_member_of_a_public_guild_sees_only_public_events() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_outsider_id, outsider_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
+
+    let public_event = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body_with_public("Community mixer", true))
+    .send()
+    .await
+    .unwrap();
+    assert!(
+        public_event.status().is_success(),
+        "{:?}",
+        public_event.status()
+    );
+    let public_event: serde_json::Value = public_event.json().await.unwrap();
+    let public_event_id = public_event["id"].as_str().unwrap().to_string();
+    assert!(public_event["public"].as_bool().unwrap());
+
+    let private_event = auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body("Officer planning"))
+    .send()
+    .await
+    .unwrap();
+    let private_event: serde_json::Value = private_event.json().await.unwrap();
+    assert!(!private_event["public"].as_bool().unwrap());
+
+    // Not yet public: the outsider is still 403'd, exactly like #391/#448's
+    // "unchanged for a non-public guild" invariant.
+    let still_forbidden = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &outsider_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(still_forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+
+    set_guild_public(&http, &base, &owner_token, &guild_id, true).await;
+
+    let list = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &outsider_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(list.status().is_success(), "{:?}", list.status());
+    let events: Vec<serde_json::Value> = list.json().await.unwrap();
+    let ids: Vec<&str> = events.iter().map(|e| e["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        vec![public_event_id.as_str()],
+        "only the public event should be listed"
+    );
+
+    // Public only widens the list — RSVP and roster stay member-only.
+    let rsvp = auth(
+        http.put(format!(
+            "{base}/guilds/{guild_id}/events/{public_event_id}/rsvp"
+        )),
+        &outsider_token,
+    )
+    .json(&serde_json::json!({ "status": "going" }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(rsvp.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // Turning `public` back off restores the 403, same as the roster
+    // override's own "off restores today's behavior" invariant.
+    set_guild_public(&http, &base, &owner_token, &guild_id, false).await;
+    let forbidden_again = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &outsider_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(forbidden_again.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// A member sees every event regardless of its `public` flag or the
+/// guild's own `public` setting — `public` only ever narrows what a
+/// *non-member* sees.
+#[tokio::test]
+#[ignore]
+async fn a_member_sees_every_event_regardless_of_public_flag() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
+    seed_membership(&pool, guild_id.parse().unwrap(), member_id, 2).await;
+
+    auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body_with_public("Community mixer", true))
+    .send()
+    .await
+    .unwrap();
+    auth(
+        http.post(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .json(&event_body("Officer planning"))
+    .send()
+    .await
+    .unwrap();
+
+    // Guild is not `public` at all, and the member still sees both events.
+    let list = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(list.status().is_success(), "{:?}", list.status());
+    let events: Vec<serde_json::Value> = list.json().await.unwrap();
+    assert_eq!(events.len(), 2);
 }

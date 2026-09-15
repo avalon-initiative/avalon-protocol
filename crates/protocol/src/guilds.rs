@@ -432,6 +432,13 @@ pub struct GuildEvent {
     pub ends_at: Option<OffsetDateTime>,
     pub created_by: IdentityId,
     pub created_at: OffsetDateTime,
+    /// Whether a non-member of a [`Guild::public`] guild may see this
+    /// event (issue #448) — `false` (the default) keeps an event
+    /// member-only even when the guild itself is public, for genuinely
+    /// internal events (officer planning, loot council) a guild still
+    /// wants to run privately. Never widens what a *member* sees — every
+    /// member sees every event regardless of this flag.
+    pub public: bool,
 }
 
 /// A member's RSVP to a `GuildEvent`. One row per (event, identity) — a
