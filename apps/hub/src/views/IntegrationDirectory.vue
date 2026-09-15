@@ -14,8 +14,8 @@ import styles from '../styles/page.module.scss'
 
 const router = useRouter()
 const session = useSessionStore()
+// Issue #432: useDiscoverIntegrations now loads and polls itself on mount.
 const discover = useDiscoverIntegrations()
-discover.refresh()
 // Issue #467: which cards get a "Connect" action — only when there's a
 // session to bind with, and only for integrators not already connected.
 const myConnections = useMyConnections()

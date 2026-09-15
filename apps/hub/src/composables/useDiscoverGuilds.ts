@@ -6,14 +6,25 @@
 // `next_cursor` (crates/server/src/guilds.rs's keyset pagination — never
 // re-derived or re-sorted client-side, since only the server's `ORDER BY`
 // matches its own cursor comparison).
-import { ref, watch } from 'vue'
+//
+// Issue #432/ADR #437: a tier-2 view — polls once activated, same interval
+// useMyConnections/useMyGuilds already use. Unlike those composables this
+// one doesn't fetch on mount: Guilds.vue's Discover tab is lazy (only
+// loaded the first time a reader actually opens it), so polling only
+// starts the first time `refresh()` actually runs, not unconditionally —
+// no point polling a board nobody has opened yet.
+import { onUnmounted, ref, watch } from 'vue'
 import * as api from '../api/client'
 import { buildDiscoverQueryString } from '../api/guilds'
 import type { DiscoverGuildSummary, DiscoverGuildsParams } from '../api/types'
 import { useSessionStore } from '../stores/session'
 
+const POLL_INTERVAL_MS = 5 * 60_000
+
 export function useDiscoverGuilds() {
   const session = useSessionStore()
+
+  let pollHandle: ReturnType<typeof setInterval> | undefined
 
   const query = ref('')
   const recruitingOnly = ref(true)
@@ -51,6 +62,9 @@ export function useDiscoverGuilds() {
     } finally {
       loading.value = false
     }
+    if (!pollHandle) {
+      pollHandle = setInterval(refresh, POLL_INTERVAL_MS)
+    }
   }
 
   async function loadMore() {
@@ -76,6 +90,10 @@ export function useDiscoverGuilds() {
   // endpoint itself); a real read model (#42) is the point to revisit
   // request-shaping like debouncing too.
   watch([query, recruitingOnly, tag, integratorSlug], refresh)
+
+  onUnmounted(() => {
+    if (pollHandle) clearInterval(pollHandle)
+  })
 
   return {
     query,

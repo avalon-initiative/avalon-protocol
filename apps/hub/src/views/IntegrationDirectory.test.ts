@@ -151,6 +151,61 @@ describe('IntegrationDirectory', () => {
     expect(router.currentRoute.value.params.slug).toBe('ashen-realms')
   })
 
+  // Issue #432/ADR #437: a tier-2 browse view — should pick up a newly
+  // published integrator without a manual reload.
+  it('polls for newly published integrators without a manual reload', async () => {
+    vi.useFakeTimers()
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        const path = new URL(url, 'http://test').pathname
+        let body: unknown
+        if (path === '/integrations') {
+          call += 1
+          body =
+            call === 1
+              ? { integrators: [], next_cursor: null }
+              : {
+                  integrators: [
+                    {
+                      id: 'g1',
+                      slug: 'ashen-realms',
+                      name: 'Ashen Realms',
+                      owner_name: 'Ashen Studios',
+                      registered_at: '2026-01-12T00:00:00Z',
+                      status: 'active',
+                      category: 'game',
+                    },
+                  ],
+                  next_cursor: null,
+                }
+        } else {
+          body = undefined
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(body === undefined ? '' : JSON.stringify(body)),
+        })
+      }),
+    )
+
+    const router = testRouter()
+    router.push('/integrations')
+    await router.isReady()
+    const wrapper = mount(IntegrationDirectory, { global: { plugins: [router] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('No games match')
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Ashen Realms')
+
+    vi.useRealTimers()
+  })
+
   it('hides the Connect action once already connected, and for a logged-out visitor', async () => {
     mockFetchByPath({
       '/integrations': {
