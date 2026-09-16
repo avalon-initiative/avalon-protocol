@@ -292,6 +292,14 @@ pub fn router(state: AppState) -> Router {
             "/integrations/{slug}/achievements/{key}/issue",
             post(achievements::issue_achievement),
         )
+        // #495 (implementing #492's decided shape): N ordinary attestations
+        // sharing one request/signature envelope — a literal path segment
+        // alongside `{key}/issue` above, same precedent `/ledger/sth/latest`
+        // vs. `/ledger/sth/{tree_size}` already established.
+        .route(
+            "/integrations/{slug}/achievements/bulk-issue",
+            post(achievements::bulk_issue_achievements),
+        )
         // #324/#325: the same claim-definition mechanism, App/Service's
         // own vocabulary ("milestone", not "achievement"). The claim
         // vocabulary is what stays category-specific here, not the path
@@ -308,6 +316,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/integrations/{slug}/milestones/{key}/issue",
             post(achievements::issue_milestone),
+        )
+        .route(
+            "/integrations/{slug}/milestones/bulk-issue",
+            post(achievements::bulk_issue_milestones),
         )
         // #33: public read — authenticity + validity, deliberately no
         // recognition verdict (a consumer's own policy, never a server

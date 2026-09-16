@@ -231,6 +231,8 @@ pub enum AppError {
         "attestation signature does not verify against any of the issuer's currently-valid keys"
     )]
     InvalidAttestationSignature,
+    #[error("a bulk issuance call must carry between 1 and {max} claims", max = crate::achievements::MAX_BULK_CLAIMS)]
+    InvalidBulkAttestationRequest,
     #[error("attestation not found")]
     AttestationNotFound,
     #[error("only the issuer that issued this attestation may revoke it")]
@@ -473,6 +475,7 @@ impl AppError {
             AppError::InvalidAchievementIconUrl => "INVALID_ACHIEVEMENT_ICON_URL",
             AppError::AttestationDefinitionRetired => "ATTESTATION_DEFINITION_RETIRED",
             AppError::InvalidAttestationSignature => "INVALID_ATTESTATION_SIGNATURE",
+            AppError::InvalidBulkAttestationRequest => "INVALID_BULK_ATTESTATION_REQUEST",
             AppError::AttestationNotFound => "ATTESTATION_NOT_FOUND",
             AppError::AttestationRevocationForbidden => "ATTESTATION_REVOCATION_FORBIDDEN",
             AppError::AttestationAlreadyRevoked => "ATTESTATION_ALREADY_REVOKED",
@@ -677,6 +680,7 @@ impl IntoResponse for AppError {
             }
             AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
+            AppError::InvalidBulkAttestationRequest => StatusCode::BAD_REQUEST,
             AppError::AttestationNotFound => StatusCode::NOT_FOUND,
             AppError::AttestationRevocationForbidden => StatusCode::FORBIDDEN,
             AppError::AttestationAlreadyRevoked => StatusCode::CONFLICT,

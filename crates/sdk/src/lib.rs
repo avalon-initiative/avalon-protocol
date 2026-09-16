@@ -430,4 +430,20 @@ impl Session {
         self.require(Capability::AchievementsIssue)?;
         self.submit_achievement_issuance(key).await
     }
+
+    /// Issue #495 (implementing #492's decided shape): issues every key in
+    /// `keys` to this session's own identity as its own ordinary
+    /// attestation, sharing one challenge-response and one signature
+    /// across the whole call rather than one round trip per key — see
+    /// `achievements` module doc comment. A bulk call is never
+    /// all-or-nothing: check each returned [`achievements::BulkClaimOutcome`]
+    /// independently rather than assuming the whole call succeeded or
+    /// failed as one unit.
+    pub async fn issue_achievements_bulk(
+        &self,
+        keys: &[&str],
+    ) -> Result<Vec<achievements::BulkClaimOutcome>, SdkError> {
+        self.require(Capability::AchievementsIssue)?;
+        self.submit_bulk_achievement_issuance(keys).await
+    }
 }

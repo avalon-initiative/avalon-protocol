@@ -408,3 +408,85 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
         Err(avalon_sdk::SdkError::MissingIssuerCredentials)
     ));
 }
+
+/// Exercises `Session::issue_achievements_bulk` (issue #495, implementing
+/// #492's decided shape) end to end through the typed SDK client: one
+/// call, two real achievements defined ahead of time, one unknown key
+/// mixed in, and a real read-back of the resulting attestation history —
+/// proving the bulk call's successes actually landed as ordinary,
+/// independently-readable attestations, and that the one failing claim
+/// didn't take the rest of the call down with it.
+#[tokio::test]
+#[ignore]
+async fn issues_multiple_achievements_via_bulk_issuance_through_the_sdk() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let display_name = format!("sdk-bulk-{}", Uuid::new_v4());
+
+    let token = register_and_login(&http, &base, &display_name).await;
+    let integrator = register_integrator(&http, &base).await;
+    define_achievement(&http, &base, &integrator, "dragon_slayer").await;
+    define_achievement(&http, &base, &integrator, "lost_city").await;
+
+    let connect = http
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&token)
+        .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let client = AvalonClient::new(AvalonConfig {
+        server_url: base,
+        integrator_credential_key_id: integrator.key_id.clone(),
+        integrator_slug: Some(integrator.slug.clone()),
+        signing_key: Some(integrator.signing_key.to_bytes()),
+        retry: Default::default(),
+    });
+    let session = client
+        .authenticate(&token)
+        .await
+        .expect("authenticate() should succeed with a valid session token");
+
+    let results = session
+        .issue_achievements_bulk(&["dragon_slayer", "does_not_exist", "lost_city"])
+        .await
+        .expect("issue_achievements_bulk should succeed as a whole call once granted");
+    assert_eq!(results.len(), 3);
+
+    let dragon_slayer_id = match &results[0] {
+        avalon_sdk::achievements::BulkClaimOutcome::Issued { key, attestation } => {
+            assert_eq!(key, "dragon_slayer");
+            attestation.id
+        }
+        other => panic!("expected dragon_slayer to be issued, got {other:?}"),
+    };
+    match &results[1] {
+        avalon_sdk::achievements::BulkClaimOutcome::Failed { key, code, .. } => {
+            assert_eq!(key, "does_not_exist");
+            assert_eq!(code, "ACHIEVEMENT_DEFINITION_NOT_FOUND");
+        }
+        other => panic!("expected does_not_exist to fail, got {other:?}"),
+    }
+    let lost_city_id = match &results[2] {
+        avalon_sdk::achievements::BulkClaimOutcome::Issued { key, attestation } => {
+            assert_eq!(key, "lost_city");
+            attestation.id
+        }
+        other => panic!("expected lost_city to be issued, got {other:?}"),
+    };
+
+    let history = session
+        .achievements()
+        .await
+        .expect("achievements() should succeed once granted");
+    let history_ids: Vec<Uuid> = history.iter().map(|a| a.id).collect();
+    assert!(history_ids.contains(&dragon_slayer_id));
+    assert!(history_ids.contains(&lost_city_id));
+    assert_eq!(
+        history.len(),
+        2,
+        "the one failed claim must not itself have produced an attestation"
+    );
+}
