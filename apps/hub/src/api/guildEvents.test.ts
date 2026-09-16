@@ -27,6 +27,7 @@ function makeEvent(overrides: Partial<EventResponse> = {}): EventResponse {
     rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
     public: false,
     my_rsvp: null,
+    details_visible: true,
     ...overrides,
   }
 }

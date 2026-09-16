@@ -17,7 +17,7 @@ use crate::channels::{
     fetch_channel, guild_owner, require_manage_channel_resource, require_member,
 };
 use crate::error::AppError;
-use crate::guilds::has_resource_permission;
+use crate::guilds::{has_resource_permission, has_view_permission};
 use crate::handlers::authenticate;
 use crate::state::AppState;
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind};
@@ -58,6 +58,37 @@ fn archive_retention_days() -> i64 {
         .unwrap_or(DEFAULT_ARCHIVE_RETENTION_DAYS)
 }
 
+/// `view_details` gate for reading a channel's message content (issue
+/// #458) — the resource-aware sibling of `channels::require_member`, used
+/// by both [`list_messages`] and [`list_archive`]. `channel_public` is
+/// the caller's own already-fetched `guild_channels.public` for this
+/// exact channel.
+async fn require_channel_view_details(
+    state: &AppState,
+    guild_id: Uuid,
+    channel_id: Uuid,
+    channel_public: bool,
+    actor: Uuid,
+) -> Result<(), AppError> {
+    let owner = guild_owner(state, guild_id).await?;
+    let allowed = has_view_permission(
+        state,
+        guild_id,
+        owner,
+        actor,
+        GuildResourceKind::Channel,
+        channel_id,
+        channel_public,
+        true,
+    )
+    .await?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::MissingGuildPermission)
+    }
+}
+
 fn validate_message_body(body: &str) -> Result<(), AppError> {
     if body.trim().is_empty() || body.chars().count() > MESSAGE_BODY_MAX_CHARS {
         return Err(AppError::MessageTooLong);
@@ -84,8 +115,13 @@ pub struct ListMessagesQuery {
 }
 
 /// `GET /guilds/{id}/channels/{cid}/messages?before=&limit=` — newest
-/// first, cursor-paginated. Requires current guild membership. Works for
-/// archived channels too (history stays readable — only posting stops).
+/// first, cursor-paginated. Requires `view_details` on this channel
+/// (issue #458) — baseline for a member is exactly the old plain
+/// membership gate (unchanged for a channel with no overrides), and a
+/// non-member of a `public` channel in a public guild can now read it
+/// too, same "public flag widens exposure" shape events already have.
+/// Works for archived channels too (history stays readable — only
+/// posting stops).
 pub async fn list_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -93,8 +129,8 @@ pub async fn list_messages(
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<MessageResponse>>, AppError> {
     let actor = authenticate(&state, &headers).await?;
-    require_member(&state, guild_id, actor).await?;
-    fetch_channel(&state, guild_id, channel_id).await?;
+    let channel = fetch_channel(&state, guild_id, channel_id).await?;
+    require_channel_view_details(&state, guild_id, channel_id, channel.public, actor).await?;
 
     let limit = query
         .limit
@@ -151,10 +187,11 @@ pub struct ArchivedMessageResponse {
 
 /// `GET /guilds/{id}/channels/{cid}/messages/archive?before=&limit=` — same
 /// newest-first, cursor-paginated shape as [`list_messages`], over
-/// `guild_messages_archive` instead of the live table. Requires *current*
-/// guild membership — see the module doc comment's "Archive read access"
-/// section for why this doesn't try to reconstruct membership as of when
-/// each message was originally sent.
+/// `guild_messages_archive` instead of the live table. Requires
+/// *current* `view_details` on the channel (issue #458), same gate
+/// [`list_messages`] uses — see the module doc comment's "Archive read
+/// access" section for why this doesn't try to reconstruct membership as
+/// of when each message was originally sent.
 pub async fn list_archive(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -162,8 +199,8 @@ pub async fn list_archive(
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<Vec<ArchivedMessageResponse>>, AppError> {
     let actor = authenticate(&state, &headers).await?;
-    require_member(&state, guild_id, actor).await?;
-    fetch_channel(&state, guild_id, channel_id).await?;
+    let channel = fetch_channel(&state, guild_id, channel_id).await?;
+    require_channel_view_details(&state, guild_id, channel_id, channel.public, actor).await?;
 
     let limit = query
         .limit

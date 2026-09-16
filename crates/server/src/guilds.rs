@@ -229,6 +229,107 @@ pub(crate) async fn has_resource_permission(
     ))
 }
 
+/// Pure resolution of `View`/`ViewDetails` for one resource (issue #458,
+/// implementing #454's decision) — deliberately **not** routed through
+/// [`resolve_resource_permission`], since these two have a baseline
+/// unlike every other permission: with no override, a *member* has both
+/// (existing behavior, unchanged for a guild with no overrides at all),
+/// and a *non-member* gets exactly `resource_public` for both — never a
+/// flat `false`, matching how a public event/guild already exposes
+/// content to non-members today (#448/#449).
+///
+/// `ViewDetails` always implies `View`: an explicit `view_details` grant
+/// (`view_details_override == Some(true)`) makes `View` true even under
+/// an explicit `View` deny — the ticket's own invariant that
+/// "`view_details` without `view` must never be reachable as a distinct
+/// state." Owner bypasses both, same as every other permission.
+pub(crate) fn resolve_view_permission(
+    is_owner: bool,
+    is_member: bool,
+    view_override: Option<bool>,
+    view_details_override: Option<bool>,
+    resource_public: bool,
+    want_details: bool,
+) -> bool {
+    if is_owner {
+        return true;
+    }
+    if !is_member {
+        return resource_public;
+    }
+    if want_details {
+        return view_details_override.unwrap_or(true);
+    }
+    // `View` resolution: an *explicit* `view_details` grant always implies
+    // `view`, even under an explicit `view` deny — but the mere *absence*
+    // of a `view_details` override (which defaults to `true` when checked
+    // on its own) must never silently override an explicit `view` deny.
+    // Only `Some(true)` counts here, never the default.
+    if view_details_override == Some(true) {
+        return true;
+    }
+    view_override.unwrap_or(true)
+}
+
+/// Resource-aware `View`/`ViewDetails` check (issue #458) — the
+/// override-fetching, membership-aware sibling of
+/// [`resolve_view_permission`], same shape [`has_resource_permission`]
+/// gives [`resolve_resource_permission`]. `resource_public` is the
+/// caller's own already-fetched `public` flag for this exact resource
+/// (an event's `public` column, or a channel's new one) — this function
+/// doesn't know which table that came from.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn has_view_permission(
+    state: &AppState,
+    guild_id: Uuid,
+    guild_owner: Uuid,
+    actor: Uuid,
+    resource_kind: GuildResourceKind,
+    resource_id: Uuid,
+    resource_public: bool,
+    want_details: bool,
+) -> Result<bool, AppError> {
+    if actor == guild_owner {
+        return Ok(true);
+    }
+    let Some((role_index, _base_permissions)) = actor_role(state, guild_id, actor).await? else {
+        return Ok(resolve_view_permission(
+            false,
+            false,
+            None,
+            None,
+            resource_public,
+            want_details,
+        ));
+    };
+    let view_override = fetch_override(
+        state,
+        guild_id,
+        role_index,
+        resource_kind,
+        resource_id,
+        GuildPermission::View,
+    )
+    .await?;
+    let view_details_override = fetch_override(
+        state,
+        guild_id,
+        role_index,
+        resource_kind,
+        resource_id,
+        GuildPermission::ViewDetails,
+    )
+    .await?;
+    Ok(resolve_view_permission(
+        false,
+        true,
+        view_override,
+        view_details_override,
+        resource_public,
+        want_details,
+    ))
+}
+
 /// `(name_index, name, permissions, description, badge)` per starter role
 /// — description/badge defaults added for issue #152, same "sensible
 /// defaults for the starter roles" the ticket's design section calls for.
@@ -4124,6 +4225,129 @@ mod tests {
             &[],
             Some(false),
             GuildPermission::ChannelPost,
+        ));
+    }
+
+    // --- resolve_view_permission (issue #458) ----------------------------
+
+    #[test]
+    fn view_owner_bypass_survives_every_deny() {
+        assert!(resolve_view_permission(
+            true,
+            false,
+            Some(false),
+            Some(false),
+            false,
+            false
+        ));
+        assert!(resolve_view_permission(
+            true,
+            false,
+            Some(false),
+            Some(false),
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn view_member_baseline_with_no_overrides_is_true_for_both() {
+        // "Baseline (no override row) stays exactly today's behavior: a
+        // guild member: view = true, view_details = true."
+        assert!(resolve_view_permission(
+            false, true, None, None, false, false
+        ));
+        assert!(resolve_view_permission(
+            false, true, None, None, false, true
+        ));
+    }
+
+    #[test]
+    fn view_non_member_baseline_follows_the_resource_public_flag() {
+        assert!(resolve_view_permission(
+            false, false, None, None, true, false
+        ));
+        assert!(resolve_view_permission(
+            false, false, None, None, true, true
+        ));
+        assert!(!resolve_view_permission(
+            false, false, None, None, false, false
+        ));
+        assert!(!resolve_view_permission(
+            false, false, None, None, false, true
+        ));
+    }
+
+    #[test]
+    fn view_non_member_baseline_is_unaffected_by_role_overrides() {
+        // A non-member has no role, so no override could apply in
+        // practice — modeled here directly: even if a caller somehow
+        // passed one through, `is_member = false` short-circuits before
+        // either override is consulted.
+        assert!(!resolve_view_permission(
+            false,
+            false,
+            Some(true),
+            Some(true),
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn view_member_explicit_view_deny_hides_the_resource() {
+        assert!(!resolve_view_permission(
+            false,
+            true,
+            Some(false),
+            None,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn view_details_explicit_deny_leaves_existence_visible() {
+        // Denied only `view_details`: the resource still shows up (its
+        // existence is visible), but its content isn't.
+        assert!(resolve_view_permission(
+            false,
+            true,
+            None,
+            Some(false),
+            false,
+            false
+        ));
+        assert!(!resolve_view_permission(
+            false,
+            true,
+            None,
+            Some(false),
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn view_details_grant_implies_view_even_under_an_explicit_view_deny() {
+        // The ticket's own invariant: "view_details without view must
+        // never be reachable as a distinct state" — an explicit
+        // `view_details` grant always wins over a `view` deny.
+        assert!(resolve_view_permission(
+            false,
+            true,
+            Some(false),
+            Some(true),
+            false,
+            false
+        ));
+        assert!(resolve_view_permission(
+            false,
+            true,
+            Some(false),
+            Some(true),
+            false,
+            true
         ));
     }
 }

@@ -13,4 +13,10 @@ export interface AvalonEventCardProps {
   startsAt: string
   endsAt?: string
   rsvpCounts: AvalonEventCardRsvpCounts
+  // Issue #458. Defaults to `true` — every existing caller keeps working
+  // unchanged. `false` means the caller has `view` but not `view_details`
+  // on this event: `description`/`rsvpCounts` are placeholder values, not
+  // real data, so this renders a "details hidden" hint instead of
+  // pretending they're meaningful.
+  detailsVisible?: boolean
 }

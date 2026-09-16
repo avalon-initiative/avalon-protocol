@@ -970,3 +970,142 @@ async fn a_member_sees_every_event_regardless_of_public_flag() {
     let events: Vec<serde_json::Value> = list.json().await.unwrap();
     assert_eq!(events.len(), 2);
 }
+
+// --- view/view_details role overrides (issue #458) -----------------------
+
+#[tokio::test]
+#[ignore]
+async fn denying_view_on_one_event_hides_it_from_that_member_only() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    let secret_event_id =
+        create_event(&http, &base, &owner_token, &guild_id, "Officers only").await;
+    let public_event_id = create_event(&http, &base, &owner_token, &guild_id, "Everyone").await;
+
+    // Before any override: the member sees both.
+    let before: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(before.len(), 2);
+
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        2, // member role
+        "event",
+        &secret_event_id,
+        "view",
+        false,
+    )
+    .await;
+
+    let after: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let ids: Vec<&str> = after.iter().map(|e| e["id"].as_str().unwrap()).collect();
+    assert!(
+        !ids.contains(&secret_event_id.as_str()),
+        "the denied event must not appear in the member's own list: {after:?}"
+    );
+    assert!(ids.contains(&public_event_id.as_str()));
+
+    // The owner is unaffected by the override.
+    let owner_view: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(owner_view.len(), 2);
+}
+
+#[tokio::test]
+#[ignore]
+async fn denying_view_details_leaves_the_event_visible_but_strips_its_content() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    let event_id = create_event(&http, &base, &owner_token, &guild_id, "Raid night").await;
+
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        2,
+        "event",
+        &event_id,
+        "view_details",
+        false,
+    )
+    .await;
+
+    let list: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let event = list
+        .iter()
+        .find(|e| e["id"] == event_id)
+        .expect("the event should still be visible — only its details are gated");
+    assert_eq!(event["title"], "Raid night");
+    assert_eq!(event["details_visible"], false);
+    assert!(event["description"].is_null());
+    assert!(event["channel_id"].is_null());
+    assert!(event["my_rsvp"].is_null());
+    assert_eq!(event["rsvp_counts"]["going"], 0);
+    assert_eq!(event["rsvp_counts"]["maybe"], 0);
+    assert_eq!(event["rsvp_counts"]["not_going"], 0);
+
+    // The owner still sees full detail.
+    let owner_list: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/events")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let owner_event = owner_list.iter().find(|e| e["id"] == event_id).unwrap();
+    assert_eq!(owner_event["details_visible"], true);
+    assert_eq!(owner_event["description"], "bring your An integrator");
+}

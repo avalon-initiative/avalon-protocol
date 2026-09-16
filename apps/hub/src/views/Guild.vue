@@ -30,7 +30,7 @@ import {
 } from '@avalon/ui'
 import * as api from '../api/client'
 import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId, EventResponse } from '../api/types'
-import ChannelPermissionOverrides from '../components/ChannelPermissionOverrides.vue'
+import ResourcePermissionOverrides from '../components/ResourcePermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, toLocalDateTimeInput, validateEventForm } from '../api/guildEvents'
 import {
@@ -66,8 +66,12 @@ import styles from '../styles/page.module.scss'
 // `channel_post` (the announcement-only-channels proof point) to the base
 // GuildPermission vocabulary — both editable here as ordinary base
 // permissions, same as the original four. Per-resource overrides on top
-// of these are a separate surface (ChannelPermissionOverrides.vue on the
-// Channels tab), not this guild-wide matrix.
+// of these are a separate surface (ResourcePermissionOverrides.vue on the
+// Channels and Events tabs), not this guild-wide matrix. `view`/
+// `view_details` (#458) are deliberately NOT listed here — their
+// resolution (`resolve_view_permission`) never even reads a role's base
+// permission list, only its per-resource overrides, so a guild-wide base
+// grant here would have no effect and would be misleading to show.
 const PERMISSION_OPTIONS = [
   'manage_guild',
   'manage_roles',
@@ -342,7 +346,7 @@ function onMessageScroll(event: Event) {
 // --- Channel topic + announcement-only (issue #276) -----------------------
 // Both live on the active channel itself now, next to its name/messages —
 // previously the announcement-only toggle was buried inside
-// ChannelPermissionOverrides.vue's role x permission grid, a strange home
+// ResourcePermissionOverrides.vue's role x permission grid, a strange home
 // for a simple per-channel setting. `activeChannel` (from useGuildChat) is
 // patched in place from each PATCH response rather than waiting on a
 // reload, since useGuildChat only refetches channel metadata when
@@ -386,6 +390,30 @@ async function onToggleAnnouncementOnly() {
     announcementOnlyError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     togglingAnnouncementOnly.value = false
+  }
+}
+
+// Issue #458: non-member visibility for this channel — same idea as an
+// event's own public toggle, newly available for channels since they had
+// no non-member visibility concept before this ticket.
+const togglingChannelPublic = ref(false)
+const channelPublicError = ref('')
+
+async function onToggleChannelPublic() {
+  if (!session.token || !activeChannel.value) return
+  channelPublicError.value = ''
+  togglingChannelPublic.value = true
+  try {
+    const updated = await api.updateChannel(session.token, guildId.value, activeChannel.value.id, {
+      name: activeChannel.value.name,
+      public: !activeChannel.value.public,
+    })
+    activeChannel.value = updated
+    await refresh()
+  } catch (e) {
+    channelPublicError.value = e instanceof Error ? e.message : 'Something went wrong.'
+  } finally {
+    togglingChannelPublic.value = false
   }
 }
 
@@ -1772,7 +1800,7 @@ const {
             <p v-else-if="activeChannel?.topic" :class="local.channelTopic">{{ activeChannel.topic }}</p>
 
             <!-- Announcement-only (issue #250, relocated by #276 out of
-                 ChannelPermissionOverrides.vue's role x permission grid —
+                 ResourcePermissionOverrides.vue's role x permission grid —
                  a channel manager expects to find this next to the
                  channel's own settings, not buried in a permissions
                  matrix). -->
@@ -1789,6 +1817,20 @@ const {
               >
             </label>
             <p v-if="announcementOnlyError" :class="styles.error">{{ announcementOnlyError }}</p>
+
+            <!-- Non-member visibility (issue #458) — only matters while
+                 this guild is Public (Settings), same framing the event
+                 public toggle already uses. -->
+            <label v-if="activeChannel && canManageChannels" :class="local.announcementRow">
+              <input
+                type="checkbox"
+                :checked="activeChannel.public"
+                :disabled="togglingChannelPublic"
+                @change="onToggleChannelPublic"
+              />
+              <span>Visible to prospective members (only matters while this guild is Public)</span>
+            </label>
+            <p v-if="channelPublicError" :class="styles.error">{{ channelPublicError }}</p>
 
             <p :class="styles.empty">
               Message history is subject to the server's retention policy, not permanent.
@@ -1823,17 +1865,19 @@ const {
             />
           </AvalonCard>
 
-          <!-- Per-resource permission overrides (issue #250): per-role
-               channel_post/manage_channels overrides for the active channel
-               — the announcement-only toggle moved above (issue #276) so
-               this stays focused purely on the role x permission grid.
-               Visible to anyone who can manage roles — server re-checks
-               each action independently. -->
-          <ChannelPermissionOverrides
+          <!-- Per-resource permission overrides (issue #250, generalized
+               by #458 to also cover view/view_details): per-role
+               overrides for the active channel — the announcement-only
+               toggle moved above (issue #276) so this stays focused
+               purely on the role x permission grid. Visible to anyone who
+               can manage roles — server re-checks each action
+               independently. -->
+          <ResourcePermissionOverrides
             v-if="activeChannel && canManageRoles"
             :token="session.token ?? ''"
             :guild-id="guildId"
-            :channel="activeChannel"
+            resource-kind="channel"
+            :resource-id="activeChannel.id"
             :roles="roles"
             :can-manage-roles="canManageRoles"
           />
@@ -1858,8 +1902,8 @@ const {
           <div
             v-for="event in sortedEvents"
             :key="event.id"
-            :class="isMember ? local.eventCardClickable : undefined"
-            @click="isMember && openRsvpRoster(event.id, event.title)"
+            :class="isMember && event.details_visible ? local.eventCardClickable : undefined"
+            @click="isMember && event.details_visible && openRsvpRoster(event.id, event.title)"
           >
             <AvalonEventCard
               :title="event.title"
@@ -1867,9 +1911,10 @@ const {
               :starts-at="event.starts_at"
               :ends-at="event.ends_at ?? undefined"
               :rsvp-counts="event.rsvp_counts"
+              :details-visible="event.details_visible"
             >
               <template #actions>
-                <div v-if="isMember" @click.stop>
+                <div v-if="isMember && event.details_visible" @click.stop>
                   <AvalonRsvpControl :current-status="event.my_rsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
                 </div>
                 <div v-if="canManageEvents" @click.stop :class="local.eventManageActions">
@@ -1913,6 +1958,20 @@ const {
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelCreateEvent" />
               </template>
             </AvalonForm>
+
+            <!-- Per-resource permission overrides (issue #458) — only
+                 while editing an existing event (there's no resource id
+                 yet while creating one). Same role x permission grid the
+                 Channels tab uses. -->
+            <ResourcePermissionOverrides
+              v-if="editingEventId && canManageRoles"
+              :token="session.token ?? ''"
+              :guild-id="guildId"
+              resource-kind="event"
+              :resource-id="editingEventId"
+              :roles="roles"
+              :can-manage-roles="canManageRoles"
+            />
           </div>
         </AvalonCard>
     </div>
@@ -1942,8 +2001,8 @@ const {
             <div
               v-for="event in calendarSelectedEvents"
               :key="event.id"
-              :class="isMember ? local.eventCardClickable : undefined"
-              @click="isMember && openRsvpRoster(event.id, event.title)"
+              :class="isMember && event.details_visible ? local.eventCardClickable : undefined"
+              @click="isMember && event.details_visible && openRsvpRoster(event.id, event.title)"
             >
               <AvalonEventCard
                 :title="event.title"
@@ -1951,8 +2010,9 @@ const {
                 :starts-at="event.starts_at"
                 :ends-at="event.ends_at ?? undefined"
                 :rsvp-counts="event.rsvp_counts"
+                :details-visible="event.details_visible"
               >
-                <template v-if="isMember" #actions>
+                <template v-if="isMember && event.details_visible" #actions>
                   <div @click.stop>
                     <AvalonRsvpControl :current-status="event.my_rsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
                   </div>

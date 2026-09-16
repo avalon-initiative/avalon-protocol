@@ -741,3 +741,179 @@ async fn owner_bypasses_a_deny_override_on_a_channel() {
     .unwrap();
     assert!(rename.status().is_success(), "{:?}", rename.status());
 }
+
+// --- view/view_details role overrides + non-member public channels
+// (issue #458) --------------------------------------------------------
+
+async fn set_guild_public(
+    http: &reqwest::Client,
+    base: &str,
+    owner_token: &str,
+    guild_id: &str,
+    value: bool,
+) {
+    let response = auth(http.patch(format!("{base}/guilds/{guild_id}")), owner_token)
+        .json(&serde_json::json!({ "public": value }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+}
+
+async fn set_channel_public(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    guild_id: &str,
+    channel_id: &str,
+    value: bool,
+) {
+    let response = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/channels/{channel_id}")),
+        token,
+    )
+    .json(&serde_json::json!({ "name": "general", "public": value }))
+    .send()
+    .await
+    .unwrap();
+    assert!(response.status().is_success(), "{:?}", response.status());
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_public_channel_is_visible_to_a_non_member_of_a_public_guild() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (_stranger_id, stranger_token) = seed_identity_session(&pool).await;
+    let (guild_id, general_channel_id) =
+        create_guild_with_general_channel(&http, &base, &owner_token).await;
+
+    // A second, non-public channel the stranger should never see.
+    let create_private = auth(
+        http.post(format!("{base}/guilds/{guild_id}/channels")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "name": "officers" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(create_private.status().is_success());
+
+    // Guild not public yet: the stranger is 403'd outright, unchanged from
+    // before this ticket.
+    let before = auth(
+        http.get(format!("{base}/guilds/{guild_id}/channels")),
+        &stranger_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(before.status(), reqwest::StatusCode::FORBIDDEN);
+
+    set_guild_public(&http, &base, &owner_token, &guild_id, true).await;
+    set_channel_public(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        &general_channel_id,
+        true,
+    )
+    .await;
+
+    let after: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/channels")),
+        &stranger_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let names: Vec<&str> = after.iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert!(
+        names.contains(&"general"),
+        "the public channel should be visible to a non-member of a public guild: {after:?}"
+    );
+    assert!(
+        !names.contains(&"officers"),
+        "a non-public channel must stay hidden from a non-member even in a public guild: {after:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn view_details_denied_on_a_channel_blocks_message_reads_but_not_listing() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+
+    // Before any override: the member can already read (empty) history.
+    let before = auth(
+        http.get(format!(
+            "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
+        )),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(before.status().is_success(), "{:?}", before.status());
+
+    set_override(
+        &http,
+        &base,
+        &owner_token,
+        &guild_id,
+        2, // member role
+        "channel",
+        &channel_id,
+        "view_details",
+        false,
+    )
+    .await;
+
+    // Still listed — existence stays visible.
+    let list: Vec<serde_json::Value> = auth(
+        http.get(format!("{base}/guilds/{guild_id}/channels")),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(list.iter().any(|c| c["id"] == channel_id));
+
+    // But message content is now gated.
+    let after = auth(
+        http.get(format!(
+            "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
+        )),
+        &member_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(after.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // The owner is unaffected.
+    let owner_read = auth(
+        http.get(format!(
+            "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
+        )),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(owner_read.status().is_success());
+}

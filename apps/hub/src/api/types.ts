@@ -748,6 +748,10 @@ export interface ChannelResponse {
   // Issue #276: a short line describing what the channel is for, shown in
   // the channel header. `null`/unset means no topic.
   topic: string | null
+  // Issue #458: non-member visibility baseline for this channel, same
+  // meaning as EventResponse.public — `false` (the default) keeps the
+  // channel member-only even in a public guild.
+  public: boolean
 }
 
 export interface CreateChannelRequest {
@@ -761,6 +765,8 @@ export interface UpdateChannelRequest {
   // Issue #276. Omitted leaves the existing value untouched; an empty
   // string clears it.
   topic?: string
+  // Issue #458. Omitted leaves the existing value untouched.
+  public?: boolean
 }
 
 // Per-resource guild permission overrides (issue #250), matching
@@ -997,6 +1003,12 @@ export interface EventResponse {
   // responded — never another member's. Lets AvalonRsvpControl pre-select
   // correctly without a separate roster fetch.
   my_rsvp: RsvpStatusValue | null
+  // Issue #458. `false` when the caller has `view` but not `view_details`
+  // on this event: id/guild_id/title/starts_at/ends_at/created_by/
+  // created_at/public are real, but channel_id/description/rsvp_counts/
+  // my_rsvp are placeholder values, not real data. Always `true` for
+  // create/update/RSVP responses.
+  details_visible: boolean
 }
 
 export interface CreateEventRequest {

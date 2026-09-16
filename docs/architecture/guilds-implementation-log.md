@@ -676,3 +676,59 @@ the actual code ever disagree, the code is right and this doc is stale.
   pencil icon that unlocks a row for renaming/permission edits (rather
   than every checkbox always being live to click by accident), and a
   Delete button for any unlocked, non-base role.
+- **Role-gated `view`/`view_details` permissions (issue #458, implementing
+  #454's decided shape).** `GuildPermission` gained two entries
+  (`crates/protocol/src/guilds.rs`), resolved through a dedicated function
+  (`crates/server/src/guilds.rs::resolve_view_permission`) rather than the
+  generic per-resource fallback (`resolve_resource_permission`) every
+  other permission uses, since these two have a genuinely different
+  baseline: with no override at all, a member gets `view = true,
+  view_details = true` (exactly today's pre-#458 behavior, unchanged),
+  while a non-member gets both derived from the resource's own `public`
+  flag — never a flat `false`. An explicit `view_details` grant always
+  implies `view`, even under an explicit `view` deny (`Some(true)` on
+  `view_details` short-circuits before `view`'s own override is even
+  consulted) — the ticket's own invariant that the two must never be a
+  contradictory pair. `has_view_permission` is the override-fetching,
+  membership-aware sibling `has_resource_permission` gives
+  `resolve_resource_permission`.
+  - **Events** (`guild_events::list_events`): a per-event `can_view` check
+    filters the list (denied `view` → not returned at all, matching how a
+    genuinely-forbidden resource already behaves elsewhere); a per-event
+    `view_details` check controls whether `event_response` returns real
+    content or a stripped placeholder. `EventResponse` gained
+    `details_visible: bool` — `false` means `channel_id`/`description`/
+    `rsvp_counts`/`my_rsvp` are zeroed placeholders, not real data, while
+    `id`/`guild_id`/`title`/`starts_at`/`ends_at`/`created_by`/
+    `created_at`/`public` stay real (existence visible, content isn't).
+    Always `true` for create/update/RSVP responses — those all require
+    the actor to already hold `event_manage` or be RSVPing to their own
+    record.
+  - **Channels** (`channels::list_channels`): channels had *no* non-member
+    visibility concept at all before this ticket — every read
+    unconditionally required membership. A new `guild_channels.public`
+    column (migration 0062, defaulted `false` — no behavior change for an
+    existing channel until an owner/manager opts it in via `PATCH
+    .../channels/{cid}`) plus the same `has_view_permission` filtering
+    `list_events` uses extends the exact "public flag widens exposure to
+    non-members" shape events already had. Message content
+    (`guild_messages::list_messages`/`list_archive`) is gated on
+    `view_details` instead of plain membership now — same baseline for an
+    existing channel with no overrides, but now also reachable by a
+    non-member of a public channel in a public guild, and deniable
+    per-role per-channel like everything else in the override layer.
+  - **Hub.** `ChannelPermissionOverrides.vue` (channel-only) generalized
+    into `ResourcePermissionOverrides.vue` (`resourceKind`/`resourceId`
+    props instead of a hardcoded channel), reused on both the Channels tab
+    (the active channel) and the Events tab (while editing an existing
+    event — there's no resource id yet while creating one). A new
+    "Visible to prospective members" checkbox next to the channel's
+    existing announcement-only toggle drives `guild_channels.public`, same
+    UX the event creation form already had for `GuildEvent.public`.
+    `AvalonEventCard` (`packages/ui`) gained a `detailsVisible` prop
+    (defaulting `true` via `withDefaults` — Vue casts an *omitted*
+    optional `boolean` prop to `false` at runtime, so every existing
+    caller needed an explicit default to keep rendering real content);
+    `false` renders a "details hidden" hint instead of the (placeholder)
+    description/RSVP summary, and both the Events tab and Calendar tab
+    stop offering RSVP/roster-click affordances for a stripped event.
