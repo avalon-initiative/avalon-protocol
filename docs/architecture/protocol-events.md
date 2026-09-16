@@ -45,10 +45,20 @@ pub struct EventBatch { pub id: Uuid, pub events: Vec<ProtocolEvent>, pub create
 pub struct Commitment { pub batch_id: Uuid, pub proof: Vec<u8>, pub committed_at: OffsetDateTime }
 ```
 
-`kind` is a string rather than a closed enum so a new kind does not require a
-protocol version bump. `Commitment.proof` is deliberately opaque: `protocol` does
-not know whether it is a ledger hash, a signed tree head, or a Merkle root
-anchored elsewhere.
+`kind` stays a plain `String` on the wire/storage type itself — the ledger
+schema and every existing consumer keep working byte-for-byte — but domain
+code no longer hand-types that string: `ProtocolEventKind`
+(`crates/protocol/src/events.rs`, issue #82) is an enum with a permanent
+wire-string mapping and an `Other(String)` escape hatch, the same template
+`Capability` established, so a new kind still never requires a protocol
+version bump (`Other` covers it), while every *known* kind gets real
+compile-time safety at every call site that builds or matches one. Payload
+construction goes through a typed struct per kind
+(`crates/protocol/src/event_payloads.rs`) serialized via
+`serde_json::to_value`, never an ad-hoc `serde_json::json!({...})`.
+`Commitment.proof` is deliberately opaque: `protocol` does not know
+whether it is a ledger hash, a signed tree head, or a Merkle root anchored
+elsewhere.
 
 ## The pipeline
 
@@ -98,13 +108,15 @@ Events carry enough canonical information to reconstruct required state and no
 more. Anything derivable from other events is computed by the indexer, not
 stored twice.
 
-## Kind catalogue (proposed)
+## Kind catalogue (normative)
 
 The full row-by-row list of every `ProtocolEvent` kind — issuer/subject,
 payload, what it drives, and who signs it — lives in its own file:
-[`./protocol-events-catalogue.md`](./protocol-events-catalogue.md). It's the
-starting point [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)
-finalizes; until then it's proposed, not normative.
+[`./protocol-events-catalogue.md`](./protocol-events-catalogue.md).
+Normative as of [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82):
+every "(done)" row has a real `ProtocolEventKindVariant` and typed payload
+struct backing it, kept honest by the compiler rather than by convention
+alone.
 
 Two conventions worth knowing before you open that table: `issuer` and
 `subject` are `GlobalId`s (`crates/protocol/src/ids.rs`), namespaced so two
@@ -147,6 +159,21 @@ an attestation's revoked flag) is a cache of the latest relevant event, never
 the record — [`./revocation.md`](./revocation.md).
 
 ## Today in the repo
+
+**Issue #82 (kind catalogue + typed payloads + versioning policy): done.**
+`ProtocolEventKind`/`ProtocolEventKindVariant` (`crates/protocol/src/events.rs`)
+and one payload struct per kind (`crates/protocol/src/event_payloads.rs`)
+back every kind the codebase actually emits — every real emitter across
+`crates/server/src` builds its `kind` and `payload` through these types,
+not a hand-typed string or an ad-hoc `serde_json::json!({...})`. Round-trip
+and fixture-decoding tests exist for every payload struct
+(`crates/protocol/src/event_payloads.rs`'s own test module); one real bug
+was caught by them before it ever reached live infra (an `Option<Option<T>>`
+field's default serde `Deserialize` collapsed "absent" and "explicit
+`null`" into the same value on the read side — fixed with the standard
+`deserialize_with` workaround). `docs/architecture/protocol-events-catalogue.md`
+is normative now, not proposed — kept honest by the compiler, not just
+convention.
 
 Types live in `crates/protocol/src/events.rs`, as shown above. There's no
 single dispatcher — each domain module emits its own kinds directly into
@@ -264,7 +291,8 @@ tick, not on size or a timer, so a single-event batch is legal.
 ## Decisions and tickets
 
 - #75 durable history is canonical
-- #82 event kind catalogue and versioning policy
+- #82 event kind catalogue and versioning policy — done, see "Today in the
+  repo" above
 - [#38](https://github.com/LunarVagabond/avalon-protocol/issues/38) batching
   (buffer → `EventBatch` → `Commitment`, real as of `batch_id`/
   `ledger_batches`)

@@ -32,7 +32,10 @@
 //! narrows trust, so it doesn't need the higher signing bar grant approval
 //! does.
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    IdentitySigningKeyAddedPayload, IdentitySigningKeyRevokedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -357,15 +360,18 @@ pub async fn approve_device_grant(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.signing_key_added".to_string(),
+        kind: ProtocolEventKindVariant::IdentitySigningKeyAdded
+            .as_str()
+            .to_string(),
         issuer: identity_ref(identity_id, "signing_key_added"),
         subject: identity_ref(identity_id, "signing_key_added"),
-        payload: serde_json::json!({
-            "signing_key_id": new_key_id,
-            "public_key": BASE64.encode(&grant.requested_signing_public_key),
-            "device_label": grant.device_label,
-            "approved_by_signing_key_id": body.approver_signing_key_id,
-        }),
+        payload: serde_json::to_value(IdentitySigningKeyAddedPayload {
+            signing_key_id: new_key_id,
+            public_key: BASE64.encode(&grant.requested_signing_public_key),
+            device_label: grant.device_label.clone(),
+            approved_by_signing_key_id: body.approver_signing_key_id,
+        })
+        .expect("IdentitySigningKeyAddedPayload should serialize"),
         timestamp: added_at,
         version: 1,
     };
@@ -484,10 +490,13 @@ pub async fn revoke_device(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.signing_key_revoked".to_string(),
+        kind: ProtocolEventKindVariant::IdentitySigningKeyRevoked
+            .as_str()
+            .to_string(),
         issuer: identity_ref(identity_id, "signing_key_revoked"),
         subject: identity_ref(identity_id, "signing_key_revoked"),
-        payload: serde_json::json!({ "signing_key_id": signing_key_id }),
+        payload: serde_json::to_value(IdentitySigningKeyRevokedPayload { signing_key_id })
+            .expect("IdentitySigningKeyRevokedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };

@@ -24,7 +24,8 @@
 //! called from the achievement-issuance write path); `mainnet` never does
 //! — an unregistered key's write is rejected outright.
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::IssuerRegisteredPayload;
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::State;
 use axum::Json;
@@ -263,14 +264,17 @@ async fn enqueue_registration_event(
     let (namespace, slug) = issuer_ref.split_once(':').unwrap_or(("issuer", issuer_ref));
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "issuer.registered".to_string(),
+        kind: ProtocolEventKindVariant::IssuerRegistered
+            .as_str()
+            .to_string(),
         issuer: GlobalId::new(namespace, slug, "self", "issuer_registered"),
         subject: GlobalId::new("network", network_id, "issuer", "registered"),
-        payload: serde_json::json!({
-            "issuer_ref": issuer_ref,
-            "network_id": network_id,
-            "registered_at": registered_at,
-        }),
+        payload: serde_json::to_value(IssuerRegisteredPayload {
+            issuer_ref: issuer_ref.to_string(),
+            network_id: network_id.to_string(),
+            registered_at,
+        })
+        .expect("IssuerRegisteredPayload should serialize"),
         timestamp: registered_at,
         version: 1,
     };

@@ -13,7 +13,8 @@
 
 use std::collections::BTreeMap;
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::GameSchemaMappingPublishedPayload;
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -187,18 +188,21 @@ pub async fn publish_mapping(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "game_schema_mapping.published".to_string(),
+        kind: ProtocolEventKindVariant::GameSchemaMappingPublished
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&slug, "schema_mapping_published"),
         subject: id.clone(),
-        payload: serde_json::json!({
-            "id": id.as_str(),
-            "integrator_id": integrator_id,
-            "slug": slug,
-            "from_schema_id": body.from_schema_id,
-            "to_schema_id": body.to_schema_id,
-            "description": body.description,
-            "field_correspondence": field_correspondence_json,
-        }),
+        payload: serde_json::to_value(GameSchemaMappingPublishedPayload {
+            id: id.as_str().to_string(),
+            integrator_id,
+            slug: slug.to_string(),
+            from_schema_id: body.from_schema_id.clone(),
+            to_schema_id: body.to_schema_id.clone(),
+            description: body.description.clone(),
+            field_correspondence: field_correspondence_json.clone(),
+        })
+        .expect("GameSchemaMappingPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
     };

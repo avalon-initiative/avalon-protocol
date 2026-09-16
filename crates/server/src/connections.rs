@@ -6,7 +6,11 @@
 
 use std::collections::HashSet;
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    GameBindingEndedPayload, GameBindingEstablishedPayload, PermissionGrantedPayload,
+    PermissionRevokedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -135,15 +139,18 @@ pub async fn connect(
     if newly_created {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "game.binding_established".to_string(),
+            kind: ProtocolEventKindVariant::GameBindingEstablished
+                .as_str()
+                .to_string(),
             issuer: identity_ref(identity_id, "binding_established"),
             subject: integrator_ref(&slug, "binding_established"),
-            payload: serde_json::json!({
-                "binding_id": binding_id,
-                "identity_id": identity_id,
-                "game_id": integrator_id,
-                "slug": slug,
-            }),
+            payload: serde_json::to_value(GameBindingEstablishedPayload {
+                binding_id,
+                identity_id,
+                game_id: integrator_id,
+                slug: slug.clone(),
+            })
+            .expect("GameBindingEstablishedPayload should serialize"),
             timestamp: now,
             version: 1,
         };
@@ -202,15 +209,18 @@ pub async fn connect(
 
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "permission.granted".to_string(),
+            kind: ProtocolEventKindVariant::PermissionGranted
+                .as_str()
+                .to_string(),
             issuer: identity_ref(identity_id, "granted"),
             subject: integrator_ref(&slug, capability),
-            payload: serde_json::json!({
-                "binding_id": binding_id,
-                "identity_id": identity_id,
-                "game_id": integrator_id,
-                "capability": capability,
-            }),
+            payload: serde_json::to_value(PermissionGrantedPayload {
+                binding_id,
+                identity_id,
+                game_id: integrator_id,
+                capability: capability.to_string(),
+            })
+            .expect("PermissionGrantedPayload should serialize"),
             timestamp: now,
             version: 1,
         };
@@ -259,15 +269,19 @@ pub async fn revoke_grant(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "permission.revoked".to_string(),
+        kind: ProtocolEventKindVariant::PermissionRevoked
+            .as_str()
+            .to_string(),
         issuer: identity_ref(identity_id, "revoked"),
         subject: integrator_ref(&slug, &capability),
-        payload: serde_json::json!({
-            "binding_id": binding_id,
-            "identity_id": identity_id,
-            "game_id": integrator_id,
-            "capability": capability,
-        }),
+        payload: serde_json::to_value(PermissionRevokedPayload {
+            binding_id,
+            identity_id,
+            game_id: integrator_id,
+            capability: capability.clone(),
+            reason: None,
+        })
+        .expect("PermissionRevokedPayload should serialize"),
         timestamp: now,
         version: 1,
     };
@@ -317,16 +331,19 @@ pub async fn disconnect(
     for capability in &revoked_capabilities {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "permission.revoked".to_string(),
+            kind: ProtocolEventKindVariant::PermissionRevoked
+                .as_str()
+                .to_string(),
             issuer: identity_ref(identity_id, "revoked"),
             subject: integrator_ref(&slug, capability),
-            payload: serde_json::json!({
-                "binding_id": binding_id,
-                "identity_id": identity_id,
-                "game_id": integrator_id,
-                "capability": capability,
-                "reason": "binding_ended",
-            }),
+            payload: serde_json::to_value(PermissionRevokedPayload {
+                binding_id,
+                identity_id,
+                game_id: integrator_id,
+                capability: capability.to_string(),
+                reason: Some("binding_ended".to_string()),
+            })
+            .expect("PermissionRevokedPayload should serialize"),
             timestamp: now,
             version: 1,
         };
@@ -335,15 +352,18 @@ pub async fn disconnect(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "game.binding_ended".to_string(),
+        kind: ProtocolEventKindVariant::GameBindingEnded
+            .as_str()
+            .to_string(),
         issuer: identity_ref(identity_id, "binding_ended"),
         subject: integrator_ref(&slug, "binding_ended"),
-        payload: serde_json::json!({
-            "binding_id": binding_id,
-            "identity_id": identity_id,
-            "game_id": integrator_id,
-            "slug": slug,
-        }),
+        payload: serde_json::to_value(GameBindingEndedPayload {
+            binding_id,
+            identity_id,
+            game_id: integrator_id,
+            slug: slug.clone(),
+        })
+        .expect("GameBindingEndedPayload should serialize"),
         timestamp: now,
         version: 1,
     };

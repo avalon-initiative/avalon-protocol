@@ -9,7 +9,11 @@ use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenti
 use avalon_protocol::achievements::{
     bulk_attestation_signing_bytes, AchievementAttestation, Issuer, Signature,
 };
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    ClaimDefinedPayload, ClaimDefinitionRetiredPayload, ClaimDefinitionUpdatedPayload,
+    ClaimIssuedPayload, ClaimProofPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
 use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory};
 use avalon_protocol::permissions::Capability;
@@ -132,6 +136,25 @@ const DEFAULT_ICON: &str = "trophy";
 /// Maximum length for `icon_url`, mirroring `handlers::MAX_AVATAR_URL_LEN`
 /// (same class of integrator-hosted-image field, same cap).
 const MAX_ICON_URL_LEN: usize = 2048;
+
+/// Picks the right typed kind for a dynamically-chosen claim vocabulary
+/// (issue #82) — `claim_kind` is `"achievement"` or `"milestone"`
+/// (`IntegratorCategory::claim_kind`), never caller-chosen. The two kinds
+/// share one payload schema per row (see
+/// `docs/architecture/protocol-events-catalogue.md`); only the *kind
+/// string* differs, matching #324/#325's own "which vocabulary, never a
+/// payload difference" split.
+pub(crate) fn claim_kind_variant(
+    claim_kind: &str,
+    achievement: ProtocolEventKindVariant,
+    milestone: ProtocolEventKindVariant,
+) -> ProtocolEventKindVariant {
+    if claim_kind == "achievement" {
+        achievement
+    } else {
+        milestone
+    }
+}
 
 /// `None`/absent is always fine (falls back to [`DEFAULT_ICON`] at read
 /// time); a non-`None` value must be one of [`BUILTIN_ICONS`].
@@ -396,21 +419,28 @@ async fn create_definition(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: format!("{claim_kind}.defined"),
+        kind: claim_kind_variant(
+            claim_kind,
+            ProtocolEventKindVariant::AchievementDefined,
+            ProtocolEventKindVariant::MilestoneDefined,
+        )
+        .as_str()
+        .to_string(),
         issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_defined")),
         subject: id.clone(),
-        payload: serde_json::json!({
-            "id": id.as_str(),
-            "game_id": integrator_id,
-            "slug": slug,
-            "key": body.key,
-            "name": body.name,
-            "description": body.description,
-            "schema": schema_str,
-            "icon": body.icon,
-            "icon_url": body.icon_url,
-            "version": INITIAL_VERSION,
-        }),
+        payload: serde_json::to_value(ClaimDefinedPayload {
+            id: id.as_str().to_string(),
+            game_id: integrator_id,
+            slug: slug.to_string(),
+            key: body.key.clone(),
+            name: body.name.clone(),
+            description: body.description.clone(),
+            schema: schema_str.map(str::to_string),
+            icon: body.icon.clone(),
+            icon_url: body.icon_url.clone(),
+            version: INITIAL_VERSION,
+        })
+        .expect("ClaimDefinedPayload should serialize"),
         timestamp: now,
         version: 1,
     };
@@ -548,25 +578,32 @@ async fn update_definition(
     if definition_changed {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: format!("{claim_kind}.definition_updated"),
+            kind: claim_kind_variant(
+                claim_kind,
+                ProtocolEventKindVariant::AchievementDefinitionUpdated,
+                ProtocolEventKindVariant::MilestoneDefinitionUpdated,
+            )
+            .as_str()
+            .to_string(),
             issuer: issuer_ref(
                 category.as_str(),
                 slug,
                 &format!("{claim_kind}_definition_updated"),
             ),
             subject: definition_ref(category, slug, &key),
-            payload: serde_json::json!({
-                "id": existing.id,
-                "game_id": integrator_id,
-                "slug": slug,
-                "key": key,
-                "name": new_name,
-                "description": new_description,
-                "schema": new_schema,
-                "icon": new_icon,
-                "icon_url": new_icon_url,
-                "version": new_version,
-            }),
+            payload: serde_json::to_value(ClaimDefinitionUpdatedPayload {
+                id: existing.id.clone(),
+                game_id: integrator_id,
+                slug: slug.to_string(),
+                key: key.clone(),
+                name: new_name.clone(),
+                description: new_description.clone(),
+                schema: new_schema.clone(),
+                icon: new_icon.clone(),
+                icon_url: new_icon_url.clone(),
+                version: new_version,
+            })
+            .expect("ClaimDefinitionUpdatedPayload should serialize"),
             timestamp: now,
             version: 1,
         };
@@ -576,19 +613,26 @@ async fn update_definition(
     if now_retiring {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: format!("{claim_kind}.definition_retired"),
+            kind: claim_kind_variant(
+                claim_kind,
+                ProtocolEventKindVariant::AchievementDefinitionRetired,
+                ProtocolEventKindVariant::MilestoneDefinitionRetired,
+            )
+            .as_str()
+            .to_string(),
             issuer: issuer_ref(
                 category.as_str(),
                 slug,
                 &format!("{claim_kind}_definition_retired"),
             ),
             subject: definition_ref(category, slug, &key),
-            payload: serde_json::json!({
-                "id": existing.id,
-                "game_id": integrator_id,
-                "slug": slug,
-                "key": key,
-            }),
+            payload: serde_json::to_value(ClaimDefinitionRetiredPayload {
+                id: existing.id.clone(),
+                game_id: integrator_id,
+                slug: slug.to_string(),
+                key: key.clone(),
+            })
+            .expect("ClaimDefinitionRetiredPayload should serialize"),
             timestamp: now,
             version: 1,
         };
@@ -906,25 +950,32 @@ async fn issue_attestation(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: format!("{claim_kind}.issued"),
+        kind: claim_kind_variant(
+            claim_kind,
+            ProtocolEventKindVariant::AchievementIssued,
+            ProtocolEventKindVariant::MilestoneIssued,
+        )
+        .as_str()
+        .to_string(),
         issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_issued")),
         subject: issuer_ref(
             "identity",
             &subject_id.to_string(),
             &format!("{claim_kind}_issued"),
         ),
-        payload: serde_json::json!({
-            "id": attestation_id,
-            "issuer": issuer_str,
-            "subject": subject_id,
-            "achievement": definition.id,
-            "evidence": body.evidence,
-            "proof": {
-                "key_id": body.key_id,
-                "algorithm": signing_key.algorithm,
-                "bytes": body.signature,
+        payload: serde_json::to_value(ClaimIssuedPayload {
+            id: attestation_id,
+            issuer: issuer_str.clone(),
+            subject: subject_id,
+            achievement: definition.id.clone(),
+            evidence: body.evidence.clone(),
+            proof: ClaimProofPayload {
+                key_id: body.key_id,
+                algorithm: signing_key.algorithm.clone(),
+                bytes: body.signature.clone(),
             },
-        }),
+        })
+        .expect("ClaimIssuedPayload should serialize"),
         timestamp: now,
         version: 1,
     };
@@ -1198,25 +1249,32 @@ async fn bulk_issue_attestation(
 
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: format!("{claim_kind}.issued"),
+            kind: claim_kind_variant(
+                claim_kind,
+                ProtocolEventKindVariant::AchievementIssued,
+                ProtocolEventKindVariant::MilestoneIssued,
+            )
+            .as_str()
+            .to_string(),
             issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_issued")),
             subject: issuer_ref(
                 "identity",
                 &subject_id.to_string(),
                 &format!("{claim_kind}_issued"),
             ),
-            payload: serde_json::json!({
-                "id": attestation_id,
-                "issuer": issuer_str,
-                "subject": subject_id,
-                "achievement": definition.id,
-                "evidence": claim.evidence,
-                "proof": {
-                    "key_id": body.key_id,
-                    "algorithm": signing_key.algorithm,
-                    "bytes": body.signature,
+            payload: serde_json::to_value(ClaimIssuedPayload {
+                id: attestation_id,
+                issuer: issuer_str.clone(),
+                subject: subject_id,
+                achievement: definition.id.clone(),
+                evidence: claim.evidence.clone(),
+                proof: ClaimProofPayload {
+                    key_id: body.key_id,
+                    algorithm: signing_key.algorithm.clone(),
+                    bytes: body.signature.clone(),
                 },
-            }),
+            })
+            .expect("ClaimIssuedPayload should serialize"),
             timestamp: now,
             version: 1,
         };

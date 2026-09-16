@@ -47,7 +47,10 @@ use avalon_protocol::achievements::{attestation_status_at, revocation_signing_by
 use avalon_protocol::ids::AttestationId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey};
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::ClaimRevokedPayload;
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
+
+use crate::achievements::claim_kind_variant;
 
 use crate::error::AppError;
 use crate::integrators::{
@@ -647,20 +650,27 @@ pub async fn revoke_attestation(
         .unwrap_or(&issuer);
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: format!("{claim_kind}.revoked"),
+        kind: claim_kind_variant(
+            claim_kind,
+            ProtocolEventKindVariant::AchievementRevoked,
+            ProtocolEventKindVariant::MilestoneRevoked,
+        )
+        .as_str()
+        .to_string(),
         issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_revoked")),
         subject: issuer_ref(
             "attestation",
             &id.to_string(),
             &format!("{claim_kind}_revoked"),
         ),
-        payload: serde_json::json!({
-            "id": revocation_id,
-            "attestation_id": id,
-            "issuer": issuer,
-            "reason_code": body.reason_code,
-            "reason": body.reason,
-        }),
+        payload: serde_json::to_value(ClaimRevokedPayload {
+            id: revocation_id,
+            attestation_id: id,
+            issuer: issuer.clone(),
+            reason_code: body.reason_code.clone(),
+            reason: body.reason.clone(),
+        })
+        .expect("ClaimRevokedPayload should serialize"),
         timestamp: now,
         version: 1,
     };

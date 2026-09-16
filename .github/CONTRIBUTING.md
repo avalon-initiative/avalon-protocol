@@ -222,6 +222,20 @@ that lags the code is treated as a bug. Each architecture file ends with
 "Today in the repo" (what actually exists, with paths) and "Decisions and
 tickets" (the issues that govern it); keep both current.
 
+### Protocol event versioning policy
+
+Adding a new `ProtocolEvent` kind or changing an existing one's payload?
+[`docs/architecture/protocol-events.md`](../docs/architecture/protocol-events.md#versioning-policy)
+is the normative versioning policy (additive fields never bump `version`;
+removing/renaming/re-meaning a field does; every version ever emitted
+stays decodable forever) and
+[`docs/architecture/protocol-events-catalogue.md`](../docs/architecture/protocol-events-catalogue.md)
+is the full kind-by-kind table. A new kind gets a real
+`ProtocolEventKindVariant` (`crates/protocol/src/events.rs`) and a typed
+payload struct (`crates/protocol/src/event_payloads.rs`) — never a
+hand-typed string or an ad-hoc `serde_json::json!({...})` — plus a
+catalogue row, in the same PR that adds its emitter.
+
 ## Development Interface
 
 The Rust workspace (`crates/`), the JS/TS workspace (`apps/hub`,

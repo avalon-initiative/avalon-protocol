@@ -15,7 +15,8 @@
 //! the macro's compile-time schema check would require a live, migrated
 //! database on every machine that so much as runs `cargo check`.
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{IdentityCreatedPayload, ProfileUpdatedPayload};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity::{
     Genre, MAX_BIO_LEN, MAX_FAVORITE_GENRES, MAX_LINKS, MAX_LINK_LEN, MAX_LOCATION_LEN,
     MAX_PRONOUNS_LEN, MAX_STATUS_LEN, MAX_TIMEZONE_LEN,
@@ -273,7 +274,9 @@ pub async fn register_finish(
     // issuer of record. See docs/architecture/security-model.md.
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.created".to_string(),
+        kind: ProtocolEventKindVariant::IdentityCreated
+            .as_str()
+            .to_string(),
         issuer: GlobalId::new(
             "identity",
             &ceremony.identity_id.to_string(),
@@ -290,11 +293,12 @@ pub async fn register_finish(
         // `display_name` is the identity's public face, not a login
         // credential (no `username` exists anywhere), and without it and the
         // discriminator `profiles` couldn't be rebuilt from history.
-        payload: serde_json::json!({
-            "identity_id": ceremony.identity_id,
-            "display_name": ceremony.display_name,
-            "discriminator": discriminator,
-        }),
+        payload: serde_json::to_value(IdentityCreatedPayload {
+            identity_id: ceremony.identity_id,
+            display_name: ceremony.display_name.clone(),
+            discriminator,
+        })
+        .expect("IdentityCreatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -1203,79 +1207,29 @@ pub(crate) fn profile_updated_payload(
     location: Option<Option<&str>>,
     main_guild: Option<Option<Uuid>>,
 ) -> serde_json::Value {
-    let mut payload = serde_json::Map::new();
-    if let Some(name) = display_name {
-        payload.insert("display_name".into(), name.into());
-    }
-    if let Some(discriminator) = discriminator {
-        payload.insert("discriminator".into(), discriminator.into());
-    }
-    if let Some(avatar_url) = avatar_url {
-        payload.insert(
-            "avatar_url".into(),
-            avatar_url.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(bio) = bio {
-        payload.insert(
-            "bio".into(),
-            bio.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(genres) = favorite_genres {
-        payload.insert(
-            "favorite_genres".into(),
-            genres.iter().map(Genre::as_str).collect::<Vec<_>>().into(),
-        );
-    }
-    if let Some(pronouns) = pronouns {
-        payload.insert(
-            "pronouns".into(),
-            pronouns.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(banner_url) = banner_url {
-        payload.insert(
-            "banner_url".into(),
-            banner_url.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(status) = status {
-        payload.insert(
-            "status".into(),
-            status.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(links) = links {
-        payload.insert("links".into(), links.to_vec().into());
-    }
-    if let Some(timezone) = timezone {
-        payload.insert(
-            "timezone".into(),
-            timezone.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(theme_color) = theme_color {
-        payload.insert(
-            "theme_color".into(),
-            theme_color.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(location) = location {
-        payload.insert(
-            "location".into(),
-            location.map_or(serde_json::Value::Null, Into::into),
-        );
-    }
-    if let Some(main_guild) = main_guild {
-        payload.insert(
-            "main_guild".into(),
-            main_guild.map_or(serde_json::Value::Null, |guild_id| {
-                guild_id.to_string().into()
-            }),
-        );
-    }
-    serde_json::Value::Object(payload)
+    // Issue #82: built through the typed `ProfileUpdatedPayload`
+    // (`avalon_protocol::event_payloads`) rather than hand-inserting keys
+    // into a `serde_json::Map` — this function's own return type stays
+    // `serde_json::Value` since every call site (and this module's own
+    // unit tests below) already expects that shape, and the wire output
+    // is byte-for-byte identical either way.
+    let payload = ProfileUpdatedPayload {
+        display_name: display_name.map(str::to_string),
+        discriminator: discriminator.map(str::to_string),
+        avatar_url: avatar_url.map(|v| v.map(str::to_string)),
+        bio: bio.map(|v| v.map(str::to_string)),
+        favorite_genres: favorite_genres
+            .map(|genres| genres.iter().map(|g| g.as_str().to_string()).collect()),
+        pronouns: pronouns.map(|v| v.map(str::to_string)),
+        banner_url: banner_url.map(|v| v.map(str::to_string)),
+        status: status.map(|v| v.map(str::to_string)),
+        links: links.map(<[String]>::to_vec),
+        timezone: timezone.map(|v| v.map(str::to_string)),
+        theme_color: theme_color.map(|v| v.map(str::to_string)),
+        location: location.map(|v| v.map(str::to_string)),
+        main_guild,
+    };
+    serde_json::to_value(payload).expect("ProfileUpdatedPayload should serialize")
 }
 
 pub async fn update_profile(
@@ -1407,7 +1361,9 @@ pub async fn update_profile(
         || main_guild_provided)
         .then(|| ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "profile.updated".to_string(),
+            kind: ProtocolEventKindVariant::ProfileUpdated
+                .as_str()
+                .to_string(),
             issuer: GlobalId::new(
                 "identity",
                 &identity_id.to_string(),
