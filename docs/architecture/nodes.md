@@ -298,6 +298,21 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   bare `server_url`) and any use of the peer table by settlement/mirror
   sync itself — this is purely peer discovery, independent of #40/#299's
   trust model.
+- **Mirror-watcher verification is per-`network_id`, not one process-wide
+  key** (#513/#515, closing a real gap the two-node LAN sandbox surfaced:
+  `AVALON_MIRROR_PEERS` used to be verified against a single globally
+  loaded key, so a peer claiming any `network_id` other than the one that
+  key happened to match either silently mirrored under its own name or
+  failed for the wrong reason — there was no actual check that the peer's
+  claimed network was one this node was meant to trust at all).
+  `crates/server/src/mirror_watcher.rs::verify_key_for_network` now
+  resolves each peer's verify key from `docs/trusted-networks.json` by its
+  *own* claimed `network_id` at verification time — a node can correctly
+  mirror peers across more than one legitimately pinned network, and a
+  peer claiming an unpinned `network_id` is refused outright
+  (`MirrorWatcherError::UnpinnedNetwork`), not silently stored. Adding a
+  trust anchor for a private/local network requires an entry in
+  `docs/trusted-networks.json`, not just an env var.
 - No SDK-side discovery yet: `AvalonConfig { server_url, .. }` in
   `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
   server-to-server mechanism, not yet consumed by client-side routing.
