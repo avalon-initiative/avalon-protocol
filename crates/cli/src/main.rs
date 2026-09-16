@@ -64,6 +64,7 @@ async fn main() {
             let dry_run = args.any(|a| a == "--dry-run");
             prune_ledger(dry_run).await;
         }
+        Some("rebuild-index") => rebuild_index().await,
         Some("list-equivocations") => {
             list_equivocations(args.next()).await;
         }
@@ -109,7 +110,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -360,6 +361,41 @@ async fn prune_ledger(dry_run: bool) {
     println!(
         "pruned {} entries' payloads (kept entry_hash/prev_hash/seq/batch_id intact)",
         report.pruned_count
+    );
+}
+
+/// `avalon rebuild-index` — issue #43's operator-facing entry point for the
+/// disaster-recovery rebuild: truncates every projection table and
+/// replays the entire `ledger_entries` history back through the indexer.
+/// Safe to run against a live database (the ordinary write path is
+/// unaffected — the indexer's own dedup table is truncated too, so
+/// replayed events aren't silently skipped as "already applied"), but a
+/// concurrent read against a partially-rebuilt projection will see
+/// transiently empty/incomplete state; run during a maintenance window on
+/// a real deployment, same caveat `avalon prune-ledger` already carries
+/// for a different reason.
+async fn rebuild_index() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres");
+    let network_id = PostgresSettlementProvider::read_genesis_network_id(&pool)
+        .await
+        .expect("failed to read genesis")
+        .unwrap_or_else(|| "(no genesis set)".to_string());
+    let chain = PostgresSettlementProvider::new(pool.clone(), network_id);
+
+    let started = std::time::Instant::now();
+    let report = avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+        .await
+        .expect("failed to rebuild index from ledger");
+    let elapsed = started.elapsed();
+
+    println!(
+        "rebuilt index from {} ledger entries ({} events applied, {} skipped as undecodable) in {:.2?}",
+        report.entries_read, report.events_applied, report.entries_skipped_undecodable, elapsed
     );
 }
 

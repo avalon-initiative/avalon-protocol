@@ -110,6 +110,17 @@ and where each is wired.
   nodes yet.
 - The trait boundaries (`SettlementProvider`, `Indexer`) are the only scaling
   affordances that exist; they are the right ones.
+- **Rebuild-time baseline (#43).** `crates/server/tests/rebuild_from_events.rs`
+  logs the wall-clock cost of its own rebuild each run: ~21ms for its
+  16-ledger-entry fixture (a handful of identities/friend/guild actions) on
+  this environment's Postgres. That is a tiny synthetic fixture, not a
+  real-scale measurement — it exists so a future session re-running this
+  test at a much larger ledger size has a first data point to compare
+  against, not a capacity claim. The whole rebuild runs in one transaction
+  (`PostgresIndexer::rebuild_from_scratch`), so wall-clock time will scale
+  with total ledger size, not just the new-entries-since-last-rebuild
+  count — see "What breaks today" in `disaster-recovery.md` for why a
+  cheaper incremental/checkpointed rebuild isn't built yet.
 
 ## Decisions and tickets
 

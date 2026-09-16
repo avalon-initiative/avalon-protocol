@@ -56,8 +56,38 @@ technically recoverable and practically not.
 
 ## Scenario J — PostgreSQL disappears
 
-Can durable projections be reconstructed? The design answer is yes. The honest
-answer for the current code is: partly, and not yet provably.
+Can durable projections be reconstructed? Yes, and as of
+[#43](https://github.com/LunarVagabond/avalon-protocol/issues/43) it's
+actually proven, not just designed: `avalon rebuild-index` (or
+`avalon_server::rebuild::rebuild_index_from_ledger`, the function it calls)
+truncates every table in `avalon_indexer::postgres::PROJECTION_TABLES` and
+replays the entire `ledger_entries` history back through
+`PostgresIndexer::rebuild_from_scratch` — one transaction, so a failure
+partway through leaves the pre-rebuild database untouched rather than a
+half-rebuilt one. `crates/server/tests/rebuild_from_events.rs` is the live
+test: it drives real registration/profile-update/friend/guild actions
+through the actual HTTP ceremony, rebuilds, and diffs. Two things that
+test's own module doc is explicit about, given today's wiring:
+
+- `profiles` is compared byte-for-byte against its real pre-rebuild state,
+  since `handlers::register_finish`/`update_profile` already keep it live
+  via the indexer (`identity.created`/`profile.updated`).
+- `indexer_friendships`/`indexer_guild_members` have no live writer to diff
+  against yet — `friends.rs`/`guilds.rs` still write their own separate
+  `friendships`/`guild_members` tables directly, and retargeting that is
+  [#44](https://github.com/LunarVagabond/avalon-protocol/issues/44)'s job.
+  The test instead asserts the rebuilt rows exactly match what the actions
+  taken should produce, plus that replaying the same history twice
+  (`replay_onto_rebuilt_index_is_noop`) reproduces an identical snapshot.
+
+A related, real gap the rebuild test surfaced along the way: a guild's
+owner is never separately event-sourced into `indexer_guild_members` —
+`guild.created` isn't a kind `projections::guild_rosters::decode`
+recognizes, so ownership stays implied by that event's payload rather than
+producing its own roster row. Not a rebuild bug (the live-write path has
+the same gap, since nothing populates `indexer_guild_members` from
+`guild.created` either), but worth folding into #44's scope when it
+retargets this projection's write path.
 
 ## What breaks today
 
@@ -87,14 +117,9 @@ answer for the current code is: partly, and not yet provably.
   loses the log too. Mirrors and an export format
   ([#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)) are what
   make "obtain the log" in step 1 possible.
-- **No rebuild test exists** (#43). A concrete `Indexer` now does exist —
-  `crates/indexer/src/postgres.rs::PostgresIndexer` (#42), dispatching by
-  `event.kind` to per-projection modules under `crates/indexer/src/projections/`
-  (`profiles`, `friendships`, `integrator_bindings`, `integrator_schemas`, `guild_rosters`,
-  `attestations`), guarded by an `indexer_applied_events(event_id)` dedup
-  table so a replayed event is a no-op the second time — but nothing yet
-  drives `Indexer::rebuild` end to end against it and diffs the result, so
-  #43's rebuild-from-genesis proof is still unbuilt.
+- ~~No rebuild test exists.~~ Fixed (#43): `avalon rebuild-index` and
+  `crates/server/tests/rebuild_from_events.rs` (see above) now drive a real
+  rebuild-from-genesis end to end, on a live database, and diff the result.
 - **Step 1 ("obtain the log") is not full-replay-only for the commitment
   layer any more.** #208 gives a settlement-state checkpoint — the latest
   `SignedTreeHead` (`PostgresSettlementProvider::checkpoint`, see
