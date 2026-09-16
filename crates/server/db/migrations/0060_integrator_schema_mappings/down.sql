@@ -1,0 +1,2 @@
+DROP TABLE indexer_integrator_schema_mappings;
+DROP TABLE integrator_schema_mappings;

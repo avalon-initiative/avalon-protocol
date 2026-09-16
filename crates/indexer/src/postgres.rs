@@ -23,7 +23,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::projections::{
     attestations, friendships, guild_rosters, integrator_bindings, integrator_data_instances,
-    integrator_recognitions, integrator_schemas, profiles,
+    integrator_recognitions, integrator_schema_mappings, integrator_schemas, profiles,
 };
 use crate::{IndexError, Indexer};
 
@@ -83,6 +83,11 @@ impl PostgresIndexer {
             "game_schema.published" => {
                 if let Some(write) = integrator_schemas::decode(event) {
                     integrator_schemas::apply(tx, &write).await?;
+                }
+            }
+            "game_schema_mapping.published" => {
+                if let Some(write) = integrator_schema_mappings::decode(event) {
+                    integrator_schema_mappings::apply(tx, &write).await?;
                 }
             }
             "game.binding_established" | "game.binding_ended" => {

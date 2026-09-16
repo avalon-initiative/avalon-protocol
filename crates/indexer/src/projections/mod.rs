@@ -20,6 +20,7 @@ pub mod guild_rosters;
 pub mod integrator_bindings;
 pub mod integrator_data_instances;
 pub mod integrator_recognitions;
+pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
 pub mod profiles;
 
