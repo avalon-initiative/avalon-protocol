@@ -328,3 +328,9 @@ uses. Neither proof substitutes for the other.
   [`network-trust-anchors.md`](network-trust-anchors.md).
 - [#483](https://github.com/LunarVagabond/avalon-protocol/issues/483) —
   SDK/CLI target-network declaration + mismatch check, described above.
+- [#492](https://github.com/LunarVagabond/avalon-protocol/issues/492) —
+  ADR: bulk attestation issuance is N ordinary attestations sharing one
+  request/signature envelope, not a new claim-set attestation type — an
+  API/transport-layer convenience over the existing per-claim
+  authenticity/validity/revocation model (#76), not a change to it.
+  Decided, not yet built — no code in this repo implements it yet.
