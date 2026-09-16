@@ -332,6 +332,30 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     writes to), and general node discovery/routing (the remote write
     target is a fixed config value, not discovered).
 
+- **Hoster-configurable resource limits** (#287/#363): every deployment of
+  `avalon-server`, single-process or otherwise, now has four independently
+  tunable safety floors, all defaulted to exactly what this process always
+  hardcoded — an unconfigured node behaves exactly as it always has.
+  - `AVALON_MAX_DB_CONNECTIONS` (default `10`) — `PgPoolOptions::max_connections`
+    in `crates/server/src/main.rs`.
+  - `AVALON_MAX_CONCURRENT_REQUESTS` (default `256`) —
+    `tower::limit::ConcurrencyLimitLayer` in `crate::router`'s middleware
+    chain. Backpressures (bounded wait) past the ceiling, never drops a
+    request without a response.
+  - `AVALON_RATE_LIMIT_PER_MINUTE` (default `600`) — `tower_governor`
+    (GCRA), keyed by the caller's `x-avalon-integrator-key-id` header when
+    present (`IntegratorOrIpKeyExtractor`, `crate::lib`), falling back to
+    peer IP for pre-auth endpoints (registration, login) that don't carry
+    an integrator key yet. Requires `into_make_service_with_connect_info`
+    (see `main.rs`) for that IP fallback to resolve. Over-limit responses
+    are always `429` with `Retry-After`.
+  - `AVALON_OUTBOX_POLL_INTERVAL_SECS` (default `3`) — the outbox worker's
+    drain cadence (`crates/server/src/outbox.rs::run_worker`).
+  - Live-tested (`crates/server/tests/resource_limits.rs`): a rate-limited
+    burst gets `429` + `Retry-After`; a concurrency-limited burst still
+    completes every request (backpressure, not a silent drop) but
+    measurably serializes.
+
 ## Decisions and tickets
 
 - #70 mirrors of a public log, not federation
@@ -353,6 +377,10 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   (implemented) is the scoped-down slice of #291 that makes that real —
   `AVALON_SETTLEMENT_REMOTE_URL` plus `POST /ledger/submit`, per the "Today
   in the repo" section above.
+- [#287](https://github.com/LunarVagabond/avalon-protocol/issues/287)
+  decided (hoster-configurable resource limits), implemented by
+  [#363](https://github.com/LunarVagabond/avalon-protocol/issues/363) — see
+  the "Today in the repo" section above.
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
   discovery and capability negotiation
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) TLS before

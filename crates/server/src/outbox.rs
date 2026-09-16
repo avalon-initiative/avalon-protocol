@@ -54,7 +54,18 @@ pub async fn enqueue(
 }
 
 const DRAIN_BATCH_SIZE: i64 = 20;
-const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+const DEFAULT_POLL_INTERVAL_SECS: u64 = 3;
+
+/// Issue #363, implementing #287's decision: hoster-configurable drain
+/// cadence, same default this constant always hardcoded.
+fn poll_interval_from_env() -> std::time::Duration {
+    let secs = std::env::var("AVALON_OUTBOX_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_POLL_INTERVAL_SECS);
+    std::time::Duration::from_secs(secs)
+}
 
 /// Node-to-node config for posting drained batches to a remote Settlement
 /// authority instead of committing them locally — issue #313. Bundles the
@@ -127,11 +138,12 @@ pub async fn run_worker(
     chain: PostgresSettlementProvider,
     remote: Option<RemoteSubmitConfig>,
 ) {
+    let poll_interval = poll_interval_from_env();
     loop {
         if let Err(err) = drain_once(&pool, &chain, remote.as_ref()).await {
             tracing::error!("outbox worker: {err}");
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+        tokio::time::sleep(poll_interval).await;
     }
 }
 
@@ -239,4 +251,43 @@ pub async fn status(pool: &PgPool) -> Result<OutboxStatus, sqlx::Error> {
         pending_count: row.try_get("pending_count")?,
         oldest_pending: row.try_get("oldest_pending")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outbox_poll_interval_env_var_overrides_default() {
+        // SAFETY-of-intent note: `std::env::set_var` is process-global;
+        // this test does not run concurrently with anything else reading
+        // this exact var (no other test in this crate touches
+        // `AVALON_OUTBOX_POLL_INTERVAL_SECS`), so it's safe here despite
+        // being `unsafe` in edition-2024 terms.
+        unsafe {
+            std::env::set_var("AVALON_OUTBOX_POLL_INTERVAL_SECS", "7");
+        }
+        assert_eq!(poll_interval_from_env(), std::time::Duration::from_secs(7));
+        unsafe {
+            std::env::remove_var("AVALON_OUTBOX_POLL_INTERVAL_SECS");
+        }
+        assert_eq!(
+            poll_interval_from_env(),
+            std::time::Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn a_non_positive_outbox_poll_interval_env_var_falls_back_to_default() {
+        unsafe {
+            std::env::set_var("AVALON_OUTBOX_POLL_INTERVAL_SECS", "0");
+        }
+        assert_eq!(
+            poll_interval_from_env(),
+            std::time::Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)
+        );
+        unsafe {
+            std::env::remove_var("AVALON_OUTBOX_POLL_INTERVAL_SECS");
+        }
+    }
 }

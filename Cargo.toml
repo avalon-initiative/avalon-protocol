@@ -28,6 +28,14 @@ axum = "0.8"
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
+# issue #363: ConcurrencyLimitLayer (AVALON_MAX_CONCURRENT_REQUESTS) in the
+# same ServiceBuilder chain tower-http's TraceLayer/CorsLayer already live
+# in.
+tower = { version = "0.5", features = ["limit"] }
+# GCRA-based rate limiting (AVALON_RATE_LIMIT_PER_MINUTE), keyed by
+# integrator key id with an IP fallback for pre-auth endpoints — issue
+# #363. tonic support disabled; this is an axum-only server.
+tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "migrate", "macros"] }
