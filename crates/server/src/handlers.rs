@@ -15,6 +15,7 @@
 //! the macro's compile-time schema check would require a live, migrated
 //! database on every machine that so much as runs `cargo check`.
 
+use avalon_indexer::projections::profiles as profile_reads;
 use avalon_protocol::event_payloads::{IdentityCreatedPayload, ProfileUpdatedPayload};
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity::{
@@ -107,12 +108,8 @@ async fn generate_unique_discriminator(
         // axum's `Handler` bound requires of every route it's awaited from.
         let candidate = format!("{:04}", rand::rng().random_range(0..10000));
         let taken =
-            sqlx::query("SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2")
-                .bind(display_name)
-                .bind(&candidate)
-                .fetch_optional(&state.pool)
-                .await?;
-        if taken.is_none() {
+            profile_reads::is_handle_taken(&state.pool, display_name, &candidate, None).await?;
+        if !taken {
             return Ok(candidate);
         }
     }
@@ -560,43 +557,39 @@ pub struct ProfileResponse {
     pub presence_visibility: String,
 }
 
-fn profile_row_to_response(
+fn profile_view_to_response(
     identity_id: Uuid,
-    row: &sqlx::postgres::PgRow,
+    view: profile_reads::ProfileView,
     effective_main_guild: Option<Uuid>,
-) -> Result<ProfileResponse, AppError> {
-    let display_name: String = row.try_get("display_name")?;
-    let discriminator: String = row.try_get("discriminator")?;
-    let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
-    let links: Vec<String> = row.try_get("links")?;
-    let main_guild: Option<Uuid> = row.try_get("main_guild")?;
-    Ok(ProfileResponse {
+) -> ProfileResponse {
+    ProfileResponse {
         identity_id,
-        identity_created_at: row.try_get("created_at")?,
-        handle: format!("{display_name}#{discriminator}"),
-        display_name,
-        avatar_url: row.try_get("avatar_url")?,
-        bio: row.try_get("bio")?,
+        identity_created_at: view.identity_created_at,
+        handle: format!("{}#{}", view.display_name, view.discriminator),
+        display_name: view.display_name,
+        avatar_url: view.avatar_url,
+        bio: view.bio,
         // Stored genre strings are already server-validated at write time
         // (`validate_favorite_genres`), so an unparseable value here would
         // mean data corruption, not a client error — dropped rather than
         // failing the whole read.
-        favorite_genres: favorite_genres
+        favorite_genres: view
+            .favorite_genres
             .iter()
             .filter_map(|g| Genre::parse(g))
             .collect(),
-        pronouns: row.try_get("pronouns")?,
-        banner_url: row.try_get("banner_url")?,
-        status: row.try_get("status")?,
-        links,
-        timezone: row.try_get("timezone")?,
-        theme_color: row.try_get("theme_color")?,
-        location: row.try_get("location")?,
-        main_guild,
+        pronouns: view.pronouns,
+        banner_url: view.banner_url,
+        status: view.status,
+        links: view.links,
+        timezone: view.timezone,
+        theme_color: view.theme_color,
+        location: view.location,
+        main_guild: view.main_guild,
         effective_main_guild,
-        discoverable: row.try_get("discoverable")?,
-        presence_visibility: row.try_get("presence_visibility")?,
-    })
+        discoverable: view.discoverable,
+        presence_visibility: view.presence_visibility,
+    }
 }
 
 /// The guild `identity_id` joined earliest (by `guild_members.joined_at`),
@@ -624,45 +617,29 @@ where
     Ok(guild_id)
 }
 
-/// `profiles` LEFT JOINed against `discovery_preferences` — a row there
-/// only exists once an identity has toggled `discoverable` at least once
-/// (see `discovery::set_discoverable`), so the join has to be outer, and
-/// the missing-row case has to `COALESCE` down to `false`: absence means
-/// "not discoverable", never NULL/unknown. Shared by [`me`] and
-/// [`update_profile`] so the two reads can never drift.
-const PROFILE_SELECT: &str = r#"
-    SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
-           p.favorite_genres, p.pronouns, p.banner_url, p.status, p.links,
-           p.timezone, p.theme_color, p.location, p.main_guild, i.created_at,
-           p.presence_visibility,
-           COALESCE(dp.discoverable, false) AS discoverable
-    FROM profiles p
-    JOIN identities i ON i.id = p.identity_id
-    LEFT JOIN discovery_preferences dp ON dp.identity_id = p.identity_id
-    WHERE p.identity_id = $1
-    "#;
-
 pub async fn me(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    let row = sqlx::query(PROFILE_SELECT)
-        .bind(identity_id)
-        .fetch_one(&state.pool)
-        .await?;
-    let main_guild: Option<Uuid> = row.try_get("main_guild")?;
-    let effective_main_guild = match main_guild {
+    // `profile_reads::fetch` returning `None` here would mean an
+    // authenticated identity has no `profiles` row — data corruption, not
+    // a normal "not found" — so this maps to the same `RowNotFound`-shaped
+    // error `fetch_one` used to produce directly.
+    let view = profile_reads::fetch(&state.pool, identity_id)
+        .await?
+        .ok_or(AppError::Database(sqlx::Error::RowNotFound))?;
+    let effective_main_guild = match view.main_guild {
         Some(guild_id) => Some(guild_id),
         None => earliest_joined_guild(&state.pool, identity_id).await?,
     };
 
-    Ok(Json(profile_row_to_response(
+    Ok(Json(profile_view_to_response(
         identity_id,
-        &row,
+        view,
         effective_main_guild,
-    )?))
+    )))
 }
 
 const PROFILE_LOOKUP_MAX_IDS: usize = 100;
@@ -740,42 +717,35 @@ pub async fn get_identity_profile(
 ) -> Result<Json<PublicIdentityProfileResponse>, AppError> {
     authenticate(&state, &headers).await?;
 
-    let row = sqlx::query(PROFILE_SELECT)
-        .bind(id)
-        .fetch_optional(&state.pool)
+    let view = profile_reads::fetch(&state.pool, id)
         .await?
         .ok_or(AppError::IdentityNotFound)?;
 
-    let main_guild: Option<Uuid> = row.try_get("main_guild")?;
-    let effective_main_guild = match main_guild {
+    let effective_main_guild = match view.main_guild {
         Some(guild_id) => Some(guild_id),
         None => earliest_joined_guild(&state.pool, id).await?,
     };
 
-    let display_name: String = row.try_get("display_name")?;
-    let discriminator: String = row.try_get("discriminator")?;
-    let favorite_genres: Vec<String> = row.try_get("favorite_genres")?;
-    let links: Vec<String> = row.try_get("links")?;
-
     Ok(Json(PublicIdentityProfileResponse {
         identity_id: id,
-        identity_created_at: row.try_get("created_at")?,
-        handle: format!("{display_name}#{discriminator}"),
-        display_name,
-        avatar_url: row.try_get("avatar_url")?,
-        bio: row.try_get("bio")?,
-        favorite_genres: favorite_genres
+        identity_created_at: view.identity_created_at,
+        handle: format!("{}#{}", view.display_name, view.discriminator),
+        display_name: view.display_name,
+        avatar_url: view.avatar_url,
+        bio: view.bio,
+        favorite_genres: view
+            .favorite_genres
             .iter()
             .filter_map(|g| Genre::parse(g))
             .collect(),
-        pronouns: row.try_get("pronouns")?,
-        banner_url: row.try_get("banner_url")?,
-        status: row.try_get("status")?,
-        links,
-        timezone: row.try_get("timezone")?,
-        theme_color: row.try_get("theme_color")?,
-        location: row.try_get("location")?,
-        main_guild,
+        pronouns: view.pronouns,
+        banner_url: view.banner_url,
+        status: view.status,
+        links: view.links,
+        timezone: view.timezone,
+        theme_color: view.theme_color,
+        location: view.location,
+        main_guild: view.main_guild,
         effective_main_guild,
     }))
 }
@@ -812,23 +782,16 @@ pub async fn list_profiles(
         return Ok(Json(Vec::new()));
     }
 
-    let rows = sqlx::query(
-        "SELECT identity_id, display_name, discriminator, avatar_url \
-         FROM profiles WHERE identity_id = ANY($1)",
-    )
-    .bind(&ids)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let mut profiles = Vec::with_capacity(rows.len());
-    for row in rows {
-        profiles.push(PublicProfileResponse {
-            identity_id: row.try_get("identity_id")?,
-            display_name: row.try_get("display_name")?,
-            discriminator: row.try_get("discriminator")?,
-            avatar_url: row.try_get("avatar_url")?,
-        });
-    }
+    let summaries = profile_reads::fetch_many(&state.pool, &ids).await?;
+    let profiles = summaries
+        .into_iter()
+        .map(|s| PublicProfileResponse {
+            identity_id: s.identity_id,
+            display_name: s.display_name,
+            discriminator: s.discriminator,
+            avatar_url: s.avatar_url,
+        })
+        .collect();
     Ok(Json(profiles))
 }
 
@@ -857,10 +820,15 @@ pub struct HistoryEntryResponse {
 /// always built from the authenticated identity id here, never accepted as
 /// a request parameter. Reads the ledger directly (issuer-filtered, see
 /// `avalon_chain::PostgresSettlementProvider::list_entries_for_issuer_prefix`)
-/// rather than through the indexer — the indexer (`crates/indexer`) is still
-/// scaffolding, not a real projection store yet, so a ledger read is the
-/// only real read path that exists today. Revisit once #42/#43 land; see
-/// docs/architecture/query-and-indexing.md.
+/// — a deliberate, permanent exception to issue #44's "no request handler
+/// queries the ledger" invariant, not a stopgap: this endpoint's whole job
+/// is exposing the raw append-only history itself, which is fundamentally
+/// a settlement-native read (a full historical log), not a current-state
+/// one — projecting the entire per-issuer event history into the indexer
+/// just to re-serve it here would duplicate the ledger, not replace it.
+/// `crates/server/tests/read_model_boundary.rs`'s guard test names this
+/// function as the one allowed exception; any other `PostgresSettlementProvider`
+/// call added to this file should not be.
 pub async fn my_history(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -958,7 +926,7 @@ pub struct UpdateProfileRequest {
 /// `javascript:`/`data:`-scheme string sitting in storage is exactly the
 /// kind of thing that becomes a real problem the moment something renders
 /// it with `<img :src>` without re-checking this. Validated before the
-/// `UPDATE profiles` write, never after.
+/// `profiles` write (via `PostgresIndexer::apply_in_tx`), never after.
 const MAX_AVATAR_URL_LEN: usize = 2048;
 
 /// Shared `http`/`https`-URL validation: non-empty, at most `max_len`
@@ -1160,22 +1128,15 @@ async fn discriminator_for_rename(
     identity_id: Uuid,
     new_display_name: &str,
 ) -> Result<String, AppError> {
-    let row = sqlx::query("SELECT discriminator FROM profiles WHERE identity_id = $1")
-        .bind(identity_id)
-        .fetch_one(&state.pool)
-        .await?;
-    let current: String = row.try_get("discriminator")?;
+    let current = profile_reads::discriminator_for(&state.pool, identity_id)
+        .await?
+        .ok_or(AppError::Database(sqlx::Error::RowNotFound))?;
 
-    let taken = sqlx::query(
-        "SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2 AND identity_id <> $3",
-    )
-    .bind(new_display_name)
-    .bind(&current)
-    .bind(identity_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let taken =
+        profile_reads::is_handle_taken(&state.pool, new_display_name, &current, Some(identity_id))
+            .await?;
 
-    if taken.is_none() {
+    if !taken {
         Ok(current)
     } else {
         generate_unique_discriminator(state, new_display_name).await
@@ -1328,7 +1289,8 @@ pub async fn update_profile(
     // avatar_url, an invalid genre, ...) leave `discoverable` flipped
     // anyway, which is exactly the kind of partial-write a default-off,
     // no-exceptions preference must never have. Still applied before the
-    // `PROFILE_SELECT` read further down, so that read already reflects it.
+    // `profile_reads::fetch` read further down, so that read already
+    // reflects it.
     if let Some(discoverable) = body.discoverable {
         crate::discovery::set_discoverable(&state, identity_id, discoverable).await?;
     }
@@ -1407,23 +1369,21 @@ pub async fn update_profile(
         outbox::enqueue(&mut tx, event).await?;
     }
 
-    let row = sqlx::query(PROFILE_SELECT)
-        .bind(identity_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let row_main_guild: Option<Uuid> = row.try_get("main_guild")?;
-    let effective_main_guild = match row_main_guild {
+    let view = profile_reads::fetch(&mut *tx, identity_id)
+        .await?
+        .ok_or(AppError::Database(sqlx::Error::RowNotFound))?;
+    let effective_main_guild = match view.main_guild {
         Some(guild_id) => Some(guild_id),
         None => earliest_joined_guild(&mut *tx, identity_id).await?,
     };
 
     tx.commit().await?;
 
-    Ok(Json(profile_row_to_response(
+    Ok(Json(profile_view_to_response(
         identity_id,
-        &row,
+        view,
         effective_main_guild,
-    )?))
+    )))
 }
 
 #[cfg(test)]

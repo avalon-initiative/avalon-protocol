@@ -91,6 +91,24 @@ retargets this projection's write path.
 
 ## What breaks today
 
+- ~~A `profile.updated` event for an identity with no `identity.created`
+  in the ledger crashed a full rebuild.~~ Fixed (found live-testing #43's
+  rebuild against this repo's own accumulated dev ledger, filed and
+  corrected as [#505](https://github.com/LunarVagabond/avalon-protocol/issues/505)):
+  `profiles::apply`'s `INSERT ... ON CONFLICT` had no existing row to fall
+  back to for such an event and manufactured one with empty-string
+  `display_name`/`discriminator` (its `COALESCE(..., '')` placeholder for
+  the NOT NULL columns) — a second orphaned identity then collided with
+  the first on `profiles_display_name_discriminator_idx`. Can't happen in
+  production (#71's outbox guarantees `identity.created` is durable before
+  any request that could produce a `profile.updated` is even possible); it
+  surfaced only because ~28 of this repo's own live test files seed
+  identities directly via SQL (bypassing registration) as a documented
+  shortcut, and some of those still exercise `PATCH /me`, leaving a real
+  orphaned `profile.updated` on the shared dev ledger. Fixed defensively
+  regardless: the INSERT is now an `INSERT ... SELECT ... WHERE` that skips
+  (with a logged warning) a partial update with no `display_name` and no
+  existing row, rather than fabricating a broken placeholder.
 - ~~Profile updates emit no event.~~ Fixed
   ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)):
   `update_profile` emits `profile.updated` through the outbox in the same
