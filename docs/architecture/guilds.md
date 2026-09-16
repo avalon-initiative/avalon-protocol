@@ -237,11 +237,33 @@ and implemented unless noted otherwise.
   `GuildEvent`, defaulted `false` (member-only, unchanged from before this
   shipped). A non-member of a `public` guild (#449) sees only that guild's
   `public` events via `GET /guilds/{id}/events`, instead of being 403'd
-  outright; a member always sees every event regardless of the flag.
-  Deliberately per-event rather than all-or-nothing like the roster
-  override — an event can be genuinely internal (officer planning, loot
-  council) even in an otherwise-public guild. RSVP and the RSVP roster stay
-  member-only either way; `public` only ever widens the *list*.
+  outright; a member sees every event *unless* a `view`/`view_details`
+  override says otherwise (#458, below). Deliberately per-event rather
+  than all-or-nothing like the roster override — an event can be genuinely
+  internal (officer planning, loot council) even in an otherwise-public
+  guild.
+- **Role-gated `view`/`view_details` permissions** (#458, implementing
+  #454's decision) — two more entries in `GuildPermission`, resolved
+  specially (`resolve_view_permission`, not the generic per-resource
+  override fallback every other permission uses): a member's *baseline*
+  (no override row) is `view = true, view_details = true`, unchanged
+  behavior for any guild with no overrides at all. A role denied `view` on
+  a specific event/channel never sees it in the list; a role denied only
+  `view_details` still sees it exist (title/time for an event, the
+  channel entry itself) but its content is stripped
+  (`EventResponse.details_visible: false` zeroes
+  `description`/`channel_id`/`rsvp_counts`/`my_rsvp`; a channel's message
+  endpoints 403 instead). An explicit `view_details` grant always implies
+  `view`, even under an explicit `view` deny — the two can never be a
+  contradictory pair. Non-members follow the resource's own `public` flag
+  for both, same as #448's existing behavior, extended to channels via a
+  **new `guild_channels.public` column** (channels had no non-member
+  visibility concept before this ticket at all — `GET
+  /guilds/{id}/channels` and the message-read endpoints now honor it the
+  same way events already did). Hub: `ResourcePermissionOverrides.vue`
+  (generalized from the channel-only `ChannelPermissionOverrides.vue`)
+  covers the role x permission grid for both resource kinds;
+  `AvalonEventCard`'s `detailsVisible` prop renders the stripped state.
 - **Guild join requests** (#242) and **withdrawing your own request** (#256).
 - **Invite discovery** (#442) — `GET /me/guild-invites` lists every
   unresolved invite where the caller is the invitee, so accepting/declining
@@ -347,11 +369,13 @@ exact types, endpoints, and migrations behind every item above.
   authenticate only, no `Capability` binding — and at resource-level
   granularity (a flag per roster/event), not a per-field mask. Not yet
   implemented as an SDK-facing read path.
-- [#454](https://github.com/LunarVagabond/avalon-protocol/issues/454) — open
-  decision: a binary public/private flag per resource isn't enough for
+- [#454](https://github.com/LunarVagabond/avalon-protocol/issues/454) —
+  decided: a binary public/private flag per resource isn't enough for
   guild events/chat specifically (a public "community mixer" vs. an
-  officers-only meeting is an audience question, not on/off). Surfaced
-  while deciding #450; doesn't block #448/#449/#450's binary-flag approach
-  in the meantime.
+  officers-only meeting is an audience question, not on/off) — role-gated
+  `view`/`view_details` permissions, layered on top of (not replacing)
+  #448/#449/#450's public-flag baseline. Implemented by
+  [#458](https://github.com/LunarVagabond/avalon-protocol/issues/458),
+  done — see "Today in the repo" above.
 - Open questions from [Proposal §32](../stakeholders/Proposal.md#32-open-questions): guild
   ownership, leadership transfer.

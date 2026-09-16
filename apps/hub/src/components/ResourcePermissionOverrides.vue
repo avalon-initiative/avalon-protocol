@@ -1,30 +1,34 @@
 <script setup lang="ts">
 // Issue #250: per-resource permission overrides, extending the existing
-// Roles-tab permission matrix (Guild.vue) with a per-channel view of the
+// Roles-tab permission matrix (Guild.vue) with a per-resource view of the
 // same idea. A role's base permissions (set on the Roles tab) still apply
 // everywhere by default; this panel lets a manage_roles holder grant or
-// deny one permission for one role on this one channel specifically —
-// server-side semantics (crates/server/src/guilds.rs::resolve_resource_permission):
-// an explicit deny always beats a base grant, an explicit grant always
-// beats a base absence.
+// deny one permission for one role on this one resource specifically —
+// server-side semantics (crates/server/src/guilds.rs::resolve_resource_permission
+// for channel_post/manage_channels/event_manage, and the special
+// resolve_view_permission for view/view_details): an explicit deny always
+// beats a base grant, an explicit grant always beats a base absence — and
+// for view/view_details specifically, an explicit view_details grant
+// always implies view even under an explicit view deny.
 //
-// The announcement-only toggle used to live here too, but issue #276
-// relocated it to sit with the channel's own settings in Guild.vue (a
-// simple per-channel setting was a strange fit for a manage-roles-oriented
-// permissions matrix) — this component is now purely the role x permission
-// grid.
+// Issue #458 generalized this from a channel-only component
+// (ChannelPermissionOverrides.vue) into this resource-kind-aware one, once
+// events needed the exact same grid — the announcement-only toggle that
+// used to live here moved to Guild.vue back in #276, so there was nothing
+// channel-specific left in this component's own logic to begin with.
 //
 // Convention: no <style> block, styling in the sibling styles/.module.scss;
 // script stays glue over the api client plus local load/error state.
 import { computed, ref, watch } from 'vue'
 import * as api from '../api/client'
-import type { ChannelResponse, PermissionOverrideResponse, RoleResponse } from '../api/types'
-import styles from '../styles/ChannelPermissionOverrides.module.scss'
+import type { GuildResourceKind, PermissionOverrideResponse, RoleResponse } from '../api/types'
+import styles from '../styles/ResourcePermissionOverrides.module.scss'
 
 const props = defineProps<{
   token: string
   guildId: string
-  channel: ChannelResponse
+  resourceKind: GuildResourceKind
+  resourceId: string
   roles: RoleResponse[]
   // Required to read/write overrides — the parent only renders this panel
   // once this is true, but it's still threaded through as a prop since
@@ -34,11 +38,15 @@ const props = defineProps<{
 
 type OverrideState = 'inherit' | 'allow' | 'deny'
 
-// The two permissions a channel-scoped override actually matters for —
-// `event_manage` has no channel resource to attach to, and the other flat
-// permissions (manage_guild/manage_roles/manage_members) are guild-wide
-// by design (see docs/architecture/guilds.md).
-const OVERRIDE_PERMISSIONS = ['channel_post', 'manage_channels'] as const
+// The permissions each resource kind actually has something to attach to —
+// the other flat permissions (manage_guild/manage_roles/manage_members)
+// are guild-wide by design (see docs/architecture/guilds.md). `view`/
+// `view_details` (#458) apply to both kinds identically.
+const OVERRIDE_PERMISSIONS = computed(() =>
+  props.resourceKind === 'channel'
+    ? (['channel_post', 'manage_channels', 'view', 'view_details'] as const)
+    : (['event_manage', 'view', 'view_details'] as const),
+)
 
 const overrides = ref<PermissionOverrideResponse[]>([])
 const loading = ref(false)
@@ -55,8 +63,8 @@ async function loadOverrides() {
     overrides.value = await api.listPermissionOverrides(
       props.token,
       props.guildId,
-      'channel',
-      props.channel.id,
+      props.resourceKind,
+      props.resourceId,
     )
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -65,7 +73,7 @@ async function loadOverrides() {
   }
 }
 
-watch(() => props.channel.id, loadOverrides, { immediate: true })
+watch(() => props.resourceId, loadOverrides, { immediate: true })
 
 function overrideFor(roleIndex: number, permission: string): PermissionOverrideResponse | undefined {
   return overrides.value.find((o) => o.role_index === roleIndex && o.permission === permission)
@@ -88,8 +96,8 @@ async function onSetState(roleIndex: number, permission: string, state: Override
     } else {
       await api.setPermissionOverride(props.token, props.guildId, {
         role_index: roleIndex,
-        resource_kind: 'channel',
-        resource_id: props.channel.id,
+        resource_kind: props.resourceKind,
+        resource_id: props.resourceId,
         permission,
         allow: state === 'allow',
       })

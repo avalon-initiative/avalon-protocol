@@ -384,6 +384,9 @@ describe('Guild', () => {
       created_by: 'id-owner',
       created_at: '2026-09-01T00:00:00Z',
       rsvp_counts: { going: 1, maybe: 0, not_going: 0 },
+      public: false,
+      my_rsvp: null,
+      details_visible: true,
     }
     mockFetchByPath({
       ...baseRoutes(),
@@ -643,6 +646,8 @@ describe('Guild', () => {
           created_at: 'now',
           rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
           public: true,
+          my_rsvp: null,
+          details_visible: true,
         },
       ],
     })
@@ -685,6 +690,7 @@ describe('Guild', () => {
       rsvp_counts: { going: 1, maybe: 0, not_going: 0 },
       public: false,
       my_rsvp: 'going',
+      details_visible: true,
     }
     mockFetchByPath({ ...baseRoutes(), '/guilds/g1/events': [event] })
 
@@ -739,6 +745,7 @@ describe('Guild', () => {
       rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
       public: false,
       my_rsvp: null,
+      details_visible: true,
     }
     mockFetchByPath({
       ...baseRoutes(),

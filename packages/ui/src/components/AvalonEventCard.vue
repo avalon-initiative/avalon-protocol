@@ -8,7 +8,14 @@ import { computed } from 'vue'
 import styles from '../styles/AvalonEventCard.module.scss'
 import type { AvalonEventCardProps } from '../types/AvalonEventCard.types'
 
-const props = defineProps<AvalonEventCardProps>()
+// `withDefaults` matters here specifically because `detailsVisible` is an
+// optional `boolean` — Vue casts an *omitted* boolean prop to `false` at
+// runtime regardless of the TS type, so every existing caller (which never
+// passes this prop) would otherwise silently render as "details hidden"
+// without an explicit `true` default.
+const props = withDefaults(defineProps<AvalonEventCardProps>(), {
+  detailsVisible: true,
+})
 
 // Stored/transmitted as UTC (ISO 8601), always displayed converted to the
 // viewer's own local timezone — timeZoneName spells that out explicitly
@@ -43,13 +50,18 @@ const totalRsvps = computed(
       <span :class="styles.title">{{ title }}</span>
       <span :class="styles.time">{{ timeRange }}</span>
     </div>
-    <p v-if="description" :class="styles.description">{{ description }}</p>
-    <div :class="styles.rsvpSummary">
-      <span :class="styles.rsvpCount">{{ rsvpCounts.going }} going</span>
-      <span :class="styles.rsvpCount">{{ rsvpCounts.maybe }} maybe</span>
-      <span :class="styles.rsvpCount">{{ rsvpCounts.not_going }} can't go</span>
-      <span v-if="totalRsvps === 0" :class="styles.rsvpEmpty">No responses yet</span>
-    </div>
+    <p v-if="detailsVisible === false" :class="styles.detailsHidden">
+      Details hidden — you don't have permission to view this event's content.
+    </p>
+    <template v-else>
+      <p v-if="description" :class="styles.description">{{ description }}</p>
+      <div :class="styles.rsvpSummary">
+        <span :class="styles.rsvpCount">{{ rsvpCounts.going }} going</span>
+        <span :class="styles.rsvpCount">{{ rsvpCounts.maybe }} maybe</span>
+        <span :class="styles.rsvpCount">{{ rsvpCounts.not_going }} can't go</span>
+        <span v-if="totalRsvps === 0" :class="styles.rsvpEmpty">No responses yet</span>
+      </div>
+    </template>
     <div v-if="$slots.actions" :class="styles.actions">
       <slot name="actions" />
     </div>

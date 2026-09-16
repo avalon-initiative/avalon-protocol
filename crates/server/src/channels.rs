@@ -175,6 +175,7 @@ pub(crate) struct ChannelRow {
     pub created_at: OffsetDateTime,
     pub announcement_only: bool,
     pub topic: Option<String>,
+    pub public: bool,
 }
 
 /// Fetches a channel, 404ing if it doesn't exist or doesn't belong to
@@ -186,8 +187,8 @@ pub(crate) async fn fetch_channel(
     channel_id: Uuid,
 ) -> Result<ChannelRow, AppError> {
     let row = sqlx::query(
-        "SELECT id, guild_id, name, archived_at, created_at, announcement_only, topic FROM guild_channels \
-         WHERE id = $1 AND guild_id = $2",
+        "SELECT id, guild_id, name, archived_at, created_at, announcement_only, topic, \"public\" \
+         FROM guild_channels WHERE id = $1 AND guild_id = $2",
     )
     .bind(channel_id)
     .bind(guild_id)
@@ -202,6 +203,7 @@ pub(crate) async fn fetch_channel(
         created_at: row.try_get("created_at")?,
         announcement_only: row.try_get("announcement_only")?,
         topic: row.try_get("topic")?,
+        public: row.try_get("public")?,
     })
 }
 
@@ -215,6 +217,11 @@ pub struct ChannelResponse {
     pub created_at: OffsetDateTime,
     pub announcement_only: bool,
     pub topic: Option<String>,
+    /// Issue #458. Non-member visibility baseline for this channel —
+    /// same meaning as `guild_events.public` (#448), just newly added
+    /// for channels, which had no non-member visibility concept before
+    /// this ticket at all.
+    pub public: bool,
 }
 
 impl From<ChannelRow> for ChannelResponse {
@@ -227,24 +234,36 @@ impl From<ChannelRow> for ChannelResponse {
             created_at: row.created_at,
             announcement_only: row.announcement_only,
             topic: row.topic,
+            public: row.public,
         }
     }
 }
 
-/// `GET /guilds/{id}/channels` — current members only (see module doc
-/// comment). Lists both active and archived channels; the client
-/// distinguishes via `archived`.
+/// `GET /guilds/{id}/channels` — a member sees every channel they hold
+/// `view` on (baseline: all of them, unless a role override says
+/// otherwise — issue #458). A non-member of a
+/// [`crate::guilds::GuildResponse::public`] guild sees only `public`
+/// channels instead of being 403'd outright — same shape
+/// `guild_events::list_events` already established for events (#448),
+/// extended to channels here since they had no non-member visibility
+/// concept before this ticket. A non-member of a non-public guild is
+/// still 403'd, unchanged. Lists both active and archived channels; the
+/// client distinguishes via `archived`.
 pub async fn list_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(guild_id): Path<Uuid>,
 ) -> Result<Json<Vec<ChannelResponse>>, AppError> {
     let actor = authenticate(&state, &headers).await?;
-    require_member(&state, guild_id, actor).await?;
+    let is_member = is_guild_member(&state, guild_id, actor).await?;
+    if !is_member && !crate::guilds::is_guild_public(&state, guild_id).await? {
+        return Err(AppError::NotGuildMember);
+    }
+    let owner = guild_owner(&state, guild_id).await?;
 
     let rows = sqlx::query(
-        "SELECT id, guild_id, name, archived_at, created_at, announcement_only, topic FROM guild_channels \
-         WHERE guild_id = $1 ORDER BY created_at",
+        "SELECT id, guild_id, name, archived_at, created_at, announcement_only, topic, \"public\" \
+         FROM guild_channels WHERE guild_id = $1 ORDER BY created_at",
     )
     .bind(guild_id)
     .fetch_all(&state.pool)
@@ -252,7 +271,7 @@ pub async fn list_channels(
 
     let mut channels = Vec::with_capacity(rows.len());
     for row in rows {
-        channels.push(ChannelResponse::from(ChannelRow {
+        let channel = ChannelRow {
             id: row.try_get("id")?,
             guild_id: row.try_get("guild_id")?,
             name: row.try_get("name")?,
@@ -260,7 +279,22 @@ pub async fn list_channels(
             created_at: row.try_get("created_at")?,
             announcement_only: row.try_get("announcement_only")?,
             topic: row.try_get("topic")?,
-        }));
+            public: row.try_get("public")?,
+        };
+        let can_view = crate::guilds::has_view_permission(
+            &state,
+            guild_id,
+            owner,
+            actor,
+            avalon_protocol::guilds::GuildResourceKind::Channel,
+            channel.id,
+            channel.public,
+            false,
+        )
+        .await?;
+        if can_view {
+            channels.push(ChannelResponse::from(channel));
+        }
     }
     Ok(Json(channels))
 }
@@ -322,6 +356,7 @@ pub async fn create_channel(
         created_at,
         announcement_only: false,
         topic: None,
+        public: false,
     }))
 }
 
@@ -337,12 +372,16 @@ pub struct UpdateChannelRequest {
     /// `crate::guilds::UpdateGuildRequest::motd` already uses.
     #[serde(default)]
     pub topic: Option<String>,
+    /// Issue #458. `None` leaves the existing value untouched, same
+    /// convention as `announcement_only` above.
+    #[serde(default)]
+    pub public: Option<bool>,
 }
 
 /// `PATCH /guilds/{id}/channels/{cid}` — rename, retopic, and/or toggle
-/// announcement-only. Requires `manage_channels` (resource-aware, issue
-/// #250). Renaming/retoggling an archived channel is allowed (it's still
-/// the same durable channel, just not accepting new posts).
+/// announcement-only/public. Requires `manage_channels` (resource-aware,
+/// issue #250). Renaming/retoggling an archived channel is allowed (it's
+/// still the same durable channel, just not accepting new posts).
 pub async fn update_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -360,16 +399,19 @@ pub async fn update_channel(
         Some(raw) => validate_channel_topic(raw)?,
         None => channel.topic.clone(),
     };
+    let public = body.public.unwrap_or(channel.public);
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
-        "UPDATE guild_channels SET name = $3, announcement_only = $4, topic = $5 WHERE id = $1 AND guild_id = $2",
+        "UPDATE guild_channels SET name = $3, announcement_only = $4, topic = $5, \"public\" = $6 \
+         WHERE id = $1 AND guild_id = $2",
     )
     .bind(channel_id)
     .bind(guild_id)
     .bind(&new_name)
     .bind(announcement_only)
     .bind(&new_topic)
+    .bind(public)
     .execute(&mut *tx)
     .await?;
 
@@ -384,6 +426,7 @@ pub async fn update_channel(
             "name": new_name,
             "announcement_only": announcement_only,
             "topic": new_topic,
+            "public": public,
             "actor": actor,
         }),
         timestamp: OffsetDateTime::now_utc(),
@@ -401,6 +444,7 @@ pub async fn update_channel(
         created_at: channel.created_at,
         announcement_only,
         topic: new_topic,
+        public,
     }))
 }
 
@@ -453,6 +497,7 @@ pub async fn archive_channel(
         created_at: channel.created_at,
         announcement_only: channel.announcement_only,
         topic: channel.topic,
+        public: channel.public,
     }))
 }
 

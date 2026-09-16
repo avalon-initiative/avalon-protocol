@@ -182,6 +182,16 @@ pub struct EventResponse {
     /// pre-select `AvalonRsvpControl` correctly instead of always
     /// rendering unset, even after the caller has already responded.
     pub my_rsvp: Option<String>,
+    /// Issue #458. `false` when the caller has `view` but not
+    /// `view_details` on this event: the event's existence is visible
+    /// (`id`/`guild_id`/`title`/`starts_at`/`ends_at`/`created_by`/
+    /// `created_at`/`public` are real), but `channel_id`/`description`/
+    /// `rsvp_counts`/`my_rsvp` are placeholder values, not real data —
+    /// never a 403, since existence itself is meant to stay visible.
+    /// Always `true` for every event this module's other endpoints
+    /// (create/update/RSVP) return, since those all require the actor to
+    /// already hold `event_manage` or be RSVPing to their own record.
+    pub details_visible: bool,
 }
 
 /// The caller's own `guild_event_rsvps` row for `event_id`, or `None` if
@@ -231,11 +241,36 @@ async fn rsvp_counts(state: &AppState, event_id: Uuid) -> Result<RsvpCounts, App
     Ok(counts)
 }
 
+/// `view_details = false` skips the RSVP-data queries entirely (there's
+/// nothing to strip after the fact if it was never fetched) and returns
+/// existence-only fields — see [`EventResponse::details_visible`].
 async fn event_response(
     state: &AppState,
     row: EventRow,
     actor: Uuid,
+    view_details: bool,
 ) -> Result<EventResponse, AppError> {
+    if !view_details {
+        return Ok(EventResponse {
+            id: row.id,
+            guild_id: row.guild_id,
+            channel_id: None,
+            title: row.title,
+            description: None,
+            starts_at: row.starts_at,
+            ends_at: row.ends_at,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            rsvp_counts: RsvpCounts {
+                going: 0,
+                maybe: 0,
+                not_going: 0,
+            },
+            public: row.public,
+            my_rsvp: None,
+            details_visible: false,
+        });
+    }
     let rsvp_counts = rsvp_counts(state, row.id).await?;
     let my_rsvp = my_rsvp(state, row.id, actor).await?;
     Ok(EventResponse {
@@ -251,6 +286,7 @@ async fn event_response(
         rsvp_counts,
         public: row.public,
         my_rsvp,
+        details_visible: true,
     })
 }
 
@@ -286,6 +322,7 @@ pub async fn list_events(
     if !is_member && !crate::guilds::is_guild_public(&state, guild_id).await? {
         return Err(AppError::NotGuildMember);
     }
+    let owner = crate::channels::guild_owner(&state, guild_id).await?;
 
     let rows = sqlx::query(
         r#"SELECT id, guild_id, channel_id, title, description, starts_at, ends_at,
@@ -317,7 +354,38 @@ pub async fn list_events(
             created_at: row.try_get("created_at")?,
             public: row.try_get("public")?,
         };
-        events.push(event_response(&state, event, actor).await?);
+        // Issue #458: the guild-level member/public gate above already
+        // decided whether this event was fetched from the DB at all
+        // (unchanged); this layers the finer-grained role-override system
+        // on top — a member denied `view` on this specific event never
+        // sees it, and one denied only `view_details` sees it with its
+        // content stripped.
+        let can_view = crate::guilds::has_view_permission(
+            &state,
+            guild_id,
+            owner,
+            actor,
+            avalon_protocol::guilds::GuildResourceKind::Event,
+            event.id,
+            event.public,
+            false,
+        )
+        .await?;
+        if !can_view {
+            continue;
+        }
+        let view_details = crate::guilds::has_view_permission(
+            &state,
+            guild_id,
+            owner,
+            actor,
+            avalon_protocol::guilds::GuildResourceKind::Event,
+            event.id,
+            event.public,
+            true,
+        )
+        .await?;
+        events.push(event_response(&state, event, actor, view_details).await?);
     }
     Ok(Json(events))
 }
@@ -395,6 +463,7 @@ pub async fn create_event(
             public: body.public,
         },
         actor,
+        true,
     )
     .await
     .map(Json)
@@ -467,6 +536,7 @@ pub async fn update_event(
             public: body.public,
         },
         actor,
+        true,
     )
     .await
     .map(Json)

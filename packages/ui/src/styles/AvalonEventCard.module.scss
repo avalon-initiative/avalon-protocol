@@ -46,6 +46,12 @@
   font-style: italic;
 }
 
+.detailsHidden {
+  font-size: var(--av-text-xs);
+  color: var(--av-color-text-muted);
+  font-style: italic;
+}
+
 .actions {
   padding-top: var(--av-space-2);
   border-top: 1px solid var(--av-color-border);

@@ -259,16 +259,32 @@ pub enum GuildPermission {
     ManageChannels,
     EventManage,
     ChannelPost,
+    /// Issue #458, implementing #454's decision: can the resource (an event
+    /// or channel) be seen to exist at all — appears in listings — without
+    /// necessarily seeing its content. Resolved specially, not through the
+    /// generic [`crate::guilds`] override fallback every other permission
+    /// above uses — see `crates/server/src/guilds.rs::resolve_view_permission`.
+    /// A [`Self::ViewDetails`] grant always implies this one; the two are
+    /// never independently absent for a role that holds `ViewDetails`.
+    View,
+    /// Issue #458: can the resource's actual content be read (an event's
+    /// description/RSVPs, a channel's messages) — implies [`Self::View`].
+    /// See `resolve_view_permission`'s own doc comment for the exact
+    /// resolution rules (baseline true for members, derived from the
+    /// resource's own `public` flag for non-members).
+    ViewDetails,
 }
 
 impl GuildPermission {
-    pub const ALL: [GuildPermission; 6] = [
+    pub const ALL: [GuildPermission; 8] = [
         GuildPermission::ManageGuild,
         GuildPermission::ManageRoles,
         GuildPermission::ManageMembers,
         GuildPermission::ManageChannels,
         GuildPermission::EventManage,
         GuildPermission::ChannelPost,
+        GuildPermission::View,
+        GuildPermission::ViewDetails,
     ];
 
     /// [`Self::ALL`], pre-rendered as strings — for seeding the starter
@@ -280,6 +296,8 @@ impl GuildPermission {
         "manage_channels",
         "event_manage",
         "channel_post",
+        "view",
+        "view_details",
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -290,6 +308,8 @@ impl GuildPermission {
             GuildPermission::ManageChannels => "manage_channels",
             GuildPermission::EventManage => "event_manage",
             GuildPermission::ChannelPost => "channel_post",
+            GuildPermission::View => "view",
+            GuildPermission::ViewDetails => "view_details",
         }
     }
 
@@ -301,6 +321,8 @@ impl GuildPermission {
             "manage_channels" => GuildPermission::ManageChannels,
             "event_manage" => GuildPermission::EventManage,
             "channel_post" => GuildPermission::ChannelPost,
+            "view" => GuildPermission::View,
+            "view_details" => GuildPermission::ViewDetails,
             _ => return None,
         })
     }
