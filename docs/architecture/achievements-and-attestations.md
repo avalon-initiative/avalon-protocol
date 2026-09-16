@@ -333,4 +333,7 @@ uses. Neither proof substitutes for the other.
   request/signature envelope, not a new claim-set attestation type — an
   API/transport-layer convenience over the existing per-claim
   authenticity/validity/revocation model (#76), not a change to it.
-  Decided, not yet built — no code in this repo implements it yet.
+  Decided, not yet built — see #495 for the implementation ticket.
+- [#495](https://github.com/LunarVagabond/avalon-protocol/issues/495) —
+  implementation ticket for #492's decision: the actual bulk-issuance
+  endpoint and SDK call. Not built yet as of this writing.
