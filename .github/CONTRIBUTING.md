@@ -264,6 +264,10 @@ two.
 
 ## Where To Contribute
 
+- [`docs/GLOSSARY.md`](../docs/GLOSSARY.md) — start here if the vocabulary
+  itself is the barrier (integrator vs. issuer vs. node, authentic vs. valid
+  vs. recognized, settlement vs. chain vs. ledger, and the rest). Everything
+  below assumes these terms.
 - [`docs/architecture/README.md`](../docs/architecture/README.md) — start
   here: invariants, authority boundaries, the crate layout, "what survives a
   game's death," and the architecture tests every proposed change is held to

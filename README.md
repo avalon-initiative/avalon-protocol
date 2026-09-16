@@ -120,6 +120,8 @@ bindings/
   csharp/     flagship external SDK for game developers (Unity-targeted)
 
 docs/
+  README.md      doc-set map: which directory is for you, suggested reading order
+  GLOSSARY.md    Avalon's vocabulary — start here if the terminology is the blocker
   stakeholders/
     Proposal.md  the living design document (narrative)
   WhyAvalon.md   the case for why this needs to exist
@@ -180,7 +182,7 @@ an unpinned network rather than trusting it silently — see
 
 | Design | Decisions | Process |
 |---|---|---|
-| [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
+| [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
 
 ## Contributing
 
