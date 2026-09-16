@@ -340,7 +340,7 @@ async fn opting_in_then_out_of_search_takes_effect_immediately() {
 }
 
 /// A non-opted-in identity never appears in search, even to a caller who
-/// searches its exact full handle (`display_name#discriminator`) — that
+/// searches its exact handle (`display_name`, issue #510) — that
 /// exact-match path is `GET /friends/handle/:handle`, deliberately
 /// untouched and separate from this fuzzy endpoint.
 #[tokio::test]

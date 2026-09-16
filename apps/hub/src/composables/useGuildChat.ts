@@ -51,7 +51,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   // archive tier instead — flipped inside loadOlder, reset by load()
   // whenever the channel changes.
   const readingArchive = ref(false)
-  // identity id -> "display_name#discriminator", resolved via
+  // identity id -> display_name (issue #510), resolved via
   // GET /identities/profiles (issue #161) for whichever authors show up
   // in the currently-loaded messages. Never removed once resolved — an
   // author's name doesn't need to change mid-session for a chat view.
@@ -125,7 +125,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       const profiles = await api.getProfiles(session.token, unknown)
       const resolved: Record<string, string> = {}
       for (const profile of profiles) {
-        resolved[profile.identity_id] = `${profile.display_name}#${profile.discriminator}`
+        resolved[profile.identity_id] = profile.display_name
       }
       authorNames.value = { ...authorNames.value, ...resolved }
     } catch {

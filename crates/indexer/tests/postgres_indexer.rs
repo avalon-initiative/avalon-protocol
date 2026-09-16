@@ -40,7 +40,6 @@ fn identity_created_event(identity_id: Uuid) -> ProtocolEvent {
         payload: serde_json::json!({
             "identity_id": identity_id,
             "display_name": format!("indexer-test-{identity_id}"),
-            "discriminator": "0001",
         }),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
@@ -58,12 +57,11 @@ async fn apply_is_idempotent_per_projection() {
     indexer.apply(&event).await.expect("first apply failed");
     indexer.apply(&event).await.expect("second apply failed");
 
-    let rows =
-        sqlx::query("SELECT display_name, discriminator FROM profiles WHERE identity_id = $1")
-            .bind(identity_id)
-            .fetch_all(&pool)
-            .await
-            .expect("failed to read back profiles row");
+    let rows = sqlx::query("SELECT display_name FROM profiles WHERE identity_id = $1")
+        .bind(identity_id)
+        .fetch_all(&pool)
+        .await
+        .expect("failed to read back profiles row");
     assert_eq!(
         rows.len(),
         1,

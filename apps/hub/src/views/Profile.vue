@@ -42,6 +42,7 @@ import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
 import { listIanaTimezones } from '../utils/timezones'
+import { isIdentityId } from '../utils/identity'
 import {
   AvalonAvatar,
   AvalonButton,
@@ -66,7 +67,6 @@ const session = useSessionStore()
 
 const displayName = ref('')
 const avatarUrl = ref('')
-const handle = ref('')
 const identityId = ref('')
 const loading = ref(true)
 const error = ref('')
@@ -201,7 +201,7 @@ async function onUnblock(identityId: string) {
   }
 }
 
-// Accepts either a raw identity id or a `display_name#1234` handle (#128),
+// Accepts either a raw identity id or a display_name handle (#128, #510),
 // same convention Friends.vue's onAddFriend already uses for the
 // analogous "add by id/handle" flow.
 async function onBlockById() {
@@ -210,9 +210,9 @@ async function onBlockById() {
   blockingById.value = true
   try {
     const input = blockByIdInput.value.trim()
-    const identityId = input.includes('#')
-      ? (await api.resolveHandle(session.token, input)).identity_id
-      : input
+    const identityId = isIdentityId(input)
+      ? input
+      : (await api.resolveHandle(session.token, input)).identity_id
     await api.createBlock(session.token, { identity_id: identityId })
     blockByIdInput.value = ''
     await refreshBlockedUsers()
@@ -237,7 +237,6 @@ onMounted(async () => {
     const profile = await api.getMe(session.token)
     displayName.value = profile.display_name
     avatarUrl.value = profile.avatar_url ?? ''
-    handle.value = profile.handle
     identityId.value = profile.identity_id
     bio.value = profile.bio ?? ''
     pronouns.value = profile.pronouns ?? ''
@@ -316,7 +315,6 @@ async function saveProfileField(field: ProfileField, value: string) {
     const profile = await api.updateProfile(session.token, { [field]: value })
     displayName.value = profile.display_name
     avatarUrl.value = profile.avatar_url ?? ''
-    handle.value = profile.handle
     bio.value = profile.bio ?? ''
     pronouns.value = profile.pronouns ?? ''
     bannerUrl.value = profile.banner_url ?? ''
@@ -898,7 +896,6 @@ async function onResignGuardian(identityId: string) {
       <AvalonAvatar :src="avatarUrl || null" :name="displayName" size="xl" />
       <div :class="styles.heroText">
         <h1 :class="page.title">{{ displayName }}</h1>
-        <p :class="styles.handle">{{ handle }}</p>
         <p :class="styles.identityId">{{ identityId }}</p>
       </div>
       <div :class="styles.heroActions">
@@ -934,7 +931,7 @@ async function onResignGuardian(identityId: string) {
             {{ discoverable ? 'You are currently publicly searchable.' : 'You are not publicly searchable.' }}
           </p>
           <p :class="styles.listDetail">
-            Turning this on lets any user find you by name or handle in search. Off by
+            Turning this on lets any user find you by name in search. Off by
             default — turning it off removes you from search immediately.
           </p>
         </div>
@@ -992,7 +989,7 @@ async function onResignGuardian(identityId: string) {
         <input
           v-model="blockByIdInput"
           type="text"
-          placeholder="identity id or handle#1234"
+          placeholder="identity id or display name"
           :class="styles.linkInput"
         />
         <AvalonButton
@@ -1383,7 +1380,7 @@ async function onResignGuardian(identityId: string) {
           <ul :class="styles.list">
             <li v-for="entry in guardianOf" :key="entry.identity_id" :class="styles.listRow">
               <span :class="styles.listText">
-                <span :class="styles.listLabel">{{ entry.display_name }}#{{ entry.discriminator }}</span>
+                <span :class="styles.listLabel">{{ entry.display_name }}</span>
                 <span :class="styles.listDetail">guardian since {{ entry.added_at }}</span>
               </span>
               <AvalonButton

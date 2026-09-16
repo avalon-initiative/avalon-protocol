@@ -17,7 +17,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Avalon User',
   avatar_url: null,
-  handle: 'Avalon User#1234',
 }
 
 function testRouter() {
@@ -68,7 +67,7 @@ describe('HubShell', () => {
     router.push('/profile')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User'))
     expect(wrapper.text()).toContain('AVALON')
     expect(wrapper.text()).toContain('Home')
     expect(wrapper.text()).toContain('Soon')
@@ -83,7 +82,7 @@ describe('HubShell', () => {
     router.push('/friends')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User'))
     expect(wrapper.text()).toContain('Add a friend')
     expect(wrapper.find('nav[aria-label="Primary"]').exists()).toBe(true)
   })

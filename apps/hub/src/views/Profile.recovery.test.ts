@@ -14,7 +14,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
 }
 
 function testRouter() {
@@ -56,7 +55,7 @@ describe('Recovery guardians card', () => {
       '/friends': [{ a: 'id-1', b: 'friend-1', since: 'now' }],
       '/presence': [{ identity_id: 'friend-1', status: 'Online' }],
       '/identities/profiles': [
-        { identity_id: 'friend-1', display_name: 'Bramble', discriminator: '0001', avatar_url: null },
+        { identity_id: 'friend-1', display_name: 'Bramble', avatar_url: null },
       ],
     })
     await vi.waitFor(() => expect(wrapper.text()).toContain('Bramble'))
@@ -100,13 +99,12 @@ describe('Guardian-of card (issue #443)', () => {
         {
           identity_id: 'owner-1',
           display_name: 'Bramble',
-          discriminator: '0001',
           added_at: 'now',
         },
       ],
     })
     await vi.waitFor(() => expect(wrapper.text()).toContain("You're a recovery guardian for"))
-    expect(wrapper.text()).toContain('Bramble#0001')
+    expect(wrapper.text()).toContain('Bramble')
 
     const resignButton = wrapper
       .findAll('button')

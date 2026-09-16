@@ -63,7 +63,7 @@ export function useGuildDetail(guildId: Ref<string>) {
       const profiles = await api.getProfiles(session.token, unknown)
       const resolved: Record<string, string> = {}
       for (const profile of profiles) {
-        resolved[profile.identity_id] = `${profile.display_name}#${profile.discriminator}`
+        resolved[profile.identity_id] = profile.display_name
       }
       applicantNames.value = { ...applicantNames.value, ...resolved }
     } catch {

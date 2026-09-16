@@ -41,7 +41,7 @@ export function useConversations() {
       const profiles = await api.getProfiles(session.token, unknown)
       const resolved: Record<string, string> = {}
       for (const profile of profiles) {
-        resolved[profile.identity_id] = `${profile.display_name}#${profile.discriminator}`
+        resolved[profile.identity_id] = profile.display_name
       }
       participantNames.value = { ...participantNames.value, ...resolved }
     } catch {
@@ -59,7 +59,7 @@ export function useConversations() {
         // ever resolves *other* participants), so seed this directly —
         // otherwise the caller's own name never appears in their own
         // conversations, only the other side's.
-        participantNames.value = { ...participantNames.value, [me.identity_id]: me.handle }
+        participantNames.value = { ...participantNames.value, [me.identity_id]: me.display_name }
       }
       conversations.value = await api.listConversations(session.token)
       await resolveParticipantNames(conversations.value)

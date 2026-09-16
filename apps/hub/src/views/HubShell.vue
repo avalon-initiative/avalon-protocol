@@ -37,7 +37,6 @@ const router = useRouter()
 const session = useSessionStore()
 
 const displayName = ref('')
-const handle = ref('')
 const avatarUrl = ref<string | null>(null)
 const myStatus = ref<PresenceStatus>('Offline')
 const loading = ref(true)
@@ -164,7 +163,6 @@ onMounted(async () => {
   try {
     const profile = await getMe(session.token)
     displayName.value = profile.display_name
-    handle.value = profile.handle
     avatarUrl.value = profile.avatar_url
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -319,7 +317,7 @@ watch(
           </div>
         </div>
         <RouterLink v-if="!loading" to="/profile" :class="styles.userLink">
-          <AvalonUserChip :name="displayName" :detail="handle" :avatar-src="avatarUrl" />
+          <AvalonUserChip :name="displayName" :avatar-src="avatarUrl" />
         </RouterLink>
       </header>
       <p v-if="error" :class="styles.error">{{ error }}</p>

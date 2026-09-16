@@ -311,9 +311,10 @@ export function removeBlock(token: string, identityId: string): Promise<void> {
   return request(`/blocks/${identityId}`, { method: 'DELETE', token })
 }
 
-// Resolves a `display_name#1234` handle (issue #128) to an identity id for
-// the "add friend" flow — exact match only. `#` isn't safe unencoded in a
-// URL path segment, so it's escaped here rather than left to the caller.
+// Resolves a display_name handle (issue #128, #510 — display_name itself
+// is the globally-unique handle now) to an identity id for the "add
+// friend" flow — exact match only. URL-encoded since a display name can
+// contain characters that aren't safe unencoded in a URL path segment.
 export function resolveHandle(token: string, handle: string): Promise<ResolveHandleResponse> {
   return request(`/friends/handle/${encodeURIComponent(handle)}`, { token })
 }

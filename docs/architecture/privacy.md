@@ -144,9 +144,10 @@ returned as the real sub-floor count; zero is never coarsened, since
   indistinguishable from a genuinely missing entry — never a
   distinguishable "hidden" error code or presence state.
 - The ledger (`crates/server/db/migrations/0002_ledger`) is readable by anyone
-  with database access; the `identity.created` payload carries
-  `identity_id`/`display_name`/`discriminator` only — no `username` or other
-  login credential — since [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)
+  with database access; the `identity.created` payload carries only
+  `identity_id`/`display_name` (issue #510: the globally-unique handle
+  itself) — no `username` or other login credential — since
+  [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73)
   and [#86](https://github.com/LunarVagabond/avalon-protocol/issues/86).
 - `crates/server/src/authz.rs` (#28) implements the write-side half of the
   "active binding → active `PermissionGrant`" chain this section describes —

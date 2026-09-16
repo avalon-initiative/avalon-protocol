@@ -313,7 +313,6 @@ async fn fetch_guardian_settings(
 pub struct GuardianOfSummary {
     pub identity_id: Uuid,
     pub display_name: String,
-    pub discriminator: String,
     #[serde(with = "time::serde::rfc3339")]
     pub added_at: OffsetDateTime,
 }
@@ -332,7 +331,7 @@ pub async fn guardian_of(
 
     let rows = sqlx::query(
         r#"
-        SELECT g.identity_id, g.added_at, p.display_name, p.discriminator
+        SELECT g.identity_id, g.added_at, p.display_name
         FROM recovery_guardians g
         JOIN profiles p ON p.identity_id = g.identity_id
         WHERE g.guardian_identity_id = $1
@@ -348,7 +347,6 @@ pub async fn guardian_of(
         summaries.push(GuardianOfSummary {
             identity_id: row.try_get("identity_id")?,
             display_name: row.try_get("display_name")?,
-            discriminator: row.try_get("discriminator")?,
             added_at: row.try_get("added_at")?,
         });
     }

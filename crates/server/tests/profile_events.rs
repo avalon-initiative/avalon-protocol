@@ -92,17 +92,20 @@ async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
     let base = server_url();
     let (_identity_id, token) = seed_identity_session(&pool).await;
 
+    // Issue #510: display_name is now globally unique, so a fixed literal
+    // here would fail every run after the first against a persistent dev
+    // database — embed a fresh uuid, same convention this suite's other
+    // fixtures already use.
+    let new_display_name = format!("renamed-by-test-{}", Uuid::new_v4());
+
     let update = http
         .patch(format!("{base}/me"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "display_name": "renamed-by-test" }))
+        .json(&serde_json::json!({ "display_name": new_display_name }))
         .send()
         .await
         .expect("update request failed — is `make start` running?");
     assert!(update.status().is_success(), "{:?}", update.status());
-    let profile: serde_json::Value = update.json().await.unwrap();
-    let handle = profile["handle"].as_str().unwrap().to_string();
-    let discriminator = handle.rsplit_once('#').unwrap().1.to_string();
 
     let entries = wait_for_history(&http, &base, &token, Duration::from_secs(30), |entries| {
         entries.iter().any(|e| e["kind"] == "profile.updated")
@@ -113,10 +116,7 @@ async fn a_display_name_change_reaches_the_ledger_as_profile_updated() {
         .find(|e| e["kind"] == "profile.updated")
         .expect("profile.updated never reached the ledger");
 
-    assert_eq!(event["payload"]["display_name"], "renamed-by-test");
-    // The discriminator in the event is the one the handle actually landed
-    // on — what a rebuild would need to reproduce `name#1234` exactly.
-    assert_eq!(event["payload"]["discriminator"], discriminator);
+    assert_eq!(event["payload"]["display_name"], new_display_name);
     // avatar_url wasn't part of this request, so it isn't part of the event.
     assert!(event["payload"].get("avatar_url").is_none());
 }

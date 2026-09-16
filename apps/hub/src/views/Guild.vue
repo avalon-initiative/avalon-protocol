@@ -59,6 +59,7 @@ import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useRsvpRoster } from '../composables/useRsvpRoster'
 import { useSessionStore } from '../stores/session'
+import { isIdentityId } from '../utils/identity'
 import local from '../styles/Guild.module.scss'
 import styles from '../styles/page.module.scss'
 
@@ -1043,12 +1044,11 @@ function cancelInvite() {
   inviteError.value = ''
 }
 
-// Issue #392: accepts either a raw identity id or a `display_name#1234`
-// handle, the same convenience Friends.vue's onAddFriend already offers —
-// a handle (anything containing '#') is resolved to an identity id first,
-// since createGuildInvite always targets an identity id on the wire.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
+// Issue #392: accepts either a raw identity id or a display_name handle
+// (#128, #510), the same convenience Friends.vue's onAddFriend already
+// offers — a handle (anything that isn't a UUID) is resolved to an
+// identity id first, since createGuildInvite always targets an identity
+// id on the wire.
 async function onInvite() {
   if (!session.token) return
   inviteError.value = ''
@@ -1056,11 +1056,9 @@ async function onInvite() {
   inviting.value = true
   try {
     const input = inviteIdentityId.value.trim()
-    const to = input.includes('#') ? (await api.resolveHandle(session.token, input)).identity_id : input
-    if (!UUID_RE.test(to)) {
-      inviteError.value = "That doesn't look like an identity id or a display_name#1234 handle — enter one of those."
-      return
-    }
+    const to = isIdentityId(input)
+      ? input
+      : (await api.resolveHandle(session.token, input)).identity_id
     const invite = await api.createGuildInvite(session.token, guildId.value, { to })
     // No endpoint lists a user's own pending guild invites yet (a real
     // gap — see docs/architecture/guilds.md's correction note), so the
@@ -1687,7 +1685,7 @@ const {
               <AvalonTextField
                 v-model="inviteIdentityId"
                 label="Identity id or handle"
-                placeholder="Identity id, or display_name#1234"
+                placeholder="Identity id, or display name"
               />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelInvite" />

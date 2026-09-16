@@ -15,7 +15,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
 }
 
 function testRouter() {
@@ -50,9 +49,7 @@ describe('Profile blocked users', () => {
       '/me': profile,
       '/me/passkeys': [],
       '/blocks': [{ blocked: 'id-2', created_at: 'now' }],
-      '/identities/profiles': [
-        { identity_id: 'id-2', display_name: 'Grief', discriminator: '9001', avatar_url: null },
-      ],
+      '/identities/profiles': [{ identity_id: 'id-2', display_name: 'Grief', avatar_url: null }],
     })
 
     const router = testRouter()
@@ -82,7 +79,10 @@ describe('Profile blocked users', () => {
     const wrapper = mount(Profile, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('Blocked users'))
 
-    await wrapper.find('input[placeholder="identity id or handle#1234"]').setValue('id-3')
+    // Issue #510: only a real UUID skips the handle-resolve step now
+    // (display_name is the handle, so anything else is treated as one).
+    const targetId = '33333333-4444-5555-6666-777777777777'
+    await wrapper.find('input[placeholder="identity id or display name"]').setValue(targetId)
     const blockButton = wrapper.findAll('button').find((b) => b.text() === 'Block')!
     await blockButton.trigger('click')
     await flushPromises()
@@ -93,6 +93,6 @@ describe('Profile blocked users', () => {
     })
     expect(blockCall).toBeTruthy()
     const body = JSON.parse((blockCall![1] as RequestInit).body as string)
-    expect(body.identity_id).toBe('id-3')
+    expect(body.identity_id).toBe(targetId)
   })
 })

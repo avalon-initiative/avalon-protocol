@@ -37,8 +37,13 @@ pub enum AppError {
     InvalidProfileQuery,
     #[error("no profile matches that handle")]
     HandleNotFound,
-    #[error("could not generate a unique handle, try a different display name")]
-    HandleGenerationFailed,
+    /// Issue #510: `display_name` (case-insensitive) is already held by a
+    /// different identity — a hard rejection, never an auto-suggested
+    /// variant. Raised both by `register_start`'s advisory pre-check and
+    /// by mapping a real `IndexError::DisplayNameTaken` (the actual
+    /// enforcement point) at `register_finish`/`update_profile`.
+    #[error("display_name is already taken")]
+    DisplayNameTaken,
     #[error("avatar_url must be an http(s) URL of 2048 characters or fewer")]
     InvalidAvatarUrl,
     #[error("bio must be 500 characters or fewer")]
@@ -382,7 +387,7 @@ impl AppError {
             AppError::PresenceActiveInMismatch => "PRESENCE_ACTIVE_IN_MISMATCH",
             AppError::InvalidProfileQuery => "INVALID_PROFILE_QUERY",
             AppError::HandleNotFound => "HANDLE_NOT_FOUND",
-            AppError::HandleGenerationFailed => "HANDLE_GENERATION_FAILED",
+            AppError::DisplayNameTaken => "DISPLAY_NAME_TAKEN",
             AppError::InvalidAvatarUrl => "INVALID_AVATAR_URL",
             AppError::InvalidBio => "INVALID_BIO",
             AppError::InvalidPronouns => "INVALID_PRONOUNS",
@@ -560,7 +565,7 @@ impl IntoResponse for AppError {
             AppError::AlreadyFriends | AppError::FriendRequestExists => StatusCode::CONFLICT,
             AppError::NotFriends => StatusCode::NOT_FOUND,
             AppError::HandleNotFound => StatusCode::NOT_FOUND,
-            AppError::HandleGenerationFailed => StatusCode::CONFLICT,
+            AppError::DisplayNameTaken => StatusCode::CONFLICT,
             AppError::InvalidAvatarUrl
             | AppError::InvalidBio
             | AppError::InvalidPronouns

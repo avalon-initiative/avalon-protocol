@@ -59,8 +59,13 @@ async fn resolves_display_names_for_a_batch_of_ids() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (alice_id, alice_token) = seed_identity_session(&pool, "alice-profiles-test").await;
-    let (bob_id, _bob_token) = seed_identity_session(&pool, "bob-profiles-test").await;
+    // Issue #510: display_name is globally unique now, so a fixed literal
+    // would collide on any re-run against a persistent dev database —
+    // embed a fresh uuid, same convention this suite's other fixtures use.
+    let alice_name = format!("alice-profiles-test-{}", Uuid::new_v4());
+    let bob_name = format!("bob-profiles-test-{}", Uuid::new_v4());
+    let (alice_id, alice_token) = seed_identity_session(&pool, &alice_name).await;
+    let (bob_id, _bob_token) = seed_identity_session(&pool, &bob_name).await;
 
     let response: serde_json::Value = auth(
         http.get(format!(
@@ -81,8 +86,8 @@ async fn resolves_display_names_for_a_batch_of_ids() {
         .iter()
         .map(|e| e["display_name"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"alice-profiles-test"));
-    assert!(names.contains(&"bob-profiles-test"));
+    assert!(names.contains(&alice_name.as_str()));
+    assert!(names.contains(&bob_name.as_str()));
 }
 
 #[tokio::test]
@@ -91,7 +96,8 @@ async fn unknown_ids_are_omitted_not_errors() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let base = server_url();
-    let (alice_id, alice_token) = seed_identity_session(&pool, "alice-unknown-id-test").await;
+    let alice_name = format!("alice-unknown-id-test-{}", Uuid::new_v4());
+    let (alice_id, alice_token) = seed_identity_session(&pool, &alice_name).await;
     let missing_id = Uuid::new_v4();
 
     let response = auth(

@@ -90,32 +90,6 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
     format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
 }
 
-/// Generates a 4-digit discriminator making `(display_name, discriminator)`
-/// unique — the pair is what a friend handle (issue #128) actually is, e.g.
-/// `alice#4821`. Retries on collision rather than failing immediately: with
-/// ~10000 possible values per display name, a handful of retries only ever
-/// matters once a single name is genuinely crowded.
-async fn generate_unique_discriminator(
-    state: &AppState,
-    display_name: &str,
-) -> Result<String, AppError> {
-    use rand::RngExt;
-    const MAX_ATTEMPTS: u32 = 20;
-    for _ in 0..MAX_ATTEMPTS {
-        // `rng()` is `!Send` and must not live across an `.await` —
-        // dropping it within this statement (rather than binding it once
-        // outside the loop) keeps this function's future `Send`, which
-        // axum's `Handler` bound requires of every route it's awaited from.
-        let candidate = format!("{:04}", rand::rng().random_range(0..10000));
-        let taken =
-            profile_reads::is_handle_taken(&state.pool, display_name, &candidate, None).await?;
-        if !taken {
-            return Ok(candidate);
-        }
-    }
-    Err(AppError::HandleGenerationFailed)
-}
-
 /// Ceremony state persisted between `register/start` and `register/finish`
 /// — bundles webauthn-rs's own `PasskeyRegistration` state with the
 /// identity id/display name the client already committed to at `start`, so
@@ -152,6 +126,18 @@ pub async fn register_start(
         .await?;
     if existing.is_some() {
         return Err(AppError::IdentityIdTaken);
+    }
+
+    // Issue #510: advisory only, purely a fail-fast UX check before a
+    // client burns a whole WebAuthn ceremony on a name that's already
+    // gone — the real, atomic enforcement is `profiles_display_name_lower_idx`
+    // at `register_finish`'s actual write (see
+    // `avalon_indexer::projections::profiles`'s module doc). A TOCTOU race
+    // against this specific check is harmless: the worst case is a client
+    // completes the ceremony and then hits the real conflict at `finish`
+    // anyway, exactly the same outcome as never having this check at all.
+    if profile_reads::is_display_name_taken(&state.pool, &body.display_name, None).await? {
+        return Err(AppError::DisplayNameTaken);
     }
 
     // WebAuthn's `user.name` (2nd param) is what password managers key off of
@@ -260,11 +246,6 @@ pub async fn register_finish(
     let passkey_json = serde_json::to_value(&passkey).expect("Passkey should serialize");
     let credential_id: &[u8] = passkey.cred_id().as_ref();
 
-    // Chosen before the event is built so the event can carry it: a rebuild
-    // of `profiles` from history (#43) has to land on the same handle, and
-    // the discriminator is server-chosen, not derivable from the name.
-    let discriminator = generate_unique_discriminator(&state, &ceremony.display_name).await?;
-
     // Self-attributed, not network-attributed: the identity signed its own
     // creation, so the ledger entry's issuer says so — a hosted node cannot
     // fabricate this the way it could when the server itself was the
@@ -288,12 +269,13 @@ pub async fn register_finish(
         ),
         // The initial promised-durable profile state rides along (#86) —
         // `display_name` is the identity's public face, not a login
-        // credential (no `username` exists anywhere), and without it and the
-        // discriminator `profiles` couldn't be rebuilt from history.
+        // credential (no `username` exists anywhere), and without it
+        // `profiles` couldn't be rebuilt from history. It's also, as of
+        // #510, the identity's globally-unique handle in its own right —
+        // no discriminator.
         payload: serde_json::to_value(IdentityCreatedPayload {
             identity_id: ceremony.identity_id,
             display_name: ceremony.display_name.clone(),
-            discriminator,
         })
         .expect("IdentityCreatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
@@ -318,7 +300,18 @@ pub async fn register_finish(
     // `apply_in_tx` against this same transaction — rather than
     // `state.indexer.apply`, which would open its own — keeps the
     // identity/profile/outbox rows committing or rolling back together.
-    state.indexer.apply_in_tx(&mut tx, &event).await?;
+    //
+    // Issue #510: this is the real, atomic display_name-uniqueness
+    // enforcement point (`register_start`'s own check was advisory only) —
+    // mapped to a clean rejection here, same pattern `insert_identity`'s
+    // own unique-violation handling just above already establishes for
+    // `identity_id`.
+    if let Err(err) = state.indexer.apply_in_tx(&mut tx, &event).await {
+        if matches!(err, avalon_indexer::IndexError::DisplayNameTaken) {
+            return Err(AppError::DisplayNameTaken);
+        }
+        return Err(err.into());
+    }
 
     sqlx::query(
         "INSERT INTO identity_keys (identity_id, credential_id, passkey_data) VALUES ($1, $2, $3)",
@@ -504,13 +497,12 @@ pub struct ProfileResponse {
     pub identity_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
     pub identity_created_at: OffsetDateTime,
+    /// Issue #510: this identity's globally-unique, case-insensitive
+    /// handle in its own right — no separate `handle`/discriminator field
+    /// exists any more (issue #128's old scheme). Add-friend-by-handle
+    /// resolves this field directly.
     pub display_name: String,
     pub avatar_url: Option<String>,
-    /// `display_name#discriminator` — the short handle issue #128 added for
-    /// adding friends without pasting a raw identity id. Derived, not
-    /// stored: always computed from the two columns so it can never drift
-    /// out of sync with a display-name change.
-    pub handle: String,
     /// Small, user-optional self-description fields (issue #155) — same
     /// promised-durable tier and same public exposure level as
     /// `display_name`/`avatar_url` above (no capability gate, no integrator ever
@@ -565,7 +557,6 @@ fn profile_view_to_response(
     ProfileResponse {
         identity_id,
         identity_created_at: view.identity_created_at,
-        handle: format!("{}#{}", view.display_name, view.discriminator),
         display_name: view.display_name,
         avatar_url: view.avatar_url,
         bio: view.bio,
@@ -667,7 +658,6 @@ pub struct ProfilesQuery {
 pub struct PublicProfileResponse {
     pub identity_id: Uuid,
     pub display_name: String,
-    pub discriminator: String,
     pub avatar_url: Option<String>,
 }
 
@@ -691,7 +681,6 @@ pub struct PublicIdentityProfileResponse {
     pub identity_created_at: OffsetDateTime,
     pub display_name: String,
     pub avatar_url: Option<String>,
-    pub handle: String,
     pub bio: Option<String>,
     pub favorite_genres: Vec<Genre>,
     pub pronouns: Option<String>,
@@ -729,7 +718,6 @@ pub async fn get_identity_profile(
     Ok(Json(PublicIdentityProfileResponse {
         identity_id: id,
         identity_created_at: view.identity_created_at,
-        handle: format!("{}#{}", view.display_name, view.discriminator),
         display_name: view.display_name,
         avatar_url: view.avatar_url,
         bio: view.bio,
@@ -788,7 +776,6 @@ pub async fn list_profiles(
         .map(|s| PublicProfileResponse {
             identity_id: s.identity_id,
             display_name: s.display_name,
-            discriminator: s.discriminator,
             avatar_url: s.avatar_url,
         })
         .collect();
@@ -1117,45 +1104,15 @@ async fn validate_main_guild(
     Ok(Some(guild_id))
 }
 
-/// A display-name change can collide with someone else's existing handle
-/// (same name, same discriminator) — the discriminator itself never changes
-/// on its own, but if the *new* name collides under it, a fresh one has to
-/// be picked so `(display_name, discriminator)` stays unique. No collision
-/// (the common case) keeps the identity's existing discriminator, so a
-/// user's handle doesn't churn just because they tweaked their name.
-async fn discriminator_for_rename(
-    state: &AppState,
-    identity_id: Uuid,
-    new_display_name: &str,
-) -> Result<String, AppError> {
-    let current = profile_reads::discriminator_for(&state.pool, identity_id)
-        .await?
-        .ok_or(AppError::Database(sqlx::Error::RowNotFound))?;
-
-    let taken =
-        profile_reads::is_handle_taken(&state.pool, new_display_name, &current, Some(identity_id))
-            .await?;
-
-    if !taken {
-        Ok(current)
-    } else {
-        generate_unique_discriminator(state, new_display_name).await
-    }
-}
-
 /// The payload `profile.updated` carries (#86, widened by #155): only the
-/// fields this request actually changed. `discriminator` rides along with a
-/// display-name change because a rebuild of `profiles` from history (#43)
-/// has to land on the same handle, and the discriminator is server-chosen,
-/// not derivable from the name. An explicitly cleared `avatar_url`/`bio`/
-/// `pronouns` is `null`; an untouched one is absent — the same three-state
-/// distinction `update_profile` itself makes. `favorite_genres` has only two
-/// states: absent (untouched) or present (the new, complete list, including
-/// `[]` to clear it).
+/// fields this request actually changed. An explicitly cleared
+/// `avatar_url`/`bio`/`pronouns` is `null`; an untouched one is absent —
+/// the same three-state distinction `update_profile` itself makes.
+/// `favorite_genres` has only two states: absent (untouched) or present
+/// (the new, complete list, including `[]` to clear it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn profile_updated_payload(
     display_name: Option<&str>,
-    discriminator: Option<&str>,
     avatar_url: Option<Option<&str>>,
     bio: Option<Option<&str>>,
     favorite_genres: Option<&[Genre]>,
@@ -1176,7 +1133,6 @@ pub(crate) fn profile_updated_payload(
     // is byte-for-byte identical either way.
     let payload = ProfileUpdatedPayload {
         display_name: display_name.map(str::to_string),
-        discriminator: discriminator.map(str::to_string),
         avatar_url: avatar_url.map(|v| v.map(str::to_string)),
         bio: bio.map(|v| v.map(str::to_string)),
         favorite_genres: favorite_genres
@@ -1200,10 +1156,14 @@ pub async fn update_profile(
 ) -> Result<Json<ProfileResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    let discriminator = match &body.display_name {
-        Some(new_name) => Some(discriminator_for_rename(&state, identity_id, new_name).await?),
-        None => None,
-    };
+    // Issue #510: advisory only, same reasoning `register_start`'s own
+    // check documents — the real enforcement is `apply_in_tx`'s write
+    // further down, mapped to a clean rejection there.
+    if let Some(new_name) = &body.display_name {
+        if profile_reads::is_display_name_taken(&state.pool, new_name, Some(identity_id)).await? {
+            return Err(AppError::DisplayNameTaken);
+        }
+    }
 
     // Three states, not two: `avatar_url` omitted (leave the column alone),
     // provided as `""` (clear it to NULL), or provided as a real value
@@ -1283,8 +1243,9 @@ pub async fn update_profile(
     // protocol history, so it has no `profile.updated` payload and needs
     // no atomicity with the rest of this request's changes. Applied only
     // now, after every fallible validation above has already succeeded —
-    // never before them. `discriminator_for_rename`/`validate_*` can each
-    // still fail and abort this handler with an `AppError`; running this
+    // never before them. The `is_display_name_taken` check/`validate_*`
+    // calls above can each still fail and abort this handler with an
+    // `AppError`; running this
     // write any earlier would let an otherwise-failed PATCH /me (a bad
     // avatar_url, an invalid genre, ...) leave `discoverable` flipped
     // anyway, which is exactly the kind of partial-write a default-off,
@@ -1340,7 +1301,6 @@ pub async fn update_profile(
             ),
             payload: profile_updated_payload(
                 body.display_name.as_deref(),
-                discriminator.as_deref(),
                 avatar_url_provided.then_some(avatar_url.as_deref()),
                 bio_provided.then_some(bio.as_deref()),
                 favorite_genres_provided.then_some(favorite_genres.as_slice()),
@@ -1365,7 +1325,15 @@ pub async fn update_profile(
     // request that changed nothing has no event, so nothing to apply; the
     // `SELECT` after this still returns the (unchanged) current row.
     if let Some(event) = &event {
-        state.indexer.apply_in_tx(&mut tx, event).await?;
+        // Issue #510: the real, atomic display_name-uniqueness enforcement
+        // point — the advisory check above this function's start can't
+        // guarantee this doesn't fail here too.
+        if let Err(err) = state.indexer.apply_in_tx(&mut tx, event).await {
+            if matches!(err, avalon_indexer::IndexError::DisplayNameTaken) {
+                return Err(AppError::DisplayNameTaken);
+            }
+            return Err(err.into());
+        }
         outbox::enqueue(&mut tx, event).await?;
     }
 
@@ -1455,7 +1423,6 @@ mod tests {
     fn profile_updated_payload_carries_only_the_changed_fields() {
         let payload = profile_updated_payload(
             Some("nova"),
-            Some("4821"),
             None,
             None,
             None,
@@ -1468,10 +1435,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(
-            payload,
-            serde_json::json!({ "display_name": "nova", "discriminator": "4821" })
-        );
+        assert_eq!(payload, serde_json::json!({ "display_name": "nova" }));
         assert!(payload.get("avatar_url").is_none());
         assert!(payload.get("bio").is_none());
         assert!(payload.get("favorite_genres").is_none());
@@ -1481,7 +1445,6 @@ mod tests {
     #[test]
     fn profile_updated_payload_distinguishes_a_cleared_avatar_from_an_untouched_one() {
         let cleared = profile_updated_payload(
-            None,
             None,
             Some(None),
             None,
@@ -1498,7 +1461,6 @@ mod tests {
         assert_eq!(cleared, serde_json::json!({ "avatar_url": null }));
 
         let set = profile_updated_payload(
-            None,
             None,
             Some(Some("https://example.com/a.png")),
             None,
@@ -1519,7 +1481,6 @@ mod tests {
 
         let untouched = profile_updated_payload(
             Some("nova"),
-            Some("4821"),
             None,
             None,
             None,
@@ -1540,7 +1501,6 @@ mod tests {
         let cleared = profile_updated_payload(
             None,
             None,
-            None,
             Some(None),
             None,
             None,
@@ -1557,7 +1517,6 @@ mod tests {
         let set = profile_updated_payload(
             None,
             None,
-            None,
             Some(Some("hello")),
             None,
             None,
@@ -1572,7 +1531,7 @@ mod tests {
         assert_eq!(set, serde_json::json!({ "bio": "hello" }));
 
         let untouched = profile_updated_payload(
-            None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
         );
         assert!(untouched.get("bio").is_none());
     }
@@ -1580,7 +1539,6 @@ mod tests {
     #[test]
     fn profile_updated_payload_carries_favorite_genres_as_strings() {
         let payload = profile_updated_payload(
-            None,
             None,
             None,
             None,
@@ -1606,7 +1564,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             Some(&[]),
             None,
             None,
@@ -1628,7 +1585,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             Some(None),
             None,
             None,
@@ -1640,7 +1596,6 @@ mod tests {
         assert_eq!(cleared, serde_json::json!({ "banner_url": null }));
 
         let set = profile_updated_payload(
-            None,
             None,
             None,
             None,
@@ -1664,7 +1619,6 @@ mod tests {
     fn profile_updated_payload_carries_links_as_a_full_replace() {
         let links = vec!["https://example.com".to_string()];
         let payload = profile_updated_payload(
-            None,
             None,
             None,
             None,
@@ -1697,14 +1651,12 @@ mod tests {
             None,
             None,
             None,
-            None,
             Some(None),
             None,
         );
         assert_eq!(cleared, serde_json::json!({ "location": null }));
 
         let set = profile_updated_payload(
-            None,
             None,
             None,
             None,

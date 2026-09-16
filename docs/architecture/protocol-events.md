@@ -188,14 +188,14 @@ where an emitter is genuinely signed, it's called out explicitly.
 - **`crates/server/src/handlers.rs`** — identity and profile.
   - `register_finish` emits `identity.created`, signed by the identity's own
     Ed25519 event-signing key (verified independently of the WebAuthn
-    ceremony that authenticated registration). Payload: `identity_id`,
-    initial `display_name`, and the handle `discriminator` — no `username`
-    field exists anywhere (#73).
+    ceremony that authenticated registration). Payload: `identity_id` and
+    initial `display_name` — no `username` field exists anywhere (#73).
+    Issue #510: `display_name` is the globally-unique handle itself, no
+    discriminator suffix.
   - `update_profile` emits `profile.updated` (#86, widened by #155) only
     when `display_name`, `avatar_url`, `bio`, `favorite_genres`, or
     `pronouns` actually changes; a no-op request emits nothing. Payload
-    carries only the changed fields (plus `discriminator` on a rename, so a
-    rebuild can reproduce the handle). `avatar_url`/`bio`/`pronouns` use
+    carries only the changed fields. `avatar_url`/`bio`/`pronouns` use
     `null` for an explicit clear vs. an absent key for untouched;
     `favorite_genres` has no separate clear state — a present key is always
     the field's complete new value, including `[]` to clear it.

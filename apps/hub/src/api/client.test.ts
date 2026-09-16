@@ -239,7 +239,6 @@ describe('api client', () => {
       identity_created_at: 't',
       display_name: 'x',
       avatar_url: null,
-      handle: 'x#0001',
       discoverable: true,
     })
     await updateProfile('token', { discoverable: true })

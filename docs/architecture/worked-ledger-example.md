@@ -38,17 +38,17 @@ identity's key into existence in the first place.
   "subject": "identity:a1b2c3d4-...-000001:self:created",
   "payload": {
     "identity_id": "a1b2c3d4-...-000001",
-    "display_name": "Nova",
-    "discriminator": "4821"
+    "display_name": "Nova"
   },
   "timestamp": "2027-01-04T09:12:03Z",
   "version": 1
 }
 ```
 
-No `username` field exists anywhere in this or any later event — `Nova#4821`
-(`display_name#discriminator`) is the whole handle, and it's derived, never
-its own stored/signed fact (see [`./identity.md`](./identity.md)).
+No `username` field exists anywhere in this or any later event — issue
+#510: `display_name` (`Nova`, above) is the whole handle itself, globally
+unique and case-insensitive, no discriminator suffix (superseded #128's
+`name#1234` scheme). See [`./identity.md`](./identity.md).
 
 ### 2. Nova sets a bio and pronouns
 

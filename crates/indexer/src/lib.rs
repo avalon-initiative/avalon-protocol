@@ -28,10 +28,25 @@ pub mod registry;
 pub enum IndexError {
     #[error("index storage error: {0}")]
     Storage(String),
+    /// Issue #510: `profiles_display_name_lower_idx`'s real unique
+    /// constraint was violated — the actual, atomic enforcement point for
+    /// display-name uniqueness (case-insensitive), not a separate prior
+    /// check a concurrent writer could race past. Distinguished from
+    /// [`Self::Storage`] specifically so callers (`crate::server::handlers`)
+    /// can map it to a clean "name taken" response instead of a generic
+    /// 500.
+    #[error("display_name is already taken")]
+    DisplayNameTaken,
 }
 
 impl From<sqlx::Error> for IndexError {
     fn from(err: sqlx::Error) -> Self {
+        let is_display_name_conflict = err
+            .as_database_error()
+            .is_some_and(|db_err| db_err.constraint() == Some("profiles_display_name_lower_idx"));
+        if is_display_name_conflict {
+            return IndexError::DisplayNameTaken;
+        }
         IndexError::Storage(err.to_string())
     }
 }
