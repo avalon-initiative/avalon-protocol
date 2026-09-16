@@ -40,7 +40,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{SdkError, Session};
+use crate::{AvalonClient, SdkError, Session};
 
 pub use avalon_schema_derive::AvalonSchema;
 
@@ -109,11 +109,43 @@ pub struct DataInstance {
     pub superseded_by: Option<String>,
 }
 
+/// Mirrors
+/// `crates/server/src/integrator_schema_mappings.rs::IntegratorSchemaMappingResponse`
+/// at the wire level — issue #491.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SchemaMapping {
+    /// This mapping's own namespaced id, e.g. `"game:<slug>:schema_mapping:<seq>"`.
+    pub id: String,
+    /// The publishing integrator's id.
+    pub integrator_id: Uuid,
+    /// The schema version this mapping maps *from*.
+    pub from_schema_id: String,
+    /// The schema version this mapping maps *to*.
+    pub to_schema_id: String,
+    /// Free text documenting whatever `field_correspondence` can't
+    /// capture (merges, splits, dropped fields, default values).
+    pub description: String,
+    /// A simple old-field -> new-field correspondence map. Never
+    /// interpreted or executed by Avalon — the integrator owns the
+    /// semantic transformation this describes.
+    pub field_correspondence: BTreeMap<String, String>,
+    /// When this mapping was published, RFC3339.
+    pub published_at: String,
+}
+
 #[derive(Serialize)]
 struct PublishSchemaVersionRequest {
     proto_source: String,
     default_visibility: String,
     field_visibility: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct PublishMappingRequest<'a> {
+    from_schema_id: &'a str,
+    to_schema_id: &'a str,
+    description: &'a str,
+    field_correspondence: &'a BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -203,6 +235,55 @@ impl Session {
             .map_err(|e| SdkError::Protocol(e.to_string()))
     }
 
+    /// `POST /integrations/{slug}/mappings` (issue #491) — publishes a
+    /// mapping documenting a correspondence between two of this
+    /// integrator's own already-published schema versions. Not an
+    /// execution engine: `field_correspondence` is a simple old-field ->
+    /// new-field rename map, `description` is free text for whatever that
+    /// map can't capture (merges, splits, dropped fields, default
+    /// values) — Avalon never interprets or runs either. Both
+    /// `from_schema_id`/`to_schema_id` must already be published and owned
+    /// by this integrator; the server rejects (never silently accepts) a
+    /// reference to a schema it doesn't own or that doesn't exist.
+    pub async fn publish_mapping(
+        &self,
+        from_schema_id: &str,
+        to_schema_id: &str,
+        description: &str,
+        field_correspondence: BTreeMap<String, String>,
+    ) -> Result<SchemaMapping, SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let headers = self.integrator_auth_headers(slug).await?;
+
+        let body = PublishMappingRequest {
+            from_schema_id,
+            to_schema_id,
+            description,
+            field_correspondence: &field_correspondence,
+        };
+
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .post(format!("{}/integrations/{slug}/mappings", self.server_url))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
     /// `POST /integrations/{slug}/schemas/{version}/data` — publishes (or
     /// supersedes) this integrator's instance data, against the schema
     /// version named by `version`, for this session's own identity. The
@@ -238,6 +319,53 @@ impl Session {
                 request = request.header(*name, value);
             }
             request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+}
+
+impl AvalonClient {
+    /// `GET /integrations/{slug}/mappings` (issue #491) — every mapping
+    /// `slug` has published, oldest first. Public and unauthenticated, like
+    /// schema-version listing — lives on [`AvalonClient`] rather than
+    /// [`Session`] for the same reason [`AvalonClient::registry`] does: no
+    /// `authenticate()` call is needed before reading it.
+    pub async fn list_schema_mappings(&self, slug: &str) -> Result<Vec<SchemaMapping>, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/integrations/{slug}/mappings",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /integrations/{slug}/mappings/{seq}` — one published mapping,
+    /// verbatim. Public and unauthenticated.
+    pub async fn get_schema_mapping(
+        &self,
+        slug: &str,
+        seq: u32,
+    ) -> Result<SchemaMapping, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/integrations/{slug}/mappings/{seq}",
+                self.config.server_url
+            ))
         })
         .await?;
         if !response.status().is_success() {

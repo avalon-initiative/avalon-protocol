@@ -43,6 +43,7 @@ milestone-1 stand-in until actor signatures exist.
 | `guild.favorite_games_updated` | guild → guild | favorited game ids, actor | favorites | acting officer's key |
 | `guild.channel_created` / `.channel_renamed` / `.channel_archived` | guild → channel | channel id, name, actor | channels | acting officer's key |
 | `game_schema.published` | integrator → schema | integrator id, version, `.proto` source, superseded_by | schema discovery (#255) | integrator key |
+| `game_schema_mapping.published` | integrator → mapping | integrator id, from_schema_id, to_schema_id, description, field_correspondence | mapping discovery (#491) | integrator key |
 | `achievement.defined` | integrator → achievement id | name, description, schema | definitions | integrator key |
 | `achievement.definition_updated` | integrator → achievement id | name, description, schema, version | definitions | integrator key |
 | `achievement.definition_retired` | integrator → achievement id | achievement id | definitions | integrator key |

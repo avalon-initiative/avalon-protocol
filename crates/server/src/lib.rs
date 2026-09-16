@@ -18,6 +18,7 @@ pub mod guilds;
 pub mod handlers;
 pub mod idempotency;
 pub mod integrator_data;
+pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
 pub mod integrators;
 pub mod issuer_registration;
@@ -326,6 +327,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/integrations/{slug}/schemas/{version}",
             get(integrator_schemas::get_schema_version),
+        )
+        // #491: schema-to-schema mapping model — documents a correspondence
+        // between two of an integrator's own published schema versions,
+        // never an execution engine (see module doc comment).
+        .route(
+            "/integrations/{slug}/mappings",
+            get(integrator_schema_mappings::list_mappings)
+                .post(integrator_schema_mappings::publish_mapping),
+        )
+        .route(
+            "/integrations/{slug}/mappings/{seq}",
+            get(integrator_schema_mappings::get_mapping),
         )
         // #384 (implementing #381's decided policy): real instance data
         // against a published schema, and the read endpoint that enforces

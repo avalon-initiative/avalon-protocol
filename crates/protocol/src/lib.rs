@@ -15,6 +15,7 @@ pub mod events;
 pub mod guilds;
 pub mod identity;
 pub mod ids;
+pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
 pub mod integrators;
 pub mod permissions;

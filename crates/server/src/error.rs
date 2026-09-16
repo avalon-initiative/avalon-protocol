@@ -309,6 +309,16 @@ pub enum AppError {
     IntegratorDataInstanceNotFound,
     #[error("an integrator may only publish instance data against its own published schemas")]
     IntegratorDataSchemaOwnershipMismatch,
+    #[error("a mapping's from/to must both be real, published schema version ids")]
+    IntegratorSchemaMappingSchemaNotFound,
+    #[error("an integrator may only publish a mapping between schema versions it owns")]
+    IntegratorSchemaMappingSchemaOwnershipMismatch,
+    #[error("a mapping's from and to must reference two distinct schema versions")]
+    InvalidIntegratorSchemaMapping,
+    #[error("published schema mapping not found")]
+    IntegratorSchemaMappingNotFound,
+    #[error("an integrator may only publish mappings attributed to its own id")]
+    IntegratorSchemaMappingForbidden,
     #[error(
         "participants must include yourself plus at least one other distinct existing identity"
     )]
@@ -498,6 +508,15 @@ impl AppError {
             AppError::IntegratorDataSchemaOwnershipMismatch => {
                 "INTEGRATOR_DATA_SCHEMA_OWNERSHIP_MISMATCH"
             }
+            AppError::IntegratorSchemaMappingSchemaNotFound => {
+                "INTEGRATOR_SCHEMA_MAPPING_SCHEMA_NOT_FOUND"
+            }
+            AppError::IntegratorSchemaMappingSchemaOwnershipMismatch => {
+                "INTEGRATOR_SCHEMA_MAPPING_SCHEMA_OWNERSHIP_MISMATCH"
+            }
+            AppError::InvalidIntegratorSchemaMapping => "INVALID_INTEGRATOR_SCHEMA_MAPPING",
+            AppError::IntegratorSchemaMappingNotFound => "INTEGRATOR_SCHEMA_MAPPING_NOT_FOUND",
+            AppError::IntegratorSchemaMappingForbidden => "INTEGRATOR_SCHEMA_MAPPING_FORBIDDEN",
             AppError::InvalidConversationParticipants => "INVALID_CONVERSATION_PARTICIPANTS",
             AppError::NotConversationParticipant => "NOT_CONVERSATION_PARTICIPANT",
             AppError::IntegratorRecognitionForbidden => "INTEGRATOR_RECOGNITION_FORBIDDEN",
@@ -693,6 +712,18 @@ impl IntoResponse for AppError {
             // Same "authenticated fine as *some* integrator, but not allowed to
             // make this specific claim" shape as `IntegratorSchemaForbidden`.
             AppError::IntegratorDataSchemaOwnershipMismatch => StatusCode::FORBIDDEN,
+            // A mapping's `from`/`to` referencing a schema id that doesn't
+            // exist at all — a well-formed request, missing referent.
+            AppError::IntegratorSchemaMappingSchemaNotFound => StatusCode::NOT_FOUND,
+            // Same shape as `IntegratorDataSchemaOwnershipMismatch`: the
+            // referenced schema exists, just isn't owned by the caller.
+            AppError::IntegratorSchemaMappingSchemaOwnershipMismatch => StatusCode::FORBIDDEN,
+            AppError::InvalidIntegratorSchemaMapping => StatusCode::BAD_REQUEST,
+            AppError::IntegratorSchemaMappingNotFound => StatusCode::NOT_FOUND,
+            // Same shape as `IntegratorSchemaForbidden`: authenticated fine as
+            // *some* integrator, but that integrator isn't the one named by
+            // the `{slug}` path segment.
+            AppError::IntegratorSchemaMappingForbidden => StatusCode::FORBIDDEN,
             AppError::InvalidConversationParticipants => StatusCode::BAD_REQUEST,
             // Same status as `NotGuildMember`: an authorization fact, not a
             // missing resource, and — per this variant's own doc comment —

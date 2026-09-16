@@ -298,3 +298,100 @@ async fn derives_and_publishes_a_schema_then_an_instance_and_reads_it_back() {
         found["fields"]
     );
 }
+
+#[derive(Debug, Serialize, AvalonSchema)]
+struct CharacterProgressV2 {
+    progression_rank: u32,
+    progression_experience: u64,
+}
+
+/// Exercises `Session::publish_mapping` and the public
+/// `AvalonClient::list_schema_mappings`/`get_schema_mapping` reads (issue
+/// #491) against a real server: two real schema versions get published,
+/// then a mapping documenting their correspondence, read back through the
+/// unauthenticated surface a third party (no relationship to the
+/// publishing integrator) would use.
+#[tokio::test]
+#[ignore]
+async fn publishes_a_mapping_between_two_real_schema_versions_and_reads_it_back() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let display_name = format!("sdk-mapping-{}", Uuid::new_v4());
+
+    let (_identity_id, token) = register_and_login(&http, &base, &display_name).await;
+    let integrator = register_integrator(&http, &base).await;
+
+    let connect = http
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&token)
+        .json(&json!({ "capabilities": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let client = AvalonClient::new(AvalonConfig {
+        server_url: base.clone(),
+        integrator_credential_key_id: integrator.key_id.clone(),
+        integrator_slug: Some(integrator.slug.clone()),
+        signing_key: Some(integrator.signing_key.to_bytes()),
+        retry: Default::default(),
+    });
+    let session = client
+        .authenticate(&token)
+        .await
+        .expect("authenticate() should succeed with a valid session token");
+
+    let v1 = session
+        .publish_schema_version::<CharacterProgress>()
+        .await
+        .expect("publishing the first schema version should succeed");
+    let v2 = session
+        .publish_schema_version::<CharacterProgressV2>()
+        .await
+        .expect("publishing the second schema version should succeed");
+
+    let mut field_correspondence = std::collections::BTreeMap::new();
+    field_correspondence.insert("level".to_string(), "progression_rank".to_string());
+    field_correspondence.insert("xp".to_string(), "progression_experience".to_string());
+
+    let published_mapping = session
+        .publish_mapping(
+            &v1.id,
+            &v2.id,
+            "progression fields were renamed and flattened",
+            field_correspondence.clone(),
+        )
+        .await
+        .expect("publish_mapping should succeed for two owned, real schema versions");
+    assert_eq!(published_mapping.from_schema_id, v1.id);
+    assert_eq!(published_mapping.to_schema_id, v2.id);
+    assert_eq!(published_mapping.field_correspondence, field_correspondence);
+
+    // Read back through the plain, unauthenticated `AvalonClient` surface —
+    // no session, no integrator credential — proving discovery genuinely
+    // needs neither.
+    let anonymous_client = AvalonClient::new(AvalonConfig {
+        server_url: base.clone(),
+        integrator_credential_key_id: String::new(),
+        integrator_slug: None,
+        signing_key: None,
+        retry: Default::default(),
+    });
+    let listed = anonymous_client
+        .list_schema_mappings(&integrator.slug)
+        .await
+        .expect("list_schema_mappings should succeed unauthenticated");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, published_mapping.id);
+
+    let fetched = anonymous_client
+        .get_schema_mapping(&integrator.slug, 1)
+        .await
+        .expect("get_schema_mapping should succeed unauthenticated");
+    assert_eq!(fetched.id, published_mapping.id);
+    assert_eq!(
+        fetched.description,
+        "progression fields were renamed and flattened"
+    );
+}

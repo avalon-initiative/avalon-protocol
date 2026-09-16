@@ -7,12 +7,13 @@ of it is actually exposed.** Neither one gives Avalon an opinion about what a
 integrator make its data *structurally describable, versioned, discoverable, and
 attributable to itself* without Avalon standardizing what that data means.
 
-**Schema publication is now built; mapping and data exposure are not.**
+**Schema publication, data exposure, and mapping are all now built.**
 #181 decided the representation and #255 built the first implementation
 slice — an integrator can publish a versioned, immutable `.proto` description of
 its own data model and have that publication discoverable through the Integrator
-Registry. Mapping (a documented relationship between two schema versions)
-and data exposure (actual instances) remain unbuilt — see
+Registry. #384 built data exposure (actual instances, with visibility
+control). #491 built mapping — a documented relationship between two
+schema versions, explicitly not an execution engine — see
 [Today in the repo](#today-in-the-repo).
 
 ## Integrator Space is not a new participation record
@@ -148,9 +149,12 @@ JSON (or whatever wire format is eventually chosen) is the transport. The
 schema reference is what makes the payload interpretable — the same relationship
 `AchievementDefinition.schema` already has to an attestation's payload
 ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)).
-**Data exposure/mapping validation mechanism is still not decided by this
-document** — only schema representation, storage, and versioning (below)
-are — see [Decisions and tickets](#decisions-and-tickets).
+Data exposure (#384) and mapping validation (#491) are both now built —
+see [Today in the repo](#today-in-the-repo). Mapping *validation* stops at
+structural sanity (both referenced schema versions exist and belong to the
+publishing integrator) — never semantic correctness of the correspondence
+itself, per this section's own "the integrator owns the semantic
+transformation" invariant.
 
 ## Representation and versioning (decided by #181, built by #255, parsing added by #384)
 
@@ -362,9 +366,27 @@ guarantee is actually needed, following the same discipline
   events — not a mechanism for versioning an integrator's data model. Schema
   versioning follows the same discipline without #82 itself being widened
   to cover it.
-- Mapping between schema versions is still unbuilt — see #182's remaining
-  tickets. Server-side validation of exposed data against a schema is now
-  built (#384, above).
+- **Schema-to-schema mapping model** (#491, closing #182's last unfiled
+  acceptance item) — `crates/server/src/integrator_schema_mappings.rs`:
+  `POST /integrations/{slug}/mappings` (publish, integrator-credential-
+  authenticated, same ownership check as schema publication), `GET
+  /integrations/{slug}/mappings` (list, public), `GET
+  /integrations/{slug}/mappings/{seq}` (one mapping, public). A mapping
+  references two of the publishing integrator's own already-published
+  schema versions (`from_schema_id`/`to_schema_id`, validated for
+  existence and ownership, never a DB-enforced foreign key — same
+  precedent `superseded_by` set) plus a `field_correspondence` old-field
+  -> new-field map and free-text `description` for whatever that map can't
+  capture. No lineage/superseding concept, unlike schema versions — each
+  mapping is a standalone, immutable fact
+  (`crates/protocol/src/integrator_schema_mappings.rs`). Discoverable
+  through the same indexer-projection machinery schema versions use
+  (`crates/indexer/src/projections/integrator_schema_mappings.rs`,
+  `game_schema_mapping.published`). SDK: `Session::publish_mapping`,
+  `AvalonClient::list_schema_mappings`/`get_schema_mapping`
+  (`crates/sdk/src/schema.rs`). Verified live against a real server,
+  including the ownership-rejection and nonexistent-schema-rejection
+  paths (`crates/server/tests/integrator_schema_mappings.rs`, `--ignored`).
 
 ## Decisions and tickets
 
@@ -393,6 +415,9 @@ guarantee is actually needed, following the same discipline
   stance for schema text specifically.
 - [#182](https://github.com/LunarVagabond/avalon-protocol/issues/182) — Epic:
   Integrator Space & Schema Publication, gated on #181.
+- [#491](https://github.com/LunarVagabond/avalon-protocol/issues/491) —
+  schema-to-schema mapping model, closing #182's last unfiled acceptance
+  item, described above.
 - [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) — ADR:
   identity is separate from game characters; the reason Integrator Space does not
   become a second integrator database.
