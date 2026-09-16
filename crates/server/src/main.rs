@@ -107,6 +107,8 @@ async fn main() {
     tracing::info!(network_id = %chain.network_id(), "avalon-server: ledger network_id");
     let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
 
+    let peers = avalon_server::nodes::PeerTable::new();
+
     let state = AppState {
         pool: pool.clone(),
         chain: chain.clone(),
@@ -117,6 +119,7 @@ async fn main() {
         settlement_submit_key: std::env::var("AVALON_SETTLEMENT_SUBMIT_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
+        peers: peers.clone(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -168,6 +171,18 @@ async fn main() {
             mirror_config,
         ));
     }
+
+    // Node-to-node announce/bootstrap discovery (issue #362) — spawned
+    // unconditionally, unlike the mirror-watcher above: even this
+    // network's anchor node (an empty resolved peer list) still needs to
+    // serve announce/list-peers requests from everyone else. See
+    // `crate::nodes`'s module doc for why.
+    let announce_config = avalon_server::nodes::AnnounceConfig::from_env(chain.network_id());
+    tokio::spawn(avalon_server::nodes::run_worker(
+        chain.clone(),
+        peers,
+        announce_config,
+    ));
 
     let app = avalon_server::router(state);
 

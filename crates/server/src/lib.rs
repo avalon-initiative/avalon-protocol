@@ -24,6 +24,7 @@ pub mod integrators;
 pub mod issuer_registration;
 pub mod migrate;
 pub mod mirror_watcher;
+pub mod nodes;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;
@@ -571,6 +572,11 @@ pub fn router(state: AppState) -> Router {
         // Issue #313: node-to-node, bearer-authenticated — the one write
         // route in this block, unlike everything else above it.
         .route("/ledger/submit", post(settlement::submit_ledger_batch))
+        // Issue #362: node-to-node peer discovery — no auth, same public
+        // posture as the `/ledger/*` block above, since a peer table isn't
+        // sensitive the way ledger-write endpoints are.
+        .route("/nodes/announce", post(nodes::announce))
+        .route("/nodes/peers", get(nodes::list_peers))
         .with_state(state)
         // Issue #265: every HTTP request gets a tracing span
         // (method/path/status/latency), and any `tracing::info!`/`error!`
