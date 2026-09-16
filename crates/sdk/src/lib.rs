@@ -33,6 +33,11 @@
 //! `AvalonClient::verify_network` independently verifies which network a
 //! server actually is before an integrator registers an issuer or submits
 //! a write, since `network_id` alone carries no cryptographic authority.
+//! `issuer_registration` (issue #483) is the first caller of that check:
+//! `AvalonClient::register_issuer` requires an explicit declared
+//! `network::TargetNetwork` and refuses, client-side, to register against
+//! anything else — belt-and-suspenders alongside the server's own
+//! `declared_network_id` gate (#481).
 
 #![deny(missing_docs)]
 
@@ -41,6 +46,7 @@ pub mod conversations;
 pub mod device_login;
 pub mod guilds;
 mod http;
+pub mod issuer_registration;
 pub mod network;
 pub mod registry;
 pub mod schema;

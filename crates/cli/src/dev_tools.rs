@@ -829,6 +829,160 @@ pub(crate) async fn issue_achievement(args: IssueAchievementArgs) {
     }
 }
 
+pub(crate) const REGISTER_ISSUER_USAGE: &str = "usage: avalon register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]";
+
+/// Parsed `avalon register-issuer` arguments — same hand-rolled style as
+/// [`RegisterIntegratorArgs`]/[`IssueAchievementArgs`]. Exactly one of
+/// `--network-id`/`--env` is required (#483's own "no implicit default"
+/// invariant) — `avalon_sdk::network::TargetNetwork` has no default
+/// variant to fall back to, and this parser doesn't invent one either.
+#[derive(Debug)]
+pub(crate) struct RegisterIssuerArgs {
+    integrator: String,
+    issuer_ref: Option<String>,
+    network_id: Option<String>,
+    env: Option<String>,
+    key_path: Option<String>,
+    server: Option<String>,
+}
+
+impl RegisterIssuerArgs {
+    pub(crate) fn parse(args: &[String]) -> Result<Self, String> {
+        let mut integrator = None;
+        let mut issuer_ref = None;
+        let mut network_id = None;
+        let mut env = None;
+        let mut key_path = None;
+        let mut server = None;
+
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--integrator" => {
+                    integrator = Some(iter.next().ok_or("--integrator requires a value")?.clone())
+                }
+                "--issuer-ref" => {
+                    issuer_ref = Some(iter.next().ok_or("--issuer-ref requires a value")?.clone())
+                }
+                "--network-id" => {
+                    network_id = Some(iter.next().ok_or("--network-id requires a value")?.clone())
+                }
+                "--env" => env = Some(iter.next().ok_or("--env requires a value")?.clone()),
+                "--key" => key_path = Some(iter.next().ok_or("--key requires a value")?.clone()),
+                "--server" => {
+                    server = Some(iter.next().ok_or("--server requires a value")?.clone())
+                }
+                other => return Err(format!("unrecognized argument: {other}")),
+            }
+        }
+
+        if network_id.is_some() == env.is_some() {
+            return Err("exactly one of --network-id or --env is required".to_string());
+        }
+
+        Ok(Self {
+            integrator: integrator.ok_or("--integrator is required")?,
+            issuer_ref,
+            network_id,
+            env,
+            key_path,
+            server,
+        })
+    }
+
+    fn target_network(&self) -> Result<avalon_sdk::network::TargetNetwork, String> {
+        if let Some(network_id) = &self.network_id {
+            return Ok(avalon_sdk::network::TargetNetwork::NetworkId(
+                network_id.clone(),
+            ));
+        }
+        let env = self
+            .env
+            .as_deref()
+            .expect("parse() enforces exactly one of --network-id/--env");
+        let tier = match env.to_ascii_lowercase().as_str() {
+            "dev" => avalon_sdk::network::TargetNetworkTier::Dev,
+            "int" => avalon_sdk::network::TargetNetworkTier::Int,
+            "mainnet" => avalon_sdk::network::TargetNetworkTier::Mainnet,
+            other => {
+                return Err(format!(
+                    "unrecognized --env '{other}' (expected dev, int, or mainnet)"
+                ))
+            }
+        };
+        Ok(avalon_sdk::network::TargetNetwork::Env(tier))
+    }
+}
+
+/// `avalon register-issuer` (issue #483, on top of #481's endpoint) —
+/// registers `--integrator`'s signing key as an issuer on the network it
+/// declares intent for, through `avalon_sdk::AvalonClient::register_issuer`
+/// exactly the way a real game/app/service would — never a raw HTTP
+/// request built by hand, matching `issue_achievement`'s own "developer-
+/// facing commands go through the SDK" invariant. Resolves `--key` from
+/// what `register_integrator` saved for `--integrator` when not given
+/// explicitly, same as `issue_achievement`. `--issuer-ref` defaults to
+/// `game:<integrator>`, matching `Session::issue_achievement`'s own
+/// convention.
+pub(crate) async fn register_issuer(args: RegisterIssuerArgs) {
+    let target = args.target_network().unwrap_or_else(|message| {
+        eprintln!("{message}");
+        std::process::exit(1);
+    });
+    let base = args.server.clone().unwrap_or_else(server_url);
+
+    let key_path =
+        args.key_path.clone().map(PathBuf::from).unwrap_or_else(|| {
+            key_dir().join(format!("integrator-{}.signing-key", args.integrator))
+        });
+    let key_base64 = std::fs::read_to_string(&key_path).unwrap_or_else(|_| {
+        eprintln!(
+            "no signing key found at {} — pass --key <path>, or run `avalon register-integrator` first.",
+            key_path.display()
+        );
+        std::process::exit(1);
+    });
+    let key_bytes: [u8; 32] = BASE64
+        .decode(key_base64.trim())
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .unwrap_or_else(|| {
+            eprintln!(
+                "{} did not contain a valid base64-encoded 32-byte Ed25519 key.",
+                key_path.display()
+            );
+            std::process::exit(1);
+        });
+
+    let issuer_ref = args
+        .issuer_ref
+        .clone()
+        .unwrap_or_else(|| format!("game:{}", args.integrator));
+
+    let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
+        server_url: base,
+        integrator_credential_key_id: String::new(),
+        integrator_slug: Some(args.integrator.clone()),
+        signing_key: Some(key_bytes),
+        retry: Default::default(),
+    });
+
+    match client.register_issuer(&issuer_ref, target).await {
+        Ok(registration) => {
+            println!();
+            println!(
+                "Issuer '{}' registered on {}.",
+                registration.issuer_ref, registration.network_id
+            );
+            println!("Registered at: {}", registration.registered_at);
+        }
+        Err(e) => {
+            eprintln!("register_issuer failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! `StoredPasskey`'s round-trip is the one piece of #115 worth unit
@@ -1051,5 +1205,63 @@ mod tests {
         ]))
         .expect_err("an unrecognized flag should fail to parse");
         assert!(err.contains("--bogus"));
+    }
+
+    #[test]
+    fn register_issuer_args_parses_a_literal_network_id() {
+        let parsed = RegisterIssuerArgs::parse(&args(&[
+            "--integrator",
+            "ashen-realms",
+            "--network-id",
+            "avalon-dev-local",
+        ]))
+        .expect("should parse with --network-id");
+        assert!(matches!(
+            parsed.target_network().unwrap(),
+            avalon_sdk::network::TargetNetwork::NetworkId(id) if id == "avalon-dev-local"
+        ));
+    }
+
+    #[test]
+    fn register_issuer_args_parses_an_env_shorthand() {
+        let parsed =
+            RegisterIssuerArgs::parse(&args(&["--integrator", "ashen-realms", "--env", "int"]))
+                .expect("should parse with --env");
+        assert!(matches!(
+            parsed.target_network().unwrap(),
+            avalon_sdk::network::TargetNetwork::Env(avalon_sdk::network::TargetNetworkTier::Int)
+        ));
+    }
+
+    #[test]
+    fn register_issuer_args_rejects_neither_network_id_nor_env() {
+        let err = RegisterIssuerArgs::parse(&args(&["--integrator", "ashen-realms"]))
+            .expect_err("neither --network-id nor --env should fail to parse");
+        assert!(err.contains("exactly one"));
+    }
+
+    #[test]
+    fn register_issuer_args_rejects_both_network_id_and_env() {
+        let err = RegisterIssuerArgs::parse(&args(&[
+            "--integrator",
+            "ashen-realms",
+            "--network-id",
+            "avalon-dev-local",
+            "--env",
+            "dev",
+        ]))
+        .expect_err("both --network-id and --env should fail to parse");
+        assert!(err.contains("exactly one"));
+    }
+
+    #[test]
+    fn register_issuer_args_rejects_an_unrecognized_env() {
+        let parsed =
+            RegisterIssuerArgs::parse(&args(&["--integrator", "ashen-realms", "--env", "staging"]))
+                .expect("parsing itself succeeds — the tier value is only validated later");
+        let err = parsed
+            .target_network()
+            .expect_err("an unrecognized --env value should be rejected");
+        assert!(err.contains("staging"));
     }
 }

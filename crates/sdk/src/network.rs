@@ -191,6 +191,140 @@ fn evaluate_network_trust(
     }
 }
 
+/// One of the three real deployment tiers a caller can declare intent for
+/// without spelling out an exact `network_id` (issue #483) — resolved
+/// against whichever pinned entry the server's STH actually verified
+/// against, never guessed from the server URL alone. Deliberately only
+/// three variants: `LocalDev` (the milestone-1 placeholder network with no
+/// real deployment behind it — see [`NetworkEnvironment::LocalDev`]) isn't
+/// one of them, so a caller targeting it declares its exact `network_id`
+/// via [`TargetNetwork::NetworkId`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetNetworkTier {
+    /// A real, non-production, single-node deployment.
+    Dev,
+    /// A real, non-production, 1-5 node interconnected test bed.
+    Int,
+    /// The real mainnet deployment.
+    Mainnet,
+}
+
+impl TargetNetworkTier {
+    fn matches(self, environment: NetworkEnvironment) -> bool {
+        matches!(
+            (self, environment),
+            (TargetNetworkTier::Dev, NetworkEnvironment::Dev)
+                | (TargetNetworkTier::Int, NetworkEnvironment::Int)
+                | (TargetNetworkTier::Mainnet, NetworkEnvironment::Prod)
+        )
+    }
+}
+
+impl std::fmt::Display for TargetNetworkTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            TargetNetworkTier::Dev => "dev",
+            TargetNetworkTier::Int => "int",
+            TargetNetworkTier::Mainnet => "mainnet",
+        };
+        f.write_str(label)
+    }
+}
+
+/// The network a caller must explicitly declare intent for before a write
+/// that's gated by network identity (issue #483, per #479/#480's ADR) —
+/// registering an issuer, most immediately. No implicit default is ever
+/// inferred from the server URL alone; see [`check_target_network`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetNetwork {
+    /// The exact `network_id` string the caller expects the server to be.
+    NetworkId(String),
+    /// A deployment-tier shorthand, resolved against the verified entry's
+    /// [`NetworkEnvironment`] rather than a literal string.
+    Env(TargetNetworkTier),
+}
+
+impl std::fmt::Display for TargetNetwork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TargetNetwork::NetworkId(network_id) => f.write_str(network_id),
+            TargetNetwork::Env(tier) => write!(f, "{tier} (declared by tier)"),
+        }
+    }
+}
+
+/// Why a declared [`TargetNetwork`] failed [`check_target_network`] — never
+/// a silent proceed, per #483's own invariant.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NetworkTargetError {
+    /// The server's network was independently verified, but it isn't the
+    /// one the caller declared intent for.
+    #[error(
+        "declared target network {declared} does not match the server's verified network {actual}"
+    )]
+    Mismatch {
+        /// What the caller declared.
+        declared: String,
+        /// The `network_id` the server actually, verifiably is.
+        actual: String,
+    },
+    /// The server's claimed network couldn't be independently verified at
+    /// all (unknown, key mismatch, or unreachable) — refused regardless of
+    /// what was declared, since there's nothing to compare it against.
+    #[error("server's network could not be independently verified: {reason}")]
+    Unverified {
+        /// A human-readable description of why verification didn't succeed.
+        reason: String,
+    },
+}
+
+/// The check #483 exists for: a declared [`TargetNetwork`] only ever
+/// proceeds against a server whose [`NetworkTrustStatus`] is `Verified`
+/// *and* whose verified entry matches what was declared — belt-and-
+/// suspenders on top of, not instead of, the server-side
+/// `declared_network_id` check (#481). Returns the matching
+/// [`TrustAnchorEntry`] on success so a caller can read back the exact
+/// `network_id` it just confirmed it's talking to.
+pub fn check_target_network<'a>(
+    status: &'a NetworkTrustStatus,
+    target: &TargetNetwork,
+) -> Result<&'a TrustAnchorEntry, NetworkTargetError> {
+    let entry = match status {
+        NetworkTrustStatus::Verified { entry } => entry,
+        NetworkTrustStatus::Mismatch {
+            claimed_network_id, ..
+        } => {
+            return Err(NetworkTargetError::Unverified {
+                reason: format!(
+                "the server's STH does not verify against the pinned key for {claimed_network_id}"
+            ),
+            })
+        }
+        NetworkTrustStatus::UnknownNetwork { claimed_network_id } => {
+            return Err(NetworkTargetError::Unverified {
+                reason: format!("{claimed_network_id} is not a pinned/known network"),
+            })
+        }
+        NetworkTrustStatus::Unreachable { detail } => {
+            return Err(NetworkTargetError::Unverified {
+                reason: detail.clone(),
+            })
+        }
+    };
+    let matches = match target {
+        TargetNetwork::NetworkId(expected) => &entry.network_id == expected,
+        TargetNetwork::Env(tier) => tier.matches(entry.environment),
+    };
+    if matches {
+        Ok(entry)
+    } else {
+        Err(NetworkTargetError::Mismatch {
+            declared: target.to_string(),
+            actual: entry.network_id.clone(),
+        })
+    }
+}
+
 impl AvalonClient {
     /// Fetches `GET /ledger/sth/latest` from this client's configured
     /// server and verifies it against [`bundled_trust_anchors`] — the
@@ -373,5 +507,92 @@ mod tests {
         let client = client_for("http://127.0.0.1:1".to_string());
         let status = client.verify_network().await;
         assert!(matches!(status, NetworkTrustStatus::Unreachable { .. }));
+    }
+
+    fn verified_dev(network_id: &str) -> NetworkTrustStatus {
+        NetworkTrustStatus::Verified {
+            entry: TrustAnchorEntry {
+                label: network_id.to_string(),
+                network_id: network_id.to_string(),
+                verify_key: "ab".repeat(32),
+                signing_key_id: "test-key".to_string(),
+                server_url: None,
+                environment: NetworkEnvironment::Dev,
+                notes: None,
+            },
+        }
+    }
+
+    #[test]
+    fn check_target_network_proceeds_when_the_declared_network_id_matches() {
+        let status = verified_dev("avalon-dev-1");
+        let target = TargetNetwork::NetworkId("avalon-dev-1".to_string());
+        assert_eq!(
+            check_target_network(&status, &target).unwrap().network_id,
+            "avalon-dev-1"
+        );
+    }
+
+    #[test]
+    fn check_target_network_proceeds_when_the_declared_tier_matches() {
+        let status = verified_dev("avalon-dev-1");
+        let target = TargetNetwork::Env(TargetNetworkTier::Dev);
+        assert!(check_target_network(&status, &target).is_ok());
+    }
+
+    #[test]
+    fn check_target_network_rejects_a_mismatched_network_id() {
+        let status = verified_dev("avalon-dev-1");
+        let target = TargetNetwork::NetworkId("avalon-mainnet-1".to_string());
+        assert_eq!(
+            check_target_network(&status, &target).unwrap_err(),
+            NetworkTargetError::Mismatch {
+                declared: "avalon-mainnet-1".to_string(),
+                actual: "avalon-dev-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn check_target_network_rejects_a_mismatched_tier() {
+        let status = verified_dev("avalon-dev-1");
+        let target = TargetNetwork::Env(TargetNetworkTier::Mainnet);
+        assert!(matches!(
+            check_target_network(&status, &target),
+            Err(NetworkTargetError::Mismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn check_target_network_never_proceeds_against_an_unverified_network() {
+        let target = TargetNetwork::NetworkId("avalon-dev-1".to_string());
+
+        let unknown = NetworkTrustStatus::UnknownNetwork {
+            claimed_network_id: "avalon-dev-1".to_string(),
+        };
+        assert!(matches!(
+            check_target_network(&unknown, &target),
+            Err(NetworkTargetError::Unverified { .. })
+        ));
+
+        let unreachable = NetworkTrustStatus::Unreachable {
+            detail: "connection refused".to_string(),
+        };
+        assert!(matches!(
+            check_target_network(&unreachable, &target),
+            Err(NetworkTargetError::Unverified { .. })
+        ));
+
+        let mismatch = NetworkTrustStatus::Mismatch {
+            entry: match verified_dev("avalon-dev-1") {
+                NetworkTrustStatus::Verified { entry } => entry,
+                _ => unreachable!(),
+            },
+            claimed_network_id: "avalon-dev-1".to_string(),
+        };
+        assert!(matches!(
+            check_target_network(&mismatch, &target),
+            Err(NetworkTargetError::Unverified { .. })
+        ));
     }
 }

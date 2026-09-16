@@ -213,6 +213,18 @@ uses. Neither proof substitutes for the other.
   outright. Verified live, including the auto-registration path, the
   explicit registration round trip, single-use-challenge enforcement, and
   both rejection paths (`crates/server/tests/issuer_registration.rs`).
+- **SDK/CLI target-network declaration + mismatch check** (#483) —
+  `crates/sdk/src/issuer_registration.rs::AvalonClient::register_issuer` and
+  `avalon-cli`'s `register-issuer` command. Client-side belt-and-suspenders
+  on top of #481's server-side `declared_network_id` check above: a caller
+  must explicitly declare a `network::TargetNetwork` (an exact `network_id`,
+  or a `Dev`/`Int`/`Mainnet` tier shorthand resolved against the *verified*
+  entry, never the server URL alone), and `register_issuer` refuses,
+  entirely client-side, to send any request at all if that declared target
+  doesn't match what `AvalonClient::verify_network` (#482) independently
+  confirms the server actually is. Verified live against a real local dev
+  server, including the true `Verified`-and-matching success path
+  (`crates/sdk/tests/issuer_registration.rs`, `--ignored`).
 - `crates/server/src/attestations.rs::list_my_achievements` (#34, paginated
   and filtered per #377) — `GET
   /me/achievements?integrator_id=&claim_kind=&before=&limit=`, cursor-paginated
@@ -303,3 +315,16 @@ uses. Neither proof substitutes for the other.
   catalogue (the `achievement.*` kinds).
 - [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — integrator
   event result attestations.
+- [#479](https://github.com/LunarVagabond/avalon-protocol/issues/479) — ADR:
+  per-network issuer admission is enforced by registration, not by binding
+  `network_id` into signatures.
+- [#480](https://github.com/LunarVagabond/avalon-protocol/issues/480) —
+  Epic: per-network issuer registration, implementing #479.
+- [#481](https://github.com/LunarVagabond/avalon-protocol/issues/481) —
+  server-side registration endpoint + admission table, described above.
+- [#482](https://github.com/LunarVagabond/avalon-protocol/issues/482) — SDK
+  STH-based network verification (`crates/sdk/src/network.rs`), what #483's
+  mismatch check is built on. See also
+  [`network-trust-anchors.md`](network-trust-anchors.md).
+- [#483](https://github.com/LunarVagabond/avalon-protocol/issues/483) —
+  SDK/CLI target-network declaration + mismatch check, described above.
