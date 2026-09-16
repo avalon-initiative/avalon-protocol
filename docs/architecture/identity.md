@@ -75,8 +75,7 @@ explicitly cleared, and an absent key means it was untouched.
 | State | Promised durable? | Canonical record | Notes |
 |---|---|---|---|
 | identity exists, `created_at` | yes | `identity.created` | self-signed, see below |
-| `display_name` | yes | `identity.created` (initial), `profile.updated` (changes) | emitted in the same transaction as the `profiles` row, via the outbox |
-| handle discriminator | yes | `identity.created` (initial), `profile.updated` (on rename) | server-chosen, so it's carried in the event — a rebuild must land on the same `name#1234` |
+| `display_name` | yes | `identity.created` (initial), `profile.updated` (changes) | emitted in the same transaction as the `profiles` row, via the outbox. Issue #510: `display_name` itself is the globally-unique, case-insensitive handle — no separate discriminator suffix exists any more (issue #128's old `name#1234` scheme, dropped) |
 | `avatar_url` | yes | `profile.updated` | — |
 | `bio` | yes | `profile.updated` | free text, capped at 500 characters (#155) |
 | `favorite_genres` | yes | `profile.updated` | fixed, small controlled vocabulary (`Genre`), capped at 5 entries; unknown values rejected, not dropped; a present key always fully replaces the list, including to `[]` (#155) |
@@ -457,8 +456,8 @@ its invariants.
   emits `profile.updated` (#86) whenever a promised-durable field changes,
   now including `bio`/`favorite_genres`/`pronouns` (#155). `list_profiles`
   (`GET /identities/profiles?ids=…`, issue #161) resolves *other*
-  identities' public profile fields (`display_name`, `discriminator`,
-  `avatar_url`) in a batch — the gap every roster surface (friends, guild
+  identities' public profile fields (`display_name`, `avatar_url`) in a
+  batch — the gap every roster surface (friends, guild
   members) previously had to leave as a raw identity id. Deliberately does
   NOT include `bio`/`favorite_genres`/`pronouns`: this endpoint has no
   further visibility gating beyond session auth (any identity can

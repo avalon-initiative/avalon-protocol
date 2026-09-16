@@ -104,10 +104,12 @@ a first-class scaling dimension — see
   transaction, so identity/profile/outbox rows commit or roll back
   together. As of #44, every *read* of it in `handlers.rs` is gone too:
   `avalon_indexer::projections::profiles::fetch`/`fetch_many`/
-  `discriminator_for`/`is_handle_taken` (each generic over
-  `sqlx::PgExecutor`, so a caller can pass the shared pool or an open
-  transaction) back `me`, `get_identity_profile`, `list_profiles`, and the
-  discriminator-collision checks in `register_start`/`update_profile`.
+  `is_display_name_taken` (each generic over `sqlx::PgExecutor`, so a
+  caller can pass the shared pool or an open transaction) back `me`,
+  `get_identity_profile`, `list_profiles`, and the advisory taken-name
+  pre-checks in `register_start`/`update_profile` (issue #510 — the real,
+  atomic enforcement is `profiles_display_name_lower_idx` at `apply`'s own
+  write, not these pre-checks).
   `crates/server/tests/read_model_boundary.rs` guards this with a plain
   source-text check (no live infra needed) that `handlers.rs` never
   queries `profiles` or `ledger_entries` directly. One deliberate,
@@ -149,8 +151,8 @@ a first-class scaling dimension — see
 - [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43)
   rebuild-from-events + idempotency guarantee
 - #44 server reads go through the indexer, not the ledger — the `profiles`
-  slice (`me`/`get_identity_profile`/`list_profiles`/discriminator checks)
-  is closed; `friends.rs`/`guilds.rs` still write their own tables directly
+  slice (`me`/`get_identity_profile`/`list_profiles`/taken-name checks) is
+  closed; `friends.rs`/`guilds.rs` still write their own tables directly
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) integrator
   registry read model
 - #75 durable history is canonical;

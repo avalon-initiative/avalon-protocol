@@ -13,7 +13,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
 }
 
 function testRouter() {

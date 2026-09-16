@@ -96,10 +96,12 @@ retargets this projection's write path.
   rebuild against this repo's own accumulated dev ledger, filed and
   corrected as [#505](https://github.com/LunarVagabond/avalon-protocol/issues/505)):
   `profiles::apply`'s `INSERT ... ON CONFLICT` had no existing row to fall
-  back to for such an event and manufactured one with empty-string
-  `display_name`/`discriminator` (its `COALESCE(..., '')` placeholder for
-  the NOT NULL columns) — a second orphaned identity then collided with
-  the first on `profiles_display_name_discriminator_idx`. Can't happen in
+  back to for such an event and manufactured one with an empty-string
+  `display_name` (its `COALESCE(..., '')` placeholder for the NOT NULL
+  column) — a second orphaned identity then collided with the first on
+  the unique display-name index (`profiles_display_name_discriminator_idx`
+  at the time; superseded by `profiles_display_name_lower_idx`, issue
+  #510). Can't happen in
   production (#71's outbox guarantees `identity.created` is durable before
   any request that could produce a `profile.updated` is even possible); it
   surfaced only because ~28 of this repo's own live test files seed
@@ -113,8 +115,9 @@ retargets this projection's write path.
   ([#86](https://github.com/LunarVagabond/avalon-protocol/issues/86)):
   `update_profile` emits `profile.updated` through the outbox in the same
   transaction as the `profiles` row, and `identity.created` carries the
-  initial display name and handle discriminator, so `profiles` is fully
-  reconstructable from history. The rebuild test that proves it is still
+  initial display name (issue #510: the handle itself, globally unique),
+  so `profiles` is fully reconstructable from history. The rebuild test
+  that proves it is still
   [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43).
 - ~~Identity creation is not atomic with its ledger entry.~~ Fixed
   ([#71](https://github.com/LunarVagabond/avalon-protocol/issues/71)):

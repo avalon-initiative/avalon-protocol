@@ -22,7 +22,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Avalon User',
   avatar_url: null,
-  handle: 'Avalon User#1234',
 }
 
 const announcement = {
@@ -92,7 +91,7 @@ async function mountAtProfile(announcements: unknown[]) {
   await router.isReady()
   const wrapper = mount(HubShell, { global: { plugins: [router] } })
   mountedWrappers.push(wrapper)
-  await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
+  await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User'))
   await flushPromises()
   return { wrapper, router }
 }

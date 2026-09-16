@@ -15,7 +15,6 @@ const selfProfile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
   discoverable: false,
 }
 
@@ -44,7 +43,7 @@ describe('viewing another user from Friends', () => {
       '/friends/requests': [],
       '/presence': [{ identity_id: 'id-friend', status: 'Online', playing: null, updated_at: 'now' }],
       '/identities/profiles': [
-        { identity_id: 'id-friend', display_name: 'Ilya', discriminator: '1122', avatar_url: null },
+        { identity_id: 'id-friend', display_name: 'Ilya', avatar_url: null },
       ],
       '/people/discover': { candidates: [] },
     })
@@ -87,7 +86,6 @@ describe('UserProfile', () => {
         identity_created_at: 'now',
         display_name: 'Ilya',
         avatar_url: null,
-        handle: 'Ilya#1122',
         bio: 'raid leader',
         favorite_genres: ['fantasy'],
         pronouns: 'they/them',
@@ -109,7 +107,7 @@ describe('UserProfile', () => {
     const wrapper = mount(UserProfile, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('Ilya'))
 
-    expect(wrapper.text()).toContain('Ilya#1122')
+    expect(wrapper.text()).toContain('Ilya')
     expect(wrapper.text()).toContain('Do Not Disturb')
     // Issue #403: self-description fields now show on another identity's
     // profile card, same exposure level as their own GET /me.
@@ -143,7 +141,6 @@ describe('UserProfile', () => {
       identity_created_at: 'now',
       display_name: 'Ilya',
       avatar_url: null,
-      handle: 'Ilya#1122',
       bio: null,
       favorite_genres: [],
       pronouns: null,

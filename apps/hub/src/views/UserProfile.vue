@@ -218,7 +218,6 @@ async function onUnblock() {
         <AvalonAvatar :src="profile.avatar_url" :name="profile.display_name" size="xl" />
         <div :class="styles.identity">
           <h1 :class="page.title">{{ profile.display_name }}</h1>
-          <p :class="page.subtitle">{{ profile.handle }}</p>
           <p v-if="profile.pronouns" :class="styles.pronouns">{{ profile.pronouns }}</p>
         </div>
         <AvalonPresenceBadge :status="status" />

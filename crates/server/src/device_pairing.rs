@@ -49,8 +49,8 @@ const USER_CODE_LEN: usize = 8;
 
 fn generate_user_code() -> String {
     // `rng()` is `!Send` and must not live across an `.await` — built fresh
-    // and dropped within this call, same reasoning
-    // `handlers::generate_unique_discriminator` documents for itself.
+    // and dropped within this call, since axum's `Handler` bound requires
+    // this function's future to stay `Send`.
     let mut rng = rand::rng();
     (0..USER_CODE_LEN)
         .map(|_| USER_CODE_ALPHABET[rng.random_range(0..USER_CODE_ALPHABET.len())] as char)
@@ -86,8 +86,7 @@ pub struct StartPairingResponse {
 /// entrypoint: mints an opaque `device_code` (known only to this client and
 /// the server, never shown to the user) and a short human-typeable
 /// `user_code` (shown to the user, e.g. as a QR code), and stores a
-/// pending pairing row. Retries on a code collision the same way
-/// `handlers::generate_unique_discriminator` does — with 32^8 possible
+/// pending pairing row. Retries on a code collision — with 32^8 possible
 /// `user_code`s this only ever matters once a huge number are pending at
 /// once.
 pub async fn start_pairing(

@@ -16,7 +16,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Avalon User',
   avatar_url: null,
-  handle: 'Avalon User#1234',
 }
 
 function testRouter() {
@@ -73,7 +72,7 @@ describe('HubShell pending-actions badge', () => {
     router.push('/profile')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User'))
 
     const bell = wrapper.find('[aria-label="Pending actions"]')
     expect(bell.exists()).toBe(true)
@@ -102,7 +101,7 @@ describe('HubShell pending-actions badge', () => {
         { request: { id: 'gr1', identity_id: 'id-recovering', status: 'pending' } },
       ],
       '/me/recovery/guardian-of': [
-        { identity_id: 'id-ward', display_name: 'Ward', discriminator: '0001', added_at: 'now' },
+        { identity_id: 'id-ward', display_name: 'Ward', added_at: 'now' },
       ],
       '/conversations': [{ id: 'convo1', participants: ['id-self', 'id-other'] }],
       '/conversations/convo1/messages': [
@@ -114,7 +113,7 @@ describe('HubShell pending-actions badge', () => {
     router.push('/profile')
     await router.isReady()
     const wrapper = mount(HubShell, { global: { plugins: [router] } })
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User#1234'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Avalon User'))
 
     // 1 friend request + 1 join request + 1 invite + 1 device grant +
     // 1 guardian request + 1 new guardian-of + 1 unread DM = 7.

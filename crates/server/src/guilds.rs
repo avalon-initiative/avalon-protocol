@@ -2215,7 +2215,6 @@ pub async fn leave_guild(
                 None,
                 None,
                 None,
-                None,
                 Some(None),
             ),
             timestamp: OffsetDateTime::now_utc(),

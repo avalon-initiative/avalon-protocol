@@ -186,7 +186,6 @@ pub struct SearchIdentitiesQuery {
 pub struct SearchResultIdentity {
     pub identity_id: Uuid,
     pub display_name: String,
-    pub discriminator: String,
     pub avatar_url: Option<String>,
 }
 
@@ -209,9 +208,8 @@ pub struct SearchIdentitiesResponse {
 /// either direction — `blocked` is `blocks::block_partners`'s already
 /// direction-agnostic output, reused rather than reimplemented, same as
 /// `discovery::compute_candidates` does for #204). `q` is matched
-/// case-insensitively against both the bare display name and the full
-/// `display_name#discriminator` handle, so a caller can search either
-/// form.
+/// case-insensitively against `display_name` — issue #510: `display_name`
+/// is the handle now, no separate discriminator suffix to also match.
 fn build_search_query(
     caller: Uuid,
     blocked: &[Uuid],
@@ -220,7 +218,7 @@ fn build_search_query(
 ) -> QueryBuilder<Postgres> {
     let like = format!("%{}%", escape_like(q));
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT p.identity_id, p.display_name, p.discriminator, p.avatar_url \
+        "SELECT p.identity_id, p.display_name, p.avatar_url \
          FROM profiles p \
          JOIN discovery_preferences dp ON dp.identity_id = p.identity_id \
          WHERE dp.discoverable = true AND p.identity_id <> ",
@@ -228,11 +226,9 @@ fn build_search_query(
     builder.push_bind(caller);
     builder.push(" AND p.identity_id <> ALL(");
     builder.push_bind(blocked.to_vec());
-    builder.push(") AND (p.display_name ILIKE ");
-    builder.push_bind(like.clone());
-    builder.push(" OR (p.display_name || '#' || p.discriminator) ILIKE ");
+    builder.push(") AND p.display_name ILIKE ");
     builder.push_bind(like);
-    builder.push(") ORDER BY p.display_name ASC, p.discriminator ASC LIMIT ");
+    builder.push(" ORDER BY p.display_name ASC LIMIT ");
     builder.push_bind(limit);
     builder
 }
@@ -276,7 +272,6 @@ pub async fn search_identities(
         results.push(SearchResultIdentity {
             identity_id: row.try_get("identity_id")?,
             display_name: row.try_get("display_name")?,
-            discriminator: row.try_get("discriminator")?,
             avatar_url: row.try_get("avatar_url")?,
         });
     }
@@ -428,13 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn search_query_matches_display_name_and_full_handle() {
+    fn search_query_matches_display_name() {
         let caller = Uuid::new_v4();
         let builder = build_search_query(caller, &[], "alice", 20);
         let sql_str = builder.sql();
         let sql = sql_str.as_str();
         assert!(sql.contains("p.display_name ILIKE"));
-        assert!(sql.contains("(p.display_name || '#' || p.discriminator) ILIKE"));
     }
 
     #[test]

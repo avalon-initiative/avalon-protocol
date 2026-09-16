@@ -20,6 +20,7 @@ import type { Suggestion } from '../api/discovery'
 import type { SearchResultIdentity } from '../api/types'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useSessionStore } from '../stores/session'
+import { isIdentityId } from '../utils/identity'
 import styles from '../styles/page.module.scss'
 
 const session = useSessionStore()
@@ -132,18 +133,19 @@ function cancelAddFriend() {
   addFriendError.value = ''
 }
 
-// Accepts either a raw identity id or a `display_name#1234` handle (#128) —
-// a handle (anything containing '#') is resolved to an identity id first,
-// since createFriendRequest always targets an identity id on the wire.
+// Accepts either a raw identity id or a display_name handle (#128, #510) —
+// a handle (anything that isn't a UUID) is resolved to an identity id
+// first, since createFriendRequest always targets an identity id on the
+// wire.
 async function onAddFriend() {
   if (!session.token) return
   addFriendError.value = ''
   addingFriend.value = true
   try {
     const input = addFriendId.value.trim()
-    const to = input.includes('#')
-      ? (await api.resolveHandle(session.token, input)).identity_id
-      : input
+    const to = isIdentityId(input)
+      ? input
+      : (await api.resolveHandle(session.token, input)).identity_id
     await api.createFriendRequest(session.token, { to })
     cancelAddFriend()
     await refresh()
@@ -245,7 +247,7 @@ async function onMessageFriend(identityId: string) {
       </div>
 
       <div :class="styles.sideColumn">
-        <AvalonCard title="Add a friend" subtitle="By handle (e.g. alice#4821) or identity id.">
+        <AvalonCard title="Add a friend" subtitle="By display name or identity id.">
           <AvalonButton
             v-show="!showAddFriend"
             label="Add a friend"
@@ -259,7 +261,7 @@ async function onMessageFriend(identityId: string) {
               :error="addFriendError"
               @submit="onAddFriend"
             >
-              <AvalonTextField v-model="addFriendId" label="Handle or identity id" placeholder="alice#4821" />
+              <AvalonTextField v-model="addFriendId" label="Handle or identity id" placeholder="alice" />
               <template #secondary-actions>
                 <AvalonButton label="Cancel" variant="secondary" @click="cancelAddFriend" />
               </template>

@@ -1,27 +1,39 @@
-//! The `profiles` projection — display name, discriminator, avatar — built
-//! from `identity.created` and `profile.updated`.
+//! The `profiles` projection — display name (issue #510: the globally
+//! unique, case-insensitive handle itself, no discriminator), avatar —
+//! built from `identity.created` and `profile.updated`.
 //!
 //! Unlike the other three projections in this module, this one targets the
 //! real `profiles` table `crates/server` already had before this ticket
 //! (`crates/server/db/migrations/0001_identity_and_auth`,
-//! `.../0005_friend_handles`): closing issue #42 for profiles means
-//! retargeting who is allowed to write that table, not standing up a new
-//! one. `handlers::register_finish`/`update_profile` no longer INSERT/UPDATE
-//! `profiles` themselves — they call
-//! [`crate::postgres::PostgresIndexer::apply_in_tx`] with the same
+//! `.../0005_friend_handles`, `.../0063_drop_discriminator_unique_display_names`):
+//! closing issue #42 for profiles means retargeting who is allowed to write
+//! that table, not standing up a new one. `handlers::register_finish`/
+//! `update_profile` no longer INSERT/UPDATE `profiles` themselves — they
+//! call [`crate::postgres::PostgresIndexer::apply_in_tx`] with the same
 //! `identity.created`/`profile.updated` event they enqueue into the outbox,
 //! inside the same transaction, so the identity/profile/outbox rows commit
 //! or roll back together. See `docs/architecture/query-and-indexing.md`.
 //!
-//! Closing issue #44's `profiles` slice: [`fetch`], [`fetch_many`],
-//! [`discriminator_for`], and [`is_handle_taken`] are the read half — every
-//! function generic over `sqlx::PgExecutor` so a caller can pass either the
-//! shared pool (`handlers::me`/`get_identity_profile`/`list_profiles`) or an
-//! open transaction (`handlers::update_profile`'s read-after-write, in the
-//! same transaction as its own `apply_in_tx` call), matching the pattern
+//! Closing issue #44's `profiles` slice: [`fetch`] and [`fetch_many`] are
+//! the read half — every function generic over `sqlx::PgExecutor` so a
+//! caller can pass either the shared pool
+//! (`handlers::me`/`get_identity_profile`/`list_profiles`) or an open
+//! transaction (`handlers::update_profile`'s read-after-write, in the same
+//! transaction as its own `apply_in_tx` call), matching the pattern
 //! `handlers::earliest_joined_guild` already established for `guild_members`.
 //! `handlers.rs` no longer has any SQL against `profiles` at all — every
 //! read goes through here.
+//!
+//! Issue #510: `display_name` uniqueness (case-insensitive, via
+//! `profiles_display_name_lower_idx`) is enforced by [`apply`]'s own
+//! INSERT/UPDATE statement — the real, atomic enforcement point, not a
+//! separate prior check a concurrent writer could race past. A violation
+//! surfaces as [`crate::IndexError::DisplayNameTaken`], which
+//! `handlers::register_finish`/`update_profile` map to a clean "name
+//! taken" response. [`is_display_name_taken`] exists only as an
+//! *advisory*, fail-fast check at `handlers::register_start` (before a
+//! client burns a whole WebAuthn ceremony on a name that's already gone) —
+//! it is never the actual correctness guarantee.
 
 use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgExecutor, Postgres, Row, Transaction};
@@ -44,7 +56,6 @@ use crate::IndexError;
 pub struct ProfileWrite {
     pub identity_id: Uuid,
     pub display_name: Option<String>,
-    pub discriminator: Option<String>,
     pub avatar_url: Option<Option<String>>,
     pub bio: Option<Option<String>>,
     pub favorite_genres: Option<Vec<String>>,
@@ -85,11 +96,9 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
         "identity.created" => {
             let identity_id = super::uuid_field(&event.payload, "identity_id")?;
             let display_name = event.payload.get("display_name")?.as_str()?.to_string();
-            let discriminator = event.payload.get("discriminator")?.as_str()?.to_string();
             Some(ProfileWrite {
                 identity_id,
                 display_name: Some(display_name),
-                discriminator: Some(discriminator),
                 avatar_url: None,
                 bio: None,
                 favorite_genres: None,
@@ -108,11 +117,6 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
             let display_name = event
                 .payload
                 .get("display_name")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            let discriminator = event
-                .payload
-                .get("discriminator")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             // `.get` distinguishes "key absent" (untouched) from "key
@@ -185,7 +189,6 @@ pub fn decode(event: &ProtocolEvent) -> Option<ProfileWrite> {
             Some(ProfileWrite {
                 identity_id,
                 display_name,
-                discriminator,
                 avatar_url,
                 bio,
                 favorite_genres,
@@ -230,67 +233,71 @@ pub async fn apply(
     let main_guild_provided = write.main_guild.is_some();
     let main_guild = write.main_guild.flatten();
 
-    // `display_name`/`discriminator` are NOT NULL columns, but this write
-    // can carry neither (a `profile.updated` that only touched e.g. `bio`)
-    // — Postgres validates NOT NULL on the tentative INSERT row even when
-    // ON CONFLICT will redirect to the UPDATE branch below, so the VALUES
-    // clause can't pass NULL through directly the way avatar_url/bio/
-    // favorite_genres/pronouns do. COALESCE to '' there (never actually
-    // read back: the UPDATE branch's CASE ignores it and keeps
-    // profiles.display_name/discriminator whenever $2/$3 is NULL) —
-    // *except* when there's no existing row to fall back to at all: a
-    // `profile.updated` with no `display_name` arriving before this
-    // identity has any `profiles` row (its own `identity.created` was
-    // never durably recorded, or hasn't been replayed yet) would otherwise
-    // silently manufacture a row with empty-string `display_name`/
-    // `discriminator` — and a *second* such orphaned identity collides
-    // with the first on `profiles_display_name_discriminator_idx`, since
-    // `''`/`''` isn't a real, distinct handle. The `WHERE` guard below (an
-    // `INSERT ... SELECT ... WHERE` rather than `INSERT ... VALUES`) skips
-    // the write entirely in that case instead of fabricating a broken row
-    // — this should never happen for a real identity (#71's outbox
-    // guarantees `identity.created` is durable before any request that
-    // could produce a `profile.updated` is even possible), so a skip here
-    // signals a genuinely malformed replay, not ordinary behavior.
+    // `display_name` is a NOT NULL column, but this write can carry none
+    // (a `profile.updated` that only touched e.g. `bio`) — Postgres
+    // validates NOT NULL on the tentative INSERT row even when ON CONFLICT
+    // will redirect to the UPDATE branch below, so the VALUES clause can't
+    // pass NULL through directly the way avatar_url/bio/favorite_genres/
+    // pronouns do. COALESCE to '' there (never actually read back: the
+    // UPDATE branch's CASE ignores it and keeps profiles.display_name
+    // whenever $2 is NULL) — *except* when there's no existing row to fall
+    // back to at all: a `profile.updated` with no `display_name` arriving
+    // before this identity has any `profiles` row (its own
+    // `identity.created` was never durably recorded, or hasn't been
+    // replayed yet) would otherwise silently manufacture a row with an
+    // empty-string `display_name` — and a *second* such orphaned identity
+    // would collide with the first on `profiles_display_name_lower_idx`,
+    // since `''` isn't a real, distinct handle. The `WHERE` guard below
+    // (an `INSERT ... SELECT ... WHERE` rather than `INSERT ... VALUES`)
+    // skips the write entirely in that case instead of fabricating a
+    // broken row — this should never happen for a real identity (#71's
+    // outbox guarantees `identity.created` is durable before any request
+    // that could produce a `profile.updated` is even possible), so a skip
+    // here signals a genuinely malformed replay, not ordinary behavior.
+    //
+    // Issue #510: this is also the one, real, atomic enforcement point for
+    // `display_name` uniqueness — `profiles_display_name_lower_idx` fires
+    // on this exact statement (either branch: a fresh INSERT for a name
+    // already held by a *different* identity_id, or an UPDATE renaming
+    // into one), converted by `IndexError::from<sqlx::Error>` into
+    // `IndexError::DisplayNameTaken`. No separate pre-check races this.
     let result = sqlx::query(
         r#"
         INSERT INTO profiles (
-            identity_id, display_name, discriminator, avatar_url,
+            identity_id, display_name, avatar_url,
             bio, favorite_genres, pronouns, banner_url, status, links,
             timezone, theme_color, location, main_guild
         )
         SELECT
-            $1, COALESCE($2, ''), COALESCE($3, ''), CASE WHEN $5 THEN $4 ELSE NULL END,
-            CASE WHEN $7 THEN $6 ELSE NULL END,
-            CASE WHEN $9 THEN $8 ELSE '{}' END,
-            CASE WHEN $11 THEN $10 ELSE NULL END,
-            CASE WHEN $13 THEN $12 ELSE NULL END,
-            CASE WHEN $15 THEN $14 ELSE NULL END,
-            CASE WHEN $17 THEN $16 ELSE '{}' END,
-            CASE WHEN $19 THEN $18 ELSE NULL END,
-            CASE WHEN $21 THEN $20 ELSE NULL END,
-            CASE WHEN $23 THEN $22 ELSE NULL END,
-            CASE WHEN $25 THEN $24 ELSE NULL END
+            $1, COALESCE($2, ''), CASE WHEN $4 THEN $3 ELSE NULL END,
+            CASE WHEN $6 THEN $5 ELSE NULL END,
+            CASE WHEN $8 THEN $7 ELSE '{}' END,
+            CASE WHEN $10 THEN $9 ELSE NULL END,
+            CASE WHEN $12 THEN $11 ELSE NULL END,
+            CASE WHEN $14 THEN $13 ELSE NULL END,
+            CASE WHEN $16 THEN $15 ELSE '{}' END,
+            CASE WHEN $18 THEN $17 ELSE NULL END,
+            CASE WHEN $20 THEN $19 ELSE NULL END,
+            CASE WHEN $22 THEN $21 ELSE NULL END,
+            CASE WHEN $24 THEN $23 ELSE NULL END
         WHERE $2 IS NOT NULL OR EXISTS (SELECT 1 FROM profiles WHERE identity_id = $1)
         ON CONFLICT (identity_id) DO UPDATE SET
             display_name = CASE WHEN $2 IS NOT NULL THEN EXCLUDED.display_name ELSE profiles.display_name END,
-            discriminator = CASE WHEN $3 IS NOT NULL THEN EXCLUDED.discriminator ELSE profiles.discriminator END,
-            avatar_url = CASE WHEN $5 THEN EXCLUDED.avatar_url ELSE profiles.avatar_url END,
-            bio = CASE WHEN $7 THEN EXCLUDED.bio ELSE profiles.bio END,
-            favorite_genres = CASE WHEN $9 THEN EXCLUDED.favorite_genres ELSE profiles.favorite_genres END,
-            pronouns = CASE WHEN $11 THEN EXCLUDED.pronouns ELSE profiles.pronouns END,
-            banner_url = CASE WHEN $13 THEN EXCLUDED.banner_url ELSE profiles.banner_url END,
-            status = CASE WHEN $15 THEN EXCLUDED.status ELSE profiles.status END,
-            links = CASE WHEN $17 THEN EXCLUDED.links ELSE profiles.links END,
-            timezone = CASE WHEN $19 THEN EXCLUDED.timezone ELSE profiles.timezone END,
-            theme_color = CASE WHEN $21 THEN EXCLUDED.theme_color ELSE profiles.theme_color END,
-            location = CASE WHEN $23 THEN EXCLUDED.location ELSE profiles.location END,
-            main_guild = CASE WHEN $25 THEN EXCLUDED.main_guild ELSE profiles.main_guild END
+            avatar_url = CASE WHEN $4 THEN EXCLUDED.avatar_url ELSE profiles.avatar_url END,
+            bio = CASE WHEN $6 THEN EXCLUDED.bio ELSE profiles.bio END,
+            favorite_genres = CASE WHEN $8 THEN EXCLUDED.favorite_genres ELSE profiles.favorite_genres END,
+            pronouns = CASE WHEN $10 THEN EXCLUDED.pronouns ELSE profiles.pronouns END,
+            banner_url = CASE WHEN $12 THEN EXCLUDED.banner_url ELSE profiles.banner_url END,
+            status = CASE WHEN $14 THEN EXCLUDED.status ELSE profiles.status END,
+            links = CASE WHEN $16 THEN EXCLUDED.links ELSE profiles.links END,
+            timezone = CASE WHEN $18 THEN EXCLUDED.timezone ELSE profiles.timezone END,
+            theme_color = CASE WHEN $20 THEN EXCLUDED.theme_color ELSE profiles.theme_color END,
+            location = CASE WHEN $22 THEN EXCLUDED.location ELSE profiles.location END,
+            main_guild = CASE WHEN $24 THEN EXCLUDED.main_guild ELSE profiles.main_guild END
         "#,
     )
     .bind(write.identity_id)
     .bind(&write.display_name)
-    .bind(&write.discriminator)
     .bind(&avatar_url)
     .bind(avatar_url_provided)
     .bind(&bio)
@@ -344,7 +351,6 @@ pub async fn apply(
 #[derive(Debug, Clone)]
 pub struct ProfileView {
     pub display_name: String,
-    pub discriminator: String,
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
     pub favorite_genres: Vec<String>,
@@ -362,7 +368,7 @@ pub struct ProfileView {
 }
 
 const PROFILE_VIEW_SELECT: &str = r#"
-    SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
+    SELECT p.display_name, p.avatar_url, p.bio,
            p.favorite_genres, p.pronouns, p.banner_url, p.status, p.links,
            p.timezone, p.theme_color, p.location, p.main_guild, i.created_at,
            p.presence_visibility,
@@ -392,7 +398,6 @@ where
     };
     Ok(Some(ProfileView {
         display_name: row.try_get("display_name")?,
-        discriminator: row.try_get("discriminator")?,
         avatar_url: row.try_get("avatar_url")?,
         bio: row.try_get("bio")?,
         favorite_genres: row.try_get("favorite_genres")?,
@@ -417,7 +422,6 @@ where
 pub struct ProfileSummary {
     pub identity_id: Uuid,
     pub display_name: String,
-    pub discriminator: String,
     pub avatar_url: Option<String>,
 }
 
@@ -432,7 +436,7 @@ where
     E: PgExecutor<'e>,
 {
     let rows = sqlx::query(
-        "SELECT identity_id, display_name, discriminator, avatar_url \
+        "SELECT identity_id, display_name, avatar_url \
          FROM profiles WHERE identity_id = ANY($1)",
     )
     .bind(identity_ids)
@@ -444,50 +448,30 @@ where
             Ok(ProfileSummary {
                 identity_id: row.try_get("identity_id")?,
                 display_name: row.try_get("display_name")?,
-                discriminator: row.try_get("discriminator")?,
                 avatar_url: row.try_get("avatar_url")?,
             })
         })
         .collect()
 }
 
-/// `identity_id`'s current discriminator, or `None` if it has no `profiles`
-/// row (same "should never happen for an authenticated identity" caveat as
-/// [`fetch`]).
-pub async fn discriminator_for<'e, E>(
-    executor: E,
-    identity_id: Uuid,
-) -> Result<Option<String>, IndexError>
-where
-    E: PgExecutor<'e>,
-{
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT discriminator FROM profiles WHERE identity_id = $1")
-            .bind(identity_id)
-            .fetch_optional(executor)
-            .await?;
-    Ok(row.map(|(discriminator,)| discriminator))
-}
-
-/// Whether `(display_name, discriminator)` is already held by some other
-/// identity — `exclude_identity_id` lets a rename check ignore the
-/// identity's own current row (its discriminator legitimately already
-/// matches itself), while registration's collision check passes `None`.
-pub async fn is_handle_taken<'e, E>(
+/// Advisory only — see this module's doc comment on why the real
+/// enforcement lives in [`apply`], not here. Case-insensitive, matching
+/// `profiles_display_name_lower_idx`. `exclude_identity_id` lets a rename
+/// check ignore the identity's own current row (its own name legitimately
+/// already matches itself), while registration's check passes `None`.
+pub async fn is_display_name_taken<'e, E>(
     executor: E,
     display_name: &str,
-    discriminator: &str,
     exclude_identity_id: Option<Uuid>,
 ) -> Result<bool, IndexError>
 where
     E: PgExecutor<'e>,
 {
     let taken: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2 \
-         AND ($3::uuid IS NULL OR identity_id <> $3)",
+        "SELECT 1 FROM profiles WHERE lower(display_name) = lower($1) \
+         AND ($2::uuid IS NULL OR identity_id <> $2)",
     )
     .bind(display_name)
-    .bind(discriminator)
     .bind(exclude_identity_id)
     .fetch_optional(executor)
     .await?;
@@ -510,7 +494,6 @@ mod tests {
             payload: serde_json::json!({
                 "identity_id": identity_id,
                 "display_name": "nova",
-                "discriminator": "4821",
             }),
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
@@ -545,21 +528,17 @@ mod tests {
         let write = decode(&identity_created_event(identity_id)).unwrap();
         assert_eq!(write.identity_id, identity_id);
         assert_eq!(write.display_name.as_deref(), Some("nova"));
-        assert_eq!(write.discriminator.as_deref(), Some("4821"));
         assert_eq!(write.avatar_url, None);
     }
 
     #[test]
     fn decodes_profile_updated_display_name_only() {
         let identity_id = Uuid::new_v4();
-        let event = profile_updated_event(
-            identity_id,
-            serde_json::json!({ "display_name": "vega", "discriminator": "1122" }),
-        );
+        let event =
+            profile_updated_event(identity_id, serde_json::json!({ "display_name": "vega" }));
         let write = decode(&event).unwrap();
         assert_eq!(write.identity_id, identity_id);
         assert_eq!(write.display_name.as_deref(), Some("vega"));
-        assert_eq!(write.discriminator.as_deref(), Some("1122"));
         assert_eq!(write.avatar_url, None);
     }
 

@@ -83,11 +83,12 @@ export type Genre =
 export interface ProfileResponse {
   identity_id: string
   identity_created_at: string
+  // Issue #510: this identity's globally-unique, case-insensitive handle
+  // in its own right — the short handle users share with each other
+  // instead of a raw identity id. No separate `handle`/discriminator
+  // field exists any more (issue #128's old scheme).
   display_name: string
   avatar_url: string | null
-  // `display_name#discriminator` (issue #128) — the short handle users
-  // share with each other instead of a raw identity id.
-  handle: string
   // Issue #155's small, user-optional self-description fields — same
   // public exposure level as display_name/avatar_url above (GET /me only;
   // deliberately withheld from batch/public profile lookups server-side,
@@ -165,7 +166,6 @@ export interface UpdateProfileRequest {
 export interface SearchResultIdentity {
   identity_id: string
   display_name: string
-  discriminator: string
   avatar_url: string | null
 }
 
@@ -403,7 +403,6 @@ export interface GuardianRequestSummary {
 export interface GuardianOfSummary {
   identity_id: string
   display_name: string
-  discriminator: string
   added_at: string
 }
 
@@ -427,7 +426,6 @@ export interface PresenceResponse {
 export interface PublicProfileResponse {
   identity_id: string
   display_name: string
-  discriminator: string
   avatar_url: string | null
 }
 
@@ -452,7 +450,6 @@ export interface PublicIdentityProfileResponse {
   identity_created_at: string
   display_name: string
   avatar_url: string | null
-  handle: string
   bio: string | null
   favorite_genres: Genre[]
   pronouns: string | null

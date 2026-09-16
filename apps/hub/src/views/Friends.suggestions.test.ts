@@ -20,7 +20,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
   discoverable: false,
 }
 
@@ -55,7 +54,7 @@ describe('Friends "people you may know" polling', () => {
       '/presence': [],
       '/people/discover': { candidates: [{ identity_id: 'id-suggested' }] },
       '/identities/profiles': [
-        { identity_id: 'id-suggested', display_name: 'Ilya', discriminator: '1122', avatar_url: null },
+        { identity_id: 'id-suggested', display_name: 'Ilya', avatar_url: null },
       ],
     })
     await vi.advanceTimersByTimeAsync(15_000)

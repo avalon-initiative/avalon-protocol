@@ -83,13 +83,14 @@ pub struct ResolveHandleResponse {
     pub identity_id: Uuid,
 }
 
-/// Resolves a `display_name#1234` handle (issue #128) to an identity id for
-/// the "add friend" flow — exact match only, never partial/fuzzy. Fuzzy
-/// name search is a separate, bigger question (issue #129) with its own
-/// privacy tradeoffs, deliberately not folded in here. Session-authenticated
-/// like every other route in this module, both so an anonymous caller can't
-/// use it to enumerate handles and so it matches this module's existing
-/// "no integrator-credential auth path" convention.
+/// Resolves a `display_name` handle (issue #128, updated by #510 to a
+/// globally-unique, case-insensitive `display_name` — no discriminator) to
+/// an identity id for the "add friend" flow — exact match only, never
+/// partial/fuzzy. Fuzzy name search is a separate, bigger question (issue
+/// #129) with its own privacy tradeoffs, deliberately not folded in here.
+/// Session-authenticated like every other route in this module, both so an
+/// anonymous caller can't use it to enumerate handles and so it matches
+/// this module's existing "no integrator-credential auth path" convention.
 pub async fn resolve_handle(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -97,16 +98,11 @@ pub async fn resolve_handle(
 ) -> Result<Json<ResolveHandleResponse>, AppError> {
     authenticate(&state, &headers).await?;
 
-    let (display_name, discriminator) = handle.rsplit_once('#').ok_or(AppError::HandleNotFound)?;
-
-    let row = sqlx::query(
-        "SELECT identity_id FROM profiles WHERE display_name = $1 AND discriminator = $2",
-    )
-    .bind(display_name)
-    .bind(discriminator)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::HandleNotFound)?;
+    let row = sqlx::query("SELECT identity_id FROM profiles WHERE lower(display_name) = lower($1)")
+        .bind(&handle)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::HandleNotFound)?;
 
     Ok(Json(ResolveHandleResponse {
         identity_id: row.try_get("identity_id")?,

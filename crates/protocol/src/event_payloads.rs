@@ -9,6 +9,18 @@
 //! additive field never bumps `version`, so a decoder must silently ignore
 //! a field it doesn't yet know about rather than erroring on it.
 //!
+//! **One deliberate exception, issue #510**: `discriminator` was removed
+//! from `IdentityCreatedPayload`/`ProfileUpdatedPayload` outright, not
+//! added-alongside-and-deprecated the way the versioning policy otherwise
+//! requires for a field removal (which would normally bump `version` and
+//! keep the old shape decodable forever). Same grounds
+//! `docs/architecture/nodes.md`'s #290 exception already documents: this
+//! repo has no real deployed network and zero external integrators yet,
+//! so there is no real historical data anywhere that needs the old shape
+//! to stay decodable. Once the repo is public this exception is gone
+//! permanently — a future field removal needs its own decision issue, not
+//! a citation of #510 as precedent.
+//!
 //! A double-`Option` field (`Option<Option<T>>`) is this repo's existing
 //! "clear vs. untouched" convention (`crate::guilds::UpdateGuildRequest::motd`
 //! and friends): the outer `None` means the key is entirely absent from the
@@ -29,7 +41,6 @@ use crate::guilds::GuildLink;
 pub struct IdentityCreatedPayload {
     pub identity_id: Uuid,
     pub display_name: String,
-    pub discriminator: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,8 +119,6 @@ where
 pub struct ProfileUpdatedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub discriminator: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -563,12 +572,10 @@ mod tests {
         let payload = IdentityCreatedPayload {
             identity_id: Uuid::nil(),
             display_name: "Aria".to_string(),
-            discriminator: "0001".to_string(),
         };
         let json = serde_json::json!({
             "identity_id": "00000000-0000-0000-0000-000000000000",
             "display_name": "Aria",
-            "discriminator": "0001",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(

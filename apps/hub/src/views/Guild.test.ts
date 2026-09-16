@@ -18,7 +18,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
 }
 
 const guild = {
@@ -394,9 +393,7 @@ describe('Guild', () => {
       '/guilds/g1/events/ev1/rsvps': [
         { identity_id: 'id-owner', status: 'going', responded_at: '2026-09-02T00:00:00Z' },
       ],
-      '/identities/profiles': [
-        { identity_id: 'id-owner', display_name: 'Nova', discriminator: '4821' },
-      ],
+      '/identities/profiles': [{ identity_id: 'id-owner', display_name: 'Nova' }],
     })
 
     const router = testRouter()
@@ -417,7 +414,7 @@ describe('Guild', () => {
     await vi.waitFor(() => expect(wrapper.find('[role="dialog"]').exists()).toBe(true))
 
     expect(wrapper.text()).toContain('Going (1)')
-    expect(wrapper.text()).toContain('Nova#4821')
+    expect(wrapper.text()).toContain('Nova')
   })
 
   // The owner role's permissions are structural (guild.owner, not this
@@ -527,17 +524,19 @@ describe('Guild', () => {
     expect(body.badge).toEqual({ icon: 'wrench', color: 'blue' })
   })
 
-  // Issue #392: the invite field used to send whatever was typed straight
-  // through as a raw UUID, opaque-422ing on anything else. It now accepts
-  // a display_name#1234 handle (resolved first, same as Friends.vue's
-  // add-friend flow) and rejects anything that isn't an id or handle
-  // client-side, with a clear message, before ever hitting the network.
-  it('invites by identity id, resolves a handle first, and rejects neither', async () => {
+  // Issue #392, updated by #510: the invite field accepts either a raw
+  // identity id (a UUID, sent straight through, no resolve call) or a
+  // display_name handle (resolved to an identity id first, same as
+  // Friends.vue's add-friend flow) — display_name is the handle now, so
+  // there's no client-side "does this look like an id or a handle"
+  // rejection any more; a handle that doesn't resolve is just whatever
+  // error the server returns.
+  it('invites by identity id directly, or resolves a handle first', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
       ...baseRoutes(),
       '/guilds/g1/invites': { id: 'inv1', guild_id: 'g1', to: 'id-outsider', status: 'pending' },
-      '/friends/handle/Nova%234821': { identity_id: '11111111-2222-3333-4444-555555555555' },
+      '/friends/handle/Nova': { identity_id: '11111111-2222-3333-4444-555555555555' },
     })
 
     const router = testRouter()
@@ -554,19 +553,19 @@ describe('Guild', () => {
     await openInviteButton.trigger('click')
     await flushPromises()
 
-    const inviteField = wrapper.find('input[placeholder="Identity id, or display_name#1234"]')
+    const inviteField = wrapper.find('input[placeholder="Identity id, or display name"]')
     const inviteForm = wrapper.findAll('form').find((f) => f.text().includes('Send invite'))!
 
-    // Neither a UUID nor a handle: rejected client-side, no network call.
+    // A raw identity id (UUID) is sent straight through — no handle-resolve call.
     ;(fetch as ReturnType<typeof vi.fn>).mockClear()
-    await inviteField.setValue('some random name')
+    await inviteField.setValue('11111111-2222-3333-4444-555555555555')
     await inviteForm.trigger('submit')
     await flushPromises()
-    expect(wrapper.text()).toContain("doesn't look like an identity id or a display_name#1234 handle")
-    expect(fetch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Invite sent — they\'ll see it on their Guilds page.')
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/friends/handle/'))
 
     // A handle is resolved to an identity id before inviting.
-    await inviteField.setValue('Nova#4821')
+    await inviteField.setValue('Nova')
     await inviteForm.trigger('submit')
     await flushPromises()
     expect(wrapper.text()).toContain('Invite sent — they\'ll see it on their Guilds page.')

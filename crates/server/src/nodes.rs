@@ -265,9 +265,9 @@ const DEFAULT_ANNOUNCE_INTERVAL_SECS: u64 = 180;
 const PRUNE_INTERVAL_MULTIPLE: u32 = 3;
 
 /// Pure resolution logic, split out for direct unit testing (same "pure
-/// function behind the env-reading wrapper" pattern
-/// `handlers::discriminator_for_rename`/`registry::coarsen` already use in
-/// this repo) — no real `bundled_trust_anchors()` call, so a test can feed
+/// function behind the env-reading wrapper" pattern `registry::coarsen`
+/// already uses in this repo) — no real `bundled_trust_anchors()` call, so
+/// a test can feed
 /// it a controlled anchor list instead of depending on
 /// `docs/trusted-networks.json`'s actual (currently empty) `seed_nodes`.
 fn resolve_bootstrap_peers(

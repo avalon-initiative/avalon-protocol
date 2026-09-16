@@ -21,7 +21,7 @@ milestone-1 stand-in until actor signatures exist.
 
 | Kind | Issuer → subject | Payload (canonical) | Drives | Signed by |
 |---|---|---|---|---|
-| `identity.created` (done) | identity → identity | `identity_id`, `display_name`, `discriminator` | identities | identity's Ed25519 event-signing key (#73, done) |
+| `identity.created` (done) | identity → identity | `identity_id`, `display_name` (issue #510: the globally-unique handle itself, no discriminator) | identities | identity's Ed25519 event-signing key (#73, done) |
 | `identity.signing_key_added` (done) | identity → identity | `signing_key_id`, `public_key`, `device_label`, `approved_by_signing_key_id` | identity signing keys | the approving device's key (#135, done) |
 | `identity.signing_key_revoked` (done) | identity → identity | `signing_key_id` | identity signing keys | network (milestone-1 stand-in, #135, done) |
 | `identity.recovery_configured` (done) | identity → identity | `guardian_ids`, `threshold` | recovery guardian settings | identity key (session-authenticated, #201, done) |
@@ -29,7 +29,7 @@ milestone-1 stand-in until actor signatures exist.
 | `identity.recovery_approved` (done) | identity (guardian) → identity | `request_id`, `guardian_id`, `approvals_count`, `threshold`, `delay_ends_at` | recovery requests/approvals | network (milestone-1 stand-in, #201, done) |
 | `identity.recovery_cancelled` (done) | identity (owner or guardian) → identity | `request_id`, `cancelled_by`, `reason` | recovery requests | network (milestone-1 stand-in, #201, done) |
 | `identity.recovered` (done) | identity → identity | `request_id`, `device_label` | identity keys | network (milestone-1 stand-in, #201, done) |
-| `profile.updated` (done) | identity → identity | sparse — only the changed promised-durable fields are present at all: `display_name`, `discriminator`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`, `banner_url`, `status`, `links`, `timezone`, `theme_color`, `location`, `main_guild` (#86, widened by #155) | profiles | identity key |
+| `profile.updated` (done) | identity → identity | sparse — only the changed promised-durable fields are present at all: `display_name`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`, `banner_url`, `status`, `links`, `timezone`, `theme_color`, `location`, `main_guild` (#86, widened by #155; discriminator removed by #510) | profiles | identity key |
 | `game.registered` (done) | integrator → integrator | `game_id`, `slug`, `name`, `developer`, `category`, `requested_capabilities`, `initial_key` (`key_id`/`algorithm`/`public_key`) | integrators, registry | integrator key |
 | `game.binding_established` (done) | identity → integrator | `binding_id`, `identity_id`, `game_id`, `slug` | bindings, registry identities | identity key |
 | `game.binding_ended` (done) | identity → integrator | `binding_id`, `identity_id`, `game_id`, `slug` | bindings | identity key |

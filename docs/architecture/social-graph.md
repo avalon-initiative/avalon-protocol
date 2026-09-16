@@ -92,17 +92,25 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   Ed25519 signature (#73); see [protocol-events.md](./protocol-events.md).
 - `crates/server/db/migrations/0004_social_graph/` — `friendships` (`a < b`
   enforced), `friend_requests` (at most one pending request per direction).
-- `crates/server/db/migrations/0005_friend_handles/` — a short handle for
-  adding friends without pasting a raw identity id
-  ([#128](https://github.com/LunarVagabond/avalon-protocol/issues/128)):
-  `profiles.discriminator`, a 4-digit string generated server-side (unique
-  together with `display_name`, exposed as `display_name#discriminator` on
-  `ProfileResponse.handle`). `GET /friends/handle/:handle` resolves a handle
-  to an identity id — exact match only, session-authenticated like every
-  other route in this module. A display-name change keeps its existing
-  discriminator unless the new pair collides, in which case a fresh one is
-  generated so uniqueness holds without the handle churning on every rename.
-  Fuzzy/partial handle lookup is out of scope here — that's identity discovery
+- `crates/server/db/migrations/0005_friend_handles/` (superseded by
+  `.../0063_drop_discriminator_unique_display_names`, issue #510) — a short
+  handle for adding friends without pasting a raw identity id
+  ([#128](https://github.com/LunarVagabond/avalon-protocol/issues/128)).
+  Originally a `profiles.discriminator` 4-digit suffix (unique together
+  with `display_name`, `display_name#discriminator`). **Now (#510):
+  `display_name` itself is the handle** — globally unique,
+  case-insensitive (`profiles_display_name_lower_idx`), no discriminator.
+  `GET /friends/handle/:handle` resolves it to an identity id — exact
+  match only, session-authenticated like every other route in this
+  module. Uniqueness is enforced by that index at the actual write
+  (`avalon_indexer::projections::profiles::apply`), not a separate prior
+  check a concurrent writer could race past; a taken name is a hard
+  rejection (`AppError::DisplayNameTaken`) at registration or rename time,
+  never an auto-suggested variant. Decided: Discord's *current* scheme
+  (globally-unique handle), not the deprecated `name#1234` one it
+  replaced — the old scheme's 4-digit space getting crowded at scale was
+  exactly the friction Discord dropped it for. Fuzzy/partial handle lookup
+  is out of scope here — that's identity discovery
   ([#129](https://github.com/LunarVagabond/avalon-protocol/issues/129), decided:
   two-tier. Private-by-default, always-on surfacing of identities via mutual
   friends ("friends of friends") and shared guild membership — never a name
@@ -143,11 +151,12 @@ conversation at all. See [communication.md](./communication.md#direct-messages-a
   (`crates/server/src/handlers.rs::update_profile`), same "extend
   `PATCH /me`" precedent #153/#155 set for other small profile-adjacent
   fields — not a dedicated endpoint. Fuzzy, case-insensitive `ILIKE`
-  substring match against both the bare display name and the full
-  `display_name#discriminator` handle; a non-opted-in identity never
-  appears, full stop, even to a caller who already knows its exact
-  handle — that's the separate, untouched `friends::resolve_handle`
-  exact-match path. Excludes the caller and any blocked relationship in
+  substring match against `display_name` — issue #510: that's the handle
+  now, no separate discriminator suffix to also match. A non-opted-in
+  identity never appears, full stop, even to a caller who already knows
+  its exact handle — that's the separate, untouched
+  `friends::resolve_handle` exact-match path. Excludes the caller and any
+  blocked relationship in
   either direction via `blocks::block_partners`, same reuse `discover_people`
   (#204) already established. Turning the toggle off removes an identity
   from every subsequent search call immediately — the preference read is

@@ -20,8 +20,7 @@ Backed by `avalon_protocol::identity::{Identity, Profile}`,
 |---|---|---|
 | `identity.id` | `IdentityId` (UUID) | The stable, opaque handle everything else hangs off. Never derived from a name/username — see `identity.md`'s "The model." |
 | `identity.created_at` | timestamp | When the identity came into existence (`identity.created`). |
-| `profile.display_name` | string | Human-facing name; combined with `discriminator` to form the `handle` shown elsewhere. |
-| `discriminator` (→ `handle`) | string | Server-chosen, disambiguates same-named identities (`name#1234`); derived into `handle`, never stored/read as its own top-level field by consumers. |
+| `profile.display_name` | string | Human-facing name — issue #510: also the globally-unique, case-insensitive handle itself (no separate discriminator suffix; superseded #128's `name#1234` scheme). |
 | `profile.avatar_url` | `Option<string>` | Self-chosen profile image. Validated as a well-formed `http`/`https` URL server-side (`is_http_url`). |
 | `profile.banner_url` | `Option<string>` (#372) | A second image slot for a profile page header — same validation as `avatar_url`. |
 | `profile.bio` | `Option<string>` | Free-text self-description, capped at 500 chars. |

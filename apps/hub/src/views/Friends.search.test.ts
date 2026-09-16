@@ -21,7 +21,6 @@ const profile = {
   identity_created_at: 'now',
   display_name: 'Nova',
   avatar_url: null,
-  handle: 'Nova#4821',
   discoverable: false,
 }
 
@@ -60,7 +59,7 @@ describe('Friends user search (issue #205)', () => {
     const wrapper = await mountFriends({
       '/identities/search': {
         results: [
-          { identity_id: 'other-1', display_name: 'Alice', discriminator: '1234', avatar_url: null },
+          { identity_id: 'other-1', display_name: 'Alice', avatar_url: null },
         ],
       },
     })

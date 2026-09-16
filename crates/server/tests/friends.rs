@@ -118,24 +118,19 @@ async fn adding_a_friend_by_handle_resolves_to_the_same_identity_as_a_direct_req
     };
 
     use sqlx::Row;
-    let bob_handle: String = sqlx::query(
-        "SELECT display_name || '#' || discriminator AS handle FROM profiles WHERE identity_id = $1",
-    )
-    .bind(bob_id)
-    .fetch_one(&pool)
-    .await
-    .expect("failed to read bob's seeded handle")
-    .try_get("handle")
-    .unwrap();
+    let bob_handle: String =
+        sqlx::query("SELECT display_name AS handle FROM profiles WHERE identity_id = $1")
+            .bind(bob_id)
+            .fetch_one(&pool)
+            .await
+            .expect("failed to read bob's seeded handle")
+            .try_get("handle")
+            .unwrap();
 
-    // Only '#' needs escaping here — display names/discriminators in this
-    // test are plain alphanumeric, so a manual replace is enough without
-    // pulling in a URL-encoding crate just for this one test.
+    // Issue #510: `display_name` is the handle now, plain alphanumeric in
+    // this test — no `#`/URL-encoding concern left.
     let resolved = auth(
-        http.get(format!(
-            "{base}/friends/handle/{}",
-            bob_handle.replace('#', "%23")
-        )),
+        http.get(format!("{base}/friends/handle/{bob_handle}")),
         &alice_token,
     )
     .send()

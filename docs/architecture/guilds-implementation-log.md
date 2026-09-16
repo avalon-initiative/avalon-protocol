@@ -595,8 +595,8 @@ the actual code ever disagree, the code is right and this doc is stale.
   status is ordinary guild-internal social info rather than a moderation
   concern (same posture the member roster already takes). Strictly
   additive: the aggregate `rsvp_counts` on `GET /guilds/{id}/events` is
-  unchanged. Hub resolves the returned identity ids to
-  `display_name#discriminator` via the existing batched
+  unchanged. Hub resolves the returned identity ids to their `display_name`
+  (issue #510: the handle itself) via the existing batched
   `GET /identities/profiles` (issue #161), the same pattern
   `useGuildChat`'s `resolveAuthorNames` and `listMembersWithPresence`
   already use, and groups them into going/maybe/can't-go buckets
