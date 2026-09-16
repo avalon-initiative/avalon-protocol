@@ -456,19 +456,58 @@ impl PostgresSettlementProvider {
         since_seq: i64,
         limit: i64,
     ) -> Result<Vec<LedgerEntryView>, SettlementError> {
-        let rows = sqlx::query(
-            r#"
-            SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
-            FROM ledger_entries
-            WHERE seq > $1
-            ORDER BY seq ASC
-            LIMIT $2
-            "#,
-        )
-        .bind(since_seq)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
+        self.list_entries_since_for_subject(since_seq, limit, None)
+            .await
+    }
+
+    /// Same pagination/ordering semantics as [`Self::list_entries_since`],
+    /// pre-filtered to one `subject` when `Some` (issue #364, implementing
+    /// #306's "make the common one-subject-at-a-time case cheap" piece).
+    /// Filtering by subject is purely a read-side convenience — it never
+    /// changes an entry's hash-chain position, and `chain_intact` carries
+    /// the exact same "not verified here" caveat
+    /// [`Self::list_entries_since`]'s own doc comment describes; inclusion
+    /// proofs for a filtered row still verify against the same global tree
+    /// regardless of this filter.
+    pub async fn list_entries_since_for_subject(
+        &self,
+        since_seq: i64,
+        limit: i64,
+        subject: Option<&str>,
+    ) -> Result<Vec<LedgerEntryView>, SettlementError> {
+        let rows = match subject {
+            Some(subject) => {
+                sqlx::query(
+                    r#"
+                    SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+                    FROM ledger_entries
+                    WHERE seq > $1 AND subject = $3
+                    ORDER BY seq ASC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(since_seq)
+                .bind(limit)
+                .bind(subject)
+                .fetch_all(&self.pool)
+                .await
+            }
+            None => {
+                sqlx::query(
+                    r#"
+                    SELECT seq, event_id, kind, issuer, subject, payload, payload_pruned_at, event_timestamp, version, prev_hash, entry_hash, batch_id
+                    FROM ledger_entries
+                    WHERE seq > $1
+                    ORDER BY seq ASC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(since_seq)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         let mut entries = Vec::with_capacity(rows.len());

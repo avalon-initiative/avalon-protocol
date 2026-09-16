@@ -205,12 +205,39 @@ modules already use rather than trusting review alone to catch it later.
 This bounds *new* unbounded growth from careless design choices. It does
 not bound the two things #306 identified as genuinely open regardless of
 this rule: how many events one issuer can write about one subject
-(#365 — a write-time abuse-floor quota) and making a subject's own history
-cheap to sync selectively without replaying the whole ledger (#364). Both
+(#365, implemented) and making a subject's own history cheap to sync
+selectively without replaying the whole ledger (#364, implemented). Both
 are real, organic-use costs this rule doesn't touch. A structural bound on
 long-run per-subject growth for legitimate, ongoing use (log
 compaction/checkpointing) was considered and deliberately deferred — see
 #366 — real design work, not needed at this project's current scale.
+
+**#365** — a volume-only abuse floor on `(issuer, subject)` attestation
+writes, enforced in `crates/server/src/achievements.rs`'s
+`issue_attestation`/`bulk_issue_attestation` before either does any
+signature verification: a rolling window (`AVALON_ACHIEVEMENT_WRITE_QUOTA`,
+`AVALON_ACHIEVEMENT_WRITE_QUOTA_WINDOW_HOURS`, generous defaults) counts
+recent writes for that exact `(issuer, subject)` pair and rejects
+(`429 ATTESTATION_WRITE_QUOTA_EXCEEDED`) a write, or a whole bulk call,
+that would cross it — never a partial application, and it never inspects
+*what* is being attested to, only volume. Scoped to
+`achievement_attestations` writes specifically, matching the "high-frequency
+ephemeral data never touches the ledger at all" rule above — chat/presence
+never reach this quota because they never reach the ledger.
+
+**#364** — `GET /ledger/entries?subject=` pre-filters the existing bulk
+entries endpoint to one subject's own entries, same pagination/ordering
+semantics as the unfiltered form, backed by a `(subject, seq)` composite
+index (migration 0061). `subject` matches the *exact* compound value
+`ledger_entries.subject` stores — e.g. `identity:<uuid>:self:achievement_issued`
+— not just the bare owner id, since every event-producing module in this
+codebase bakes its own verb into `subject` (`issuer_ref`/`identity_ref`/
+`guild_ref` helpers). A caller filters on the exact string it already
+knows it wrote; there's no owner-level "everything about this identity
+regardless of verb" query yet. A subject with no entries returns an empty
+list, not an error. Filtering never changes an entry's hash-chain position
+— inclusion proofs for a filtered row still verify against the same
+global tree.
 
 ## Today in the repo
 
@@ -270,6 +297,7 @@ for exact types, migrations, and algorithms behind every item above.
   decided (bounding ledger growth — see the section above): the
   ledger-vs-indexer split is now a standing rule (#306's "option D"), not
   just precedent; #364 (subject-scoped selective sync) and #365
-  (per-issuer-subject write quota) implement the near-term pieces; #366
-  (log compaction/checkpointing for long-run organic growth) is
+  (per-issuer-subject write quota) implement the near-term pieces —
+  both now built (see the section above); #366 (log
+  compaction/checkpointing for long-run organic growth) is
   deliberately deferred, still open

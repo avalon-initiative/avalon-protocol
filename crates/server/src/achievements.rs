@@ -61,6 +61,69 @@ const BULK_ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.bulk_iss
 /// [`AppError::InvalidBulkAttestationRequest`], never silently truncated.
 pub(crate) const MAX_BULK_CLAIMS: usize = 1000;
 
+/// Default cap on how many attestations one issuer may write about one
+/// subject within [`DEFAULT_WRITE_QUOTA_WINDOW_HOURS`] (#365, #306's
+/// abuse-floor piece) — overridable via `AVALON_ACHIEVEMENT_WRITE_QUOTA`
+/// so live tests can exercise the rejection path without actually writing
+/// hundreds of attestations. Deliberately generous: a legitimate bulk
+/// issuance ([`MAX_BULK_CLAIMS`]) can still land in one window; this is a
+/// floor against runaway/abusive volume, never a throughput target.
+const DEFAULT_WRITE_QUOTA: i64 = 500;
+const DEFAULT_WRITE_QUOTA_WINDOW_HOURS: i64 = 1;
+
+fn write_quota_from_env() -> i64 {
+    std::env::var("AVALON_ACHIEVEMENT_WRITE_QUOTA")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_WRITE_QUOTA)
+}
+
+fn write_quota_window_hours_from_env() -> i64 {
+    std::env::var("AVALON_ACHIEVEMENT_WRITE_QUOTA_WINDOW_HOURS")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|hours| *hours > 0)
+        .unwrap_or(DEFAULT_WRITE_QUOTA_WINDOW_HOURS)
+}
+
+/// Volume-only abuse floor (#365) — never evaluates *what* is being
+/// attested to, only how many writes one issuer has made about one
+/// subject recently. `additional` is however many writes this call would
+/// add (1 for a single issuance, `body.claims.len()` for a bulk call) so a
+/// bulk call that would *cross* the quota is rejected as a whole, not
+/// partially applied.
+pub(crate) fn guard_write_quota(recent_count: i64, additional: i64) -> Result<(), AppError> {
+    if recent_count + additional > write_quota_from_env() {
+        return Err(AppError::AttestationWriteQuotaExceeded);
+    }
+    Ok(())
+}
+
+/// How many attestations `issuer_str` has written about `subject_id`
+/// within the current quota window — same rolling-window-count shape as
+/// `recovery::recent_request_count`. Scoped to `achievement_attestations`
+/// specifically: the quota is about durable ledger-backed writes, not
+/// chat/presence, which never reach this table at all.
+async fn recent_issuer_subject_write_count(
+    state: &AppState,
+    issuer_str: &str,
+    subject_id: Uuid,
+) -> Result<i64, AppError> {
+    let window_start =
+        OffsetDateTime::now_utc() - time::Duration::hours(write_quota_window_hours_from_env());
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS count FROM achievement_attestations \
+         WHERE issuer = $1 AND subject = $2 AND issued_at >= $3",
+    )
+    .bind(issuer_str)
+    .bind(subject_id)
+    .bind(window_start)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.try_get("count")?)
+}
+
 /// A definition with neither `icon` nor `icon_url` set still renders
 /// *something* (issue #332's invariant) — this is what every reader falls
 /// back to.
@@ -766,6 +829,13 @@ async fn issue_attestation(
     // #84's point-in-time model.
     let claim_kind = category.claim_kind();
     let issuer_str = format!("{}:{}", category.as_str(), slug);
+
+    // #365: the write-time abuse floor, checked before the (more
+    // expensive) signature verification below — same ordering
+    // `recovery::start_request` uses for its own rate limit.
+    let recent_writes = recent_issuer_subject_write_count(state, &issuer_str, subject_id).await?;
+    guard_write_quota(recent_writes, 1)?;
+
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidAttestationSignature)?;
@@ -1024,6 +1094,12 @@ async fn bulk_issue_attestation(
 
     let claim_kind = category.claim_kind();
     let issuer_str = format!("{}:{}", category.as_str(), slug);
+
+    // #365: the whole batch counts against the quota as one unit — a
+    // bulk call that would cross the limit is rejected outright, never
+    // partially applied claim-by-claim.
+    let recent_writes = recent_issuer_subject_write_count(state, &issuer_str, subject_id).await?;
+    guard_write_quota(recent_writes, body.claims.len() as i64)?;
 
     // Every claim's full achievement ref, in order — pure, no DB lookup —
     // exactly what the caller must have signed over, independent of
@@ -1459,5 +1535,26 @@ mod tests {
     #[test]
     fn rebuild_with_no_events_yields_nothing() {
         assert!(rebuild_definition(&[]).is_none());
+    }
+
+    #[test]
+    fn guard_write_quota_allows_up_to_the_limit() {
+        let limit = write_quota_from_env();
+        assert!(guard_write_quota(0, 1).is_ok());
+        assert!(guard_write_quota(limit - 1, 1).is_ok());
+        assert!(guard_write_quota(0, limit).is_ok());
+    }
+
+    #[test]
+    fn guard_write_quota_rejects_crossing_the_limit() {
+        let limit = write_quota_from_env();
+        assert!(matches!(
+            guard_write_quota(limit, 1),
+            Err(AppError::AttestationWriteQuotaExceeded)
+        ));
+        assert!(matches!(
+            guard_write_quota(0, limit + 1),
+            Err(AppError::AttestationWriteQuotaExceeded)
+        ));
     }
 }
