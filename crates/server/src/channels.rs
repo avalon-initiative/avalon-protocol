@@ -33,7 +33,10 @@
 //! "any current member may post." Toggled via `PATCH .../channels/{cid}`,
 //! gated the same as a rename (`manage_channels`, resource-aware).
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    GuildChannelArchivedPayload, GuildChannelCreatedPayload, GuildChannelRenamedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
@@ -332,15 +335,18 @@ pub async fn create_channel(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.channel_created".to_string(),
+        kind: ProtocolEventKindVariant::GuildChannelCreated
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_channel_created"),
         subject: channel_ref(channel_id, "guild_channel_created"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "channel_id": channel_id,
-            "name": name,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildChannelCreatedPayload {
+            guild_id,
+            channel_id,
+            name: name.clone(),
+            actor,
+        })
+        .expect("GuildChannelCreatedPayload should serialize"),
         timestamp: created_at,
         version: 1,
     };
@@ -417,18 +423,21 @@ pub async fn update_channel(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.channel_renamed".to_string(),
+        kind: ProtocolEventKindVariant::GuildChannelRenamed
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_channel_renamed"),
         subject: channel_ref(channel_id, "guild_channel_renamed"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "channel_id": channel_id,
-            "name": new_name,
-            "announcement_only": announcement_only,
-            "topic": new_topic,
-            "public": public,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildChannelRenamedPayload {
+            guild_id,
+            channel_id,
+            name: new_name.clone(),
+            announcement_only,
+            topic: new_topic.clone(),
+            public,
+            actor,
+        })
+        .expect("GuildChannelRenamedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -474,14 +483,17 @@ pub async fn archive_channel(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.channel_archived".to_string(),
+        kind: ProtocolEventKindVariant::GuildChannelArchived
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_channel_archived"),
         subject: channel_ref(channel_id, "guild_channel_archived"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "channel_id": channel_id,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildChannelArchivedPayload {
+            guild_id,
+            channel_id,
+            actor,
+        })
+        .expect("GuildChannelArchivedPayload should serialize"),
         timestamp: archived_at,
         version: 1,
     };

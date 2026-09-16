@@ -22,7 +22,10 @@
 
 use std::collections::HashSet;
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    FriendAcceptedPayload, FriendRemovedPayload, FriendRequestedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -187,10 +190,17 @@ pub async fn create_friend_request(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "friend.requested".to_string(),
+        kind: ProtocolEventKindVariant::FriendRequested
+            .as_str()
+            .to_string(),
         issuer: identity_ref(from, "friend_requested"),
         subject: identity_ref(to, "friend_requested"),
-        payload: serde_json::json!({ "from": from, "to": to, "actor": from }),
+        payload: serde_json::to_value(FriendRequestedPayload {
+            from,
+            to,
+            actor: from,
+        })
+        .expect("FriendRequestedPayload should serialize"),
         timestamp: requested_at,
         version: 1,
     };
@@ -273,10 +283,17 @@ pub async fn accept_friend_request(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "friend.accepted".to_string(),
+        kind: ProtocolEventKindVariant::FriendAccepted
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "friend_accepted"),
         subject: identity_ref(request.from, "friend_accepted"),
-        payload: serde_json::json!({ "from": request.from, "to": request.to, "actor": actor }),
+        payload: serde_json::to_value(FriendAcceptedPayload {
+            from: request.from,
+            to: request.to,
+            actor,
+        })
+        .expect("FriendAcceptedPayload should serialize"),
         timestamp: since,
         version: 1,
     };
@@ -335,10 +352,11 @@ pub async fn remove_friend(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "friend.removed".to_string(),
+        kind: ProtocolEventKindVariant::FriendRemoved.as_str().to_string(),
         issuer: identity_ref(actor, "friend_removed"),
         subject: identity_ref(other_identity_id, "friend_removed"),
-        payload: serde_json::json!({ "a": a, "b": b, "actor": actor }),
+        payload: serde_json::to_value(FriendRemovedPayload { a, b, actor })
+            .expect("FriendRemovedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };

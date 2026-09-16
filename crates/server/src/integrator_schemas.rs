@@ -7,7 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::GameSchemaPublishedPayload;
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -217,19 +218,22 @@ pub async fn publish_schema_version(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "game_schema.published".to_string(),
+        kind: ProtocolEventKindVariant::GameSchemaPublished
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&slug, "schema_published"),
         subject: id.clone(),
-        payload: serde_json::json!({
-            "id": id.as_str(),
-            "game_id": integrator_id,
-            "slug": slug,
-            "version": new_version,
-            "proto_source": body.proto_source,
-            "supersedes": previous_id.as_ref().map(GlobalId::as_str),
-            "default_visibility": body.default_visibility,
-            "field_visibility": field_visibility_json,
-        }),
+        payload: serde_json::to_value(GameSchemaPublishedPayload {
+            id: id.as_str().to_string(),
+            game_id: integrator_id,
+            slug: slug.to_string(),
+            version: new_version,
+            proto_source: body.proto_source.clone(),
+            supersedes: previous_id.as_ref().map(|g| g.as_str().to_string()),
+            default_visibility: body.default_visibility.clone(),
+            field_visibility: field_visibility_json.clone(),
+        })
+        .expect("GameSchemaPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
     };

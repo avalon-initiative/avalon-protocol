@@ -23,7 +23,10 @@
 //! registry-adjacent read in this crate takes: aggregates/facts about
 //! integrators, never per-player data.
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    IntegratorRecognitionPublishedPayload, IntegratorRecognitionRevokedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -111,14 +114,17 @@ pub async fn publish_recognition(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "integrator.recognition_published".to_string(),
+        kind: ProtocolEventKindVariant::IntegratorRecognitionPublished
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&slug, "recognition_published"),
         subject: integrator_ref(&body.recognized_slug, "recognized"),
-        payload: serde_json::json!({
-            "recognizer_id": recognizer_id,
-            "recognized_id": recognized_id,
-            "scope": body.scope,
-        }),
+        payload: serde_json::to_value(IntegratorRecognitionPublishedPayload {
+            recognizer_id,
+            recognized_id,
+            scope: body.scope.clone(),
+        })
+        .expect("IntegratorRecognitionPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
     };
@@ -168,13 +174,16 @@ pub async fn revoke_recognition(
     if updated.rows_affected() > 0 {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "integrator.recognition_revoked".to_string(),
+            kind: ProtocolEventKindVariant::IntegratorRecognitionRevoked
+                .as_str()
+                .to_string(),
             issuer: integrator_ref(&slug, "recognition_revoked"),
             subject: integrator_ref(&body.recognized_slug, "recognized"),
-            payload: serde_json::json!({
-                "recognizer_id": recognizer_id,
-                "recognized_id": recognized_id,
-            }),
+            payload: serde_json::to_value(IntegratorRecognitionRevokedPayload {
+                recognizer_id,
+                recognized_id,
+            })
+            .expect("IntegratorRecognitionRevokedPayload should serialize"),
             timestamp: now,
             version: 1,
         };

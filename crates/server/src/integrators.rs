@@ -4,7 +4,10 @@
 
 use std::collections::HashMap;
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    GameRegisteredKeyPayload, GameRegisteredPayload, IssuerKeyAddedPayload, IssuerKeyRevokedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey, KeyRole};
 use avalon_protocol::permissions::Capability;
@@ -284,24 +287,28 @@ pub async fn register_integrator(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "game.registered".to_string(),
+        kind: ProtocolEventKindVariant::GameRegistered
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&body.slug, "registered"),
         subject: integrator_ref(&body.slug, "registered"),
-        payload: serde_json::json!({
-            "game_id": integrator_id,
-            "slug": body.slug,
-            "name": body.name,
-            // Durable ledger payload key: stays `developer` even though
-            // the Rust/API field is now `owner_name` (#290).
-            "developer": body.owner_name,
-            "category": category.as_str(),
-            "requested_capabilities": requested_capabilities,
-            "initial_key": {
-                "key_id": key_id,
-                "algorithm": body.initial_key.algorithm,
-                "public_key": BASE64.encode(&public_key_bytes),
+        // Durable ledger payload key: stays `developer` even though the
+        // Rust/API field is now `owner_name` (#290) — see
+        // `GameRegisteredPayload::developer`.
+        payload: serde_json::to_value(GameRegisteredPayload {
+            game_id: integrator_id,
+            slug: body.slug.clone(),
+            name: body.name.clone(),
+            developer: body.owner_name.clone(),
+            category: category.as_str().to_string(),
+            requested_capabilities: requested_capabilities.clone(),
+            initial_key: GameRegisteredKeyPayload {
+                key_id,
+                algorithm: body.initial_key.algorithm.clone(),
+                public_key: BASE64.encode(&public_key_bytes),
             },
-        }),
+        })
+        .expect("GameRegisteredPayload should serialize"),
         timestamp: registered_at,
         version: 1,
     };
@@ -854,18 +861,21 @@ pub async fn add_issuer_key(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "issuer.key_added".to_string(),
+        kind: ProtocolEventKindVariant::IssuerKeyAdded
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&slug, "key_added"),
         subject: integrator_ref(&slug, "key_added"),
-        payload: serde_json::json!({
-            "game_id": path_integrator_id,
-            "slug": slug,
-            "key_id": key_id,
-            "algorithm": body.algorithm,
-            "public_key": BASE64.encode(&public_key_bytes),
-            "role": role.as_str(),
-            "valid_until": body.valid_until,
-        }),
+        payload: serde_json::to_value(IssuerKeyAddedPayload {
+            game_id: path_integrator_id,
+            slug: slug.clone(),
+            key_id,
+            algorithm: body.algorithm.clone(),
+            public_key: BASE64.encode(&public_key_bytes),
+            role: role.as_str().to_string(),
+            valid_until: body.valid_until,
+        })
+        .expect("IssuerKeyAddedPayload should serialize"),
         timestamp: valid_from,
         version: 1,
     };
@@ -933,16 +943,19 @@ pub async fn revoke_issuer_key(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "issuer.key_revoked".to_string(),
+        kind: ProtocolEventKindVariant::IssuerKeyRevoked
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&slug, "key_revoked"),
         subject: integrator_ref(&slug, "key_revoked"),
-        payload: serde_json::json!({
-            "game_id": path_integrator_id,
-            "slug": slug,
-            "key_id": key_id,
-            "revoked_at": revoked_at,
-            "reason": body.reason,
-        }),
+        payload: serde_json::to_value(IssuerKeyRevokedPayload {
+            game_id: path_integrator_id,
+            slug: slug.clone(),
+            key_id,
+            revoked_at,
+            reason: body.reason.clone(),
+        })
+        .expect("IssuerKeyRevokedPayload should serialize"),
         timestamp: revoked_at,
         version: 1,
     };

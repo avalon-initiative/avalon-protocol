@@ -4,7 +4,13 @@
 //! `guilds-implementation-log.md`'s "Today in the repo" for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    GuildCreatedPayload, GuildFavoriteGamesUpdatedPayload, GuildGameAssociatedPayload,
+    GuildMemberAddedPayload, GuildMemberRemovedPayload, GuildOwnerTransferredPayload,
+    GuildRoleBadgePayload, GuildRoleChangedPayload, GuildRoleDefinedPayload,
+    GuildRoleDeletedPayload, GuildUpdatedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::guilds::{
     GuildLink, GuildPermission, GuildResourceKind, JoinPolicy, RoleBadge, RoleBadgeColor,
     RoleBadgeIcon,
@@ -497,11 +503,11 @@ impl RoleBadgeRequest {
     }
 }
 
-fn badge_payload(badge: RoleBadge) -> serde_json::Value {
-    serde_json::json!({
-        "icon": badge.icon.as_str(),
-        "color": badge.color.as_str(),
-    })
+fn badge_payload(badge: RoleBadge) -> GuildRoleBadgePayload {
+    GuildRoleBadgePayload {
+        icon: badge.icon.as_str().to_string(),
+        color: badge.color.as_str().to_string(),
+    }
 }
 
 struct GuildRow {
@@ -766,16 +772,17 @@ pub async fn create_guild(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.created".to_string(),
+        kind: ProtocolEventKindVariant::GuildCreated.as_str().to_string(),
         issuer: identity_ref(actor, "guild_created"),
         subject: guild_ref(guild_id, "guild_created"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "name": body.name,
-            "tag": body.tag,
-            "description": body.description,
-            "owner": actor,
-        }),
+        payload: serde_json::to_value(GuildCreatedPayload {
+            guild_id,
+            name: body.name.clone(),
+            tag: body.tag.clone(),
+            description: body.description.clone(),
+            owner: actor,
+        })
+        .expect("GuildCreatedPayload should serialize"),
         timestamp: created_at,
         version: 1,
     };
@@ -971,25 +978,26 @@ pub async fn update_guild(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.updated".to_string(),
+        kind: ProtocolEventKindVariant::GuildUpdated.as_str().to_string(),
         issuer: identity_ref(actor, "guild_updated"),
         subject: guild_ref(guild_id, "guild_updated"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "name": new_name,
-            "tag": new_tag,
-            "description": new_description,
-            "motd": new_motd,
-            "banner": new_banner,
-            "icon": new_icon,
-            "links": new_links,
-            "recruiting": new_recruiting,
-            "public": new_public,
-            "game_breakdown_public": new_game_breakdown_public,
-            "join_policy": new_join_policy.as_str(),
-            "roster_visibility": new_roster_visibility,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildUpdatedPayload {
+            guild_id,
+            name: new_name.clone(),
+            tag: new_tag.clone(),
+            description: new_description.clone(),
+            motd: new_motd.clone(),
+            banner: new_banner.clone(),
+            icon: new_icon.clone(),
+            links: new_links.clone(),
+            recruiting: new_recruiting,
+            public: new_public,
+            game_breakdown_public: new_game_breakdown_public,
+            join_policy: new_join_policy.as_str().to_string(),
+            roster_visibility: new_roster_visibility.clone(),
+            actor,
+        })
+        .expect("GuildUpdatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -1210,18 +1218,21 @@ pub async fn create_role(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.role_defined".to_string(),
+        kind: ProtocolEventKindVariant::GuildRoleDefined
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_role_defined"),
         subject: guild_ref(guild_id, "guild_role_defined"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "name_index": name_index,
-            "name": body.name,
-            "permissions": permissions,
-            "description": body.description,
-            "badge": badge_payload(badge),
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildRoleDefinedPayload {
+            guild_id,
+            name_index,
+            name: body.name.clone(),
+            permissions: permissions.clone(),
+            description: body.description.clone(),
+            badge: badge_payload(badge),
+            actor,
+        })
+        .expect("GuildRoleDefinedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -1324,18 +1335,21 @@ pub async fn update_role(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.role_defined".to_string(),
+        kind: ProtocolEventKindVariant::GuildRoleDefined
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_role_defined"),
         subject: guild_ref(guild_id, "guild_role_defined"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "name_index": name_index,
-            "name": new_name,
-            "permissions": new_permissions,
-            "description": new_description,
-            "badge": badge_payload(new_badge),
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildRoleDefinedPayload {
+            guild_id,
+            name_index,
+            name: new_name.clone(),
+            permissions: new_permissions.clone(),
+            description: new_description.clone(),
+            badge: badge_payload(new_badge),
+            actor,
+        })
+        .expect("GuildRoleDefinedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -1408,14 +1422,17 @@ pub async fn delete_role(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.role_deleted".to_string(),
+        kind: ProtocolEventKindVariant::GuildRoleDeleted
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_role_deleted"),
         subject: guild_ref(guild_id, "guild_role_deleted"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "name_index": name_index,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildRoleDeletedPayload {
+            guild_id,
+            name_index,
+            actor,
+        })
+        .expect("GuildRoleDeletedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -1657,14 +1674,17 @@ pub async fn transfer_ownership(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.owner_transferred".to_string(),
+        kind: ProtocolEventKindVariant::GuildOwnerTransferred
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_owner_transferred"),
         subject: guild_ref(guild_id, "guild_owner_transferred"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "from": guild.owner,
-            "to": body.to,
-        }),
+        payload: serde_json::to_value(GuildOwnerTransferredPayload {
+            guild_id,
+            from: guild.owner,
+            to: body.to,
+        })
+        .expect("GuildOwnerTransferredPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -1731,14 +1751,17 @@ pub async fn associate_integrator(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.game_associated".to_string(),
+        kind: ProtocolEventKindVariant::GuildGameAssociated
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_integrator_associated"),
         subject: guild_ref(guild_id, "guild_integrator_associated"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "game_id": integrator_id,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildGameAssociatedPayload {
+            guild_id,
+            game_id: integrator_id,
+            actor,
+        })
+        .expect("GuildGameAssociatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -2029,16 +2052,19 @@ async fn add_member(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.member_added".to_string(),
+        kind: ProtocolEventKindVariant::GuildMemberAdded
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_member_added"),
         subject: guild_ref(guild_id, "guild_member_added"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "identity_id": identity_id,
-            "role_index": role_index,
-            "via": via,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildMemberAddedPayload {
+            guild_id,
+            identity_id,
+            role_index,
+            via: via.to_string(),
+            actor,
+        })
+        .expect("GuildMemberAddedPayload should serialize"),
         timestamp: joined_at,
         version: 1,
     };
@@ -2172,7 +2198,9 @@ pub async fn leave_guild(
     if current_main_guild == Some(guild_id) {
         let clear_main_guild_event = ProtocolEvent {
             id: Uuid::new_v4(),
-            kind: "profile.updated".to_string(),
+            kind: ProtocolEventKindVariant::ProfileUpdated
+                .as_str()
+                .to_string(),
             issuer: identity_ref(actor, "profile_updated"),
             subject: identity_ref(actor, "profile_updated"),
             payload: crate::handlers::profile_updated_payload(
@@ -2202,15 +2230,18 @@ pub async fn leave_guild(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.member_removed".to_string(),
+        kind: ProtocolEventKindVariant::GuildMemberRemoved
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_member_removed"),
         subject: guild_ref(guild_id, "guild_member_removed"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "identity_id": actor,
-            "reason": "left",
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildMemberRemovedPayload {
+            guild_id,
+            identity_id: actor,
+            reason: "left".to_string(),
+            actor,
+        })
+        .expect("GuildMemberRemovedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -2252,15 +2283,18 @@ pub async fn remove_member(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.member_removed".to_string(),
+        kind: ProtocolEventKindVariant::GuildMemberRemoved
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_member_removed"),
         subject: guild_ref(guild_id, "guild_member_removed"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "identity_id": identity_id,
-            "reason": "removed",
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildMemberRemovedPayload {
+            guild_id,
+            identity_id,
+            reason: "removed".to_string(),
+            actor,
+        })
+        .expect("GuildMemberRemovedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -2693,15 +2727,18 @@ pub async fn update_member_role(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.role_changed".to_string(),
+        kind: ProtocolEventKindVariant::GuildRoleChanged
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_role_changed"),
         subject: identity_ref(identity_id, "guild_role_changed"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "identity_id": identity_id,
-            "role_index": body.role_index,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildRoleChangedPayload {
+            guild_id,
+            identity_id,
+            role_index: body.role_index,
+            actor,
+        })
+        .expect("GuildRoleChangedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
@@ -3354,14 +3391,17 @@ pub async fn set_favorite_games(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "guild.favorite_games_updated".to_string(),
+        kind: ProtocolEventKindVariant::GuildFavoriteGamesUpdated
+            .as_str()
+            .to_string(),
         issuer: identity_ref(actor, "guild_favorite_games_updated"),
         subject: guild_ref(guild_id, "guild_favorite_games_updated"),
-        payload: serde_json::json!({
-            "guild_id": guild_id,
-            "game_ids": body.integrator_ids,
-            "actor": actor,
-        }),
+        payload: serde_json::to_value(GuildFavoriteGamesUpdatedPayload {
+            guild_id,
+            game_ids: body.integrator_ids.clone(),
+            actor,
+        })
+        .expect("GuildFavoriteGamesUpdatedPayload should serialize"),
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };

@@ -7,7 +7,11 @@
 
 use std::collections::HashSet;
 
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::{
+    IdentityRecoveredPayload, IdentityRecoveryApprovedPayload, IdentityRecoveryCancelledPayload,
+    IdentityRecoveryConfiguredPayload, IdentityRecoveryRequestedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -237,13 +241,16 @@ pub async fn set_guardians(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.recovery_configured".to_string(),
+        kind: ProtocolEventKindVariant::IdentityRecoveryConfigured
+            .as_str()
+            .to_string(),
         issuer: identity_ref(identity_id, "recovery_configured"),
         subject: identity_ref(identity_id, "recovery_configured"),
-        payload: serde_json::json!({
-            "guardian_ids": unique_guardians,
-            "threshold": body.threshold,
-        }),
+        payload: serde_json::to_value(IdentityRecoveryConfiguredPayload {
+            guardian_ids: unique_guardians.clone(),
+            threshold: body.threshold,
+        })
+        .expect("IdentityRecoveryConfiguredPayload should serialize"),
         timestamp: updated_at,
         version: 1,
     };
@@ -645,13 +652,16 @@ pub async fn finish_request(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.recovery_requested".to_string(),
+        kind: ProtocolEventKindVariant::IdentityRecoveryRequested
+            .as_str()
+            .to_string(),
         issuer: identity_ref(ceremony.identity_id, "recovery_requested"),
         subject: identity_ref(ceremony.identity_id, "recovery_requested"),
-        payload: serde_json::json!({
-            "request_id": request_id,
-            "threshold": threshold,
-        }),
+        payload: serde_json::to_value(IdentityRecoveryRequestedPayload {
+            request_id,
+            threshold,
+        })
+        .expect("IdentityRecoveryRequestedPayload should serialize"),
         timestamp: requested_at,
         version: 1,
     };
@@ -818,16 +828,19 @@ pub async fn approve_request(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.recovery_approved".to_string(),
+        kind: ProtocolEventKindVariant::IdentityRecoveryApproved
+            .as_str()
+            .to_string(),
         issuer: identity_ref(caller, "recovery_approved"),
         subject: identity_ref(request.identity_id, "recovery_approved"),
-        payload: serde_json::json!({
-            "request_id": request_id,
-            "guardian_id": caller,
-            "approvals_count": count,
-            "threshold": request.threshold_at_request,
-            "delay_ends_at": delay_ends_at,
-        }),
+        payload: serde_json::to_value(IdentityRecoveryApprovedPayload {
+            request_id,
+            guardian_id: caller,
+            approvals_count: count,
+            threshold: request.threshold_at_request,
+            delay_ends_at,
+        })
+        .expect("IdentityRecoveryApprovedPayload should serialize"),
         timestamp: approved_at,
         version: 1,
     };
@@ -895,14 +908,17 @@ pub async fn cancel_request(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.recovery_cancelled".to_string(),
+        kind: ProtocolEventKindVariant::IdentityRecoveryCancelled
+            .as_str()
+            .to_string(),
         issuer: identity_ref(caller, "recovery_cancelled"),
         subject: identity_ref(request.identity_id, "recovery_cancelled"),
-        payload: serde_json::json!({
-            "request_id": request_id,
-            "cancelled_by": caller,
-            "reason": body.reason,
-        }),
+        payload: serde_json::to_value(IdentityRecoveryCancelledPayload {
+            request_id,
+            cancelled_by: caller,
+            reason: body.reason.clone(),
+        })
+        .expect("IdentityRecoveryCancelledPayload should serialize"),
         timestamp: cancelled_at,
         version: 1,
     };
@@ -992,13 +1008,16 @@ pub async fn finalize_request(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "identity.recovered".to_string(),
+        kind: ProtocolEventKindVariant::IdentityRecovered
+            .as_str()
+            .to_string(),
         issuer: identity_ref(request.identity_id, "recovered"),
         subject: identity_ref(request.identity_id, "recovered"),
-        payload: serde_json::json!({
-            "request_id": request_id,
-            "device_label": pending_device_label,
-        }),
+        payload: serde_json::to_value(IdentityRecoveredPayload {
+            request_id,
+            device_label: pending_device_label.clone(),
+        })
+        .expect("IdentityRecoveredPayload should serialize"),
         timestamp: completed_at,
         version: 1,
     };

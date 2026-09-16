@@ -28,7 +28,8 @@ use std::collections::BTreeMap;
 use avalon_indexer::projections::{
     integrator_data_instances, integrator_schemas as indexed_integrator_schemas,
 };
-use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::event_payloads::GameDataPublishedPayload;
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -184,21 +185,24 @@ pub async fn publish_instance(
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
-        kind: "game_data.published".to_string(),
+        kind: ProtocolEventKindVariant::GameDataPublished
+            .as_str()
+            .to_string(),
         issuer: integrator_ref(&slug, "data_published"),
         subject: issuer_ref(
             "identity",
             &body.subject.to_string(),
             "integrator_data_published",
         ),
-        payload: serde_json::json!({
-            "id": id.to_string(),
-            "schema": schema_id.as_str(),
-            "game_id": integrator_id,
-            "subject": body.subject,
-            "instance": body.instance,
-            "supersedes": previous_id,
-        }),
+        payload: serde_json::to_value(GameDataPublishedPayload {
+            id: id.to_string(),
+            schema: schema_id.as_str().to_string(),
+            game_id: integrator_id,
+            subject: body.subject,
+            instance: body.instance.clone(),
+            supersedes: previous_id.clone(),
+        })
+        .expect("GameDataPublishedPayload should serialize"),
         timestamp: now,
         version: 1,
     };
