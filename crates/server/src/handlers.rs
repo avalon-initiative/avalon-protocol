@@ -599,13 +599,9 @@ async fn earliest_joined_guild<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let guild_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT guild_id FROM guild_members WHERE identity_id = $1 ORDER BY joined_at ASC LIMIT 1",
-    )
-    .bind(identity_id)
-    .fetch_optional(executor)
-    .await?;
-    Ok(guild_id)
+    let memberships =
+        avalon_indexer::projections::guild_rosters::memberships_for(executor, identity_id).await?;
+    Ok(memberships.first().map(|m| m.guild_id))
 }
 
 pub async fn me(
@@ -1091,13 +1087,8 @@ async fn validate_main_guild(
         return Ok(None);
     }
     let guild_id: Uuid = main_guild.parse().map_err(|_| AppError::InvalidMainGuild)?;
-    let is_member: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2)",
-    )
-    .bind(guild_id)
-    .bind(identity_id)
-    .fetch_one(pool)
-    .await?;
+    let is_member =
+        avalon_indexer::projections::guild_rosters::is_member(pool, guild_id, identity_id).await?;
     if !is_member {
         return Err(AppError::NotGuildMember);
     }

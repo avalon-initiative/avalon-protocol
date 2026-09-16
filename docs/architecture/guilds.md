@@ -222,8 +222,11 @@ and implemented unless noted otherwise.
   recruiting status. Before #449, `recruiting` alone controlled roster
   visibility; a guild can now be public without recruiting, or recruiting
   without a public roster.
-- **Guild discovery board** (#154) — browse/search recruiting guilds; a
-  milestone-1 server-side stand-in pending the indexer projection (#506/#42).
+- **Guild discovery board** (#154) — browse/search recruiting guilds; its
+  member-count and membership-scoped filters read `indexer_guild_members`
+  directly (#506) rather than through a dedicated read-model function,
+  since they're fragments of one larger dynamically-composed query
+  (`guilds::build_discover_query`), not standalone lookups.
 - **Guild integrator affinity view** (#206, implementing decision #160) and
   **favorite integrators pin list** (#207) — derived from real member bindings,
   never manager-declared.
@@ -307,9 +310,9 @@ exact types, endpoints, and migrations behind every item above.
 - [#153](https://github.com/LunarVagabond/avalon-protocol/issues/153) — guild
   MOTD/banner/links/recruiting metadata, done.
 - [#154](https://github.com/LunarVagabond/avalon-protocol/issues/154) — guild
-  discovery board (browse + search recruiting guilds), done as a milestone-1
-  `server`-side stand-in pending [#506](https://github.com/LunarVagabond/avalon-protocol/issues/506)
-  (server reads moved onto the indexer's `guild_rosters` projection, #42).
+  discovery board (browse + search recruiting guilds), done; its
+  member/membership queries now read `indexer_guild_members`, closed
+  alongside [#506](https://github.com/LunarVagabond/avalon-protocol/issues/506).
 - [#160](https://github.com/LunarVagabond/avalon-protocol/issues/160) — decided:
   guild-integrator association is derived from real member bindings, never
   manager-declared; superseded #20's `associate_integrator`. Implemented by

@@ -80,20 +80,16 @@ pub(crate) async fn guild_owner(state: &AppState, guild_id: Uuid) -> Result<Uuid
     Ok(row.try_get("owner")?)
 }
 
-/// True if `identity_id` currently holds membership in `guild_id`. See
-/// module doc comment — queries a table this worktree's own migrations
-/// never create.
+/// True if `identity_id` currently holds membership in `guild_id`.
 pub(crate) async fn is_guild_member(
     state: &AppState,
     guild_id: Uuid,
     identity_id: Uuid,
 ) -> Result<bool, AppError> {
-    let row = sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-        .bind(guild_id)
-        .bind(identity_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    Ok(row.is_some())
+    Ok(
+        avalon_indexer::projections::guild_rosters::is_member(&state.pool, guild_id, identity_id)
+            .await?,
+    )
 }
 
 pub(crate) async fn require_member(

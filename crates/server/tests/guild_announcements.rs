@@ -48,7 +48,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 
 async fn seed_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid, role_index: i32) {
     sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
+        "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, $3, now())",
     )
     .bind(guild_id)
@@ -259,7 +259,7 @@ async fn leaving_a_guild_stops_its_announcements_from_appearing() {
     // Leave the guild directly via SQL (no "leave guild" HTTP endpoint
     // exercised elsewhere by this test — the invariant under test is what
     // the read does with membership state, not how membership ends).
-    sqlx::query("DELETE FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
+    sqlx::query("DELETE FROM indexer_guild_members WHERE guild_id = $1 AND identity_id = $2")
         .bind(guild_id)
         .bind(member_id)
         .execute(&pool)

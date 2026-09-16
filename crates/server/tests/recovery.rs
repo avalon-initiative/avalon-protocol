@@ -100,7 +100,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 
 async fn seed_friendship(pool: &PgPool, a: Uuid, b: Uuid) {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(lo)
         .bind(hi)
         .execute(pool)

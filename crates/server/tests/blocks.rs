@@ -59,7 +59,7 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 /// of another's real presence.
 async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
-    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
         .bind(b)
         .execute(pool)

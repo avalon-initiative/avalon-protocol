@@ -8,9 +8,10 @@
 //! `friendships`/`guild_rosters`/`attestations` already get their own
 //! tables per `docs/architecture/query-and-indexing.md`: `bindings` is
 //! still written directly by `crates/server/src/connections.rs` at request
-//! time, and retargeting that write path is #506's job, not this one's —
-//! writing both paths into the same table would create two writers of one
-//! projection.
+//! time, and issue #506 deliberately left it out of scope —
+//! `bindings`/`permission_grants` are genuinely `connections.rs`'s own
+//! source of truth (capability/grant state), not "two writers of one
+//! projection."
 //!
 //! This is the Integrator Registry's (#89, first slice #261) source for the
 //! `players` and `total players ever` metrics: `crate::registry` reads

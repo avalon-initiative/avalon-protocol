@@ -8,7 +8,7 @@
 //! established. Guilds are created through the real `POST /guilds`
 //! endpoint (id generation, owner assignment, and validation all live
 //! there); membership beyond the owner is seeded directly, the same
-//! shortcut `guild_members` rows already get in this test suite's sibling
+//! shortcut `indexer_guild_members` rows already get in this test suite's sibling
 //! files.
 
 use sqlx::postgres::PgPoolOptions;
@@ -57,7 +57,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 
 async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
-    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
         .bind(b)
         .execute(pool)
@@ -164,12 +164,15 @@ async fn create_guild(http: &reqwest::Client, base: &str, owner_token: &str) -> 
 }
 
 async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
-    sqlx::query("INSERT INTO guild_members (guild_id, identity_id, role_index) VALUES ($1, $2, 1)")
-        .bind(guild_id)
-        .bind(identity_id)
-        .execute(pool)
-        .await
-        .expect("failed to seed guild membership");
+    sqlx::query(
+        "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
+         VALUES ($1, $2, 1, now())",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .execute(pool)
+    .await
+    .expect("failed to seed guild membership");
 }
 
 async fn set_roster_visibility(

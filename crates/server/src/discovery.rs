@@ -7,6 +7,8 @@
 
 use std::collections::HashSet;
 
+use avalon_indexer::projections::friendships as friendship_reads;
+use avalon_indexer::projections::guild_rosters;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -29,25 +31,8 @@ async fn friends_of_friends(
     state: &AppState,
     friend_ids: &HashSet<Uuid>,
 ) -> Result<HashSet<Uuid>, AppError> {
-    if friend_ids.is_empty() {
-        return Ok(HashSet::new());
-    }
     let friend_ids: Vec<Uuid> = friend_ids.iter().copied().collect();
-    let rows = sqlx::query(
-        r#"
-        SELECT b AS candidate FROM friendships WHERE a = ANY($1)
-        UNION
-        SELECT a AS candidate FROM friendships WHERE b = ANY($1)
-        "#,
-    )
-    .bind(&friend_ids)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut set = HashSet::with_capacity(rows.len());
-    for row in rows {
-        set.insert(row.try_get("candidate")?);
-    }
-    Ok(set)
+    Ok(friendship_reads::friends_of_any(&state.pool, &friend_ids).await?)
 }
 
 /// Every identity that shares at least one guild membership with `caller`,
@@ -57,22 +42,7 @@ pub(crate) async fn mutual_guild_members(
     state: &AppState,
     caller: Uuid,
 ) -> Result<HashSet<Uuid>, AppError> {
-    let rows = sqlx::query(
-        r#"
-        SELECT DISTINCT gm2.identity_id AS candidate
-        FROM guild_members gm1
-        JOIN guild_members gm2 ON gm2.guild_id = gm1.guild_id
-        WHERE gm1.identity_id = $1 AND gm2.identity_id != $1
-        "#,
-    )
-    .bind(caller)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut set = HashSet::with_capacity(rows.len());
-    for row in rows {
-        set.insert(row.try_get("candidate")?);
-    }
-    Ok(set)
+    Ok(guild_rosters::mutual_members(&state.pool, caller).await?)
 }
 
 /// Pure merge/filter step, directly unit-testable without a database

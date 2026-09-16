@@ -22,6 +22,7 @@
 
 use std::collections::HashSet;
 
+use avalon_indexer::projections::friendships as friendship_reads;
 use avalon_protocol::event_payloads::{
     FriendAcceptedPayload, FriendRemovedPayload, FriendRequestedPayload,
 };
@@ -53,21 +54,7 @@ pub(crate) async fn friend_partners(
     state: &AppState,
     caller: Uuid,
 ) -> Result<HashSet<Uuid>, AppError> {
-    let rows = sqlx::query(
-        r#"
-        SELECT b AS other FROM friendships WHERE a = $1
-        UNION
-        SELECT a AS other FROM friendships WHERE b = $1
-        "#,
-    )
-    .bind(caller)
-    .fetch_all(&state.pool)
-    .await?;
-    let mut set = HashSet::with_capacity(rows.len());
-    for row in rows {
-        set.insert(row.try_get("other")?);
-    }
-    Ok(set)
+    Ok(friendship_reads::partners_of(&state.pool, caller).await?)
 }
 
 fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
@@ -151,13 +138,7 @@ pub async fn create_friend_request(
         return Err(AppError::IdentityNotFound);
     }
 
-    let (a, b) = ordered_pair(from, to);
-    let already_friends = sqlx::query("SELECT 1 FROM friendships WHERE a = $1 AND b = $2")
-        .bind(a)
-        .bind(b)
-        .fetch_optional(&state.pool)
-        .await?;
-    if already_friends.is_some() {
+    if friendship_reads::are_friends(&state.pool, from, to).await? {
         return Err(AppError::AlreadyFriends);
     }
 
@@ -270,12 +251,6 @@ pub async fn accept_friend_request(
 
     let (a, b) = ordered_pair(request.from, request.to);
     let since = OffsetDateTime::now_utc();
-    sqlx::query("INSERT INTO friendships (a, b, since) VALUES ($1, $2, $3)")
-        .bind(a)
-        .bind(b)
-        .bind(since)
-        .execute(&mut *tx)
-        .await?;
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
@@ -293,6 +268,10 @@ pub async fn accept_friend_request(
         timestamp: since,
         version: 1,
     };
+    // Issue #506: `friendships` is a projection now — the row is written
+    // by the indexer applying `event`, not a bespoke `INSERT` here, same
+    // pattern `handlers::register_finish` established for `profiles`.
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -335,16 +314,16 @@ pub async fn remove_friend(
     let actor = authenticate(&state, &headers).await?;
     let (a, b) = ordered_pair(actor, other_identity_id);
 
-    let mut tx = state.pool.begin().await?;
-
-    let removed = sqlx::query("DELETE FROM friendships WHERE a = $1 AND b = $2")
-        .bind(a)
-        .bind(b)
-        .execute(&mut *tx)
-        .await?;
-    if removed.rows_affected() == 0 {
+    // A real correctness check, not just advisory: `indexer_friendships`'
+    // DELETE is idempotent (`friendships::apply`), so it can't itself tell
+    // us whether a row existed — this is what stops an emitted
+    // `friend.removed` event from lying about a relationship that was
+    // never there.
+    if !friendship_reads::are_friends(&state.pool, actor, other_identity_id).await? {
         return Err(AppError::NotFriends);
     }
+
+    let mut tx = state.pool.begin().await?;
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
@@ -356,6 +335,7 @@ pub async fn remove_friend(
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -369,19 +349,15 @@ pub async fn list_friends(
 ) -> Result<Json<Vec<FriendshipResponse>>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    let rows = sqlx::query("SELECT a, b, since FROM friendships WHERE a = $1 OR b = $1")
-        .bind(identity_id)
-        .fetch_all(&state.pool)
-        .await?;
-
-    let mut friendships = Vec::with_capacity(rows.len());
-    for row in rows {
-        friendships.push(FriendshipResponse {
-            a: row.try_get("a")?,
-            b: row.try_get("b")?,
-            since: row.try_get("since")?,
-        });
-    }
+    let rows = friendship_reads::list_for(&state.pool, identity_id).await?;
+    let friendships = rows
+        .into_iter()
+        .map(|row| FriendshipResponse {
+            a: row.a,
+            b: row.b,
+            since: row.since,
+        })
+        .collect();
     Ok(Json(friendships))
 }
 

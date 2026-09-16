@@ -202,9 +202,12 @@ settles are correct.
   guilds/channels/events, conversations, achievements, integrator/issuer
   registration and discovery, the integrator registry, a real WebSocket presence
   service (`presence.rs`), settlement/outbox, retention, and recovery all
-  have their own module. Most reads still go directly against `server`'s own
-  tables rather than through the indexer — #44 closed that migration for
-  `profiles`; #506 tracks the rest (`friends.rs`/`guilds.rs`/`connections.rs`).
+  have their own module. #44 migrated `profiles`; #506 migrated
+  `friends.rs`/`guilds.rs` onto `indexer_friendships`/`indexer_guild_members`
+  too. `connections.rs`'s own `bindings`/`permission_grants` tables were
+  deliberately left out of #506's scope — they're genuinely server-owned
+  data (capability/grant state, not "two writers of one projection"), not
+  a gap still to close.
 - `crates/sdk/` — `authenticate()` wired to a live server; friends/presence,
   guilds (roster/channels/chat), and conversations are real, not stubbed;
   `sync_journal`/`submission` (#110/#111) implement offline durability and
