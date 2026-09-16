@@ -78,15 +78,6 @@ pub async fn run_worker(
     indexer: PostgresIndexer,
     config: MirrorWatcherConfig,
 ) {
-    let verify_key = match sth::load_verify_key_from_env() {
-        Ok(key) => key,
-        Err(err) => {
-            tracing::error!(
-                "mirror-watcher: cannot start, failed to load AVALON_SETTLEMENT_VERIFY_KEY: {err}"
-            );
-            return;
-        }
-    };
     let client = reqwest::Client::new();
 
     tracing::info!(
@@ -105,7 +96,9 @@ pub async fn run_worker(
         let mut verified_by_network: HashMap<String, Vec<(String, SignedTreeHead)>> =
             HashMap::new();
         for peer in &config.peers {
-            match fetch_and_verify_sth(&client, &verify_key, peer).await {
+            match fetch_and_verify_sth(&client, avalon_sdk::network::bundled_trust_anchors(), peer)
+                .await
+            {
                 Ok(sth) => {
                     let observed = ObservedSth::from_sth(peer, &sth, OffsetDateTime::now_utc());
                     match mirror::insert_observation(&pool, &observed).await {
@@ -151,6 +144,16 @@ pub enum MirrorWatcherError {
     Decode(String),
     #[error("STH signature verification failed — refusing to trust this observation")]
     InvalidSignature,
+    /// Issue #513/#515: distinguishable from [`Self::InvalidSignature`] on
+    /// purpose — there's no key to even attempt verification against,
+    /// because this `network_id` has no entry in
+    /// `docs/trusted-networks.json`. A node only ever mirrors networks it
+    /// has an explicit, reviewed trust anchor for; an unpinned
+    /// `network_id` (typo, unrelated network, or a peer just claiming
+    /// whatever it wants) is refused the same way an invalid signature is,
+    /// never silently stored.
+    #[error("peer claims network_id {0:?}, which has no pinned trust anchor in docs/trusted-networks.json — refusing to mirror it")]
+    UnpinnedNetwork(String),
     #[error("inclusion proof failed verification for seq={seq} against tree_size={tree_size}")]
     InvalidInclusionProof { seq: i64, tree_size: i64 },
     #[error("peer's inclusion-proof root_hash did not match the already-verified STH root_hash")]
@@ -255,22 +258,54 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
 /// every peer goes through in phase 1, regardless of what happens next.
 async fn fetch_and_verify_sth(
     client: &reqwest::Client,
-    verify_key: &VerifyingKey,
+    anchors: &[avalon_sdk::network::TrustAnchorEntry],
     peer: &str,
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
     let (sth, peer_protocol_version) = fetch_latest_sth(client, peer).await?;
     check_peer_version(peer, &peer_protocol_version)?;
 
-    if !sth::verify_tree_head(verify_key, &sth) {
+    let Some(verify_key) = verify_key_for_network(anchors, &sth.network_id) else {
+        tracing::error!(
+            event = "mirror_peer_network_unpinned",
+            peer = %peer,
+            network_id = %sth.network_id,
+            "peer claims a network_id with no pinned trust anchor — not mirroring",
+        );
+        return Err(MirrorWatcherError::UnpinnedNetwork(sth.network_id));
+    };
+
+    if !sth::verify_tree_head(&verify_key, &sth) {
         tracing::error!(
             event = "sth_signature_invalid",
             peer = %peer,
+            network_id = %sth.network_id,
             tree_size = sth.tree_size,
-            "STH signature verification failed — not storing, not trusting",
+            "STH signature verification failed against its claimed network's pinned key — not \
+             storing, not trusting",
         );
         return Err(MirrorWatcherError::InvalidSignature);
     }
     Ok(sth)
+}
+
+/// Resolves the verify key for whatever `network_id` a peer's STH actually
+/// claims, rather than one process-wide key (issue #515) — the same
+/// per-network trust-anchor lookup `avalon_sdk::network::evaluate_network_trust`
+/// uses client-side (#482), applied here so a node mirroring peers across
+/// more than one legitimate, pinned network verifies each against its own
+/// correct key. `None` for a `network_id` with no entry in
+/// `docs/trusted-networks.json` at all — the caller treats that as a hard
+/// refusal (issue #513), never a fallback to some other key. Pure, for
+/// direct unit testing (same split-out pattern `nodes::resolve_bootstrap_peers`
+/// already uses in this repo).
+fn verify_key_for_network(
+    anchors: &[avalon_sdk::network::TrustAnchorEntry],
+    network_id: &str,
+) -> Option<VerifyingKey> {
+    let entry = anchors.iter().find(|a| a.network_id == network_id)?;
+    let bytes = hex::decode(&entry.verify_key).ok()?;
+    let key_array: [u8; 32] = bytes.as_slice().try_into().ok()?;
+    VerifyingKey::from_bytes(&key_array).ok()
 }
 
 /// Returns the decoded STH alongside the peer's separately-reported
@@ -837,6 +872,56 @@ mod tests {
             }
             other => panic!("expected IncompatiblePeerVersion, got {other:?}"),
         }
+    }
+
+    fn anchor(network_id: &str, verify_key_hex: String) -> avalon_sdk::network::TrustAnchorEntry {
+        avalon_sdk::network::TrustAnchorEntry {
+            label: network_id.to_string(),
+            network_id: network_id.to_string(),
+            verify_key: verify_key_hex,
+            signing_key_id: "test-key".to_string(),
+            server_url: None,
+            environment: avalon_sdk::network::NetworkEnvironment::LocalDev,
+            seed_nodes: Vec::new(),
+            notes: None,
+        }
+    }
+
+    // Issue #515: a node mirroring peers on two distinct, independently
+    // pinned networks must resolve each against its own key, not one
+    // shared process-wide key.
+    #[test]
+    fn verify_key_for_network_resolves_the_matching_pinned_entry_among_several() {
+        let key_a = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let key_b = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let anchors = vec![
+            anchor("avalon-a", hex::encode(key_a.verifying_key().to_bytes())),
+            anchor("avalon-b", hex::encode(key_b.verifying_key().to_bytes())),
+        ];
+
+        let resolved = verify_key_for_network(&anchors, "avalon-b").expect("pinned");
+        assert_eq!(resolved, key_b.verifying_key());
+    }
+
+    // Issue #513: a `network_id` with no pinned trust anchor must never
+    // fall back to some other key — there is simply nothing to verify
+    // against, so mirroring it is refused outright.
+    #[test]
+    fn verify_key_for_network_returns_none_for_an_unpinned_network() {
+        let key_a = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let anchors = vec![anchor(
+            "avalon-a",
+            hex::encode(key_a.verifying_key().to_bytes()),
+        )];
+
+        assert!(verify_key_for_network(&anchors, "avalon-unpinned").is_none());
+    }
+
+    #[test]
+    fn verify_key_for_network_returns_none_for_a_malformed_pinned_key() {
+        let anchors = vec![anchor("avalon-a", "not-hex".to_string())];
+
+        assert!(verify_key_for_network(&anchors, "avalon-a").is_none());
     }
 
     // Both cases live in one test (rather than two `#[test]` fns) because
