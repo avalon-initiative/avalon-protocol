@@ -6,7 +6,7 @@
 //! reason [`super::friendships`] isn't `crates/server`'s existing
 //! `guild_members` table (`crates/server/db/migrations/0009_guild_membership`,
 //! written directly by `crates/server/src/guilds.rs`): retargeting that
-//! write path is issue #44's job, and reusing the same table now would mean
+//! write path is issue #506's job, and reusing the same table now would mean
 //! two writers, violating this ticket's own invariant. Unlike the server's
 //! `guild_members` table, this one has no foreign key into `guild_roles` —
 //! the indexer decodes payload independently of whether a locally-known

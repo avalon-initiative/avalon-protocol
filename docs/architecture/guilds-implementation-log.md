@@ -343,10 +343,10 @@ the actual code ever disagree, the code is right and this doc is stale.
   is a direct query against the `guilds`/`guild_members`/
   `guild_integrator_associations` tables in `server`, not routed through
   `crates/indexer`'s `guild_rosters` projection (#42, closed) — the same
-  pragmatic call #44 (open: wire `avalon-server` reads to use the indexer)
-  documents for reads generally. When #44 lands, this endpoint's
-  implementation should move onto the indexer, unchanged at the HTTP
-  surface.
+  pragmatic call #506 (open: retarget `friends.rs`/`guilds.rs`/
+  `connections.rs` reads onto the indexer) documents for reads generally.
+  When #506 lands, this endpoint's implementation should move onto the
+  indexer, unchanged at the HTTP surface.
   - **Filters**: `q=` does a case-insensitive substring match across
     `name`/`tag`/`description`; `tag=` is an exact case-insensitive match
     (indexed via `crates/server/db/migrations/0021_guild_discovery_index`'s
@@ -397,7 +397,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   direct-query stand-in #154's discovery board already established
   (`build_game_breakdown_query`, split out and unit-tested the same way
   `build_discover_query` is), not routed through the indexer (#42, closed;
-  #44, open, is what would move reads like this onto it). No
+  #506, open, is what would move reads like this onto it). No
   protocol event and no durable table backs the breakdown itself — it's
   derived/computed data, the same "hot state, not history" tier as
   presence (#57) and the discovery board, never touching

@@ -8,7 +8,7 @@
 //! `friendships`/`guild_rosters`/`attestations` already get their own
 //! tables per `docs/architecture/query-and-indexing.md`: `bindings` is
 //! still written directly by `crates/server/src/connections.rs` at request
-//! time, and retargeting that write path is #44's job, not this one's —
+//! time, and retargeting that write path is #506's job, not this one's —
 //! writing both paths into the same table would create two writers of one
 //! projection.
 //!

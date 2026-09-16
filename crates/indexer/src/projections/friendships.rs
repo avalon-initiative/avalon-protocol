@@ -6,7 +6,7 @@
 //! directly at request time
 //! (`crates/server/db/migrations/0004_social_graph`). Retargeting that
 //! write path — so `friends.rs` stops writing it and reads go through the
-//! indexer instead — is issue #44's job, not this ticket's (#42): writing
+//! indexer instead — is issue #506's job, not this ticket's (#42): writing
 //! both paths into the same table here would immediately violate this
 //! ticket's own invariant ("no projection table is written by a request
 //! handler; only by `Indexer::apply`") the moment `friends.rs` also wrote a

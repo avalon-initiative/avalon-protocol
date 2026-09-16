@@ -102,24 +102,38 @@ a first-class scaling dimension — see
   `state.indexer.apply_in_tx` with the same `identity.created`/
   `profile.updated` event they enqueue into the outbox, in the same
   transaction, so identity/profile/outbox rows commit or roll back
-  together.
-- `friendships`, `guild_rosters`, and `attestations` write their own new
-  tables (`indexer_friendships`, `indexer_guild_members`,
+  together. As of #44, every *read* of it in `handlers.rs` is gone too:
+  `avalon_indexer::projections::profiles::fetch`/`fetch_many`/
+  `discriminator_for`/`is_handle_taken` (each generic over
+  `sqlx::PgExecutor`, so a caller can pass the shared pool or an open
+  transaction) back `me`, `get_identity_profile`, `list_profiles`, and the
+  discriminator-collision checks in `register_start`/`update_profile`.
+  `crates/server/tests/read_model_boundary.rs` guards this with a plain
+  source-text check (no live infra needed) that `handlers.rs` never
+  queries `profiles` or `ledger_entries` directly. One deliberate,
+  documented exception: `handlers::my_history` still reads
+  `ledger_entries` via `PostgresSettlementProvider::list_entries_for_issuer_prefix`,
+  since it serves the raw historical log itself, not current state — see
+  that function's own doc comment.
+- `friendships`, `guild_rosters`, and `attestations` still write their own
+  new tables (`indexer_friendships`, `indexer_guild_members`,
   `indexer_attestations` — `crates/server/db/migrations/0015_indexer_projections`)
   rather than the existing `friendships`/`guild_members` tables
-  `crates/server/src/friends.rs`/`guilds.rs` still write directly at request
-  time. Retargeting those write paths — so those modules stop writing them
-  and server reads go through the indexer instead — is #44's job; writing
-  both paths into the same table now would immediately create two writers
-  of one projection, which is exactly the shape this ticket's own
-  invariant forbids. `attestations` has no producer yet (achievement
-  issuing, Epic #30, isn't built) — its `decode`/`apply` are proven by
-  fixture events only, ready for #30 to start emitting into.
-- No rebuild-from-events driver yet (that's #43): `PostgresIndexer::apply`
-  is exercised directly (inline, from `handlers.rs`) and via
-  `crates/indexer/tests/postgres_indexer.rs`'s `--ignored`
-  `apply_is_idempotent_per_projection` / `unknown_kind_is_skipped_not_error`
-  tests, not yet driven by a worker replaying the full ledger.
+  `crates/server/src/friends.rs`/`guilds.rs` still write directly at
+  request time — #44 only closed the `profiles` slice. Retargeting those
+  write paths — so those modules stop writing them and server reads go
+  through the indexer instead — is still open scope; writing both paths
+  into the same table now would immediately create two writers of one
+  projection, which is exactly the shape this ticket's own invariant
+  forbids. `attestations` has no producer yet (achievement issuing, Epic
+  #30, isn't built) — its `decode`/`apply` are proven by fixture events
+  only, ready for #30 to start emitting into.
+- **Rebuild-from-events is real** (#43): `avalon rebuild-index`
+  (`avalon_server::rebuild::rebuild_index_from_ledger`) truncates every
+  table in `avalon_indexer::postgres::PROJECTION_TABLES` and replays all of
+  `ledger_entries` back through `PostgresIndexer::rebuild_from_scratch`, in
+  one transaction. `crates/server/tests/rebuild_from_events.rs` is the live
+  proof — see [`./disaster-recovery.md`](./disaster-recovery.md).
 - **Registry projections now exist**: `integrator_bindings` (`indexer_integrator_bindings`,
   migration `0039_indexer_game_bindings`) backs the `players`/`total players
   ever` metrics (#261); `integrator_schemas` (#255) backs schema-version discovery
@@ -134,7 +148,9 @@ a first-class scaling dimension — see
   for profiles / friends / guild rosters / achievements
 - [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43)
   rebuild-from-events + idempotency guarantee
-- #44 server reads go through the indexer, not the ledger
+- #44 server reads go through the indexer, not the ledger — the `profiles`
+  slice (`me`/`get_identity_profile`/`list_profiles`/discriminator checks)
+  is closed; `friends.rs`/`guilds.rs` still write their own tables directly
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) integrator
   registry read model
 - #75 durable history is canonical;

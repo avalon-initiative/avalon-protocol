@@ -12,9 +12,20 @@
 //! `identity.created`/`profile.updated` event they enqueue into the outbox,
 //! inside the same transaction, so the identity/profile/outbox rows commit
 //! or roll back together. See `docs/architecture/query-and-indexing.md`.
+//!
+//! Closing issue #44's `profiles` slice: [`fetch`], [`fetch_many`],
+//! [`discriminator_for`], and [`is_handle_taken`] are the read half — every
+//! function generic over `sqlx::PgExecutor` so a caller can pass either the
+//! shared pool (`handlers::me`/`get_identity_profile`/`list_profiles`) or an
+//! open transaction (`handlers::update_profile`'s read-after-write, in the
+//! same transaction as its own `apply_in_tx` call), matching the pattern
+//! `handlers::earliest_joined_guild` already established for `guild_members`.
+//! `handlers.rs` no longer has any SQL against `profiles` at all — every
+//! read goes through here.
 
 use avalon_protocol::events::ProtocolEvent;
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgExecutor, Postgres, Row, Transaction};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::IndexError;
@@ -226,15 +237,29 @@ pub async fn apply(
     // clause can't pass NULL through directly the way avatar_url/bio/
     // favorite_genres/pronouns do. COALESCE to '' there (never actually
     // read back: the UPDATE branch's CASE ignores it and keeps
-    // profiles.display_name/discriminator whenever $2/$3 is NULL).
-    sqlx::query(
+    // profiles.display_name/discriminator whenever $2/$3 is NULL) —
+    // *except* when there's no existing row to fall back to at all: a
+    // `profile.updated` with no `display_name` arriving before this
+    // identity has any `profiles` row (its own `identity.created` was
+    // never durably recorded, or hasn't been replayed yet) would otherwise
+    // silently manufacture a row with empty-string `display_name`/
+    // `discriminator` — and a *second* such orphaned identity collides
+    // with the first on `profiles_display_name_discriminator_idx`, since
+    // `''`/`''` isn't a real, distinct handle. The `WHERE` guard below (an
+    // `INSERT ... SELECT ... WHERE` rather than `INSERT ... VALUES`) skips
+    // the write entirely in that case instead of fabricating a broken row
+    // — this should never happen for a real identity (#71's outbox
+    // guarantees `identity.created` is durable before any request that
+    // could produce a `profile.updated` is even possible), so a skip here
+    // signals a genuinely malformed replay, not ordinary behavior.
+    let result = sqlx::query(
         r#"
         INSERT INTO profiles (
             identity_id, display_name, discriminator, avatar_url,
             bio, favorite_genres, pronouns, banner_url, status, links,
             timezone, theme_color, location, main_guild
         )
-        VALUES (
+        SELECT
             $1, COALESCE($2, ''), COALESCE($3, ''), CASE WHEN $5 THEN $4 ELSE NULL END,
             CASE WHEN $7 THEN $6 ELSE NULL END,
             CASE WHEN $9 THEN $8 ELSE '{}' END,
@@ -246,7 +271,7 @@ pub async fn apply(
             CASE WHEN $21 THEN $20 ELSE NULL END,
             CASE WHEN $23 THEN $22 ELSE NULL END,
             CASE WHEN $25 THEN $24 ELSE NULL END
-        )
+        WHERE $2 IS NOT NULL OR EXISTS (SELECT 1 FROM profiles WHERE identity_id = $1)
         ON CONFLICT (identity_id) DO UPDATE SET
             display_name = CASE WHEN $2 IS NOT NULL THEN EXCLUDED.display_name ELSE profiles.display_name END,
             discriminator = CASE WHEN $3 IS NOT NULL THEN EXCLUDED.discriminator ELSE profiles.discriminator END,
@@ -291,7 +316,182 @@ pub async fn apply(
     .execute(&mut **tx)
     .await?;
 
+    if result.rows_affected() == 0 {
+        // Matches this crate's existing `eprintln!`-based structured-ish
+        // logging convention (`postgres.rs`'s "skipping unrecognized event
+        // kind") — no `tracing` dependency here.
+        eprintln!(
+            "indexer: event=profiles.orphaned_update_skipped identity_id={} — \
+             profile.updated with no display_name arrived for an identity with no existing \
+             profiles row; skipped rather than manufacturing an empty-handle row",
+            write.identity_id
+        );
+    }
+
     Ok(())
+}
+
+/// Every field `GET /me`, `GET /identities/{id}/profile`, and
+/// `update_profile`'s read-after-write need — the same shape
+/// `handlers::PROFILE_SELECT` used to fetch as a raw row before issue #44.
+/// `identity_created_at`/`discoverable` come from `identities`/
+/// `discovery_preferences` respectively, neither of which is itself a
+/// projection table — composing a read across a projection and its
+/// adjacent, non-projection tables is exactly what a read model is for;
+/// the invariant this ticket enforces is that `handlers.rs` never issues
+/// that SQL itself, not that every joined table must itself be a
+/// projection.
+#[derive(Debug, Clone)]
+pub struct ProfileView {
+    pub display_name: String,
+    pub discriminator: String,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub favorite_genres: Vec<String>,
+    pub pronouns: Option<String>,
+    pub banner_url: Option<String>,
+    pub status: Option<String>,
+    pub links: Vec<String>,
+    pub timezone: Option<String>,
+    pub theme_color: Option<String>,
+    pub location: Option<String>,
+    pub main_guild: Option<Uuid>,
+    pub identity_created_at: OffsetDateTime,
+    pub presence_visibility: String,
+    pub discoverable: bool,
+}
+
+const PROFILE_VIEW_SELECT: &str = r#"
+    SELECT p.display_name, p.discriminator, p.avatar_url, p.bio,
+           p.favorite_genres, p.pronouns, p.banner_url, p.status, p.links,
+           p.timezone, p.theme_color, p.location, p.main_guild, i.created_at,
+           p.presence_visibility,
+           COALESCE(dp.discoverable, false) AS discoverable
+    FROM profiles p
+    JOIN identities i ON i.id = p.identity_id
+    LEFT JOIN discovery_preferences dp ON dp.identity_id = p.identity_id
+    WHERE p.identity_id = $1
+    "#;
+
+/// `None` if `identity_id` has no `profiles` row — an authenticated
+/// identity always has one (see `register_finish`), so `None` from an
+/// authenticated caller signals data corruption, not a normal "not found";
+/// callers on that path map it to the same `RowNotFound`-shaped error
+/// `fetch_one` used to produce directly. `get_identity_profile`, reading a
+/// caller-supplied id, treats `None` as an ordinary not-found instead.
+pub async fn fetch<'e, E>(executor: E, identity_id: Uuid) -> Result<Option<ProfileView>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let Some(row) = sqlx::query(PROFILE_VIEW_SELECT)
+        .bind(identity_id)
+        .fetch_optional(executor)
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ProfileView {
+        display_name: row.try_get("display_name")?,
+        discriminator: row.try_get("discriminator")?,
+        avatar_url: row.try_get("avatar_url")?,
+        bio: row.try_get("bio")?,
+        favorite_genres: row.try_get("favorite_genres")?,
+        pronouns: row.try_get("pronouns")?,
+        banner_url: row.try_get("banner_url")?,
+        status: row.try_get("status")?,
+        links: row.try_get("links")?,
+        timezone: row.try_get("timezone")?,
+        theme_color: row.try_get("theme_color")?,
+        location: row.try_get("location")?,
+        main_guild: row.try_get("main_guild")?,
+        identity_created_at: row.try_get("created_at")?,
+        presence_visibility: row.try_get("presence_visibility")?,
+        discoverable: row.try_get("discoverable")?,
+    }))
+}
+
+/// The least-sensitive public-face fields only — same fields
+/// `handlers::PublicProfileResponse` exposes, backing `GET
+/// /identities/profiles`'s batch-resolve endpoint.
+#[derive(Debug, Clone)]
+pub struct ProfileSummary {
+    pub identity_id: Uuid,
+    pub display_name: String,
+    pub discriminator: String,
+    pub avatar_url: Option<String>,
+}
+
+/// Unknown ids are silently omitted from the result, not an error —
+/// matches `handlers::list_profiles`'s existing behavior of not letting one
+/// bad id 500 the whole batch.
+pub async fn fetch_many<'e, E>(
+    executor: E,
+    identity_ids: &[Uuid],
+) -> Result<Vec<ProfileSummary>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        "SELECT identity_id, display_name, discriminator, avatar_url \
+         FROM profiles WHERE identity_id = ANY($1)",
+    )
+    .bind(identity_ids)
+    .fetch_all(executor)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ProfileSummary {
+                identity_id: row.try_get("identity_id")?,
+                display_name: row.try_get("display_name")?,
+                discriminator: row.try_get("discriminator")?,
+                avatar_url: row.try_get("avatar_url")?,
+            })
+        })
+        .collect()
+}
+
+/// `identity_id`'s current discriminator, or `None` if it has no `profiles`
+/// row (same "should never happen for an authenticated identity" caveat as
+/// [`fetch`]).
+pub async fn discriminator_for<'e, E>(
+    executor: E,
+    identity_id: Uuid,
+) -> Result<Option<String>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT discriminator FROM profiles WHERE identity_id = $1")
+            .bind(identity_id)
+            .fetch_optional(executor)
+            .await?;
+    Ok(row.map(|(discriminator,)| discriminator))
+}
+
+/// Whether `(display_name, discriminator)` is already held by some other
+/// identity — `exclude_identity_id` lets a rename check ignore the
+/// identity's own current row (its discriminator legitimately already
+/// matches itself), while registration's collision check passes `None`.
+pub async fn is_handle_taken<'e, E>(
+    executor: E,
+    display_name: &str,
+    discriminator: &str,
+    exclude_identity_id: Option<Uuid>,
+) -> Result<bool, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let taken: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM profiles WHERE display_name = $1 AND discriminator = $2 \
+         AND ($3::uuid IS NULL OR identity_id <> $3)",
+    )
+    .bind(display_name)
+    .bind(discriminator)
+    .bind(exclude_identity_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(taken.is_some())
 }
 
 #[cfg(test)]
