@@ -5,8 +5,10 @@
 //! repo" and "Namespacing" sections for the category-driven claim
 //! vocabulary, auth model, and update/retirement semantics.
 
-use avalon_chain::attestations::{verify_authenticity, Authenticity};
-use avalon_protocol::achievements::{AchievementAttestation, Issuer, Signature};
+use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenticity};
+use avalon_protocol::achievements::{
+    bulk_attestation_signing_bytes, AchievementAttestation, Issuer, Signature,
+};
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::{AttestationId, GlobalId, IdentityId, IntegratorId};
 use avalon_protocol::integrators::{resolve_valid_signing_key, IntegratorCategory};
@@ -45,6 +47,19 @@ const BUILTIN_ICONS: &[&str] = &["trophy", "star", "shield", "sword"];
 /// through [`issue_attestation`], the one place an idempotency key is
 /// actually honored today.
 const ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.issue";
+
+/// Cache key for bulk issuance's own idempotency entries (#495) — deliberately
+/// distinct from [`ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT`] so a bulk call and
+/// a single-claim call can never collide on the same idempotency key by
+/// accident.
+const BULK_ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.bulk_issue";
+
+/// A bulk call's own claim-count cap (#495) — generous enough for "a
+/// veteran player's full in-game achievement history" (this ticket's own
+/// motivating case), small enough that a single request body/transaction
+/// can't grow unbounded. An oversized or empty list is
+/// [`AppError::InvalidBulkAttestationRequest`], never silently truncated.
+pub(crate) const MAX_BULK_CLAIMS: usize = 1000;
 
 /// A definition with neither `icon` nor `icon_url` set still renders
 /// *something* (issue #332's invariant) — this is what every reader falls
@@ -892,6 +907,298 @@ pub async fn issue_milestone(
     Json(body): Json<IssueAttestationRequest>,
 ) -> Result<Json<AttestationResponse>, AppError> {
     issue_attestation(&state, &headers, &slug, key, ClaimRoute::Milestones, body).await
+}
+
+/// One claim in a [`BulkIssueAttestationRequest`] — just enough to look up
+/// its definition; the proof covering the whole ordered list lives once,
+/// at the request's top level (see that struct's own doc comment).
+#[derive(Deserialize)]
+pub struct BulkClaimRequest {
+    pub key: String,
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
+}
+
+/// `POST /integrations/{slug}/achievements/bulk-issue` /
+/// `.../milestones/bulk-issue` (issue #495, implementing #492's decided
+/// shape). One challenge-response proof that this integrator's key is
+/// making the call, plus **one** signature over
+/// [`bulk_attestation_signing_bytes`] of the whole ordered `claims` list —
+/// never a per-claim signature. Every claim still becomes its own ordinary
+/// attestation server-side, through the exact same write path
+/// [`issue_attestation`] uses per-item; this endpoint is purely an
+/// API/transport-layer convenience over that, per #492's own invariant.
+#[derive(Deserialize)]
+pub struct BulkIssueAttestationRequest {
+    /// Which of the issuer's own keys signed the whole ordered list.
+    pub key_id: Uuid,
+    /// Standard-base64-encoded detached Ed25519 signature over
+    /// [`bulk_attestation_signing_bytes`] of `claims`, in order.
+    pub signature: String,
+    pub claims: Vec<BulkClaimRequest>,
+}
+
+/// One claim's own outcome — a bulk call is never all-or-nothing (#495's
+/// own invariant): a claim referencing an unknown or retired definition
+/// fails on its own, every other claim in the same call still succeeds.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum BulkClaimResult {
+    Issued {
+        key: String,
+        attestation: AttestationResponse,
+    },
+    Failed {
+        key: String,
+        /// A stable machine-readable code, matching `AppError::code`'s own
+        /// convention elsewhere in this codebase — never just the free-text
+        /// `error` string alone.
+        code: String,
+        error: String,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BulkIssueAttestationResponse {
+    /// Same order as the request's `claims` — a caller matches results
+    /// back to what it submitted by position, not by searching for `key`
+    /// (which isn't itself guaranteed unique within one call).
+    pub results: Vec<BulkClaimResult>,
+}
+
+/// Shared core of the two bulk-issuance handlers below — mirrors
+/// [`issue_attestation`]'s own auth/capability checks exactly (one
+/// integrator credential, one subject, one capability check for the whole
+/// call, since every claim in a bulk call shares the same subject and
+/// issuer), but resolves the *list* of achievement refs up front (pure, no
+/// DB) so the one signature can be verified once against all of them
+/// before any per-claim database work happens.
+async fn bulk_issue_attestation(
+    state: &AppState,
+    headers: &HeaderMap,
+    slug: &str,
+    route: ClaimRoute,
+    body: BulkIssueAttestationRequest,
+) -> Result<Json<BulkIssueAttestationResponse>, AppError> {
+    let caller = authenticate_caller(state, headers).await?;
+    let Caller::Integrator {
+        integrator_id,
+        identity_id: subject_id,
+    } = caller
+    else {
+        return Err(AppError::Forbidden);
+    };
+
+    let path_integrator_id = fetch_integrator_id_by_slug(state, slug).await?;
+    if integrator_id != path_integrator_id {
+        return Err(AppError::AchievementDefinitionForbidden);
+    }
+
+    if body.claims.is_empty() || body.claims.len() > MAX_BULK_CLAIMS {
+        return Err(AppError::InvalidBulkAttestationRequest);
+    }
+
+    let idempotency_key = crate::idempotency::read_idempotency_key(headers);
+    if let Some(key) = &idempotency_key {
+        if let Some(cached) = crate::idempotency::find_cached::<BulkIssueAttestationResponse>(
+            state,
+            integrator_id,
+            key,
+            BULK_ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT,
+        )
+        .await?
+        {
+            return Ok(Json(cached));
+        }
+    }
+
+    let category = fetch_integrator_category(state, integrator_id).await?;
+    if !route.allows(category) {
+        return Err(AppError::ClaimVocabularyMismatch);
+    }
+
+    // The user's own consent, checked once for the whole call — every
+    // claim in a bulk call shares the same subject/integrator/capability,
+    // matching `issue_attestation`'s own single-claim check.
+    require_capability(&caller, route.issue_capability(), state).await?;
+
+    let claim_kind = category.claim_kind();
+    let issuer_str = format!("{}:{}", category.as_str(), slug);
+
+    // Every claim's full achievement ref, in order — pure, no DB lookup —
+    // exactly what the caller must have signed over, independent of
+    // whether each referenced definition actually exists yet.
+    let achievement_refs: Vec<String> = body
+        .claims
+        .iter()
+        .map(|claim| {
+            definition_ref(category, slug, &claim.key)
+                .as_str()
+                .to_string()
+        })
+        .collect();
+
+    let signature_bytes = BASE64
+        .decode(&body.signature)
+        .map_err(|_| AppError::InvalidAttestationSignature)?;
+    let issuer_keys = fetch_issuer_keys(state, integrator_id).await?;
+    let now = OffsetDateTime::now_utc();
+
+    let signing_bytes = bulk_attestation_signing_bytes(
+        claim_kind,
+        &issuer_str,
+        IdentityId(subject_id),
+        &achievement_refs,
+    );
+    let Authenticity::Authentic { .. } = verify_signature(
+        &body.key_id.to_string(),
+        &signing_bytes,
+        &signature_bytes,
+        now,
+        &issuer_keys,
+    ) else {
+        return Err(AppError::InvalidAttestationSignature);
+    };
+    let signing_key = resolve_valid_signing_key(&issuer_keys, body.key_id, now)
+        .expect("verify_signature already resolved this key successfully");
+
+    let mut tx = state.pool.begin().await?;
+
+    // Same belt-and-suspenders network-admission check `issue_attestation`
+    // makes, once for the whole call — every claim writes under the same
+    // issuer key, so there's nothing to admit per-claim.
+    ensure_issuer_registered(
+        &mut tx,
+        state.chain.network_id(),
+        &signing_key.public_key,
+        &issuer_str,
+    )
+    .await?;
+
+    let mut results = Vec::with_capacity(body.claims.len());
+    for (claim, achievement_ref) in body.claims.iter().zip(achievement_refs.iter()) {
+        // Per-claim definition existence/retirement — a per-item failure,
+        // never aborting the rest of the batch (#495's own invariant). Any
+        // other error (a real database failure) still propagates as a
+        // whole-call failure, same as it would for a single issuance.
+        let definition = match fetch_definition(state, integrator_id, &claim.key).await {
+            Ok(row) => row,
+            Err(AppError::AchievementDefinitionNotFound) => {
+                results.push(BulkClaimResult::Failed {
+                    key: claim.key.clone(),
+                    code: "ACHIEVEMENT_DEFINITION_NOT_FOUND".to_string(),
+                    error: "achievement definition not found".to_string(),
+                });
+                continue;
+            }
+            Err(other) => return Err(other),
+        };
+        if definition.retired_at.is_some() {
+            results.push(BulkClaimResult::Failed {
+                key: claim.key.clone(),
+                code: "ATTESTATION_DEFINITION_RETIRED".to_string(),
+                error: "achievement definition is retired".to_string(),
+            });
+            continue;
+        }
+
+        let attestation_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO achievement_attestations \
+             (id, integrator_id, issuer, subject, achievement, issued_at, proof_key_id, proof_algorithm, proof_bytes) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(attestation_id)
+        .bind(integrator_id)
+        .bind(&issuer_str)
+        .bind(subject_id)
+        .bind(&definition.id)
+        .bind(now)
+        .bind(body.key_id)
+        .bind(&signing_key.algorithm)
+        .bind(&signature_bytes)
+        .execute(&mut *tx)
+        .await?;
+
+        let event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: format!("{claim_kind}.issued"),
+            issuer: issuer_ref(category.as_str(), slug, &format!("{claim_kind}_issued")),
+            subject: issuer_ref(
+                "identity",
+                &subject_id.to_string(),
+                &format!("{claim_kind}_issued"),
+            ),
+            payload: serde_json::json!({
+                "id": attestation_id,
+                "issuer": issuer_str,
+                "subject": subject_id,
+                "achievement": definition.id,
+                "evidence": claim.evidence,
+                "proof": {
+                    "key_id": body.key_id,
+                    "algorithm": signing_key.algorithm,
+                    "bytes": body.signature,
+                },
+            }),
+            timestamp: now,
+            version: 1,
+        };
+        outbox::enqueue(&mut tx, &event).await?;
+
+        results.push(BulkClaimResult::Issued {
+            key: claim.key.clone(),
+            attestation: AttestationResponse {
+                id: attestation_id,
+                issuer: issuer_str.clone(),
+                subject: subject_id,
+                achievement: achievement_ref.clone(),
+                issued_at: now,
+                proof: AttestationSignatureResponse {
+                    key_id: body.key_id,
+                    algorithm: signing_key.algorithm.clone(),
+                    bytes: body.signature.clone(),
+                },
+            },
+        });
+    }
+
+    tx.commit().await?;
+
+    let response = BulkIssueAttestationResponse { results };
+
+    if let Some(key) = &idempotency_key {
+        crate::idempotency::store(
+            state,
+            integrator_id,
+            key,
+            BULK_ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT,
+            &response,
+        )
+        .await?;
+    }
+
+    Ok(Json(response))
+}
+
+/// `POST /integrations/{slug}/achievements/bulk-issue` (#495).
+pub async fn bulk_issue_achievements(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(body): Json<BulkIssueAttestationRequest>,
+) -> Result<Json<BulkIssueAttestationResponse>, AppError> {
+    bulk_issue_attestation(&state, &headers, &slug, ClaimRoute::Achievements, body).await
+}
+
+/// `POST /integrations/{slug}/milestones/bulk-issue` (#495).
+pub async fn bulk_issue_milestones(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(body): Json<BulkIssueAttestationRequest>,
+) -> Result<Json<BulkIssueAttestationResponse>, AppError> {
+    bulk_issue_attestation(&state, &headers, &slug, ClaimRoute::Milestones, body).await
 }
 
 /// A pure, DB-free projection of a definition's current state from its own

@@ -225,6 +225,29 @@ uses. Neither proof substitutes for the other.
   confirms the server actually is. Verified live against a real local dev
   server, including the true `Verified`-and-matching success path
   (`crates/sdk/tests/issuer_registration.rs`, `--ignored`).
+- **Bulk attestation issuance** (#495, implementing #492's decided shape) —
+  `POST /integrations/{slug}/achievements/bulk-issue` /
+  `.../milestones/bulk-issue` (`crates/server/src/achievements.rs::bulk_issue_attestation`).
+  One challenge-response plus **one** signature over
+  `bulk_attestation_signing_bytes` (`crates/protocol/src/achievements.rs`,
+  length-prefixed so claim order/boundaries can never be ambiguous) covers
+  a whole ordered claim list for one subject; every claim still becomes
+  its own ordinary `achievement_attestations` row and its own
+  `achievement.issued`/`milestone.issued` event through the exact same
+  write path single-claim issuance uses — no new attestation shape, no
+  change to authenticity/validity/revocation, matching #492's own
+  invariant. A bulk call is never all-or-nothing: an unknown or retired
+  definition fails that one claim (`ACHIEVEMENT_DEFINITION_NOT_FOUND`/
+  `ATTESTATION_DEFINITION_RETIRED`) without touching the rest of the
+  batch. SDK: `Session::issue_achievements_bulk`
+  (`crates/sdk/src/achievements.rs`/`lib.rs`) — achievements only, same
+  scope limit #34's own SDK issuance already has (no milestones SDK
+  wrapper yet). Verified live against a real Postgres, including the
+  all-valid, partial-failure, forged-signature, tampered-claim-list, and
+  empty-list rejection paths, plus a regression check that single-claim
+  issuance is unaffected
+  (`crates/server/tests/achievements_bulk.rs`,
+  `crates/sdk/tests/achievements.rs`, both `--ignored`).
 - `crates/server/src/attestations.rs::list_my_achievements` (#34, paginated
   and filtered per #377) — `GET
   /me/achievements?integrator_id=&claim_kind=&before=&limit=`, cursor-paginated
@@ -332,8 +355,8 @@ uses. Neither proof substitutes for the other.
   ADR: bulk attestation issuance is N ordinary attestations sharing one
   request/signature envelope, not a new claim-set attestation type — an
   API/transport-layer convenience over the existing per-claim
-  authenticity/validity/revocation model (#76), not a change to it.
-  Decided, not yet built — see #495 for the implementation ticket.
+  authenticity/validity/revocation model (#76), not a change to it. Built
+  by #495.
 - [#495](https://github.com/LunarVagabond/avalon-protocol/issues/495) —
-  implementation ticket for #492's decision: the actual bulk-issuance
-  endpoint and SDK call. Not built yet as of this writing.
+  implements #492's decision: the bulk-issuance endpoint and SDK call,
+  described above.

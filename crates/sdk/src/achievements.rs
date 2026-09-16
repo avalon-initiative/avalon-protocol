@@ -147,6 +147,91 @@ fn attestation_signing_bytes(issuer_ref: &str, subject: Uuid, achievement: &str)
     format!("avalon:achievement.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
+/// The exact bytes this integrator's key signs to authorize a *bulk*
+/// issuance (issue #495, implementing #492's decided shape) — must match
+/// `avalon_protocol::achievements::bulk_attestation_signing_bytes` exactly.
+/// Same "each side independently builds the same canonical format" posture
+/// as [`attestation_signing_bytes`] above.
+fn bulk_attestation_signing_bytes(
+    issuer_ref: &str,
+    subject: Uuid,
+    achievements: &[String],
+) -> Vec<u8> {
+    let mut message =
+        format!("avalon:achievement.issued.bulk:v1:{issuer_ref}:{subject}:").into_bytes();
+    message.extend_from_slice(&(achievements.len() as u32).to_be_bytes());
+    for achievement in achievements {
+        message.extend_from_slice(&(achievement.len() as u32).to_be_bytes());
+        message.extend_from_slice(achievement.as_bytes());
+    }
+    message
+}
+
+#[derive(Serialize)]
+struct BulkClaimRequestWire {
+    key: String,
+}
+
+#[derive(Serialize)]
+struct BulkIssueRequest {
+    key_id: Uuid,
+    signature: String,
+    claims: Vec<BulkClaimRequestWire>,
+}
+
+/// The attestation a successful bulk claim resulted in — a deliberately
+/// smaller shape than the full server response (omitting `proof`, which
+/// nothing in this SDK's own bulk caller needs), same minimalism
+/// `Session::issue_achievement`'s bare `Uuid` return already takes for the
+/// single-claim case.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkIssuedAttestation {
+    /// This attestation's own id.
+    pub id: Uuid,
+    /// The issuer that issued it, e.g. `"game:<slug>"`.
+    pub issuer: String,
+    /// The identity this attestation is about.
+    pub subject: Uuid,
+    /// The achievement definition this attestation claims, e.g.
+    /// `"game:<slug>:achievement:<key>"`.
+    pub achievement: String,
+    /// When it was issued.
+    #[serde(with = "time::serde::rfc3339")]
+    pub issued_at: OffsetDateTime,
+}
+
+/// One claim's own outcome from a bulk issuance call — a bulk call is
+/// never all-or-nothing (#495's own invariant): a claim referencing an
+/// unknown or retired definition fails on its own, every other claim in
+/// the same call still succeeds. Mirrors
+/// `crates/server/src/achievements.rs::BulkClaimResult` at the wire level.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum BulkClaimOutcome {
+    /// This claim was issued successfully.
+    Issued {
+        /// The achievement key this outcome is for.
+        key: String,
+        /// The resulting attestation.
+        attestation: BulkIssuedAttestation,
+    },
+    /// This claim failed — every other claim in the same call may still
+    /// have succeeded; check each [`BulkClaimOutcome`] independently.
+    Failed {
+        /// The achievement key this outcome is for.
+        key: String,
+        /// A stable, machine-readable reason code.
+        code: String,
+        /// A human-readable explanation of `code`.
+        error: String,
+    },
+}
+
+#[derive(Deserialize)]
+struct BulkIssueResponseWire {
+    results: Vec<BulkClaimOutcome>,
+}
+
 /// Mirrors `crate::attestations::ListMyAchievementsResponse` at the wire
 /// level — issue #377 wrapped what was a bare array in a
 /// `{ achievements, next_cursor }` envelope so `GET /me/achievements`
@@ -286,5 +371,107 @@ impl Session {
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(body.id)
+    }
+
+    /// Issue #495 (implementing #492's decided shape): the bulk-issuance
+    /// counterpart to [`Session::submit_achievement_issuance`] — one
+    /// challenge-response, one signature over the whole ordered `keys`
+    /// list, every claim still becoming its own ordinary attestation
+    /// server-side. Same idempotency/retry posture as the single-claim
+    /// call: the *whole* challenge-then-bulk-issue exchange is the retry
+    /// unit, never just the final POST.
+    pub(crate) async fn submit_bulk_achievement_issuance(
+        &self,
+        keys: &[&str],
+    ) -> Result<Vec<BulkClaimOutcome>, SdkError> {
+        let idempotency_key = Uuid::new_v4().to_string();
+        crate::http::retry_write(&self.retry, || {
+            self.attempt_bulk_achievement_issuance(keys, &idempotency_key)
+        })
+        .await
+    }
+
+    async fn attempt_bulk_achievement_issuance(
+        &self,
+        keys: &[&str],
+        idempotency_key: &str,
+    ) -> Result<Vec<BulkClaimOutcome>, SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+        let key_id: Uuid = self
+            .integrator_key_id
+            .parse()
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/challenge",
+                self.server_url, slug
+            ))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let nonce = BASE64
+            .decode(&challenge.nonce)
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+        let challenge_signature = signing_key.sign(&nonce);
+
+        let subject = self.identity.id.0;
+        let issuer_ref = format!("game:{slug}");
+        let achievements: Vec<String> = keys
+            .iter()
+            .map(|key| format!("game:{slug}:achievement:{key}"))
+            .collect();
+        let signing_bytes = bulk_attestation_signing_bytes(&issuer_ref, subject, &achievements);
+        let signature = signing_key.sign(&signing_bytes);
+
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/achievements/bulk-issue",
+                self.server_url, slug
+            ))
+            .header("x-avalon-integrator-key-id", &self.integrator_key_id)
+            .header(
+                "x-avalon-integrator-challenge-id",
+                challenge.challenge_id.to_string(),
+            )
+            .header(
+                "x-avalon-integrator-signature",
+                BASE64.encode(challenge_signature.to_bytes()),
+            )
+            .header("x-avalon-identity-id", subject.to_string())
+            .header("idempotency-key", idempotency_key)
+            .json(&BulkIssueRequest {
+                key_id,
+                signature: BASE64.encode(signature.to_bytes()),
+                claims: keys
+                    .iter()
+                    .map(|key| BulkClaimRequestWire {
+                        key: key.to_string(),
+                    })
+                    .collect(),
+            })
+        })
+        .await?;
+
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+
+        let body: BulkIssueResponseWire = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        Ok(body.results)
     }
 }

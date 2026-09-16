@@ -126,6 +126,35 @@ pub fn attestation_signing_bytes(
     format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
+/// The exact bytes an issuer's key signs to authorize a *bulk* issuance
+/// (issue #495, implementing #492's decided shape: N ordinary attestations
+/// sharing one request/signature envelope, not a new claim-set attestation
+/// type). One signature covers the whole ordered `achievements` list for
+/// one `subject` — each entry is that claim's own full [`GlobalId`] wire
+/// string (the same value a single [`attestation_signing_bytes`] call
+/// would sign), length-prefixed so two different orderings of the same
+/// keys, or a key containing bytes that could otherwise be mistaken for a
+/// delimiter, can never produce identical signed bytes (same care
+/// `crates/chain/src/sth.rs::signing_message` already takes with its own
+/// variable-length fields). A signature over this can never be replayed
+/// as a signature over a different claim list, a different subject, or a
+/// different issuer/claim-kind pair.
+pub fn bulk_attestation_signing_bytes(
+    claim_kind: &str,
+    issuer_ref: &str,
+    subject: IdentityId,
+    achievements: &[String],
+) -> Vec<u8> {
+    let mut message =
+        format!("avalon:{claim_kind}.issued.bulk:v1:{issuer_ref}:{subject}:").into_bytes();
+    message.extend_from_slice(&(achievements.len() as u32).to_be_bytes());
+    for achievement in achievements {
+        message.extend_from_slice(&(achievement.len() as u32).to_be_bytes());
+        message.extend_from_slice(achievement.as_bytes());
+    }
+    message
+}
+
 /// The exact bytes an issuer's key signs to authorize a revocation (issue
 /// #85, implementing #81's decided mechanics: revocation is a signed,
 /// appended entry — never a mutation of the original attestation).
@@ -228,6 +257,81 @@ mod issuer_tests {
         let b =
             attestation_signing_bytes("milestone", "app:wallet-app", subject, achievement.as_str());
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bulk_attestation_signing_bytes_are_deterministic() {
+        let subject = IdentityId(Uuid::new_v4());
+        let achievements = vec![
+            "game:ashen-realms:achievement:dragon_slayer".to_string(),
+            "game:ashen-realms:achievement:lost_city".to_string(),
+        ];
+
+        let a = bulk_attestation_signing_bytes(
+            "achievement",
+            "game:ashen-realms",
+            subject,
+            &achievements,
+        );
+        let b = bulk_attestation_signing_bytes(
+            "achievement",
+            "game:ashen-realms",
+            subject,
+            &achievements,
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bulk_attestation_signing_bytes_differ_by_claim_order() {
+        // A bulk signature must not verify against a claim list the issuer
+        // never actually signed, including a reordering of the same keys —
+        // length-prefixing alone doesn't guarantee this unless order is
+        // also part of the message, which it is (iteration order below).
+        let subject = IdentityId(Uuid::new_v4());
+        let forward = vec!["a".to_string(), "b".to_string()];
+        let reversed = vec!["b".to_string(), "a".to_string()];
+
+        let forward_bytes =
+            bulk_attestation_signing_bytes("achievement", "game:ashen-realms", subject, &forward);
+        let reversed_bytes =
+            bulk_attestation_signing_bytes("achievement", "game:ashen-realms", subject, &reversed);
+        assert_ne!(forward_bytes, reversed_bytes);
+    }
+
+    #[test]
+    fn bulk_attestation_signing_bytes_are_unambiguous_across_a_split_boundary() {
+        // Without length-prefixing, `["ab", "c"]` and `["a", "bc"]` could
+        // concatenate to the same bytes. With it, they must not.
+        let subject = IdentityId(Uuid::new_v4());
+        let split_a = vec!["ab".to_string(), "c".to_string()];
+        let split_b = vec!["a".to_string(), "bc".to_string()];
+
+        let bytes_a =
+            bulk_attestation_signing_bytes("achievement", "game:ashen-realms", subject, &split_a);
+        let bytes_b =
+            bulk_attestation_signing_bytes("achievement", "game:ashen-realms", subject, &split_b);
+        assert_ne!(bytes_a, bytes_b);
+    }
+
+    #[test]
+    fn bulk_attestation_signing_bytes_differ_from_a_single_claim_signature() {
+        // A bulk signature over a one-claim list must never verify as a
+        // plain single-claim `attestation_signing_bytes` signature, or vice
+        // versa — the `.issued.bulk` domain tag keeps the two schemes from
+        // ever being confused, even for the degenerate one-claim case.
+        let subject = IdentityId(Uuid::new_v4());
+        let achievement = "game:ashen-realms:achievement:dragon_slayer".to_string();
+
+        let single =
+            attestation_signing_bytes("achievement", "game:ashen-realms", subject, &achievement);
+        let bulk = bulk_attestation_signing_bytes(
+            "achievement",
+            "game:ashen-realms",
+            subject,
+            std::slice::from_ref(&achievement),
+        );
+        assert_ne!(single, bulk);
     }
 }
 
