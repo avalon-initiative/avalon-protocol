@@ -70,8 +70,18 @@ async fn main() {
     let network_id = std::env::var("AVALON_NETWORK_ID")
         .expect("AVALON_NETWORK_ID must be set — see .env.example");
 
+    // Issue #363, implementing #287's decision: every hoster-configurable
+    // resource limit defaults to exactly what this process hardcoded
+    // before — an unconfigured node behaves exactly as it always has, not
+    // "unlimited" and not "fails to start."
+    let max_db_connections = std::env::var("AVALON_MAX_DB_CONNECTIONS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(10);
+
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(max_db_connections)
         .connect(&database_url)
         .await
         .expect("failed to connect to Postgres");
@@ -165,5 +175,15 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("failed to bind address");
-    axum::serve(listener, app).await.expect("server error");
+    // Issue #363: the rate limiter's IP-fallback key extractor
+    // (`IntegratorOrIpKeyExtractor`) needs the real peer address in
+    // `ConnectInfo`, which only `into_make_service_with_connect_info`
+    // populates — the plain `into_make_service()` this used to be leaves
+    // it unset.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("server error");
 }

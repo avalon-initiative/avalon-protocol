@@ -36,10 +36,14 @@ pub mod settlement;
 pub mod state;
 pub mod visibility;
 
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, Request};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use state::AppState;
+use tower::limit::ConcurrencyLimitLayer;
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::key_extractor::{KeyExtractor, PeerIpKeyExtractor};
+use tower_governor::{GovernorError, GovernorLayer};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -78,7 +82,67 @@ fn cors_layer_from_env() -> CorsLayer {
         ])
 }
 
+/// Issue #363, implementing #287's decision: hoster-configurable resource
+/// limits, every one defaulted so an unconfigured node behaves exactly as
+/// it always has — never "unlimited", never "fails to start".
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 256;
+const DEFAULT_RATE_LIMIT_PER_MINUTE: u64 = 600;
+
+fn max_concurrent_requests_from_env() -> usize {
+    std::env::var("AVALON_MAX_CONCURRENT_REQUESTS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
+}
+
+fn rate_limit_per_minute_from_env() -> u64 {
+    std::env::var("AVALON_RATE_LIMIT_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE)
+}
+
+/// Keyed by the calling integrator's own key id
+/// (`x-avalon-integrator-key-id`, the same header
+/// [`authz::authenticate_integrator`] reads) when present, so one
+/// integrator's traffic can't starve another's — falls back to peer IP for
+/// pre-auth endpoints (registration, login) that don't carry an integrator
+/// key yet. Requires the server to be served via
+/// `into_make_service_with_connect_info::<SocketAddr>()` (see `main.rs`)
+/// for the IP fallback to resolve to anything but an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IntegratorOrIpKeyExtractor;
+
+impl KeyExtractor for IntegratorOrIpKeyExtractor {
+    type Key = String;
+
+    fn extract<T>(&self, req: &Request<T>) -> Result<Self::Key, GovernorError> {
+        if let Some(key_id) = req
+            .headers()
+            .get("x-avalon-integrator-key-id")
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty())
+        {
+            return Ok(format!("integrator:{key_id}"));
+        }
+        PeerIpKeyExtractor.extract(req).map(|ip| format!("ip:{ip}"))
+    }
+}
+
 pub fn router(state: AppState) -> Router {
+    let max_concurrent_requests = max_concurrent_requests_from_env();
+    let rate_limit_per_minute = rate_limit_per_minute_from_env();
+    let governor_config = GovernorConfigBuilder::default()
+        .period(std::time::Duration::from_secs_f64(
+            60.0 / rate_limit_per_minute as f64,
+        ))
+        .burst_size(rate_limit_per_minute as u32)
+        .key_extractor(IntegratorOrIpKeyExtractor)
+        .finish()
+        .expect("per_minute is always > 0, so period/burst_size are always non-zero");
+
     Router::new()
         .route("/identities/register/start", post(handlers::register_start))
         .route(
@@ -514,4 +578,10 @@ pub fn router(state: AppState) -> Router {
         // without hand-threading a request id through every handler.
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer_from_env())
+        // Issue #363: concurrency backpressures (bounded wait), never
+        // silently drops a request without a response.
+        .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
+        // Issue #363: per-key GCRA rate limit, 429 + Retry-After past the
+        // configured ceiling — see `IntegratorOrIpKeyExtractor`.
+        .layer(GovernorLayer::new(governor_config))
 }

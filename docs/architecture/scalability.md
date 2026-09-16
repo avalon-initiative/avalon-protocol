@@ -78,6 +78,23 @@ as the hot/durable line holds. The parts that do scale with population — event
 volume, history size, read volume, presence fan-out — each have an independent
 lever, which is what the three verticals and the node roles exist to provide.
 
+## Resource limits (#287/#363)
+
+Nothing above touches per-process safety under load — a single
+`avalon-server` instance still needs floors that stop it from falling over
+under a burst, independent of whatever the durable-history scaling story
+eventually becomes. #287 decided the shape (four independently-configurable
+limits, all enforced in `avalon-server` itself, every one defaulted so an
+unconfigured node is exactly as safe as it always was); #363 is the
+implementation, real today: `AVALON_MAX_DB_CONNECTIONS` (Postgres pool
+size), `AVALON_MAX_CONCURRENT_REQUESTS` (`tower::limit::ConcurrencyLimitLayer`
+— backpressures, never drops), `AVALON_RATE_LIMIT_PER_MINUTE`
+(`tower_governor`, GCRA, keyed by integrator key id with an IP fallback for
+pre-auth endpoints — always `429` + `Retry-After`, never a silent drop or a
+generic `500`), and `AVALON_OUTBOX_POLL_INTERVAL_SECS` (drain cadence). See
+[`./nodes.md`](./nodes.md)'s own "Today in the repo" for the exact defaults
+and where each is wired.
+
 ## Today in the repo
 
 - Nothing is load-tested. Milestone 1 is one `avalon-server` process, one
@@ -108,3 +125,7 @@ lever, which is what the three verticals and the node roles exist to provide.
   and failover
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) presence is
   its own vertical
+- [#287](https://github.com/LunarVagabond/avalon-protocol/issues/287)
+  decided (hoster-configurable resource limits — see the section above),
+  implemented by
+  [#363](https://github.com/LunarVagabond/avalon-protocol/issues/363)
