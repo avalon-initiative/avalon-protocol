@@ -57,6 +57,12 @@ pub struct SignedTreeHeadResponse {
     pub signature: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Issue #368: this node's own build version — not part of the signed
+    /// bytes (see `signature`'s doc comment above; adding a field here
+    /// never changes what's cryptographically covered), purely a
+    /// compatibility/availability signal a peer's mirror-watcher checks
+    /// against its own `crate::version::MIN_SUPPORTED_PEER_VERSION` floor.
+    pub protocol_version: String,
 }
 
 impl From<SignedTreeHead> for SignedTreeHeadResponse {
@@ -68,6 +74,7 @@ impl From<SignedTreeHead> for SignedTreeHeadResponse {
             signing_key_id: sth.signing_key_id,
             signature: sth.signature,
             created_at: sth.created_at,
+            protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         }
     }
 }

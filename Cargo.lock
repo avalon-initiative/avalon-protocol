@@ -241,6 +241,7 @@ dependencies = [
  "public-suffix",
  "rand 0.10.2",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",

@@ -36,6 +36,7 @@ pub mod registry;
 pub mod retention;
 pub mod settlement;
 pub mod state;
+pub mod version;
 pub mod visibility;
 
 use axum::http::{HeaderValue, Method, Request};
@@ -577,6 +578,7 @@ pub fn router(state: AppState) -> Router {
         // sensitive the way ledger-write endpoints are.
         .route("/nodes/announce", post(nodes::announce))
         .route("/nodes/peers", get(nodes::list_peers))
+        .route("/nodes/status", get(nodes::status))
         .with_state(state)
         // Issue #265: every HTTP request gets a tracing span
         // (method/path/status/latency), and any `tracing::info!`/`error!`

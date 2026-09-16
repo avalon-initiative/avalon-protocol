@@ -217,11 +217,15 @@ verified regardless of what version either side claims. The same
 reasoning #40/#299 already apply to a single signed STH (never trusted
 without corroboration) applies here too.
 
-Concrete node-to-node version awareness, tracked as #368:
+Concrete node-to-node version awareness, implemented by #368
+(`crates/server/src/version.rs`):
 
-- The mirror-watcher's wire format carries a real version field; a decode
-  failure from a version mismatch becomes a clear "incompatible" log
-  signal instead of a raw panic.
+- The mirror-watcher's wire format carries a real version field
+  (`SignedTreeHeadDto.protocol_version`, additive/`#[serde(default)]` so
+  an older peer's response without it still decodes) — an incompatible
+  version becomes a clear `event = "incompatible_peer_version"` structured
+  log line and a distinct `MirrorWatcherError::IncompatiblePeerVersion`,
+  never a raw panic or an undifferentiated decode error.
 - **The version a node reports is a compile-time constant**
   (`PROTOCOL_VERSION`), never a runtime-settable env var — closes the
   trivial "just set a config value" spoofing path. Stated honestly: this
@@ -240,9 +244,16 @@ Concrete node-to-node version awareness, tracked as #368:
   reporting a passing version and is naturally re-admitted on its next
   announce/gossip cycle, no manual unban step. Raising the binary's own
   baked-in floor over time happens via a real, changelog-visible release,
-  never a silent default bump.
-- Node status/health output surfaces this node's own version and, when
-  known via peer gossip, a staleness flag.
+  never a silent default bump. `nodes::PeerTable::admit_if_supported` is
+  the one enforcement point, shared by `POST /nodes/announce`'s handler
+  and `nodes::run_worker`'s gossip merge — a below-floor peer is dropped
+  (logged, never upserted), not rejected outright the way a `network_id`
+  mismatch is.
+- `GET /nodes/status` surfaces this node's own `protocol_version` and,
+  when known via peer gossip (#362's peer table), a `stale` flag — `true`
+  when some known peer reports a *newer* version than this node's own. A
+  self-diagnostic "you may want to upgrade" signal only; nothing reads it
+  to change behavior.
 
 Opt-in auto-update
 for self-hosted nodes — the further step of a node acting on a newer
@@ -396,8 +407,11 @@ genuinely-incompatible-crypto-change case none of the above can cover.
 - [#292](https://github.com/LunarVagabond/avalon-protocol/issues/292)
   decided (node-to-node announce/bootstrap discovery design), implemented
   by [#362](https://github.com/LunarVagabond/avalon-protocol/issues/362) —
-  see the "Today in the repo" section above. [#368](https://github.com/LunarVagabond/avalon-protocol/issues/368)
-  tracks protocol version awareness gating this peer table.
+  see the "Today in the repo" section above. [#308](https://github.com/LunarVagabond/avalon-protocol/issues/308)
+  decided (version rollout design), implemented by
+  [#368](https://github.com/LunarVagabond/avalon-protocol/issues/368) —
+  protocol version awareness gating this peer table, see the "Version
+  rollout"/"Today in the repo" sections above.
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
   discovery and capability negotiation — could consume #362's peer table
   once it exists

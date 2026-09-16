@@ -159,6 +159,13 @@ pub enum MirrorWatcherError {
     AllPeersFailed,
     #[error("storage error: {0}")]
     Storage(#[from] avalon_chain::SettlementError),
+    /// Issue #368: distinguishable from [`Self::Decode`] on purpose — this
+    /// peer's response decoded just fine, it's the reported version that
+    /// doesn't clear this node's floor (or is empty/unparseable). Never a
+    /// panic, and reversible: the peer's next STH is re-checked fresh on
+    /// this node's next poll tick, so an upgrade is picked up automatically.
+    #[error("peer reported protocol_version {peer_version:?}, below this node's effective floor {floor}")]
+    IncompatiblePeerVersion { peer_version: String, floor: String },
 }
 
 #[derive(Deserialize)]
@@ -170,6 +177,13 @@ struct SignedTreeHeadDto {
     signature: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    /// Issue #368: additive (`#[serde(default)]`) so an older peer's
+    /// response without this field still decodes fine — it's reported as
+    /// an empty string, which `crate::version::is_supported` always
+    /// treats as unsupported (never given the benefit of the doubt), same
+    /// as a genuinely malformed version string.
+    #[serde(default)]
+    protocol_version: String,
 }
 
 impl From<SignedTreeHeadDto> for SignedTreeHead {
@@ -211,6 +225,32 @@ struct InclusionProofDto {
     proof: Vec<String>,
 }
 
+/// Pure check, split out for direct unit testing without a live peer:
+/// `Err` (never a panic) if `peer_protocol_version` doesn't clear this
+/// node's effective floor — logged as a clear, distinct "incompatible"
+/// event, whether the reported version is empty (an older peer, or a
+/// decode that fell back to `SignedTreeHeadDto`'s `#[serde(default)]`),
+/// unparseable, or simply below the floor.
+fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), MirrorWatcherError> {
+    if crate::version::is_supported(peer_protocol_version) {
+        return Ok(());
+    }
+    let floor = crate::version::effective_min_peer_version().to_string();
+    tracing::error!(
+        event = "incompatible_peer_version",
+        peer = %peer,
+        peer_version = %peer_protocol_version,
+        floor = %floor,
+        "peer's reported protocol_version is below this node's effective floor — not \
+         trusting this STH; this is a compatibility/availability signal only, never a \
+         security check, and is self-correcting once the peer upgrades",
+    );
+    Err(MirrorWatcherError::IncompatiblePeerVersion {
+        peer_version: peer_protocol_version.to_string(),
+        floor,
+    })
+}
+
 /// Fetches `peer`'s latest STH and verifies its signature — the one step
 /// every peer goes through in phase 1, regardless of what happens next.
 async fn fetch_and_verify_sth(
@@ -218,7 +258,9 @@ async fn fetch_and_verify_sth(
     verify_key: &VerifyingKey,
     peer: &str,
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
-    let sth = fetch_latest_sth(client, peer).await?;
+    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer).await?;
+    check_peer_version(peer, &peer_protocol_version)?;
+
     if !sth::verify_tree_head(verify_key, &sth) {
         tracing::error!(
             event = "sth_signature_invalid",
@@ -231,10 +273,14 @@ async fn fetch_and_verify_sth(
     Ok(sth)
 }
 
+/// Returns the decoded STH alongside the peer's separately-reported
+/// `protocol_version` — kept apart from [`SignedTreeHead`] itself (see
+/// `SignedTreeHeadDto`'s own doc comment): the version is never part of
+/// the signed payload.
 async fn fetch_latest_sth(
     client: &reqwest::Client,
     peer: &str,
-) -> Result<SignedTreeHead, MirrorWatcherError> {
+) -> Result<(SignedTreeHead, String), MirrorWatcherError> {
     let url = format!("{peer}/ledger/sth/latest");
     let dto: SignedTreeHeadDto = client
         .get(&url)
@@ -244,7 +290,8 @@ async fn fetch_latest_sth(
         .json()
         .await
         .map_err(|e| MirrorWatcherError::Decode(e.to_string()))?;
-    Ok(dto.into())
+    let protocol_version = dto.protocol_version.clone();
+    Ok((dto.into(), protocol_version))
 }
 
 /// Compares `observed` against every other observation this node has
@@ -750,6 +797,47 @@ async fn fetch_inclusion_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_peer_at_the_current_protocol_version_passes() {
+        assert!(check_peer_version("http://peer", crate::version::PROTOCOL_VERSION).is_ok());
+    }
+
+    #[test]
+    fn an_empty_peer_version_is_incompatible_not_a_panic() {
+        let err = check_peer_version("http://peer", "").unwrap_err();
+        assert!(matches!(
+            err,
+            MirrorWatcherError::IncompatiblePeerVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unparseable_peer_version_is_incompatible_not_a_panic() {
+        let err = check_peer_version("http://peer", "not-a-version").unwrap_err();
+        assert!(matches!(
+            err,
+            MirrorWatcherError::IncompatiblePeerVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn a_peer_version_below_the_floor_is_incompatible() {
+        let err = check_peer_version("http://peer", "0.0.1").unwrap_err();
+        match err {
+            MirrorWatcherError::IncompatiblePeerVersion {
+                peer_version,
+                floor,
+            } => {
+                assert_eq!(peer_version, "0.0.1");
+                assert_eq!(
+                    floor,
+                    crate::version::effective_min_peer_version().to_string()
+                );
+            }
+            other => panic!("expected IncompatiblePeerVersion, got {other:?}"),
+        }
+    }
 
     // Both cases live in one test (rather than two `#[test]` fns) because
     // `cargo test` runs tests in the same binary concurrently by default,
