@@ -72,6 +72,33 @@ impl PeerTable {
             .insert(info.base_url.clone(), info);
     }
 
+    /// Issue #368's floor enforcement, shared by `announce`'s handler and
+    /// `run_worker`'s gossip merge — the one place a `protocol_version`
+    /// claim has any actual effect. `info` below the effective floor is
+    /// dropped (logged, never upserted) instead of erroring: a version
+    /// claim is a compatibility/availability signal, never a security
+    /// gate (#308's cross-cutting invariant), so the worst case is a
+    /// self-inflicted, reversible availability loss — the same peer is
+    /// admitted normally the moment it reports an upgraded version.
+    /// Returns whether `info` was admitted, so a caller (like `announce`)
+    /// can decide whether to also log at its own call site.
+    pub fn admit_if_supported(&self, info: PeerInfo) -> bool {
+        if crate::version::is_supported(&info.protocol_version) {
+            self.upsert(info);
+            true
+        } else {
+            tracing::warn!(
+                event = "incompatible_peer_version",
+                peer = %info.base_url,
+                peer_version = %info.protocol_version,
+                floor = %crate::version::effective_min_peer_version(),
+                "peer's protocol_version is below this node's effective floor — not added to \
+                 the peer table; will be admitted normally once it upgrades",
+            );
+            false
+        }
+    }
+
     /// Every known peer except `exclude_base_url` — what `announce`
     /// returns to a caller (never echoing its own entry back to it).
     pub fn list_excluding(&self, exclude_base_url: &str) -> Vec<PeerInfo> {
@@ -131,6 +158,16 @@ pub struct AnnounceResponse {
 /// `POST /nodes/announce`. Rejects an announcement naming a different
 /// `network_id` than this node's own without touching the peer table —
 /// two different networks' peer tables must never merge.
+///
+/// Issue #368: a caller reporting a `protocol_version` below this node's
+/// effective floor is **not** rejected outright the way a `network_id`
+/// mismatch is — the request still succeeds and still gets this node's own
+/// peer list back (a version claim is a compatibility signal, never a
+/// security gate, per #308's cross-cutting invariant), but the caller
+/// itself is not upserted into the peer table / gossiped to others.
+/// Reversible and self-correcting: the same caller re-announcing with an
+/// upgraded version on its next cycle is admitted normally, no manual
+/// unban step.
 pub async fn announce(
     State(state): State<AppState>,
     Json(body): Json<AnnounceRequest>,
@@ -139,8 +176,9 @@ pub async fn announce(
         return Err(AppError::PeerNetworkMismatch);
     }
 
-    state.peers.upsert(PeerInfo {
-        base_url: body.base_url.clone(),
+    let caller_base_url = body.base_url.clone();
+    state.peers.admit_if_supported(PeerInfo {
+        base_url: body.base_url,
         roles: body.roles,
         protocol_version: body.protocol_version,
         network_id: body.network_id,
@@ -148,7 +186,7 @@ pub async fn announce(
     });
 
     Ok(Json(AnnounceResponse {
-        peers: state.peers.list_excluding(&body.base_url),
+        peers: state.peers.list_excluding(&caller_base_url),
     }))
 }
 
@@ -156,6 +194,50 @@ pub async fn announce(
 /// already requires for other read endpoints (see module docs).
 pub async fn list_peers(State(state): State<AppState>) -> Json<Vec<PeerInfo>> {
     Json(state.peers.list_all())
+}
+
+/// This node's own reported operational status — issue #368's "node
+/// status/health output... gains its own protocol version and, when known
+/// via peer gossip, a staleness flag." No such surface existed before this
+/// ticket (checked before assuming a new endpoint was needed, per the
+/// ticket body), so `/nodes/status` is it, alongside the peer table it
+/// reads from.
+#[derive(Debug, Serialize)]
+pub struct NodeStatusResponse {
+    pub protocol_version: String,
+    pub network_id: String,
+    /// `true` when some known peer (via #362's peer table) reports a
+    /// *newer* `protocol_version` than this node's own — a self-diagnostic
+    /// "you may want to upgrade" signal for the operator, never used to
+    /// gate anything: the version-floor exclusion above is the only place
+    /// a version claim has any actual effect.
+    pub stale: bool,
+    /// The newest `protocol_version` any known peer currently reports, if
+    /// any peer is known and its version parses.
+    pub newest_known_peer_version: Option<String>,
+}
+
+/// `GET /nodes/status` — read-only, same public posture as `list_peers`.
+pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
+    let own_version = semver::Version::parse(crate::version::PROTOCOL_VERSION).ok();
+    let newest_known_peer_version = state
+        .peers
+        .list_all()
+        .iter()
+        .filter_map(|p| semver::Version::parse(&p.protocol_version).ok())
+        .max();
+
+    let stale = match (&own_version, &newest_known_peer_version) {
+        (Some(own), Some(newest)) => newest > own,
+        _ => false,
+    };
+
+    Json(NodeStatusResponse {
+        protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+        network_id: state.chain.network_id().to_string(),
+        stale,
+        newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
+    })
 }
 
 /// This node's own outbound announce/bootstrap configuration.
@@ -296,7 +378,7 @@ pub async fn run_worker(
                     Ok(discovered) => {
                         for info in discovered {
                             if info.network_id == network_id {
-                                peers.upsert(info);
+                                peers.admit_if_supported(info);
                             }
                         }
                     }
@@ -324,7 +406,7 @@ async fn announce_to(
         .json(&AnnounceRequest {
             base_url: own_base_url.to_string(),
             roles: roles.to_vec(),
-            protocol_version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
             network_id: network_id.to_string(),
         })
         .send()
@@ -387,6 +469,50 @@ mod tests {
         let remaining = table.list_all();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].base_url, "http://fresh");
+    }
+
+    fn peer_with_version(base_url: &str, protocol_version: &str) -> PeerInfo {
+        PeerInfo {
+            base_url: base_url.to_string(),
+            roles: vec!["combined".to_string()],
+            protocol_version: protocol_version.to_string(),
+            network_id: "avalon-dev-local".to_string(),
+            last_announced_at: OffsetDateTime::now_utc(),
+        }
+    }
+
+    #[test]
+    fn a_peer_below_the_effective_floor_is_excluded_from_the_peer_table() {
+        let table = PeerTable::new();
+        let admitted = table.admit_if_supported(peer_with_version("http://old-peer", "0.0.1"));
+        assert!(!admitted);
+        assert!(table.list_all().is_empty());
+    }
+
+    #[test]
+    fn a_peer_at_or_above_the_effective_floor_is_included() {
+        let table = PeerTable::new();
+        let admitted = table.admit_if_supported(peer_with_version(
+            "http://current-peer",
+            crate::version::PROTOCOL_VERSION,
+        ));
+        assert!(admitted);
+        assert_eq!(table.list_all().len(), 1);
+    }
+
+    #[test]
+    fn a_peer_that_later_reports_an_upgraded_version_is_re_admitted() {
+        let table = PeerTable::new();
+        assert!(!table.admit_if_supported(peer_with_version("http://upgrading-peer", "0.0.1")));
+        assert!(table.list_all().is_empty());
+
+        assert!(table.admit_if_supported(peer_with_version(
+            "http://upgrading-peer",
+            crate::version::PROTOCOL_VERSION,
+        )));
+        let remaining = table.list_all();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].base_url, "http://upgrading-peer");
     }
 
     fn anchor(network_id: &str, seed_nodes: Vec<String>) -> avalon_sdk::network::TrustAnchorEntry {

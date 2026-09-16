@@ -78,3 +78,8 @@ proc-macro2 = "1"
 # not usable from a dependent crate) — a scoped, auto-cleaned temp file per
 # parse request is the plumbing for that, not a new persistent artifact.
 tempfile = "3"
+# Issue #368: real semver ordering for node-to-node protocol version
+# comparison (MIN_SUPPORTED_PEER_VERSION / AVALON_MIN_PEER_VERSION), rather
+# than string comparison — already present transitively (many crates in
+# this workspace depend on it), promoted to a direct dependency here.
+semver = "1"
