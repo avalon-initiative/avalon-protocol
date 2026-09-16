@@ -339,14 +339,13 @@ the actual code ever disagree, the code is right and this doc is stale.
   session-authenticated browse over the same already-public guild metadata
   — no membership requirement, and no new visibility tier: it's a
   browsable surface over data #20/#153 already made public, not a
-  privacy boundary of its own. **Milestone-1 stand-in**, explicitly: this
-  is a direct query against the `guilds`/`guild_members`/
-  `guild_integrator_associations` tables in `server`, not routed through
-  `crates/indexer`'s `guild_rosters` projection (#42, closed) — the same
-  pragmatic call #506 (open: retarget `friends.rs`/`guilds.rs`/
-  `connections.rs` reads onto the indexer) documents for reads generally.
-  When #506 lands, this endpoint's implementation should move onto the
-  indexer, unchanged at the HTTP surface.
+  privacy boundary of its own. As of #506, its membership-scoped
+  filters/counts read `indexer_guild_members` (`crates/indexer`'s
+  `guild_rosters` projection, #42) directly by table name rather than
+  through a dedicated read-model function — they're fragments of one
+  larger dynamically-composed `QueryBuilder` query
+  (`build_discover_query`), not standalone lookups a function call could
+  cleanly replace.
   - **Filters**: `q=` does a case-insensitive substring match across
     `name`/`tag`/`description`; `tag=` is an exact case-insensitive match
     (indexed via `crates/server/db/migrations/0021_guild_discovery_index`'s
@@ -367,7 +366,7 @@ the actual code ever disagree, the code is right and this doc is stale.
     guild's public metadata, which is exactly what this endpoint must not
     allow.
   - **Sort**: `newest` (default, `created_at DESC`), `alphabetical`
-    (`name ASC`), `most_members` (a `COUNT(*)` over `guild_members`,
+    (`name ASC`), `most_members` (a `COUNT(*)` over `indexer_guild_members`,
     `DESC`) — no "trending"/engagement ranking in milestone 1, deliberately
     (that's the kind of derived stat #96's minimum-cohort-size thinking
     would need to apply to first).
@@ -392,12 +391,11 @@ the actual code ever disagree, the code is right and this doc is stale.
   `GET /guilds/{id}/integrator-breakdown` (`crates/server/src/guilds.rs::game_breakdown`)
   returns, for a guild, how many current members hold an active
   [`IntegratorBinding`](./bindings.md) (#83) to each integrator they play —
-  computed on every read from `guild_members` JOIN `bindings`
-  (`ended_at IS NULL`) JOIN `integrators`, grouped by integrator. Same milestone-1
-  direct-query stand-in #154's discovery board already established
+  computed on every read from `indexer_guild_members` JOIN `bindings`
+  (`ended_at IS NULL`) JOIN `integrators`, grouped by integrator (#506). Same
+  direct-query-fragment posture #154's discovery board already established
   (`build_game_breakdown_query`, split out and unit-tested the same way
-  `build_discover_query` is), not routed through the indexer (#42, closed;
-  #506, open, is what would move reads like this onto it). No
+  `build_discover_query` is). No
   protocol event and no durable table backs the breakdown itself — it's
   derived/computed data, the same "hot state, not history" tier as
   presence (#57) and the discovery board, never touching

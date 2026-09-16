@@ -72,22 +72,21 @@ test's own module doc is explicit about, given today's wiring:
 - `profiles` is compared byte-for-byte against its real pre-rebuild state,
   since `handlers::register_finish`/`update_profile` already keep it live
   via the indexer (`identity.created`/`profile.updated`).
-- `indexer_friendships`/`indexer_guild_members` have no live writer to diff
-  against yet — `friends.rs`/`guilds.rs` still write their own separate
-  `friendships`/`guild_members` tables directly, and retargeting that is
-  [#44](https://github.com/LunarVagabond/avalon-protocol/issues/44)'s job.
-  The test instead asserts the rebuilt rows exactly match what the actions
-  taken should produce, plus that replaying the same history twice
+- `indexer_friendships`/`indexer_guild_members` are, as of
+  [#506](https://github.com/LunarVagabond/avalon-protocol/issues/506),
+  also kept live (`friends.rs`/`guilds.rs` no longer write the old
+  `friendships`/`guild_members` tables at all) — the test still asserts
+  the rebuilt rows exactly match what the actions taken should produce
+  (rather than folding them into the `profiles` byte-for-byte comparison),
+  plus that replaying the same history twice
   (`replay_onto_rebuilt_index_is_noop`) reproduces an identical snapshot.
 
-A related, real gap the rebuild test surfaced along the way: a guild's
-owner is never separately event-sourced into `indexer_guild_members` —
-`guild.created` isn't a kind `projections::guild_rosters::decode`
-recognizes, so ownership stays implied by that event's payload rather than
-producing its own roster row. Not a rebuild bug (the live-write path has
-the same gap, since nothing populates `indexer_guild_members` from
-`guild.created` either), but worth folding into #44's scope when it
-retargets this projection's write path.
+The gap this rebuild test originally surfaced — a guild's owner was never
+separately event-sourced into `indexer_guild_members`, since `guild.created`
+wasn't a kind `projections::guild_rosters::decode` recognized — is closed:
+`decode` now folds the owner's implicit membership (`role_index` 0) into
+the same upsert every other member row gets, so the projection has no gap
+between a guild's owner and its other members.
 
 ## What breaks today
 

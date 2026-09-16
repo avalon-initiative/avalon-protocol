@@ -4,6 +4,7 @@
 //! `guilds-implementation-log.md`'s "Today in the repo" for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
+use avalon_indexer::projections::guild_rosters;
 use avalon_protocol::event_payloads::{
     GuildCreatedPayload, GuildFavoriteGamesUpdatedPayload, GuildGameAssociatedPayload,
     GuildMemberAddedPayload, GuildMemberRemovedPayload, GuildOwnerTransferredPayload,
@@ -142,24 +143,22 @@ pub(crate) async fn actor_role(
     guild_id: Uuid,
     actor: Uuid,
 ) -> Result<Option<(i32, Vec<String>)>, AppError> {
-    let row = sqlx::query(
-        r#"
-        SELECT gr.name_index, gr.permissions FROM guild_members gm
-        JOIN guild_roles gr ON gr.guild_id = gm.guild_id AND gr.name_index = gm.role_index
-        WHERE gm.guild_id = $1 AND gm.identity_id = $2
-        "#,
+    // Issue #506: the membership half reads `indexer_guild_members` via the
+    // read model; `guild_roles` (role definitions/permissions) stays
+    // server-owned data, not part of this projection, so this is two
+    // queries rather than the old single JOIN.
+    let Some(role_index) = guild_rosters::role_index_for(&state.pool, guild_id, actor).await?
+    else {
+        return Ok(None);
+    };
+    let permissions: Option<Vec<String>> = sqlx::query_scalar(
+        "SELECT permissions FROM guild_roles WHERE guild_id = $1 AND name_index = $2",
     )
     .bind(guild_id)
-    .bind(actor)
+    .bind(role_index)
     .fetch_optional(&state.pool)
     .await?;
-    match row {
-        Some(row) => Ok(Some((
-            row.try_get("name_index")?,
-            row.try_get("permissions")?,
-        ))),
-        None => Ok(None),
-    }
+    Ok(permissions.map(|permissions| (role_index, permissions)))
 }
 
 /// The override row's `allow` value for an exact (role, resource,
@@ -649,12 +648,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
         integrators.push(row.try_get("integrator_id")?);
     }
 
-    let member_count_row =
-        sqlx::query("SELECT COUNT(*) AS count FROM guild_members WHERE guild_id = $1")
-            .bind(guild.id)
-            .fetch_one(&state.pool)
-            .await?;
-    let member_count: i64 = member_count_row.try_get("count")?;
+    let member_count = guild_rosters::member_count(&state.pool, guild.id).await?;
 
     let favorite_games = fetch_favorite_games(state, guild.id).await?;
 
@@ -744,21 +738,6 @@ pub async fn create_guild(
         .await?;
     }
 
-    // The owner gets a `guild_members` row too (role_index 0) — see issue
-    // #21's design note: #20 couldn't do this because this table didn't
-    // exist yet. Folded into `guild.created`'s existing event rather than
-    // a separate `guild.member_added`; owner membership is implied by
-    // guild creation itself, not a distinct durable fact.
-    sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(guild_id)
-    .bind(actor)
-    .bind(OWNER_ROLE_INDEX)
-    .bind(created_at)
-    .execute(&mut *tx)
-    .await?;
-
     // Issue #22: every guild gets a default `general` channel on creation.
     // Deliberately just the row insert here, no `guild.channel_created`
     // event — see `crates/server/src/channels.rs`'s module doc comment for
@@ -786,6 +765,12 @@ pub async fn create_guild(
         timestamp: created_at,
         version: 1,
     };
+    // Owner membership (role_index 0) is derived from this same event —
+    // see `avalon_indexer::projections::guild_rosters`'s module doc comment
+    // (issue #506): folded into `guild.created` rather than a separate
+    // `guild.member_added`, since owner membership is implied by guild
+    // creation itself, not a distinct durable fact.
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -1041,21 +1026,10 @@ pub(crate) async fn actor_role_permissions(
     guild_id: Uuid,
     actor: Uuid,
 ) -> Result<Vec<String>, AppError> {
-    let row = sqlx::query(
-        r#"
-        SELECT gr.permissions FROM guild_members gm
-        JOIN guild_roles gr ON gr.guild_id = gm.guild_id AND gr.name_index = gm.role_index
-        WHERE gm.guild_id = $1 AND gm.identity_id = $2
-        "#,
-    )
-    .bind(guild_id)
-    .bind(actor)
-    .fetch_optional(&state.pool)
-    .await?;
-    match row {
-        Some(row) => Ok(row.try_get("permissions")?),
-        None => Ok(Vec::new()),
-    }
+    Ok(actor_role(state, guild_id, actor)
+        .await?
+        .map(|(_, permissions)| permissions)
+        .unwrap_or_default())
 }
 
 #[derive(Serialize)]
@@ -1400,22 +1374,21 @@ pub async fn delete_role(
 
     let mut tx = state.pool.begin().await?;
 
-    // `guild_members(guild_id, role_index)` has a (deliberately ON DELETE
-    // RESTRICT, i.e. plain) foreign key into this table — a member still
-    // holding this role blocks the delete at the database level rather
-    // than needing an app-side existence check first (and a second
-    // round trip) that could race a concurrent role change.
+    // Issue #506: `indexer_guild_members` has no foreign key into
+    // `guild_roles` (see that projection's own module doc comment), unlike
+    // the old `guild_members` table this used to rely on for this check at
+    // the database level — so a member still holding this role is checked
+    // explicitly here, inside the same transaction as the delete, to avoid
+    // racing a concurrent role change.
+    if guild_rosters::any_member_with_role(&mut *tx, guild_id, name_index).await? {
+        return Err(AppError::RoleHasMembers);
+    }
+
     let deleted = sqlx::query("DELETE FROM guild_roles WHERE guild_id = $1 AND name_index = $2")
         .bind(guild_id)
         .bind(name_index)
         .execute(&mut *tx)
-        .await;
-    if let Err(sqlx::Error::Database(db_err)) = &deleted {
-        if db_err.is_foreign_key_violation() {
-            return Err(AppError::RoleHasMembers);
-        }
-    }
-    let deleted = deleted?;
+        .await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::GuildRoleNotFound);
     }
@@ -1839,15 +1812,9 @@ async fn member_role_index(
     guild_id: Uuid,
     identity_id: Uuid,
 ) -> Result<i32, AppError> {
-    let row = sqlx::query(
-        "SELECT role_index FROM guild_members WHERE guild_id = $1 AND identity_id = $2",
-    )
-    .bind(guild_id)
-    .bind(identity_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotGuildMember)?;
-    Ok(row.try_get("role_index")?)
+    guild_rosters::role_index_for(&state.pool, guild_id, identity_id)
+        .await?
+        .ok_or(AppError::NotGuildMember)
 }
 
 #[derive(Deserialize)]
@@ -1892,13 +1859,7 @@ pub async fn create_invite(
         return Err(AppError::IdentityNotFound);
     }
 
-    let already_member =
-        sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-            .bind(guild_id)
-            .bind(body.to)
-            .fetch_optional(&state.pool)
-            .await?;
-    if already_member.is_some() {
+    if guild_rosters::is_member(&state.pool, guild_id, body.to).await? {
         return Err(AppError::AlreadyGuildMember);
     }
 
@@ -2020,12 +1981,21 @@ async fn fetch_pending_invite(
     })
 }
 
-/// Inserts `identity_id` into `guild_members` at `role_index` and enqueues
-/// the durable `guild.member_added` event, in the given transaction. The
-/// one membership-add code path, shared by [`accept_invite`],
-/// [`join_guild`], and [`approve_join_request`] (issue #242) so approving a
-/// join request can't drift from what invites/direct-join already do.
+/// Upserts `identity_id` into `indexer_guild_members` at `role_index` and
+/// enqueues the durable `guild.member_added` event, in the given
+/// transaction. The one membership-add code path, shared by
+/// [`accept_invite`], [`join_guild`], and [`approve_join_request`] (issue
+/// #242) so approving a join request can't drift from what invites/
+/// direct-join already do.
+///
+/// A real correctness check, not just advisory (issue #506): the indexer's
+/// own upsert is idempotent (`ON CONFLICT ... DO UPDATE`), so it can't by
+/// itself signal "was already a member" the way the old table's unique
+/// violation did — this reads `guild_rosters::is_member` first, inside the
+/// same transaction, so the check and the write can't race against each
+/// other via another request.
 async fn add_member(
+    indexer: &avalon_indexer::postgres::PostgresIndexer,
     tx: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: Uuid,
     identity_id: Uuid,
@@ -2033,23 +2003,11 @@ async fn add_member(
     actor: Uuid,
     via: &str,
 ) -> Result<OffsetDateTime, AppError> {
-    let joined_at = OffsetDateTime::now_utc();
-    let inserted = sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(guild_id)
-    .bind(identity_id)
-    .bind(role_index)
-    .bind(joined_at)
-    .execute(&mut **tx)
-    .await;
-    if let Err(sqlx::Error::Database(db_err)) = &inserted {
-        if db_err.is_unique_violation() {
-            return Err(AppError::AlreadyGuildMember);
-        }
+    if guild_rosters::is_member(&mut **tx, guild_id, identity_id).await? {
+        return Err(AppError::AlreadyGuildMember);
     }
-    inserted?;
 
+    let joined_at = OffsetDateTime::now_utc();
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::GuildMemberAdded
@@ -2068,6 +2026,7 @@ async fn add_member(
         timestamp: joined_at,
         version: 1,
     };
+    indexer.apply_in_tx(tx, &event).await?;
     outbox::enqueue(tx, &event).await?;
 
     Ok(joined_at)
@@ -2099,8 +2058,16 @@ pub async fn accept_invite(
         return Err(AppError::GuildInviteNotFound);
     }
 
-    let joined_at =
-        add_member(&mut tx, guild_id, actor, MEMBER_ROLE_INDEX, actor, "invite").await?;
+    let joined_at = add_member(
+        &state.indexer,
+        &mut tx,
+        guild_id,
+        actor,
+        MEMBER_ROLE_INDEX,
+        actor,
+        "invite",
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -2147,7 +2114,16 @@ pub async fn join_guild(
 
     let mut tx = state.pool.begin().await?;
 
-    let joined_at = add_member(&mut tx, guild_id, actor, MEMBER_ROLE_INDEX, actor, "join").await?;
+    let joined_at = add_member(
+        &state.indexer,
+        &mut tx,
+        guild_id,
+        actor,
+        MEMBER_ROLE_INDEX,
+        actor,
+        "join",
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -2173,12 +2149,12 @@ pub async fn leave_guild(
 
     let mut tx = state.pool.begin().await?;
 
-    let removed = sqlx::query("DELETE FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-        .bind(guild_id)
-        .bind(actor)
-        .execute(&mut *tx)
-        .await?;
-    if removed.rows_affected() == 0 {
+    // Issue #506: `guild_rosters::apply`'s `DELETE` is idempotent (no
+    // rows-affected signal), so the "are they even a member" check reads
+    // the roster explicitly first, inside this same transaction — same
+    // pattern `friends.rs::remove_friend` established for
+    // `friendship_reads::are_friends`.
+    if !guild_rosters::is_member(&mut *tx, guild_id, actor).await? {
         return Err(AppError::NotGuildMember);
     }
 
@@ -2244,6 +2220,7 @@ pub async fn leave_guild(
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -2271,12 +2248,7 @@ pub async fn remove_member(
 
     let mut tx = state.pool.begin().await?;
 
-    let removed = sqlx::query("DELETE FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-        .bind(guild_id)
-        .bind(identity_id)
-        .execute(&mut *tx)
-        .await?;
-    if removed.rows_affected() == 0 {
+    if !guild_rosters::is_member(&mut *tx, guild_id, identity_id).await? {
         return Err(AppError::NotGuildMember);
     }
 
@@ -2297,6 +2269,7 @@ pub async fn remove_member(
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -2380,13 +2353,7 @@ pub async fn create_join_request(
         validate_join_request_message(message)?;
     }
 
-    let already_member =
-        sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-            .bind(guild_id)
-            .bind(actor)
-            .fetch_optional(&state.pool)
-            .await?;
-    if already_member.is_some() {
+    if guild_rosters::is_member(&state.pool, guild_id, actor).await? {
         return Err(AppError::AlreadyGuildMember);
     }
 
@@ -2581,6 +2548,7 @@ pub async fn approve_join_request(
     }
 
     let joined_at = add_member(
+        &state.indexer,
         &mut tx,
         guild_id,
         request.applicant,
@@ -2704,25 +2672,14 @@ pub async fn update_member_role(
 
     let mut tx = state.pool.begin().await?;
 
-    let updated = sqlx::query(
-        "UPDATE guild_members SET role_index = $3 WHERE guild_id = $1 AND identity_id = $2",
-    )
-    .bind(guild_id)
-    .bind(identity_id)
-    .bind(body.role_index)
-    .execute(&mut *tx)
-    .await?;
-    if updated.rows_affected() == 0 {
+    // Issue #506: `guild_rosters::apply`'s `ON CONFLICT ... DO UPDATE` is
+    // silently a no-op for a non-member, so the "are they even a member"
+    // check (and the `joined_at` the response needs, which the upsert
+    // deliberately leaves untouched) reads the roster explicitly first.
+    let Some(joined_at) = guild_rosters::joined_at_for(&mut *tx, guild_id, identity_id).await?
+    else {
         return Err(AppError::NotGuildMember);
-    }
-
-    let joined_at_row =
-        sqlx::query("SELECT joined_at FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-            .bind(guild_id)
-            .bind(identity_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    let joined_at: OffsetDateTime = joined_at_row.try_get("joined_at")?;
+    };
 
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
@@ -2741,6 +2698,7 @@ pub async fn update_member_role(
         timestamp: OffsetDateTime::now_utc(),
         version: 1,
     };
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
@@ -2787,22 +2745,17 @@ pub async fn list_members(
         }
     }
 
-    let rows = sqlx::query(
-        "SELECT guild_id, identity_id, role_index, joined_at FROM guild_members WHERE guild_id = $1 ORDER BY joined_at",
-    )
-    .bind(guild_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let rows = guild_rosters::roster(&state.pool, guild_id).await?;
 
-    let mut members = Vec::with_capacity(rows.len());
-    for row in rows {
-        members.push(GuildMemberResponse {
-            guild_id: row.try_get("guild_id")?,
-            identity_id: row.try_get("identity_id")?,
-            role_index: row.try_get("role_index")?,
-            joined_at: row.try_get("joined_at")?,
-        });
-    }
+    let members = rows
+        .into_iter()
+        .map(|row| GuildMemberResponse {
+            guild_id,
+            identity_id: row.identity_id,
+            role_index: row.role_index,
+            joined_at: row.joined_at,
+        })
+        .collect();
     Ok(Json(members))
 }
 
@@ -2820,21 +2773,16 @@ pub async fn list_my_guilds(
 ) -> Result<Json<Vec<MyGuildMembershipResponse>>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
-    let rows = sqlx::query(
-        "SELECT guild_id, role_index, joined_at FROM guild_members WHERE identity_id = $1 ORDER BY joined_at",
-    )
-    .bind(identity_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let rows = guild_rosters::memberships_for(&state.pool, identity_id).await?;
 
-    let mut memberships = Vec::with_capacity(rows.len());
-    for row in rows {
-        memberships.push(MyGuildMembershipResponse {
-            guild_id: row.try_get("guild_id")?,
-            role_index: row.try_get("role_index")?,
-            joined_at: row.try_get("joined_at")?,
-        });
-    }
+    let memberships = rows
+        .into_iter()
+        .map(|row| MyGuildMembershipResponse {
+            guild_id: row.guild_id,
+            role_index: row.role_index,
+            joined_at: row.joined_at,
+        })
+        .collect();
     Ok(Json(memberships))
 }
 
@@ -2936,7 +2884,7 @@ fn build_discover_query(
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT g.id, g.name, g.tag, g.description, g.recruiting, g.created_at, \
          g.banner, g.icon, \
-         (SELECT COUNT(*) FROM guild_members gm WHERE gm.guild_id = g.id) AS member_count \
+         (SELECT COUNT(*) FROM indexer_guild_members gm WHERE gm.guild_id = g.id) AS member_count \
          FROM guilds g WHERE 1 = 1",
     );
 
@@ -2957,14 +2905,14 @@ fn build_discover_query(
         }
         Some(false) => {
             builder.push(
-                " AND g.recruiting = false AND g.id IN (SELECT guild_id FROM guild_members WHERE identity_id = ",
+                " AND g.recruiting = false AND g.id IN (SELECT guild_id FROM indexer_guild_members WHERE identity_id = ",
             );
             builder.push_bind(actor);
             builder.push(")");
         }
         None => {
             builder.push(
-                " AND (g.recruiting = true OR g.id IN (SELECT guild_id FROM guild_members WHERE identity_id = ",
+                " AND (g.recruiting = true OR g.id IN (SELECT guild_id FROM indexer_guild_members WHERE identity_id = ",
             );
             builder.push_bind(actor);
             builder.push("))");
@@ -3000,8 +2948,8 @@ fn build_discover_query(
             }
             DiscoverSort::MostMembers => {
                 builder.push(
-                    " AND ((SELECT COUNT(*) FROM guild_members gm2 WHERE gm2.guild_id = g.id), g.id) < \
-                     ((SELECT COUNT(*) FROM guild_members WHERE guild_id = ",
+                    " AND ((SELECT COUNT(*) FROM indexer_guild_members gm2 WHERE gm2.guild_id = g.id), g.id) < \
+                     ((SELECT COUNT(*) FROM indexer_guild_members WHERE guild_id = ",
                 );
                 builder.push_bind(cursor_id);
                 builder.push("), ");
@@ -3137,7 +3085,7 @@ fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT b.integrator_id, g.slug AS integrator_slug, g.name AS integrator_name, \
          COUNT(DISTINCT b.identity_id) AS member_count \
-         FROM guild_members gm \
+         FROM indexer_guild_members gm \
          JOIN bindings b ON b.identity_id = gm.identity_id AND b.ended_at IS NULL \
          JOIN integrators g ON g.id = b.integrator_id \
          WHERE gm.guild_id = ",
@@ -3180,12 +3128,7 @@ pub async fn game_breakdown(
         return Err(AppError::MissingGuildPermission);
     }
 
-    let total_members_row =
-        sqlx::query("SELECT COUNT(*) AS count FROM guild_members WHERE guild_id = $1")
-            .bind(guild_id)
-            .fetch_one(&state.pool)
-            .await?;
-    let total_members: i64 = total_members_row.try_get("count")?;
+    let total_members = guild_rosters::member_count(&state.pool, guild_id).await?;
 
     let mut builder = build_game_breakdown_query(guild_id);
     let rows = builder.build().fetch_all(&state.pool).await?;
@@ -3920,7 +3863,7 @@ mod tests {
         let sql = builder.sql();
         let sql = sql.as_str();
         assert!(sql.contains("g.recruiting = true"));
-        assert!(!sql.contains("g.id IN (SELECT guild_id FROM guild_members"));
+        assert!(!sql.contains("g.id IN (SELECT guild_id FROM indexer_guild_members"));
     }
 
     /// `recruiting=false` must NOT be a raw exact filter — that would let a
@@ -3937,7 +3880,8 @@ mod tests {
         let sql = builder.sql();
         let sql = sql.as_str();
         assert!(sql.contains("g.recruiting = false"));
-        assert!(sql.contains("g.id IN (SELECT guild_id FROM guild_members WHERE identity_id = "));
+        assert!(sql
+            .contains("g.id IN (SELECT guild_id FROM indexer_guild_members WHERE identity_id = "));
     }
 
     #[test]

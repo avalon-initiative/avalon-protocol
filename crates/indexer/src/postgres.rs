@@ -131,7 +131,10 @@ impl PostgresIndexer {
                     friendships::apply(tx, &write).await?;
                 }
             }
-            "guild.member_added" | "guild.member_removed" | "guild.role_changed" => {
+            "guild.created"
+            | "guild.member_added"
+            | "guild.member_removed"
+            | "guild.role_changed" => {
                 if let Some(write) = guild_rosters::decode(event) {
                     guild_rosters::apply(tx, &write).await?;
                 }

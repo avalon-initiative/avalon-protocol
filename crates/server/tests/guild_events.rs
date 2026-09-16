@@ -51,7 +51,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 
 async fn seed_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid, role_index: i32) {
     sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
+        "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, $3, now())",
     )
     .bind(guild_id)
@@ -76,9 +76,9 @@ fn unique_guild_body() -> serde_json::Value {
 }
 
 /// Creates a guild as `owner_token`'s identity and returns the guild id.
-/// `POST /guilds` already makes the creator a real owner `guild_members`
+/// `POST /guilds` already makes the creator a real owner `indexer_guild_members`
 /// row atomically (`guilds::create_guild`) — no separate seed needed, and
-/// seeding it again would collide on `guild_members`'s `(guild_id,
+/// seeding it again would collide on `indexer_guild_members`'s `(guild_id,
 /// identity_id)` primary key.
 async fn create_guild_with_owner(http: &reqwest::Client, base: &str, owner_token: &str) -> String {
     let create = auth(http.post(format!("{base}/guilds")), owner_token)

@@ -2,11 +2,11 @@
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 //!
-//! `seed_membership` inserts directly into `guild_members` for a
+//! `seed_membership` inserts directly into `indexer_guild_members` for a
 //! non-owner role; the owner role is never seeded that way since
-//! `POST /guilds` already creates a real owner `guild_members` row
+//! `POST /guilds` already creates a real owner `indexer_guild_members` row
 //! atomically (`guilds::create_guild`) — seeding it again would collide on
-//! `guild_members`'s `(guild_id, identity_id)` primary key.
+//! `indexer_guild_members`'s `(guild_id, identity_id)` primary key.
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -52,12 +52,12 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
-/// Seeds a `guild_members` row directly — see module doc comment. `owner`
+/// Seeds an `indexer_guild_members` row directly — see module doc comment. `owner`
 /// role index 0, `officer` 1, `member` 2, matching `guilds.rs`'s starter
 /// roles.
 async fn seed_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid, role_index: i32) {
     sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
+        "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, $3, now())",
     )
     .bind(guild_id)
@@ -135,7 +135,7 @@ async fn guild_creation_seeds_a_default_general_channel() {
 /// creator as an owner-role member (so subsequent membership-gated calls
 /// succeed), and returns `(guild_id, general_channel_id)`.
 /// `create_guild_with_general_channel` already makes the caller a real
-/// `guild_members` owner row — this is just that call under a name matching
+/// `indexer_guild_members` owner row — this is just that call under a name matching
 /// what most tests below actually want ("a guild that already has its
 /// owner seeded"), not a second, redundant membership insert.
 async fn seed_membership_and_guild(

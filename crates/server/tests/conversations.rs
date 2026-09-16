@@ -57,7 +57,7 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 /// `a < b` — ordered here rather than trusting caller order.
 async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
-    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
         .bind(b)
         .execute(pool)
@@ -94,10 +94,10 @@ async fn create_guild(client: &reqwest::Client, owner_token: &str) -> Uuid {
     Uuid::parse_str(created["id"].as_str().expect("expected guild id")).expect("guild id is a UUID")
 }
 
-/// Seeds a `guild_members` row directly at the `member` role (index 2).
+/// Seeds an `indexer_guild_members` row directly at the `member` role (index 2).
 async fn seed_guild_membership(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
     sqlx::query(
-        "INSERT INTO guild_members (guild_id, identity_id, role_index, joined_at) \
+        "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
          VALUES ($1, $2, 2, now())",
     )
     .bind(guild_id)

@@ -117,19 +117,30 @@ a first-class scaling dimension — see
   `ledger_entries` via `PostgresSettlementProvider::list_entries_for_issuer_prefix`,
   since it serves the raw historical log itself, not current state — see
   that function's own doc comment.
-- `friendships`, `guild_rosters`, and `attestations` still write their own
-  new tables (`indexer_friendships`, `indexer_guild_members`,
-  `indexer_attestations` — `crates/server/db/migrations/0015_indexer_projections`)
-  rather than the existing `friendships`/`guild_members` tables
-  `crates/server/src/friends.rs`/`guilds.rs` still write directly at
-  request time — #44 only closed the `profiles` slice. Retargeting those
-  write paths — so those modules stop writing them and server reads go
-  through the indexer instead — is still open scope; writing both paths
-  into the same table now would immediately create two writers of one
-  projection, which is exactly the shape this ticket's own invariant
-  forbids. `attestations` has no producer yet (achievement issuing, Epic
-  #30, isn't built) — its `decode`/`apply` are proven by fixture events
-  only, ready for #30 to start emitting into.
+- `friendships` and `guild_rosters` are, as of #506, the live read/write
+  path for the social graph and guild rosters, not just a rebuild target:
+  `friends.rs`/`guilds.rs` no longer write or read the old `friendships`/
+  `guild_members` tables at all (`crates/server/db/migrations/0004_social_graph`,
+  `.../0009_guild_membership` — both now dead, kept only until a follow-up
+  migration drops them once nothing references them, per that ticket's own
+  design). Writes go through `state.indexer.apply_in_tx` with the same
+  `friend.accepted`/`.removed` and `guild.member_added`/`.member_removed`/
+  `.role_changed` events enqueued into the outbox, in the same transaction.
+  Reads go through `avalon_indexer::projections::{friendships,guild_rosters}`'s
+  functions (`are_friends`/`partners_of`/`friends_of_any`;
+  `role_index_for`/`is_member`/`roster`/`memberships_for`/`member_count`/
+  `any_member_with_role`/`mutual_members`), generic over `sqlx::PgExecutor`
+  same as `profiles`. `guild_rosters::decode` also recognizes `guild.created`
+  now, folding the owner's implicit membership (`role_index` 0) into the
+  same upsert every other member row gets — closing the gap #43's rebuild
+  test surfaced, where a guild's owner never had a durable roster row of
+  their own. `crates/server/tests/read_model_boundary.rs` extends its
+  source-text guard to both modules. `guild_roles` (role definitions/
+  permissions) and `bindings`/`permission_grants` (`connections.rs`) stay
+  outside this projection on purpose — they're genuinely server-owned data,
+  not "two writers of one projection." `attestations` has no producer yet
+  (achievement issuing, Epic #30, isn't built) — its `decode`/`apply` are
+  proven by fixture events only, ready for #30 to start emitting into.
 - **Rebuild-from-events is real** (#43): `avalon rebuild-index`
   (`avalon_server::rebuild::rebuild_index_from_ledger`) truncates every
   table in `avalon_indexer::postgres::PROJECTION_TABLES` and replays all of
@@ -152,7 +163,11 @@ a first-class scaling dimension — see
   rebuild-from-events + idempotency guarantee
 - #44 server reads go through the indexer, not the ledger — the `profiles`
   slice (`me`/`get_identity_profile`/`list_profiles`/taken-name checks) is
-  closed; `friends.rs`/`guilds.rs` still write their own tables directly
+  closed
+- [#506](https://github.com/LunarVagabond/avalon-protocol/issues/506)
+  retargeted `friends.rs`/`guilds.rs` onto the indexer's `friendships`/
+  `guild_rosters` projections, the same shape #44 established for
+  `profiles` — closed
 - [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) integrator
   registry read model
 - #75 durable history is canonical;

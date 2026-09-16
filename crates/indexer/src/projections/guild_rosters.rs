@@ -1,24 +1,41 @@
-//! Guild roster read model, built from `guild.member_added`,
-//! `guild.member_removed`, and `guild.role_changed`.
+//! Guild roster read model, built from `guild.created` (the owner's implicit
+//! membership), `guild.member_added`, `guild.member_removed`, and
+//! `guild.role_changed`.
 //!
 //! Its own `indexer_guild_members` table
-//! (`crates/server/db/migrations/0015_indexer_projections`), for the same
-//! reason [`super::friendships`] isn't `crates/server`'s existing
-//! `guild_members` table (`crates/server/db/migrations/0009_guild_membership`,
-//! written directly by `crates/server/src/guilds.rs`): retargeting that
-//! write path is issue #506's job, and reusing the same table now would mean
-//! two writers, violating this ticket's own invariant. Unlike the server's
-//! `guild_members` table, this one has no foreign key into `guild_roles` —
-//! the indexer decodes payload independently of whether a locally-known
-//! `guild_roles` row exists for `role_index` (`docs/architecture/query-and-indexing.md`:
-//! "the indexer consumes protocol semantics; it never redefines them").
+//! (`crates/server/db/migrations/0015_indexer_projections`). Issue #506
+//! retargeted `crates/server/src/guilds.rs` onto this table: it no longer
+//! writes `crates/server`'s prior `guild_members` table
+//! (`crates/server/db/migrations/0009_guild_membership`) directly, and its
+//! own membership/role reads go through [`role_index_for`], [`roster`], and
+//! [`memberships_for`] below (generic over `sqlx::PgExecutor`, same pattern
+//! [`super::profiles::fetch`]/[`super::friendships::are_friends`] already
+//! established). Unlike the server's old `guild_members` table, this one has
+//! no foreign key into `guild_roles` — the indexer decodes payload
+//! independently of whether a locally-known `guild_roles` row exists for
+//! `role_index` (`docs/architecture/query-and-indexing.md`: "the indexer
+//! consumes protocol semantics; it never redefines them").
+//!
+//! `guild.created` gets its own [`decode`] case (issue #43's rebuild test
+//! surfaced this gap, closed by #506): a guild's owner is never issued a
+//! separate `guild.member_added`, since guild creation already carries
+//! `owner` in its own payload (see `worked-ledger-example.md`) — decoding it
+//! here into the same `role_index = 0` (owner) upsert every other member row
+//! gets means the roster is complete without every reader having to special-
+//! case `guilds.owner` on top of it. This is a roster-*completeness* fix,
+//! not a permissions one: `crate::server::guilds::has_guild_permission`
+//! checks `actor == guild_owner` directly against the `guilds.owner` column
+//! and never consulted `guild_members`/`indexer_guild_members` for the owner
+//! case in the first place.
 
 use avalon_protocol::events::ProtocolEvent;
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgExecutor, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::IndexError;
+
+const OWNER_ROLE_INDEX: i32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuildRosterWrite {
@@ -44,6 +61,16 @@ fn role_index(payload: &serde_json::Value) -> Option<i32> {
 
 pub fn decode(event: &ProtocolEvent) -> Option<GuildRosterWrite> {
     match event.kind.as_str() {
+        "guild.created" => {
+            let guild_id = super::uuid_field(&event.payload, "guild_id")?;
+            let owner = super::uuid_field(&event.payload, "owner")?;
+            Some(GuildRosterWrite::Upsert {
+                guild_id,
+                identity_id: owner,
+                role_index: OWNER_ROLE_INDEX,
+                joined_at: event.timestamp,
+            })
+        }
         "guild.member_added" | "guild.role_changed" => {
             let guild_id = super::uuid_field(&event.payload, "guild_id")?;
             let identity_id = super::uuid_field(&event.payload, "identity_id")?;
@@ -106,6 +133,198 @@ pub async fn apply(
     Ok(())
 }
 
+/// `identity_id`'s current `role_index` in `guild_id`, or `None` if they
+/// aren't currently a member.
+pub async fn role_index_for<'e, E>(
+    executor: E,
+    guild_id: Uuid,
+    identity_id: Uuid,
+) -> Result<Option<i32>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let role_index: Option<i32> = sqlx::query_scalar(
+        "SELECT role_index FROM indexer_guild_members WHERE guild_id = $1 AND identity_id = $2",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(role_index)
+}
+
+/// `identity_id`'s current `joined_at` in `guild_id`, or `None` if they
+/// aren't currently a member — the `joined_at` half of [`role_index_for`],
+/// kept separate rather than always fetching both since most call sites
+/// only need one or the other.
+pub async fn joined_at_for<'e, E>(
+    executor: E,
+    guild_id: Uuid,
+    identity_id: Uuid,
+) -> Result<Option<OffsetDateTime>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let joined_at: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT joined_at FROM indexer_guild_members WHERE guild_id = $1 AND identity_id = $2",
+    )
+    .bind(guild_id)
+    .bind(identity_id)
+    .fetch_optional(executor)
+    .await?;
+    Ok(joined_at)
+}
+
+/// Whether `identity_id` is currently a member of `guild_id`.
+pub async fn is_member<'e, E>(
+    executor: E,
+    guild_id: Uuid,
+    identity_id: Uuid,
+) -> Result<bool, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    Ok(role_index_for(executor, guild_id, identity_id)
+        .await?
+        .is_some())
+}
+
+/// Current member count of `guild_id`.
+pub async fn member_count<'e, E>(executor: E, guild_id: Uuid) -> Result<i64, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM indexer_guild_members WHERE guild_id = $1")
+            .bind(guild_id)
+            .fetch_one(executor)
+            .await?;
+    Ok(count)
+}
+
+/// Whether any current member of `guild_id` holds `role_index` — issue
+/// #506: the old `guild_members(guild_id, role_index)` foreign key into
+/// `guild_roles` used to enforce this at the database level (a role delete
+/// simply failed with a foreign-key violation); this table has no such
+/// key on purpose (see the module doc comment), so a role-delete caller
+/// needs this explicit check instead, run inside the same transaction as
+/// the delete to avoid racing a concurrent role change.
+pub async fn any_member_with_role<'e, E>(
+    executor: E,
+    guild_id: Uuid,
+    role_index: i32,
+) -> Result<bool, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let row: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM indexer_guild_members WHERE guild_id = $1 AND role_index = $2 LIMIT 1",
+    )
+    .bind(guild_id)
+    .bind(role_index)
+    .fetch_optional(executor)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// One roster row, from [`roster`].
+#[derive(Debug, Clone)]
+pub struct MemberRow {
+    pub identity_id: Uuid,
+    pub role_index: i32,
+    pub joined_at: OffsetDateTime,
+}
+
+/// `guild_id`'s full current roster, ordered by `joined_at` — same shape
+/// `crates/server/src/guilds.rs::list_members` already returns.
+pub async fn roster<'e, E>(executor: E, guild_id: Uuid) -> Result<Vec<MemberRow>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        "SELECT identity_id, role_index, joined_at FROM indexer_guild_members \
+         WHERE guild_id = $1 ORDER BY joined_at",
+    )
+    .bind(guild_id)
+    .fetch_all(executor)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(MemberRow {
+                identity_id: row.try_get("identity_id")?,
+                role_index: row.try_get("role_index")?,
+                joined_at: row.try_get("joined_at")?,
+            })
+        })
+        .collect()
+}
+
+/// One membership row, from [`memberships_for`].
+#[derive(Debug, Clone)]
+pub struct MembershipRow {
+    pub guild_id: Uuid,
+    pub role_index: i32,
+    pub joined_at: OffsetDateTime,
+}
+
+/// Every guild `identity_id` currently belongs to, ordered by `joined_at` —
+/// same shape `crates/server/src/guilds.rs::list_my_guilds` already returns.
+pub async fn memberships_for<'e, E>(
+    executor: E,
+    identity_id: Uuid,
+) -> Result<Vec<MembershipRow>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        "SELECT guild_id, role_index, joined_at FROM indexer_guild_members \
+         WHERE identity_id = $1 ORDER BY joined_at",
+    )
+    .bind(identity_id)
+    .fetch_all(executor)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(MembershipRow {
+                guild_id: row.try_get("guild_id")?,
+                role_index: row.try_get("role_index")?,
+                joined_at: row.try_get("joined_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Every identity that shares at least one guild membership with
+/// `identity_id`, not yet filtered against the caller's own friends/blocks/
+/// self — the "mutual guild members" set `crate::server::discovery` and
+/// `crate::server::conversations` need (issue #506).
+pub async fn mutual_members<'e, E>(
+    executor: E,
+    identity_id: Uuid,
+) -> Result<std::collections::HashSet<Uuid>, IndexError>
+where
+    E: PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        r#"
+        SELECT DISTINCT gm2.identity_id AS candidate
+        FROM indexer_guild_members gm1
+        JOIN indexer_guild_members gm2 ON gm2.guild_id = gm1.guild_id
+        WHERE gm1.identity_id = $1 AND gm2.identity_id != $1
+        "#,
+    )
+    .bind(identity_id)
+    .fetch_all(executor)
+    .await?;
+    let mut set = std::collections::HashSet::with_capacity(rows.len());
+    for row in rows {
+        set.insert(row.try_get("candidate")?);
+    }
+    Ok(set)
+}
+
 #[cfg(test)]
 mod tests {
     use avalon_protocol::ids::GlobalId;
@@ -122,6 +341,32 @@ mod tests {
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
         }
+    }
+
+    #[test]
+    fn decodes_guild_created_into_an_owner_upsert() {
+        let guild_id = Uuid::new_v4();
+        let owner = Uuid::new_v4();
+        let source_event = event(
+            "guild.created",
+            serde_json::json!({
+                "guild_id": guild_id,
+                "name": "Wandering Blades",
+                "tag": "WB",
+                "description": "",
+                "owner": owner,
+            }),
+        );
+        let write = decode(&source_event).unwrap();
+        assert_eq!(
+            write,
+            GuildRosterWrite::Upsert {
+                guild_id,
+                identity_id: owner,
+                role_index: OWNER_ROLE_INDEX,
+                joined_at: source_event.timestamp,
+            }
+        );
     }
 
     #[test]

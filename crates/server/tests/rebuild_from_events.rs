@@ -10,26 +10,22 @@
 //! no `identity.created` event behind it), which is exactly the gap this
 //! test exists to catch, not paper over.
 //!
-//! **Scope note, given the repo's actual current wiring**: only
-//! `profiles` is kept live by request handlers calling
-//! `PostgresIndexer::apply_in_tx` today (`identity.created`/
-//! `profile.updated`, via `handlers::register_finish`/`update_profile`).
-//! `friend.*`/`guild.*` events reach `ledger_entries` through the outbox,
-//! but nothing applies them to `indexer_friendships`/`indexer_guild_members`
-//! on an ordinary node — retargeting `friends.rs`/`guilds.rs` to write
-//! through the indexer instead of their own separate `friendships`/
-//! `guild_members` tables is issue #44's job, not this one's (see
-//! `crates/indexer/src/projections/friendships.rs`'s own module doc). So:
+//! **Scope note, given the repo's actual current wiring**: `profiles`,
+//! `indexer_friendships`, and `indexer_guild_members` are all kept live by
+//! request handlers calling `PostgresIndexer::apply_in_tx` today
+//! (`identity.created`/`profile.updated` via `handlers::register_finish`/
+//! `update_profile`; `friend.*` via `friends.rs`; `guild.*` via
+//! `guilds.rs`, issue #506). So:
 //!
 //! - For `profiles`, this test compares real pre-rebuild state against
 //!   post-rebuild state directly — the strong "nothing was lost" claim,
 //!   since `profiles` genuinely is continuously projected today.
-//! - For `indexer_friendships`/`indexer_guild_members`, which have no live
-//!   writer to compare against before #44 lands, this test instead asserts
-//!   the rebuilt rows exactly match what the real friend/guild actions
-//!   should produce, plus that a second rebuild reproduces the identical
-//!   snapshot (idempotency) — the honest version of the same guarantee
-//!   given today's wiring.
+//! - For `indexer_friendships`/`indexer_guild_members`, this test instead
+//!   asserts the rebuilt rows exactly match what the real friend/guild
+//!   actions should produce, plus that a second rebuild reproduces the
+//!   identical snapshot (idempotency) — kept as its own explicit assertion
+//!   rather than folded into the `profiles` byte-for-byte comparison,
+//!   since it's still useful as a readable, self-contained expectation.
 
 use avalon_chain::PostgresSettlementProvider;
 use avalon_indexer::postgres::PROJECTION_TABLES;
@@ -362,12 +358,12 @@ async fn rebuild_reproduces_projections_exactly() {
         "rebuilt indexer_friendships must contain exactly the accepted pair"
     );
 
-    // Not `[alice, bob]`: `guild.created` is a kind
-    // `crate::projections::guild_rosters::decode` doesn't recognize (owner
-    // membership is implied by that event's payload, not separately
-    // event-sourced) — only bob's real `guild.member_added` from `/join`
-    // lands here. That's the indexer's actual, current behavior, not an
-    // assumption this test is inventing.
+    // `[alice, bob]`, not just `[bob]`: issue #506 closed the gap this
+    // test used to document — `guild.created` is now a kind
+    // `crate::projections::guild_rosters::decode` recognizes too, so
+    // alice's owner membership (implied by that event's own `owner` field,
+    // never a separate `guild.member_added`) lands here alongside bob's
+    // real `guild.member_added` from `/join`.
     let guild_member_ids: Vec<Uuid> = sqlx::query(
         "SELECT identity_id FROM indexer_guild_members WHERE guild_id = $1 ORDER BY identity_id",
     )
@@ -378,10 +374,11 @@ async fn rebuild_reproduces_projections_exactly() {
     .into_iter()
     .map(|row| row.get("identity_id"))
     .collect();
+    let mut expected_member_ids = vec![alice_id, bob_id];
+    expected_member_ids.sort();
     assert_eq!(
-        guild_member_ids,
-        vec![bob_id],
-        "rebuilt indexer_guild_members must contain exactly the joiner"
+        guild_member_ids, expected_member_ids,
+        "rebuilt indexer_guild_members must contain the owner and the joiner"
     );
 }
 

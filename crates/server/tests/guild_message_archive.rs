@@ -10,7 +10,7 @@
 //! covered as a pure-function test in `crates/server/src/guild_messages.rs`
 //! instead. These tests seed rows directly into `guild_messages_archive`
 //! via SQL (same "seed state directly, exercise only the endpoint under
-//! test" pattern `guild_channels.rs` already uses for `guild_members`) and
+//! test" pattern `guild_channels.rs` already uses for `indexer_guild_members`) and
 //! focus on the two things that need a live server: the archive
 //! read-access rule, and moderation deletion reaching an already-archived
 //! row.
@@ -107,8 +107,8 @@ async fn create_guild_with_general_channel(
 }
 
 /// `create_guild_with_general_channel` already makes the caller a real
-/// `guild_members` owner row — no separate seed needed, and seeding it
-/// again would collide on `guild_members`'s `(guild_id, identity_id)`
+/// `indexer_guild_members` owner row — no separate seed needed, and seeding it
+/// again would collide on `indexer_guild_members`'s `(guild_id, identity_id)`
 /// primary key (same fix as `guild_channels.rs`/`guild_events.rs`).
 async fn seed_membership_and_guild(
     http: &reqwest::Client,

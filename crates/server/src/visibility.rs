@@ -30,6 +30,8 @@
 //! read paths need it is the intended shape going forward, not a
 //! redesign.
 
+use avalon_indexer::projections::friendships as friendship_reads;
+use avalon_indexer::projections::guild_rosters;
 use avalon_protocol::permissions::Visibility;
 use uuid::Uuid;
 
@@ -93,17 +95,7 @@ pub(crate) async fn is_visible(
 }
 
 async fn are_friends(state: &AppState, a: Uuid, b: Uuid) -> Result<bool, AppError> {
-    let row = sqlx::query(
-        r#"
-        SELECT 1 FROM friendships
-        WHERE (a = $1 AND b = $2) OR (a = $2 AND b = $1)
-        "#,
-    )
-    .bind(a)
-    .bind(b)
-    .fetch_optional(&state.pool)
-    .await?;
-    Ok(row.is_some())
+    Ok(friendship_reads::are_friends(&state.pool, a, b).await?)
 }
 
 async fn is_guild_member(
@@ -111,12 +103,7 @@ async fn is_guild_member(
     guild_id: Uuid,
     identity_id: Uuid,
 ) -> Result<bool, AppError> {
-    let row = sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = $1 AND identity_id = $2")
-        .bind(guild_id)
-        .bind(identity_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    Ok(row.is_some())
+    Ok(guild_rosters::is_member(&state.pool, guild_id, identity_id).await?)
 }
 
 /// Sets `identity_id`'s own `profiles.presence_visibility` (issue #87) —

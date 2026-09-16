@@ -478,7 +478,7 @@ pub struct GuildAnnouncementAlert {
 /// history" posture — there is nothing here to promote to durable state,
 /// so there is nothing here to track server-side either.
 ///
-/// Scoped to *current* membership by construction: the `JOIN guild_members`
+/// Scoped to *current* membership by construction: the `JOIN indexer_guild_members`
 /// below means a guild the caller has left simply produces no rows for
 /// that guild, the same "no historical-membership machinery for
 /// non-durable data" posture `list_archive`'s own doc comment already
@@ -495,7 +495,7 @@ pub async fn list_my_guild_announcements(
         "SELECT gm.id AS message_id, gc.id AS channel_id, gc.name AS channel_name, \
                 gc.guild_id, gm.author, gm.body, gm.sent_at \
          FROM guild_channels gc \
-         JOIN guild_members mem ON mem.guild_id = gc.guild_id AND mem.identity_id = $1 \
+         JOIN indexer_guild_members mem ON mem.guild_id = gc.guild_id AND mem.identity_id = $1 \
          JOIN LATERAL ( \
              SELECT id, author, body, sent_at FROM guild_messages \
              WHERE channel_id = gc.id ORDER BY sent_at DESC, id DESC LIMIT $2 \

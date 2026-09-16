@@ -349,7 +349,7 @@ async fn deleting_a_role() {
 }
 
 /// A custom role still held by a member can't be deleted — the database's
-/// own foreign key (`guild_members.role_index` -> `guild_roles.name_index`)
+/// own explicit application check (issue #506; the old `guild_members.role_index -> guild_roles.name_index` foreign key no longer applies)
 /// catches this, mapped to a clean 409 rather than a raw DB error.
 #[tokio::test]
 #[ignore]
@@ -1439,8 +1439,8 @@ async fn end_binding(pool: &PgPool, binding_id: Uuid) {
 /// Invites `to_identity_id` into `guild_id` and accepts on their behalf,
 /// landing them as a plain member (role index 2, no permissions) — the
 /// same flow `invite_accept_join_and_leave_flow` above exercises, reused
-/// here just to get a second real guild member without hand-writing a
-/// `guild_members` row.
+/// here just to get a second real guild member without hand-writing an
+/// `indexer_guild_members` row.
 async fn invite_and_accept(
     http: &reqwest::Client,
     base: &str,
