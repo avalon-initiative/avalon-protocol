@@ -148,7 +148,27 @@ its subject).
 
 ## 8. Revoke
 
-Not yet wrapped by the SDK — `POST /attestations/{id}/revoke`, issuer-only
-(only the issuer that issued it can revoke it), append-only history (a
-revocation is recorded, never erased). See
-[`../architecture/revocation.md`](../architecture/revocation.md).
+```rust
+session
+    .revoke_attestation(attestation_id, "issuer_error", "issued by mistake")
+    .await?;
+```
+
+Issuer-only (only the issuer that issued it can revoke it) — `Session` is
+the right home for this even though it's not identity-scoped, since it's
+issuer-credentialed the same challenge-response way `issue_achievement`
+is. Append-only history (a revocation is recorded, never erased); a
+subsequent `achievements()` read shows `validity: Invalid` and a second
+`history` entry. Revoking an already-revoked attestation returns
+`SdkError::Conflict`, not a silent no-op; revoking one you didn't issue
+returns `SdkError::CapabilityNotGranted`.
+
+**A bulk-issued attestation revokes exactly the same way as any other**
+— `issue_achievements_bulk`'s own claim shape (#492) is deliberately N
+ordinary, independent attestations, not one claim-set attestation, so
+there's no separate "bulk revoke" call: pull the `attestation_id` out of
+whichever `BulkClaimOutcome::Issued` you want to remediate and call
+`revoke_attestation` on it directly.
+
+See [`../architecture/revocation.md`](../architecture/revocation.md) for
+the full revocation-as-protocol-history model.

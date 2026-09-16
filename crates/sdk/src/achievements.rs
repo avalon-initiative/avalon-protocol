@@ -232,6 +232,24 @@ struct BulkIssueResponseWire {
     results: Vec<BulkClaimOutcome>,
 }
 
+/// The exact bytes this integrator's key signs to authorize a revocation
+/// (issue #85, wrapped here by #498) — must match
+/// `avalon_protocol::achievements::revocation_signing_bytes` exactly. Same
+/// "each side independently builds the same canonical format" posture as
+/// [`attestation_signing_bytes`] above.
+fn revocation_signing_bytes(issuer_ref: &str, attestation_id: Uuid, reason_code: &str) -> Vec<u8> {
+    format!("avalon:achievement.revoked:v1:{issuer_ref}:{attestation_id}:{reason_code}")
+        .into_bytes()
+}
+
+#[derive(Serialize)]
+struct RevokeAttestationRequest {
+    key_id: Uuid,
+    signature: String,
+    reason_code: String,
+    reason: String,
+}
+
 /// Mirrors `crate::attestations::ListMyAchievementsResponse` at the wire
 /// level — issue #377 wrapped what was a bare array in a
 /// `{ achievements, next_cursor }` envelope so `GET /me/achievements`
@@ -473,5 +491,87 @@ impl Session {
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(body.results)
+    }
+
+    /// `POST /attestations/{id}/revoke` (issue #85, wrapped here by #498)
+    /// — revokes an attestation this integrator itself issued (singly or
+    /// via `issue_achievements_bulk`, which doesn't distinguish a bulk-
+    /// issued attestation from any other — see module doc comment: no
+    /// bulk-revoke mechanism exists or is needed, since every claim in a
+    /// bulk call is already its own ordinary, independently-revocable
+    /// attestation). Same two-proof shape as issuance: a fresh challenge-
+    /// response proving this key is making the call right now, plus a
+    /// signature embedded in the body over the revocation's own canonical
+    /// bytes, checked independently server-side. No idempotency key —
+    /// unlike issuance, a bare retry here is already safe: the server's
+    /// own already-revoked check (`SdkError::Conflict`) makes a repeat
+    /// call a no-op, never a second revocation.
+    pub async fn revoke_attestation(
+        &self,
+        attestation_id: Uuid,
+        reason_code: &str,
+        reason: &str,
+    ) -> Result<(), SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+        let key_id: Uuid = self
+            .integrator_key_id
+            .parse()
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/challenge",
+                self.server_url, slug
+            ))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let nonce = BASE64
+            .decode(&challenge.nonce)
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+        let challenge_signature = signing_key.sign(&nonce);
+
+        let issuer_ref = format!("game:{slug}");
+        let signing_bytes = revocation_signing_bytes(&issuer_ref, attestation_id, reason_code);
+        let signature = signing_key.sign(&signing_bytes);
+
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/attestations/{attestation_id}/revoke",
+                self.server_url
+            ))
+            .header("x-avalon-integrator-key-id", &self.integrator_key_id)
+            .header(
+                "x-avalon-integrator-challenge-id",
+                challenge.challenge_id.to_string(),
+            )
+            .header(
+                "x-avalon-integrator-signature",
+                BASE64.encode(challenge_signature.to_bytes()),
+            )
+            .json(&RevokeAttestationRequest {
+                key_id,
+                signature: BASE64.encode(signature.to_bytes()),
+                reason_code: reason_code.to_string(),
+                reason: reason.to_string(),
+            })
+        })
+        .await?;
+
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        Ok(())
     }
 }
