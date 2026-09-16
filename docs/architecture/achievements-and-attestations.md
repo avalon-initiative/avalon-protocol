@@ -248,6 +248,21 @@ uses. Neither proof substitutes for the other.
   issuance is unaffected
   (`crates/server/tests/achievements_bulk.rs`,
   `crates/sdk/tests/achievements.rs`, both `--ignored`).
+- **SDK revocation wrapper** (#498) — `Session::revoke_attestation`
+  (`crates/sdk/src/achievements.rs`), closing the gap `POST
+  /attestations/{id}/revoke` (#85) left since it was first built:
+  no SDK method called it before this. Same two-proof shape as issuance
+  (challenge-response plus an embedded signature over
+  `revocation_signing_bytes`, the SDK's own byte-for-byte copy of the
+  protocol function), issuer-only, no idempotency key needed (a repeat
+  call against an already-revoked attestation is `SdkError::Conflict`,
+  never a silent no-op or a second revocation). Deliberately no
+  bulk-revoke counterpart to #495's bulk-issue: a bulk-issued attestation
+  is already an ordinary, independently-revocable attestation, so
+  remediating one out of a batch is just `revoke_attestation` on its own
+  id. Verified live, including the validity-flips-to-invalid case,
+  already-revoked rejection, and a different-issuer forbidden case
+  (`crates/sdk/tests/achievements.rs`, `--ignored`).
 - `crates/server/src/attestations.rs::list_my_achievements` (#34, paginated
   and filtered per #377) — `GET
   /me/achievements?integrator_id=&claim_kind=&before=&limit=`, cursor-paginated
@@ -322,7 +337,9 @@ uses. Neither proof substitutes for the other.
   #325, landed.
 - [#32](https://github.com/LunarVagabond/avalon-protocol/issues/32) — issue
   an achievement/milestone → signed attestation, landed for both claim
-  vocabularies (#324). SDK client (#34) still returns `NotImplemented`.
+  vocabularies (#324). SDK client (#34) is wired: issue, read, bulk-issue
+  (#495), and revoke (#498) all landed; milestones-specific SDK wrappers
+  (as opposed to achievements) have not.
 - [#33](https://github.com/LunarVagabond/avalon-protocol/issues/33) — verify
   attestation + trust relationships.
 - [#34](https://github.com/LunarVagabond/avalon-protocol/issues/34) — SDK
@@ -360,3 +377,8 @@ uses. Neither proof substitutes for the other.
 - [#495](https://github.com/LunarVagabond/avalon-protocol/issues/495) —
   implements #492's decision: the bulk-issuance endpoint and SDK call,
   described above.
+- [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85) —
+  revocation as protocol history (the mechanism #498 finally wraps in the
+  SDK).
+- [#498](https://github.com/LunarVagabond/avalon-protocol/issues/498) —
+  SDK wrapper for `POST /attestations/{id}/revoke`, described above.

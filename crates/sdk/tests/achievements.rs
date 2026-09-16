@@ -490,3 +490,134 @@ async fn issues_multiple_achievements_via_bulk_issuance_through_the_sdk() {
         "the one failed claim must not itself have produced an attestation"
     );
 }
+
+/// Exercises `Session::revoke_attestation` (issue #85, wrapped by #498)
+/// end to end: issue a real attestation, revoke it, and confirm the
+/// revocation is actually reflected in a subsequent `achievements()` read
+/// — not just that the revoke call itself returned success.
+#[tokio::test]
+#[ignore]
+async fn revoke_attestation_flips_validity_to_invalid() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let display_name = format!("sdk-revoke-{}", Uuid::new_v4());
+
+    let token = register_and_login(&http, &base, &display_name).await;
+    let integrator = register_integrator(&http, &base).await;
+    define_achievement(&http, &base, &integrator, "dragon_slayer").await;
+
+    let connect = http
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&token)
+        .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let client = AvalonClient::new(AvalonConfig {
+        server_url: base,
+        integrator_credential_key_id: integrator.key_id.clone(),
+        integrator_slug: Some(integrator.slug.clone()),
+        signing_key: Some(integrator.signing_key.to_bytes()),
+        retry: Default::default(),
+    });
+    let session = client
+        .authenticate(&token)
+        .await
+        .expect("authenticate() should succeed with a valid session token");
+
+    let attestation_id = session
+        .issue_achievement("dragon_slayer")
+        .await
+        .expect("issue_achievement should succeed once granted");
+
+    session
+        .revoke_attestation(attestation_id, "issuer_error", "issued by mistake")
+        .await
+        .expect("revoke_attestation should succeed for the issuer's own attestation");
+
+    let history = session
+        .achievements()
+        .await
+        .expect("achievements() should succeed once granted");
+    let revoked = history
+        .iter()
+        .find(|a| a.id == attestation_id)
+        .expect("the revoked attestation should still be present in history");
+    assert!(matches!(
+        revoked.validity,
+        avalon_sdk::achievements::Validity::Invalid { .. }
+    ));
+    assert_eq!(revoked.history.len(), 2, "issued, then revoked");
+
+    // A second revocation of the same attestation must not be silently
+    // accepted as a no-op success.
+    let second_attempt = session
+        .revoke_attestation(attestation_id, "issuer_error", "issued by mistake")
+        .await;
+    assert!(matches!(
+        second_attempt,
+        Err(avalon_sdk::SdkError::Conflict(_))
+    ));
+}
+
+/// A different integrator — even a real, legitimately registered one —
+/// may never revoke an attestation it didn't itself issue.
+#[tokio::test]
+#[ignore]
+async fn revoke_attestation_is_forbidden_for_a_different_issuer() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let display_name = format!("sdk-revoke-forbidden-{}", Uuid::new_v4());
+
+    let token = register_and_login(&http, &base, &display_name).await;
+    let issuer = register_integrator(&http, &base).await;
+    define_achievement(&http, &base, &issuer, "dragon_slayer").await;
+
+    let connect = http
+        .post(format!("{base}/integrations/{}/connect", issuer.slug))
+        .bearer_auth(&token)
+        .json(&json!({ "capabilities": ["achievements.issue"] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let issuer_client = AvalonClient::new(AvalonConfig {
+        server_url: base.clone(),
+        integrator_credential_key_id: issuer.key_id.clone(),
+        integrator_slug: Some(issuer.slug.clone()),
+        signing_key: Some(issuer.signing_key.to_bytes()),
+        retry: Default::default(),
+    });
+    let issuer_session = issuer_client
+        .authenticate(&token)
+        .await
+        .expect("authenticate() should succeed with a valid session token");
+    let attestation_id = issuer_session
+        .issue_achievement("dragon_slayer")
+        .await
+        .expect("issue_achievement should succeed once granted");
+
+    let impostor = register_integrator(&http, &base).await;
+    let impostor_client = AvalonClient::new(AvalonConfig {
+        server_url: base,
+        integrator_credential_key_id: impostor.key_id.clone(),
+        integrator_slug: Some(impostor.slug.clone()),
+        signing_key: Some(impostor.signing_key.to_bytes()),
+        retry: Default::default(),
+    });
+    let impostor_session = impostor_client
+        .authenticate(&token)
+        .await
+        .expect("authenticate() should succeed with a valid session token");
+
+    let result = impostor_session
+        .revoke_attestation(attestation_id, "issuer_error", "not actually mine")
+        .await;
+    assert!(matches!(
+        result,
+        Err(avalon_sdk::SdkError::CapabilityNotGranted(_))
+    ));
+}
