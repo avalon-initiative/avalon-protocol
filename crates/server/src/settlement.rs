@@ -280,6 +280,12 @@ pub struct EntriesQuery {
     pub since_seq: i64,
     #[serde(default = "default_entries_limit")]
     pub limit: i64,
+    /// #364: pre-filter to one subject's own entries, e.g.
+    /// `identity:<uuid>` — the exact same `subject` string
+    /// `LedgerEntryResponse::subject` echoes back. `None` (the default)
+    /// keeps this endpoint's original unfiltered, mirror-facing behavior.
+    #[serde(default)]
+    pub subject: Option<String>,
 }
 
 fn default_entries_limit() -> i64 {
@@ -324,19 +330,27 @@ impl From<LedgerEntryView> for LedgerEntryResponse {
     }
 }
 
-/// `GET /ledger/entries?since_seq={n}&limit={m}` — issue #299's bulk
-/// entries endpoint, the read path a mirror needs to hold real ledger
-/// content rather than only verify STHs. Public, unauthenticated, same
-/// rationale as every other endpoint in this module (see module docs).
+/// `GET /ledger/entries?since_seq={n}&limit={m}&subject={id}` — issue
+/// #299's bulk entries endpoint, the read path a mirror needs to hold real
+/// ledger content rather than only verify STHs. Public, unauthenticated,
+/// same rationale as every other endpoint in this module (see module
+/// docs).
 ///
 /// Returns entries with `seq` strictly greater than `since_seq`, oldest
 /// first, capped at [`MAX_ENTRIES_LIMIT`] rows regardless of what `limit`
-/// asks for. **Not itself a verified read** — see
+/// asks for. When `subject` is given, pre-filters to that subject's own
+/// entries (#364) — same pagination/ordering semantics, just scoped, so an
+/// integrator that only cares about one of its own users doesn't have to
+/// replay the whole ledger to find their entries. A subject with no
+/// entries yet returns an empty list, not an error. **Not itself a
+/// verified read** — see
 /// [`avalon_chain::PostgresSettlementProvider::list_entries_since`]'s doc
 /// comment: a caller that needs to trust this content (a mirror
 /// backfilling) must independently verify each entry against a
 /// signature-checked STH via `GET /ledger/proof/inclusion` before
-/// accepting it.
+/// accepting it. Filtering by `subject` never changes an entry's
+/// hash-chain position — inclusion proofs for a filtered row still verify
+/// against the same global tree.
 pub async fn list_entries(
     State(state): State<AppState>,
     Query(query): Query<EntriesQuery>,
@@ -347,7 +361,7 @@ pub async fn list_entries(
     let limit = query.limit.min(MAX_ENTRIES_LIMIT);
     let entries = state
         .chain
-        .list_entries_since(query.since_seq, limit)
+        .list_entries_since_for_subject(query.since_seq, limit, query.subject.as_deref())
         .await?;
     Ok(Json(entries.into_iter().map(Into::into).collect()))
 }

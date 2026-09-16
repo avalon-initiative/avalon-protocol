@@ -233,6 +233,8 @@ pub enum AppError {
     InvalidAttestationSignature,
     #[error("a bulk issuance call must carry between 1 and {max} claims", max = crate::achievements::MAX_BULK_CLAIMS)]
     InvalidBulkAttestationRequest,
+    #[error("this issuer has written too many attestations about this subject recently")]
+    AttestationWriteQuotaExceeded,
     #[error("attestation not found")]
     AttestationNotFound,
     #[error("only the issuer that issued this attestation may revoke it")]
@@ -476,6 +478,7 @@ impl AppError {
             AppError::AttestationDefinitionRetired => "ATTESTATION_DEFINITION_RETIRED",
             AppError::InvalidAttestationSignature => "INVALID_ATTESTATION_SIGNATURE",
             AppError::InvalidBulkAttestationRequest => "INVALID_BULK_ATTESTATION_REQUEST",
+            AppError::AttestationWriteQuotaExceeded => "ATTESTATION_WRITE_QUOTA_EXCEEDED",
             AppError::AttestationNotFound => "ATTESTATION_NOT_FOUND",
             AppError::AttestationRevocationForbidden => "ATTESTATION_REVOCATION_FORBIDDEN",
             AppError::AttestationAlreadyRevoked => "ATTESTATION_ALREADY_REVOKED",
@@ -681,6 +684,7 @@ impl IntoResponse for AppError {
             AppError::AttestationDefinitionRetired => StatusCode::CONFLICT,
             AppError::InvalidAttestationSignature => StatusCode::UNAUTHORIZED,
             AppError::InvalidBulkAttestationRequest => StatusCode::BAD_REQUEST,
+            AppError::AttestationWriteQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
             AppError::AttestationNotFound => StatusCode::NOT_FOUND,
             AppError::AttestationRevocationForbidden => StatusCode::FORBIDDEN,
             AppError::AttestationAlreadyRevoked => StatusCode::CONFLICT,

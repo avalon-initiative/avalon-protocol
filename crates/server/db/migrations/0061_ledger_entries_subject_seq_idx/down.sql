@@ -1,0 +1,1 @@
+DROP INDEX ledger_entries_subject_seq_idx;
