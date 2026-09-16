@@ -27,6 +27,12 @@ export interface TrustAnchorEntry {
   // deployment used to test that changes actually integrate across nodes),
   // or 'prod' (a real mainnet deployment).
   environment: 'local-dev' | 'dev' | 'int' | 'prod'
+  // Issue #362: base URLs of this network's always-on anchor node(s) — the
+  // default bootstrap peers a node for this network_id announces to when
+  // it has no bootstrap peers of its own configured. Not consumed by the
+  // Hub itself (server-to-server discovery); mirrored here only so this
+  // type stays field-for-field with the canonical JSON.
+  seed_nodes?: string[]
   notes?: string
 }
 

@@ -58,6 +58,17 @@ pub struct TrustAnchorEntry {
     pub server_url: Option<String>,
     /// Which deployment tier this is.
     pub environment: NetworkEnvironment,
+    /// Issue #362: base URLs of this network's always-on anchor node(s) —
+    /// the default bootstrap peers a node configured for this `network_id`
+    /// announces to when it has no `AVALON_BOOTSTRAP_PEERS` of its own set.
+    /// Reuses this file rather than a second committed list, since an
+    /// anchor node is exactly the "always-on node(s) each real deployment
+    /// already plans to run" this file's own entries already describe —
+    /// same governance story (a normal reviewed PR adds/rotates one, never
+    /// a live-writable directory). Empty for a network with no anchor yet,
+    /// or for the network's own anchor entry itself (nothing to seed from).
+    #[serde(default)]
+    pub seed_nodes: Vec<String>,
     /// Free-text notes.
     #[serde(default)]
     pub notes: Option<String>,
@@ -385,6 +396,7 @@ mod tests {
             signing_key_id: "test-key".to_string(),
             server_url: None,
             environment: NetworkEnvironment::LocalDev,
+            seed_nodes: Vec::new(),
             notes: None,
         }
     }
@@ -518,6 +530,7 @@ mod tests {
                 signing_key_id: "test-key".to_string(),
                 server_url: None,
                 environment: NetworkEnvironment::Dev,
+                seed_nodes: Vec::new(),
                 notes: None,
             },
         }

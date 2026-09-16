@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use webauthn_rs::prelude::Webauthn;
 
 use crate::chat::ChatBus;
+use crate::nodes::PeerTable;
 use crate::presence::PresenceStore;
 
 #[derive(Clone)]
@@ -33,4 +34,7 @@ pub struct AppState {
     /// every request rather than accepting an unauthenticated one; see
     /// `crate::settlement::submit_ledger_batch`.
     pub settlement_submit_key: Option<String>,
+    /// This node's local peer table (issue #362) — in-process,
+    /// non-durable, same posture `presence` takes. See `crate::nodes`.
+    pub peers: PeerTable,
 }

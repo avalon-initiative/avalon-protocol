@@ -266,19 +266,31 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `AVALON_MIRROR_PEERS` set, watching another deployment
   ([#299](https://github.com/LunarVagabond/avalon-protocol/issues/299),
   see [`settlement.md`](./settlement.md)'s "Mirror-watcher" section for the
-  actual observation/equivocation-detection/backfill mechanism). What #299
-  does *not* change: there is still no node-to-node discovery, capability
-  advertisement, or general node-to-node protocol beyond the specific
-  public HTTP read endpoints Settlement mirroring uses — the honesty note
-  in the next bullet still stands.
+  actual observation/equivocation-detection/backfill mechanism).
   **This is also why the retention-tier mechanism above cannot yet
   deliver #180's actual availability guarantee** — there is only one
   database for a hot-tier node's pruning to be gated against, not a
   second archive-tier node — see this section's own honesty note.
-- No discovery: `AvalonConfig { server_url, .. }` in `crates/sdk/src/lib.rs`
-  takes a URL.
-- No node-to-node protocol, no export format for the log, no capability
-  advertisement endpoint.
+- **Node-to-node announce/bootstrap discovery is real** (#362, implementing
+  #292's decided design): `POST /nodes/announce`/`GET /nodes/peers`
+  (`crates/server/src/nodes.rs`) — a lightweight, in-memory peer table
+  (`network_id`, roles, protocol version, last-announced timestamp),
+  keyed by `base_url`, never merged across `network_id`s.
+  `AVALON_BOOTSTRAP_PEERS` names explicit peers; unset, a node falls back
+  to its own network's `seed_nodes` in `docs/trusted-networks.json` (see
+  [`./network-trust-anchors.md`](./network-trust-anchors.md)) — empty for
+  a network with no anchor node yet, which is the expected state for a
+  network's first node, not an error. `nodes::run_worker` re-announces on
+  `AVALON_ANNOUNCE_INTERVAL_SECS` (default 180s) and prunes any peer not
+  re-announced within a few multiples of that interval. Still not built:
+  capability-aware routing (the SDK's own discovery, below, still takes a
+  bare `server_url`) and any use of the peer table by settlement/mirror
+  sync itself — this is purely peer discovery, independent of #40/#299's
+  trust model.
+- No SDK-side discovery yet: `AvalonConfig { server_url, .. }` in
+  `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
+  server-to-server mechanism, not yet consumed by client-side routing.
+- No export format for the log (that's #40).
 - No distinct "archive" node *type*/binary exists, and #208 deliberately
   didn't invent one: retention tier is operational configuration on the
   one existing Settlement role (`AVALON_RETENTION_TIER=full`), not a fifth
@@ -381,8 +393,14 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   decided (hoster-configurable resource limits), implemented by
   [#363](https://github.com/LunarVagabond/avalon-protocol/issues/363) — see
   the "Today in the repo" section above.
+- [#292](https://github.com/LunarVagabond/avalon-protocol/issues/292)
+  decided (node-to-node announce/bootstrap discovery design), implemented
+  by [#362](https://github.com/LunarVagabond/avalon-protocol/issues/362) —
+  see the "Today in the repo" section above. [#368](https://github.com/LunarVagabond/avalon-protocol/issues/368)
+  tracks protocol version awareness gating this peer table.
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) SDK node
-  discovery and capability negotiation
+  discovery and capability negotiation — could consume #362's peer table
+  once it exists
 - [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) TLS before
   any non-local deployment
 - [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) realtime is

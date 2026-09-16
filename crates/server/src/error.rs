@@ -346,6 +346,8 @@ pub enum AppError {
     DevicePairingNotFound,
     #[error("failed to generate a unique pairing code, try again")]
     DevicePairingCodeGenerationFailed,
+    #[error("peer announced a different network_id than this node's own")]
+    PeerNetworkMismatch,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -529,6 +531,7 @@ impl AppError {
             AppError::InvalidRecognitionScope => "INVALID_RECOGNITION_SCOPE",
             AppError::DevicePairingNotFound => "DEVICE_PAIRING_NOT_FOUND",
             AppError::DevicePairingCodeGenerationFailed => "DEVICE_PAIRING_CODE_GENERATION_FAILED",
+            AppError::PeerNetworkMismatch => "PEER_NETWORK_MISMATCH",
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
             AppError::Index(..) => "INDEX",
@@ -742,6 +745,11 @@ impl IntoResponse for AppError {
             AppError::InvalidRecognitionScope => StatusCode::BAD_REQUEST,
             AppError::DevicePairingNotFound => StatusCode::NOT_FOUND,
             AppError::DevicePairingCodeGenerationFailed => StatusCode::CONFLICT,
+            // Mirrors the genesis-mismatch-is-fatal precedent (#173): this
+            // node's own network_id is never negotiable against a peer's
+            // claim, but it's a per-request rejection, not fatal to the
+            // node itself the way a genesis mismatch at startup is.
+            AppError::PeerNetworkMismatch => StatusCode::CONFLICT,
             AppError::TooManyFavoriteGames | AppError::DuplicateFavoriteGame => {
                 StatusCode::BAD_REQUEST
             }
