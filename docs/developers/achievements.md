@@ -16,7 +16,53 @@ Not an SDK call (there's no player-facing token yet at this point) — either
 command, which also saves the resulting private signing key locally. See
 [`local-development.md`](local-development.md).
 
-## 2. Define the achievement
+## 2. Register as an issuer on your target network
+
+Separate from integrator registration above: before you can issue on a real
+network, your integrator's signing key must be admitted to write on it
+(#479/#480's per-network isolation — a signature valid against your key
+history isn't itself enough, see
+[`../architecture/network-trust-anchors.md`](../architecture/network-trust-anchors.md)).
+`AvalonClient::register_issuer` requires you to **explicitly declare which
+network you mean** — either the exact `network_id`, or one of the three
+real deployment tiers — and refuses, client-side, before sending any
+request, if that doesn't match what the server's own Signed Tree Head
+independently verifies as. There is no implicit default inferred from the
+server URL alone.
+
+```rust
+use avalon_sdk::network::{TargetNetwork, TargetNetworkTier};
+
+let registration = client
+    .register_issuer("game:ashen-realms", TargetNetwork::Env(TargetNetworkTier::Dev))
+    .await?;
+```
+
+or declare the exact string if you know it (required for the
+milestone-1 local dev network, `avalon-dev-local`, which isn't one of the
+three real tiers):
+
+```rust
+let registration = client
+    .register_issuer("game:ashen-realms", TargetNetwork::NetworkId("avalon-dev-local".to_string()))
+    .await?;
+```
+
+**What a mismatch error means:** if you get back
+`IssuerRegistrationError::NetworkTarget(NetworkTargetError::Mismatch { declared, actual })`,
+the server really is a verifiable Avalon network — just not the one you
+meant. Double-check `server_url` against which deployment you intended to
+target; this is the exact case #483 exists to catch (a copy-pasted `.env`
+pointing at the wrong environment, most commonly). A
+`NetworkTargetError::Unverified` instead means the server's claimed network
+couldn't be confirmed as trustworthy at all (unknown, key mismatch, or
+unreachable) — refused regardless of what you declared, since there's
+nothing to compare it against.
+
+`avalon-cli`'s `register-issuer --integrator <slug> (--network-id <id> |
+--env <dev|int|mainnet>)` command drives this same SDK call.
+
+## 3. Define the achievement
 
 Also not an SDK call yet (issue #49's own scope is issuance, reading,
 verifying — defining is a documented gap, not silently skipped):
@@ -34,13 +80,13 @@ x-avalon-integrator-signature: <that challenge's nonce, signed>
 shape; `crates/sdk/tests/achievements.rs`'s own test helpers are a working
 reference implementation of the same request.
 
-## 3. Get the player's consent
+## 4. Get the player's consent
 
 The player must grant your integrator `achievements.issue` (and
 `achievements.read` if you also want to read their history) — see
 [`capabilities.md`](capabilities.md).
 
-## 4. Issue it
+## 5. Issue it
 
 ```rust
 use avalon_sdk::{AvalonClient, AvalonConfig};
@@ -75,7 +121,7 @@ A complete, runnable version: `crates/sdk/examples/issue_achievement.rs` —
 `cargo run -p avalon-sdk --example issue_achievement`. `avalon-cli`'s
 `issue-achievement` command drives the exact same SDK call.
 
-## 5. Read a player's history
+## 6. Read a player's history
 
 ```rust
 let history = session.achievements().await?; // requires achievements.read
@@ -93,14 +139,14 @@ matter to you?) — evaluate it yourself against
 `avalon_protocol::achievements::recognize` and your own
 `TrustRelationship`, never assume the SDK has decided for you.
 
-## 6. Verify a specific attestation
+## 7. Verify a specific attestation
 
 `GET /attestations/{id}` is public and unauthenticated — no SDK wrapper yet,
 but a plain HTTP `GET` returns the same authenticity/validity/history shape
 `achievements()` does, for a single attestation by id, from anyone (not just
 its subject).
 
-## 7. Revoke
+## 8. Revoke
 
 Not yet wrapped by the SDK — `POST /attestations/{id}/revoke`, issuer-only
 (only the issuer that issued it can revoke it), append-only history (a
