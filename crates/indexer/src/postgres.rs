@@ -27,6 +27,28 @@ use crate::projections::{
 };
 use crate::{IndexError, Indexer};
 
+/// Every table a `PostgresIndexer` owns — closing issue #43: this is the
+/// literal list `rebuild_from_scratch` truncates before replaying, and the
+/// list the disaster-recovery test snapshots/diffs. Kept as one place so
+/// adding a new projection (a new module under `projections/`) has one
+/// obvious spot to also register its table here, instead of a rebuild
+/// silently missing it. Deliberately does not include `indexer_applied_events`
+/// alongside the read-model tables in doc comments elsewhere — it's a
+/// dedup ledger, not a promised-durable projection itself, but it still has
+/// to be truncated for a rebuild to actually re-apply anything.
+pub const PROJECTION_TABLES: &[&str] = &[
+    "indexer_applied_events",
+    "profiles",
+    "indexer_friendships",
+    "indexer_guild_members",
+    "indexer_attestations",
+    "indexer_integrator_bindings",
+    "indexer_integrator_data_instances",
+    "indexer_integrator_recognitions",
+    "indexer_integrator_schema_mappings",
+    "indexer_integrator_schemas",
+];
+
 #[derive(Clone)]
 pub struct PostgresIndexer {
     pool: PgPool,
@@ -35,6 +57,45 @@ pub struct PostgresIndexer {
 impl PostgresIndexer {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Drops and rebuilds every projection table from `events` alone —
+    /// issue #43's disaster-recovery proof that Postgres really is just a
+    /// projection (ADR #75), not a second source of truth. `events` must
+    /// already be in ledger `seq` order (the caller — `avalon
+    /// rebuild-index`, or a test driving this directly — is the one
+    /// reading `ledger_entries`, so it owns that ordering).
+    ///
+    /// The truncate and every event's replay all happen inside **one**
+    /// transaction: a rebuild is all-or-nothing. A partial rebuild would be
+    /// worse than no rebuild at all — it would silently leave a live
+    /// database missing whatever hadn't been replayed yet when a later
+    /// event failed to decode/apply, rather than leaving the pre-rebuild
+    /// state untouched for an operator to investigate. Returns how many
+    /// events were actually applied (an event whose kind no projection
+    /// recognizes still counts — [`PostgresIndexer::apply_in_tx`] treats
+    /// that as a deliberate no-op, not a skip worth distinguishing here).
+    pub async fn rebuild_from_scratch(
+        &self,
+        events: &[ProtocolEvent],
+    ) -> Result<usize, IndexError> {
+        let mut tx = self.pool.begin().await?;
+        for table in PROJECTION_TABLES {
+            // `table` always comes from the fixed `PROJECTION_TABLES`
+            // constant above, never external input — `AssertSqlSafe` is
+            // sqlx 0.9's opt-in for a dynamic-but-not-attacker-controlled
+            // query string.
+            sqlx::query(sqlx::AssertSqlSafe(format!("TRUNCATE TABLE {table}")))
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        for event in events {
+            self.apply_in_tx(&mut tx, event).await?;
+        }
+
+        tx.commit().await?;
+        Ok(events.len())
     }
 
     /// The real dispatch. Marks `event.id` as applied first (inside `tx`,

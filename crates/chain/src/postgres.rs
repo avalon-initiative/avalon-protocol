@@ -947,6 +947,38 @@ pub struct LedgerEntryView {
     pub chain_intact: bool,
 }
 
+impl LedgerEntryView {
+    /// Decodes this entry back into the same [`ProtocolEvent`] shape
+    /// `outbox::drain_once` built it from — the read half of the
+    /// settlement/indexer boundary, used by `avalon rebuild-index` (issue
+    /// #43) to replay ledger history back through an `Indexer`. `None` for
+    /// a pruned payload (issue #208 — the entry survives, but its content
+    /// doesn't) or an `issuer`/`subject` that isn't a well-formed
+    /// `GlobalId`, which should never happen for a genuine ledger entry but
+    /// is handled as a skip, not a panic. Same conversion
+    /// `mirror_watcher::protocol_event_from_mirrored` does for a
+    /// peer-mirrored entry.
+    pub fn to_protocol_event(&self) -> Option<ProtocolEvent> {
+        Some(ProtocolEvent {
+            id: self.event_id,
+            kind: self.kind.clone(),
+            issuer: global_id_from_str(&self.issuer)?,
+            subject: global_id_from_str(&self.subject)?,
+            payload: self.payload.clone()?,
+            timestamp: self.event_timestamp,
+            version: u32::try_from(self.version).ok()?,
+        })
+    }
+}
+
+/// `GlobalId` derives `Deserialize` as a transparent newtype over `String`,
+/// so this is the same round trip a `ProtocolEvent`'s `issuer`/`subject`
+/// field already goes through at every other JSON boundary — there is no
+/// public raw-string constructor on `GlobalId` itself.
+fn global_id_from_str(raw: &str) -> Option<avalon_protocol::ids::GlobalId> {
+    serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
+}
+
 /// One committed batch — the unit of settlement (issue #38): entries are
 /// hash-chained individually, but a batch is what `get_commitment` looks up
 /// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is

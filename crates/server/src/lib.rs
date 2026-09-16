@@ -28,6 +28,7 @@ pub mod outbox;
 pub mod passkeys;
 pub mod presence;
 pub mod proto_schema;
+pub mod rebuild;
 pub mod recognitions;
 pub mod recovery;
 pub mod registry;
