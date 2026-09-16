@@ -193,12 +193,14 @@ name = "avalon-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "avalon-chain",
  "avalon-protocol",
  "avalon-schema-derive",
  "avalon-sdk",
  "base64 0.23.1",
  "ed25519-dalek",
  "futures-util",
+ "hex",
  "passkey-authenticator",
  "passkey-client",
  "passkey-types",
