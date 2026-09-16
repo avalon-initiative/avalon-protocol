@@ -8,6 +8,9 @@ description = "Rust reference SDK for integrating a game with Avalon. Thin over 
 
 [dependencies]
 avalon-protocol = { path = "../protocol" }
+# Issue #482: STH-based network trust verification reuses `chain`'s signing-
+# message logic directly rather than reimplementing it.
+avalon-chain = { path = "../chain" }
 # Issue #386: #[derive(AvalonSchema)] — re-exported through schema.rs.
 avalon-schema-derive = { path = "../schema-derive" }
 async-trait.workspace = true
@@ -29,6 +32,8 @@ ed25519-dalek.workspace = true
 base64.workspace = true
 # Full jitter on retry backoff (issue #47).
 rand.workspace = true
+# Hex-decoding trust-anchor verify keys and STH signatures (issue #482).
+hex.workspace = true
 
 [features]
 # Exposes Session::grant_for_testing, a capability-grant escape hatch that

@@ -27,7 +27,12 @@
 //! or `Session`'s other methods yet — no method appends to the journal on
 //! its own. An integrator constructs a `FileJournal` and `SubmissionEngine`
 //! itself and drives them explicitly; `Session::submission_transport`
-//! supplies the `Transport` the engine submits through.
+//! supplies the `Transport` the engine submits through. `network` (issue
+//! #482) is the SDK-side counterpart to the Hub's STH-based network
+//! pinning (`docs/architecture/network-trust-anchors.md`) —
+//! `AvalonClient::verify_network` independently verifies which network a
+//! server actually is before an integrator registers an issuer or submits
+//! a write, since `network_id` alone carries no cryptographic authority.
 
 #![deny(missing_docs)]
 
@@ -36,6 +41,7 @@ pub mod conversations;
 pub mod device_login;
 pub mod guilds;
 mod http;
+pub mod network;
 pub mod registry;
 pub mod schema;
 pub mod social;

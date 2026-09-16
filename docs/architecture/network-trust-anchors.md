@@ -124,10 +124,15 @@ good. That is a governance/process problem — who can approve a change to
 does not claim otherwise; treat a PR touching `trusted-networks.json` with
 the scrutiny that claim deserves.
 
-This also does not yet cover the Rust SDK (`crates/sdk`) — the same
-verification belongs there once [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91)'s
-node-discovery work is active. #91 is about *finding* a node; this document
-is about *trusting* one once found — related, not the same problem.
+This is now also covered by the Rust SDK (`crates/sdk/src/network.rs`,
+[#482](https://github.com/LunarVagabond/avalon-protocol/issues/482)):
+`AvalonClient::verify_network` fetches `GET /ledger/sth/latest` and
+verifies it against the same `docs/trusted-networks.json` list, embedded
+directly into the crate rather than mirrored into a generated file the
+way `apps/hub` needs to. [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91)'s
+node-discovery work is a separate, still-open concern: #91 is about
+*finding* a node; this document (and #482's SDK-side check) is about
+*trusting* one once found.
 
 Nor does this solve, or attempt to solve, the reverse direction: whether a
 given *issuer's key* should be allowed to write on a given network. This
@@ -156,10 +161,16 @@ identity has to be established and enforced somewhere once `dev`/`int`/
 - `apps/hub/src/api/client.ts` — the Hub's first settlement/ledger API
   client (`GET /ledger/sth/latest`); none existed before this.
 - README's ["Trusted networks"](../../README.md#trusted-networks) section.
-- Not built: an SDK-side equivalent (tracked under #91 per above), a
-  "manually add a custom trust anchor" UI in the Hub (the Hub's own
-  invariant is satisfied by clearly flagging an unpinned network as
-  unverified rather than requiring a manual-add flow — see Invariants
+- `crates/sdk/src/network.rs` — the SDK-side equivalent (#482):
+  `TrustAnchorEntry`/`bundled_trust_anchors()` (embedded from
+  `docs/trusted-networks.json` via `include_str!`, no generated mirror
+  needed), `NetworkTrustStatus`'s four states, and
+  `AvalonClient::verify_network`, unit-tested against a real generated
+  Ed25519 keypair (valid, forged/wrong-key, and unpinned cases) plus a
+  `wiremock`-backed end-to-end fetch test.
+- Not built: a "manually add a custom trust anchor" UI in the Hub (the
+  Hub's own invariant is satisfied by clearly flagging an unpinned network
+  as unverified rather than requiring a manual-add flow — see Invariants
   below), and any server-side change — #210/#211 already built everything
   the server needed to expose.
 
@@ -185,3 +196,5 @@ identity has to be established and enforced somewhere once `dev`/`int`/
   the decisions that made STH signing real in the first place.
 - [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) — SDK
   node discovery, the related-but-distinct "finding a node" problem.
+- [#482](https://github.com/LunarVagabond/avalon-protocol/issues/482) —
+  this document's SDK-side counterpart, `crates/sdk/src/network.rs`.
