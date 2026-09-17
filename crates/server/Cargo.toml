@@ -49,6 +49,13 @@ passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
 public-suffix.workspace = true
+# Issue #539: a real websocket client for the cross-node relay live test —
+# already pulled in transitively via axum's own ws support, promoted to a
+# direct dev-dependency so `crates/server/tests/realtime_relay.rs` can
+# drive `GET /ws/chat` the same way an actual client does, rather than
+# testing relay delivery only indirectly.
+tokio-tungstenite = "0.29"
+futures-util = { workspace = true }
 
 [[bin]]
 name = "avalon-server"

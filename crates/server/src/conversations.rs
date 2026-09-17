@@ -252,7 +252,7 @@ pub async fn list_my_conversations(
     Ok(Json(conversations))
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -418,6 +418,11 @@ pub async fn send_message(
     // fresh-insert path publishes; the idempotent-retry return above
     // already published once, on the original send.
     state.chat.publish_conversation_message(response.clone());
+    // Issue #539: reach subscribers connected to a different node.
+    tokio::spawn(crate::realtime_relay::relay_to_peers(
+        state.clone(),
+        crate::realtime_relay::RelayEvent::ConversationMessage(response.clone()),
+    ));
     Ok(Json(response))
 }
 

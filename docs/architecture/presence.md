@@ -159,6 +159,25 @@ realtime connections is a separate axis from scaling history or queries
   each friend's presence live; the friend-*list* poll (membership changes —
   a request accepted/declined, a friend removed) still runs, just much
   slower now that presence itself doesn't depend on it for liveness.
+- **Cross-node relay (#539, implementing #535's decision).** Everything
+  above describes one process's own `PresenceStore` — until #539, a
+  `PresenceStore::set()` never reached a *different* `avalon-server`
+  process, so two friends connected to two different Realtime/Gateway
+  nodes couldn't see each other online. `update_my_presence`/
+  `update_integrator_presence` now also call
+  `crate::realtime_relay::relay_to_peers` (spawned, not awaited inline,
+  so an unreachable peer never delays the HTTP response) after every
+  `set()`, posting once to every same-`network_id` peer in this node's
+  own `nodes::PeerTable` that advertises a `realtime`/`gateway`/`combined`
+  role. The receiving node's `POST /nodes/relay` handler calls the new
+  `PresenceStore::apply_relayed` — the same local map-insert-plus-broadcast
+  `set()` does, preserving the *origin* node's `updated_at` rather than
+  re-stamping it, and never itself relaying again (single-hop by
+  construction — see `crate::realtime_relay`'s own module doc comment).
+  A single-node deployment (no peers) is unaffected: `relay_to_peers`
+  returns immediately when the peer table is empty. Live-verified with two
+  real `avalon-server` processes sharing one Postgres
+  (`crates/server/tests/realtime_relay.rs`).
 
 ## Decisions and tickets
 
