@@ -287,6 +287,12 @@ pub struct IssuerRegisteredPayload {
     pub registered_at: OffsetDateTime,
 }
 
+fn default_key_purpose() -> String {
+    crate::integrators::KeyPurpose::Attestation
+        .as_str()
+        .to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IssuerKeyAddedPayload {
     pub game_id: Uuid,
@@ -295,6 +301,13 @@ pub struct IssuerKeyAddedPayload {
     pub algorithm: String,
     pub public_key: String,
     pub role: String,
+    /// Issue #543. `#[serde(default = "default_key_purpose")]` (not a
+    /// bare `String` default, which would be `""`) so every
+    /// `issuer.key_added` event recorded before #543 existed — real
+    /// historical ledger entries — still decodes as exactly what it
+    /// already meant: `"attestation"`.
+    #[serde(default = "default_key_purpose")]
+    pub purpose: String,
     #[serde(
         skip_serializing_if = "Option::is_none",
         with = "time::serde::rfc3339::option",
@@ -1033,6 +1046,7 @@ mod tests {
             algorithm: "ed25519".to_string(),
             public_key: "base64key".to_string(),
             role: "operational".to_string(),
+            purpose: "attestation".to_string(),
             valid_until: None,
         };
         let json = serde_json::json!({
@@ -1042,12 +1056,31 @@ mod tests {
             "algorithm": "ed25519",
             "public_key": "base64key",
             "role": "operational",
+            "purpose": "attestation",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
             serde_json::from_value::<IssuerKeyAddedPayload>(json).unwrap(),
             payload
         );
+    }
+
+    #[test]
+    fn issuer_key_added_with_no_purpose_field_defaults_to_attestation() {
+        // Issue #543: real historical `issuer.key_added` events recorded
+        // before this field existed have no `purpose` key at all — this
+        // must decode as `"attestation"`, exactly what every such key
+        // already meant, not an error.
+        let pre_543_json = serde_json::json!({
+            "game_id": "00000000-0000-0000-0000-000000000000",
+            "slug": "ashen-realms",
+            "key_id": "00000000-0000-0000-0000-000000000000",
+            "algorithm": "ed25519",
+            "public_key": "base64key",
+            "role": "operational",
+        });
+        let payload: IssuerKeyAddedPayload = serde_json::from_value(pre_543_json).unwrap();
+        assert_eq!(payload.purpose, "attestation");
     }
 
     #[test]

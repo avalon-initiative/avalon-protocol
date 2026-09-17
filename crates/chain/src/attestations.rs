@@ -158,6 +158,7 @@ mod tests {
             algorithm: "ed25519".to_string(),
             public_key: signing_key.verifying_key().to_bytes().to_vec(),
             role: KeyRole::Root,
+            purpose: avalon_protocol::integrators::KeyPurpose::Attestation,
             valid_from,
             valid_until: None,
             revoked_at: None,

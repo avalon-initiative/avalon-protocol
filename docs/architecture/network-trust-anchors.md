@@ -204,9 +204,38 @@ Merkle math, wrong or revoked signer), not just aggregation math.
 | issuer key (`shard_settlement`) | the integrator, as a shard operator | signing that integrator's own shard's log entries / tree heads | #80 / #84 / #543 |
 | log operator key (core shard) | the core shard's operator | signing the core shard's log entries / tree heads | #39 |
 
-Implementation (the `purpose` field, per-shard key resolution via
-inclusion proof, and the witness-side cross-shard-root check) is separate
-follow-up work under epic #528, not part of this design pass.
+**Implemented (#543), one honest simplification from the original
+design.** `avalon_protocol::integrators::KeyPurpose` (`Attestation`/
+`ShardSettlement`) is a real field on `IssuerKey`/`issuer_keys`
+(migration `0069`), authorized through the exact same `POST
+/integrations/{slug}/keys` root-key-authorizes-operational-key flow
+attestation keys already use — no second registry, purpose is just
+another field on the same request/event/row. `IssuerKey::may_sign_attestations`/
+`may_sign_shard_settlement` keep the two domains mechanically
+non-interchangeable: a `shard_settlement` key can authenticate ordinary
+challenge-response calls (purpose never gates authentication) but can
+never be resolved as an attestation-signing key, and vice versa.
+`avalon_server::cross_shard::resolve_shard_verify_keys_from_db` is the
+witness-side composition with #529: given a `shard_id`
+(`"{namespace}:{owner}"`), it queries this node's own `issuer_keys` table
+directly for that integrator's currently-unrevoked `shard_settlement`
+keys and verifies the shard's fetched STH against them — falling back to
+the interim `AVALON_SHARD_VERIFY_KEYS` static config only when nothing
+resolves from the database.
+
+The one simplification from the original design: rather than an
+inclusion proof of the `issuer.key_added` event against the core shard's
+STH (which would let a *remote* node verify a shard without its own
+direct database access to `issuer_keys`), this node's own local
+`issuer_keys` table — durable, written in the same transaction as the
+`issuer.key_added` event itself — is queried directly. Both give the same
+answer for a node that already has the event applied locally; the
+inclusion-proof form only matters for a node verifying a shard it hasn't
+locally indexed `issuer.key_added` for, which isn't yet a real scenario
+in this milestone. Live-verified: a `shard_settlement` key registers and
+reads back with its purpose over the real API, and purpose-gating is
+unit-tested directly (`crates/protocol/src/integrators.rs`,
+`crates/server/tests/shard_trust_anchors.rs`).
 
 ## Today in the repo
 

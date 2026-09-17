@@ -97,6 +97,42 @@ impl KeyRole {
     }
 }
 
+/// What an issuer key is authorized to sign — a second, independent axis
+/// from [`KeyRole`] (issue #543): `role` governs *who can change the key
+/// set*, `purpose` governs *what the key speaks for*. Introduced for
+/// sharded settlement (#527): a shard operator's settlement-signing key
+/// is authorized through this exact same issuer-key registration flow,
+/// scoped with `ShardSettlement` rather than a second, separate registry
+/// — see `docs/architecture/network-trust-anchors.md`'s "Per-shard trust
+/// anchors" section. Defaults to `Attestation` (`#[serde(default)]` at
+/// every call site that reads one) so every key registered before #543
+/// existed — including pre-existing recorded ledger history — keeps
+/// decoding exactly as it always meant: an attestation-signing key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyPurpose {
+    #[default]
+    Attestation,
+    ShardSettlement,
+}
+
+impl KeyPurpose {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeyPurpose::Attestation => "attestation",
+            KeyPurpose::ShardSettlement => "shard_settlement",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<KeyPurpose> {
+        Some(match s {
+            "attestation" => KeyPurpose::Attestation,
+            "shard_settlement" => KeyPurpose::ShardSettlement,
+            _ => return None,
+        })
+    }
+}
+
 /// One key in an issuer's key history (issue #80, decided; implemented here
 /// per #84) — the record [`resolve_valid_signing_key`] and
 /// [`resolve_valid_root_key`] search. Pure data plus pure point-in-time
@@ -107,6 +143,12 @@ pub struct IssuerKey {
     pub algorithm: String,
     pub public_key: Vec<u8>,
     pub role: KeyRole,
+    /// Issue #543. `#[serde(default)]` so decoding a pre-#543 record
+    /// (nothing in its wire shape ever mentioned this field) falls back
+    /// to `KeyPurpose::Attestation` — exactly what every key registered
+    /// before this existed already meant.
+    #[serde(default)]
+    pub purpose: KeyPurpose,
     pub valid_from: OffsetDateTime,
     /// `None` means no expiry — the common case. `Some` is an issuer-chosen
     /// validity window, checked the same way `valid_from` and `revoked_at`
@@ -153,8 +195,20 @@ impl IssuerKey {
     /// rather than inlined at call sites so "can this key sign an
     /// attestation" reads as its own deliberate question, not an
     /// accidental `true` from forgetting to check role at all.
+    ///
+    /// Issue #543: now also gated on `purpose` — a `ShardSettlement`
+    /// key was never registered to speak for attestations at all, the
+    /// same "two distinct domains, never interchangeable" boundary
+    /// `docs/architecture/issuers.md`'s key-domain table already draws.
     pub fn may_sign_attestations(&self) -> bool {
-        true
+        self.purpose == KeyPurpose::Attestation
+    }
+
+    /// Issue #543: whether this key is registered to speak for its
+    /// issuer's settlement shard — the counterpart to
+    /// [`Self::may_sign_attestations`], never both for the same key.
+    pub fn may_sign_shard_settlement(&self) -> bool {
+        self.purpose == KeyPurpose::ShardSettlement
     }
 }
 
@@ -312,6 +366,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn key_purpose_round_trips_through_its_wire_string() {
+        assert_eq!(KeyPurpose::Attestation.as_str(), "attestation");
+        assert_eq!(KeyPurpose::ShardSettlement.as_str(), "shard_settlement");
+        assert_eq!(
+            KeyPurpose::parse("attestation"),
+            Some(KeyPurpose::Attestation)
+        );
+        assert_eq!(
+            KeyPurpose::parse("shard_settlement"),
+            Some(KeyPurpose::ShardSettlement)
+        );
+        assert_eq!(KeyPurpose::parse("bogus"), None);
+    }
+
+    #[test]
+    fn key_purpose_defaults_to_attestation() {
+        assert_eq!(KeyPurpose::default(), KeyPurpose::Attestation);
+    }
+
+    #[test]
+    fn purpose_gates_attestation_vs_shard_settlement_signing_authority_exclusively() {
+        let attestation_key = key(KeyRole::Operational, 0, None, None);
+        assert!(attestation_key.may_sign_attestations());
+        assert!(!attestation_key.may_sign_shard_settlement());
+
+        let mut shard_key = key(KeyRole::Operational, 0, None, None);
+        shard_key.purpose = KeyPurpose::ShardSettlement;
+        assert!(!shard_key.may_sign_attestations());
+        assert!(shard_key.may_sign_shard_settlement());
+    }
+
+    #[test]
     fn integrator_status_round_trips_through_its_wire_string() {
         assert_eq!(IntegratorStatus::Active.as_str(), "active");
         assert_eq!(
@@ -382,6 +468,7 @@ mod tests {
             algorithm: "ed25519".to_string(),
             public_key: vec![0u8; 32],
             role,
+            purpose: KeyPurpose::Attestation,
             valid_from: t(valid_from),
             valid_until: valid_until.map(t),
             revoked_at: revoked_at.map(t),
