@@ -176,13 +176,25 @@ cryptographically bound to one host:
   (or local `chain.commit`, for self-hosting) from where the stalled host
   left off. Nothing about the shard's identity or history changes; only
   which infrastructure is currently serving it does.
-- **Not solved by this pass: automatic/redundant multi-host submission.**
-  An integrator wanting live failover (rather than a manual switch after
-  noticing a stall) would need to submit concurrently to more than one
-  host and let whichever one actually finalizes first win — a real
-  option, not designed here. Today's mechanism makes switching *possible
-  and cheap*, not *automatic*; documented explicitly as the known,
-  narrower scope of this pass rather than silently assumed away.
+- **Automatic multi-host failover (issue #564).** An integrator wanting
+  live failover, rather than a manual switch after noticing a stall, can
+  use `avalon_sdk::managed_hosting::ManagedHostingClient` with more than
+  one candidate host. It fans `prepare-batch` out to every candidate
+  concurrently and uses whichever answers first — safe because `prepare`
+  is read-only (see `PostgresSettlementProvider::prepare`'s own doc
+  comment) — then `finalize-batch`es against that *one* host only, never
+  more than one per batch. A concurrent *finalize* fan-out would fork the
+  shard's log (two independent hosts each hold their own separate ledger,
+  so committing the same batch to two of them independently appends it
+  after two different tips); prepare-race/finalize-once avoids that by
+  construction, not by locking. If the chosen host's finalize itself
+  fails, the client falls back to prepare-racing the remaining
+  candidates rather than retrying blindly. `PostgresSettlementProvider::commit`/
+  `finalize` are also idempotent on a replayed `batch_id`, so a retried
+  finalize against the *same* host (a dropped response) returns the
+  existing commitment instead of erroring — that only de-duplicates
+  retries against one host, not across two, which is why the client's own
+  single-finalize discipline is what actually prevents a fork.
 
 ## Why this is safe to offer, and exactly where the line is
 
@@ -298,6 +310,15 @@ on the public network" — that's a real gap, not a hidden feature; see
   the human-readable dev format to one JSON object per line, the shape a
   self-hoster's log aggregator (Grafana/Loki, etc.) expects. See
   [`../maintainers/local-development.md`](../maintainers/local-development.md#logs-and-run-state).
+- Issue #564's prepare-race/finalize-once multi-host client:
+  `avalon_sdk::managed_hosting::ManagedHostingClient` (`crates/sdk/src/managed_hosting.rs`),
+  live-verified over real HTTP against two independently-running
+  `avalon-server` processes (`crates/sdk/tests/managed_hosting_live.rs`,
+  `--ignored`). `PostgresSettlementProvider::commit`/`finalize`'s
+  replayed-`batch_id` idempotency (`crates/chain/src/postgres.rs`) is the
+  companion server-side piece, covered by
+  `finalize_is_idempotent_on_a_replayed_batch_id`
+  (`crates/chain/tests/managed_hosting.rs`, `--ignored`).
 
 ## Decisions and tickets
 

@@ -47,6 +47,7 @@ pub mod device_login;
 pub mod guilds;
 mod http;
 pub mod issuer_registration;
+pub mod managed_hosting;
 pub mod network;
 pub mod registry;
 pub mod schema;

@@ -211,3 +211,68 @@ async fn finalize_after_the_tip_moved_since_prepare_is_rejected() {
          against outdated tree_size/root_hash"
     );
 }
+
+/// Issue #564: a replayed `finalize` for the same `batch_id` (a client
+/// retrying after a timeout without knowing whether its first attempt
+/// landed) must return the *existing* commitment, not error or insert a
+/// second copy of the entry.
+#[tokio::test]
+#[ignore]
+async fn finalize_is_idempotent_on_a_replayed_batch_id() {
+    let pool = test_pool().await;
+    let _guard = ledger_test_lock().lock().await;
+    let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+    let integrator_key = SigningKey::generate(&mut rand::rng());
+    let batch = sample_batch("test.managed_hosting_idempotent");
+
+    let preview = chain.prepare(&batch).await.expect("prepare failed");
+    let message = avalon_chain::sth::signing_message(
+        preview.tree_size,
+        &preview.root_hash,
+        &preview.network_id,
+        preview.created_at,
+    );
+    let signature = integrator_key.sign(&message);
+
+    let first = chain
+        .finalize(
+            &batch,
+            preview.created_at,
+            "integrator-key-1",
+            &hex::encode(signature.to_bytes()),
+            &integrator_key.verifying_key(),
+        )
+        .await
+        .expect("first finalize should succeed");
+
+    // Replay the exact same finalize call — same batch, same signature —
+    // simulating a client that never saw the first response.
+    let second = chain
+        .finalize(
+            &batch,
+            preview.created_at,
+            "integrator-key-1",
+            &hex::encode(signature.to_bytes()),
+            &integrator_key.verifying_key(),
+        )
+        .await
+        .expect("replayed finalize must return the existing commitment, not error");
+
+    assert_eq!(
+        first.batch_id, second.batch_id,
+        "must be the same commitment"
+    );
+    assert_eq!(first.proof, second.proof);
+    assert_eq!(
+        first.committed_at, second.committed_at,
+        "a replay must echo the same caller-signed created_at back, not a DB-sourced timestamp"
+    );
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ledger_entries WHERE event_id = $1")
+        .bind(batch.events[0].id)
+        .fetch_one(&pool)
+        .await
+        .expect("query failed");
+    assert_eq!(count, 1, "the replay must not have inserted a second entry");
+}
