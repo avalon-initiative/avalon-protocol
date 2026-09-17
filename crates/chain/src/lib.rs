@@ -8,6 +8,7 @@
 //! *how* commitments are produced, only on this trait.
 
 pub mod attestations;
+pub mod cross_shard;
 pub mod incremental_merkle;
 pub mod merkle;
 pub mod mirror;

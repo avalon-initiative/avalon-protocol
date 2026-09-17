@@ -271,11 +271,32 @@ trivially equal to that shard's own STH in everything but shape — the
 single-operator case from earlier in this document is the one-shard
 special case of this design, not a separate code path.
 
-Implementation (building this into `chain`/`server`, plus the live tests
-#529 calls for — two independent nodes given the same gossiped shard STHs
-producing byte-identical cross-shard roots, and a node with a missing
-shard correctly marking its root `partial`) is separate follow-up work
-under epic #528, not part of this design pass.
+**Implemented (#529).** `avalon_chain::cross_shard` is the pure aggregation
+math — `compute_cross_shard_root`/`compute_cross_shard_root_checked` take
+a `Vec<ShardTreeHead>` (already-verified `(shard_id, SignedTreeHead)`
+pairs, from wherever a node gathered them) and produce a
+`CrossShardRoot`, reusing the exact same RFC 6962 `merkle::mth`/
+`inclusion_proof`/`verify_inclusion_proof` the per-shard tree already
+uses — no new hashing scheme, no new proof type. `avalon_server::cross_shard`
+is the network-facing half: `GET /ledger/cross-shard-root` fetches each
+configured known shard's `/ledger/sth/latest` (the same read any mirror
+already uses), verifies it, and aggregates — or, with no shards
+configured, falls back to this node's own local STH as the one-shard
+degenerate case, no network calls. **Interim, config-based shard
+discovery/trust** (`AVALON_KNOWN_SHARDS`/`AVALON_SHARD_VERIFY_KEYS`):
+#543's real per-shard key resolution (via `issuer.key_added(purpose:
+shard_settlement)` inclusion proofs) isn't built yet, so an operator
+configures which shards exist and their verify keys directly for now — a
+shard with no configured key, or a failed fetch/verify, is folded into
+`missing_shard_ids` exactly like a shard this node has never heard from,
+never silently included unverified.
+
+Live-verified, including #529's own stated acceptance test: two
+independent `avalon-server` processes, both configured with the identical
+known-shards set, computing byte-for-byte identical `root_hash` values
+(`crates/server/tests/cross_shard.rs`), plus the pure aggregation math's
+own determinism/partial-detection/inclusion-proof unit tests
+(`crates/chain/src/cross_shard.rs`).
 
 ### Write routing to the correct shard (#532)
 

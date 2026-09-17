@@ -389,6 +389,7 @@ mod live_tests {
             settlement_submit_key: None,
             peers: crate::nodes::PeerTable::new(),
             managed_hosting_verify_key: None,
+            known_shards: None,
         }
     }
 

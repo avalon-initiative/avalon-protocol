@@ -48,4 +48,10 @@ pub struct AppState {
     /// per-shard key resolution (via issuer-key registration) isn't built
     /// yet — see `crate::settlement`'s module doc comment.
     pub managed_hosting_verify_key: Option<ed25519_dalek::VerifyingKey>,
+    /// `AVALON_KNOWN_SHARDS`/`AVALON_SHARD_VERIFY_KEYS` (issue #529) —
+    /// which shards this node aggregates into a cross-shard root, and how
+    /// it verifies each one's STH. `None` (the default) falls back to the
+    /// one-shard degenerate case — see `crate::cross_shard`'s own module
+    /// doc comment.
+    pub known_shards: Option<crate::cross_shard::KnownShardsConfig>,
 }
