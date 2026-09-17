@@ -1,0 +1,40 @@
+# Issue #545: optional, per-hoster Redis-backed rate limit/concurrency
+# ceiling. Applied as a compose *override* file, not folded into
+# docker-compose.yml directly, because AVALON_REDIS_URL genuinely can't be
+# "present but harmless" — `avalon-server` hard-fails at startup if it's
+# set and Redis isn't actually reachable (see `crates/server/src/redis_limits.rs`).
+# An override file is what lets `AVALON_REDIS_URL` be truly *absent*
+# (not just empty) for `make stack-up-no-redis`, rather than pointing at a
+# container that was never started.
+#
+# `make stack-up` (the default) applies this automatically:
+#   docker compose -f docker-compose.yml -f docker-compose.redis.yml ...
+# `make stack-up-no-redis` uses docker-compose.yml alone.
+#
+# This is per-stack, not network-wide — see `crate::redis_limits`'s own
+# module doc comment: a hoster's Redis only ever shares state across that
+# one hoster's own `avalon-server` instances, never across independent
+# deployments. Today's `stack-up` only starts one `avalon-server`
+# container, so this genuinely does nothing useful yet on its own — it's
+# here so a hoster who later scales to more than one replica already has
+# it running, rather than silently reverting to per-process limits the
+# moment they do.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: avalon-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles: ["stack"]
+
+  avalon-server:
+    environment:
+      AVALON_REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
