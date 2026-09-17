@@ -623,6 +623,103 @@ pub async fn submit_ledger_batch(
     headers: HeaderMap,
     Json(batch): Json<EventBatch>,
 ) -> Result<Json<Commitment>, AppError> {
+    require_settlement_submit_key(&state, &headers)?;
+    let commitment = state.chain.commit(&batch).await?;
+    Ok(Json(commitment))
+}
+
+/// `POST /ledger/prepare-batch` — issue #531's managed-hosting two-phase
+/// remote-signing flow, phase one. An integrator using a managed host
+/// (rather than self-hosting) submits its already-collected pending
+/// events; this handler returns the unsigned candidate tree head
+/// (`avalon_chain::sth::PreparedTreeHead`) the integrator needs to sign
+/// *locally*, with its own settlement key — this node never holds, sees,
+/// or asks for that key. See `PostgresSettlementProvider::prepare`'s own
+/// doc comment for why the response is a stateless preview, not something
+/// this node persists as "pending."
+///
+/// **Auth**: the same shared-secret bearer mechanism `submit_ledger_batch`
+/// above uses (`AVALON_SETTLEMENT_SUBMIT_KEY`) — this is node-to-node/
+/// integrator-to-managed-host traffic, not a public read. A managed host
+/// with `AVALON_MANAGED_HOSTING_VERIFY_KEY` unset also refuses every
+/// request here (see `finalize_batch`'s own doc comment for why gating
+/// both endpoints on that one var, not just `finalize`, is the honest
+/// choice) — preparing a batch there could never be finalized anyway.
+pub async fn prepare_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(batch): Json<EventBatch>,
+) -> Result<Json<avalon_chain::sth::PreparedTreeHead>, AppError> {
+    require_settlement_submit_key(&state, &headers)?;
+    if state.managed_hosting_verify_key.is_none() {
+        return Err(AppError::Unauthorized);
+    }
+
+    let preview = state.chain.prepare(&batch).await?;
+    Ok(Json(preview))
+}
+
+#[derive(Deserialize)]
+pub struct FinalizeBatchRequest {
+    pub batch: EventBatch,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    pub signing_key_id: String,
+    /// Hex-encoded Ed25519 signature over
+    /// `avalon_chain::sth::signing_message(tree_size, root_hash,
+    /// network_id, created_at)` — the exact preview `prepare_batch`
+    /// returned, computed and signed by the integrator's own settlement
+    /// key.
+    pub signature: String,
+}
+
+/// `POST /ledger/finalize-batch` — issue #531's managed-hosting two-phase
+/// remote-signing flow, phase two. Verifies the caller's signature against
+/// `AVALON_MANAGED_HOSTING_VERIFY_KEY` and, only if it checks out,
+/// actually commits `body.batch` — see
+/// `PostgresSettlementProvider::finalize`'s own doc comment for why this
+/// recomputes everything fresh rather than trusting a prior `prepare`
+/// call, and why that alone is what makes a stale or forged finalize fail
+/// cleanly.
+///
+/// **Interim, single-key-per-node** (`AVALON_MANAGED_HOSTING_VERIFY_KEY`,
+/// `AppState::managed_hosting_verify_key`): a managed-hosting node is
+/// presumed dedicated to exactly one hosted integrator's shard for now.
+/// #543 (per-shard trust anchors — resolving a shard's authorized
+/// signing key via that integrator's own `issuer.key_added` event,
+/// reusing issuer-key registration rather than a static config value) is
+/// the real, designed replacement for this; not built yet, so this is the
+/// honest interim. Unset, this endpoint refuses every request — an
+/// operator who never turns on managed hosting gets an endpoint that
+/// exists but accepts nothing, never one that's silently open.
+pub async fn finalize_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FinalizeBatchRequest>,
+) -> Result<Json<Commitment>, AppError> {
+    require_settlement_submit_key(&state, &headers)?;
+    let verify_key = state
+        .managed_hosting_verify_key
+        .as_ref()
+        .ok_or(AppError::Unauthorized)?;
+
+    let commitment = state
+        .chain
+        .finalize(
+            &body.batch,
+            body.created_at,
+            &body.signing_key_id,
+            &body.signature,
+            verify_key,
+        )
+        .await?;
+    Ok(Json(commitment))
+}
+
+/// Shared bearer-token check `prepare_batch`/`finalize_batch` both use —
+/// factored out of `submit_ledger_batch` rather than duplicated a third
+/// time.
+fn require_settlement_submit_key(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
     let expected = state
         .settlement_submit_key
         .as_deref()
@@ -635,7 +732,5 @@ pub async fn submit_ledger_batch(
     if provided != expected {
         return Err(AppError::Unauthorized);
     }
-
-    let commitment = state.chain.commit(&batch).await?;
-    Ok(Json(commitment))
+    Ok(())
 }

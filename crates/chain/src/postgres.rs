@@ -997,20 +997,24 @@ pub struct LedgerBatchView {
     pub committed_at: time::OffsetDateTime,
 }
 
-#[async_trait]
-impl SettlementProvider for PostgresSettlementProvider {
-    async fn commit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+impl PostgresSettlementProvider {
+    /// Inserts `batch`'s events as `ledger_entries`, computes the
+    /// resulting Merkle tree size/root, and inserts the `ledger_batches`
+    /// row — everything `commit`/`finalize` (issue #531) share, up to but
+    /// not including who signs the resulting Signed Tree Head (a local
+    /// key for `commit`, a caller-provided already-verified signature for
+    /// `finalize`). Callers commit or roll back `tx` themselves; nothing
+    /// here is durable until the caller commits it.
+    async fn insert_batch_and_compute_root(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        batch: &EventBatch,
+    ) -> Result<(i64, String, time::OffsetDateTime), SettlementError> {
         if batch.events.is_empty() {
             return Err(SettlementError::Storage(
                 "cannot commit an empty batch".to_string(),
             ));
         }
-
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         let mut prev_hash = self.tip_hash().await?;
         let mut first_seq: Option<i64> = None;
@@ -1043,7 +1047,7 @@ impl SettlementProvider for PostgresSettlementProvider {
             .bind(&prev_hash)
             .bind(&entry_hash)
             .bind(batch.id)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
@@ -1067,7 +1071,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         // doesn't hold, e.g. right after process start.
         let mut cached = self.leaf_cache.write().await;
         let previous_committed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ledger_entries")
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
         let previous_committed = previous_committed - batch_hashes.len() as i64;
@@ -1090,7 +1094,7 @@ impl SettlementProvider for PostgresSettlementProvider {
                     "SELECT entry_hash FROM ledger_entries WHERE seq <= $1 ORDER BY seq ASC",
                 )
                 .bind(last_seq)
-                .fetch_all(&mut *tx)
+                .fetch_all(&mut **tx)
                 .await
                 .map_err(|e| SettlementError::Storage(e.to_string()))?;
                 let fetched: Vec<String> = leaf_rows
@@ -1121,13 +1125,190 @@ impl SettlementProvider for PostgresSettlementProvider {
         .bind(first_seq)
         .bind(last_seq)
         .bind(&batch_root)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
         let committed_at: time::OffsetDateTime = batch_row
             .try_get("committed_at")
             .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        Ok((tree_size, batch_root, committed_at))
+    }
+
+    /// Inserts a Signed Tree Head row using an already-built
+    /// [`SignedTreeHead`] — shared by `commit` (locally signed) and
+    /// `finalize` (issue #531, caller-signed and independently verified
+    /// before this is ever called).
+    async fn insert_signed_tree_head(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tree_head: &SignedTreeHead,
+    ) -> Result<(), SettlementError> {
+        sqlx::query(
+            r#"
+            INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(tree_head.tree_size)
+        .bind(&tree_head.root_hash)
+        .bind(&tree_head.network_id)
+        .bind(&tree_head.signing_key_id)
+        .bind(&tree_head.signature)
+        .bind(tree_head.created_at)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Issue #531 (managed hosting): the first half of the two-phase
+    /// remote-signing flow — `POST /ledger/prepare-batch`
+    /// (`crate::settlement`, `avalon-server`) calls this to give an
+    /// integrator using a managed host the exact tree head they need to
+    /// sign locally with their own settlement key, without that key ever
+    /// touching this node.
+    ///
+    /// **Read-only — never touches `ledger_entries`, `ledger_batches`, or
+    /// the shared `leaf_cache`.** Deliberately not the fast incremental
+    /// path `commit`/`finalize` use: a preview that mutated shared state
+    /// or burned real `seq` values (Postgres identity columns advance
+    /// even inside a rolled-back transaction) every time it was called,
+    /// whether or not the caller ever actually finalizes, would be a real
+    /// cost with no corresponding commit. A fresh full fetch-and-recompute
+    /// is the correct tradeoff here — previews are infrequent relative to
+    /// `commit`'s own hot path.
+    ///
+    /// Because [`Self::finalize`] independently recomputes everything
+    /// fresh rather than trusting this preview back, nothing returned
+    /// here needs to be persisted or tracked as "pending" — if the
+    /// ledger's tip moves between `prepare` and `finalize`, the caller's
+    /// signature (over this preview's now-stale values) simply fails to
+    /// verify against `finalize`'s freshly-recomputed ones, and the
+    /// caller re-prepares and re-signs.
+    pub async fn prepare(
+        &self,
+        batch: &EventBatch,
+    ) -> Result<sth::PreparedTreeHead, SettlementError> {
+        if batch.events.is_empty() {
+            return Err(SettlementError::Storage(
+                "cannot prepare an empty batch".to_string(),
+            ));
+        }
+
+        let mut prev_hash = self.tip_hash().await?;
+        let mut entry_hashes = Vec::with_capacity(batch.events.len());
+        for event in &batch.events {
+            let entry_hash = hash_event(&self.network_id, &prev_hash, event);
+            entry_hashes.push(entry_hash.clone());
+            prev_hash = entry_hash;
+        }
+
+        let existing_rows = sqlx::query("SELECT entry_hash FROM ledger_entries ORDER BY seq ASC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        let mut all_hashes: Vec<String> = existing_rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("entry_hash"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        all_hashes.extend(entry_hashes);
+
+        let tree_size = all_hashes.len() as i64;
+        let root = merkle::mth_of_hex_hashes(&all_hashes).map_err(SettlementError::Storage)?;
+
+        Ok(sth::PreparedTreeHead {
+            batch_id: batch.id,
+            tree_size,
+            root_hash: hex::encode(root),
+            network_id: self.network_id.clone(),
+            created_at: time::OffsetDateTime::now_utc(),
+        })
+    }
+
+    /// Issue #531 (managed hosting): the second half of the two-phase
+    /// remote-signing flow — `POST /ledger/finalize-batch`
+    /// (`crate::settlement`, `avalon-server`) calls this after a caller
+    /// (an integrator using a managed host) has independently signed the
+    /// tree head [`Self::commit`] would otherwise have signed with a
+    /// locally-held key.
+    ///
+    /// **Does not trust anything from a prior `prepare` call as
+    /// authoritative** — it recomputes `batch`'s insertion and resulting
+    /// tree size/root fresh, inside a real transaction, from this node's
+    /// *current* tip. It then builds the candidate `SignedTreeHead` from
+    /// those freshly-computed values (never from whatever a caller might
+    /// claim) plus the caller-supplied `signing_key_id`/`signature`/
+    /// `created_at`, and verifies that against `verify_key` *before*
+    /// committing the transaction. A stale finalize (the ledger's tip
+    /// moved since the caller last previewed it) or a forged/wrong
+    /// signature both fail signature verification here — one check
+    /// closes both failure modes, and the transaction rolls back on
+    /// either, so a rejected finalize never burns real `seq`/tree state.
+    pub async fn finalize(
+        &self,
+        batch: &EventBatch,
+        created_at: time::OffsetDateTime,
+        signing_key_id: &str,
+        signature_hex: &str,
+        verify_key: &ed25519_dalek::VerifyingKey,
+    ) -> Result<Commitment, SettlementError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let (tree_size, batch_root, _real_committed_at) =
+            self.insert_batch_and_compute_root(&mut tx, batch).await?;
+
+        let candidate = SignedTreeHead {
+            tree_size,
+            root_hash: batch_root.clone(),
+            network_id: self.network_id.clone(),
+            signing_key_id: signing_key_id.to_string(),
+            signature: signature_hex.to_string(),
+            created_at,
+        };
+        if !sth::verify_tree_head(verify_key, &candidate) {
+            // Transaction is dropped without `commit()`, rolling back
+            // everything `insert_batch_and_compute_root` just did — a
+            // rejected finalize (stale tip, or a genuinely invalid
+            // signature) never leaves partial state or burns `seq`.
+            return Err(SettlementError::Storage(
+                "finalize: signature does not verify against the freshly-computed tree head \
+                 (stale prepare, or an invalid signature) — re-prepare and re-sign"
+                    .to_string(),
+            ));
+        }
+
+        self.insert_signed_tree_head(&mut tx, &candidate).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        Ok(Commitment {
+            batch_id: batch.id,
+            proof: batch_root.into_bytes(),
+            committed_at: candidate.created_at,
+        })
+    }
+}
+
+#[async_trait]
+impl SettlementProvider for PostgresSettlementProvider {
+    async fn commit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+        let (tree_size, batch_root, committed_at) =
+            self.insert_batch_and_compute_root(&mut tx, batch).await?;
 
         // Signed Tree Head (issue #210/#39): one per batch commit, in this
         // same transaction, STH-only signing — no per-entry signature is
@@ -1143,21 +1324,7 @@ impl SettlementProvider for PostgresSettlementProvider {
             &self.network_id,
             committed_at,
         );
-        sqlx::query(
-            r#"
-            INSERT INTO signed_tree_heads (tree_size, root_hash, network_id, signing_key_id, signature, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            "#,
-        )
-        .bind(tree_head.tree_size)
-        .bind(&tree_head.root_hash)
-        .bind(&tree_head.network_id)
-        .bind(&tree_head.signing_key_id)
-        .bind(&tree_head.signature)
-        .bind(tree_head.created_at)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        self.insert_signed_tree_head(&mut tx, &tree_head).await?;
 
         tx.commit()
             .await

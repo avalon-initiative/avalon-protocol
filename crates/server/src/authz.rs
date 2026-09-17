@@ -388,6 +388,7 @@ mod live_tests {
             chat: crate::chat::ChatBus::new(),
             settlement_submit_key: None,
             peers: crate::nodes::PeerTable::new(),
+            managed_hosting_verify_key: None,
         }
     }
 

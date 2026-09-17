@@ -37,4 +37,15 @@ pub struct AppState {
     /// This node's local peer table (issue #362) — in-process,
     /// non-durable, same posture `presence` takes. See `crate::nodes`.
     pub peers: PeerTable,
+    /// `AVALON_MANAGED_HOSTING_VERIFY_KEY` (issue #531) — the one hosted
+    /// integrator's settlement *public* key, used only to verify a
+    /// `POST /ledger/finalize-batch` caller's signature; this node never
+    /// holds the corresponding private key. `None` means both
+    /// `/ledger/prepare-batch` and `/ledger/finalize-batch` refuse every
+    /// request — an operator who never turns on managed hosting gets
+    /// endpoints that exist but accept nothing, never ones that are
+    /// silently open. **Interim, single-key-per-node**: #543's real
+    /// per-shard key resolution (via issuer-key registration) isn't built
+    /// yet — see `crate::settlement`'s module doc comment.
+    pub managed_hosting_verify_key: Option<ed25519_dalek::VerifyingKey>,
 }

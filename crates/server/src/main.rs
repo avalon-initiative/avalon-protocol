@@ -120,6 +120,23 @@ async fn main() {
             .ok()
             .filter(|s| !s.is_empty()),
         peers: peers.clone(),
+        // Issue #531: interim, single-key managed-hosting verify key —
+        // see `AppState::managed_hosting_verify_key`'s own doc comment.
+        managed_hosting_verify_key: std::env::var("AVALON_MANAGED_HOSTING_VERIFY_KEY")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|hex_value| {
+                let bytes = hex::decode(&hex_value)
+                    .expect("AVALON_MANAGED_HOSTING_VERIFY_KEY must be valid hex");
+                let bytes: [u8; 32] = bytes.try_into().unwrap_or_else(|v: Vec<u8>| {
+                    panic!(
+                        "AVALON_MANAGED_HOSTING_VERIFY_KEY must decode to exactly 32 bytes, got {}",
+                        v.len()
+                    )
+                });
+                ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+                    .expect("AVALON_MANAGED_HOSTING_VERIFY_KEY is not a valid Ed25519 key")
+            }),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
