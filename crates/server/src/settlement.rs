@@ -599,6 +599,50 @@ pub async fn list_entries(
     Ok(Json(entries.into_iter().map(Into::into).collect()))
 }
 
+#[derive(Deserialize)]
+pub struct MirrorProgressQuery {
+    pub network_id: String,
+}
+
+#[derive(Serialize)]
+pub struct MirrorProgressResponse {
+    pub network_id: String,
+    /// The highest `seq` this node has independently verified and stored
+    /// in its own `mirrored_entries` for `network_id` — `0` if it has
+    /// never mirrored anything for that network at all. Compared against
+    /// a would-be pruning node's own boundary `seq` for archive-
+    /// confirmation gating (issue #569) — see
+    /// `avalon_server::retention`'s module doc comment.
+    pub last_seq: i64,
+}
+
+/// `GET /ledger/mirror-progress?network_id={id}` — issue #569's
+/// archive-confirmation gating: how far *this* node has independently
+/// verified and mirrored `network_id`'s history, so a hot-tier node
+/// elsewhere can confirm this one already has full payloads for whatever
+/// it's about to prune, before actually pruning it. Public,
+/// unauthenticated — same posture as every other `/ledger/*` diagnostic
+/// read in this module (see module docs): a mirrored progress count isn't
+/// sensitive, and gating it would defeat the point for the exact
+/// automated caller this exists for.
+///
+/// Deliberately reports only from `mirrored_entries` (this node's own
+/// independently-verified mirror of *another* node), never from
+/// `state.chain`'s own authored `ledger_entries` — a node checking
+/// whether it's safe to prune its own history needs to know whether
+/// *someone else* independently holds a copy, not whether it holds one
+/// itself.
+pub async fn mirror_progress(
+    State(state): State<AppState>,
+    Query(query): Query<MirrorProgressQuery>,
+) -> Result<Json<MirrorProgressResponse>, AppError> {
+    let progress = mirror::mirrored_progress(&state.pool, &query.network_id).await?;
+    Ok(Json(MirrorProgressResponse {
+        network_id: query.network_id,
+        last_seq: progress.last_seq,
+    }))
+}
+
 /// `POST /ledger/submit` — issue #313's node-to-node write endpoint: a
 /// remote-settlement node's `outbox::run_worker` posts each drained batch
 /// here instead of calling `chain.commit` against its own pool, and this

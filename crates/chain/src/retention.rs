@@ -3,6 +3,14 @@
 //! tiers" section for the two-tier design, the env config, and the
 //! honest milestone-1 caveat that pruning today means real permanent
 //! data loss since no archive-tier mirror network exists yet.
+//!
+//! **Archive-confirmation gating (issue #569, closing the gap the note
+//! above used to describe as pure operator discipline).** `archive_peers`/
+//! `min_archive_confirmations` below are this crate's pure config half —
+//! the actual HTTP confirmation check (querying each peer's own mirrored
+//! progress before pruning) lives in `avalon_server::retention`, since
+//! this crate deliberately has no network I/O of its own. See that
+//! module's doc comment for the full mechanism.
 
 use time::{Duration, OffsetDateTime};
 
@@ -35,23 +43,44 @@ impl RetentionTier {
 /// Two independent gates on purpose: declaring `hot` alone commits a node
 /// to *eventually* pruning down to its window, without yet accepting the
 /// "nothing else retains a copy" risk described in the module doc comment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetentionConfig {
     pub tier: RetentionTier,
     /// Off by default. Must be explicitly set `true` (`AVALON_RETENTION_PRUNING_ENABLED=true`)
     /// for [`Self::should_prune`] to ever return `true` — see the module
     /// doc comment for what turning this on means today.
     pub pruning_enabled: bool,
+    /// Issue #569: base URLs of nodes expected to have mirrored this
+    /// node's own network before pruning is allowed to proceed past what
+    /// they've confirmed. Empty (the default) means no gating at all —
+    /// additive, opt-in, same posture every other retention knob here
+    /// takes; a node that never sets this behaves exactly as before this
+    /// existed.
+    pub archive_peers: Vec<String>,
+    /// How many *distinct* `archive_peers` must confirm coverage up to a
+    /// pruning pass's boundary before it's allowed to run. Meaningless
+    /// (never checked) when `archive_peers` is empty.
+    pub min_archive_confirmations: usize,
 }
 
 impl RetentionConfig {
     /// A full-tier node with pruning left off — the safe default returned
     /// whenever the relevant env vars are unset.
-    pub const fn full() -> Self {
+    pub fn full() -> Self {
         Self {
             tier: RetentionTier::Full,
             pruning_enabled: false,
+            archive_peers: Vec::new(),
+            min_archive_confirmations: 0,
         }
+    }
+
+    /// Issue #569: whether a pruning pass must first confirm archive
+    /// coverage before it's allowed to run — `false` (no gating, today's
+    /// original milestone-1 behavior) whenever `archive_peers` is empty,
+    /// regardless of `min_archive_confirmations`.
+    pub fn requires_archive_confirmation(&self) -> bool {
+        !self.archive_peers.is_empty() && self.min_archive_confirmations > 0
     }
 
     /// Whether this node should actually run pruning: both "declared hot
@@ -83,15 +112,23 @@ impl RetentionConfig {
     /// - `AVALON_RETENTION_PRUNING_ENABLED` — `true`/`false` (default
     ///   `false`). Only meaningful for the `hot` tier; see
     ///   [`Self::should_prune`].
+    /// - `AVALON_RETENTION_ARCHIVE_PEERS` (issue #569) — comma-separated
+    ///   base URLs of nodes expected to mirror this one; unset/empty means
+    ///   no archive-confirmation gating at all.
+    /// - `AVALON_RETENTION_MIN_ARCHIVE_CONFIRMATIONS` — positive integer,
+    ///   only read when `AVALON_RETENTION_ARCHIVE_PEERS` is non-empty;
+    ///   defaults to `1` when peers are configured but this is left unset.
     pub fn from_env() -> Result<Self, RetentionConfigError> {
         Self::from_vars(
             std::env::var("AVALON_RETENTION_TIER").ok(),
             std::env::var("AVALON_RETENTION_HOT_WINDOW_DAYS").ok(),
             std::env::var("AVALON_RETENTION_PRUNING_ENABLED").ok(),
+            std::env::var("AVALON_RETENTION_ARCHIVE_PEERS").ok(),
+            std::env::var("AVALON_RETENTION_MIN_ARCHIVE_CONFIRMATIONS").ok(),
         )
     }
 
-    /// The pure, testable core of [`Self::from_env`] — takes the three raw
+    /// The pure, testable core of [`Self::from_env`] — takes the raw
     /// env-var values directly rather than reading the environment, so
     /// every combination is unit-testable without `std::env` mutation
     /// (which isn't thread-safe across parallel tests).
@@ -99,6 +136,8 @@ impl RetentionConfig {
         tier_var: Option<String>,
         window_var: Option<String>,
         pruning_var: Option<String>,
+        archive_peers_var: Option<String>,
+        min_archive_confirmations_var: Option<String>,
     ) -> Result<Self, RetentionConfigError> {
         let tier = match tier_var.as_deref().map(str::trim) {
             None | Some("") | Some("full") => RetentionTier::Full,
@@ -123,9 +162,30 @@ impl RetentionConfig {
             Some(other) => return Err(RetentionConfigError::InvalidPruningFlag(other.to_string())),
         };
 
+        let archive_peers: Vec<String> = archive_peers_var
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let min_archive_confirmations = if archive_peers.is_empty() {
+            0
+        } else {
+            match min_archive_confirmations_var.as_deref().map(str::trim) {
+                None | Some("") => 1,
+                Some(raw) => raw.parse::<usize>().map_err(|_| {
+                    RetentionConfigError::InvalidMinArchiveConfirmations(raw.to_string())
+                })?,
+            }
+        };
+
         Ok(Self {
             tier,
             pruning_enabled,
+            archive_peers,
+            min_archive_confirmations,
         })
     }
 
@@ -133,7 +193,7 @@ impl RetentionConfig {
     /// at startup alongside its `network_id` line, and what `avalon
     /// prune-ledger` prints before acting.
     pub fn describe(&self) -> String {
-        match self.tier {
+        let base = match self.tier {
             RetentionTier::Full => "full/archive (no pruning; complete history retained)".into(),
             RetentionTier::Hot { window_days } => format!(
                 "hot ({window_days}-day window; pruning {})",
@@ -143,6 +203,15 @@ impl RetentionConfig {
                     "disabled — behaves as a full node until AVALON_RETENTION_PRUNING_ENABLED=true"
                 }
             ),
+        };
+        if self.requires_archive_confirmation() {
+            format!(
+                "{base}; gated on {} archive confirmation(s) among {} configured peer(s) before each prune",
+                self.min_archive_confirmations,
+                self.archive_peers.len()
+            )
+        } else {
+            base
         }
     }
 }
@@ -159,6 +228,10 @@ pub enum RetentionConfigError {
     UnknownTier(String),
     #[error("AVALON_RETENTION_PRUNING_ENABLED must be `true` or `false`, got {0:?}")]
     InvalidPruningFlag(String),
+    #[error(
+        "AVALON_RETENTION_MIN_ARCHIVE_CONFIRMATIONS must be a non-negative integer, got {0:?}"
+    )]
+    InvalidMinArchiveConfirmations(String),
 }
 
 /// What one pruning pass did — returned by
@@ -176,7 +249,7 @@ mod tests {
 
     #[test]
     fn defaults_to_full_tier_with_pruning_off_when_unset() {
-        let config = RetentionConfig::from_vars(None, None, None).unwrap();
+        let config = RetentionConfig::from_vars(None, None, None, None, None).unwrap();
         assert_eq!(config.tier, RetentionTier::Full);
         assert!(!config.pruning_enabled);
         assert!(!config.should_prune());
@@ -184,21 +257,29 @@ mod tests {
 
     #[test]
     fn explicit_full_tier_parses_the_same_as_unset() {
-        let config = RetentionConfig::from_vars(Some("full".into()), None, None).unwrap();
+        let config =
+            RetentionConfig::from_vars(Some("full".into()), None, None, None, None).unwrap();
         assert_eq!(config.tier, RetentionTier::Full);
     }
 
     #[test]
     fn hot_tier_requires_a_window() {
-        let err = RetentionConfig::from_vars(Some("hot".into()), None, None).unwrap_err();
+        let err =
+            RetentionConfig::from_vars(Some("hot".into()), None, None, None, None).unwrap_err();
         assert!(matches!(err, RetentionConfigError::MissingHotWindow));
     }
 
     #[test]
     fn hot_tier_rejects_a_non_positive_window() {
         for bad in ["0", "-5", "not-a-number"] {
-            let err = RetentionConfig::from_vars(Some("hot".into()), Some(bad.to_string()), None)
-                .unwrap_err();
+            let err = RetentionConfig::from_vars(
+                Some("hot".into()),
+                Some(bad.to_string()),
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
             assert!(matches!(err, RetentionConfigError::InvalidHotWindow(_)));
         }
     }
@@ -206,7 +287,8 @@ mod tests {
     #[test]
     fn hot_tier_with_valid_window_parses() {
         let config =
-            RetentionConfig::from_vars(Some("hot".into()), Some("90".into()), None).unwrap();
+            RetentionConfig::from_vars(Some("hot".into()), Some("90".into()), None, None, None)
+                .unwrap();
         assert_eq!(config.tier, RetentionTier::Hot { window_days: 90 });
         assert!(!config.pruning_enabled, "pruning stays off by default");
         assert!(!config.should_prune());
@@ -214,8 +296,14 @@ mod tests {
 
     #[test]
     fn unknown_tier_is_rejected() {
-        let err = RetentionConfig::from_vars(Some("archive-of-everything".into()), None, None)
-            .unwrap_err();
+        let err = RetentionConfig::from_vars(
+            Some("archive-of-everything".into()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(matches!(err, RetentionConfigError::UnknownTier(_)));
     }
 
@@ -226,6 +314,8 @@ mod tests {
                 Some("hot".into()),
                 Some("30".into()),
                 Some(raw.to_string()),
+                None,
+                None,
             )
             .unwrap();
             assert_eq!(config.pruning_enabled, expected);
@@ -238,6 +328,8 @@ mod tests {
             Some("hot".into()),
             Some("30".into()),
             Some("yes-please".into()),
+            None,
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, RetentionConfigError::InvalidPruningFlag(_)));
@@ -255,6 +347,7 @@ mod tests {
         let config = RetentionConfig {
             tier: RetentionTier::Full,
             pruning_enabled: true,
+            ..RetentionConfig::full()
         };
         assert!(!config.should_prune());
         assert!(config.prune_cutoff(OffsetDateTime::now_utc()).is_none());
@@ -265,6 +358,7 @@ mod tests {
         let disabled = RetentionConfig {
             tier: RetentionTier::Hot { window_days: 30 },
             pruning_enabled: false,
+            ..RetentionConfig::full()
         };
         assert!(!disabled.should_prune());
         assert!(disabled.prune_cutoff(OffsetDateTime::now_utc()).is_none());
@@ -272,6 +366,7 @@ mod tests {
         let enabled = RetentionConfig {
             tier: RetentionTier::Hot { window_days: 30 },
             pruning_enabled: true,
+            ..RetentionConfig::full()
         };
         assert!(enabled.should_prune());
         assert!(enabled.prune_cutoff(OffsetDateTime::now_utc()).is_some());
@@ -303,13 +398,113 @@ mod tests {
         let disabled = RetentionConfig {
             tier: RetentionTier::Hot { window_days: 90 },
             pruning_enabled: false,
+            ..RetentionConfig::full()
         };
         assert!(disabled.describe().contains("disabled"));
 
         let enabled = RetentionConfig {
             tier: RetentionTier::Hot { window_days: 90 },
             pruning_enabled: true,
+            ..RetentionConfig::full()
         };
         assert!(enabled.describe().contains("ENABLED"));
+    }
+
+    #[test]
+    fn no_archive_peers_means_no_confirmation_required() {
+        let config = RetentionConfig::from_vars(
+            Some("hot".into()),
+            Some("30".into()),
+            Some("true".into()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(config.archive_peers.is_empty());
+        assert_eq!(config.min_archive_confirmations, 0);
+        assert!(!config.requires_archive_confirmation());
+    }
+
+    #[test]
+    fn archive_peers_default_to_requiring_one_confirmation() {
+        let config = RetentionConfig::from_vars(
+            Some("hot".into()),
+            Some("30".into()),
+            Some("true".into()),
+            Some("http://a.example,http://b.example/".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            config.archive_peers,
+            vec![
+                "http://a.example".to_string(),
+                "http://b.example".to_string()
+            ],
+            "trailing slashes are stripped, matching every other peer-URL parser in this codebase"
+        );
+        assert_eq!(config.min_archive_confirmations, 1);
+        assert!(config.requires_archive_confirmation());
+    }
+
+    #[test]
+    fn archive_peers_honors_an_explicit_confirmation_count() {
+        let config = RetentionConfig::from_vars(
+            Some("hot".into()),
+            Some("30".into()),
+            Some("true".into()),
+            Some("http://a.example,http://b.example,http://c.example".into()),
+            Some("2".into()),
+        )
+        .unwrap();
+        assert_eq!(config.min_archive_confirmations, 2);
+        assert!(config.requires_archive_confirmation());
+    }
+
+    #[test]
+    fn an_explicit_zero_confirmation_count_disables_gating_despite_configured_peers() {
+        let config = RetentionConfig::from_vars(
+            Some("hot".into()),
+            Some("30".into()),
+            Some("true".into()),
+            Some("http://a.example".into()),
+            Some("0".into()),
+        )
+        .unwrap();
+        assert!(
+            !config.requires_archive_confirmation(),
+            "an operator explicitly setting 0 is a deliberate opt-out, not a bug"
+        );
+    }
+
+    #[test]
+    fn invalid_min_archive_confirmations_is_rejected() {
+        let err = RetentionConfig::from_vars(
+            Some("hot".into()),
+            Some("30".into()),
+            Some("true".into()),
+            Some("http://a.example".into()),
+            Some("not-a-number".into()),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            RetentionConfigError::InvalidMinArchiveConfirmations(_)
+        ));
+    }
+
+    #[test]
+    fn describe_mentions_archive_gating_when_configured() {
+        let config = RetentionConfig::from_vars(
+            Some("hot".into()),
+            Some("30".into()),
+            Some("true".into()),
+            Some("http://a.example,http://b.example".into()),
+            Some("2".into()),
+        )
+        .unwrap();
+        let description = config.describe();
+        assert!(description.contains("2 archive confirmation"));
+        assert!(description.contains("2 configured peer"));
     }
 }

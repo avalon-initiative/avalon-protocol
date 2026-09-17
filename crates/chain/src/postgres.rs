@@ -810,6 +810,29 @@ impl PostgresSettlementProvider {
             .map_err(|e| SettlementError::Storage(e.to_string()))
     }
 
+    /// Issue #569's archive-confirmation gating (see
+    /// `avalon_server::retention`): the highest `seq` among entries that
+    /// [`Self::prune_payloads_older_than`] would act on for this exact
+    /// `cutoff` — the boundary a would-be archive peer must have already
+    /// mirrored up through before a hot node prunes past it. `None` when
+    /// nothing is prunable at this cutoff at all (nothing to confirm
+    /// coverage for).
+    pub async fn max_seq_before(
+        &self,
+        cutoff: time::OffsetDateTime,
+    ) -> Result<Option<i64>, SettlementError> {
+        let row = sqlx::query(
+            "SELECT MAX(seq) AS max_seq FROM ledger_entries \
+             WHERE committed_at < $1 AND payload_pruned_at IS NULL",
+        )
+        .bind(cutoff)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+        row.try_get::<Option<i64>, _>("max_seq")
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    }
+
     /// Issue #208's actual pruning operation: discards (`NULL`s out) the
     /// `payload` of every entry committed strictly before `cutoff` that
     /// hasn't already been pruned, and stamps `payload_pruned_at`.

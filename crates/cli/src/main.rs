@@ -315,6 +315,16 @@ async fn resolve_equivocation(raw_args: &[String]) {
 /// the periodic in-process version `avalon-server` runs when its own
 /// config enables pruning; both call the same
 /// `avalon_chain::PostgresSettlementProvider::prune_payloads_older_than`.
+///
+/// **Issue #569: does not perform archive-confirmation gating itself.**
+/// `avalon-cli`'s `--no-default-features` build has no `reqwest`
+/// dependency at all (see this crate's own feature-split doc comment) —
+/// this command can't make the HTTP calls that check would need. A real
+/// (non-`--dry-run`) prune refuses outright when the loaded config
+/// requires archive confirmation (`AVALON_RETENTION_ARCHIVE_PEERS` set),
+/// pointing the operator at `avalon-server`'s background worker instead —
+/// the one place that check actually runs — rather than silently skipping
+/// a safety gate the config asked for.
 async fn prune_ledger(dry_run: bool) {
     let config = avalon_chain::retention::RetentionConfig::from_env().unwrap_or_else(|e| {
         eprintln!("invalid retention configuration: {e}");
@@ -326,6 +336,17 @@ async fn prune_ledger(dry_run: bool) {
         println!("nothing to do (either full tier, or hot tier with pruning disabled)");
         return;
     };
+
+    if !dry_run && config.requires_archive_confirmation() {
+        eprintln!(
+            "refusing to prune: this configuration requires archive confirmation \
+             (AVALON_RETENTION_ARCHIVE_PEERS is set), which this manual command cannot check \
+             (no reqwest dependency in a --no-default-features build). Use avalon-server's \
+             background retention worker instead (AVALON_RETENTION_PRUNING_ENABLED=true on a \
+             running avalon-server), or run with --dry-run to see counts without pruning."
+        );
+        std::process::exit(1);
+    }
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
