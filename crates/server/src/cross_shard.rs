@@ -6,15 +6,19 @@
 //! already uses — no new transport), verifying each, and serving the
 //! result at `GET /ledger/cross-shard-root`.
 //!
-//! **Interim, config-based shard discovery and trust
-//! (`AVALON_KNOWN_SHARDS`/`AVALON_SHARD_VERIFY_KEYS`).** #543's real
-//! mechanism — resolving a shard's authorized key by an inclusion proof
-//! of its `issuer.key_added(purpose: shard_settlement)` event against the
-//! core shard's own STH — isn't built yet. Until it is, an operator who
-//! wants to compute a real cross-shard root configures which shards exist
-//! and what each one's verify key is directly, the same "interim,
-//! per-node config" shape issue #531's `AVALON_MANAGED_HOSTING_VERIFY_KEY`
-//! already established. A shard with no configured verify key, or whose
+//! **Shard discovery is still config-based (`AVALON_KNOWN_SHARDS`) — which
+//! shards to even ask about isn't discovered automatically. Trust is not**:
+//! #543's real mechanism, [`resolve_shard_verify_keys_from_db`], resolves
+//! a shard's authorized key(s) directly from this node's own `issuer_keys`
+//! table (`purpose = 'shard_settlement'`) — the same registration flow
+//! attestation-issuance keys already use, not a second registry — and is
+//! tried first. `AVALON_SHARD_VERIFY_KEYS` is a fallback for a shard whose
+//! key hasn't resolved from the DB at all (e.g. this node has never seen
+//! that integrator's registration), the same "interim, per-node config"
+//! shape issue #531's `AVALON_MANAGED_HOSTING_VERIFY_KEY` established.
+//! Live-verified across two genuinely separate machines
+//! (`docs/architecture/settlement.md`'s "Cross-machine, real end to end"
+//! section). A shard with no key resolved from either source, or whose
 //! STH fails to fetch or verify, is treated exactly like a shard this
 //! node has never heard an STH for — folded into `missing_shard_ids`,
 //! never silently included unverified (see
