@@ -30,8 +30,15 @@ That's it for a first-time, single-node bring-up. What it does:
    safe, working default for a single local node. The generated `.env` is
    `chmod`ed to owner read/write only (`600`) — not world-readable at
    whatever the shell's umask happened to leave it.
-2. **Starts Postgres** (`docker compose ... up -d postgres`) and waits for
-   it to report healthy.
+2. **Starts Postgres and Redis** (`docker compose ... up -d postgres redis`)
+   and waits for both to report healthy. Redis backs the rate limit/
+   concurrency ceiling (issue #545) — it's on by default so a node that's
+   later scaled to more than one `avalon-server` replica already has it
+   running, rather than silently reverting to per-process limits the
+   moment it does; a single-instance node gets no functional difference
+   from having it. `make stack-up-no-redis` skips it entirely — no Redis
+   container, and `avalon-server` runs with its original, purely
+   per-process limits, same as before #545 existed.
 3. **Runs migrations** (`docker compose ... run --rm migrate`) — a one-shot
    container that applies everything under `crates/server/db/migrations/`
    and exits.
@@ -99,8 +106,14 @@ applied.
   dev flow — see `../maintainers/local-development.md`), plus `migrate` and `avalon-server`
   behind a `stack` Compose profile so a plain `docker compose up -d` (the
   existing postgres-only flow) doesn't also try to build/start them.
-- `make stack-up`/`stack-down`/`stack-logs` (root `Makefile`) — the
-  bring-up/teardown/logs commands described above.
+- `docker-compose.redis.yml` — issue #545's Redis-backed rate limit/
+  concurrency ceiling, applied as a Compose *override* file (not folded
+  into `docker-compose.yml` directly — `avalon-server` hard-fails at
+  startup if `AVALON_REDIS_URL` is set but unreachable, so it has to be
+  genuinely absent for `make stack-up-no-redis`, not just unused). `make
+  stack-up` layers it on automatically; `make stack-up-no-redis` doesn't.
+- `make stack-up`/`stack-up-no-redis`/`stack-down`/`stack-logs` (root
+  `Makefile`) — the bring-up/teardown/logs commands described above.
 - Every other `AVALON_*` value not mentioned here already has a working
   default via `.env.compose.example` — see `.env.example` for the full,
   commented list of what's configurable and why.
