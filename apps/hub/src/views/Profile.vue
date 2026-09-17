@@ -439,7 +439,7 @@ const recoveryPhrase = ref('')
 const recovering = ref(false)
 const recoveryError = ref('')
 
-function onRecoverSigningKey() {
+async function onRecoverSigningKey() {
   recoveryError.value = ''
   recovering.value = true
   try {
@@ -447,6 +447,13 @@ function onRecoverSigningKey() {
     hasSigningKey.value = true
     showRecovery.value = false
     recoveryPhrase.value = ''
+    // Issue #525: this device just gained a local signing key mid-session
+    // — refresh the session store's cached signing_key_id so
+    // reconnect-across-nodes becomes available without a fresh login.
+    if (session.token) {
+      const secretKey = loadSigningKey(identityId.value)
+      session.setSigningKeyId(secretKey ? await findMySigningKeyId(session.token, secretKey) : null)
+    }
     refreshDevicesAndPendingGrants()
   } catch (e) {
     recoveryError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -482,6 +489,15 @@ async function pollMyGrant() {
       finalizeApprovedGrant(identityId.value, pendingRequest.value.secretKey)
       pendingRequest.value = null
       hasSigningKey.value = true
+      // Issue #525: same reconnect-signing_key_id refresh as
+      // onRecoverSigningKey above — this device just gained its key via
+      // approval instead of a recovery phrase.
+      if (session.token) {
+        const secretKey = loadSigningKey(identityId.value)
+        session.setSigningKeyId(
+          secretKey ? await findMySigningKeyId(session.token, secretKey) : null,
+        )
+      }
       await refreshDevicesAndPendingGrants()
     } else if (grant.status !== 'pending') {
       grantRequestError.value = `That request was ${grant.status}. Try again, or use a recovery phrase instead.`

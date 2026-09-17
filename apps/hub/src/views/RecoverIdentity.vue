@@ -10,8 +10,10 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
 import { login } from '../api/identity'
+import { findMySigningKeyId } from '../api/deviceGrants'
 import { finalizeRecoveryRequest, getIdentityRecoveryStatus, startRecovery } from '../api/recovery'
 import type { RecoveryRequestResponse } from '../api/types'
+import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
@@ -78,7 +80,16 @@ async function onFinalize() {
     const identityId = request.value.identity_id
     request.value = await finalizeRecoveryRequest(request.value.id)
     const { token } = await login(identityId)
-    session.login(token)
+    // Issue #525: guardian-based recovery (#201) only ever registers a new
+    // WebAuthn passkey, never a new Ed25519 signing key (startRecovery
+    // above), so loadSigningKey correctly returns null here until this
+    // device separately goes through #135's device-grant flow — no
+    // reconnect-across-nodes support for this session until then, same as
+    // any other signing-key-less device (see session.login's own doc
+    // comment).
+    const secretKey = loadSigningKey(identityId)
+    const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
+    session.login(token, identityId, signingKeyId)
     await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

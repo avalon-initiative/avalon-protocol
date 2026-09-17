@@ -3,6 +3,8 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
 import { createIdentity, login } from '../api/identity'
+import { findMySigningKeyId } from '../api/deviceGrants'
+import { loadSigningKey } from '../crypto/signingKey'
 import { useSessionStore } from '../stores/session'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
@@ -65,7 +67,12 @@ async function continueToHome() {
   // itself start a session — log in now that the user has acknowledged
   // their id, rather than sending them to a second manual login step.
   const { token } = await login(createdIdentityId.value)
-  session.login(token)
+  // Issue #525: this identity's signing key was just generated/stored a
+  // moment ago by createIdentity() above — see session.login's own doc
+  // comment for why signing_key_id is cached here too.
+  const secretKey = loadSigningKey(createdIdentityId.value)
+  const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
+  session.login(token, createdIdentityId.value, signingKeyId)
   await router.push({ name: 'home' })
 }
 </script>
