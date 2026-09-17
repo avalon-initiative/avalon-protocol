@@ -353,6 +353,28 @@ existing live suite (real achievement issuance, Integrator Space instance
 publication, settlement proof endpoints — all real `game:...`-namespace
 writes) re-run unchanged against the new routing with no regression.
 
+### Discovering a forwarding node's configured authority (#526)
+
+A forwarding node whose remote-submit attempts are failing (its configured
+authority unreachable or rejecting it) previously only logged that
+locally — an integrator whose SDK ended up misconfigured against the
+wrong node (a gateway/indexer rather than the real Settlement authority)
+had no way to discover the correct target from the error alone.
+`GET /ledger/remote-submit-status` (`crate::settlement::remote_submit_status`,
+public, unauthenticated — the URL a node forwards to isn't sensitive, and
+gating it would defeat the point for exactly the misconfigured caller this
+helps) answers with `failing_shards`: every shard currently failing to
+reach its configured authority, each entry's `authority` being exactly
+that shard's own already-configured `AVALON_SETTLEMENT_REMOTE_URL(S)`
+value — never an inferred or alternate one. **503** while any shard is
+failing, **200** with an empty list otherwise (including when this node
+forwards nothing at all). This is a discovery hint only, not a failover
+mechanism: exactly one Settlement authority is still expected per shard;
+nothing here proposes a second one. Out of scope, same as the original
+ticket: the authority itself being down — there is no "other node" to
+point at there, and hold-and-retry against the same authority is still
+correct.
+
 ## Bounding ledger growth
 
 Standing rule, decided in #306: **high-frequency ephemeral data never
@@ -428,6 +450,12 @@ Everything below is real and implemented unless noted otherwise.
   (#299) — a mirror can independently verify authenticity rather than
   trusting whichever node answered its request.
 - **`POST /ledger/submit`** (#313) — the node-to-node write endpoint.
+- **`GET /ledger/remote-submit-status`** (#526) — a forwarding node's
+  discovery hint for which of its configured shard authorities is
+  currently failing, and why. See "Discovering a forwarding node's
+  configured authority" above; live-verified against a real forwarding
+  node pointed at a genuinely unreachable authority
+  (`crates/server/tests/remote_submit_status.rs`, `--ignored`).
 - **Genesis and network identity** (#173) — a singleton `chain_genesis` table.
 - **Node-tiered durable history retention** (#208) and a **settlement-state
   checkpoint** (#180/#208) for fast restart.

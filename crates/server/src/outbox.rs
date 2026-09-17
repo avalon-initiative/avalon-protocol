@@ -110,6 +110,71 @@ fn poll_interval_from_env() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// Issue #526: one shard's currently-ongoing remote-submit failure — this
+/// node is configured to forward that shard's writes to `authority_url`,
+/// but the most recent attempt failed with `reason`. Cleared (removed from
+/// [`RemoteSubmitStatus`]) the moment a submit to that shard next
+/// succeeds — this is "currently failing," not a permanent failure log.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RemoteFailure {
+    pub authority_url: String,
+    pub reason: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub since: OffsetDateTime,
+}
+
+/// Issue #526: shared, in-process record of which shards (if any) are
+/// currently failing to reach their configured remote Settlement
+/// authority — written by [`drain_locked`] on every remote submit
+/// attempt, read by `crate::settlement::remote_submit_status` to answer
+/// `GET /ledger/remote-submit-status`. A forwarding node's integrator
+/// otherwise has no way to discover the correct authority from a failure
+/// alone — this makes the node's own already-known target discoverable
+/// from a client-visible response instead of only from server logs.
+/// Never proposes an alternate authority: every entry's `authority_url` is
+/// exactly what this node was already configured with for that shard.
+#[derive(Clone, Default)]
+pub struct RemoteSubmitStatus {
+    failing: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, RemoteFailure>>>,
+}
+
+impl RemoteSubmitStatus {
+    fn record_failure(&self, shard_id: &str, authority_url: &str, reason: String) {
+        let mut failing = self
+            .failing
+            .lock()
+            .expect("RemoteSubmitStatus lock poisoned");
+        let entry = failing
+            .entry(shard_id.to_string())
+            .or_insert_with(|| RemoteFailure {
+                authority_url: authority_url.to_string(),
+                reason: reason.clone(),
+                since: OffsetDateTime::now_utc(),
+            });
+        entry.reason = reason;
+    }
+
+    fn record_success(&self, shard_id: &str) {
+        self.failing
+            .lock()
+            .expect("RemoteSubmitStatus lock poisoned")
+            .remove(shard_id);
+    }
+
+    /// Every shard currently failing to reach its configured remote
+    /// authority, `shard_id` alongside its [`RemoteFailure`]. Empty when
+    /// every configured shard's most recent submit succeeded (or none is
+    /// configured at all).
+    pub fn currently_failing(&self) -> Vec<(String, RemoteFailure)> {
+        self.failing
+            .lock()
+            .expect("RemoteSubmitStatus lock poisoned")
+            .iter()
+            .map(|(shard_id, failure)| (shard_id.clone(), failure.clone()))
+            .collect()
+    }
+}
+
 /// Node-to-node config for posting drained batches to a remote Settlement
 /// authority instead of committing them locally — issue #313, extended to
 /// a per-shard map by issue #532. Bundles the `reqwest::Client` alongside
@@ -126,6 +191,8 @@ pub struct RemoteSubmitConfig {
     /// `crate::settlement::submit_ledger_batch`'s doc comment for why this
     /// is the chosen node-to-node auth mechanism.
     submit_key: Option<String>,
+    /// Issue #526 — see [`RemoteSubmitStatus`]'s own doc comment.
+    status: RemoteSubmitStatus,
 }
 
 impl RemoteSubmitConfig {
@@ -193,7 +260,16 @@ impl RemoteSubmitConfig {
             client: reqwest::Client::new(),
             targets,
             submit_key,
+            status: RemoteSubmitStatus::default(),
         })
+    }
+
+    /// Issue #526: a cheap-to-clone handle to this config's live
+    /// failure-tracking state, for `AppState` to hold and
+    /// `crate::settlement::remote_submit_status` to read — see
+    /// [`RemoteSubmitStatus`]'s own doc comment.
+    pub fn status(&self) -> RemoteSubmitStatus {
+        self.status.clone()
     }
 
     /// This shard's configured remote authority, if any — `None` means
@@ -359,6 +435,13 @@ async fn drain_locked(
         };
         match commit_result {
             Ok(commitment) => {
+                // Issue #526: a shard that just succeeded is no longer
+                // "currently failing" — clear any stale record from an
+                // earlier tick's outage. Local commits (`remote_target`
+                // is `None`) have no remote authority to track at all.
+                if let Some((remote, _)) = remote_target {
+                    remote.status.record_success(&shard_id);
+                }
                 for id in pending_ids {
                     sqlx::query(
                         "UPDATE protocol_outbox SET committed_at = now(), batch_id = $2 WHERE id = $1",
@@ -370,6 +453,17 @@ async fn drain_locked(
                 }
             }
             Err(err) => {
+                // Issue #526: only a *remote* failure is worth tracking
+                // for discovery — a local `chain.commit` failure has no
+                // "authority URL" to surface, and would defeat the
+                // "never proposes an alternate authority" invariant if it
+                // did (there is no other authority; this node just failed
+                // its own local commit).
+                if let Some((remote, url)) = remote_target {
+                    remote
+                        .status
+                        .record_failure(&shard_id, url, err.to_string());
+                }
                 tracing::error!(
                     shard_id,
                     "outbox worker: chain.commit failed, batch left pending: {err}"
@@ -749,5 +843,77 @@ mod tests {
              fallback, not be silently overwritten by it"
         );
         clear_remote_submit_env_vars();
+    }
+
+    #[test]
+    fn remote_submit_status_starts_empty() {
+        let status = RemoteSubmitStatus::default();
+        assert!(status.currently_failing().is_empty());
+    }
+
+    #[test]
+    fn a_recorded_failure_surfaces_the_configured_authority_url_and_reason() {
+        let status = RemoteSubmitStatus::default();
+        status.record_failure(
+            "core",
+            "https://authority.example",
+            "connection refused".to_string(),
+        );
+
+        let failing = status.currently_failing();
+        assert_eq!(failing.len(), 1);
+        let (shard_id, failure) = &failing[0];
+        assert_eq!(shard_id, "core");
+        assert_eq!(failure.authority_url, "https://authority.example");
+        assert_eq!(failure.reason, "connection refused");
+    }
+
+    #[test]
+    fn a_success_clears_that_shards_failure_but_not_another_shards() {
+        let status = RemoteSubmitStatus::default();
+        status.record_failure("core", "https://a.example", "unreachable".to_string());
+        status.record_failure(
+            "game:ashen-realms",
+            "https://b.example",
+            "unauthorized".to_string(),
+        );
+
+        status.record_success("core");
+
+        let failing = status.currently_failing();
+        assert_eq!(
+            failing.len(),
+            1,
+            "only the recovered shard's entry should clear"
+        );
+        assert_eq!(failing[0].0, "game:ashen-realms");
+    }
+
+    #[test]
+    fn a_second_failure_for_the_same_shard_updates_the_reason_not_the_since_timestamp() {
+        let status = RemoteSubmitStatus::default();
+        status.record_failure(
+            "core",
+            "https://authority.example",
+            "first reason".to_string(),
+        );
+        let first_since = status.currently_failing()[0].1.since;
+
+        status.record_failure(
+            "core",
+            "https://authority.example",
+            "second reason".to_string(),
+        );
+        let failing = status.currently_failing();
+        assert_eq!(
+            failing.len(),
+            1,
+            "must still be one entry for this shard, not two"
+        );
+        assert_eq!(failing[0].1.reason, "second reason");
+        assert_eq!(
+            failing[0].1.since, first_since,
+            "since must track when the outage started, not this call's own timestamp"
+        );
     }
 }
