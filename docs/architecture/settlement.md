@@ -353,6 +353,25 @@ existing live suite (real achievement issuance, Integrator Space instance
 publication, settlement proof endpoints — all real `game:...`-namespace
 writes) re-run unchanged against the new routing with no regression.
 
+**Cross-machine, real end to end (2026-09-17).** All of the above had only
+been proven with two local processes sharing one Postgres. `avalon-peer`
+(see `docs/architecture/nodes.md`) is now genuinely both: it still mirrors
+the primary's core shard, and it's *also* the real remote authority for a
+second, distinct `game:...` shard — with its own real, registered
+`shard_settlement` operational key (`POST /integrations/{slug}/keys` with
+`purpose: shard_settlement`, resolved server-side by
+`crate::cross_shard::resolve_shard_verify_keys_from_db`), not a shared
+operator key. Enqueuing a real event for that shard on the primary, the
+outbox routed it over the real network to `avalon-peer`, which committed
+it locally (landing in *its own* `ledger_entries`, distinct from the
+`mirrored_entries` its core-shard mirroring still populates) and signed
+its own real STH with that shard's registered key. The primary's
+`GET /ledger/cross-shard-root` independently verified that STH against the
+DB-resolved key and produced a real, non-partial two-node cross-shard root
+(`shard_count: 1`, `partial: false`) — #529, #532, and #543 composing for
+real, across two physically separate machines, not the local-process
+approximation every other test here still uses.
+
 ### Discovering a forwarding node's configured authority (#526)
 
 A forwarding node whose remote-submit attempts are failing (its configured
