@@ -123,10 +123,34 @@ keys. Hosting is infrastructure only; it carries no elevated trust over
 the integrator's own history, matching this document's shard-operator
 invariants above.
 
-This section defines the API/service shape (#531's first acceptance
-criterion); the `prepare-batch`/`finalize-batch` endpoints and the
-two-phase split of `PostgresSettlementProvider::commit` they require are
-implementation work, tracked separately under epic #528.
+**Implemented (#531).** `POST /ledger/prepare-batch` returns a read-only
+preview (`avalon_chain::sth::PreparedTreeHead`) that never touches
+`ledger_entries`/`ledger_batches`/the shared Merkle cache — a preview
+that mutated shared state or burned real `seq` values on every call,
+whether or not the caller ever finalizes, would be a real cost with no
+corresponding commit. `POST /ledger/finalize-batch` **does not trust the
+earlier preview as authoritative** — `PostgresSettlementProvider::finalize`
+recomputes the batch's insertion and resulting tree size/root fresh,
+inside a real transaction, and only *then* verifies the caller's
+signature against those freshly-computed values (never against whatever
+the caller claims). A stale finalize (the tip moved since the preview) or
+a forged/wrong signature both fail that one check, and the transaction
+rolls back on either — a rejected finalize never burns `seq` or leaves
+partial state. Live-verified end to end, including a real cross-key
+rejection case (`crates/chain/tests/managed_hosting.rs`,
+`crates/server/tests/managed_hosting.rs`): a valid signature commits the
+batch and stamps the STH with the caller's own `signing_key_id`; an
+invalid signature, and a finalize against a preview made stale by an
+intervening commit, are both cleanly rejected with nothing persisted.
+
+**Interim, single-key-per-node** (`AVALON_MANAGED_HOSTING_VERIFY_KEY`): a
+managed-hosting node is presumed dedicated to exactly one hosted
+integrator's shard for now — this env var names that one integrator's
+public settlement key directly, rather than resolving it from #543's
+real per-shard trust-anchor mechanism (issuer-key registration), which
+isn't built yet. Both endpoints refuse every request when it's unset,
+matching `submit_ledger_batch`'s own "exists but accepts nothing until
+configured" posture.
 
 ### Censorship recourse: switching hosts, or self-hosting, without losing the shard (#544)
 

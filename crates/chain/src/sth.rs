@@ -36,6 +36,23 @@ use time::OffsetDateTime;
 /// key that actually signed them, distinct from whatever key is active now.
 pub const DEFAULT_SIGNING_KEY_ID: &str = "settlement-operator-1";
 
+/// Issue #531 (managed hosting): the *unsigned* candidate tree head
+/// `PostgresSettlementProvider::prepare` returns as a preview — the exact
+/// fields an integrator using a managed host needs to sign locally
+/// (`signing_message`'s inputs, minus the signature itself) before
+/// calling `POST /ledger/finalize-batch`. A preview only, never persisted
+/// — see `prepare`'s own doc comment for why finalize recomputes fresh
+/// rather than trusting this back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PreparedTreeHead {
+    pub batch_id: uuid::Uuid,
+    pub tree_size: i64,
+    pub root_hash: String,
+    pub network_id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
 /// One row of `signed_tree_heads` — produced by [`sign_tree_head`] at
 /// commit time, or read back from storage (`PostgresSettlementProvider::
 /// list_signed_tree_heads`) for verification.
@@ -64,7 +81,12 @@ pub struct SignedTreeHead {
 /// last field before the fixed-width timestamp suffix, so two different
 /// `network_id` values (of any length) can never produce identical
 /// trailing bytes once that fixed-width suffix is accounted for.
-fn signing_message(
+/// Public since issue #531: a managed-hosting integrator needs to
+/// construct these exact bytes themselves, outside this crate entirely
+/// (they sign locally, with a key this crate/node never holds — see
+/// `PostgresSettlementProvider::prepare`'s doc comment), not just internal
+/// callers signing/verifying with an in-process key.
+pub fn signing_message(
     tree_size: i64,
     root_hash_hex: &str,
     network_id: &str,

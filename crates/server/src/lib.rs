@@ -590,6 +590,10 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         // Issue #313: node-to-node, bearer-authenticated — the one write
         // route in this block, unlike everything else above it.
         .route("/ledger/submit", post(settlement::submit_ledger_batch))
+        // Issue #531: managed-hosting two-phase remote signing — see
+        // `crate::settlement::prepare_batch`/`finalize_batch`.
+        .route("/ledger/prepare-batch", post(settlement::prepare_batch))
+        .route("/ledger/finalize-batch", post(settlement::finalize_batch))
         // Issue #362: node-to-node peer discovery — no auth, same public
         // posture as the `/ledger/*` block above, since a peer table isn't
         // sensitive the way ledger-write endpoints are.
