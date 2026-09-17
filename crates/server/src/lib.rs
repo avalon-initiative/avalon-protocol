@@ -5,6 +5,7 @@ pub mod authz;
 pub mod blocks;
 pub mod channels;
 pub mod chat;
+pub mod chat_replication;
 pub mod connections;
 pub mod continuation;
 pub mod conversations;
@@ -591,6 +592,12 @@ pub fn router(state: AppState) -> Router {
         // Issue #539: one-hop live realtime event relay across nodes,
         // built on the peer table above — see `crate::realtime_relay`.
         .route("/nodes/relay", post(realtime_relay::relay_handler))
+        // Issue #540: async at-rest chat/conversation replication — see
+        // `crate::chat_replication`.
+        .route(
+            "/nodes/replicate-chat",
+            post(chat_replication::replicate_chat_handler),
+        )
         .with_state(state)
         // Issue #265: every HTTP request gets a tracing span
         // (method/path/status/latency), and any `tracing::info!`/`error!`

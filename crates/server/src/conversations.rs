@@ -423,6 +423,11 @@ pub async fn send_message(
         state.clone(),
         crate::realtime_relay::RelayEvent::ConversationMessage(response.clone()),
     ));
+    // Issue #540: at-rest durability on at least one additional node.
+    tokio::spawn(crate::chat_replication::replicate_to_peers(
+        state.clone(),
+        crate::chat_replication::ReplicationEvent::ConversationMessage(response.clone()),
+    ));
     Ok(Json(response))
 }
 
