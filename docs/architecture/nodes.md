@@ -393,6 +393,16 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     burst gets `429` + `Retry-After`; a concurrency-limited burst still
     completes every request (backpressure, not a silent drop) but
     measurably serializes.
+  - **Per-process, not network-wide (#537).** Both the GCRA rate-limit
+    bucket and the concurrency counter live entirely in one process's
+    memory, with no shared backing store across processes. An operator
+    running more than one `avalon-server` process against the same network
+    gets that many independent copies of each ceiling — a caller who fans
+    requests across every process gets roughly (configured limit × process
+    count), not the configured limit. Treat `AVALON_RATE_LIMIT_PER_MINUTE`/
+    `AVALON_MAX_CONCURRENT_REQUESTS` as a per-node floor and size
+    accordingly until #545 decides whether real network-wide enforcement
+    (a shared counter) is worth building.
 
 ## Decisions and tickets
 
