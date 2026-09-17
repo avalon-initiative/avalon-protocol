@@ -147,8 +147,46 @@ pub async fn run_worker(
     }
 }
 
+/// Postgres advisory lock key guarding a drain tick, issue #536: without
+/// it, more than one `avalon-server` process polling the same
+/// `protocol_outbox` table can select the same pending rows and both
+/// commit them into the ledger — a silent double-commit, not just a race
+/// on who commits first. Session-scoped (tied to the connection that took
+/// it), held only for the duration of one tick, and released even if this
+/// process crashes mid-tick (Postgres drops session-scoped advisory locks
+/// when the holding connection closes).
+const OUTBOX_DRAIN_LOCK_KEY: i64 = 53_602;
+
 async fn drain_once(
     pool: &PgPool,
+    chain: &PostgresSettlementProvider,
+    remote: Option<&RemoteSubmitConfig>,
+) -> Result<(), sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(OUTBOX_DRAIN_LOCK_KEY)
+        .fetch_one(&mut *conn)
+        .await?;
+    if !acquired {
+        // Another process (or another tick, if a prior one somehow hung)
+        // is already draining — skip this tick rather than blocking, and
+        // try again on the next poll.
+        return Ok(());
+    }
+
+    let result = drain_locked(&mut conn, chain, remote).await;
+
+    let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        .bind(OUTBOX_DRAIN_LOCK_KEY)
+        .fetch_one(&mut *conn)
+        .await?;
+
+    result
+}
+
+async fn drain_locked(
+    conn: &mut sqlx::PgConnection,
     chain: &PostgresSettlementProvider,
     remote: Option<&RemoteSubmitConfig>,
 ) -> Result<(), sqlx::Error> {
@@ -156,7 +194,7 @@ async fn drain_once(
         "SELECT id, event FROM protocol_outbox WHERE committed_at IS NULL ORDER BY enqueued_at LIMIT $1",
     )
     .bind(DRAIN_BATCH_SIZE)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // One EventBatch for this whole tick's rows, not one per row — issue
@@ -180,7 +218,7 @@ async fn drain_once(
             tracing::error!(%id, "outbox worker: dropping unparseable row");
             sqlx::query("UPDATE protocol_outbox SET committed_at = now() WHERE id = $1")
                 .bind(id)
-                .execute(pool)
+                .execute(&mut *conn)
                 .await?;
             continue;
         };
@@ -222,7 +260,7 @@ async fn drain_once(
                 )
                 .bind(id)
                 .bind(commitment.batch_id)
-                .execute(pool)
+                .execute(&mut *conn)
                 .await?;
             }
         }
@@ -256,6 +294,68 @@ pub async fn status(pool: &PgPool) -> Result<OutboxStatus, sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avalon_protocol::ids::GlobalId;
+
+    /// Issue #536: two `drain_once` calls racing against the same
+    /// `protocol_outbox` rows must not both commit them into the ledger.
+    /// Gated `--ignored`/live like every other test in this crate that
+    /// touches real Postgres/`avalon-chain` (see `crates/chain/tests/settlement.rs`).
+    /// Reproduces the bug directly against `drain_once` (real
+    /// `PgPool`/`PostgresSettlementProvider`), not through the outer
+    /// `run_worker` loop or HTTP — this is the exact race that existed
+    /// before the advisory lock: no `--ignored` marker changes what's
+    /// exercised, only whether it needs live infra to run.
+    #[tokio::test]
+    #[ignore]
+    async fn concurrent_drains_do_not_double_commit() {
+        dotenvy::dotenv().ok();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&database_url)
+            .await
+            .expect("failed to connect to Postgres — is it reachable?");
+
+        let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+        let mut tx = pool.begin().await.expect("begin failed");
+        let mut event_ids = Vec::new();
+        for i in 0..5 {
+            let actor = Uuid::new_v4();
+            let event = ProtocolEvent {
+                id: Uuid::new_v4(),
+                kind: "test.outbox_lock".to_string(),
+                issuer: GlobalId::new("identity", &actor.to_string(), "self", "test_event"),
+                subject: GlobalId::new("identity", &actor.to_string(), "self", "test_event"),
+                payload: serde_json::json!({ "n": i }),
+                timestamp: OffsetDateTime::now_utc(),
+                version: 1,
+            };
+            event_ids.push(event.id);
+            enqueue(&mut tx, &event).await.expect("enqueue failed");
+        }
+        tx.commit().await.expect("commit failed");
+
+        // Before #536's fix, both of these would race past the (then
+        // nonexistent) mutual exclusion, both `SELECT` the same pending
+        // rows, and both call `chain.commit` with them — one ledger entry
+        // per event per racing drain instead of one, total.
+        let (r1, r2) = tokio::join!(
+            drain_once(&pool, &chain, None),
+            drain_once(&pool, &chain, None),
+        );
+        r1.expect("drain 1 failed");
+        r2.expect("drain 2 failed");
+
+        for id in &event_ids {
+            let count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM ledger_entries WHERE event_id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("query failed");
+            assert_eq!(count, 1, "event {id} was committed more than once");
+        }
+    }
 
     #[test]
     fn outbox_poll_interval_env_var_overrides_default() {

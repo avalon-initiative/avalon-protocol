@@ -97,6 +97,15 @@ the actual code ever disagree, the code is right and this doc is stale.
   with a single `SettlementProvider::commit` call — a batch closes when the
   worker runs, not on a size threshold or timer, and a single-event batch is
   legal. No handler calls `commit` directly.
+  - **Mutual exclusion across processes (#536).** A drain tick first takes a
+    Postgres session-scoped advisory lock (`pg_try_advisory_lock`,
+    `OUTBOX_DRAIN_LOCK_KEY`) before selecting any pending rows; a tick that
+    can't acquire it skips entirely rather than blocking, and tries again
+    next poll. Without this, more than one `avalon-server` process draining
+    the same table could both select the same pending rows and both commit
+    them, producing two ledger entries for one logical event — a real,
+    previously-unfixed gap, not a hypothetical one, live-verified via
+    `outbox::tests::concurrent_drains_do_not_double_commit`.
 - **Mirror-facing proof/sync endpoints, implemented (#211).**
   `crates/server/src/settlement.rs` exposes the read-side API surface #40's
   mirror-sync design calls for, consuming the Merkle tree and STHs above.
