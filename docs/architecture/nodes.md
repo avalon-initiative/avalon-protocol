@@ -147,6 +147,17 @@ the log is self-verifying. The log *is* Avalon's own chain, not an anchor into s
 [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93)), and
 that does not change this.
 
+Mirroring addresses *read* decentralization — anyone can independently
+verify the log without trusting whichever node they happened to ask.
+[#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)
+(decided) addresses the complementary *write*/control problem — one
+operator holding sole settlement authority over the whole network — by
+sharding settlement authority per-integrator instead. See
+[`settlement.md`](./settlement.md)'s "Cross-shard commitment" section
+(#529) for how a network with more than one shard still produces one
+globally verifiable state with no designated aggregator, mirroring
+this section's own "no single trusted party" standard one layer up.
+
 ## Discovery
 
 A developer should not need to know `postgres://...` or
