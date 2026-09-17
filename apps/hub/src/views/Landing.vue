@@ -67,6 +67,8 @@ const steps = [
     body: 'Friends, guilds, and achievements persist — even if a world shuts down.',
   },
 ]
+
+const GITHUB_PROFILE_URL = 'https://github.com/avalon-initiative'
 </script>
 
 <template>
@@ -179,12 +181,21 @@ const steps = [
       </AvalonCard>
     </section>
 
+    <div :class="styles.footerSpacer" aria-hidden="true" />
     <footer :class="styles.footer">
       <div :class="styles.footerBrand">
         <span :class="styles.brandMark"><AvalonIcon name="logo" :size="18" /></span>
         <span :class="styles.brandName">AVALON</span>
       </div>
       <p :class="styles.footerTagline">Infinite worlds. One you.</p>
+      <a
+        :class="styles.footerLink"
+        :href="GITHUB_PROFILE_URL"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Avalon Initiative
+      </a>
     </footer>
   </div>
 </template>
