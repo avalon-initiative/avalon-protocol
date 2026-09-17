@@ -79,12 +79,12 @@ async fn mirrored_entries_since_paginates_and_filters_by_subject() {
         .expect("insert_mirrored_entry failed");
     }
 
-    let all = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, None)
+    let all = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, None, None)
         .await
         .expect("mirrored_entries_since failed");
     assert_eq!(all.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
 
-    let since_one = mirror::mirrored_entries_since(&pool, &network_id, 1, 100, None)
+    let since_one = mirror::mirrored_entries_since(&pool, &network_id, 1, 100, None, None)
         .await
         .expect("mirrored_entries_since failed");
     assert_eq!(
@@ -93,7 +93,7 @@ async fn mirrored_entries_since_paginates_and_filters_by_subject() {
         "since_seq must exclude the row at exactly that seq"
     );
 
-    let only_a = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, Some(subject_a))
+    let only_a = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, Some(subject_a), None)
         .await
         .expect("mirrored_entries_since failed");
     assert_eq!(
@@ -102,7 +102,7 @@ async fn mirrored_entries_since_paginates_and_filters_by_subject() {
         "subject filter must scope to that subject's own entries only"
     );
 
-    let capped = mirror::mirrored_entries_since(&pool, &network_id, 0, 1, None)
+    let capped = mirror::mirrored_entries_since(&pool, &network_id, 0, 1, None, None)
         .await
         .expect("mirrored_entries_since failed");
     assert_eq!(capped.len(), 1, "limit must cap the returned rows");
@@ -117,7 +117,7 @@ async fn mirrored_entries_since_on_an_empty_network_is_an_empty_list() {
     let pool = test_pool().await;
     let network_id = unique_network_id("entries-since-empty");
 
-    let entries = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, None)
+    let entries = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, None, None)
         .await
         .expect("mirrored_entries_since failed");
     assert!(entries.is_empty());
@@ -150,12 +150,12 @@ async fn mirrored_entry_hashes_up_to_reproduces_the_verified_tree() {
         .expect("insert_mirrored_entry failed");
     }
 
-    let up_to_three = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, 3)
+    let up_to_three = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, 3, None)
         .await
         .expect("mirrored_entry_hashes_up_to failed");
     assert_eq!(up_to_three, hashes[..3]);
 
-    let up_to_all = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, 5)
+    let up_to_all = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, 5, None)
         .await
         .expect("mirrored_entry_hashes_up_to failed");
     assert_eq!(up_to_all, hashes);
@@ -194,25 +194,25 @@ async fn mirrored_leaf_index_for_seq_ranks_entries_zero_indexed() {
     }
 
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 10)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 10, None)
             .await
             .expect("query failed"),
         Some(0)
     );
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 20)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 20, None)
             .await
             .expect("query failed"),
         Some(1)
     );
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 30)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 30, None)
             .await
             .expect("query failed"),
         Some(2)
     );
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 999)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 999, None)
             .await
             .expect("query failed"),
         None,
@@ -264,16 +264,17 @@ async fn observed_sth_matching_root_ignores_disagreeing_observations_at_the_same
     .await
     .expect("insert_observation failed");
 
-    let matched = mirror::observed_sth_matching_root(&pool, &network_id, 10, &good_root)
+    let matched = mirror::observed_sth_matching_root(&pool, &network_id, 10, &good_root, None)
         .await
         .expect("observed_sth_matching_root failed")
         .expect("the matching observation should be found");
     assert_eq!(matched.source_url, "peer-a");
     assert_eq!(matched.root_hash, good_root);
 
-    let no_match = mirror::observed_sth_matching_root(&pool, &network_id, 10, &"33".repeat(32))
-        .await
-        .expect("observed_sth_matching_root failed");
+    let no_match =
+        mirror::observed_sth_matching_root(&pool, &network_id, 10, &"33".repeat(32), None)
+            .await
+            .expect("observed_sth_matching_root failed");
     assert!(
         no_match.is_none(),
         "a root nobody actually reported must never match"
@@ -309,7 +310,7 @@ async fn observed_sth_round_trips_the_signed_created_at_not_the_observed_at() {
     .await
     .expect("insert_observation failed");
 
-    let fetched = mirror::observed_sth_matching_root(&pool, &network_id, 1, &"44".repeat(32))
+    let fetched = mirror::observed_sth_matching_root(&pool, &network_id, 1, &"44".repeat(32), None)
         .await
         .expect("observed_sth_matching_root failed")
         .expect("row should exist");

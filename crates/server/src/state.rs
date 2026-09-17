@@ -61,4 +61,14 @@ pub struct AppState {
     /// all — it isn't forwarding to any remote authority, so there is
     /// nothing to ever report as failing.
     pub remote_submit_status: Option<crate::outbox::RemoteSubmitStatus>,
+    /// `AVALON_OWN_SHARD_ID` (issue #573), defaulting to `"core"`. Which
+    /// shard this node's own `chain`/`ledger_entries` represents, when it
+    /// has any local history — see `crate::settlement`'s module doc
+    /// comment for why this matters now that a node can hold local
+    /// history for one shard while mirroring a *different* one.
+    pub own_shard_id: String,
+    /// Issue #573: `AVALON_MIRROR_PEERS` parsed into a `shard_id -> url`
+    /// map, for `crate::settlement`'s shard-scoped mirror reads. See
+    /// `crate::settlement::ShardMirrorSources`'s own doc comment.
+    pub shard_mirror_sources: crate::settlement::ShardMirrorSources,
 }
