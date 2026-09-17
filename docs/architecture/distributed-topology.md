@@ -73,9 +73,16 @@ graph TD
 - A shard operator can be the integrator itself, or a managed host running
   infrastructure on the integrator's behalf — the signing key never
   leaves the integrator either way (`#531`).
+- A witness's `Check` step above isn't just "does the math match" — it
+  also confirms each contributing shard's STH is signed by a key actually
+  authorized for that shard (`#543`,
+  [`./network-trust-anchors.md`](./network-trust-anchors.md)'s "Per-shard
+  trust anchors" section), catching a consistent-but-unauthorized shard,
+  not just a math error.
 - Tracked by: [#528](https://github.com/LunarVagabond/avalon-protocol/issues/528)
   epic, sub-issues
-  [#529](https://github.com/LunarVagabond/avalon-protocol/issues/529)–[#533](https://github.com/LunarVagabond/avalon-protocol/issues/533).
+  [#529](https://github.com/LunarVagabond/avalon-protocol/issues/529)–[#533](https://github.com/LunarVagabond/avalon-protocol/issues/533),
+  [#543](https://github.com/LunarVagabond/avalon-protocol/issues/543).
 
 ## 2. Realtime: interest-scoped mesh, not full broadcast
 
