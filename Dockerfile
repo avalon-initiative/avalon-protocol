@@ -1,5 +1,10 @@
-# Builds `avalon-server` and its `migrate` companion binary (issue #289) —
-# the one-command hoster bring-up path's runtime image. Not yet
+# Builds `avalon-server` and its `migrate` companion binary (issue #289),
+# plus `avalon-cli`'s `avalon` binary built `--no-default-features` (issue
+# #511 — `discover-mirror-peers` specifically, a read-only ops command that
+# needs to run from `make stack-up`'s Docker-only bring-up path with no host
+# Rust toolchain; `--no-default-features` keeps the passkey/WebAuthn dev-tool
+# dependencies this image never uses out of this build entirely) — the
+# one-command hoster bring-up path's runtime image. Not yet
 # multi-stage-cached for incremental rebuilds (no cargo-chef layer); a first
 # correct build, not an optimized one — worth revisiting if `make stack-up`
 # rebuild times become a real hoster complaint.
@@ -18,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libs
 WORKDIR /usr/src/avalon-protocol
 COPY . .
 RUN cargo build --release -p avalon-server
+RUN cargo build --release -p avalon-cli --no-default-features
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
@@ -25,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /usr/src/avalon-protocol
 COPY --from=builder /usr/src/avalon-protocol/target/release/avalon-server /usr/local/bin/avalon-server
 COPY --from=builder /usr/src/avalon-protocol/target/release/migrate /usr/local/bin/migrate
+COPY --from=builder /usr/src/avalon-protocol/target/release/avalon /usr/local/bin/avalon
 COPY --from=builder /usr/src/avalon-protocol/crates/server/db ./crates/server/db
 
 EXPOSE 8080

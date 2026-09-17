@@ -270,7 +270,12 @@ const PRUNE_INTERVAL_MULTIPLE: u32 = 3;
 /// a test can feed
 /// it a controlled anchor list instead of depending on
 /// `docs/trusted-networks.json`'s actual (currently empty) `seed_nodes`.
-fn resolve_bootstrap_peers(
+///
+/// `pub` (issue #511): `avalon-cli`'s `discover-mirror-peers` command
+/// reuses this exact same resolution — `AVALON_BOOTSTRAP_PEERS` verbatim,
+/// or this network's seed nodes — rather than re-implementing it, so the
+/// two never drift apart on what "the configured bootstrap peers" means.
+pub fn resolve_bootstrap_peers(
     bootstrap_env: Option<&str>,
     network_id: &str,
     anchors: &[avalon_sdk::network::TrustAnchorEntry],

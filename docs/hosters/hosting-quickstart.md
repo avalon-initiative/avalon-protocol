@@ -29,7 +29,13 @@ That's it for a first-time, single-node bring-up. What it does:
    `AVALON_NETWORK_ID` unique to this deployment. Every other value gets a
    safe, working default for a single local node. The generated `.env` is
    `chmod`ed to owner read/write only (`600`) — not world-readable at
-   whatever the shell's umask happened to leave it.
+   whatever the shell's umask happened to leave it. If `AVALON_BOOTSTRAP_PEERS`
+   (or a network's bundled seed nodes) resolves to a reachable peer on this
+   first run, you're prompted interactively to pick which discovered peer(s),
+   if any, to mirror — the selection is written straight into
+   `AVALON_MIRROR_PEERS`, no hand-copying URLs (issue #511). Skipped silently
+   (no prompt, no behavior change) if nothing's discoverable or this isn't
+   running in a real terminal.
 2. **Starts Postgres and Redis** (`docker compose ... up -d postgres redis`)
    and waits for both to report healthy. Redis backs the rate limit/
    concurrency ceiling (issue #545) — it's on by default so a node that's

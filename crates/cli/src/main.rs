@@ -65,6 +65,7 @@ async fn main() {
             prune_ledger(dry_run).await;
         }
         Some("rebuild-index") => rebuild_index().await,
+        Some("discover-mirror-peers") => discover_mirror_peers().await,
         Some("list-equivocations") => {
             list_equivocations(args.next()).await;
         }
@@ -110,7 +111,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|discover-mirror-peers|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -420,6 +421,135 @@ async fn rebuild_index() {
     );
 }
 
+/// `avalon discover-mirror-peers` — issue #511. Closes the gap between
+/// #362's node-to-node announce/bootstrap discovery and `AVALON_MIRROR_PEERS`
+/// (a fully separate, manually-set env var with no fallback of its own): a
+/// hoster who successfully discovers peers previously still had to
+/// hand-copy URLs themselves, with no guidance on which ones exist to
+/// choose from. `make stack-up`'s first-run `.env` generation invokes this
+/// (via the `discover-mirror-peers` Compose service, so no host Rust
+/// toolchain is needed — see `docker-compose.yml`) and appends whatever
+/// this prints on stdout to the generated `.env`'s `AVALON_MIRROR_PEERS`.
+///
+/// **Every path below that has nothing useful to offer prints nothing and
+/// exits 0** — this must never block a non-interactive bring-up:
+/// `AVALON_MIRROR_PEERS` already set, no bootstrap peer configured/resolved,
+/// the bootstrap peer unreachable, its address book empty, or stdin isn't a
+/// real terminal (a non-interactive `docker compose run` — e.g. CI, or a
+/// scripted bring-up — passes `-T` and gets no TTY, so this skips the
+/// prompt exactly like every other unattended case here). All prompts and
+/// status text go to stderr, so stdout only ever carries the final
+/// comma-separated peer list (or nothing) — safe for the Makefile to
+/// capture directly.
+///
+/// **"ALL" is never a silent default** — mirroring another node's data is a
+/// deliberate trust decision (`docs/architecture/nodes.md`'s node-authority
+/// model), not something that should happen just because a peer showed up
+/// in discovery. An empty selection (just pressing enter) mirrors nothing,
+/// same as skipping the prompt entirely.
+async fn discover_mirror_peers() {
+    if std::env::var("AVALON_MIRROR_PEERS")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let network_id = std::env::var("AVALON_NETWORK_ID").unwrap_or_default();
+    let bootstrap_peers = avalon_server::nodes::resolve_bootstrap_peers(
+        std::env::var("AVALON_BOOTSTRAP_PEERS").ok().as_deref(),
+        &network_id,
+        avalon_sdk::network::bundled_trust_anchors(),
+    );
+    let Some(bootstrap_peer) = bootstrap_peers.into_iter().next() else {
+        return;
+    };
+
+    let own_base_url = std::env::var("AVALON_NODE_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
+
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return,
+    };
+
+    let Ok(response) = http
+        .get(format!("{bootstrap_peer}/nodes/peers"))
+        .send()
+        .await
+    else {
+        eprintln!(
+            "discover-mirror-peers: bootstrap peer {bootstrap_peer} unreachable — skipping mirror-peer discovery"
+        );
+        return;
+    };
+    let Ok(peers) = response.json::<Vec<avalon_server::nodes::PeerInfo>>().await else {
+        return;
+    };
+
+    // The bootstrap peer itself is a real, reachable candidate too — not
+    // just whatever it happens to already know about — so it's included
+    // alongside its address book, deduplicated, and never offered as a
+    // candidate to mirror itself.
+    let mut candidates: Vec<String> = std::iter::once(bootstrap_peer)
+        .chain(peers.into_iter().map(|p| p.base_url))
+        .filter(|url| Some(url) != own_base_url.as_ref())
+        .collect();
+    candidates.sort();
+    candidates.dedup();
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return;
+    }
+
+    eprintln!("discover-mirror-peers: discovered peer(s) available to mirror:");
+    for (i, url) in candidates.iter().enumerate() {
+        eprintln!("  {}) {url}", i + 1);
+    }
+    eprintln!(
+        "Select peer(s) to mirror (comma-separated numbers, ALL for every peer above, or blank for none):"
+    );
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return;
+    }
+
+    let selected = parse_peer_selection(&input, &candidates);
+    if !selected.is_empty() {
+        println!("{}", selected.join(","));
+    }
+}
+
+/// `discover_mirror_peers`'s selection parsing, split out for direct unit
+/// testing — `"ALL"`/`"all"` selects every candidate, comma-separated
+/// 1-indexed numbers select specific ones (any out-of-range or unparseable
+/// entry is silently dropped rather than erroring, since a hoster mistyping
+/// one number in a list shouldn't lose the rest of their selection), and
+/// anything else (in particular a blank line) selects nothing — "ALL" is
+/// never applied by default, only on this exact explicit input.
+fn parse_peer_selection(input: &str, candidates: &[String]) -> Vec<String> {
+    let input = input.trim();
+    if input.eq_ignore_ascii_case("all") {
+        return candidates.to_vec();
+    }
+    input
+        .split(',')
+        .filter_map(|s| s.trim().parse::<usize>().ok())
+        .filter(|n| *n >= 1 && *n <= candidates.len())
+        .map(|n| candidates[n - 1].clone())
+        .collect()
+}
+
 /// `full: false` is `avalon inspect-ledger` — the concise chain-integrity
 /// view. `full: true` is `avalon inspect-ledger-full` — the same view plus
 /// each entry's actual payload (pretty-printed JSON) and version, for
@@ -649,6 +779,57 @@ mod tests {
         assert!(is_register_integrator_command("register-integrator"));
         assert!(is_register_integrator_command("register-game"));
         assert!(!is_register_integrator_command("register-app"));
+    }
+
+    fn sample_candidates() -> Vec<String> {
+        vec![
+            "http://peer-a:8080".to_string(),
+            "http://peer-b:8080".to_string(),
+        ]
+    }
+
+    /// Issue #511: a blank line (just pressing enter) selects nothing — the
+    /// prompt-skip/no-op default, never "ALL" applied silently.
+    #[test]
+    fn blank_selection_mirrors_nothing() {
+        assert!(parse_peer_selection("", &sample_candidates()).is_empty());
+        assert!(parse_peer_selection("\n", &sample_candidates()).is_empty());
+    }
+
+    #[test]
+    fn numeric_selection_picks_the_named_candidates() {
+        assert_eq!(
+            parse_peer_selection("2", &sample_candidates()),
+            vec!["http://peer-b:8080".to_string()]
+        );
+        assert_eq!(
+            parse_peer_selection("1,2", &sample_candidates()),
+            sample_candidates()
+        );
+    }
+
+    /// Out-of-range/unparseable entries are dropped, not fatal — one typo
+    /// shouldn't lose the rest of an otherwise-valid selection.
+    #[test]
+    fn invalid_entries_are_silently_dropped_not_fatal() {
+        assert_eq!(
+            parse_peer_selection("1,99,nonsense", &sample_candidates()),
+            vec!["http://peer-a:8080".to_string()]
+        );
+    }
+
+    /// "ALL" (any case) is the one explicit way to select every candidate —
+    /// never the default for an empty/invalid input.
+    #[test]
+    fn all_selects_every_candidate_explicitly() {
+        assert_eq!(
+            parse_peer_selection("ALL", &sample_candidates()),
+            sample_candidates()
+        );
+        assert_eq!(
+            parse_peer_selection("all", &sample_candidates()),
+            sample_candidates()
+        );
     }
 
     fn sample_entries(hashes: &[&str]) -> Vec<LedgerEntryView> {
