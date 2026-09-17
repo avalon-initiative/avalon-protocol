@@ -78,6 +78,7 @@ pub enum ProtocolEventKindVariant {
     GameSchemaPublished,
     GameSchemaMappingPublished,
     GameDataPublished,
+    GameDataDeleted,
     AchievementDefined,
     AchievementDefinitionUpdated,
     AchievementDefinitionRetired,
@@ -146,6 +147,7 @@ impl ProtocolEventKind {
         ProtocolEventKindVariant::GameSchemaPublished,
         ProtocolEventKindVariant::GameSchemaMappingPublished,
         ProtocolEventKindVariant::GameDataPublished,
+        ProtocolEventKindVariant::GameDataDeleted,
         ProtocolEventKindVariant::AchievementDefined,
         ProtocolEventKindVariant::AchievementDefinitionUpdated,
         ProtocolEventKindVariant::AchievementDefinitionRetired,
@@ -212,6 +214,7 @@ impl ProtocolEventKindVariant {
             ProtocolEventKindVariant::GameSchemaPublished => "game_schema.published",
             ProtocolEventKindVariant::GameSchemaMappingPublished => "game_schema_mapping.published",
             ProtocolEventKindVariant::GameDataPublished => "game_data.published",
+            ProtocolEventKindVariant::GameDataDeleted => "game_data.deleted",
             ProtocolEventKindVariant::AchievementDefined => "achievement.defined",
             ProtocolEventKindVariant::AchievementDefinitionUpdated => {
                 "achievement.definition_updated"
@@ -473,6 +476,10 @@ mod tests {
             (
                 ProtocolEventKindVariant::GameDataPublished,
                 "game_data.published",
+            ),
+            (
+                ProtocolEventKindVariant::GameDataDeleted,
+                "game_data.deleted",
             ),
             (
                 ProtocolEventKindVariant::AchievementDefined,

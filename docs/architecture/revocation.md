@@ -152,6 +152,32 @@ still open.
   uses the mutable-field shape; grants are not promised-durable protocol
   history (a projection concern, not covered by #81's ruling), left
   untouched by this pass.
+- **Entity/instance deletion, landed (#533).** The same "append, never
+  erase" standard applied to Integrator Space instance data
+  ([`./integrator-space.md`](./integrator-space.md)) — a deleted
+  character (or any other integrator-published instance) gets a
+  `game_data.deleted` tombstone event (`crates/server/src/integrator_data.rs::delete_instance`)
+  referencing the original instance by id, never a physical delete or a
+  mutation of the original `instance`/`published_at` fields. Differs
+  slightly in mechanics from achievement revocation above: rather than a
+  separate `attestation_revocations`-style table, the tombstone sets
+  `deleted_at`/`delete_reason_code`/`delete_reason` columns directly on
+  `integrator_data_instances`' own row — the same shape this table
+  already used for `superseded_by` before #533 existed, so this reuses an
+  established local pattern rather than introducing a second one. The
+  substantive content (`instance`, `published_at`) is never touched
+  either way; only a lifecycle marker changes. `GET
+  /identities/{id}/integrator-data` filters `deleted_at IS NULL`, same
+  posture as its existing `superseded_by IS NULL` filter — a deleted
+  instance simply stops appearing there while staying fully observable in
+  raw ledger history and the indexer's own row. Live-verified end to end,
+  including a full rebuild from `ledger_entries` alone reproducing the
+  tombstoned projection state byte-for-byte
+  (`crates/server/tests/rebuild_from_events.rs::rebuild_reproduces_integrator_data_deletion`).
+  `reason_code` is currently a free-form string, same as
+  `ClaimRevokedPayload`'s — becoming a real enum with defined
+  visibility-per-reason semantics is #534, shared across both this and
+  achievement revocation.
 
 ## Decisions and tickets
 

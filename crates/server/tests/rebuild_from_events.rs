@@ -217,6 +217,251 @@ async fn chain(pool: &PgPool) -> PostgresSettlementProvider {
     PostgresSettlementProvider::new(pool.clone(), network_id)
 }
 
+// --- Integrator Space helpers, issue #533's own fixture ---------------------
+//
+// Slimmed copies of `crates/server/tests/integrator_data.rs`'s own helpers —
+// this file is otherwise identity/friend/guild-scoped and has no existing
+// integrator registration/auth fixture to reuse.
+
+struct RebuildTestIntegrator {
+    signing_key: SigningKey,
+    slug: String,
+    key_id: String,
+}
+
+async fn register_integrator(http: &reqwest::Client, base: &str) -> RebuildTestIntegrator {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let mut csprng = rand::rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let slug = format!("rebuild-533-{}", &suffix[..10]);
+    let body = serde_json::json!({
+        "slug": slug,
+        "name": format!("Rebuild Test Integrator {}", &suffix[..8]),
+        "owner_name": "Test Studio",
+        "requested_capabilities": [],
+        "initial_key": {
+            "algorithm": "ed25519",
+            "public_key": BASE64.encode(signing_key.verifying_key().as_bytes()),
+        },
+    });
+    let response = http
+        .post(format!("{base}/integrations"))
+        .json(&body)
+        .send()
+        .await
+        .expect("register integrator failed");
+    assert!(response.status().is_success(), "{:?}", response.status());
+    let registered: serde_json::Value = response.json().await.unwrap();
+    RebuildTestIntegrator {
+        signing_key,
+        slug,
+        key_id: registered["credential"]["key_id"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    }
+}
+
+async fn integrator_auth_headers(
+    http: &reqwest::Client,
+    base: &str,
+    integrator: &RebuildTestIntegrator,
+) -> reqwest::header::HeaderMap {
+    let challenge: serde_json::Value = http
+        .post(format!("{base}/integrations/{}/challenge", integrator.slug))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let challenge_id = challenge["challenge_id"].as_str().unwrap();
+    let nonce = BASE64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
+    let signature = integrator.signing_key.sign(&nonce);
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "x-avalon-integrator-key-id",
+        integrator.key_id.parse().unwrap(),
+    );
+    headers.insert(
+        "x-avalon-integrator-challenge-id",
+        challenge_id.parse().unwrap(),
+    );
+    headers.insert(
+        "x-avalon-integrator-signature",
+        BASE64.encode(signature.to_bytes()).parse().unwrap(),
+    );
+    headers
+}
+
+const REBUILD_TEST_CHARACTER_PROTO: &str =
+    "syntax = \"proto3\"; message Character { uint32 level = 1; }";
+
+/// Issue #533: publish an Integrator Space instance (a "character"), delete
+/// it via the new tombstone endpoint, then rebuild the entire index from
+/// `ledger_entries` alone and confirm the projection comes back
+/// byte-for-byte identical — the original `game_data.published` event and
+/// the `game_data.deleted` tombstone are both real, durable ledger
+/// entries, so replaying them must reproduce the exact same "deleted"
+/// projection state, not just leave the deletion looking coincidentally
+/// correct because it was never actually dropped from memory.
+#[tokio::test]
+#[ignore]
+async fn rebuild_reproduces_integrator_data_deletion() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let integrator = register_integrator(&http, &base).await;
+    let (subject_id, subject_token) = register_and_login(&http, &base).await;
+
+    let connect = auth(
+        http.post(format!("{base}/integrations/{}/connect", integrator.slug)),
+        &subject_token,
+    )
+    .json(&serde_json::json!({ "capabilities": [] }))
+    .send()
+    .await
+    .expect("connect failed");
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let schema_headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let published_schema: serde_json::Value = http
+        .post(format!("{base}/integrations/{}/schemas", integrator.slug))
+        .headers(schema_headers)
+        .json(&serde_json::json!({ "proto_source": REBUILD_TEST_CHARACTER_PROTO }))
+        .send()
+        .await
+        .expect("publish schema failed")
+        .json()
+        .await
+        .unwrap();
+    let version = published_schema["version"].as_u64().unwrap();
+
+    let publish_headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let published_instance: serde_json::Value = http
+        .post(format!(
+            "{base}/integrations/{}/schemas/{version}/data",
+            integrator.slug
+        ))
+        .headers(publish_headers)
+        .json(&serde_json::json!({
+            "subject": subject_id,
+            "instance": { "level": 42 },
+        }))
+        .send()
+        .await
+        .expect("publish instance failed")
+        .json()
+        .await
+        .unwrap();
+    let instance_id = published_instance["id"].as_str().unwrap();
+
+    wait_for_outbox_drain(&pool).await;
+
+    // Confirmed live before deletion — same "the character exists" read
+    // path the Hub uses.
+    let before_delete: serde_json::Value = http
+        .get(format!("{base}/identities/{subject_id}/integrator-data"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        before_delete
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|inst| inst["schema"] == published_schema["id"]),
+        "expected the published instance to be visible before deletion"
+    );
+
+    let delete_headers = integrator_auth_headers(&http, &base, &integrator).await;
+    let delete_response = http
+        .delete(format!(
+            "{base}/integrations/{}/schemas/{version}/data/{subject_id}",
+            integrator.slug
+        ))
+        .headers(delete_headers)
+        .json(
+            &serde_json::json!({ "reason_code": "deleted", "reason": "player deleted character" }),
+        )
+        .send()
+        .await
+        .expect("delete instance failed");
+    assert!(
+        delete_response.status().is_success(),
+        "{:?}",
+        delete_response.status()
+    );
+
+    wait_for_outbox_drain(&pool).await;
+
+    // The tombstone event is real, durable ledger history — never a
+    // physical delete/mutation of the original entry, per
+    // docs/architecture/revocation.md's own standard.
+    let ledger_kinds: Vec<String> = sqlx::query_scalar(
+        "SELECT kind FROM ledger_entries WHERE payload->>'id' = $1 OR payload->>'instance_id' = $1 ORDER BY seq",
+    )
+    .bind(instance_id)
+    .fetch_all(&pool)
+    .await
+    .expect("failed to read ledger_entries");
+    assert_eq!(
+        ledger_kinds,
+        vec![
+            "game_data.published".to_string(),
+            "game_data.deleted".to_string()
+        ],
+        "expected exactly the publish then the tombstone, both durable"
+    );
+
+    let after_delete: serde_json::Value = http
+        .get(format!("{base}/identities/{subject_id}/integrator-data"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        after_delete
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|inst| inst["schema"] != published_schema["id"]),
+        "expected the deleted instance to no longer be visible"
+    );
+
+    // The real, continuously-projected state before anything is dropped —
+    // `indexer_integrator_data_instances` is kept live by
+    // `integrator_data::publish_instance`/`delete_instance` calling
+    // `apply_in_tx` directly, same posture this file's `profiles` check
+    // already relies on.
+    let projection_before = snapshot_table(&pool, "indexer_integrator_data_instances").await;
+    assert!(
+        projection_before
+            .iter()
+            .any(|row| row.contains(instance_id)
+                && row.contains("\"delete_reason_code\":\"deleted\"")),
+        "expected the tombstoned row to already carry its deletion columns before rebuild"
+    );
+
+    let chain = chain(&pool).await;
+    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+        .await
+        .expect("rebuild failed");
+
+    let projection_after = snapshot_table(&pool, "indexer_integrator_data_instances").await;
+    assert_eq!(
+        projection_before, projection_after,
+        "integrator data instance projection (including its #533 tombstone columns) must come back byte-for-byte identical after a full rebuild"
+    );
+}
+
 /// The core disaster-recovery proof: register two identities (real
 /// `identity.created` events), update one's profile, friend-request +
 /// accept between them, and have both join a guild — then rebuild the

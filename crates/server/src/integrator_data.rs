@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use avalon_indexer::projections::{
     integrator_data_instances, integrator_schemas as indexed_integrator_schemas,
 };
-use avalon_protocol::event_payloads::GameDataPublishedPayload;
+use avalon_protocol::event_payloads::{GameDataDeletedPayload, GameDataPublishedPayload};
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
@@ -227,6 +227,104 @@ pub async fn publish_instance(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct DeleteInstanceRequest {
+    #[serde(default = "default_delete_reason_code")]
+    pub reason_code: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+fn default_delete_reason_code() -> String {
+    "deleted".to_string()
+}
+
+/// `DELETE /integrations/{slug}/schemas/{version}/data/{subject}` (#533) —
+/// append-only tombstone for the schema's current (non-superseded,
+/// non-deleted) instance belonging to `subject`, following
+/// `docs/architecture/revocation.md`'s pattern: the original
+/// `integrator_data_instances` row's `instance`/`published_at` are never
+/// touched, only `deleted_at`/`delete_reason_code`/`delete_reason` are
+/// set — the same "add a lifecycle marker, never mutate the substantive
+/// content" shape this module already uses for `superseded_by` above. The
+/// original `game_data.published` event, and the new `game_data.deleted`
+/// event this appends, both stay observable in raw ledger history.
+pub async fn delete_instance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((slug, version, subject)): Path<(String, u32, Uuid)>,
+    Json(body): Json<DeleteInstanceRequest>,
+) -> Result<Json<()>, AppError> {
+    let integrator_id = authenticate_owning_integrator(&state, &headers, &slug).await?;
+
+    let schema_id = schema_ref(&slug, version);
+    let schema = fetch_schema_by_id(&state, schema_id.as_str())
+        .await?
+        .ok_or(AppError::IntegratorSchemaNotFound)?;
+    if schema.integrator_id != integrator_id {
+        return Err(AppError::IntegratorDataSchemaOwnershipMismatch);
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    // Same race-prevention shape `publish_instance` uses: lock the current
+    // instance row for the duration of this transaction so a concurrent
+    // publish/delete for the same (schema, subject) pair serializes rather
+    // than racing.
+    let instance_id: Option<String> = sqlx::query(
+        "SELECT id FROM integrator_data_instances \
+         WHERE schema_id = $1 AND subject = $2 AND superseded_by IS NULL AND deleted_at IS NULL \
+         FOR UPDATE",
+    )
+    .bind(schema_id.as_str())
+    .bind(subject)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(|row| row.try_get("id"))
+    .transpose()?;
+    let instance_id = instance_id.ok_or(AppError::IntegratorDataInstanceNotFound)?;
+
+    let now = OffsetDateTime::now_utc();
+
+    sqlx::query(
+        "UPDATE integrator_data_instances \
+         SET deleted_at = $2, delete_reason_code = $3, delete_reason = $4 \
+         WHERE id = $1",
+    )
+    .bind(&instance_id)
+    .bind(now)
+    .bind(&body.reason_code)
+    .bind(&body.reason)
+    .execute(&mut *tx)
+    .await?;
+
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: ProtocolEventKindVariant::GameDataDeleted
+            .as_str()
+            .to_string(),
+        issuer: integrator_ref(&slug, "data_deleted"),
+        subject: issuer_ref("identity", &subject.to_string(), "integrator_data_deleted"),
+        payload: serde_json::to_value(GameDataDeletedPayload {
+            instance_id,
+            schema: schema_id.as_str().to_string(),
+            game_id: integrator_id,
+            subject,
+            reason_code: body.reason_code,
+            reason: body.reason,
+        })
+        .expect("GameDataDeletedPayload should serialize"),
+        timestamp: now,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
+
+    tx.commit().await?;
+
+    Ok(Json(()))
+}
+
 /// The entire visibility decision, pure and DB-free — the field-inclusion
 /// rule #384/#381 define, applied to one instance's top-level JSON keys
 /// against its schema's visibility metadata. Matches
@@ -279,6 +377,10 @@ pub async fn get_identity_integrator_data(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<VisibleIntegratorDataInstanceResponse>>, AppError> {
+    // #533: `list_current_for_subject` already excludes deleted instances
+    // (`deleted_at IS NULL`), so a deleted character simply stops
+    // appearing here — the tombstone event stays in raw history, not this
+    // filtered read.
     let instances = integrator_data_instances::list_current_for_subject(&state.pool, id).await?;
 
     let mut response = Vec::with_capacity(instances.len());

@@ -299,6 +299,12 @@ guarantee is actually needed, following the same discipline
   `indexer_integrator_data_instances` tables mirroring the
   `integrator_schemas`/`indexer_integrator_schemas` pairing exactly (append-only,
   `superseded_by` lineage, no PATCH).
+- **Instance deletion (#533)**: `DELETE
+  /integrations/{slug}/schemas/{version}/data/{subject}` — a deleted
+  character (or any other published instance) gets a `game_data.deleted`
+  tombstone, never a physical delete; see
+  [`./revocation.md`](./revocation.md)'s "Entity/instance deletion"
+  section for the full mechanics.
 
   Write auth needs three things together: `authenticate_owning_integrator` (the
   caller must *be* `{slug}`, same guard `publish_schema_version` uses); an
