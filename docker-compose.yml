@@ -55,6 +55,27 @@ services:
         condition: service_healthy
     profiles: ["stack"]
 
+  # One-shot, interactive: issue #511. `make stack-up`'s first-run flow
+  # invokes this (`docker compose run --rm discover-mirror-peers`, before
+  # `avalon-server` itself starts) so a hoster whose `AVALON_BOOTSTRAP_PEERS`
+  # (or network seed list) resolves to a reachable peer gets prompted to
+  # pick which discovered peer(s) to mirror, without hand-copying URLs. See
+  # `crates/cli/src/main.rs::discover_mirror_peers`'s own doc comment for the
+  # full skip-conditions list (already configured, nothing discoverable, no
+  # TTY, ...) — every one of them prints nothing and exits 0, so this never
+  # blocks a non-interactive bring-up. `stdin_open`/`tty` pass the host
+  # terminal through so the interactive prompt actually works via `docker
+  # compose run` (not `up` — this isn't a long-running service).
+  discover-mirror-peers:
+    build: .
+    container_name: avalon-discover-mirror-peers
+    env_file: .env
+    entrypoint: ["avalon"]
+    command: ["discover-mirror-peers"]
+    stdin_open: true
+    tty: true
+    profiles: ["stack"]
+
   avalon-server:
     build: .
     container_name: avalon-server

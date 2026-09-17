@@ -276,6 +276,23 @@ deployments. A node mirroring the public network and a private, disconnected
 instance both "self-host" the same code — they are not the same thing; see
 [`./self-hosting.md`](./self-hosting.md).
 
+**Discovery feeding mirror bring-up directly (#511).** #362's announce/
+bootstrap discovery (`GET /nodes/peers`, this section) and mirroring
+(`AVALON_MIRROR_PEERS`, the previous section) used to be entirely
+disconnected in practice — a hoster who successfully discovered peers still
+had to hand-copy URLs into `AVALON_MIRROR_PEERS` themselves. `make
+stack-up`'s first-run bring-up now closes that gap: `avalon
+discover-mirror-peers` (run via the `discover-mirror-peers` Compose
+service, so it needs no host Rust toolchain) queries the resolved bootstrap
+peer's address book and prompts interactively for which peer(s) to mirror,
+writing the selection straight into the generated `.env`. This never makes
+discovery *imply* mirroring — every skip condition (already configured, no
+bootstrap peer resolved, unreachable, empty address book, no TTY) exits
+silently with no behavior change, and "mirror every discovered peer" is
+never the default even when offered; an explicit `ALL` or a blank/skipped
+prompt are the only two ways to leave with zero or every peer, never a
+silent choice made on the hoster's behalf.
+
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
 presence for identities *publishing through* that node lapses until they

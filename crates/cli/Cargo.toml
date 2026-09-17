@@ -30,12 +30,17 @@ time.workspace = true
 # dev_tools.rs commands below, which do also use ed25519-dalek (signing, not
 # just verifying) for their own reasons.
 ed25519-dalek.workspace = true
+# Required (not dev-tools-gated), same reasoning as ed25519-dalek above:
+# `avalon discover-mirror-peers` (issue #511) is a read-only ops command —
+# queries a bootstrap peer's `/nodes/peers` address book, never mutates
+# anything — meant to run from `make stack-up`'s Docker-only bring-up path,
+# so it has to work in a `--no-default-features` build too.
+reqwest.workspace = true
 # Everything below is only reachable from `dev_tools.rs` (issue #175) — the
 # mutating commands (`create-identity`, `login`, `register-game`) that a
 # `--no-default-features` build excludes along with these dependencies
 # entirely, not just their call sites.
 url = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 passkey-types = { workspace = true, optional = true }
 passkey-client = { workspace = true, optional = true }
@@ -59,7 +64,6 @@ default = ["dev-tools"]
 # not merely unreachable at runtime.
 dev-tools = [
     "dep:url",
-    "dep:reqwest",
     "dep:rand",
     "dep:passkey-types",
     "dep:passkey-client",
