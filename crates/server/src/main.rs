@@ -184,7 +184,17 @@ async fn main() {
         announce_config,
     ));
 
-    let app = avalon_server::router(state);
+    // Issue #545: per-hoster shared rate-limit/concurrency-ceiling state
+    // across this operator's own processes — `None` (the default,
+    // AVALON_REDIS_URL unset) keeps `router` on its existing in-process
+    // layers. See `avalon_server::redis_limits`'s own module doc comment.
+    let redis_limiter = avalon_server::redis_limits::RedisLimiterState::from_env().await;
+    if redis_limiter.is_some() {
+        tracing::info!(
+            "avalon-server: rate limit / concurrency ceiling backed by Redis (AVALON_REDIS_URL set)"
+        );
+    }
+    let app = avalon_server::router(state, redis_limiter);
 
     tracing::info!(%addr, "avalon-server listening");
     let listener = tokio::net::TcpListener::bind(&addr)

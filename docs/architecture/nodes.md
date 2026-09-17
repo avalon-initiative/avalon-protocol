@@ -437,16 +437,34 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     burst gets `429` + `Retry-After`; a concurrency-limited burst still
     completes every request (backpressure, not a silent drop) but
     measurably serializes.
-  - **Per-process, not network-wide (#537).** Both the GCRA rate-limit
-    bucket and the concurrency counter live entirely in one process's
-    memory, with no shared backing store across processes. An operator
-    running more than one `avalon-server` process against the same network
-    gets that many independent copies of each ceiling — a caller who fans
-    requests across every process gets roughly (configured limit × process
-    count), not the configured limit. Treat `AVALON_RATE_LIMIT_PER_MINUTE`/
-    `AVALON_MAX_CONCURRENT_REQUESTS` as a per-node floor and size
-    accordingly until #545 decides whether real network-wide enforcement
-    (a shared counter) is worth building.
+  - **Per-process by default; optionally shared per-hoster (#537, decided
+    #545).** Both the GCRA rate-limit bucket and the concurrency counter
+    live entirely in one process's memory by default, with no shared
+    backing store across processes — an operator running more than one
+    `avalon-server` process gets that many independent copies of each
+    ceiling unless they opt in. `AVALON_REDIS_URL` (issue #545,
+    `crate::redis_limits`) makes both limits Redis-backed instead,
+    **strictly scoped to that one hoster's own processes** — never a
+    network-wide shared limiter (that would recreate exactly the single-
+    point-of-control problem #527/#535 exist to remove; this only lets one
+    operator's own N processes agree with each other, the same way their
+    own `DATABASE_URL` already does). Unset (the default), behavior is
+    unchanged from before #545 existed. Rate limiting: fixed-window
+    `INCR`+`PEXPIRE`, atomic via a Lua script — an honest, documented
+    tradeoff (up to ~2x burst right at a window boundary), strictly better
+    than today's real gap (no cross-process limit at all). Concurrency:
+    a Redis sorted set of in-flight request ids, pruned of anything
+    stale (a crashed process's leaked slot self-heals on the next
+    admission check, not stuck forever), backpressuring the same way the
+    in-process `ConcurrencyLimitLayer` does rather than dropping. Both fail
+    open (log a warning, let the request through) if Redis itself becomes
+    unreachable, rather than taking the whole node down over a rate-limit
+    backend outage. Live-verified against two real `avalon-server`
+    processes sharing one Redis: the rate limit measurably held across
+    both (spending most of the budget on one process starved the other,
+    rather than granting it a fresh allotment), and a burst split across
+    both nodes backpressured together instead of each node independently
+    absorbing its own half (`crates/server/tests/redis_resource_limits.rs`).
 
 ## Decisions and tickets
 

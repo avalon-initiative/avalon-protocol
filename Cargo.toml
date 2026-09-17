@@ -83,3 +83,12 @@ tempfile = "3"
 # than string comparison — already present transitively (many crates in
 # this workspace depend on it), promoted to a direct dependency here.
 semver = "1"
+# Issue #545: optional, per-hoster shared rate-limit/concurrency-ceiling
+# backend (AVALON_REDIS_URL) — a hoster running more than one avalon-server
+# process for their own deployment can point all of them at their own
+# Redis so a configured limit means "across my own N processes," not
+# "per process." Never shared across different hosters/operators — see
+# `crate::redis_limits`'s own module doc comment. `connection-manager`
+# gives a cheap-to-clone, auto-reconnecting async connection; `tokio-comp`
+# is this server's only async runtime.
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
