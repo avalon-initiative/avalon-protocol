@@ -38,7 +38,7 @@ const whatIsThis = [
     icon: 'discover' as const,
     kicker: 'network',
     label: 'An open protocol',
-    body: 'Avalon is the connective layer — identity, social graph, guilds, achievements — not a platform that owns your world. Your integrator stays sovereign over its rules, economy, and world state; Avalon is the shared layer underneath it, the way OAuth or Steam Cloud sit under an app without being the app.',
+    body: 'Avalon is the connective layer — identity, friends and guilds, achievements — not a platform that owns your world. Your integrator stays sovereign over its rules, economy, and world state; Avalon is the shared layer underneath it, the way OAuth or Steam Cloud sit under an app without being the app.',
     snippet: 'integrator.connect(avalon)',
   },
   {
