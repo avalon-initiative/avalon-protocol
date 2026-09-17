@@ -276,6 +276,38 @@ into a Hub-only or integrator-only corner.
   interconnected. Live-verified with two real `avalon-server` processes
   sharing one Postgres and a real websocket subscriber on the second node
   (`crates/server/tests/realtime_relay.rs`).
+- **At-rest replication, so chat history survives a node's loss (#540,
+  implementing #535's decision).** A separate concern from #539's live
+  relay above — this never touches a broadcast channel, and #539 never
+  touches Postgres. `crate::chat_replication`: `send_message`/
+  `delete_message` also call `replicate_to_peers` (spawned, not awaited
+  inline) right after their existing `ChatBus`/`relay_to_peers` calls,
+  posting once to exactly one deterministic target — the
+  lexicographically-smallest same-`network_id` peer advertising an
+  `indexer`/`combined` role (distinct eligibility from #539's
+  `realtime`/`gateway`, since this is about durable storage capacity, not
+  live push). The target's `POST /nodes/replicate-chat` handler writes
+  into its own `guild_messages_replica`/`conversation_messages_replica`
+  tables (migration `0068`) — **deliberately not** the live
+  `guild_messages`/`conversation_messages` tables themselves, since those
+  tables' foreign keys reference `guild_channels`/`identities` data a
+  replication target may not itself hold a copy of (today's architecture
+  has no mechanism replicating those specific core tables to a node that
+  isn't also authoring them directly). A deletion sets `deleted_at` on the
+  replica row rather than removing it, mirroring #533's own "lifecycle
+  marker, not content mutation" pattern. Every replication attempt logs
+  its outcome and elapsed time (`tracing::debug` on success,
+  `tracing::warn` on failure/rejection) — replication lag is observable,
+  never silently swallowed, satisfying #540's own acceptance bar. A
+  single-node deployment, or one with no `indexer`/`combined` peer, is
+  unaffected (`replicate_to_peers` is a no-op with no eligible target).
+  Live-verified with two real `avalon-server` processes: a message sent on
+  node A lands in node B's own `guild_messages_replica`
+  (`crates/server/tests/chat_replication.rs`) — that test's own module doc
+  comment is explicit about what it does and doesn't prove, given this
+  environment's Postgres role has no `CREATEDB` privilege to stand up a
+  genuinely separate second database for the full "database, not just
+  process, is gone" scenario.
 
 ## Decisions and tickets
 

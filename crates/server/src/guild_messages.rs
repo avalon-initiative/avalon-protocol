@@ -316,6 +316,11 @@ pub async fn send_message(
         state.clone(),
         crate::realtime_relay::RelayEvent::ChannelMessage(response.clone()),
     ));
+    // Issue #540: at-rest durability on at least one additional node.
+    tokio::spawn(crate::chat_replication::replicate_to_peers(
+        state.clone(),
+        crate::chat_replication::ReplicationEvent::ChannelMessage(response.clone()),
+    ));
     Ok(Json(response))
 }
 
@@ -455,6 +460,14 @@ pub async fn delete_message(
     tokio::spawn(crate::realtime_relay::relay_to_peers(
         state.clone(),
         crate::realtime_relay::RelayEvent::ChannelMessageDeleted {
+            channel_id,
+            message_id,
+        },
+    ));
+    // Issue #540: mark the replica's copy deleted too.
+    tokio::spawn(crate::chat_replication::replicate_to_peers(
+        state.clone(),
+        crate::chat_replication::ReplicationEvent::ChannelMessageDeleted {
             channel_id,
             message_id,
         },

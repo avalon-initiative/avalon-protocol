@@ -277,6 +277,13 @@ and implemented unless noted otherwise.
 See [`./guilds-implementation-log.md`](./guilds-implementation-log.md) for
 exact types, endpoints, and migrations behind every item above.
 
+- **Guild chat survives a node's loss (#540).** Guild channel messages are
+  now asynchronously replicated to at least one additional node beyond
+  the one that received the write — see
+  [`./communication.md`](./communication.md)'s "Today in the repo" entry
+  for the full mechanics (a separate, foreign-key-free replica table,
+  never the live `guild_messages` table itself).
+
 ## Decisions and tickets
 
 - [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74) — ADR: guilds
