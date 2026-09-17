@@ -106,6 +106,12 @@ applied.
   dev flow — see `../maintainers/local-development.md`), plus `migrate` and `avalon-server`
   behind a `stack` Compose profile so a plain `docker compose up -d` (the
   existing postgres-only flow) doesn't also try to build/start them.
+  `avalon-server`'s published port binds to `AVALON_HOST_IP` (unset
+  defaults to `127.0.0.1`, loopback-only, same as the native dev flow) —
+  set it to this machine's LAN IP so a peer node elsewhere on the LAN can
+  reach it, e.g. for `AVALON_MIRROR_PEERS`/`AVALON_BOOTSTRAP_PEERS` on
+  another deployment. Docker refuses to bind a port to an IP not actually
+  assigned to a local interface.
 - `docker-compose.redis.yml` — issue #545's Redis-backed rate limit/
   concurrency ceiling, applied as a Compose *override* file (not folded
   into `docker-compose.yml` directly — `avalon-server` hard-fails at

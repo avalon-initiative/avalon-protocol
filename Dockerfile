@@ -13,6 +13,8 @@
 # `/app` layout without also relocating `db/` under it would make `migrate`
 # fail to find its own migrations at runtime.
 FROM rust:1-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/src/avalon-protocol
 COPY . .
 RUN cargo build --release -p avalon-server

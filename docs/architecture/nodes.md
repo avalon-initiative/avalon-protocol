@@ -81,17 +81,28 @@ derived from the data itself (`payload_pruned_at`), not from the reading
 process's own config, so it stays accurate against any database it's
 pointed at.
 
-**Milestone-1 honesty**: per "Today in the repo" below, there is currently
-exactly one Settlement node/database. #180's availability invariant — never
-prune what nothing else retains — has no real archive-tier mirror to be
-checked against yet. `AVALON_RETENTION_PRUNING_ENABLED=true` today means
-real, permanent data loss for anything outside the configured window, not
-"safely available elsewhere" — `.env.example` and `crates/chain/src/retention.rs`'s
-module doc comment both say this plainly rather than letting the mechanism
-imply a safety guarantee the network doesn't yet provide. The mechanism
-itself (config, pruning query, what never gets touched) is built to be
-correct once an archive-tier mirror actually exists; only the network-wide
-guarantee it should ultimately be gated on is still missing.
+**Milestone-1 honesty, updated**: a second, physically-separate node now
+genuinely exists in this environment — see "Today in the repo" below for
+`avalon-peer`'s real, live-verified mirror deployment (its own Postgres
+container on a distinct host, independently verified against the pinned
+trust-anchor key, fully converged with the primary's real history). That
+closes the "no archive-tier mirror exists at all" gap this note used to
+describe. What's still genuinely unproven: `AVALON_RETENTION_PRUNING_ENABLED=true`
+has not actually been turned on anywhere against this now-real mirror, so
+the specific claim "a hot node can safely prune because an archive tier
+retains it" is structurally supported but not yet exercised end to end —
+turning pruning on for a controlled test (without destabilizing the
+primary's persistent config) is the natural next step, not done here.
+Two things this second node does *not* by itself solve, and shouldn't be
+read as solving: **write availability** during a primary outage (a
+mirror-only node never becomes a new writer/authority — that's a
+promotion/failover story this doesn't attempt) and the harder
+multi-writer/consensus question #40 still owns. What it does solve: a
+genuine second, independently-verifiable copy of Settlement history no
+longer depends on one physical database being up — reads (`/ledger/*`)
+against `avalon-peer` succeed today even with the primary down, because
+they're served from its own independently-verified mirrored data, not
+proxied through the primary.
 
 **Settlement-state checkpoint.** #180 also asked for a periodic
 durable-state checkpoint so a hot-tier node, or any new node, can bootstrap
@@ -355,6 +366,26 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
   server-to-server mechanism, not yet consumed by client-side routing.
 - No export format for the log (that's #40).
+- **A real, physically-separate second node exists and is live-verified**
+  (`avalon-peer`, a distinct host on the same LAN, `~/avalon-protocol`
+  there, always reachable via `ssh avalon-peer` in this sandbox — see
+  `.claude/CLAUDE.md`). Deployed with `make stack-up-no-redis` (its own
+  Docker-Compose Postgres container, genuinely separate storage from the
+  primary's), `AVALON_NETWORK_ID=avalon-dev-local` (matching the primary,
+  required for its STHs to verify against the same pinned trust anchor —
+  see `docs/trusted-networks.json`), and `AVALON_MIRROR_PEERS=http://<primary-LAN-IP>:8080`
+  — no `AVALON_SETTLEMENT_SIGNING_KEY` needed at all, since a pure mirror
+  never calls local `chain.commit`. Fully converged (its `mirrored_entries`
+  count matches the primary's real `tree_size` exactly, same root hash) via
+  the existing mirror-watcher/backfill mechanism, no new code. **Read
+  availability during an outage is live-proven, not just structural**: with
+  the primary process stopped entirely (`make stop`, confirmed
+  connection-refused), `avalon-peer`'s `GET /ledger/sth/latest` and
+  `GET /ledger/entries` kept answering correctly from its own independently
+  -verified data — see the retention section's updated honesty note above
+  for exactly what this does and doesn't close (write availability during
+  an outage, and the archive-tier-pruning-safety claim specifically,
+  remain open).
 - No distinct "archive" node *type*/binary exists, and #208 deliberately
   didn't invent one: retention tier is operational configuration on the
   one existing Settlement role (`AVALON_RETENTION_TIER=full`), not a fifth
