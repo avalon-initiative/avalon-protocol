@@ -184,7 +184,7 @@ const steps = [
         <span :class="styles.brandMark"><AvalonIcon name="logo" :size="18" /></span>
         <span :class="styles.brandName">AVALON</span>
       </div>
-      <p :class="styles.footerTagline">One network. Many worlds.</p>
+      <p :class="styles.footerTagline">Infinite worlds. One you.</p>
     </footer>
   </div>
 </template>
