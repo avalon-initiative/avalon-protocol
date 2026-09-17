@@ -14,6 +14,9 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+# FIXME: update to the new org (github.com/avalon-initiative or wherever
+# the protocol repo actually lands) once that move happens — destination
+# not settled yet, so left pointing at the real current repo for now.
 repository = "https://github.com/LunarVagabond/avalon-protocol"
 
 [workspace.dependencies]

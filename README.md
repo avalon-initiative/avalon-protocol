@@ -37,6 +37,15 @@ where it always should have been: not owned by any one platform, and not
 rebuilt from scratch by every game that needs it. See
 [Why Avalon](docs/WhyAvalon.md) for the full argument.
 
+## We are the Avalon Initiative
+
+Not one studio, and not a platform selling access to the games that use it.
+Run a node, mirror the log, build against the SDK, or ship a game that plugs
+in — however you touch this network, you're not a customer of it, you're part
+of it. An open protocol only stays open as long as more than one party is
+actually running it; every operator, integrator, and contributor here is
+that party, not just whoever wrote the reference implementation first.
+
 ## Why Avalon
 
 - **Identity is separate from characters.** One persistent identity, any number of

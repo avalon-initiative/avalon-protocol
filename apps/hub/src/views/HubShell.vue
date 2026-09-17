@@ -121,7 +121,12 @@ function onSelectAnnouncement(alert: GuildAnnouncementAlert) {
   router.push({ name: 'guild-channel', params: { id: alert.guild_id, cid: alert.channel_id } })
 }
 
-const GITHUB_PROFILE_URL = 'https://github.com/LunarVagabond'
+const GITHUB_PROFILE_URL = 'https://github.com/avalon-initiative'
+// FIXME: still the personal-account repo — point this at
+// github.com/avalon-initiative/avalon-protocol once the actual repo
+// transfer happens, not before (issues/contributing/release links below
+// all derive from this and would 404 against an org repo that doesn't
+// exist yet).
 const GITHUB_REPO_URL = 'https://github.com/LunarVagabond/avalon-protocol'
 const GITHUB_ISSUES_URL = `${GITHUB_REPO_URL}/issues/new?template=bug_report.yml`
 const CONTRIBUTING_URL = `${GITHUB_REPO_URL}/blob/main/.github/CONTRIBUTING.md`
@@ -329,7 +334,7 @@ watch(
       <footer :class="styles.footer">
         <div :class="styles.footerLeft">
           <a :class="styles.footerLink" :href="GITHUB_PROFILE_URL" target="_blank" rel="noopener noreferrer">
-            @LunarVagabond
+            Avalon Initiative
           </a>
         </div>
 

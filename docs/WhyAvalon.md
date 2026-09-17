@@ -132,3 +132,18 @@ personhood.
 > another game can be completely different. But the user behind them remains
 > the same — and for the first time, that fact is something the games themselves,
 > not just one platform, can actually recognize.
+
+## Who this belongs to
+
+Not one studio. Not one company selling access to the games that use it. This
+is built by **the Avalon Initiative** — and that name describes the shape of
+the thing, not a legal wrapper around one team's project. A node operator
+mirroring the log, a studio integrating the SDK, a hoster running their own
+node for their own community — none of that is "using someone else's
+platform." It's the same thing every other independent operator on this
+network is doing, which is the only way an open protocol actually stays open:
+not by one party's goodwill, but because enough separate parties are running
+it that no single one of them could close it even if they wanted to. If
+you're reading this because you're thinking about hosting a node, building
+against the SDK, or integrating a game — you're not evaluating whether to
+join something finished. You're one of the people this is actually for.

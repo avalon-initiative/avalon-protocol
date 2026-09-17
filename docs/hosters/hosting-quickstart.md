@@ -12,6 +12,10 @@ community" path. If you're contributing code to this repository itself, see
 instead — that one runs `avalon-server` natively via `cargo` for faster
 edit/rebuild cycles.
 
+Running this node makes you part of the Avalon Initiative's actual
+infrastructure, not a downstream consumer of someone else's — the network is
+only as real and as decentralized as the operators actually running it.
+
 ## One command
 
 ```bash

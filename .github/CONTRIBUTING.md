@@ -1,5 +1,9 @@
 # Contributing
 
+Opening a PR here makes you part of the Avalon Initiative, not an outside
+contributor to somebody else's project — the same standard every operator
+and integrator on this network is held to.
+
 ## Purpose
 
 Contribution standards for Avalon Protocol, with emphasis on clarity, safety,
