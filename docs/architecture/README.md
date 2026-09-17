@@ -20,7 +20,7 @@ Each document below links the ones that govern it.
 
 | Topic | Document | One line |
 |---|---|---|
-| Overview | [overview.md](overview.md) | What Avalon is and is not; the three verticals; the six crates; phases |
+| Overview | [overview.md](overview.md) | What Avalon is and is not; the three verticals; the workspace crates; phases |
 | Identity | [identity.md](identity.md) | Self-owned, integrator-independent anchor; identity-controlled metadata |
 | Integrator bindings | [bindings.md](bindings.md) | An identity's scoped participation in an integrator; characters stay integrator-owned |
 | Achievements & attestations | [achievements-and-attestations.md](achievements-and-attestations.md) | An achievement is an issuer's signed claim, namespaced by issuer |
@@ -51,6 +51,7 @@ Each document below links the ones that govern it.
 | Scalability | [scalability.md](scalability.md) | 1,000 integrators × 100,000 identities, without becoming a gameplay bottleneck |
 | Future layers | [future-layers.md](future-layers.md) | Portable assets and economy: later phases, not foundations |
 | Integrator Space | [integrator-space.md](integrator-space.md) | Integrator-defined schemas, publication, versioning, and mappings; not built yet — the design a decision has to close before it starts |
+| Distributed topology | [distributed-topology.md](distributed-topology.md) | Target shape, not today's reality: sharded settlement with no designated aggregator, interest-scoped realtime mesh instead of full broadcast |
 
 ## Invariants
 
@@ -86,7 +87,7 @@ established it.
 | Registry | Network statistics inform decisions; they never determine trust. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
 | Privacy | Network visibility is intentionally scoped. | [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78), [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) |
 | Economy | Universal economic interoperability is not foundational. | [`../stakeholders/Proposal.md` §15](../stakeholders/Proposal.md#15-economy-and-currency) |
-| Workspace | Six crates; new domains are modules of `protocol`, not new crates. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
+| Workspace | Six domain crates plus one proc-macro support crate (`schema-derive`); new domains are modules of `protocol`, not new crates. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
 
 Still open, and deliberately so:
 

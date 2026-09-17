@@ -128,9 +128,12 @@ Avalon is the connective tissue. The integrators are the experiences.
 
 ## The workspace
 
-Six crates, confirmed by
-[#69](https://github.com/LunarVagabond/avalon-protocol/issues/69). Each has a
-concrete boundary; none exists merely because a concept has a name.
+Six domain crates, confirmed by
+[#69](https://github.com/LunarVagabond/avalon-protocol/issues/69), plus one
+proc-macro support crate (`schema-derive`, added for #386/#423) that generates
+code rather than owning a domain — it doesn't reopen #69's invariant below.
+Each domain crate has a concrete boundary; none exists merely because a
+concept has a name.
 
 | Crate | May know about | Must not know about |
 |---|---|---|
@@ -140,6 +143,7 @@ concrete boundary; none exists merely because a concept has a name.
 | `server` | everything — it composes protocol, chain, indexer, realtime, API | being reached around by clients (Hub, integrators use the API/SDK) |
 | `sdk` | protocol capabilities, auth, retries, discovery, routing | exposing Postgres, chain RPC, Merkle trees, or node topology to an integrator |
 | `cli` | dev/ops workflows: registration, inspection, diagnostics, migrations | being a second server |
+| `schema-derive` | deriving `.proto` text + visibility maps from a Rust struct (`#[derive(AvalonSchema)]`) | anything domain-specific — purely a codegen helper, re-exported through `sdk` rather than used directly |
 
 Internal growth is by module (`protocol/src/{identity,guilds,achievements,...}.rs`),
 not by crate. A new domain such as assets becomes a module of `protocol` unless a
