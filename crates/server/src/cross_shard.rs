@@ -225,6 +225,13 @@ pub async fn fetch_and_compute(
         let fetched: Result<FetchedSth, String> = async {
             let response = client
                 .get(format!("{url}/ledger/sth/latest"))
+                // Issue #573: explicit, not implicit — a peer answering
+                // for more than one shard (mirroring one, authoring
+                // another) needs to be told which one this request is
+                // about; omitting it would silently get whichever shard
+                // that peer treats as its own default (`"core"`), not
+                // necessarily the one this aggregation actually wants.
+                .query(&[("shard_id", shard_id.as_str())])
                 .send()
                 .await
                 .map_err(|e| e.to_string())?

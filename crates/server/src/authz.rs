@@ -391,6 +391,8 @@ mod live_tests {
             managed_hosting_verify_key: None,
             known_shards: None,
             remote_submit_status: None,
+            own_shard_id: "core".to_string(),
+            shard_mirror_sources: crate::settlement::ShardMirrorSources::default(),
         }
     }
 

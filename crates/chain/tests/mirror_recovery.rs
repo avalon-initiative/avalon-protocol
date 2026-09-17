@@ -199,7 +199,7 @@ async fn discard_only_removes_entries_at_or_after_the_conflicting_tree_size() {
             .expect("insert_mirrored_entry failed");
     }
 
-    let progress_before = mirror::mirrored_progress(&pool, &network_id)
+    let progress_before = mirror::mirrored_progress(&pool, &network_id, None)
         .await
         .expect("mirrored_progress failed");
     assert_eq!(progress_before.verified_count, 3);
@@ -212,7 +212,7 @@ async fn discard_only_removes_entries_at_or_after_the_conflicting_tree_size() {
         "should discard the entries at tree_size 10 and 15"
     );
 
-    let progress_after = mirror::mirrored_progress(&pool, &network_id)
+    let progress_after = mirror::mirrored_progress(&pool, &network_id, None)
         .await
         .expect("mirrored_progress failed");
     assert_eq!(
@@ -313,7 +313,7 @@ async fn full_recovery_lifecycle_leaves_only_pre_conflict_entries_and_clears_the
         .expect("discard_mirrored_entries_from failed");
     assert_eq!(discarded, 1);
 
-    let progress = mirror::mirrored_progress(&pool, &network_id)
+    let progress = mirror::mirrored_progress(&pool, &network_id, None)
         .await
         .expect("mirrored_progress failed");
     assert_eq!(

@@ -24,19 +24,53 @@ use uuid::Uuid;
 /// How many entries to request per bulk-entries page while backfilling.
 const BACKFILL_PAGE_SIZE: i64 = 200;
 
+/// Issue #573: `AVALON_MIRROR_PEERS` entries can now be either a bare URL
+/// (implicitly the `"core"` shard, preserving every pre-#573 config
+/// byte-for-byte) or `shard_id=url` — the same bare-vs-keyed convention
+/// `AVALON_SETTLEMENT_REMOTE_URLS`/`AVALON_KNOWN_SHARDS` already use.
+/// Shared by [`MirrorWatcherConfig::from_env`] (which only needs the bare
+/// URL list to poll) and `crate::settlement::ShardMirrorSources` (which
+/// needs the shard_id mapping too, to scope reads correctly — see its own
+/// doc comment for why this matters).
+pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
+    raw.split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            let (shard_id, url) = match entry.split_once('=') {
+                Some((shard_id, url)) => (shard_id.trim().to_string(), url.trim()),
+                None => ("core".to_string(), entry),
+            };
+            let url = url.trim_end_matches('/').to_string();
+            if url.is_empty() {
+                None
+            } else {
+                Some((shard_id, url))
+            }
+        })
+        .collect()
+}
+
 pub struct MirrorWatcherConfig {
     /// Base URLs of peers to watch, e.g. `http://localhost:8081` — no
     /// trailing slash (stripped in [`Self::from_env`] if present). More
     /// than one is a normal, supported configuration — see module docs.
+    /// Polling itself doesn't care which shard a peer represents (each
+    /// peer's own `mirrored_entries`/`observed_sths` rows are tagged with
+    /// its `source_url` regardless) — only read-serving
+    /// (`crate::settlement::ShardMirrorSources`) needs that mapping.
     pub peers: Vec<String>,
     pub poll_interval: Duration,
 }
 
 impl MirrorWatcherConfig {
-    /// `AVALON_MIRROR_PEERS` — comma-separated peer base URLs. Unset or
-    /// empty means this node isn't watching anyone; `None` here is the
-    /// signal `main.rs` uses to skip spawning the watcher entirely, the
-    /// same "only spawn if configured" pattern
+    /// `AVALON_MIRROR_PEERS` — comma-separated peer base URLs, each
+    /// optionally `shard_id=`-prefixed (see [`parse_mirror_peers`]).
+    /// Unset or empty means this node isn't watching anyone; `None` here
+    /// is the signal `main.rs` uses to skip spawning the watcher
+    /// entirely, the same "only spawn if configured" pattern
     /// `retention::RetentionConfig::should_prune` already uses.
     ///
     /// Poll interval defaults to 30s, overridable via
@@ -46,10 +80,9 @@ impl MirrorWatcherConfig {
     /// sensible default cadence rather than a tight poll loop.
     pub fn from_env() -> Option<Self> {
         let raw = std::env::var("AVALON_MIRROR_PEERS").ok()?;
-        let peers: Vec<String> = raw
-            .split(',')
-            .map(|s| s.trim().trim_end_matches('/').to_string())
-            .filter(|s| !s.is_empty())
+        let peers: Vec<String> = parse_mirror_peers(&raw)
+            .into_iter()
+            .map(|(_shard_id, url)| url)
             .collect();
         if peers.is_empty() {
             return None;
@@ -468,7 +501,14 @@ async fn backfill(
         return Ok(());
     }
 
-    let mut progress = mirror::mirrored_progress(pool, &sth.network_id).await?;
+    // Issue #573: unscoped (`None`) — backfill's own "how much of this
+    // network have I mirrored" progress tracking is deliberately left
+    // exactly as it was; this fix's live-verified scope is the *read*
+    // side (`crate::settlement`'s shard-blending bug). Whether backfill
+    // itself needs equivalent per-shard scoping when `candidate_peers`
+    // spans more than one shard under the same `network_id` is a real,
+    // separate question — not something tonight's fix changes either way.
+    let mut progress = mirror::mirrored_progress(pool, &sth.network_id, None).await?;
     if progress.verified_count >= sth.tree_size {
         return Ok(());
     }
@@ -1094,7 +1134,7 @@ mod tests {
             .await
             .expect("backfill_network should return Ok(()) rather than error when gated");
 
-        let progress = mirror::mirrored_progress(&pool, &network_id)
+        let progress = mirror::mirrored_progress(&pool, &network_id, None)
             .await
             .expect("mirrored_progress failed");
         assert_eq!(

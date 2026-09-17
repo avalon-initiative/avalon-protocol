@@ -44,6 +44,22 @@
 //! re-derives and self-verifies exactly the same way the authored path
 //! does — see each `mirror_*` helper's own doc comment — so a caller gets
 //! the same verifiable answer regardless of which kind of node answered.
+//!
+//! **Issue #573 — shard-scoped, not just node-global.** The rule above was
+//! written assuming a node is *either* a pure mirror *or* a pure authority,
+//! never both. That assumption broke for real once a node could hold local
+//! history for one shard (#527's sharded model) while mirroring a
+//! *different* one: "any authored history at all" used to silently make
+//! the node stop answering from its mirror entirely, even for a shard it
+//! never authors — wrong data, no error. Every handler here now takes an
+//! optional `shard_id` query param (default `"core"`, matching every
+//! pre-#573 deployment's implicit single shard) and decides per request:
+//! local only when the requested `shard_id` equals this node's own
+//! [`AppState::own_shard_id`], mirror otherwise — scoped, via
+//! [`ShardMirrorSources`], to the specific peer configured for that
+//! `shard_id`, not blended across every peer this node happens to mirror.
+//! Live-verified against the exact scenario that surfaced the bug — see
+//! `docs/architecture/nodes.md`'s `avalon-peer` entry.
 
 use avalon_chain::merkle;
 use avalon_chain::mirror;
@@ -59,6 +75,51 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Issue #573: `AVALON_MIRROR_PEERS` (`shard_id=url` or bare-URL entries,
+/// same parsing `crate::mirror_watcher::MirrorWatcherConfig` uses to build
+/// its own poll list) resolved into a `shard_id -> source_url` lookup, so
+/// a read handler can scope its mirror query to the one peer actually
+/// responsible for the requested shard instead of every mirrored row this
+/// node happens to hold under the same `network_id`. Built once at
+/// startup (`main.rs`), held in [`AppState`].
+#[derive(Clone, Default)]
+pub struct ShardMirrorSources {
+    sources: std::collections::HashMap<String, String>,
+}
+
+impl ShardMirrorSources {
+    pub fn from_env() -> Self {
+        let raw = std::env::var("AVALON_MIRROR_PEERS").unwrap_or_default();
+        let sources = crate::mirror_watcher::parse_mirror_peers(&raw)
+            .into_iter()
+            .collect();
+        Self { sources }
+    }
+
+    /// The configured mirror peer's base URL for `shard_id`, if any —
+    /// `None` means either no mirroring is configured at all, or this
+    /// specific `shard_id` isn't one of the configured peers (an unscoped
+    /// mirror query is the correct fallback there, same as before #573:
+    /// nothing configured to scope by, so nothing lost by not scoping).
+    pub fn source_url_for(&self, shard_id: &str) -> Option<&str> {
+        self.sources.get(shard_id).map(String::as_str)
+    }
+}
+
+/// Issue #573: which shard a `/ledger/*` read is asking about — every
+/// handler in this module now takes this, defaulting to `"core"` so an
+/// unset/single-shard deployment (every pre-#573 config) behaves exactly
+/// as it always did.
+#[derive(Deserialize)]
+pub struct ShardQuery {
+    #[serde(default)]
+    pub shard_id: Option<String>,
+}
+
+fn default_shard_id() -> &'static str {
+    "core"
+}
 
 #[derive(Serialize)]
 pub struct SignedTreeHeadResponse {
@@ -106,11 +167,19 @@ impl From<SignedTreeHead> for SignedTreeHeadResponse {
 /// so authored and mirrored history are never blended for one response.
 pub async fn latest_sth(
     State(state): State<AppState>,
+    Query(shard_query): Query<ShardQuery>,
 ) -> Result<Json<SignedTreeHeadResponse>, AppError> {
-    if let Some(sth) = state.chain.latest_signed_tree_head().await? {
-        return Ok(Json(sth.into()));
+    let shard_id = shard_query
+        .shard_id
+        .as_deref()
+        .unwrap_or(default_shard_id());
+    if shard_id == state.own_shard_id {
+        if let Some(sth) = state.chain.latest_signed_tree_head().await? {
+            return Ok(Json(sth.into()));
+        }
     }
-    let sth = mirror_latest_sth(&state.pool, state.chain.network_id())
+    let source_url = state.shard_mirror_sources.source_url_for(shard_id);
+    let sth = mirror_latest_sth(&state.pool, state.chain.network_id(), source_url)
         .await?
         .ok_or(AppError::SignedTreeHeadNotFound)?;
     Ok(Json(sth.into()))
@@ -128,11 +197,19 @@ pub async fn latest_sth(
 pub async fn sth_at_tree_size(
     State(state): State<AppState>,
     Path(tree_size): Path<i64>,
+    Query(shard_query): Query<ShardQuery>,
 ) -> Result<Json<SignedTreeHeadResponse>, AppError> {
-    if let Some(sth) = state.chain.signed_tree_head_at(tree_size).await? {
-        return Ok(Json(sth.into()));
+    let shard_id = shard_query
+        .shard_id
+        .as_deref()
+        .unwrap_or(default_shard_id());
+    if shard_id == state.own_shard_id {
+        if let Some(sth) = state.chain.signed_tree_head_at(tree_size).await? {
+            return Ok(Json(sth.into()));
+        }
     }
-    let sth = mirror_sth_at(&state.pool, state.chain.network_id(), tree_size)
+    let source_url = state.shard_mirror_sources.source_url_for(shard_id);
+    let sth = mirror_sth_at(&state.pool, state.chain.network_id(), tree_size, source_url)
         .await?
         .ok_or(AppError::SignedTreeHeadNotFound)?;
     Ok(Json(sth.into()))
@@ -150,12 +227,13 @@ pub async fn sth_at_tree_size(
 async fn mirror_latest_sth(
     pool: &sqlx::PgPool,
     network_id: &str,
+    source_url: Option<&str>,
 ) -> Result<Option<SignedTreeHead>, AppError> {
-    let progress = mirror::mirrored_progress(pool, network_id).await?;
+    let progress = mirror::mirrored_progress(pool, network_id, source_url).await?;
     if progress.verified_count == 0 {
         return Ok(None);
     }
-    mirror_sth_at(pool, network_id, progress.verified_count).await
+    mirror_sth_at(pool, network_id, progress.verified_count, source_url).await
 }
 
 /// Issue #520: `GET /ledger/sth/{tree_size}`'s mirror-backed fallback — see
@@ -169,15 +247,23 @@ async fn mirror_sth_at(
     pool: &sqlx::PgPool,
     network_id: &str,
     tree_size: i64,
+    source_url: Option<&str>,
 ) -> Result<Option<SignedTreeHead>, AppError> {
-    let hashes = mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size).await?;
+    let hashes =
+        mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size, source_url).await?;
     if (hashes.len() as i64) < tree_size {
         return Ok(None);
     }
     let root =
         merkle::mth_of_hex_hashes(&hashes).map_err(avalon_chain::SettlementError::Storage)?;
-    let observed =
-        mirror::observed_sth_matching_root(pool, network_id, tree_size, &hex::encode(root)).await?;
+    let observed = mirror::observed_sth_matching_root(
+        pool,
+        network_id,
+        tree_size,
+        &hex::encode(root),
+        source_url,
+    )
+    .await?;
     Ok(observed.map(SignedTreeHead::from))
 }
 
@@ -185,6 +271,8 @@ async fn mirror_sth_at(
 pub struct ConsistencyProofQuery {
     pub first: i64,
     pub second: i64,
+    #[serde(default)]
+    pub shard_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -218,11 +306,19 @@ pub async fn consistency_proof(
     if first < 0 || second < 0 || first > second {
         return Err(AppError::InvalidProofQuery);
     }
+    let shard_id = query.shard_id.as_deref().unwrap_or(default_shard_id());
 
     let entry_count = state.chain.entry_count().await?;
-    if entry_count == 0 {
-        return mirror_consistency_proof(&state.pool, state.chain.network_id(), first, second)
-            .await;
+    if shard_id != state.own_shard_id || entry_count == 0 {
+        let source_url = state.shard_mirror_sources.source_url_for(shard_id);
+        return mirror_consistency_proof(
+            &state.pool,
+            state.chain.network_id(),
+            first,
+            second,
+            source_url,
+        )
+        .await;
     }
     if second > entry_count {
         return Err(AppError::LedgerRangeNotCommitted);
@@ -282,13 +378,15 @@ async fn mirror_consistency_proof(
     network_id: &str,
     first: i64,
     second: i64,
+    source_url: Option<&str>,
 ) -> Result<Json<ConsistencyProofResponse>, AppError> {
-    let progress = mirror::mirrored_progress(pool, network_id).await?;
+    let progress = mirror::mirrored_progress(pool, network_id, source_url).await?;
     if second > progress.verified_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
-    let hashes_to_second = mirror::mirrored_entry_hashes_up_to(pool, network_id, second).await?;
+    let hashes_to_second =
+        mirror::mirrored_entry_hashes_up_to(pool, network_id, second, source_url).await?;
     let second_root = merkle::mth_of_hex_hashes(&hashes_to_second)
         .map_err(avalon_chain::SettlementError::Storage)?;
     let first_root = if first == 0 {
@@ -324,6 +422,8 @@ async fn mirror_consistency_proof(
 pub struct InclusionProofQuery {
     pub seq: i64,
     pub tree_size: i64,
+    #[serde(default)]
+    pub shard_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -361,10 +461,19 @@ pub async fn inclusion_proof(
     if seq < 1 || tree_size < 1 {
         return Err(AppError::InvalidProofQuery);
     }
+    let shard_id = query.shard_id.as_deref().unwrap_or(default_shard_id());
 
     let entry_count = state.chain.entry_count().await?;
-    if entry_count == 0 {
-        return mirror_inclusion_proof(&state.pool, state.chain.network_id(), seq, tree_size).await;
+    if shard_id != state.own_shard_id || entry_count == 0 {
+        let source_url = state.shard_mirror_sources.source_url_for(shard_id);
+        return mirror_inclusion_proof(
+            &state.pool,
+            state.chain.network_id(),
+            seq,
+            tree_size,
+            source_url,
+        )
+        .await;
     }
     if tree_size > entry_count {
         return Err(AppError::LedgerRangeNotCommitted);
@@ -416,13 +525,14 @@ async fn mirror_inclusion_proof(
     network_id: &str,
     seq: i64,
     tree_size: i64,
+    source_url: Option<&str>,
 ) -> Result<Json<InclusionProofResponse>, AppError> {
-    let progress = mirror::mirrored_progress(pool, network_id).await?;
+    let progress = mirror::mirrored_progress(pool, network_id, source_url).await?;
     if tree_size > progress.verified_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
-    let leaf_index = mirror::mirrored_leaf_index_for_seq(pool, network_id, seq)
+    let leaf_index = mirror::mirrored_leaf_index_for_seq(pool, network_id, seq, source_url)
         .await?
         .ok_or(AppError::InvalidProofQuery)?;
     if leaf_index >= tree_size {
@@ -431,7 +541,8 @@ async fn mirror_inclusion_proof(
     let leaf_index_usize = leaf_index as usize;
     let tree_size_usize = tree_size as usize;
 
-    let hashes = mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size).await?;
+    let hashes =
+        mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size, source_url).await?;
     let leaf_hash_hex = hashes[leaf_index_usize].clone();
     let proof = merkle::inclusion_proof_of_hex_hashes(leaf_index_usize, &hashes)
         .map_err(avalon_chain::SettlementError::Storage)?;
@@ -478,6 +589,8 @@ pub struct EntriesQuery {
     /// keeps this endpoint's original unfiltered, mirror-facing behavior.
     #[serde(default)]
     pub subject: Option<String>,
+    #[serde(default)]
+    pub shard_id: Option<String>,
 }
 
 fn default_entries_limit() -> i64 {
@@ -578,15 +691,18 @@ pub async fn list_entries(
         return Err(AppError::InvalidEntriesQuery);
     }
     let limit = query.limit.min(MAX_ENTRIES_LIMIT);
+    let shard_id = query.shard_id.as_deref().unwrap_or(default_shard_id());
 
     let entry_count = state.chain.entry_count().await?;
-    if entry_count == 0 {
+    if shard_id != state.own_shard_id || entry_count == 0 {
+        let source_url = state.shard_mirror_sources.source_url_for(shard_id);
         let entries = mirror::mirrored_entries_since(
             &state.pool,
             state.chain.network_id(),
             query.since_seq,
             limit,
             query.subject.as_deref(),
+            source_url,
         )
         .await?;
         return Ok(Json(entries.into_iter().map(Into::into).collect()));
@@ -602,6 +718,14 @@ pub async fn list_entries(
 #[derive(Deserialize)]
 pub struct MirrorProgressQuery {
     pub network_id: String,
+    /// Issue #573: the *caller's own* base URL, when it knows one
+    /// (`AVALON_NODE_URL`) — scopes the answer to specifically how far
+    /// this node has mirrored *that* caller, not every peer it happens to
+    /// mirror under the same `network_id`. Omitted (the default) keeps
+    /// the exact pre-#573 unscoped behavior, for a caller that either
+    /// doesn't know its own URL or only ever expects one mirror source.
+    #[serde(default)]
+    pub source_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -636,7 +760,9 @@ pub async fn mirror_progress(
     State(state): State<AppState>,
     Query(query): Query<MirrorProgressQuery>,
 ) -> Result<Json<MirrorProgressResponse>, AppError> {
-    let progress = mirror::mirrored_progress(&state.pool, &query.network_id).await?;
+    let progress =
+        mirror::mirrored_progress(&state.pool, &query.network_id, query.source_url.as_deref())
+            .await?;
     Ok(Json(MirrorProgressResponse {
         network_id: query.network_id,
         last_seq: progress.last_seq,

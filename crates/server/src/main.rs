@@ -153,6 +153,11 @@ async fn main() {
         // Issue #526: `None` when `remote_submit` itself is `None` —
         // nothing this node could ever report as failing.
         remote_submit_status: remote_submit.as_ref().map(|r| r.status()),
+        // Issue #573: `AVALON_OWN_SHARD_ID`, defaulting to `"core"` —
+        // every pre-#573 deployment's implicit single shard, so unset
+        // means zero behavior change.
+        own_shard_id: std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string()),
+        shard_mirror_sources: avalon_server::settlement::ShardMirrorSources::from_env(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing

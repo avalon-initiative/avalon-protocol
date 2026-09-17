@@ -53,14 +53,26 @@ struct MirrorProgressBody {
 /// counts as "not confirmed" rather than erroring the whole pruning pass —
 /// one flaky/misconfigured archive peer should never itself become a
 /// reason every *other* configured peer's confirmation is ignored.
+///
+/// Issue #573: `own_base_url`, when this node knows its own
+/// (`AVALON_NODE_URL`), is sent as `source_url` — the archive peer might
+/// mirror more than one node under this same `network_id` (#527's sharded
+/// model), so without it, "has this peer mirrored far enough" could
+/// answer using a completely different mirrored source's progress.
+/// `None` keeps the exact pre-#573 unscoped query.
 async fn peer_confirms_coverage(
     client: &reqwest::Client,
     peer: &str,
     network_id: &str,
     boundary_seq: i64,
+    own_base_url: Option<&str>,
 ) -> bool {
-    let url = format!("{peer}/ledger/mirror-progress?network_id={network_id}");
-    match client.get(&url).send().await {
+    let url = format!("{peer}/ledger/mirror-progress");
+    let mut params = vec![("network_id", network_id)];
+    if let Some(own_base_url) = own_base_url {
+        params.push(("source_url", own_base_url));
+    }
+    match client.get(&url).query(&params).send().await {
         Ok(response) if response.status().is_success() => {
             match response.json::<MirrorProgressBody>().await {
                 Ok(body) => body.last_seq >= boundary_seq,
@@ -80,13 +92,14 @@ pub async fn confirm_archive_coverage(
     config: &RetentionConfig,
     network_id: &str,
     boundary_seq: i64,
+    own_base_url: Option<&str>,
 ) -> bool {
     if !config.requires_archive_confirmation() {
         return true;
     }
     let mut confirmations = 0usize;
     for peer in &config.archive_peers {
-        if peer_confirms_coverage(client, peer, network_id, boundary_seq).await {
+        if peer_confirms_coverage(client, peer, network_id, boundary_seq, own_base_url).await {
             confirmations += 1;
             if confirmations >= config.min_archive_confirmations {
                 return true;
@@ -104,8 +117,13 @@ pub async fn confirm_archive_coverage(
 /// `avalon-chain`.
 pub async fn run_worker(chain: PostgresSettlementProvider, config: RetentionConfig) {
     let client = reqwest::Client::new();
+    // Issue #573: read once, not per tick — `AVALON_NODE_URL` doesn't
+    // change while this process runs, and this is the same env var
+    // `crate::nodes::AnnounceConfig` already reads for the same purpose
+    // (telling a peer "this is who I am").
+    let own_base_url = std::env::var("AVALON_NODE_URL").ok();
     loop {
-        match prune_once(&chain, &config, &client).await {
+        match prune_once(&chain, &config, &client, own_base_url.as_deref()).await {
             Ok(Some(report)) if report.pruned_count > 0 => {
                 tracing::info!(
                     pruned_count = report.pruned_count,
@@ -125,6 +143,7 @@ async fn prune_once(
     chain: &PostgresSettlementProvider,
     config: &RetentionConfig,
     client: &reqwest::Client,
+    own_base_url: Option<&str>,
 ) -> Result<Option<avalon_chain::retention::PruneReport>, avalon_chain::SettlementError> {
     let Some(cutoff) = config.prune_cutoff(time::OffsetDateTime::now_utc()) else {
         return Ok(None);
@@ -137,7 +156,15 @@ async fn prune_once(
             // do either.
             return Ok(None);
         };
-        if !confirm_archive_coverage(client, config, chain.network_id(), boundary_seq).await {
+        if !confirm_archive_coverage(
+            client,
+            config,
+            chain.network_id(),
+            boundary_seq,
+            own_base_url,
+        )
+        .await
+        {
             tracing::warn!(
                 boundary_seq,
                 min_confirmations = config.min_archive_confirmations,
@@ -201,28 +228,30 @@ mod tests {
     async fn a_peer_reporting_coverage_at_or_past_the_boundary_confirms() {
         let peer = spawn_fake_peer(100).await;
         let client = reqwest::Client::new();
-        assert!(peer_confirms_coverage(&client, &peer, "avalon-test", 100).await);
-        assert!(peer_confirms_coverage(&client, &peer, "avalon-test", 50).await);
+        assert!(peer_confirms_coverage(&client, &peer, "avalon-test", 100, None).await);
+        assert!(peer_confirms_coverage(&client, &peer, "avalon-test", 50, None).await);
     }
 
     #[tokio::test]
     async fn a_peer_reporting_coverage_short_of_the_boundary_does_not_confirm() {
         let peer = spawn_fake_peer(50).await;
         let client = reqwest::Client::new();
-        assert!(!peer_confirms_coverage(&client, &peer, "avalon-test", 100).await);
+        assert!(!peer_confirms_coverage(&client, &peer, "avalon-test", 100, None).await);
     }
 
     #[tokio::test]
     async fn an_unreachable_peer_does_not_confirm_rather_than_erroring() {
         let client = reqwest::Client::new();
-        assert!(!peer_confirms_coverage(&client, "http://127.0.0.1:1", "avalon-test", 1).await);
+        assert!(
+            !peer_confirms_coverage(&client, "http://127.0.0.1:1", "avalon-test", 1, None).await
+        );
     }
 
     #[tokio::test]
     async fn no_archive_peers_configured_means_coverage_is_always_confirmed() {
         let config = config_with_peers(vec![], 0);
         let client = reqwest::Client::new();
-        assert!(confirm_archive_coverage(&client, &config, "avalon-test", 999).await);
+        assert!(confirm_archive_coverage(&client, &config, "avalon-test", 999, None).await);
     }
 
     #[tokio::test]
@@ -233,13 +262,13 @@ mod tests {
 
         let config = config_with_peers(vec![covering.clone(), short.clone()], 1);
         assert!(
-            confirm_archive_coverage(&client, &config, "avalon-test", 100).await,
+            confirm_archive_coverage(&client, &config, "avalon-test", 100, None).await,
             "one covering peer should be enough when min_confirmations is 1"
         );
 
         let config = config_with_peers(vec![short, covering], 2);
         assert!(
-            !confirm_archive_coverage(&client, &config, "avalon-test", 100).await,
+            !confirm_archive_coverage(&client, &config, "avalon-test", 100, None).await,
             "only one of two peers actually covers the boundary — 2 confirmations isn't met"
         );
     }

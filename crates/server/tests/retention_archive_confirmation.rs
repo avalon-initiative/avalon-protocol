@@ -111,7 +111,14 @@ async fn pruning_is_blocked_until_confirmed_then_proceeds_once_it_is() {
         min_archive_confirmations: 1,
     };
     assert!(
-        !confirm_archive_coverage(&client, &blocked_config, chain.network_id(), boundary_seq).await,
+        !confirm_archive_coverage(
+            &client,
+            &blocked_config,
+            chain.network_id(),
+            boundary_seq,
+            None
+        )
+        .await,
         "a peer short of the boundary must not confirm coverage"
     );
 
@@ -132,8 +139,14 @@ async fn pruning_is_blocked_until_confirmed_then_proceeds_once_it_is() {
         ..blocked_config
     };
     assert!(
-        confirm_archive_coverage(&client, &confirmed_config, chain.network_id(), boundary_seq)
-            .await,
+        confirm_archive_coverage(
+            &client,
+            &confirmed_config,
+            chain.network_id(),
+            boundary_seq,
+            None
+        )
+        .await,
         "a peer at exactly the boundary must confirm coverage"
     );
 

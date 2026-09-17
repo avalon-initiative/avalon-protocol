@@ -213,26 +213,33 @@ fn observed_sth_from_row(row: sqlx::postgres::PgRow) -> Result<ObservedSth, Sett
 /// other (necessarily disagreeing) observation recorded at the same
 /// `network_id`/`tree_size`. `None` means either no peer ever reported
 /// this exact STH, or this node hasn't backfilled up to `tree_size` yet.
+/// Issue #573: `source_url`, when `Some`, additionally scopes to one
+/// specific mirrored peer — see [`mirrored_progress`]'s doc comment for
+/// why. `None` preserves the exact pre-#573 query/behavior.
 pub async fn observed_sth_matching_root(
     pool: &PgPool,
     network_id: &str,
     tree_size: i64,
     root_hash: &str,
+    source_url: Option<&str>,
 ) -> Result<Option<ObservedSth>, SettlementError> {
-    let row = sqlx::query(
-        r#"
-        SELECT source_url, network_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at
-        FROM observed_sths
-        WHERE network_id = $1 AND tree_size = $2 AND root_hash = $3
-        LIMIT 1
-        "#,
-    )
-    .bind(network_id)
-    .bind(tree_size)
-    .bind(root_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT source_url, network_id, tree_size, root_hash, signature, signing_key_id, \
+         created_at, observed_at FROM observed_sths WHERE network_id = ",
+    );
+    builder.push_bind(network_id);
+    builder.push(" AND tree_size = ").push_bind(tree_size);
+    builder.push(" AND root_hash = ").push_bind(root_hash);
+    if let Some(source_url) = source_url {
+        builder.push(" AND source_url = ").push_bind(source_url);
+    }
+    builder.push(" LIMIT 1");
+
+    let row = builder
+        .build()
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
     row.map(observed_sth_from_row).transpose()
 }
 
@@ -528,16 +535,36 @@ where
 /// verification (a contiguous count of accepted entries, matching how
 /// `leaf_index_for_seq`/`entry_hashes_up_to` rank entries on the authority
 /// side — see `crates/chain/src/postgres.rs`'s module doc comment).
+/// Issue #573: `source_url`, when `Some`, additionally scopes this to one
+/// specific mirrored peer/shard — a node mirroring more than one peer
+/// under the same `network_id` (#527's sharded model: distinct shards
+/// share one `network_id`, each with its own independent tree) needs to
+/// ask "how far have I mirrored *this* peer specifically," not "how far
+/// have I mirrored *anyone* claiming this network" (which would blend two
+/// unrelated shards' entries into one meaningless count). `None` preserves
+/// the exact pre-#573 behavior — every caller from before this existed
+/// still gets the same answer it always did.
 pub async fn mirrored_progress(
     pool: &PgPool,
     network_id: &str,
+    source_url: Option<&str>,
 ) -> Result<MirrorProgress, SettlementError> {
-    let row = sqlx::query(
-        "SELECT COALESCE(MAX(seq), 0) AS last_seq, COUNT(*) AS count FROM mirrored_entries WHERE network_id = $1",
-    )
-    .bind(network_id)
-    .fetch_one(pool)
-    .await
+    let row = match source_url {
+        Some(source_url) => sqlx::query(
+            "SELECT COALESCE(MAX(seq), 0) AS last_seq, COUNT(*) AS count FROM mirrored_entries \
+             WHERE network_id = $1 AND source_url = $2",
+        )
+        .bind(network_id)
+        .bind(source_url)
+        .fetch_one(pool)
+        .await,
+        None => sqlx::query(
+            "SELECT COALESCE(MAX(seq), 0) AS last_seq, COUNT(*) AS count FROM mirrored_entries WHERE network_id = $1",
+        )
+        .bind(network_id)
+        .fetch_one(pool)
+        .await,
+    }
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
     Ok(MirrorProgress {
         last_seq: row
@@ -579,45 +606,38 @@ fn mirrored_entry_from_row(row: sqlx::postgres::PgRow) -> Result<MirroredEntry, 
 /// with `seq` strictly greater than `since_seq`, oldest first, pre-filtered
 /// to one `subject` when `Some`. What `GET /ledger/entries` falls back to
 /// once this node has no locally-authored entries of its own to serve.
+///
+/// Issue #573: `source_url`, when `Some`, additionally scopes to one
+/// specific mirrored peer — see [`mirrored_progress`]'s doc comment for
+/// why. `None` preserves the exact pre-#573 query/behavior.
 pub async fn mirrored_entries_since(
     pool: &PgPool,
     network_id: &str,
     since_seq: i64,
     limit: i64,
     subject: Option<&str>,
+    source_url: Option<&str>,
 ) -> Result<Vec<MirroredEntry>, SettlementError> {
-    let rows = match subject {
-        Some(subject) => sqlx::query(
-            r#"
-            SELECT source_url, network_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size
-            FROM mirrored_entries
-            WHERE network_id = $1 AND seq > $2 AND subject = $4
-            ORDER BY seq ASC
-            LIMIT $3
-            "#,
-        )
-        .bind(network_id)
-        .bind(since_seq)
-        .bind(limit)
-        .bind(subject)
-        .fetch_all(pool)
-        .await,
-        None => sqlx::query(
-            r#"
-            SELECT source_url, network_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size
-            FROM mirrored_entries
-            WHERE network_id = $1 AND seq > $2
-            ORDER BY seq ASC
-            LIMIT $3
-            "#,
-        )
-        .bind(network_id)
-        .bind(since_seq)
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT source_url, network_id, seq, event_id, kind, issuer, subject, payload, \
+         event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size \
+         FROM mirrored_entries WHERE network_id = ",
+    );
+    builder.push_bind(network_id);
+    builder.push(" AND seq > ").push_bind(since_seq);
+    if let Some(subject) = subject {
+        builder.push(" AND subject = ").push_bind(subject);
     }
-    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    if let Some(source_url) = source_url {
+        builder.push(" AND source_url = ").push_bind(source_url);
+    }
+    builder.push(" ORDER BY seq ASC LIMIT ").push_bind(limit);
+
+    let rows = builder
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
 
     rows.into_iter().map(mirrored_entry_from_row).collect()
 }
@@ -631,19 +651,30 @@ pub async fn mirrored_entries_since(
 /// (`mirror_watcher::backfill`'s `progress.verified_count`), so this
 /// reproduces the exact same tree an inclusion proof was originally
 /// verified against.
+/// Issue #573: `source_url`, when `Some`, additionally scopes to one
+/// specific mirrored peer — see [`mirrored_progress`]'s doc comment for
+/// why. `None` preserves the exact pre-#573 query/behavior.
 pub async fn mirrored_entry_hashes_up_to(
     pool: &PgPool,
     network_id: &str,
     tree_size: i64,
+    source_url: Option<&str>,
 ) -> Result<Vec<String>, SettlementError> {
-    let rows = sqlx::query(
-        "SELECT entry_hash FROM mirrored_entries WHERE network_id = $1 ORDER BY seq ASC LIMIT $2",
-    )
-    .bind(network_id)
-    .bind(tree_size)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
+        sqlx::QueryBuilder::new("SELECT entry_hash FROM mirrored_entries WHERE network_id = ");
+    builder.push_bind(network_id);
+    if let Some(source_url) = source_url {
+        builder.push(" AND source_url = ").push_bind(source_url);
+    }
+    builder
+        .push(" ORDER BY seq ASC LIMIT ")
+        .push_bind(tree_size);
+
+    let rows = builder
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
     rows.into_iter()
         .map(|row| {
             row.try_get::<String, _>("entry_hash")
@@ -657,22 +688,40 @@ pub async fn mirrored_entry_hashes_up_to(
 /// leaf position of the mirrored entry at `seq`, among this network's
 /// mirrored entries ordered by `seq`. `None` if no mirrored entry has this
 /// exact `seq`.
+/// Issue #573: `source_url`, when `Some`, additionally scopes to one
+/// specific mirrored peer — see [`mirrored_progress`]'s doc comment for
+/// why. `None` preserves the exact pre-#573 query/behavior.
 pub async fn mirrored_leaf_index_for_seq(
     pool: &PgPool,
     network_id: &str,
     seq: i64,
+    source_url: Option<&str>,
 ) -> Result<Option<i64>, SettlementError> {
-    let row = sqlx::query(
-        r#"
-        SELECT (SELECT COUNT(*) FROM mirrored_entries e2 WHERE e2.network_id = $1 AND e2.seq <= e1.seq) - 1 AS leaf_index
-        FROM mirrored_entries e1
-        WHERE e1.network_id = $1 AND e1.seq = $2
-        "#,
-    )
-    .bind(network_id)
-    .bind(seq)
-    .fetch_optional(pool)
-    .await
+    let row = match source_url {
+        Some(source_url) => sqlx::query(
+            r#"
+            SELECT (SELECT COUNT(*) FROM mirrored_entries e2 WHERE e2.network_id = $1 AND e2.source_url = $3 AND e2.seq <= e1.seq) - 1 AS leaf_index
+            FROM mirrored_entries e1
+            WHERE e1.network_id = $1 AND e1.seq = $2 AND e1.source_url = $3
+            "#,
+        )
+        .bind(network_id)
+        .bind(seq)
+        .bind(source_url)
+        .fetch_optional(pool)
+        .await,
+        None => sqlx::query(
+            r#"
+            SELECT (SELECT COUNT(*) FROM mirrored_entries e2 WHERE e2.network_id = $1 AND e2.seq <= e1.seq) - 1 AS leaf_index
+            FROM mirrored_entries e1
+            WHERE e1.network_id = $1 AND e1.seq = $2
+            "#,
+        )
+        .bind(network_id)
+        .bind(seq)
+        .fetch_optional(pool)
+        .await,
+    }
     .map_err(|e| SettlementError::Storage(e.to_string()))?;
     row.map(|r| {
         r.try_get("leaf_index")
