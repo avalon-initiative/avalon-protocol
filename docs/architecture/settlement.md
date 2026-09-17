@@ -318,9 +318,19 @@ use, it never introduces a second writer for the same shard. A milestone-1
 deployment with no `AVALON_SETTLEMENT_REMOTE_URLS` configured has exactly
 one shard (`core`) and behaves exactly as today.
 
-Implementation (extending `RemoteSubmitConfig` to a per-shard map,
-`shard_id` derivation in `outbox.rs`, per-shard batch grouping) is
-separate follow-up work under epic #528, not part of this design pass.
+**Implemented (#532).** `outbox::shard_id_for_event` derives the shard
+exactly as designed above; `RemoteSubmitConfig::from_env` parses
+`AVALON_SETTLEMENT_REMOTE_URLS` into a `shard_id -> url` map, merging in
+`AVALON_SETTLEMENT_REMOTE_URL` as the implicit `core` entry; `drain_locked`
+groups a tick's pending rows by shard and commits one independent
+`EventBatch` per shard (never mixing two shards into one batch). Live-
+verified: a single drain tick spanning both a `core`-shard event and a
+`game:...`-shard event produced two distinct `ledger_entries.batch_id`
+values (`crates/server/src/outbox.rs`'s
+`a_tick_spanning_two_shards_commits_two_separate_batches`), and the full
+existing live suite (real achievement issuance, Integrator Space instance
+publication, settlement proof endpoints — all real `game:...`-namespace
+writes) re-run unchanged against the new routing with no regression.
 
 ## Bounding ledger growth
 

@@ -390,15 +390,16 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     instead of calling `chain.commit` locally; the authority runs the exact
     same `chain.commit` call there that it runs for its own local outbox.
     Unset (the default), the worker's behavior is completely unchanged.
-    Exactly one Settlement authority is ever configured as a write target —
-    no automatic failover across multiple peers, matching #70/#186's "no
-    contested writes" invariant. Still today's single-shard reality; see
-    [`settlement.md`](./settlement.md)'s "Write routing to the correct
-    shard" section (#532) for how this generalizes to
-    `AVALON_SETTLEMENT_REMOTE_URLS` (a per-shard map, keyed by the event's
-    own `GlobalId` namespace/owner) once sharded settlement (#527) exists —
-    the singular env var above keeps working unchanged as that map's
-    implicit single `core` entry.
+    Exactly one Settlement authority is ever configured as a write target
+    per shard — no automatic failover across multiple peers, matching
+    #70/#186's "no contested writes" invariant. **Shard-aware since #532**:
+    see [`settlement.md`](./settlement.md)'s "Write routing to the correct
+    shard" section — `AVALON_SETTLEMENT_REMOTE_URLS` (a per-shard map,
+    keyed by the event's own `GlobalId` namespace/owner) generalizes the
+    singular var above, which keeps working unchanged as that map's
+    implicit single `core` entry. A milestone-1 deployment with neither
+    var set has exactly one shard (`core`) and behaves exactly as before
+    #532 existed.
   - This is eventually consistent, not synchronous: a write accepted by a
     remote-settlement node's own API is durably committed on the authority
     immediately, but that node's own local reads only pick it up once
