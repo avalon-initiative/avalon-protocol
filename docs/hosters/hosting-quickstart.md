@@ -70,6 +70,20 @@ make stack-down   # stop everything this started
   see [`../architecture/settlement.md`](../architecture/settlement.md) if
   you're looking to run alongside other operators on the same network.
 
+## Node roles at a glance
+
+Three independent choices, not one — see
+[`../architecture/nodes.md`](../architecture/nodes.md)'s "A node's three
+configuration axes are independent" section for the full reference. This
+`make stack-up` quickstart leaves all three at their defaults (below);
+change them by adding the corresponding line to `.env`.
+
+| Axis | Default here | Env var | Other value(s) |
+|---|---|---|---|
+| Capability | Combined (everything in one process) | `AVALON_NODE_ROLES` | e.g. `settlement,indexer` for a specialized deployment |
+| Shard role | Authority for `core` (this node authors what it's configured to) | `AVALON_SETTLEMENT_SIGNING_KEY` (authority) / `AVALON_MIRROR_PEERS` (mirror) | A node can be an authority for one shard and a mirror of another at once |
+| Retention tier | Full/archive (keeps everything, never prunes) | `AVALON_RETENTION_TIER` | `hot` + `AVALON_RETENTION_HOT_WINDOW_DAYS` for a bounded local window |
+
 ## Generated `.env` values are yours to keep
 
 `AVALON_SETTLEMENT_SIGNING_KEY` and `AVALON_NETWORK_ID` are generated once,

@@ -29,6 +29,45 @@ later without a rewrite.
 | Gateway / API | SDK endpoints, auth, routing | anyone fronting the others |
 | Combined | any subset, including all | milestone 1: one `avalon-server` |
 
+**Config knob**: `AVALON_NODE_ROLES` (comma-separated, e.g.
+`settlement,indexer`) — see `crates/server/src/nodes.rs::node_roles`.
+Unset defaults to `combined`, today's only actually-implemented mode
+(specialized single-role deployments are designed for, per the doc
+comment above, but not yet exercised operationally). This value is purely
+advisory/self-reported (peer-table bookkeeping and #539's realtime relay
+routing) — it doesn't gate which endpoints a node actually serves.
+
+### A node's three configuration axes are independent
+
+Easy to conflate, especially once a single node holds more than one at
+once (see `avalon-peer`'s real deployment below) — these are three
+separate questions, and a node's answer to one says nothing about its
+answer to the other two:
+
+| Axis | Question it answers | Values | Config |
+|---|---|---|---|
+| **Capability** | What services does this process run? | Settlement / Indexer / Realtime / Gateway / Combined (table above) | `AVALON_NODE_ROLES` |
+| **Shard role** (per shard) | Does this node hold the real signing key and author this shard's writes, or does it only watch and independently verify another node's? | Authority (self-hosting.md's "shard operator") / Mirror (self-hosting.md's "mirroring the public network") | Authority: `AVALON_SETTLEMENT_SIGNING_KEY` set to that shard's registered key. Mirror: that shard's URL listed in `AVALON_MIRROR_PEERS` |
+| **Retention tier** | How much local history does this node keep? | Full/archive (everything) / Hot (recent window only, issue #569-gated on confirmed archive coverage) | `AVALON_RETENTION_TIER` (see below) |
+
+**Shard role is per-shard, not per-node** — a single node can be the
+authority for one shard and a mirror of a completely different one at
+the same time (nothing shares storage between the two: authored history
+lives in `ledger_entries`, mirrored history in `mirrored_entries`, kept
+separate by construction). `AVALON_OWN_SHARD_ID` (default `"core"`)
+declares which shard, if any, this node authors — see
+`crate::settlement`'s module doc comment (issue #573) for why every
+`/ledger/*` read has to know this to answer correctly once a node holds
+both roles.
+
+**Real example, live in this environment**: `avalon-peer` is
+Combined-capability (same as every node today), Full-tier, and holds
+*both* shard roles — mirror of the primary's `core` shard, and authority
+for its own separate `game:peer-shard-demo-*` shard. See this file's
+"Today in the repo" section and
+[`./settlement.md`](./settlement.md)'s "Cross-machine, real end to end"
+section for the full write-up.
+
 ### Settlement retention tiers
 
 Not every Settlement node is expected to store and serve *all* durable
@@ -51,6 +90,15 @@ never discard something nothing else retains, and never affect the
 commitment's own verifiability either way. Exact window defaults and the
 minimum archive-replication factor are implementation-ticket-level numbers,
 set per-deployment rather than fixed by the protocol.
+
+**Independent of shard role, same as it's independent of capability
+(above).** A shard *authority* can be hot or full tier for the shard it
+authors; a *mirror* can independently be hot or full tier too (this only
+ever governs whether *this node's own* stored copy prunes old payloads —
+a mirror's `mirrored_entries` isn't touched by pruning at all, see
+`crates/chain/src/retention.rs`'s own doc comment). These three axes really are
+orthogonal — see "A node's three configuration axes are independent"
+above.
 
 **Implemented, `crates/chain/src/retention.rs`.** A node declares its tier
 via environment configuration, the same pattern `AVALON_NETWORK_ID`/
