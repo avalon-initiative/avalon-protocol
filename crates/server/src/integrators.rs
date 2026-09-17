@@ -9,7 +9,9 @@ use avalon_protocol::event_payloads::{
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
-use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey, KeyRole};
+use avalon_protocol::integrators::{
+    IntegratorCategory, IntegratorStatus, IssuerKey, KeyPurpose, KeyRole,
+};
 use avalon_protocol::permissions::Capability;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -602,11 +604,19 @@ fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AppEr
 
 fn issuer_key_from_row(row: &sqlx::postgres::PgRow) -> Result<IssuerKey, AppError> {
     let role_raw: String = row.try_get("role")?;
+    // Issue #543: `purpose` defaults to `attestation` at the column level
+    // (migration `0069`), but this also tolerates a query that hasn't
+    // been updated to select it at all — same "never break on an
+    // unrecognized/missing value" posture the wire-format default takes.
+    let purpose_raw: Option<String> = row.try_get("purpose").ok();
     Ok(IssuerKey {
         key_id: row.try_get("key_id")?,
         algorithm: row.try_get("algorithm")?,
         public_key: row.try_get("public_key")?,
         role: KeyRole::parse(&role_raw).unwrap_or(KeyRole::Operational),
+        purpose: purpose_raw
+            .and_then(|p| KeyPurpose::parse(&p))
+            .unwrap_or(KeyPurpose::Attestation),
         valid_from: row.try_get("created_at")?,
         valid_until: row.try_get("valid_until")?,
         revoked_at: row.try_get("revoked_at")?,
@@ -624,7 +634,7 @@ pub(crate) async fn fetch_issuer_keys(
     integrator_id: Uuid,
 ) -> Result<Vec<IssuerKey>, AppError> {
     let rows = sqlx::query(
-        "SELECT key_id, algorithm, public_key, role, created_at, valid_until, revoked_at \
+        "SELECT key_id, algorithm, public_key, role, purpose, created_at, valid_until, revoked_at \
          FROM issuer_keys WHERE integrator_id = $1",
     )
     .bind(integrator_id)
@@ -644,7 +654,7 @@ pub(crate) async fn fetch_issuer_keys_batch(
         return Ok(HashMap::new());
     }
     let rows = sqlx::query(
-        "SELECT integrator_id, key_id, algorithm, public_key, role, created_at, valid_until, revoked_at \
+        "SELECT integrator_id, key_id, algorithm, public_key, role, purpose, created_at, valid_until, revoked_at \
          FROM issuer_keys WHERE integrator_id = ANY($1)",
     )
     .bind(integrator_ids)
@@ -682,6 +692,7 @@ pub async fn list_issuer_keys(
                 key_id: k.key_id,
                 algorithm: k.algorithm,
                 role: k.role.as_str().to_string(),
+                purpose: k.purpose.as_str().to_string(),
                 valid_from: k.valid_from,
                 valid_until: k.valid_until,
                 revoked_at: k.revoked_at,
@@ -735,7 +746,7 @@ async fn authenticate_integrator_key(
     let nonce: Vec<u8> = challenge_row.try_get("nonce")?;
 
     let key_row = sqlx::query(
-        "SELECT key_id, algorithm, public_key, role, created_at, valid_until, revoked_at \
+        "SELECT key_id, algorithm, public_key, role, purpose, created_at, valid_until, revoked_at \
          FROM issuer_keys WHERE key_id = $1 AND integrator_id = $2",
     )
     .bind(key_id)
@@ -798,8 +809,17 @@ pub struct AddIssuerKeyRequest {
     pub public_key: String,
     /// `"root"` or `"operational"` — see `avalon_protocol::integrators::KeyRole`.
     pub role: String,
+    /// `"attestation"` (the default, omit for existing pre-#543 caller
+    /// behavior) or `"shard_settlement"` — see
+    /// `avalon_protocol::integrators::KeyPurpose`, issue #543.
+    #[serde(default = "default_key_purpose")]
+    pub purpose: String,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub valid_until: Option<OffsetDateTime>,
+}
+
+fn default_key_purpose() -> String {
+    KeyPurpose::Attestation.as_str().to_string()
 }
 
 #[derive(Serialize)]
@@ -807,6 +827,7 @@ pub struct IssuerKeyResponse {
     pub key_id: Uuid,
     pub algorithm: String,
     pub role: String,
+    pub purpose: String,
     #[serde(with = "time::serde::rfc3339")]
     pub valid_from: OffsetDateTime,
     #[serde(default, with = "time::serde::rfc3339::option")]
@@ -836,6 +857,7 @@ pub async fn add_issuer_key(
         return Err(AppError::InvalidIntegratorKey);
     }
     let role = KeyRole::parse(&body.role).ok_or(AppError::InvalidIssuerKeyRole)?;
+    let purpose = KeyPurpose::parse(&body.purpose).ok_or(AppError::InvalidIssuerKeyPurpose)?;
     let public_key_bytes = BASE64
         .decode(&body.public_key)
         .map_err(|_| AppError::InvalidIntegratorKey)?;
@@ -846,14 +868,15 @@ pub async fn add_issuer_key(
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
-        "INSERT INTO issuer_keys (key_id, integrator_id, algorithm, public_key, role, valid_until, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO issuer_keys (key_id, integrator_id, algorithm, public_key, role, purpose, valid_until, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(key_id)
     .bind(path_integrator_id)
     .bind(&body.algorithm)
     .bind(&public_key_bytes)
     .bind(role.as_str())
+    .bind(purpose.as_str())
     .bind(body.valid_until)
     .bind(valid_from)
     .execute(&mut *tx)
@@ -873,6 +896,7 @@ pub async fn add_issuer_key(
             algorithm: body.algorithm.clone(),
             public_key: BASE64.encode(&public_key_bytes),
             role: role.as_str().to_string(),
+            purpose: purpose.as_str().to_string(),
             valid_until: body.valid_until,
         })
         .expect("IssuerKeyAddedPayload should serialize"),
@@ -887,6 +911,7 @@ pub async fn add_issuer_key(
         key_id,
         algorithm: body.algorithm,
         role: role.as_str().to_string(),
+        purpose: purpose.as_str().to_string(),
         valid_from,
         valid_until: body.valid_until,
         revoked_at: None,
@@ -926,7 +951,7 @@ pub async fn revoke_issuer_key(
     let row = sqlx::query(
         "UPDATE issuer_keys SET revoked_at = $1, revoked_reason = $2 \
          WHERE key_id = $3 AND integrator_id = $4 AND revoked_at IS NULL \
-         RETURNING algorithm, role, created_at, valid_until",
+         RETURNING algorithm, role, purpose, created_at, valid_until",
     )
     .bind(revoked_at)
     .bind(&body.reason)
@@ -938,6 +963,7 @@ pub async fn revoke_issuer_key(
 
     let algorithm: String = row.try_get("algorithm")?;
     let role: String = row.try_get("role")?;
+    let purpose: String = row.try_get("purpose")?;
     let valid_from: OffsetDateTime = row.try_get("created_at")?;
     let valid_until: Option<OffsetDateTime> = row.try_get("valid_until")?;
 
@@ -967,6 +993,7 @@ pub async fn revoke_issuer_key(
         key_id,
         algorithm,
         role,
+        purpose,
         valid_from,
         valid_until,
         revoked_at: Some(revoked_at),

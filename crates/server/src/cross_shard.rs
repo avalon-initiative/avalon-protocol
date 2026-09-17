@@ -36,6 +36,7 @@ use axum::extract::State;
 use axum::Json;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
+use sqlx::Row;
 use time::OffsetDateTime;
 
 use crate::error::AppError;
@@ -143,23 +144,79 @@ impl From<FetchedSth> for SignedTreeHead {
     }
 }
 
+/// Issue #543: resolves a shard's currently-authorized
+/// `shard_settlement`-purpose issuer keys directly from this node's own
+/// `issuer_keys` table — the real per-shard trust-anchor mechanism,
+/// composing with #529's aggregation rather than relying solely on the
+/// interim `AVALON_SHARD_VERIFY_KEYS` static config. `shard_id` must be
+/// `"{namespace}:{owner}"` (#532's own derivation, e.g.
+/// `"game:ashen-realms"`) to resolve at all — `"core"` (no owning
+/// integrator) and any other unparseable id return no keys, same as an
+/// integrator that has never registered a `shard_settlement` key. Only
+/// currently-unrevoked keys are returned — rotation/compromise reuses
+/// `issuer.key_revoked` unchanged, per this mechanism's own design.
+async fn resolve_shard_verify_keys_from_db(state: &AppState, shard_id: &str) -> Vec<VerifyingKey> {
+    let Some((namespace, owner)) = shard_id.split_once(':') else {
+        return Vec::new();
+    };
+    if !matches!(namespace, "game" | "app" | "service") {
+        return Vec::new();
+    }
+
+    let rows = sqlx::query(
+        "SELECT ik.public_key FROM issuer_keys ik \
+         JOIN integrators i ON i.id = ik.integrator_id \
+         WHERE i.slug = $1 AND i.category = $2 \
+           AND ik.purpose = 'shard_settlement' AND ik.revoked_at IS NULL",
+    )
+    .bind(owner)
+    .bind(namespace)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    rows.into_iter()
+        .filter_map(|row| {
+            let bytes: Vec<u8> = row.try_get::<Vec<u8>, _>("public_key").ok()?;
+            let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
+            VerifyingKey::from_bytes(&array).ok()
+        })
+        .collect()
+}
+
 /// Fetches, verifies, and aggregates every configured known shard's
 /// current STH. Returns the [`CrossShardRoot`] plus the exact
 /// `(shard_id, SignedTreeHead)` pairs it was computed from — #529's own
 /// "publishes the root plus the full list it used, so anyone can
 /// independently verify by recomputing" requirement.
-pub async fn fetch_and_compute(config: &KnownShardsConfig) -> (CrossShardRoot, Vec<ShardTreeHead>) {
+///
+/// **Verification order (#543 composing with #529)**: a shard's STH is
+/// checked against every currently-authorized `shard_settlement` key this
+/// node can resolve from its own `issuer_keys` table first — the real
+/// mechanism — and, if none resolve (e.g. `"core"`, or an integrator that
+/// hasn't registered one yet), falls back to the interim
+/// `AVALON_SHARD_VERIFY_KEYS` static config. Either source succeeding is
+/// sufficient; neither resolving at all is exactly "no verify key
+/// configured," folded into `missing_shard_ids` like any other
+/// unverifiable shard.
+pub async fn fetch_and_compute(
+    state: &AppState,
+    config: &KnownShardsConfig,
+) -> (CrossShardRoot, Vec<ShardTreeHead>) {
     let client = reqwest::Client::new();
     let mut shards = Vec::new();
 
     for (shard_id, url) in &config.urls {
-        let Some(verify_key) = config.verify_keys.get(shard_id) else {
+        let db_keys = resolve_shard_verify_keys_from_db(state, shard_id).await;
+        let static_key = config.verify_keys.get(shard_id);
+        if db_keys.is_empty() && static_key.is_none() {
             tracing::warn!(
                 shard_id,
-                "cross-shard root: no verify key configured for this shard, treating as missing"
+                "cross-shard root: no verify key resolved (neither issuer-key registration \
+                 nor static config) for this shard, treating as missing"
             );
             continue;
-        };
+        }
 
         let fetched: Result<FetchedSth, String> = async {
             let response = client
@@ -188,10 +245,15 @@ pub async fn fetch_and_compute(config: &KnownShardsConfig) -> (CrossShardRoot, V
             }
         };
 
-        if !sth::verify_tree_head(verify_key, &sth) {
+        let verified = db_keys
+            .iter()
+            .chain(static_key)
+            .any(|key| sth::verify_tree_head(key, &sth));
+        if !verified {
             tracing::warn!(
                 shard_id,
-                "cross-shard root: STH signature verification failed, treating as missing"
+                "cross-shard root: STH signature verification failed against every resolved \
+                 key, treating as missing"
             );
             continue;
         }
@@ -216,7 +278,7 @@ pub async fn compute_for_this_node(
     config: Option<&KnownShardsConfig>,
 ) -> Result<(CrossShardRoot, Vec<ShardTreeHead>), avalon_chain::SettlementError> {
     if let Some(config) = config {
-        return Ok(fetch_and_compute(config).await);
+        return Ok(fetch_and_compute(state, config).await);
     }
 
     let shards = match state.chain.latest_signed_tree_head().await? {

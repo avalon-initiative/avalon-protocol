@@ -208,6 +208,8 @@ pub enum AppError {
     IssuerKeyNotRoot,
     #[error("key role must be one of root, operational")]
     InvalidIssuerKeyRole,
+    #[error("key purpose must be one of attestation, shard_settlement")]
+    InvalidIssuerKeyPurpose,
     #[error("issuer key not found, already revoked, or not owned by this integrator")]
     IssuerKeyForbidden,
     #[error("requested capability was not declared by the integrator at registration")]
@@ -471,6 +473,7 @@ impl AppError {
             AppError::IssuerNotRegisteredOnNetwork => "ISSUER_NOT_REGISTERED_ON_NETWORK",
             AppError::IssuerKeyNotRoot => "ISSUER_KEY_NOT_ROOT",
             AppError::InvalidIssuerKeyRole => "INVALID_ISSUER_KEY_ROLE",
+            AppError::InvalidIssuerKeyPurpose => "INVALID_ISSUER_KEY_PURPOSE",
             AppError::IssuerKeyForbidden => "ISSUER_KEY_FORBIDDEN",
             AppError::CapabilityNotRequested => "CAPABILITY_NOT_REQUESTED",
             AppError::BindingNotFound => "BINDING_NOT_FOUND",
@@ -665,6 +668,7 @@ impl IntoResponse for AppError {
             // hasn't admitted the key.
             AppError::IssuerNotRegisteredOnNetwork => StatusCode::FORBIDDEN,
             AppError::InvalidIssuerKeyRole => StatusCode::BAD_REQUEST,
+            AppError::InvalidIssuerKeyPurpose => StatusCode::BAD_REQUEST,
             AppError::IssuerKeyForbidden => StatusCode::FORBIDDEN,
             AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,
             AppError::BindingNotFound | AppError::GrantNotFound => StatusCode::NOT_FOUND,
