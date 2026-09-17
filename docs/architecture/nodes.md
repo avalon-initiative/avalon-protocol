@@ -68,6 +68,22 @@ via environment configuration, the same pattern `AVALON_NETWORK_ID`/
   `network_id` line; `avalon prune-ledger [--dry-run]` is the manual/cron
   entry point, and `avalon-server` also runs an in-process hourly worker
   (`crates/server/src/retention.rs`) whenever pruning is enabled.
+- `AVALON_RETENTION_ARCHIVE_PEERS`/`AVALON_RETENTION_MIN_ARCHIVE_CONFIRMATIONS`
+  (issue #569) — a third, independent, off-by-default opt-in that turns
+  "never prune what nothing else retains" from operator discipline into
+  something the code actually checks. Unset (the default): zero behavior
+  change from before this existed. Configured: before each pruning pass,
+  the node computes the boundary `seq` it's about to prune past and asks
+  each listed peer's own `GET /ledger/mirror-progress?network_id={id}`
+  (`crate::settlement::mirror_progress`) how far it has independently
+  verified and mirrored this node's history — pruning only proceeds once
+  at least `AVALON_RETENTION_MIN_ARCHIVE_CONFIRMATIONS` (default `1` once
+  peers are configured) distinct peers confirm coverage past that
+  boundary; otherwise the pass is skipped and retried next tick. Only the
+  background worker performs this check — `avalon prune-ledger`'s manual
+  entry point has no `reqwest` dependency in a `--no-default-features`
+  build and refuses to run a real (non-`--dry-run`) prune at all when this
+  is configured, rather than silently skipping the safety gate.
 
 Pruning only ever `NULL`s out `ledger_entries.payload` (nullable as of the
 `0027_ledger_payload_retention` migration) — `seq`, `entry_hash`,
@@ -81,28 +97,36 @@ derived from the data itself (`payload_pruned_at`), not from the reading
 process's own config, so it stays accurate against any database it's
 pointed at.
 
-**Milestone-1 honesty, updated**: a second, physically-separate node now
-genuinely exists in this environment — see "Today in the repo" below for
-`avalon-peer`'s real, live-verified mirror deployment (its own Postgres
-container on a distinct host, independently verified against the pinned
-trust-anchor key, fully converged with the primary's real history). That
-closes the "no archive-tier mirror exists at all" gap this note used to
-describe. What's still genuinely unproven: `AVALON_RETENTION_PRUNING_ENABLED=true`
-has not actually been turned on anywhere against this now-real mirror, so
-the specific claim "a hot node can safely prune because an archive tier
-retains it" is structurally supported but not yet exercised end to end —
-turning pruning on for a controlled test (without destabilizing the
-primary's persistent config) is the natural next step, not done here.
-Two things this second node does *not* by itself solve, and shouldn't be
-read as solving: **write availability** during a primary outage (a
-mirror-only node never becomes a new writer/authority — that's a
-promotion/failover story this doesn't attempt) and the harder
+**Milestone-1 honesty, updated (2026-09-17)**: a second, physically-separate
+node now genuinely exists in this environment — see "Today in the repo"
+below for `avalon-peer`'s real, live-verified mirror deployment (its own
+Postgres container on a distinct host, independently verified against the
+pinned trust-anchor key, fully converged with the primary's real history).
+That closes the "no archive-tier mirror exists at all" gap this note used
+to describe. **Archive-confirmation gating (#569) closes the second half**:
+"never prune what nothing else retains" is no longer pure operator
+discipline — a hot node configured with `AVALON_RETENTION_ARCHIVE_PEERS`
+now genuinely refuses to prune past what its configured archive peers
+haven't yet confirmed, live-verified end to end against a real, isolated
+Postgres database (a real `PostgresSettlementProvider`, real committed
+entries, real fake-peer HTTP servers reporting coverage): pruning
+demonstrably blocked while coverage was unconfirmed, then proceeded once
+it was, with `prunable_entry_count` going from nonzero to zero exactly
+when expected. This is opt-in (`AVALON_RETENTION_ARCHIVE_PEERS` unset
+means zero behavior change from before), so it doesn't retroactively make
+every past pruning decision safe — it means a node that turns it on now
+gets a real, enforced guarantee instead of a documented risk.
+Two things this second node/mechanism does *not* by itself solve, and
+shouldn't be read as solving: **write availability** during a primary
+outage (a mirror-only node never becomes a new writer/authority — that's a
+promotion/failover story neither of these attempts) and the harder
 multi-writer/consensus question #40 still owns. What it does solve: a
 genuine second, independently-verifiable copy of Settlement history no
-longer depends on one physical database being up — reads (`/ledger/*`)
-against `avalon-peer` succeed today even with the primary down, because
-they're served from its own independently-verified mirrored data, not
-proxied through the primary.
+longer depends on one physical database being up (reads against
+`avalon-peer` succeed today even with the primary down, served from its
+own independently-verified mirrored data), and a hot node's pruning
+decision is no longer a documented risk an operator has to manage by
+hand — it's an enforced check against real, confirmed coverage.
 
 **Settlement-state checkpoint.** #180 also asked for a periodic
 durable-state checkpoint so a hot-tier node, or any new node, can bootstrap
@@ -384,8 +408,24 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `GET /ledger/entries` kept answering correctly from its own independently
   -verified data — see the retention section's updated honesty note above
   for exactly what this does and doesn't close (write availability during
-  an outage, and the archive-tier-pruning-safety claim specifically,
-  remain open).
+  an outage remains open).
+- **Archive-confirmation gating (#569) is real, implemented, and
+  live-verified.** `GET /ledger/mirror-progress?network_id={id}`
+  (`crate::settlement::mirror_progress`) plus
+  `avalon_chain::retention::RetentionConfig`'s `archive_peers`/
+  `min_archive_confirmations` plus `avalon_server::retention::confirm_archive_coverage`
+  (the actual HTTP check, run before every pruning pass in
+  `crate::retention::prune_once`) — see the retention section above for
+  the full mechanism and what it closes. Unit-tested with an in-process
+  fake-peer HTTP server (`crates/server/src/retention.rs`'s own tests);
+  live-verified end to end against a real, isolated Postgres database
+  (`crates/server/tests/retention_archive_confirmation.rs`, `--ignored`):
+  real committed entries, pruning genuinely blocked while a configured
+  peer hadn't mirrored far enough, then genuinely proceeded once it had.
+  `avalon prune-ledger`'s manual entry point deliberately does not perform
+  this check itself (no `reqwest` in a `--no-default-features` build) and
+  refuses to run a real prune when the loaded config requires it, rather
+  than silently bypassing the gate the background worker enforces.
 - No distinct "archive" node *type*/binary exists, and #208 deliberately
   didn't invent one: retention tier is operational configuration on the
   one existing Settlement role (`AVALON_RETENTION_TIER=full`), not a fifth

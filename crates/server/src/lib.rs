@@ -606,6 +606,9 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
             "/ledger/remote-submit-status",
             get(settlement::remote_submit_status),
         )
+        // Issue #569: archive-confirmation gating's own read — see
+        // `crate::settlement::mirror_progress`.
+        .route("/ledger/mirror-progress", get(settlement::mirror_progress))
         // Issue #362: node-to-node peer discovery — no auth, same public
         // posture as the `/ledger/*` block above, since a peer table isn't
         // sensitive the way ledger-write endpoints are.
