@@ -156,7 +156,12 @@ sharding settlement authority per-integrator instead. See
 [`settlement.md`](./settlement.md)'s "Cross-shard commitment" section
 (#529) for how a network with more than one shard still produces one
 globally verifiable state with no designated aggregator, mirroring
-this section's own "no single trusted party" standard one layer up.
+this section's own "no single trusted party" standard one layer up. An
+operator running their own shard (rather than only mirroring) is a third,
+distinct self-hosting category — see
+[`self-hosting.md`](./self-hosting.md)'s "shard operator" section (#530)
+for exactly how that stays unambiguous from both mirroring and a
+disconnected private fork.
 
 ## Discovery
 

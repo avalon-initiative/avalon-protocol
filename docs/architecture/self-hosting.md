@@ -5,7 +5,7 @@ not join the Avalon network — it forks it. Those are two different things,
 and this document exists so that distinction is never fuzzy for a studio
 deciding which one they actually want.
 
-## The two things people mean by "self-host"
+## The three things people mean by "self-host"
 
 1. **Mirroring the public network.** An operator runs `avalon-server`
    (Settlement/Indexer/Gateway, any combination) against the *same*
@@ -13,16 +13,62 @@ deciding which one they actually want.
    verifiable log. This is what [`./nodes.md`](./nodes.md) means by "multiple
    operators" and what [`../stakeholders/Proposal.md` §20](../stakeholders/Proposal.md#20-self-hosting-and-decentralization)
    describes — more infrastructure serving the one network, the Certificate
-   Transparency pattern, not federation.
-2. **Running a private, disconnected instance.** An organization runs the
+   Transparency pattern, not federation. **Read-only** with respect to
+   mainnet's history: a mirror never has its own write authority over any
+   part of the shared state.
+2. **Running as a shard operator.** [#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)
+   (decided) shards settlement *authority* per-integrator rather than
+   leaving one operator as mainnet's sole committer. A shard operator runs
+   `avalon-server` configured with its own shard's settlement signing key,
+   under the **same** `network_id` (shared genesis) as every other shard,
+   and is cryptographically part of mainnet via the cross-shard root
+   ([`./settlement.md`](./settlement.md)'s "Cross-shard commitment"
+   section, #529) — but is the real, authoritative write target for its
+   own shard's events, not a read-only copy of someone else's. This is the
+   category this document previously had no answer for: "run your own
+   settlement node that's actually part of mainnet." See
+   [Invariants](#shard-operator-invariants) below for exactly how this
+   stays distinct from both mirroring and forking.
+3. **Running a private, disconnected instance.** An organization runs the
    exact same code, but roots it under its own `network_id` — a studio
    spinning up Avalon for its own internal games, an air-gapped environment,
-   a staging/dev copy that should never touch production data. This document
-   is about this case.
+   a staging/dev copy that should never touch production data. Most of the
+   rest of this document is about this case.
 
-Both are "self-hosting" in casual conversation. Only the first one is part of
-the Avalon network. The second is deploying the software, not joining the
-protocol's community of integrators and identities — same code, disconnected data.
+All three are "self-hosting" in casual conversation, and only the third one
+forks the network — the other two mirror or extend the same shared
+`network_id`. The line that actually matters is not "does this operator run
+their own infrastructure" (all three do) but "does this deployment share
+mainnet's `network_id` and genesis, or root its own": mirror and shard
+operator both share it; a private instance does not.
+
+### Shard operator invariants
+
+- **Genesis, not config, is the boundary.** A shard operator's `chain_genesis`
+  row matches mainnet's `network_id` exactly — the same boot-time check
+  ([`crates/chain/src/postgres.rs`](../../crates/chain/src/postgres.rs))
+  that makes a private fork's history cryptographically incapable of being
+  mistaken for mainnet's (see below) is what makes a shard operator
+  provably part of mainnet, not a separate mechanism. There is no
+  config flag that turns a shard into a fork or vice versa without
+  actually changing `network_id`, which is deliberately a one-time,
+  write-once value.
+- **Write authority is scoped, never network-wide.** A shard operator's
+  settlement key signs STHs for its own shard's log only — #527's
+  per-integrator sharding, not a second copy of mainnet's single log. It
+  never commits on another shard's behalf, and the cross-shard root is
+  computed the same deterministic way regardless of which node computes
+  it (see #529's "no designated aggregator" invariant) — a shard operator
+  gains write authority over its own shard, never influence over anyone
+  else's.
+- **A shard is never a fork by omission.** A shard operator that stops
+  publishing its STH, or that a node can't currently reach, shows up as a
+  named gap in that node's `CrossShardRoot` (`partial: true`, per #529) —
+  never as a silent, undetectable divergence that could be confused with
+  an intentional fork. The distinction between "this shard is temporarily
+  unreachable" and "this deployment deliberately forked" stays legible
+  from the outside, by construction, the same way this document's mirror/
+  fork boundary already is (see below).
 
 ## Why this is safe to offer, and exactly where the line is
 
