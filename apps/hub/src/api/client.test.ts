@@ -24,6 +24,7 @@ import {
   updateProfile,
 } from './client'
 import { AvalonApiError } from './errors'
+import { generateAndStoreSigningKey } from '../crypto/signingKey'
 
 // A minimal fake standing in for the browser's `WebSocket` — records what
 // was sent, and lets a test drive `open`/`message` events by hand rather
@@ -409,5 +410,96 @@ describe('openPresenceSocket', () => {
     expect(received).toEqual([
       { identity_id: 'id-1', status: 'Online', playing: null, updated_at: 'now' },
     ])
+  })
+})
+
+// Issue #525: the "detect my node is unreachable, mint a continuation
+// token, reconnect elsewhere" retry — a 401 against the currently-stored
+// opaque session token, with reconnect material available locally, is
+// retried exactly once with a freshly-minted continuation token.
+describe('reconnect-on-401 (issue #525)', () => {
+  function seedReconnectCredentials(): { identityId: string; signingKeyId: string; token: string } {
+    const identityId = crypto.randomUUID()
+    generateAndStoreSigningKey(identityId)
+    const signingKeyId = crypto.randomUUID()
+    const token = 'stale-opaque-token'
+    localStorage.setItem('avalon:session:token', token)
+    localStorage.setItem('avalon:session:identityId', identityId)
+    localStorage.setItem('avalon:session:signingKeyId', signingKeyId)
+    return { identityId, signingKeyId, token }
+  }
+
+  function stubTwoResponses(first: { status: number; body: unknown }, second: { status: number; body: unknown }) {
+    const responseFor = (r: { status: number; body: unknown }) => ({
+      ok: r.status >= 200 && r.status < 300,
+      status: r.status,
+      json: () => Promise.resolve(r.body),
+      text: () => Promise.resolve(JSON.stringify(r.body)),
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(responseFor(first))
+        .mockResolvedValueOnce(responseFor(second)),
+    )
+  }
+
+  const meBody = {
+    identity_id: 'id',
+    identity_created_at: 'now',
+    display_name: 'name',
+    avatar_url: null,
+  }
+
+  it('retries once with a continuation-token bearer and succeeds', async () => {
+    const { token } = seedReconnectCredentials()
+    stubTwoResponses({ status: 401, body: { error: 'unauthorized' } }, { status: 200, body: meBody })
+
+    const result = await getMe(token)
+    expect(result).toEqual(meBody)
+
+    const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls).toHaveLength(2)
+    expect(calls[0][1].headers.Authorization).toBe(`Bearer ${token}`)
+    expect(calls[1][1].headers.Authorization).toMatch(/^Bearer AVCT1\./)
+  })
+
+  it('never retries for a token that is not the currently-stored session token', async () => {
+    seedReconnectCredentials()
+    mockFetchOnce(401, { error: 'unauthorized' })
+
+    await expect(getMe('some-other-token')).rejects.toThrow(AvalonApiError)
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
+  })
+
+  it('never retries when this device holds no local signing key', async () => {
+    const token = 'stale-opaque-token'
+    localStorage.setItem('avalon:session:token', token)
+    localStorage.setItem('avalon:session:identityId', crypto.randomUUID())
+    localStorage.setItem('avalon:session:signingKeyId', crypto.randomUUID())
+    mockFetchOnce(401, { error: 'unauthorized' })
+
+    await expect(getMe(token)).rejects.toThrow(AvalonApiError)
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
+  })
+
+  it('surfaces the second attempt as a real failure if the retry also 401s', async () => {
+    const { token } = seedReconnectCredentials()
+    stubTwoResponses(
+      { status: 401, body: { error: 'unauthorized' } },
+      { status: 401, body: { error: 'unauthorized' } },
+    )
+
+    await expect(getMe(token)).rejects.toThrow(AvalonApiError)
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2)
+  })
+
+  it('never retries a non-401 failure', async () => {
+    const { token } = seedReconnectCredentials()
+    mockFetchOnce(500, { error: 'server error' })
+
+    await expect(getMe(token)).rejects.toThrow(AvalonApiError)
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
   })
 })

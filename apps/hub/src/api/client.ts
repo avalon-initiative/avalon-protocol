@@ -2,6 +2,8 @@
 // base URL and bearer header; every other module in apps/hub goes through
 // the typed functions below rather than touching fetch or the URL directly.
 import { AvalonApiError, messageForStatus } from './errors'
+import { mintContinuationToken } from '../crypto/continuation'
+import { loadSigningKey } from '../crypto/signingKey'
 import type {
   AchievementDefinitionResponse,
   AddPasskeyFinishRequest,
@@ -148,6 +150,49 @@ export function setServerUrl(url: string) {
 
 const BASE_URL = currentBaseUrl()
 
+// Issue #525's reconnect trigger reads these directly rather than
+// importing the Pinia session store — same reasoning `SERVER_URL_STORAGE_KEY`
+// above already established: this module owns fetch/localStorage access
+// and must not depend on a store that itself depends on this module.
+// Values must match `stores/session.ts`'s own storage keys exactly.
+const SESSION_TOKEN_STORAGE_KEY = 'avalon:session:token'
+const SESSION_IDENTITY_ID_STORAGE_KEY = 'avalon:session:identityId'
+const SESSION_SIGNING_KEY_ID_STORAGE_KEY = 'avalon:session:signingKeyId'
+
+/**
+ * Issue #525: the actual "detect my node is unreachable, mint a
+ * continuation token, reconnect elsewhere" trigger. Only fires when
+ * `failedToken` is exactly the currently-persisted opaque session token
+ * (never for some other bearer value a caller passed directly, e.g. an
+ * identity token mid-registration) — that's the specific case a 401 here
+ * can mean "this session's origin node doesn't recognize this token,"
+ * whether because the Hub just switched `server_url` (`NetworkStatus.vue`)
+ * or because the original node went offline and the viewer is now, for
+ * whatever operational reason, reaching a different one at the same URL.
+ * Returns `null` when reconnecting isn't possible (no cached identity/
+ * signing-key-id, or this device holds no local signing key for it) —
+ * the caller falls back to surfacing the 401 as-is, same as before this
+ * existed.
+ */
+function tryMintReconnectToken(failedToken: string): string | null {
+  let storedToken: string | null
+  let identityId: string | null
+  let signingKeyId: string | null
+  try {
+    storedToken = localStorage.getItem(SESSION_TOKEN_STORAGE_KEY)
+    identityId = localStorage.getItem(SESSION_IDENTITY_ID_STORAGE_KEY)
+    signingKeyId = localStorage.getItem(SESSION_SIGNING_KEY_ID_STORAGE_KEY)
+  } catch {
+    return null
+  }
+  if (!storedToken || storedToken !== failedToken || !identityId || !signingKeyId) {
+    return null
+  }
+  const secretKey = loadSigningKey(identityId)
+  if (!secretKey) return null
+  return mintContinuationToken(identityId, signingKeyId, secretKey)
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; token?: string } = {},
@@ -157,11 +202,28 @@ async function request<T>(
     headers.Authorization = `Bearer ${options.token}`
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, {
+  let response = await fetch(`${BASE_URL}${path}`, {
     method: options.method ?? 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   })
+
+  // Issue #525: exactly one retry, with a freshly-minted continuation
+  // token in place of the stale opaque one — never persisted back into
+  // `avalon:session:token` (a continuation token is single-use/short-lived
+  // by design, see crypto/continuation.ts), so every later request against
+  // a node that still doesn't recognize the opaque token mints its own
+  // fresh one again here, same as this one just did.
+  if (response.status === 401 && options.token) {
+    const reconnectToken = tryMintReconnectToken(options.token)
+    if (reconnectToken) {
+      response = await fetch(`${BASE_URL}${path}`, {
+        method: options.method ?? 'GET',
+        headers: { ...headers, Authorization: `Bearer ${reconnectToken}` },
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      })
+    }
+  }
 
   if (!response.ok) {
     // avalon-server's `{ "error": "..." }` body is already written to be

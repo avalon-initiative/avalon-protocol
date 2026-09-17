@@ -372,11 +372,43 @@ signing key (`POST /me/devices/:id/revoke`) makes every future continuation
 token minted with it fail immediately, on any node, the same
 durable-revocation guarantee #523 gives passkeys.
 
-The client-side "detect my node is unreachable, mint a continuation token,
-reconnect elsewhere" trigger is SDK/Hub work, not covered here — this
-section is the server-side verification piece only, which doesn't depend
-on that landing first (a client can switch nodes manually today and this
-still works).
+**The client-side trigger (Hub half, implemented).** The identity's own
+signing key only ever lives in `apps/hub`'s browser storage (see "Where
+the Ed25519 signing key lives in a browser" above) — third-party games/
+tools using the Rust SDK receive an already-authenticated session token,
+never the raw key, so minting happens in `apps/hub/src/crypto/continuation.ts`,
+not `crates/sdk`. `mintContinuationToken` is a byte-for-byte TypeScript
+port of `avalon_protocol::continuation::signing_bytes`/`ContinuationToken::to_wire`
+— live-verified: a token minted by the TS code was accepted by a real,
+running `avalon-server`'s `GET /me`, and correctly rejected on a second
+use of the same token (anti-replay).
+
+The trigger itself lives centrally in `apps/hub/src/api/client.ts`'s one
+`request()` function, not scattered across call sites: a 401 against
+whatever token was passed is retried **exactly once**, with a freshly-minted
+continuation token, but only when that token is exactly the
+currently-persisted opaque session token (never some other bearer value a
+caller passed directly, e.g. an identity token mid-registration) — the
+specific case a 401 there can mean "this session's origin node doesn't
+recognize this token," whether because the viewer explicitly switched
+`server_url` (`NetworkStatus.vue`, issue #232) or the original node went
+offline and a different one is now, for whatever operational reason,
+answering at the same URL. The minted token is never persisted back into
+the opaque-token storage slot (continuation tokens are single-use/
+short-lived by design) — every later request against a node that still
+doesn't recognize the opaque token mints its own fresh one again, the same
+way. `stores/session.ts` caches `identityId`/`signingKeyId` alongside the
+opaque token specifically so minting never depends on a prior successful
+`GET /me` call against the (possibly-unreachable) node being reconnected
+away from — a narrow, documented exception to #55's "profile data always
+re-read from `GET /me`" invariant, since neither field is ever displayed
+or treated as authoritative for anything but minting.
+
+Scoped out: WebSocket reconnection (`openPresenceSocket`/chat sockets
+carry their token in the connection URL, not through `request()`) and the
+Rust SDK/C# binding surface for non-Hub consumers — #91's still-on-hold
+node-discovery work is the more natural home for a generic SDK-level
+failover story, if one is ever built.
 
 ### Social recovery via M-of-N guardians (#201)
 
