@@ -70,6 +70,58 @@ operator both share it; a private instance does not.
   from the outside, by construction, the same way this document's mirror/
   fork boundary already is (see below).
 
+### Managed hosting for a shard operator without their own infrastructure (#531)
+
+Not every shard-authoritative integrator wants to run `avalon-server`
+themselves. A managed host — first-party or third-party — can run the
+storage/batching/Merkle-computation/STH-production infrastructure for an
+integrator's shard while the integrator keeps its own settlement signing
+key exactly as if it were self-hosting. This is deliberately a different
+mechanism from [#313's existing `POST /ledger/submit`](./settlement.md)
+node-to-node forwarding: that endpoint has the *receiving* node sign with
+its *own* local settlement key (`crates/server/src/settlement.rs::submit_ledger_batch`
+calls `state.chain.commit`, which signs with whatever key that process
+holds) — correct when a remote node genuinely owns full settlement
+authority, wrong here, since a managed host must never hold the
+integrator's signing key at all.
+
+**Two-phase remote signing, so the key never leaves the integrator's
+control:**
+
+1. `POST /ledger/prepare-batch` (on the managed host) — the integrator
+   submits its pending events. The host performs storage, batching, and
+   Merkle computation over its own accumulated shard log exactly as
+   `chain.commit` does today, but stops short of signing: it returns the
+   unsigned candidate `SignedTreeHead` fields (`tree_size`, `root_hash`,
+   `network_id`, `timestamp`) plus a `batch_id`, not yet written as
+   authoritative.
+2. The integrator signs that returned digest **locally**, with its own
+   settlement signing key — the same key it would use if self-hosting,
+   never transmitted to the host.
+3. `POST /ledger/finalize-batch` — the integrator posts back `{batch_id,
+   signature}`. The host verifies the signature against the shard's own
+   registered verify key (the same `AVALON_SETTLEMENT_VERIFY_KEY`-style
+   check `settlement.rs` already uses for mirror verification, no new
+   crypto scheme) before persisting the batch's `ledger_entries` and STH as
+   valid. A batch that's `prepare`d but never validly `finalize`d simply
+   stays visibly stuck in that state — never silently accepted as
+   authoritative — mirroring how a stuck outbox row is visible, not lost
+   (`crates/server/src/outbox.rs`).
+
+**Trust boundary, enforced mechanically, not by policy.** A managed host
+is structurally incapable of producing a valid STH for a shard whose
+signing key it never holds — `finalize-batch` requires a real signature
+verifiable against that shard's own registered key, the same guarantee
+[`./issuers.md`](./issuers.md)'s key-custody model already gives issuer
+keys. Hosting is infrastructure only; it carries no elevated trust over
+the integrator's own history, matching this document's shard-operator
+invariants above.
+
+This section defines the API/service shape (#531's first acceptance
+criterion); the `prepare-batch`/`finalize-batch` endpoints and the
+two-phase split of `PostgresSettlementProvider::commit` they require are
+implementation work, tracked separately under epic #528.
+
 ## Why this is safe to offer, and exactly where the line is
 
 Every ledger entry is hashed with its `network_id` folded in ahead of the

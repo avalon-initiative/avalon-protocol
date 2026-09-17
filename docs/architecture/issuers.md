@@ -77,6 +77,14 @@ The system distinguishes "this claim was signed by the legitimate key at the
 time" from "this key is compromised now". Rotating a key never invalidates
 history.
 
+A shard operator's *settlement* signing key (distinct key domain, see
+"Three key domains, kept apart" below) is held to the same custody
+standard: [`./self-hosting.md`](./self-hosting.md)'s managed-hosting
+design (#531) never lets a managed host hold that key, for the identical
+reason an issuer's key is never handed to Avalon's own infrastructure —
+hosting the infrastructure around a key is never the same thing as holding
+the key.
+
 ## Who authorizes key changes
 
 **Decided ([#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)):
