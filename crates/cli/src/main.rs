@@ -66,6 +66,10 @@ async fn main() {
         }
         Some("rebuild-index") => rebuild_index().await,
         Some("discover-mirror-peers") => discover_mirror_peers().await,
+        Some("check-switch-readiness") => {
+            let raw_args: Vec<String> = args.collect();
+            check_switch_readiness(&raw_args).await;
+        }
         Some("list-equivocations") => {
             list_equivocations(args.next()).await;
         }
@@ -111,7 +115,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|discover-mirror-peers|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -550,6 +554,280 @@ fn parse_peer_selection(input: &str, candidates: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// A remote `GET /ledger/sth/*` response, trimmed to what
+/// `check_switch_readiness` needs — deliberately not
+/// `avalon_chain::sth::SignedTreeHead` itself (that type has no
+/// `Deserialize`; it's only ever built in-process from a real signature,
+/// never trusted in from the wire, everywhere else this crate uses it).
+/// This command is the one place a `SignedTreeHead`-shaped value
+/// legitimately arrives over HTTP from a party this process doesn't
+/// control — converted immediately into the real type below so
+/// `avalon_chain::sth::verify_tree_head` (the same signature check every
+/// other verifier in this codebase uses) can check it like any other.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemoteSth {
+    tree_size: i64,
+    root_hash: String,
+    network_id: String,
+    signing_key_id: String,
+    signature: String,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: time::OffsetDateTime,
+}
+
+impl From<RemoteSth> for avalon_chain::sth::SignedTreeHead {
+    fn from(r: RemoteSth) -> Self {
+        avalon_chain::sth::SignedTreeHead {
+            tree_size: r.tree_size,
+            root_hash: r.root_hash,
+            network_id: r.network_id,
+            signing_key_id: r.signing_key_id,
+            signature: r.signature,
+            created_at: r.created_at,
+        }
+    }
+}
+
+/// `avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id
+/// <id>] [--verify-key <hex>]` — issue #544's switch-host tooling: the
+/// design decided a managed-hosting integrator is never cryptographically
+/// locked to one host (the shard's identity is the integrator's own key,
+/// #543, never the host's) and can always switch to a different host or
+/// to self-hosting by having the new one sync the shard's existing history
+/// from any mirror — but nothing concrete existed to answer the actual
+/// operational question an integrator faces mid-switch: **has the new host
+/// actually caught up, and does it agree with the old one, before I cut
+/// traffic over?** This answers exactly that, read-only, against real
+/// running nodes:
+///
+/// 1. Fetches `old-host`'s latest STH for `--shard-id` (default `core`).
+///    If `old-host` is unreachable — plausible, it may be the very host
+///    that's stalling — falls back to reporting `new-host`'s own latest
+///    STH alone, with an explicit `UNKNOWN` verdict rather than a false
+///    `READY`.
+/// 2. Fetches `new-host`'s STH at *exactly* `old-host`'s `tree_size` for
+///    the same shard. A 404 there means `new-host` hasn't backfilled that
+///    far yet — `NOT_READY`. A different `root_hash` at the same
+///    `tree_size` is `MISMATCH` — a serious finding (the two hosts
+///    disagree about the shard's actual history at a point both claim to
+///    have), never silently treated as "close enough."
+/// 3. Equal root hashes at that `tree_size` is `READY` — the same
+///    self-verifying comparison every mirror in this codebase already
+///    does, just run manually against two specific hosts on demand.
+/// 4. `--verify-key` (the shard's registered verify key, hex-encoded) is
+///    optional but recommended — when given, both STHs' signatures are
+///    also checked with `avalon_chain::sth::verify_tree_head`, the same
+///    check `inspect-ledger` runs locally. Without it, a `READY` verdict
+///    only means "these two hosts' claims agree with each other," not
+///    "both are honest" — the whole reason this crate's convention is
+///    "never trust, verify" rather than assuming agreement implies
+///    correctness.
+///
+/// Never mutates anything — this is purely a pre-cutover diagnostic. What
+/// to actually *do* with a `READY` verdict (updating
+/// `AVALON_SETTLEMENT_REMOTE_URLS`/self-hosting config to point at the new
+/// host) stays a manual, deliberate operator action, same as every other
+/// deployment-config change in this repo.
+async fn check_switch_readiness(raw_args: &[String]) {
+    const USAGE: &str = "usage: avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]";
+
+    let mut shard_id = "core".to_string();
+    let mut verify_key_hex: Option<String> = None;
+    let mut positional = Vec::new();
+    let mut iter = raw_args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--shard-id" => match iter.next() {
+                Some(v) => shard_id = v.clone(),
+                None => {
+                    eprintln!("--shard-id requires a value\n{USAGE}");
+                    std::process::exit(1);
+                }
+            },
+            "--verify-key" => match iter.next() {
+                Some(v) => verify_key_hex = Some(v.clone()),
+                None => {
+                    eprintln!("--verify-key requires a value\n{USAGE}");
+                    std::process::exit(1);
+                }
+            },
+            other => positional.push(other.to_string()),
+        }
+    }
+    let [old_host, new_host] = positional.as_slice() else {
+        eprintln!("{USAGE}");
+        std::process::exit(1);
+    };
+    let old_host = old_host.trim_end_matches('/');
+    let new_host = new_host.trim_end_matches('/');
+
+    let verify_key = verify_key_hex.map(|hex_value| {
+        let bytes = hex::decode(&hex_value).unwrap_or_else(|e| {
+            eprintln!("--verify-key is not valid hex: {e}");
+            std::process::exit(1);
+        });
+        let bytes: [u8; 32] = bytes.try_into().unwrap_or_else(|v: Vec<u8>| {
+            eprintln!("--verify-key must decode to exactly 32 bytes, got {}", v.len());
+            std::process::exit(1);
+        });
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes).unwrap_or_else(|e| {
+            eprintln!("--verify-key is not a valid Ed25519 public key: {e}");
+            std::process::exit(1);
+        })
+    });
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("failed to build HTTP client");
+
+    let report_sth = |label: &str, sth: &avalon_chain::sth::SignedTreeHead| {
+        println!("{label}: tree_size={} root_hash={}", sth.tree_size, sth.root_hash);
+        if let Some(key) = &verify_key {
+            let ok = avalon_chain::sth::verify_tree_head(key, sth);
+            println!(
+                "{label}: signature {}",
+                if ok { "VERIFIES against --verify-key" } else { "DOES NOT VERIFY against --verify-key" }
+            );
+            if !ok {
+                println!("{label}: WARNING — do not trust this host's claim until this is resolved");
+            }
+        }
+    };
+
+    let old_sth: Option<avalon_chain::sth::SignedTreeHead> = match http
+        .get(format!("{old_host}/ledger/sth/latest?shard_id={shard_id}"))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => match resp.json::<RemoteSth>().await {
+            Ok(sth) => Some(sth.into()),
+            Err(e) => {
+                println!("old-host ({old_host}): returned an unparseable response — {e}");
+                None
+            }
+        },
+        Ok(resp) => {
+            println!(
+                "old-host ({old_host}): {} for shard '{shard_id}' — treating as unreachable/no data",
+                resp.status()
+            );
+            None
+        }
+        Err(e) => {
+            println!("old-host ({old_host}): unreachable — {e}");
+            None
+        }
+    };
+
+    let Some(old_sth) = old_sth else {
+        // old-host may genuinely be the stalled party this whole check
+        // exists for — fall back to reporting new-host's own state alone
+        // rather than refusing to answer anything.
+        match http
+            .get(format!("{new_host}/ledger/sth/latest?shard_id={shard_id}"))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.json::<RemoteSth>().await {
+                Ok(sth) => report_sth("new-host", &sth.into()),
+                Err(e) => println!("new-host ({new_host}): returned an unparseable response — {e}"),
+            },
+            Ok(resp) => println!("new-host ({new_host}): {} for shard '{shard_id}'", resp.status()),
+            Err(e) => println!("new-host ({new_host}): unreachable — {e}"),
+        }
+        println!(
+            "VERDICT: UNKNOWN — could not reach old-host to confirm new-host has actually caught up"
+        );
+        return;
+    };
+    report_sth("old-host", &old_sth);
+
+    let new_sth: Option<avalon_chain::sth::SignedTreeHead> = match http
+        .get(format!(
+            "{new_host}/ledger/sth/{}?shard_id={shard_id}",
+            old_sth.tree_size
+        ))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => match resp.json::<RemoteSth>().await {
+            Ok(sth) => Some(sth.into()),
+            Err(e) => {
+                println!("new-host ({new_host}): returned an unparseable response — {e}");
+                None
+            }
+        },
+        Ok(resp) => {
+            println!(
+                "new-host ({new_host}): {} at tree_size {} for shard '{shard_id}' — not caught up yet",
+                resp.status(),
+                old_sth.tree_size
+            );
+            None
+        }
+        Err(e) => {
+            println!("new-host ({new_host}): unreachable — {e}");
+            None
+        }
+    };
+
+    let Some(new_sth) = new_sth else {
+        println!(
+            "{}",
+            switch_verdict(&old_sth.root_hash, None).describe(old_sth.tree_size)
+        );
+        return;
+    };
+    report_sth("new-host", &new_sth);
+
+    println!(
+        "{}",
+        switch_verdict(&old_sth.root_hash, Some(&new_sth.root_hash)).describe(old_sth.tree_size)
+    );
+}
+
+/// The three possible outcomes of comparing `new-host`'s root hash at
+/// `old-host`'s `tree_size` against `old-host`'s own root hash — pure
+/// decision logic, split out from `check_switch_readiness`'s I/O for
+/// direct unit testing (same "pure function behind the env/IO wrapper"
+/// pattern this repo already uses elsewhere, e.g. `nodes::resolve_bootstrap_peers`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchVerdict {
+    /// `new-host` hasn't backfilled up to `old-host`'s `tree_size` yet.
+    NotReady,
+    /// Both hosts agree on the root hash at that exact `tree_size`.
+    Ready,
+    /// Both hosts claim a value at the exact same `tree_size` but
+    /// disagree on the root hash — never "close enough," always a
+    /// serious finding worth investigating before switching.
+    Mismatch,
+}
+
+impl SwitchVerdict {
+    fn describe(self, old_tree_size: i64) -> String {
+        match self {
+            SwitchVerdict::NotReady => format!(
+                "VERDICT: NOT_READY — new-host has not synced up to old-host's tree_size {old_tree_size} yet"
+            ),
+            SwitchVerdict::Ready => format!(
+                "VERDICT: READY — old-host and new-host agree on the shard's history up to tree_size {old_tree_size}"
+            ),
+            SwitchVerdict::Mismatch => format!(
+                "VERDICT: MISMATCH — old-host and new-host report DIFFERENT root hashes at the SAME tree_size {old_tree_size} — do not switch, investigate before proceeding (see docs/maintainers/equivocation-response.md)"
+            ),
+        }
+    }
+}
+
+fn switch_verdict(old_root_hash: &str, new_root_hash_at_old_tree_size: Option<&str>) -> SwitchVerdict {
+    match new_root_hash_at_old_tree_size {
+        None => SwitchVerdict::NotReady,
+        Some(new_root) if new_root == old_root_hash => SwitchVerdict::Ready,
+        Some(_) => SwitchVerdict::Mismatch,
+    }
+}
+
 /// `full: false` is `avalon inspect-ledger` — the concise chain-integrity
 /// view. `full: true` is `avalon inspect-ledger-full` — the same view plus
 /// each entry's actual payload (pretty-printed JSON) and version, for
@@ -829,6 +1107,31 @@ mod tests {
         assert_eq!(
             parse_peer_selection("all", &sample_candidates()),
             sample_candidates()
+        );
+    }
+
+    /// Issue #544: new-host hasn't backfilled to old-host's tree_size yet.
+    #[test]
+    fn switch_verdict_not_ready_when_new_host_has_no_data_at_that_tree_size() {
+        assert_eq!(switch_verdict("abc123", None), SwitchVerdict::NotReady);
+    }
+
+    /// Both hosts agree — safe to switch.
+    #[test]
+    fn switch_verdict_ready_when_root_hashes_match() {
+        assert_eq!(
+            switch_verdict("abc123", Some("abc123")),
+            SwitchVerdict::Ready
+        );
+    }
+
+    /// Same tree_size, different root hash — never "close enough," always
+    /// a serious finding.
+    #[test]
+    fn switch_verdict_mismatch_when_root_hashes_differ_at_the_same_tree_size() {
+        assert_eq!(
+            switch_verdict("abc123", Some("def456")),
+            SwitchVerdict::Mismatch
         );
     }
 
