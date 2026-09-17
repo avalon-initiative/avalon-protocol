@@ -427,6 +427,13 @@ pub fn router(state: AppState) -> Router {
             "/integrations/{slug}/schemas/{version}/data",
             post(integrator_data::publish_instance),
         )
+        // #533: append-only tombstone for a published instance (e.g. a
+        // deleted character) — never a physical delete, see
+        // `integrator_data::delete_instance`'s own doc comment.
+        .route(
+            "/integrations/{slug}/schemas/{version}/data/{subject}",
+            delete(integrator_data::delete_instance),
+        )
         .route(
             "/identities/{id}/integrator-data",
             get(integrator_data::get_identity_integrator_data),

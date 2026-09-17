@@ -507,6 +507,25 @@ pub struct GameDataPublishedPayload {
     pub supersedes: Option<String>,
 }
 
+/// Issue #533: append-only tombstone for a published instance (e.g. a
+/// deleted character) — `docs/architecture/revocation.md`'s pattern
+/// applied to Integrator Space instance data. Never mutates or removes
+/// `instance_id`'s original row; a projection marks it deleted from this
+/// event forward while the original `game_data.published` event (and this
+/// one) both stay observable in raw history. `reason_code`/`reason` match
+/// `ClaimRevokedPayload`'s shape — linked to #534's real `reason_code`
+/// enum, which both this and achievement revocation will share once built.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameDataDeletedPayload {
+    pub instance_id: String,
+    pub schema: String,
+    pub game_id: Uuid,
+    pub subject: Uuid,
+    pub reason_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 // --- achievement.* / milestone.* --------------------------------------------
 //
 // One shared shape per row, used for both the `achievement.*` and

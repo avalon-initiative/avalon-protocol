@@ -177,6 +177,11 @@ impl PostgresIndexer {
                     integrator_data_instances::apply(tx, &write).await?;
                 }
             }
+            "game_data.deleted" => {
+                if let Some(write) = integrator_data_instances::decode_deletion(event) {
+                    integrator_data_instances::apply_deletion(tx, &write).await?;
+                }
+            }
             "integrator.recognition_published" | "integrator.recognition_revoked" => {
                 if let Some(write) = integrator_recognitions::decode(event) {
                     integrator_recognitions::apply(tx, &write).await?;

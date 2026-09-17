@@ -60,6 +60,56 @@ pub fn decode(event: &ProtocolEvent) -> Option<IntegratorDataPublished> {
     })
 }
 
+/// Issue #533: `game_data.deleted`'s decoded shape — a tombstone
+/// referencing an existing instance, never new content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegratorDataDeleted {
+    pub instance_id: String,
+    pub deleted_at: OffsetDateTime,
+    pub reason_code: String,
+    pub reason: Option<String>,
+}
+
+pub fn decode_deletion(event: &ProtocolEvent) -> Option<IntegratorDataDeleted> {
+    if event.kind != "game_data.deleted" {
+        return None;
+    }
+    let instance_id = event.payload.get("instance_id")?.as_str()?.to_string();
+    let reason_code = event.payload.get("reason_code")?.as_str()?.to_string();
+    let reason = event
+        .payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Some(IntegratorDataDeleted {
+        instance_id,
+        deleted_at: event.timestamp,
+        reason_code,
+        reason,
+    })
+}
+
+/// Sets the tombstone columns on the referenced instance row — never
+/// touches `instance`/`published_at`, same "lifecycle marker, not content
+/// mutation" shape `apply`'s own `superseded_by` update already uses.
+pub async fn apply_deletion(
+    tx: &mut Transaction<'_, Postgres>,
+    write: &IntegratorDataDeleted,
+) -> Result<(), IndexError> {
+    sqlx::query(
+        "UPDATE indexer_integrator_data_instances \
+         SET deleted_at = $2, delete_reason_code = $3, delete_reason = $4 \
+         WHERE id = $1",
+    )
+    .bind(&write.instance_id)
+    .bind(write.deleted_at)
+    .bind(&write.reason_code)
+    .bind(&write.reason)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 pub async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     write: &IntegratorDataPublished,
@@ -120,7 +170,7 @@ pub async fn list_current_for_subject(
     let rows = sqlx::query(
         "SELECT id, schema_id, integrator_id, instance, published_at \
          FROM indexer_integrator_data_instances \
-         WHERE subject = $1 AND superseded_by IS NULL \
+         WHERE subject = $1 AND superseded_by IS NULL AND deleted_at IS NULL \
          ORDER BY published_at",
     )
     .bind(subject)
@@ -191,6 +241,47 @@ mod tests {
             decode(&event(
                 "game_data.published",
                 serde_json::json!({ "id": "x" })
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn decodes_a_deletion() {
+        let source_event = event(
+            "game_data.deleted",
+            serde_json::json!({
+                "instance_id": "game:ashen-realms:schema:1:data:1",
+                "schema": "game:ashen-realms:schema:1",
+                "game_id": Uuid::new_v4(),
+                "subject": Uuid::new_v4(),
+                "reason_code": "deleted",
+                "reason": "character deleted by player",
+            }),
+        );
+        let write = decode_deletion(&source_event).unwrap();
+        assert_eq!(write.instance_id, "game:ashen-realms:schema:1:data:1");
+        assert_eq!(write.reason_code, "deleted");
+        assert_eq!(
+            write.reason,
+            Some("character deleted by player".to_string())
+        );
+    }
+
+    #[test]
+    fn deletion_decode_ignores_non_deletion_kinds() {
+        assert_eq!(
+            decode_deletion(&event("game_data.published", serde_json::json!({}))),
+            None
+        );
+    }
+
+    #[test]
+    fn deletion_decode_of_malformed_payload_is_none() {
+        assert_eq!(
+            decode_deletion(&event(
+                "game_data.deleted",
+                serde_json::json!({ "instance_id": "x" })
             )),
             None
         );
