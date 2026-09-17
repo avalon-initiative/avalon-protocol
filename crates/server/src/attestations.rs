@@ -46,6 +46,7 @@ use avalon_protocol::achievements::validity as compute_validity;
 use avalon_protocol::achievements::{attestation_status_at, revocation_signing_bytes};
 use avalon_protocol::ids::AttestationId;
 use avalon_protocol::integrators::{IntegratorCategory, IntegratorStatus, IssuerKey};
+use avalon_protocol::revocation::RevocationReasonCode;
 
 use avalon_protocol::event_payloads::ClaimRevokedPayload;
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
@@ -189,14 +190,15 @@ fn parse_attestation_row(row: &PgRow) -> Result<AttestationRowData, AppError> {
 #[derive(Clone)]
 struct RevocationData {
     revoked_at: OffsetDateTime,
-    reason_code: String,
+    reason_code: RevocationReasonCode,
     reason: String,
 }
 
 fn revocation_data_from_row(row: &PgRow) -> Result<RevocationData, AppError> {
+    let reason_code: String = row.try_get("reason_code")?;
     Ok(RevocationData {
         revoked_at: row.try_get("revoked_at")?,
-        reason_code: row.try_get("reason_code")?,
+        reason_code: RevocationReasonCode::from(reason_code),
         reason: row.try_get("reason")?,
     })
 }
@@ -256,7 +258,7 @@ fn assemble_attestation_response(
         history.push(AttestationHistoryEntry {
             event: "revoked".to_string(),
             at: r.revoked_at,
-            reason_code: Some(r.reason_code),
+            reason_code: Some(r.reason_code.to_string()),
             reason: Some(r.reason),
         });
     }
@@ -476,6 +478,13 @@ pub async fn list_my_achievements(
     let issuer_keys_by_integrator = fetch_issuer_keys_batch(&state, &integrator_ids).await?;
     let revocations = fetch_revocations_batch(&state, &attestation_ids).await?;
 
+    // Cursor must walk the real underlying row order regardless of #534
+    // filtering below — computed from the page as actually fetched, not
+    // from whatever survives the visibility filter, so a page containing
+    // only hidden-reason revocations still advances `before=` correctly
+    // instead of re-fetching the same page forever.
+    let last_fetched_id = page.last().map(|d| d.id);
+
     let mut achievements = Vec::with_capacity(page.len());
     for data in page {
         // A row here always has a matching `integrators` row — the
@@ -491,20 +500,22 @@ pub async fn list_my_achievements(
             .get(&data.integrator_id)
             .unwrap_or(&empty_keys);
         let revocation = revocations.get(&data.id).cloned();
-        achievements.push(assemble_attestation_response(
-            data,
-            category,
-            status,
-            issuer_keys,
-            revocation,
-        )?);
+        // Issue #534: a revocation coded with a reason that "hides after
+        // revocation" (e.g. a developer mistake, never a real fact about
+        // the subject) drops the claim from this current-state listing
+        // entirely — raw ledger history is unaffected either way, this
+        // only changes what this one projection-style read surfaces.
+        let hidden = revocation
+            .as_ref()
+            .is_some_and(|r| r.reason_code.hides_after_revocation());
+        let response =
+            assemble_attestation_response(data, category, status, issuer_keys, revocation)?;
+        if !hidden {
+            achievements.push(response);
+        }
     }
 
-    let next_cursor = if has_more {
-        achievements.last().map(|a| a.id)
-    } else {
-        None
-    };
+    let next_cursor = if has_more { last_fetched_id } else { None };
 
     Ok(Json(ListMyAchievementsResponse {
         achievements,
@@ -545,7 +556,12 @@ pub struct RevokeAttestationRequest {
     /// Standard-base64-encoded detached Ed25519 signature over
     /// [`revocation_signing_bytes`].
     pub signature: String,
-    pub reason_code: String,
+    /// Issue #534: a real, extensible vocabulary (`RevocationReasonCode`),
+    /// not a free-text string — see that type's own doc comment. Still
+    /// deserializes from a plain JSON string, so no wire-format change
+    /// for existing callers; an unrecognized code decodes to `Other`
+    /// rather than a request error.
+    pub reason_code: RevocationReasonCode,
     pub reason: String,
 }
 
@@ -554,7 +570,7 @@ pub struct RevocationResponse {
     pub attestation_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
     pub revoked_at: OffsetDateTime,
-    pub reason_code: String,
+    pub reason_code: RevocationReasonCode,
     pub reason: String,
 }
 
@@ -602,8 +618,12 @@ pub async fn revoke_attestation(
     let signature_bytes = BASE64
         .decode(&body.signature)
         .map_err(|_| AppError::InvalidAttestationSignature)?;
-    let signing_bytes =
-        revocation_signing_bytes(claim_kind, &issuer, AttestationId(id), &body.reason_code);
+    let signing_bytes = revocation_signing_bytes(
+        claim_kind,
+        &issuer,
+        AttestationId(id),
+        body.reason_code.as_str(),
+    );
 
     let issuer_keys = fetch_issuer_keys(&state, integrator_id).await?;
     let now = OffsetDateTime::now_utc();
@@ -628,7 +648,7 @@ pub async fn revoke_attestation(
     .bind(revocation_id)
     .bind(id)
     .bind(&issuer)
-    .bind(&body.reason_code)
+    .bind(body.reason_code.as_str())
     .bind(&body.reason)
     .bind(now)
     .bind(body.key_id)

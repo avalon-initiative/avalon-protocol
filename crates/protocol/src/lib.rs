@@ -21,4 +21,5 @@ pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
 pub mod integrators;
 pub mod permissions;
+pub mod revocation;
 pub mod social;

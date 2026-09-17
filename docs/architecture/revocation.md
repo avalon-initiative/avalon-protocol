@@ -19,7 +19,7 @@ achievement.issued          (Integrator A, key k1, 2027-03-14)
         ▼
 achievement.revoked         (Integrator A, key k1, 2027-05-02)
     references the attestation above
-    reason_code: cheating_detected
+    reason_code: cheating
     reason:      "…"
 ```
 
@@ -29,11 +29,58 @@ Current state, as a projection:
 User X — Dragon Slayer (Ashen Realms)
     status:  REVOKED
     issued:  2027-03-14
-    revoked: 2027-05-02 — cheating_detected
+    revoked: 2027-05-02 — cheating
 ```
 
 The original issuance remains observable. The Hub shows both, not an empty
 slot ([`./hub.md`](./hub.md)).
+
+## Reason code vocabulary and visibility (#534)
+
+Not every revocation reason means the same thing for what should stay
+visible. `reason_code` is `avalon_protocol::revocation::RevocationReasonCode`
+— a real, extensible vocabulary (not a free-text string), where each known
+code carries a default visibility policy:
+
+| Reason code | Meaning | Stays visible after revocation? |
+|---|---|---|
+| `cheating` | A real fact about the subject — they earned it, then had it pulled for cause. | **Yes** — both `issued` and `revoked` stay in current-state views (the worked example above). |
+| `policy_change` | Not about the subject at all — a ruleset/definition changed after the fact. The historical fact of having earned it under the old policy still matters. | **Yes**. |
+| `mistake` | An operator/integrator error — this should never have existed as its own entry. Showing "subject had X, then had it revoked" is actively misleading. | **No** — disappears from current-state views entirely, as if never issued. |
+| `duplicate` | A duplicate of another still-valid claim. Same "shouldn't have existed on its own" shape as `mistake`. | **No**. |
+
+**Worked example, hidden case.** A developer accidentally publishes an
+achievement to production that should never have gone out:
+
+```text
+achievement.issued          (Integrator A, key k1, 2027-04-01)
+    Beta Tester Badge → User Y
+        │
+        ▼
+achievement.revoked         (Integrator A, key k1, 2027-04-02)
+    references the attestation above
+    reason_code: mistake
+    reason:      "published to prod by mistake, never should have gone out"
+```
+
+`GET /attestations/{id}` (a direct lookup by an id the caller already has —
+not a "browsing" query) still shows both `issued` and `revoked` entries,
+full history, unchanged — raw history is never filtered regardless of
+reason code, per this document's own opening rule. `GET /me/achievements`
+(a current-state, *listing*-shaped read) simply never includes this
+attestation at all, as if User Y never had it — not shown as revoked, not
+shown at all.
+
+**Only known codes get a defined policy; an unrecognized code defaults to
+visible.** `RevocationReasonCode` mirrors `ProtocolEventKind`'s own
+`Known`/`Other` open-enum shape (#82) — a code this build doesn't
+recognize (including every revocation recorded before #534 existed, e.g.
+historical `"cheating_detected"` strings) decodes to `Other` rather than
+an error, and `Other`'s `hides_after_revocation()` is `false`. Staying
+visible is the safe default to fail toward; silently hiding history
+because a code wasn't recognized would be the wrong one. Adding a new
+known code later (with its own visibility policy) is purely additive —
+it never changes what an already-recorded reason code means.
 
 ## Issuer-level suspension and revocation
 
@@ -174,10 +221,18 @@ still open.
   including a full rebuild from `ledger_entries` alone reproducing the
   tombstoned projection state byte-for-byte
   (`crates/server/tests/rebuild_from_events.rs::rebuild_reproduces_integrator_data_deletion`).
-  `reason_code` is currently a free-form string, same as
-  `ClaimRevokedPayload`'s — becoming a real enum with defined
-  visibility-per-reason semantics is #534, shared across both this and
-  achievement revocation.
+  **Scoping decision, made while building #534**: `GameDataDeletedPayload.reason_code`
+  deliberately stays a free-text string, not
+  `avalon_protocol::revocation::RevocationReasonCode`. #534's vocabulary
+  (`cheating`/`mistake`/`duplicate`/`policy_change`) describes *why an
+  issuer revoked something it issued* — a judgment call about validity.
+  Instance deletion here is the opposite shape: the *subject themselves*
+  choosing to delete their own published data (a character retired, an
+  account cleaned up), which isn't a validity judgment at all and doesn't
+  map onto that vocabulary. Always stays visible-with-a-marker either way
+  (see above) — there's no hidden-vs-visible question for this event to
+  answer, so there's nothing for the enum to gain here beyond what a
+  free-text reason already gives.
 
 ## Decisions and tickets
 

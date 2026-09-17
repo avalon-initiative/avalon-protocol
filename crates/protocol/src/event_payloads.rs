@@ -513,8 +513,11 @@ pub struct GameDataPublishedPayload {
 /// `instance_id`'s original row; a projection marks it deleted from this
 /// event forward while the original `game_data.published` event (and this
 /// one) both stay observable in raw history. `reason_code`/`reason` match
-/// `ClaimRevokedPayload`'s shape — linked to #534's real `reason_code`
-/// enum, which both this and achievement revocation will share once built.
+/// `ClaimRevokedPayload`'s *shape* but deliberately stay a free-text
+/// `String`, not #534's `RevocationReasonCode` — see
+/// `docs/architecture/revocation.md`'s "Entity/instance deletion" section
+/// for why that vocabulary (an issuer's judgment call about validity)
+/// doesn't fit a subject's own choice to delete their own data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameDataDeletedPayload {
     pub instance_id: String,
@@ -597,7 +600,11 @@ pub struct ClaimRevokedPayload {
     pub id: Uuid,
     pub attestation_id: Uuid,
     pub issuer: String,
-    pub reason_code: String,
+    /// Issue #534: a real, extensible vocabulary
+    /// (`avalon_protocol::revocation::RevocationReasonCode`), not a
+    /// free-text string — still a plain JSON string on the wire, so this
+    /// is not a breaking change to the event's stored shape.
+    pub reason_code: crate::revocation::RevocationReasonCode,
     pub reason: String,
 }
 
@@ -1620,11 +1627,19 @@ mod tests {
 
     #[test]
     fn claim_revoked_round_trips() {
+        // Issue #534: exercised with a pre-#534 free-text reason_code
+        // ("cheating_detected" — real historical ledger entries recorded
+        // exactly this string) rather than one of the new known wire
+        // strings ("cheating"), on purpose — this proves
+        // `RevocationReasonCode`'s `Other` fallback keeps old recorded
+        // history decoding correctly, not just new writes.
         let payload = ClaimRevokedPayload {
             id: Uuid::nil(),
             attestation_id: Uuid::nil(),
             issuer: "game:ashen-realms".to_string(),
-            reason_code: "cheating_detected".to_string(),
+            reason_code: crate::revocation::RevocationReasonCode::Other(
+                "cheating_detected".to_string(),
+            ),
             reason: "unauthorized tooling".to_string(),
         };
         let json = serde_json::json!({
