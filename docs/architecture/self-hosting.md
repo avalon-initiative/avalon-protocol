@@ -208,6 +208,27 @@ cryptographically bound to one host:
   existing commitment instead of erroring — that only de-duplicates
   retries against one host, not across two, which is why the client's own
   single-finalize discipline is what actually prevents a fork.
+- **Manual switch-readiness tooling (implemented).** The design above
+  describes a manual switch as always cryptographically safe, but until
+  now nothing concretely answered the actual operational question an
+  integrator faces mid-switch: has the candidate new host actually caught
+  up, and does it agree with the old one, *before* traffic is cut over?
+  `avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id
+  <id>] [--verify-key <hex>]` answers exactly that, read-only, against two
+  real running nodes: fetches the old host's latest STH for the shard,
+  fetches the new host's STH at that *exact* `tree_size`, and reports
+  `READY` (root hashes agree), `NOT_READY` (new host hasn't backfilled
+  that far yet), `MISMATCH` (both claim a value at the same `tree_size`
+  but disagree — a serious finding, never treated as "close enough"), or
+  `UNKNOWN` (old host unreachable — plausible, it may be the very host
+  that's stalling — falls back to reporting the new host's own state
+  alone rather than a false `READY`). `--verify-key` additionally checks
+  both STHs' signatures against the shard's registered key, the same
+  check `inspect-ledger` runs locally — without it, a `READY` verdict
+  only means the two hosts agree with *each other*, not that either is
+  honest. Never mutates anything; what to do with a `READY` verdict
+  (updating `AVALON_SETTLEMENT_REMOTE_URLS`/self-hosting config) stays a
+  manual, deliberate operator action.
 
 ## Why this is safe to offer, and exactly where the line is
 
