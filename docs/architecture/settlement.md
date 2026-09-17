@@ -277,6 +277,51 @@ producing byte-identical cross-shard roots, and a node with a missing
 shard correctly marking its root `partial`) is separate follow-up work
 under epic #528, not part of this design pass.
 
+### Write routing to the correct shard (#532)
+
+Sharding is per-integrator by candidate (#527's own wording) — but not
+every durable event has an integrator to shard by. A `ProtocolEvent`'s
+`issuer` is a [`GlobalId`](../../crates/protocol/src/ids.rs)
+(`<namespace>:<owner>:<kind>:<key>`); its `namespace` is exactly the
+signal write routing needs:
+
+- **`namespace` is `game`/`app`/`service`** (an integrator acting as
+  itself — achievement issuance, attestation revocation, integrator-owned
+  connections/schema events) — routes to that integrator's own shard,
+  `shard_id = "{namespace}:{owner}"`. This is the case #527's motivating
+  examples (`achievement.issued`) are actually about.
+- **`namespace` is `identity`** (identity/social-graph/guild events —
+  `identity.created`, `friend.*`, `guild.*`, and everything else with no
+  single owning integrator) — routes to a single reserved **core shard**
+  (`shard_id = "core"`), not split per-integrator. This is a deliberate,
+  narrower scope than "every event is sharded": #527 never claimed
+  identity/social/guild history has a natural per-integrator partition
+  (it doesn't — a friendship or guild isn't owned by any one integrator),
+  so those stay on one shared log, same as today. The core shard is not
+  exempt from #527's motivation in principle — it can itself become a
+  managed/shard-operator-run shard like any other (#531) — it just isn't
+  *split further* by this design.
+- `outbox::drain_once` groups pending rows by this derived `shard_id`
+  before building a batch (today it builds exactly one batch per tick;
+  this changes it to one batch per shard per tick), and looks up that
+  shard's own commit target: local `chain.commit` if this node holds that
+  shard's own signing key, otherwise the shard's own configured remote
+  authority (`AVALON_SETTLEMENT_REMOTE_URLS`, extending #313's existing
+  single-`AVALON_SETTLEMENT_REMOTE_URL` config to a `shard_id=url` map —
+  the existing singular env var keeps working unchanged as the implicit
+  `core=<url>` entry, so milestone-1's single-shard topology needs no
+  config change).
+
+This keeps #532's invariant intact: exactly one legitimate write authority
+per shard, never contested — routing picks *which* shard's authority to
+use, it never introduces a second writer for the same shard. A milestone-1
+deployment with no `AVALON_SETTLEMENT_REMOTE_URLS` configured has exactly
+one shard (`core`) and behaves exactly as today.
+
+Implementation (extending `RemoteSubmitConfig` to a per-shard map,
+`shard_id` derivation in `outbox.rs`, per-shard batch grouping) is
+separate follow-up work under epic #528, not part of this design pass.
+
 ## Bounding ledger growth
 
 Standing rule, decided in #306: **high-frequency ephemeral data never

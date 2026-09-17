@@ -370,7 +370,13 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     Unset (the default), the worker's behavior is completely unchanged.
     Exactly one Settlement authority is ever configured as a write target —
     no automatic failover across multiple peers, matching #70/#186's "no
-    contested writes" invariant.
+    contested writes" invariant. Still today's single-shard reality; see
+    [`settlement.md`](./settlement.md)'s "Write routing to the correct
+    shard" section (#532) for how this generalizes to
+    `AVALON_SETTLEMENT_REMOTE_URLS` (a per-shard map, keyed by the event's
+    own `GlobalId` namespace/owner) once sharded settlement (#527) exists —
+    the singular env var above keeps working unchanged as that map's
+    implicit single `core` entry.
   - This is eventually consistent, not synchronous: a write accepted by a
     remote-settlement node's own API is durably committed on the authority
     immediately, but that node's own local reads only pick it up once
