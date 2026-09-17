@@ -186,6 +186,97 @@ Implementation tracked as
 (mirror-facing proof/sync endpoints), both under epic #36 — both now
 implemented, see "Today in the repo" below.
 
+## Cross-shard commitment (#527 decided, #529 design)
+
+[#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)
+(decided, closed) sharded settlement authority per-integrator instead of one
+operator, with an explicit invariant: the cross-shard root must be
+independently computable by any node from public inputs — no designated
+"gluer"/aggregator node, because aggregation itself would just become a new
+single point of failure. This section is #529's design for making that
+concrete, revisiting #40/#210/#211's closed single-log Merkle/STH design
+above for a world with more than one log.
+
+**Each shard keeps exactly what a single-operator ledger has today.** A
+shard is a `PostgresSettlementProvider`-style log with its own hash chain,
+Merkle tree, and STH, signed by that shard's own settlement key —
+unchanged from everything in "What is decided (continued)" above. Sharding
+adds one more layer on top; it does not change how any individual shard
+works internally, and existing single-shard inclusion/consistency proofs
+keep working unchanged from a client's perspective (#529's own invariant).
+
+**Shard identity and registration.** Each shard has a stable `shard_id`
+(the sharded integrator's own slug/id, already unique under #527's
+per-integrator model — no new uniqueness mechanism needed). A shard
+announces itself to the network with a durable, signed `shard.registered`
+event (`kind`, `shard_id`, `shard_id`'s settlement public key, first-known
+STH), gossiped the same way node announcements already propagate via
+#362's peer table — not a new transport. This is what lets a newly-joined
+shard get included without a coordinated "everyone add this shard" event:
+the shard simply announces itself, and any node that has received the
+announcement now knows to include it.
+
+**Canonical ordering: sort by `shard_id`, byte-wise.** The cross-shard
+tree's leaves are `(shard_id, shard_sth)` pairs, sorted by `shard_id` as a
+plain byte-wise (UTF-8) ascending sort — no registration-order, join-time,
+or other stateful ordering. This is what makes the aggregation
+deterministic: two nodes with the same *set* of currently-known shard STHs
+always produce the same sorted leaf order, and therefore the same tree,
+regardless of the order they happened to learn about each shard in.
+
+**Aggregation recipe.** For each currently-known shard, compute a leaf hash
+`SHA-256(shard_id ‖ sth.tree_size ‖ sth.root_hash ‖ sth.signing_key_id ‖
+sth.signature)` — the STH's own signature is included in the leaf so the
+cross-shard root also commits to *which* STH (not just which shard) was
+aggregated, making a shard's downgrade to a stale/rolled-back STH
+detectable the same way any Merkle inclusion mismatch is. Leaves are
+sorted by `shard_id` (see above) and combined with the exact same RFC 6962
+tree-hashing algorithm the single-shard Merkle tree already uses — no new
+hashing scheme, just a second tree of the same shape, one level up. The
+result is a `CrossShardRoot { root_hash, shard_count, computed_at }` that
+any node can recompute byte-for-byte from public gossip alone. This is
+deliberately *not* itself STH-signed by any one party — signing it would
+reintroduce exactly the designated-aggregator chokepoint #527 exists to
+remove. A node that wants to publish "the network's current global state
+as I see it" publishes the `CrossShardRoot` plus the full list of
+`(shard_id, sth)` pairs it used, so anyone can independently verify by
+recomputing.
+
+**Detecting a missing or stale shard, instead of silently disagreeing.** A
+node tracks two sets: shards it has ever seen a `shard.registered` event
+for ("known shards"), and shards it currently holds an STH for ("STH'd
+shards"). A `CrossShardRoot` computed while `STH'd shards` is a strict
+subset of `known shards` is marked `partial: true` and lists exactly which
+`shard_id`s are missing, rather than silently producing a root over
+whatever subset happens to be on hand — the same "detectable, not silent"
+standard #543's per-shard trust anchors already applies to a shard id
+alone proving nothing. A node with a `partial` root should not be treated
+as authoritative for the shards it's missing; it can still serve full
+proofs for shards it does have complete STHs for.
+
+**Verifying "is shard X part of mainnet's current global state."** Given a
+`CrossShardRoot`, the full list of `(shard_id, sth)` pairs it was computed
+from, and a standard Merkle inclusion proof for shard X's leaf within that
+list — any node (or mirror, or client) can verify shard X's current STH is
+part of that specific cross-shard root using the same inclusion-proof
+verification code the single-shard tree already has, applied one level up.
+No new proof type; the cross-shard tree is verified exactly like the
+per-shard tree is.
+
+**What this does not change.** No consensus, no ordering across shards —
+this is purely an aggregation/commitment structure over independently
+authoritative logs, exactly as #527 decided. A network with exactly one
+shard degenerates to a `CrossShardRoot` over a single leaf, which is
+trivially equal to that shard's own STH in everything but shape — the
+single-operator case from earlier in this document is the one-shard
+special case of this design, not a separate code path.
+
+Implementation (building this into `chain`/`server`, plus the live tests
+#529 calls for — two independent nodes given the same gossiped shard STHs
+producing byte-identical cross-shard roots, and a node with a missing
+shard correctly marking its root `partial`) is separate follow-up work
+under epic #528, not part of this design pass.
+
 ## Bounding ledger growth
 
 Standing rule, decided in #306: **high-frequency ephemeral data never
