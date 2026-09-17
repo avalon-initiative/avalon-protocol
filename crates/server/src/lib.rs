@@ -9,6 +9,7 @@ pub mod chat_replication;
 pub mod connections;
 pub mod continuation;
 pub mod conversations;
+pub mod cross_shard;
 pub mod device_pairing;
 pub mod devices;
 pub mod discovery;
@@ -594,6 +595,11 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         // `crate::settlement::prepare_batch`/`finalize_batch`.
         .route("/ledger/prepare-batch", post(settlement::prepare_batch))
         .route("/ledger/finalize-batch", post(settlement::finalize_batch))
+        // Issue #529: cross-shard root — see `crate::cross_shard`.
+        .route(
+            "/ledger/cross-shard-root",
+            get(cross_shard::cross_shard_root),
+        )
         // Issue #362: node-to-node peer discovery — no auth, same public
         // posture as the `/ledger/*` block above, since a peer table isn't
         // sensitive the way ledger-write endpoints are.

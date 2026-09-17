@@ -137,6 +137,10 @@ async fn main() {
                 ed25519_dalek::VerifyingKey::from_bytes(&bytes)
                     .expect("AVALON_MANAGED_HOSTING_VERIFY_KEY is not a valid Ed25519 key")
             }),
+        // Issue #529: see `avalon_server::cross_shard::KnownShardsConfig`'s
+        // own doc comment — `None` falls back to the one-shard degenerate
+        // case, no config needed for a milestone-1 deployment.
+        known_shards: avalon_server::cross_shard::KnownShardsConfig::from_env(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
