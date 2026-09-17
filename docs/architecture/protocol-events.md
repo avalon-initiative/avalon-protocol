@@ -191,7 +191,11 @@ where an emitter is genuinely signed, it's called out explicitly.
     ceremony that authenticated registration). Payload: `identity_id` and
     initial `display_name` — no `username` field exists anywhere (#73).
     Issue #510: `display_name` is the globally-unique handle itself, no
-    discriminator suffix.
+    discriminator suffix. Issue #525 surfaced that this identity's very
+    first signing key never got a durable event of its own — fixed in the
+    same handler, now also emitting `identity.signing_key_added` right
+    alongside `identity.created`, `approved_by_signing_key_id` set to
+    itself (self-approved, no separate approver exists yet at creation).
   - `update_profile` emits `profile.updated` (#86, widened by #155) only
     when `display_name`, `avatar_url`, `bio`, `favorite_genres`, or
     `pronouns` actually changes; a no-op request emits nothing. Payload
@@ -210,7 +214,12 @@ where an emitter is genuinely signed, it's called out explicitly.
   when a device grant is approved (signed by the approving device's own
   Ed25519 key, verified the same way as `identity.created`) and
   `identity.signing_key_revoked` when a key is revoked
-  (network-attributed).
+  (network-attributed). Issue #525: both now also apply to
+  `avalon_indexer::projections::identity_signing_keys`
+  (`indexer_identity_signing_keys`) in the same transaction as the outbox
+  enqueue — the projection a mirror-only node's replay reconstructs the
+  same table from, and what session-continuation token verification
+  (`crates/server/src/continuation.rs`) reads on any node.
 - **`crates/server/src/passkeys.rs`** and **`crates/server/src/handlers.rs`**
   (#523, Part 1 of #521's decision) — `identity.passkey_registered` (the
   identity's very first passkey, from `handlers::register_finish`, and every

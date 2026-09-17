@@ -22,7 +22,7 @@ milestone-1 stand-in until actor signatures exist.
 | Kind | Issuer → subject | Payload (canonical) | Drives | Signed by |
 |---|---|---|---|---|
 | `identity.created` (done) | identity → identity | `identity_id`, `display_name` (issue #510: the globally-unique handle itself, no discriminator) | identities | identity's Ed25519 event-signing key (#73, done) |
-| `identity.signing_key_added` (done) | identity → identity | `signing_key_id`, `public_key`, `device_label`, `approved_by_signing_key_id` | identity signing keys | the approving device's key (#135, done) |
+| `identity.signing_key_added` (done) | identity → identity | `signing_key_id`, `public_key`, `device_label`, `approved_by_signing_key_id`, `identity_id` (#525) | `identity_signing_keys` (authoring node) / `indexer_identity_signing_keys` (mirror-only node, #525) | the approving device's key, or self (the very first key, #525) (#135, done) |
 | `identity.signing_key_revoked` (done) | identity → identity | `signing_key_id` | identity signing keys | network (milestone-1 stand-in, #135, done) |
 | `identity.passkey_registered` (done) | identity → identity | `passkey_id`, `identity_id`, `credential_id` (base64), `passkey_data` (full serialized WebAuthn `Passkey` — public credential material only), `label` | `identity_keys` (authoring node) / `indexer_identity_passkeys` (mirror-only node) | network (milestone-1 stand-in, #523, done) |
 | `identity.passkey_revoked` (done) | identity → identity | `passkey_id`, `identity_id` | `identity_keys` (authoring node) / `indexer_identity_passkeys` (mirror-only node) | network (milestone-1 stand-in, #523, done) |

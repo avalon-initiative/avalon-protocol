@@ -6,6 +6,7 @@ pub mod blocks;
 pub mod channels;
 pub mod chat;
 pub mod connections;
+pub mod continuation;
 pub mod conversations;
 pub mod device_pairing;
 pub mod devices;

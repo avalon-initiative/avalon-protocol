@@ -22,9 +22,9 @@ use avalon_protocol::events::ProtocolEvent;
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::projections::{
-    attestations, friendships, guild_rosters, identity_passkeys, integrator_bindings,
-    integrator_data_instances, integrator_recognitions, integrator_schema_mappings,
-    integrator_schemas, profiles,
+    attestations, friendships, guild_rosters, identity_passkeys, identity_signing_keys,
+    integrator_bindings, integrator_data_instances, integrator_recognitions,
+    integrator_schema_mappings, integrator_schemas, profiles,
 };
 use crate::{IndexError, Indexer};
 
@@ -49,6 +49,7 @@ pub const PROJECTION_TABLES: &[&str] = &[
     "indexer_integrator_schema_mappings",
     "indexer_integrator_schemas",
     "indexer_identity_passkeys",
+    "indexer_identity_signing_keys",
 ];
 
 #[derive(Clone)]
@@ -131,6 +132,11 @@ impl PostgresIndexer {
             "identity.passkey_registered" | "identity.passkey_revoked" => {
                 if let Some(write) = identity_passkeys::decode(event) {
                     identity_passkeys::apply(tx, &write).await?;
+                }
+            }
+            "identity.signing_key_added" | "identity.signing_key_revoked" => {
+                if let Some(write) = identity_signing_keys::decode(event) {
+                    identity_signing_keys::apply(tx, &write).await?;
                 }
             }
             "friend.requested" | "friend.accepted" | "friend.removed" => {

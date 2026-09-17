@@ -17,7 +17,8 @@
 
 use avalon_indexer::projections::profiles as profile_reads;
 use avalon_protocol::event_payloads::{
-    IdentityCreatedPayload, IdentityPasskeyRegisteredPayload, ProfileUpdatedPayload,
+    IdentityCreatedPayload, IdentityPasskeyRegisteredPayload, IdentitySigningKeyAddedPayload,
+    ProfileUpdatedPayload,
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::identity::{
@@ -68,7 +69,18 @@ pub(crate) async fn authenticate(state: &AppState, headers: &HeaderMap) -> Resul
 /// `presence::presence_ws` authenticates off a `?token=` query parameter
 /// instead. Every other route keeps using [`authenticate`]; this exists
 /// only because the websocket upgrade genuinely can't.
+///
+/// Issue #525: `token` may also be a self-signed session-continuation
+/// assertion (`avalon_protocol::continuation::WIRE_PREFIX`-prefixed)
+/// instead of an opaque `sessions`-table bearer token — additive, not a
+/// replacement; every existing caller of [`authenticate`]/[`authenticate_token`]
+/// gets continuation-token support for free, with no per-route changes,
+/// since both credential kinds resolve to the same `Uuid` return type.
 pub(crate) async fn authenticate_token(state: &AppState, token: &str) -> Result<Uuid, AppError> {
+    if let Some(body) = token.strip_prefix(avalon_protocol::continuation::WIRE_PREFIX) {
+        return crate::continuation::verify(state, body).await;
+    }
+
     let row = sqlx::query("SELECT identity_id, expires_at FROM sessions WHERE token = $1")
         .bind(token)
         .fetch_optional(&state.pool)
@@ -361,14 +373,60 @@ pub async fn register_finish(
     outbox::enqueue(&mut tx, &passkey_event).await?;
     state.indexer.apply_in_tx(&mut tx, &passkey_event).await?;
 
-    sqlx::query(
-        "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3)",
+    let signing_key_row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key, label) VALUES ($1, $2, $3) RETURNING id, added_at",
     )
     .bind(ceremony.identity_id)
     .bind(&public_key_bytes)
     .bind(&body.device_label)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    let signing_key_id: Uuid = signing_key_row.try_get("id")?;
+    let signing_key_added_at: OffsetDateTime = signing_key_row.try_get("added_at")?;
+
+    // Issue #525 (Part 2 of #521's decision) surfaced this gap: the
+    // identity's very first signing key — every identity has exactly this
+    // one at minimum — never got a durable event of its own, only
+    // `identity.created` did. Session continuation depends on any node
+    // being able to look up an identity's active signing key from replayed
+    // history alone, so this can no longer be silent. `approved_by_signing_key_id`
+    // is self-referential (this key approved itself) since there is no
+    // separate approver yet at identity creation — distinct from
+    // `devices.rs`'s grant-approval flow, where a *different*,
+    // already-trusted key does the approving.
+    let signing_key_event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: ProtocolEventKindVariant::IdentitySigningKeyAdded
+            .as_str()
+            .to_string(),
+        issuer: GlobalId::new(
+            "identity",
+            &ceremony.identity_id.to_string(),
+            "self",
+            "signing_key_added",
+        ),
+        subject: GlobalId::new(
+            "identity",
+            &ceremony.identity_id.to_string(),
+            "self",
+            "signing_key_added",
+        ),
+        payload: serde_json::to_value(IdentitySigningKeyAddedPayload {
+            signing_key_id,
+            public_key: BASE64.encode(&public_key_bytes),
+            device_label: body.device_label.clone(),
+            approved_by_signing_key_id: signing_key_id,
+            identity_id: ceremony.identity_id,
+        })
+        .expect("IdentitySigningKeyAddedPayload should serialize"),
+        timestamp: signing_key_added_at,
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &signing_key_event).await?;
+    state
+        .indexer
+        .apply_in_tx(&mut tx, &signing_key_event)
+        .await?;
 
     outbox::enqueue(&mut tx, &event).await?;
 

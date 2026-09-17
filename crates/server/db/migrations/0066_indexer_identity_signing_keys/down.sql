@@ -1,0 +1,2 @@
+DROP TABLE consumed_continuation_nonces;
+DROP TABLE indexer_identity_signing_keys;

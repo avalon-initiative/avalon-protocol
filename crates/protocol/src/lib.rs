@@ -11,6 +11,7 @@
 //! identity and game characters are modeled separately: issue #67).
 
 pub mod achievements;
+pub mod continuation;
 pub mod event_payloads;
 pub mod events;
 pub mod guilds;

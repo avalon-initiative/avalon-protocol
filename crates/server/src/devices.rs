@@ -370,12 +370,14 @@ pub async fn approve_device_grant(
             public_key: BASE64.encode(&grant.requested_signing_public_key),
             device_label: grant.device_label.clone(),
             approved_by_signing_key_id: body.approver_signing_key_id,
+            identity_id,
         })
         .expect("IdentitySigningKeyAddedPayload should serialize"),
         timestamp: added_at,
         version: 1,
     };
     outbox::enqueue(&mut tx, &event).await?;
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
 
@@ -501,6 +503,7 @@ pub async fn revoke_device(
         version: 1,
     };
     outbox::enqueue(&mut tx, &event).await?;
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
 

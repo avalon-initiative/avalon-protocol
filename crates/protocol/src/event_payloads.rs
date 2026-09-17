@@ -49,6 +49,17 @@ pub struct IdentitySigningKeyAddedPayload {
     pub public_key: String,
     pub device_label: Option<String>,
     pub approved_by_signing_key_id: Uuid,
+    /// Issue #525 — the identity this key belongs to. Every emitter already
+    /// knows it (it's `issuer`/`subject`'s own owner segment), but
+    /// `GlobalId` has no public accessor to pull it back out of an
+    /// already-built `ProtocolEvent`, so a decoder that needs it
+    /// (`avalon_indexer::projections::identity_signing_keys`) needs it
+    /// carried explicitly, same as `IdentityCreatedPayload`/
+    /// `IdentityPasskeyRegisteredPayload` already do. A historical event
+    /// emitted before this field existed simply won't decode into that
+    /// (also brand-new) projection — harmless, since `identity_signing_keys`
+    /// itself, this node's own local source of truth, was never missing it.
+    pub identity_id: Uuid,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -621,12 +632,14 @@ mod tests {
             public_key: "base64key".to_string(),
             device_label: Some("Pixel 9".to_string()),
             approved_by_signing_key_id: Uuid::nil(),
+            identity_id: Uuid::nil(),
         };
         let json = serde_json::json!({
             "signing_key_id": "00000000-0000-0000-0000-000000000000",
             "public_key": "base64key",
             "device_label": "Pixel 9",
             "approved_by_signing_key_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": "00000000-0000-0000-0000-000000000000",
         });
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(

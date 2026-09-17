@@ -89,9 +89,9 @@ explicitly cleared, and an absent key means it was untouched.
 | `main_guild` | yes | `profile.updated` | a pointer to one of this identity's own current guild memberships (no ticket — see below); must name a guild the identity is currently a member of, checked server-side against `guild_members`; also cleared automatically, in the same transaction, if the identity leaves the guild it points at |
 | future title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
 | WebAuthn passkey(s) | yes, as of #523 (Part 1 of #521's decision) | `identity.passkey_registered`/`.passkey_revoked` | `identity_keys` table (authoring node's own local source of truth) / `indexer_identity_passkeys` projection (what a mirror-only node reconstructs from replayed history alone); see below. Public credential material only, never anything secret. Passkeys registered before #523 landed have no such event — only newly-registered credentials are portable this way; a pre-existing passkey still works for local login on the node it was registered on, it just isn't verifiable from a different node's mirrored history |
-| event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
+| event-signing public key | yes, as of #525 (surfaced while implementing Part 2 of #521's decision) | `identity.signing_key_added`/`.signing_key_revoked` | `identity_signing_keys` table / `indexer_identity_signing_keys` projection, same authoring-vs-mirror split as passkeys above. **Corrected from an earlier version of this table**, which claimed this was already durable via `identity.created`'s issuer alone — that's a `GlobalId` string (`identity:<id>:self:created`), never the actual key bytes; the very first signing key genuinely had no durable event of its own until #525 |
 | credentials (password hash) | **no**, pruned entirely | — | #73, done |
-| sessions / tokens | **no** | — | ephemeral server state |
+| sessions / tokens | **no**, still ephemeral server state — see below for the additive exception | — | the opaque `sessions`-table bearer token itself is unchanged; #525 adds a *separate*, short-lived, self-signed continuation credential that isn't stored anywhere at all (verified statelessly against the durable signing key above plus a one-time-use nonce row) |
 | presence | **no** | — | [`./presence.md`](./presence.md) |
 | visibility settings | no, unless later promoted | — | [`./privacy.md`](./privacy.md) |
 
@@ -324,6 +324,59 @@ provider the identity's owner uses. Separately, as of #523, the passkey's
 *public* credential material (never anything secret, same as everything
 above) is now durable/mirrored — a distinct fact from this section's
 signing-key custody story, not a change to it.
+
+### Session continuation across nodes (#525, Part 2 of #521's decision)
+
+An opaque `sessions`-table bearer token is node-local by construction —
+minted by whichever node ran the WebAuthn login, checked only against that
+node's own `sessions` table. If that node goes offline, the token is dead
+even though every other trusted node may have fully mirrored the
+identity's ledger history and could otherwise serve it fine (issue #520).
+Confirmed hands-on in the two-node LAN sandbox: a token minted on one node
+is flatly rejected by another.
+
+The fix doesn't touch the opaque token at all — it adds a second,
+*additive* credential kind a client can present in the same
+`Authorization: Bearer` slot: a **session-continuation token**
+(`avalon_protocol::continuation::ContinuationToken`), a short-lived
+(60 seconds by default), self-signed assertion `{identity_id,
+signing_key_id, nonce, issued_at, expires_at, signature}`, minted entirely
+client-side with the identity's own Ed25519 event-signing key — the same
+key it already holds for authoring events (see "Where the Ed25519 signing
+key lives in a browser" above). No server ever issues one; a node's only
+job is verification.
+
+Verification (`crates/server/src/continuation.rs`, wired into
+`handlers::authenticate_token` so every existing session-gated route gets
+it for free, no per-route changes) needs nothing but:
+
+- the token's own claimed fields (checked for a sane, not-too-long expiry
+  window and not already-expired, independent of what the client claims),
+- the signing key's public half, read from
+  `avalon_indexer::projections::identity_signing_keys` — durable as of
+  this same ticket (see the durability table above) and, crucially, the
+  *same* projection whether this node authored the key locally or only
+  ever mirrored it,
+- a one-time-use nonce, checked against `consumed_continuation_nonces`
+  (a node-local anti-replay table, not itself durable/mirrored — a
+  continuation token that somehow got replayed against a *different* node
+  before its 60-second window closed would still succeed there; accepted
+  as a narrow, short-window residual risk rather than building cross-node
+  nonce coordination for it).
+
+Never a login credential by itself (#122's separation, preserved): a
+continuation token only extends an *already-established* session — nothing
+routes it into `/identities/register/*` or `/sessions/*`, which authenticate
+via a real WebAuthn ceremony, never via `authenticate_token`. Revoking the
+signing key (`POST /me/devices/:id/revoke`) makes every future continuation
+token minted with it fail immediately, on any node, the same
+durable-revocation guarantee #523 gives passkeys.
+
+The client-side "detect my node is unreachable, mint a continuation token,
+reconnect elsewhere" trigger is SDK/Hub work, not covered here — this
+section is the server-side verification piece only, which doesn't depend
+on that landing first (a client can switch nodes manually today and this
+still works).
 
 ### Social recovery via M-of-N guardians (#201)
 
