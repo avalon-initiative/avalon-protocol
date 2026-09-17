@@ -128,6 +128,38 @@ criterion); the `prepare-batch`/`finalize-batch` endpoints and the
 two-phase split of `PostgresSettlementProvider::commit` they require are
 implementation work, tracked separately under epic #528.
 
+### Censorship recourse: switching hosts, or self-hosting, without losing the shard (#544)
+
+Two-phase signing means a managed host can never forge an integrator's
+history — but it can still simply refuse to `prepare-batch`, or go dark,
+withholding service from that one integrator (see
+[`./security-model.md`](./security-model.md)'s "Explicit limitations" for
+this named as a real, undismissed liveness gap, not something this design
+claims to fully solve). The recourse is that an integrator is never
+cryptographically bound to one host:
+
+- **The shard's identity is the integrator's own key, never the host's.**
+  #543's per-shard trust anchors authorize a shard via the integrator's
+  `issuer.key_added(purpose: shard_settlement)` event, not via anything
+  the hosting operator holds or controls. A host stalling an integrator
+  has no power to reassign, freeze, or otherwise touch that authorization
+  — it can only decline to help.
+- **Switching hosts (or to self-hosting) has zero continuity break.** The
+  shard's own log is a normal, mirrorable log like any other (#529/#530)
+  — a new host, or a self-hosted node, syncs the shard's existing history
+  from any mirror the same way any node bootstraps into serving content
+  it didn't originally author, then resumes `prepare-batch`/`finalize-batch`
+  (or local `chain.commit`, for self-hosting) from where the stalled host
+  left off. Nothing about the shard's identity or history changes; only
+  which infrastructure is currently serving it does.
+- **Not solved by this pass: automatic/redundant multi-host submission.**
+  An integrator wanting live failover (rather than a manual switch after
+  noticing a stall) would need to submit concurrently to more than one
+  host and let whichever one actually finalizes first win — a real
+  option, not designed here. Today's mechanism makes switching *possible
+  and cheap*, not *automatic*; documented explicitly as the known,
+  narrower scope of this pass rather than silently assumed away.
+
 ## Why this is safe to offer, and exactly where the line is
 
 Every ledger entry is hashed with its `network_id` folded in ahead of the

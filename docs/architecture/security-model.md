@@ -147,7 +147,26 @@ deployment blocker, not an optional hardening step.
   buy here ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
   If Avalon ever runs more than one independent settlement operator, the
   real mitigation is witnessed, gossiped signed tree heads catching a
-  divergent/dishonest operator — not consensus.
+  divergent/dishonest operator — not consensus. Sharded settlement (#527)
+  narrows this from "the whole network's liveness" to "one shard's
+  liveness" but does not eliminate it at the single-shard level — see the
+  next point for the managed-hosting case specifically.
+- **A managed settlement host (#531) can still stall or refuse its own
+  integrator, even though it can never forge that integrator's history.**
+  #531's two-phase signing keeps the integrator's key off the host, so a
+  dishonest or unavailable host is limited to withholding service, never
+  fabricating events — but withholding service is still a real liveness
+  gap for that one integrator's shard, same shape as the single-operator
+  case above, one level down. Recourse (#544): a shard's identity/trust
+  anchor is tied to the integrator's own key, never to the hosting
+  operator (#543) — switching to a different managed host, or to
+  self-hosting, carries zero continuity break, since the new host or
+  self-hosted node can sync the shard's existing log from any mirror
+  (#529/#530) before resuming service. An integrator is never
+  cryptographically locked into one host; it can always be operationally
+  slow to actually switch. See
+  [`./self-hosting.md`](./self-hosting.md)'s "Managed hosting" section for
+  the mechanics.
 - **Statistics can be gamed.** Sybil identities can inflate registry numbers;
   documented, not solved ([`./registry.md`](./registry.md)).
 - **Persistent identity makes harassment persistent.** Blocking and
