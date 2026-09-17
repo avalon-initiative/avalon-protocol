@@ -42,6 +42,19 @@ their own infrastructure" (all three do) but "does this deployment share
 mainnet's `network_id` and genesis, or root its own": mirror and shard
 operator both share it; a private instance does not.
 
+**#1 and #2 are not mutually exclusive per node.** Framed above as three
+choices a studio picks between because that's the decision an operator
+actually faces — but mechanically, "mirror" and "shard operator" are a
+per-*shard* property, not a per-*node* one: a single running `avalon-server`
+can be the shard-operator authority for one shard and a mirror of a
+completely different shard at the same time, since authored history
+(`ledger_entries`) and mirrored history (`mirrored_entries`) are kept in
+separate storage by construction. See
+[`./nodes.md`](./nodes.md)'s "A node's three configuration axes are
+independent" section for the full breakdown (this is one of those three
+axes) — `avalon-peer` in this environment runs exactly this dual role for
+real, live-verified.
+
 ### Shard operator invariants
 
 - **Genesis, not config, is the boundary.** A shard operator's `chain_genesis`
