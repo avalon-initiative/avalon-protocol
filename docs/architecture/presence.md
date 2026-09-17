@@ -177,7 +177,12 @@ realtime connections is a separate axis from scaling history or queries
   A single-node deployment (no peers) is unaffected: `relay_to_peers`
   returns immediately when the peer table is empty. Live-verified with two
   real `avalon-server` processes sharing one Postgres
-  (`crates/server/tests/realtime_relay.rs`).
+  (`crates/server/tests/realtime_relay.rs`). #541 separately verified the
+  failover consequence #535's decision claimed follows "for free": a
+  client that reconnects to a different node after losing its connection
+  resumes live delivery with the same session token and zero special
+  hand-off (`crates/server/tests/realtime_reconnect.rs`), with any gap
+  bounded to the disconnect window itself.
 
 ## Decisions and tickets
 

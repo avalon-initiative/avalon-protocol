@@ -184,9 +184,19 @@ instance both "self-host" the same code — they are not the same thing; see
 
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
-presence for identities on that node lapses until their next heartbeat
+presence for identities *publishing through* that node lapses until they
+themselves reconnect and republish elsewhere
 ([`./presence.md`](./presence.md)); nothing an integrator had already verified becomes
-unverifiable.
+unverifiable. A client that was only *subscribed* (reading presence/chat)
+through the disappeared node, not authoring anything through it, resumes
+live delivery immediately on reconnecting anywhere else — #539's
+cross-node relay means every node already receives the same events, so
+there's no session hand-off to perform, only a fresh connection to make.
+Live-verified as its own ticket (#541,
+[`crates/server/tests/realtime_reconnect.rs`](../../crates/server/tests/realtime_reconnect.rs)):
+reconnecting to a different node with the same session token resumes
+delivery, and the gap is bounded to the disconnect window itself, never
+ongoing afterward.
 
 ## Version rollout
 
