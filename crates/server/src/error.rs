@@ -260,6 +260,14 @@ pub enum AppError {
     FavoriteGameNotBound,
     #[error("no signed tree head exists at that tree_size")]
     SignedTreeHeadNotFound,
+    /// Issue #519: same "not found" as [`AppError::SignedTreeHeadNotFound`],
+    /// but for a node that's configured as a mirror for the requested
+    /// shard and simply hasn't backfilled anything from its peer yet —
+    /// distinct from a genuine empty authority, whose 404 stays the plain
+    /// variant above. Never fabricates or synthesizes an STH; this only
+    /// changes what the error body says about *why* nothing was found.
+    #[error("no signed tree head exists yet (mirror not yet backfilled)")]
+    SignedTreeHeadNotFoundMirror { peers: Vec<String> },
     #[error("invalid proof query: seq/tree_size and first/second must be non-negative with the first bound not exceeding the second")]
     InvalidProofQuery,
     #[error("requested tree_size exceeds what has been committed to the ledger so far")]
@@ -496,7 +504,9 @@ impl AppError {
             AppError::TooManyFavoriteGames => "TOO_MANY_FAVORITE_GAMES",
             AppError::DuplicateFavoriteGame => "DUPLICATE_FAVORITE_GAME",
             AppError::FavoriteGameNotBound => "FAVORITE_GAME_NOT_BOUND",
-            AppError::SignedTreeHeadNotFound => "SIGNED_TREE_HEAD_NOT_FOUND",
+            AppError::SignedTreeHeadNotFound | AppError::SignedTreeHeadNotFoundMirror { .. } => {
+                "SIGNED_TREE_HEAD_NOT_FOUND"
+            }
             AppError::InvalidProofQuery => "INVALID_PROOF_QUERY",
             AppError::LedgerRangeNotCommitted => "LEDGER_RANGE_NOT_COMMITTED",
             AppError::ProofVerificationFailed => "PROOF_VERIFICATION_FAILED",
@@ -768,7 +778,9 @@ impl IntoResponse for AppError {
             // not allowed to claim this" shape as `PresenceActiveInMismatch`
             // above, not a 404 (the integrator itself may well exist).
             AppError::FavoriteGameNotBound => StatusCode::FORBIDDEN,
-            AppError::SignedTreeHeadNotFound => StatusCode::NOT_FOUND,
+            AppError::SignedTreeHeadNotFound | AppError::SignedTreeHeadNotFoundMirror { .. } => {
+                StatusCode::NOT_FOUND
+            }
             AppError::InvalidProofQuery => StatusCode::BAD_REQUEST,
             // "Doesn't exist *yet*," not "never will" — a request for a
             // seq/tree_size beyond what's actually committed so far. 404,
@@ -795,10 +807,11 @@ impl IntoResponse for AppError {
             AppError::ProofVerificationFailed => "internal server error".to_string(),
             other => other.to_string(),
         };
-        (
-            status,
-            Json(json!({ "error": message, "code": self.code() })),
-        )
-            .into_response()
+        let mut body = json!({ "error": message, "code": self.code() });
+        if let AppError::SignedTreeHeadNotFoundMirror { peers } = &self {
+            body["is_mirror"] = json!(true);
+            body["mirror_peers"] = json!(peers);
+        }
+        (status, Json(body)).into_response()
     }
 }

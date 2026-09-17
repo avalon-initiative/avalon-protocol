@@ -181,8 +181,28 @@ pub async fn latest_sth(
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
     let sth = mirror_latest_sth(&state.pool, state.chain.network_id(), source_url)
         .await?
-        .ok_or(AppError::SignedTreeHeadNotFound)?;
+        .ok_or_else(|| sth_not_found_error(source_url))?;
     Ok(Json(sth.into()))
+}
+
+/// Issue #519: `GET /ledger/sth/latest` and `/ledger/sth/{tree_size}`
+/// previously 404'd identically whether this node was a genuinely empty
+/// Settlement authority or a mirror that simply hasn't backfilled
+/// anything yet for the requested shard — indistinguishable to a caller
+/// (client, operator, monitoring check) without already knowing which
+/// situation they're looking at. `source_url` being `Some` means this
+/// node is configured to mirror the requested shard from that peer, so
+/// the 404 becomes actionable ("ask this peer instead") rather than a
+/// dead end; `None` means this really is either a genuine empty authority
+/// or a shard this node has no mirror configured for at all, and the
+/// plain 404 is unchanged.
+fn sth_not_found_error(source_url: Option<&str>) -> AppError {
+    match source_url {
+        Some(peer) => AppError::SignedTreeHeadNotFoundMirror {
+            peers: vec![peer.to_string()],
+        },
+        None => AppError::SignedTreeHeadNotFound,
+    }
 }
 
 /// `GET /ledger/sth/{tree_size}` — a historical Signed Tree Head at exactly
@@ -211,7 +231,7 @@ pub async fn sth_at_tree_size(
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
     let sth = mirror_sth_at(&state.pool, state.chain.network_id(), tree_size, source_url)
         .await?
-        .ok_or(AppError::SignedTreeHeadNotFound)?;
+        .ok_or_else(|| sth_not_found_error(source_url))?;
     Ok(Json(sth.into()))
 }
 
@@ -972,4 +992,34 @@ fn require_settlement_submit_key(state: &AppState, headers: &HeaderMap) -> Resul
         return Err(AppError::Unauthorized);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod not_found_error_tests {
+    use super::sth_not_found_error;
+    use crate::error::AppError;
+
+    /// Issue #519: a shard this node has no mirror source configured for
+    /// (or a genuine empty authority) still gets the plain, unenriched
+    /// 404 — no behavior change for the case that was already correct.
+    #[test]
+    fn no_source_url_is_the_plain_not_found() {
+        let err = sth_not_found_error(None);
+        assert!(matches!(err, AppError::SignedTreeHeadNotFound));
+    }
+
+    /// Issue #519's actual fix: a shard this node mirrors from a
+    /// configured peer gets the enriched variant naming that peer, so a
+    /// caller can tell "ask this peer instead" from "genuinely nothing
+    /// here yet."
+    #[test]
+    fn configured_mirror_source_names_the_peer() {
+        let err = sth_not_found_error(Some("http://192.168.7.174:8080"));
+        match err {
+            AppError::SignedTreeHeadNotFoundMirror { peers } => {
+                assert_eq!(peers, vec!["http://192.168.7.174:8080".to_string()]);
+            }
+            other => panic!("expected SignedTreeHeadNotFoundMirror, got {other:?}"),
+        }
+    }
 }
