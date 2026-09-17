@@ -30,12 +30,55 @@
 //! outbox, so there's still exactly one canonical committer. Unset (the
 //! default), this worker behaves exactly as it always has — see
 //! [`RemoteSubmitConfig::from_env`] and [`RemoteSubmitConfig::submit`].
+//!
+//! **Shard-aware routing (issue #532, implementing #527's decided sharded
+//! settlement).** A single drain tick can now span more than one shard's
+//! worth of pending rows — [`shard_id_for_event`] derives which shard an
+//! event belongs to from its `issuer`'s [`GlobalId`] namespace (`game`/
+//! `app`/`service` routes to that integrator's own shard; everything else
+//! — identity/social/guild events, which have no single owning integrator
+//! — routes to one reserved `"core"` shard). [`drain_locked`] groups
+//! pending rows by that derived `shard_id`, builds **one `EventBatch` per
+//! shard per tick** (never mixing two shards' events into one batch), and
+//! commits each independently: locally via `chain.commit` if this node
+//! holds no configured remote target for that shard, or via
+//! [`RemoteSubmitConfig`] to that shard's own configured authority
+//! otherwise. `AVALON_SETTLEMENT_REMOTE_URL` (singular) keeps working
+//! completely unchanged — it's exactly `AVALON_SETTLEMENT_REMOTE_URLS`'s
+//! implicit `core=<url>` entry, so milestone-1's single-shard topology
+//! needs zero configuration change. See
+//! `docs/architecture/settlement.md`'s "Write routing to the correct
+//! shard" section for the full design.
+
+use std::collections::BTreeMap;
 
 use avalon_chain::{PostgresSettlementProvider, SettlementError, SettlementProvider};
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// Issue #532: which shard `event` belongs to, derived from its `issuer`'s
+/// `GlobalId` namespace (`<namespace>:<owner>:<kind>:<key>`) — never from
+/// any other field, since `issuer` is exactly "who authored this event,"
+/// the same question shard authority answers. `game`/`app`/`service` (an
+/// integrator acting as itself) routes to that integrator's own shard,
+/// `"{namespace}:{owner}"`. Everything else — `identity` namespace events
+/// (identity/social-graph/guild events; a friendship or guild isn't owned
+/// by any one integrator) — routes to the one reserved `"core"` shard,
+/// not split further. A milestone-1 deployment with no
+/// `AVALON_SETTLEMENT_REMOTE_URLS` configured has exactly one shard
+/// (`"core"`) and behaves exactly as today.
+pub(crate) fn shard_id_for_event(event: &ProtocolEvent) -> String {
+    let issuer = event.issuer.as_str();
+    let mut parts = issuer.splitn(3, ':');
+    let namespace = parts.next().unwrap_or("");
+    let owner = parts.next().unwrap_or("");
+    match namespace {
+        "game" | "app" | "service" => format!("{namespace}:{owner}"),
+        _ => "core".to_string(),
+    }
+}
 
 /// Enqueues `event` as part of `tx`. Callers must be inside the same
 /// transaction as the app-data rows this event describes — never call this
@@ -68,49 +111,99 @@ fn poll_interval_from_env() -> std::time::Duration {
 }
 
 /// Node-to-node config for posting drained batches to a remote Settlement
-/// authority instead of committing them locally — issue #313. Bundles the
-/// `reqwest::Client` alongside the target so `run_worker` only builds one.
+/// authority instead of committing them locally — issue #313, extended to
+/// a per-shard map by issue #532. Bundles the `reqwest::Client` alongside
+/// the targets so `run_worker` only builds one.
 pub struct RemoteSubmitConfig {
     client: reqwest::Client,
-    /// Base URL of the remote Settlement authority, no trailing slash.
-    url: String,
+    /// `shard_id` -> base URL of that shard's remote Settlement authority
+    /// (no trailing slash). A shard with no entry here is committed
+    /// locally via `chain.commit` — this node is presumed authoritative
+    /// for any shard it hasn't been told to defer.
+    targets: std::collections::HashMap<String, String>,
     /// `AVALON_SETTLEMENT_SUBMIT_KEY` — sent as a bearer credential on every
-    /// submit. See `crate::settlement::submit_ledger_batch`'s doc comment
-    /// for why this is the chosen node-to-node auth mechanism.
+    /// submit, to every configured target. See
+    /// `crate::settlement::submit_ledger_batch`'s doc comment for why this
+    /// is the chosen node-to-node auth mechanism.
     submit_key: Option<String>,
 }
 
 impl RemoteSubmitConfig {
-    /// `AVALON_SETTLEMENT_REMOTE_URL` unset (the default) returns `None`,
-    /// leaving `run_worker` on its original local-commit path — this ticket
-    /// must be purely additive. `AVALON_SETTLEMENT_SUBMIT_KEY` is read here
-    /// too (sent as this node's own credential to the remote authority) but
-    /// is optional at the type level; an authority with no submit key of
-    /// its own configured refuses every submission regardless (see
-    /// `crate::settlement::submit_ledger_batch`), so an operator who forgets
-    /// it on one side simply gets every submission rejected, not silently
-    /// unauthenticated.
+    /// Both `AVALON_SETTLEMENT_REMOTE_URL` and `AVALON_SETTLEMENT_REMOTE_URLS`
+    /// unset (the default) returns `None`, leaving `run_worker` on its
+    /// original local-commit path for every shard — this ticket must be
+    /// purely additive, matching #313's own invariant.
+    ///
+    /// `AVALON_SETTLEMENT_REMOTE_URLS` — issue #532 — is a comma-separated
+    /// `shard_id=url` list (e.g. `game:ashen-realms=https://a.example,core=https://core.example`),
+    /// one remote authority per shard. `AVALON_SETTLEMENT_REMOTE_URL`
+    /// (singular, #313's original var) keeps working completely
+    /// unchanged: it's merged in as the implicit `core=<url>` entry
+    /// whenever `AVALON_SETTLEMENT_REMOTE_URLS` doesn't already name
+    /// `core` itself — a milestone-1 deployment with only the singular
+    /// var set behaves byte-for-byte as it always has, just expressed
+    /// through the same per-shard map every other shard now uses too.
+    ///
+    /// `AVALON_SETTLEMENT_SUBMIT_KEY` is read here too (sent as this
+    /// node's own credential to every configured remote authority) but is
+    /// optional at the type level; an authority with no submit key of its
+    /// own configured refuses every submission regardless (see
+    /// `crate::settlement::submit_ledger_batch`), so an operator who
+    /// forgets it on one side simply gets every submission rejected, not
+    /// silently unauthenticated.
     pub fn from_env() -> Option<Self> {
-        let url = std::env::var("AVALON_SETTLEMENT_REMOTE_URL").ok()?;
-        let url = url.trim().trim_end_matches('/').to_string();
-        if url.is_empty() {
+        let mut targets = std::collections::HashMap::new();
+
+        if let Ok(raw) = std::env::var("AVALON_SETTLEMENT_REMOTE_URLS") {
+            for entry in raw.split(',') {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                let Some((shard_id, url)) = entry.split_once('=') else {
+                    tracing::error!(
+                        entry,
+                        "outbox: AVALON_SETTLEMENT_REMOTE_URLS entry missing '=' — ignoring"
+                    );
+                    continue;
+                };
+                let shard_id = shard_id.trim().to_string();
+                let url = url.trim().trim_end_matches('/').to_string();
+                if !shard_id.is_empty() && !url.is_empty() {
+                    targets.insert(shard_id, url);
+                }
+            }
+        }
+
+        if let Ok(url) = std::env::var("AVALON_SETTLEMENT_REMOTE_URL") {
+            let url = url.trim().trim_end_matches('/').to_string();
+            if !url.is_empty() {
+                targets.entry("core".to_string()).or_insert(url);
+            }
+        }
+
+        if targets.is_empty() {
             return None;
         }
+
         let submit_key = std::env::var("AVALON_SETTLEMENT_SUBMIT_KEY")
             .ok()
             .filter(|s| !s.is_empty());
         Some(Self {
             client: reqwest::Client::new(),
-            url,
+            targets,
             submit_key,
         })
     }
 
-    async fn submit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
-        let mut request = self
-            .client
-            .post(format!("{}/ledger/submit", self.url))
-            .json(batch);
+    /// This shard's configured remote authority, if any — `None` means
+    /// this node commits that shard's batches locally.
+    fn target_for_shard(&self, shard_id: &str) -> Option<&str> {
+        self.targets.get(shard_id).map(String::as_str)
+    }
+
+    async fn submit(&self, url: &str, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+        let mut request = self.client.post(format!("{url}/ledger/submit")).json(batch);
         if let Some(key) = &self.submit_key {
             request = request.bearer_auth(key);
         }
@@ -197,10 +290,14 @@ async fn drain_locked(
     .fetch_all(&mut *conn)
     .await?;
 
-    // One EventBatch for this whole tick's rows, not one per row — issue
-    // #38: a protocol event is never its own settlement action.
-    let mut pending_ids = Vec::with_capacity(rows.len());
-    let mut events = Vec::with_capacity(rows.len());
+    // Issue #532: grouped by shard, not one flat list — a protocol event
+    // is never its own settlement action (#38), but two different shards'
+    // events are never allowed into the same batch either, since a batch
+    // closes under exactly one shard's authority. `BTreeMap` (not
+    // `HashMap`) purely so shard processing order is deterministic run to
+    // run, which makes this worker's own logs/tests reproducible — the
+    // order shards are committed in has no correctness meaning.
+    let mut by_shard: BTreeMap<String, (Vec<Uuid>, Vec<ProtocolEvent>)> = BTreeMap::new();
 
     for row in rows {
         let id: Uuid = row.try_get("id")?;
@@ -223,49 +320,61 @@ async fn drain_locked(
             continue;
         };
 
-        pending_ids.push(id);
-        events.push(event);
+        let shard_id = shard_id_for_event(&event);
+        let group = by_shard.entry(shard_id).or_default();
+        group.0.push(id);
+        group.1.push(event);
     }
 
-    if events.is_empty() {
-        return Ok(());
-    }
-
-    let batch = EventBatch {
-        id: Uuid::new_v4(),
-        events,
-        created_at: OffsetDateTime::now_utc(),
-    };
-
-    // Failure: leave every row in this tick's batch pending, retried whole
-    // (as a new batch) next tick — `commit` is one transaction, so nothing
-    // was partially settled. Still logged, though — a `commit` that fails
-    // every tick (e.g. a missing signing key) must not fail silently
-    // forever; the pending rows alone don't say why they're stuck.
-    //
-    // Issue #313: `remote` is `None` on every deployment that hasn't set
-    // `AVALON_SETTLEMENT_REMOTE_URL` — `chain.commit` below is the exact
-    // same call this worker has always made. Never both: exactly one
-    // Settlement authority ever accepts writes for a network, so this is
-    // either-or, never a local-then-remote fallback.
-    let commit_result = match remote {
-        None => chain.commit(&batch).await,
-        Some(remote) => remote.submit(&batch).await,
-    };
-    match commit_result {
-        Ok(commitment) => {
-            for id in pending_ids {
-                sqlx::query(
-                    "UPDATE protocol_outbox SET committed_at = now(), batch_id = $2 WHERE id = $1",
-                )
-                .bind(id)
-                .bind(commitment.batch_id)
-                .execute(&mut *conn)
-                .await?;
-            }
+    for (shard_id, (pending_ids, events)) in by_shard {
+        if events.is_empty() {
+            continue;
         }
-        Err(err) => {
-            tracing::error!("outbox worker: chain.commit failed, batch left pending: {err}");
+
+        let batch = EventBatch {
+            id: Uuid::new_v4(),
+            events,
+            created_at: OffsetDateTime::now_utc(),
+        };
+
+        // Failure: leave every row in this shard's batch pending, retried
+        // whole (as a new batch) next tick — `commit` is one transaction,
+        // so nothing was partially settled. A failure on one shard never
+        // blocks another shard's batch this same tick — each is fully
+        // independent. Still logged, though — a `commit` that fails every
+        // tick (e.g. a missing signing key) must not fail silently
+        // forever; the pending rows alone don't say why they're stuck.
+        //
+        // Issue #313/#532: no configured remote target for this shard
+        // means this node commits it locally — `chain.commit` below is
+        // the exact same call this worker has always made for every
+        // shard before #532 existed. Never both local and remote for the
+        // same shard: exactly one Settlement authority ever accepts
+        // writes for a given shard, so this is either-or per shard, never
+        // a local-then-remote fallback.
+        let remote_target = remote.and_then(|r| r.target_for_shard(&shard_id).map(|url| (r, url)));
+        let commit_result = match remote_target {
+            None => chain.commit(&batch).await,
+            Some((remote, url)) => remote.submit(url, &batch).await,
+        };
+        match commit_result {
+            Ok(commitment) => {
+                for id in pending_ids {
+                    sqlx::query(
+                        "UPDATE protocol_outbox SET committed_at = now(), batch_id = $2 WHERE id = $1",
+                    )
+                    .bind(id)
+                    .bind(commitment.batch_id)
+                    .execute(&mut *conn)
+                    .await?;
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    shard_id,
+                    "outbox worker: chain.commit failed, batch left pending: {err}"
+                );
+            }
         }
     }
 
@@ -296,6 +405,18 @@ mod tests {
     use super::*;
     use avalon_protocol::ids::GlobalId;
 
+    /// **Both live tests in this module call `drain_once` directly
+    /// against the real, shared `protocol_outbox`/`OUTBOX_DRAIN_LOCK_KEY`
+    /// — run them with `--test-threads=1`.** Two of these tests racing
+    /// concurrently (cargo's default within one binary) can have one
+    /// test's `drain_once` legitimately lose the advisory-lock race to
+    /// the *other* test's concurrent call and skip its own tick, which
+    /// looks like a flake (a row briefly not yet committed) but isn't a
+    /// bug in `drain_once` itself — it's exactly two independent tests
+    /// sharing one global resource without serializing against each
+    /// other. `cargo test -p avalon-server --lib outbox -- --ignored
+    /// --test-threads=1`.
+    ///
     /// Issue #536: two `drain_once` calls racing against the same
     /// `protocol_outbox` rows must not both commit them into the ledger.
     /// Gated `--ignored`/live like every other test in this crate that
@@ -346,15 +467,176 @@ mod tests {
         r1.expect("drain 1 failed");
         r2.expect("drain 2 failed");
 
+        // One of the two calls above may have lost the advisory-lock race
+        // to this environment's `make start` server (which runs the same
+        // outbox worker against the same shared Postgres) and skipped its
+        // own tick — a brief poll covers that legitimate case without
+        // weakening the actual assertion below (still exactly 1, never
+        // more).
         for id in &event_ids {
-            let count: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM ledger_entries WHERE event_id = $1")
-                    .bind(id)
+            let mut count = 0i64;
+            for _ in 0..20 {
+                count =
+                    sqlx::query_scalar("SELECT count(*) FROM ledger_entries WHERE event_id = $1")
+                        .bind(id)
+                        .fetch_one(&pool)
+                        .await
+                        .expect("query failed");
+                if count >= 1 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            assert_eq!(count, 1, "event {id} was committed more than once");
+        }
+    }
+
+    #[test]
+    fn game_namespace_routes_to_its_own_shard() {
+        let event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "achievement.issued".to_string(),
+            issuer: GlobalId::new("game", "ashen-realms", "self", "achievement_issued"),
+            subject: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
+            payload: serde_json::json!({}),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+        };
+        assert_eq!(shard_id_for_event(&event), "game:ashen-realms");
+    }
+
+    #[test]
+    fn app_and_service_namespaces_also_route_to_their_own_shard() {
+        for namespace in ["app", "service"] {
+            let event = ProtocolEvent {
+                id: Uuid::new_v4(),
+                kind: "milestone.issued".to_string(),
+                issuer: GlobalId::new(namespace, "some-integrator", "self", "milestone_issued"),
+                subject: GlobalId::new("identity", &Uuid::new_v4().to_string(), "self", "x"),
+                payload: serde_json::json!({}),
+                timestamp: OffsetDateTime::now_utc(),
+                version: 1,
+            };
+            assert_eq!(
+                shard_id_for_event(&event),
+                format!("{namespace}:some-integrator")
+            );
+        }
+    }
+
+    #[test]
+    fn identity_namespace_routes_to_the_core_shard() {
+        let actor = Uuid::new_v4();
+        let event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "identity.created".to_string(),
+            issuer: GlobalId::new("identity", &actor.to_string(), "self", "identity_created"),
+            subject: GlobalId::new("identity", &actor.to_string(), "self", "identity_created"),
+            payload: serde_json::json!({}),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+        };
+        assert_eq!(shard_id_for_event(&event), "core");
+    }
+
+    /// Issue #532: a single drain tick spanning both a `game:...`-shard
+    /// event and a `core`-shard event must produce **two** distinct
+    /// `ledger_entries.batch_id` values, not one combined batch — direct
+    /// live proof `drain_locked` actually groups by shard rather than
+    /// still treating every pending row as one flat batch.
+    #[tokio::test]
+    #[ignore]
+    async fn a_tick_spanning_two_shards_commits_two_separate_batches() {
+        dotenvy::dotenv().ok();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&database_url)
+            .await
+            .expect("failed to connect to Postgres — is it reachable?");
+
+        let chain = PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+
+        let mut tx = pool.begin().await.expect("begin failed");
+
+        let core_actor = Uuid::new_v4();
+        let core_event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "test.shard_routing_core".to_string(),
+            issuer: GlobalId::new(
+                "identity",
+                &core_actor.to_string(),
+                "self",
+                "shard_routing_test",
+            ),
+            subject: GlobalId::new(
+                "identity",
+                &core_actor.to_string(),
+                "self",
+                "shard_routing_test",
+            ),
+            payload: serde_json::json!({}),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+        };
+
+        let integrator_slug = format!("shard-routing-test-{}", Uuid::new_v4().simple());
+        let game_event = ProtocolEvent {
+            id: Uuid::new_v4(),
+            kind: "test.shard_routing_game".to_string(),
+            issuer: GlobalId::new("game", &integrator_slug, "self", "shard_routing_test"),
+            subject: GlobalId::new(
+                "identity",
+                &Uuid::new_v4().to_string(),
+                "self",
+                "shard_routing_test",
+            ),
+            payload: serde_json::json!({}),
+            timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+        };
+
+        enqueue(&mut tx, &core_event).await.expect("enqueue failed");
+        enqueue(&mut tx, &game_event).await.expect("enqueue failed");
+        tx.commit().await.expect("commit failed");
+
+        // Poll rather than assume this call's own `drain_once` wins the
+        // advisory-lock race — this environment's `make start` server
+        // runs its own outbox worker against the same shared Postgres, so
+        // a tick can legitimately lose that race and skip (#536's own
+        // documented, correct behavior), retried on the next poll rather
+        // than a bug.
+        for _ in 0..20 {
+            let _ = drain_once(&pool, &chain, None).await;
+            let both_committed: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM ledger_entries WHERE event_id = ANY($1)")
+                    .bind([core_event.id, game_event.id])
                     .fetch_one(&pool)
                     .await
                     .expect("query failed");
-            assert_eq!(count, 1, "event {id} was committed more than once");
+            if both_committed == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+
+        let core_batch_id: Uuid =
+            sqlx::query_scalar("SELECT batch_id FROM ledger_entries WHERE event_id = $1")
+                .bind(core_event.id)
+                .fetch_one(&pool)
+                .await
+                .expect("core event never committed within the timeout");
+        let game_batch_id: Uuid =
+            sqlx::query_scalar("SELECT batch_id FROM ledger_entries WHERE event_id = $1")
+                .bind(game_event.id)
+                .fetch_one(&pool)
+                .await
+                .expect("game event never committed within the timeout");
+
+        assert_ne!(
+            core_batch_id, game_batch_id,
+            "a core-shard event and a game-shard event landed in the same batch — \
+             shard grouping did not actually happen"
+        );
     }
 
     #[test]
@@ -389,5 +671,83 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_OUTBOX_POLL_INTERVAL_SECS");
         }
+    }
+
+    /// SAFETY-of-intent note, same as the poll-interval tests above: these
+    /// three env vars (`AVALON_SETTLEMENT_REMOTE_URL(S)`,
+    /// `AVALON_SETTLEMENT_SUBMIT_KEY`) aren't touched by any other test in
+    /// this crate's binary, so mutating them process-globally here is
+    /// safe despite being `unsafe` in edition-2024 terms. Each test clears
+    /// all three afterward regardless of which it set, so they can't leak
+    /// into whichever test runs next.
+    fn clear_remote_submit_env_vars() {
+        unsafe {
+            std::env::remove_var("AVALON_SETTLEMENT_REMOTE_URL");
+            std::env::remove_var("AVALON_SETTLEMENT_REMOTE_URLS");
+            std::env::remove_var("AVALON_SETTLEMENT_SUBMIT_KEY");
+        }
+    }
+
+    #[test]
+    fn no_remote_env_vars_set_returns_none() {
+        clear_remote_submit_env_vars();
+        assert!(RemoteSubmitConfig::from_env().is_none());
+    }
+
+    #[test]
+    fn singular_remote_url_becomes_the_implicit_core_entry() {
+        clear_remote_submit_env_vars();
+        unsafe {
+            std::env::set_var("AVALON_SETTLEMENT_REMOTE_URL", "https://authority.example/");
+        }
+        let config = RemoteSubmitConfig::from_env().expect("should be Some");
+        assert_eq!(
+            config.target_for_shard("core"),
+            Some("https://authority.example")
+        );
+        assert_eq!(config.target_for_shard("game:ashen-realms"), None);
+        clear_remote_submit_env_vars();
+    }
+
+    #[test]
+    fn plural_remote_urls_parses_a_per_shard_map() {
+        clear_remote_submit_env_vars();
+        unsafe {
+            std::env::set_var(
+                "AVALON_SETTLEMENT_REMOTE_URLS",
+                "game:ashen-realms=https://a.example, core = https://core.example/",
+            );
+        }
+        let config = RemoteSubmitConfig::from_env().expect("should be Some");
+        assert_eq!(
+            config.target_for_shard("game:ashen-realms"),
+            Some("https://a.example")
+        );
+        assert_eq!(
+            config.target_for_shard("core"),
+            Some("https://core.example")
+        );
+        assert_eq!(config.target_for_shard("app:some-app"), None);
+        clear_remote_submit_env_vars();
+    }
+
+    #[test]
+    fn plural_remote_urls_naming_core_wins_over_the_singular_fallback() {
+        clear_remote_submit_env_vars();
+        unsafe {
+            std::env::set_var(
+                "AVALON_SETTLEMENT_REMOTE_URLS",
+                "core=https://plural.example",
+            );
+            std::env::set_var("AVALON_SETTLEMENT_REMOTE_URL", "https://singular.example");
+        }
+        let config = RemoteSubmitConfig::from_env().expect("should be Some");
+        assert_eq!(
+            config.target_for_shard("core"),
+            Some("https://plural.example"),
+            "AVALON_SETTLEMENT_REMOTE_URLS naming core explicitly must win over the singular \
+             fallback, not be silently overwritten by it"
+        );
+        clear_remote_submit_env_vars();
     }
 }
