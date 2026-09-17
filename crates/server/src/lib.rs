@@ -600,6 +600,12 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
             "/ledger/cross-shard-root",
             get(cross_shard::cross_shard_root),
         )
+        // Issue #526: forwarding-node discovery hint — see
+        // `crate::settlement::remote_submit_status`.
+        .route(
+            "/ledger/remote-submit-status",
+            get(settlement::remote_submit_status),
+        )
         // Issue #362: node-to-node peer discovery — no auth, same public
         // posture as the `/ledger/*` block above, since a peer table isn't
         // sensitive the way ledger-write endpoints are.

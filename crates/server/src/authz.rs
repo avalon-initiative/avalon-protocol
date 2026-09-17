@@ -390,6 +390,7 @@ mod live_tests {
             peers: crate::nodes::PeerTable::new(),
             managed_hosting_verify_key: None,
             known_shards: None,
+            remote_submit_status: None,
         }
     }
 

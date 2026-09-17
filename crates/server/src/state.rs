@@ -54,4 +54,11 @@ pub struct AppState {
     /// one-shard degenerate case — see `crate::cross_shard`'s own module
     /// doc comment.
     pub known_shards: Option<crate::cross_shard::KnownShardsConfig>,
+    /// Issue #526: a handle to the outbox worker's own live
+    /// remote-submit failure tracker, for `GET /ledger/remote-submit-status`
+    /// (`crate::settlement::remote_submit_status`) to read. `None` when
+    /// this node has no `AVALON_SETTLEMENT_REMOTE_URL(S)` configured at
+    /// all — it isn't forwarding to any remote authority, so there is
+    /// nothing to ever report as failing.
+    pub remote_submit_status: Option<crate::outbox::RemoteSubmitStatus>,
 }

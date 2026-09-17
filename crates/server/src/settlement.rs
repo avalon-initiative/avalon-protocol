@@ -716,6 +716,75 @@ pub async fn finalize_batch(
     Ok(Json(commitment))
 }
 
+#[derive(Serialize)]
+pub struct FailingShard {
+    pub shard_id: String,
+    pub authority: String,
+    pub reason: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub since: OffsetDateTime,
+}
+
+#[derive(Serialize)]
+pub struct RemoteSubmitStatusResponse {
+    pub failing_shards: Vec<FailingShard>,
+}
+
+/// `GET /ledger/remote-submit-status` — issue #526. A forwarding node
+/// (`AVALON_SETTLEMENT_REMOTE_URL(S)` configured) that can't reach or gets
+/// rejected by a shard's configured Settlement authority previously only
+/// logged that failure locally (`crate::outbox::drain_locked`) — an
+/// integrator whose SDK is misconfigured against the wrong node had no way
+/// to discover the correct authority from the error alone. This surfaces
+/// it: `failing_shards` lists every shard currently failing to reach its
+/// configured authority, each entry's `authority` being exactly the URL
+/// this node was already configured with for that shard — never an
+/// inferred or alternate one (exactly one Settlement authority is expected
+/// per shard; this doesn't add or imply a second one).
+///
+/// Public, unauthenticated — same rationale as every other `/ledger/*`
+/// diagnostic read in this module (see module docs): the URL a node is
+/// configured to forward to isn't sensitive, and gating discovery of it
+/// behind a credential would defeat the point for exactly the
+/// misconfigured caller this exists to help.
+///
+/// **503** while any shard is failing (a signal worth a non-2xx, not just
+/// a quiet 200 a caller has to know to inspect); **200** with an empty
+/// list otherwise — including when this node has no remote authority
+/// configured at all, since there is then nothing to ever report as
+/// failing (`AppState::remote_submit_status` is `None`).
+pub async fn remote_submit_status(
+    State(state): State<AppState>,
+) -> (axum::http::StatusCode, Json<RemoteSubmitStatusResponse>) {
+    let failing_shards: Vec<FailingShard> = state
+        .remote_submit_status
+        .as_ref()
+        .map(|status| {
+            status
+                .currently_failing()
+                .into_iter()
+                .map(|(shard_id, failure)| FailingShard {
+                    shard_id,
+                    authority: failure.authority_url,
+                    reason: failure.reason,
+                    since: failure.since,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let http_status = if failing_shards.is_empty() {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        http_status,
+        Json(RemoteSubmitStatusResponse { failing_shards }),
+    )
+}
+
 /// Shared bearer-token check `prepare_batch`/`finalize_batch` both use —
 /// factored out of `submit_ledger_batch` rather than duplicated a third
 /// time.

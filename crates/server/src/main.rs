@@ -109,6 +109,15 @@ async fn main() {
 
     let peers = avalon_server::nodes::PeerTable::new();
 
+    // Issue #313/#532: built here (rather than down by `run_worker`'s own
+    // spawn, its previous location) so its issue #526 failure-tracking
+    // handle can be threaded into `AppState` below, before `remote_submit`
+    // itself is moved into the worker.
+    let remote_submit = outbox::RemoteSubmitConfig::from_env();
+    if remote_submit.is_some() {
+        tracing::info!("avalon-server: outbox committing via remote Settlement authority (AVALON_SETTLEMENT_REMOTE_URL set)");
+    }
+
     let state = AppState {
         pool: pool.clone(),
         chain: chain.clone(),
@@ -141,6 +150,9 @@ async fn main() {
         // own doc comment — `None` falls back to the one-shard degenerate
         // case, no config needed for a milestone-1 deployment.
         known_shards: avalon_server::cross_shard::KnownShardsConfig::from_env(),
+        // Issue #526: `None` when `remote_submit` itself is `None` —
+        // nothing this node could ever report as failing.
+        remote_submit_status: remote_submit.as_ref().map(|r| r.status()),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -163,11 +175,8 @@ async fn main() {
     // see crates/server/src/outbox.rs (issue #71). `AVALON_SETTLEMENT_REMOTE_URL`
     // (issue #313) switches this from committing locally to posting each
     // batch to a remote Settlement authority; unset (the default), nothing
-    // changes.
-    let remote_submit = outbox::RemoteSubmitConfig::from_env();
-    if remote_submit.is_some() {
-        tracing::info!("avalon-server: outbox committing via remote Settlement authority (AVALON_SETTLEMENT_REMOTE_URL set)");
-    }
+    // changes. `remote_submit` itself was built earlier, above `state`'s
+    // own construction — see that site's comment.
     tokio::spawn(outbox::run_worker(
         pool.clone(),
         chain.clone(),
