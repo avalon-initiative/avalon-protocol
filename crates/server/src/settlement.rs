@@ -29,8 +29,24 @@
 //! yet is a clear [`AppError::LedgerRangeNotCommitted`] (404), never an
 //! empty or fabricated proof — the negative case the ticket calls out
 //! explicitly.
+//!
+//! **Issue #520 — mirror-backed fallback.** Every handler in this module
+//! first tries `state.chain` (this node's own authored `ledger_entries`/
+//! `signed_tree_heads`), and only when that has nothing at all
+//! (`state.chain.entry_count() == 0`) falls back to this node's own
+//! mirrored data (`mirrored_entries`/`observed_sths`, populated by
+//! `crate::mirror_watcher`). This is deliberately all-or-nothing per
+//! request, never a partial blend of authored and mirrored rows for one
+//! response: a node with any authored history of its own is always this
+//! network's authority for `/ledger/*` and never even looks at its mirror
+//! tables; a pure-mirror node (no authored history) serves entirely from
+//! what it independently verified while mirroring. The mirror fallback
+//! re-derives and self-verifies exactly the same way the authored path
+//! does — see each `mirror_*` helper's own doc comment — so a caller gets
+//! the same verifiable answer regardless of which kind of node answered.
 
 use avalon_chain::merkle;
+use avalon_chain::mirror;
 use avalon_chain::sth::SignedTreeHead;
 use avalon_chain::{LedgerEntryView, SettlementProvider};
 use avalon_protocol::events::{Commitment, EventBatch};
@@ -81,12 +97,20 @@ impl From<SignedTreeHead> for SignedTreeHeadResponse {
 
 /// `GET /ledger/sth/latest` — the current Signed Tree Head. Public,
 /// unauthenticated (see module docs).
+///
+/// Issue #520: falls back to this node's own mirrored data
+/// ([`mirror_latest_sth`]) when it has no locally-authored STH of its own —
+/// a pure-mirror node's whole point, per the module-level "Mirrors, not
+/// federation" design. An authority node with any local history always
+/// answers from `state.chain` and never even looks at the mirror tables,
+/// so authored and mirrored history are never blended for one response.
 pub async fn latest_sth(
     State(state): State<AppState>,
 ) -> Result<Json<SignedTreeHeadResponse>, AppError> {
-    let sth = state
-        .chain
-        .latest_signed_tree_head()
+    if let Some(sth) = state.chain.latest_signed_tree_head().await? {
+        return Ok(Json(sth.into()));
+    }
+    let sth = mirror_latest_sth(&state.pool, state.chain.network_id())
         .await?
         .ok_or(AppError::SignedTreeHeadNotFound)?;
     Ok(Json(sth.into()))
@@ -99,16 +123,62 @@ pub async fn latest_sth(
 /// 404s (not an empty/fabricated STH) if no batch ever closed at exactly
 /// this size — `tree_size` values between batch boundaries have no STH by
 /// construction, since one is only ever produced per batch commit.
+///
+/// Issue #520: same mirror fallback as [`latest_sth`] — see its doc comment.
 pub async fn sth_at_tree_size(
     State(state): State<AppState>,
     Path(tree_size): Path<i64>,
 ) -> Result<Json<SignedTreeHeadResponse>, AppError> {
-    let sth = state
-        .chain
-        .signed_tree_head_at(tree_size)
+    if let Some(sth) = state.chain.signed_tree_head_at(tree_size).await? {
+        return Ok(Json(sth.into()));
+    }
+    let sth = mirror_sth_at(&state.pool, state.chain.network_id(), tree_size)
         .await?
         .ok_or(AppError::SignedTreeHeadNotFound)?;
     Ok(Json(sth.into()))
+}
+
+/// Issue #520: `GET /ledger/sth/latest`'s mirror-backed fallback, reached
+/// only once this node has no locally-authored STH of its own to serve.
+/// Recomputes the Merkle root from this node's own `mirrored_entries` at
+/// the highest `tree_size` it has fully backfilled so far, then looks up
+/// the one `observed_sths` row whose `root_hash` matches that recomputed
+/// root exactly — the same self-verify-before-serving invariant every
+/// proof endpoint in this module already follows, applied here to STHs
+/// instead of proofs. `Ok(None)` if this node has never mirrored anything
+/// for `network_id`.
+async fn mirror_latest_sth(
+    pool: &sqlx::PgPool,
+    network_id: &str,
+) -> Result<Option<SignedTreeHead>, AppError> {
+    let progress = mirror::mirrored_progress(pool, network_id).await?;
+    if progress.verified_count == 0 {
+        return Ok(None);
+    }
+    mirror_sth_at(pool, network_id, progress.verified_count).await
+}
+
+/// Issue #520: `GET /ledger/sth/{tree_size}`'s mirror-backed fallback — see
+/// [`mirror_latest_sth`]'s doc comment for the self-verification shape this
+/// shares. `Ok(None)` if this node hasn't mirrored `tree_size` entries yet,
+/// or (should never happen, given the mirror-watcher's own
+/// verify-before-store invariant) no peer's STH ever matched the root this
+/// node independently recomputes — treated as "not found" rather than
+/// served unverifiable, per this module's headline rule.
+async fn mirror_sth_at(
+    pool: &sqlx::PgPool,
+    network_id: &str,
+    tree_size: i64,
+) -> Result<Option<SignedTreeHead>, AppError> {
+    let hashes = mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size).await?;
+    if (hashes.len() as i64) < tree_size {
+        return Ok(None);
+    }
+    let root =
+        merkle::mth_of_hex_hashes(&hashes).map_err(avalon_chain::SettlementError::Storage)?;
+    let observed =
+        mirror::observed_sth_matching_root(pool, network_id, tree_size, &hex::encode(root)).await?;
+    Ok(observed.map(SignedTreeHead::from))
 }
 
 #[derive(Deserialize)]
@@ -136,6 +206,10 @@ pub struct ConsistencyProofResponse {
 /// consistency proof that the tree at `second` leaves is a strict
 /// append-only extension of the tree at `first` leaves. See module docs for
 /// the self-verification invariant and the not-yet-committed negative case.
+///
+/// Issue #520: falls back to [`mirror_consistency_proof`] when this node has
+/// no locally-authored entries — see [`latest_sth`]'s doc comment for the
+/// "never blended" rationale shared by every handler in this module.
 pub async fn consistency_proof(
     State(state): State<AppState>,
     Query(query): Query<ConsistencyProofQuery>,
@@ -146,6 +220,10 @@ pub async fn consistency_proof(
     }
 
     let entry_count = state.chain.entry_count().await?;
+    if entry_count == 0 {
+        return mirror_consistency_proof(&state.pool, state.chain.network_id(), first, second)
+            .await;
+    }
     if second > entry_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
@@ -193,6 +271,55 @@ pub async fn consistency_proof(
     }))
 }
 
+/// Issue #520: [`consistency_proof`]'s mirror-backed fallback. Rebuilds
+/// both roots and the proof itself from this node's own `mirrored_entries`
+/// (the exact same leaf ordering the mirror-watcher already verified each
+/// entry's inclusion against while backfilling), then re-verifies before
+/// ever responding — the same invariant [`consistency_proof`] itself
+/// follows for the authored path.
+async fn mirror_consistency_proof(
+    pool: &sqlx::PgPool,
+    network_id: &str,
+    first: i64,
+    second: i64,
+) -> Result<Json<ConsistencyProofResponse>, AppError> {
+    let progress = mirror::mirrored_progress(pool, network_id).await?;
+    if second > progress.verified_count {
+        return Err(AppError::LedgerRangeNotCommitted);
+    }
+
+    let hashes_to_second = mirror::mirrored_entry_hashes_up_to(pool, network_id, second).await?;
+    let second_root = merkle::mth_of_hex_hashes(&hashes_to_second)
+        .map_err(avalon_chain::SettlementError::Storage)?;
+    let first_root = if first == 0 {
+        merkle::empty_root()
+    } else {
+        merkle::mth_of_hex_hashes(&hashes_to_second[..first as usize])
+            .map_err(avalon_chain::SettlementError::Storage)?
+    };
+
+    let proof = merkle::consistency_proof_of_hex_hashes(first as usize, &hashes_to_second)
+        .map_err(avalon_chain::SettlementError::Storage)?;
+
+    if !merkle::verify_consistency_proof(
+        first as usize,
+        second as usize,
+        &proof,
+        &first_root,
+        &second_root,
+    ) {
+        return Err(AppError::ProofVerificationFailed);
+    }
+
+    Ok(Json(ConsistencyProofResponse {
+        first,
+        second,
+        first_root_hash: hex::encode(first_root),
+        second_root_hash: hex::encode(second_root),
+        proof: proof.into_iter().map(hex::encode).collect(),
+    }))
+}
+
 #[derive(Deserialize)]
 pub struct InclusionProofQuery {
     pub seq: i64,
@@ -222,6 +349,10 @@ pub struct InclusionProofResponse {
 /// transactional), so the Merkle leaf index is never `seq - 1`; it's the
 /// entry's *rank* among all committed entries, resolved via
 /// `leaf_index_for_seq`.
+///
+/// Issue #520: falls back to [`mirror_inclusion_proof`] when this node has
+/// no locally-authored entries — see [`latest_sth`]'s doc comment for the
+/// "never blended" rationale shared by every handler in this module.
 pub async fn inclusion_proof(
     State(state): State<AppState>,
     Query(query): Query<InclusionProofQuery>,
@@ -232,6 +363,9 @@ pub async fn inclusion_proof(
     }
 
     let entry_count = state.chain.entry_count().await?;
+    if entry_count == 0 {
+        return mirror_inclusion_proof(&state.pool, state.chain.network_id(), seq, tree_size).await;
+    }
     if tree_size > entry_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
@@ -262,6 +396,57 @@ pub async fn inclusion_proof(
 
     // Same self-verification invariant as `consistency_proof` above.
     if !merkle::verify_inclusion_proof(&leaf_bytes, leaf_index, tree_size_usize, &proof, &root) {
+        return Err(AppError::ProofVerificationFailed);
+    }
+
+    Ok(Json(InclusionProofResponse {
+        seq,
+        tree_size,
+        leaf_hash: leaf_hash_hex,
+        root_hash: hex::encode(root),
+        proof: proof.into_iter().map(hex::encode).collect(),
+    }))
+}
+
+/// Issue #520: [`inclusion_proof`]'s mirror-backed fallback — same
+/// self-verify-before-serving shape, over this node's own
+/// `mirrored_entries` rather than `ledger_entries`.
+async fn mirror_inclusion_proof(
+    pool: &sqlx::PgPool,
+    network_id: &str,
+    seq: i64,
+    tree_size: i64,
+) -> Result<Json<InclusionProofResponse>, AppError> {
+    let progress = mirror::mirrored_progress(pool, network_id).await?;
+    if tree_size > progress.verified_count {
+        return Err(AppError::LedgerRangeNotCommitted);
+    }
+
+    let leaf_index = mirror::mirrored_leaf_index_for_seq(pool, network_id, seq)
+        .await?
+        .ok_or(AppError::InvalidProofQuery)?;
+    if leaf_index >= tree_size {
+        return Err(AppError::InvalidProofQuery);
+    }
+    let leaf_index_usize = leaf_index as usize;
+    let tree_size_usize = tree_size as usize;
+
+    let hashes = mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size).await?;
+    let leaf_hash_hex = hashes[leaf_index_usize].clone();
+    let proof = merkle::inclusion_proof_of_hex_hashes(leaf_index_usize, &hashes)
+        .map_err(avalon_chain::SettlementError::Storage)?;
+    let leaf_bytes = hex::decode(&leaf_hash_hex)
+        .map_err(|e: hex::FromHexError| avalon_chain::SettlementError::Storage(e.to_string()))?;
+    let root =
+        merkle::mth_of_hex_hashes(&hashes).map_err(avalon_chain::SettlementError::Storage)?;
+
+    if !merkle::verify_inclusion_proof(
+        &leaf_bytes,
+        leaf_index_usize,
+        tree_size_usize,
+        &proof,
+        &root,
+    ) {
         return Err(AppError::ProofVerificationFailed);
     }
 
@@ -337,6 +522,29 @@ impl From<LedgerEntryView> for LedgerEntryResponse {
     }
 }
 
+/// Issue #520: a mirrored entry (`mirrored_entries`) never has a pruned
+/// payload — the mirror-watcher only ever stores what it fetched and
+/// independently verified, and this codebase's retention/pruning (#208)
+/// only ever touches `ledger_entries`, this node's own authored rows.
+impl From<mirror::MirroredEntry> for LedgerEntryResponse {
+    fn from(entry: mirror::MirroredEntry) -> Self {
+        Self {
+            seq: entry.seq,
+            event_id: entry.event_id,
+            kind: entry.kind,
+            issuer: entry.issuer,
+            subject: entry.subject,
+            payload: entry.payload,
+            payload_pruned: false,
+            version: entry.version,
+            event_timestamp: entry.event_timestamp,
+            prev_hash: entry.prev_hash,
+            entry_hash: entry.entry_hash,
+            batch_id: entry.batch_id,
+        }
+    }
+}
+
 /// `GET /ledger/entries?since_seq={n}&limit={m}&subject={id}` — issue
 /// #299's bulk entries endpoint, the read path a mirror needs to hold real
 /// ledger content rather than only verify STHs. Public, unauthenticated,
@@ -358,6 +566,10 @@ impl From<LedgerEntryView> for LedgerEntryResponse {
 /// accepting it. Filtering by `subject` never changes an entry's
 /// hash-chain position — inclusion proofs for a filtered row still verify
 /// against the same global tree.
+///
+/// Issue #520: falls back to this node's own `mirrored_entries` when it has
+/// no locally-authored entries — see [`latest_sth`]'s doc comment for the
+/// "never blended" rationale shared by every handler in this module.
 pub async fn list_entries(
     State(state): State<AppState>,
     Query(query): Query<EntriesQuery>,
@@ -366,6 +578,20 @@ pub async fn list_entries(
         return Err(AppError::InvalidEntriesQuery);
     }
     let limit = query.limit.min(MAX_ENTRIES_LIMIT);
+
+    let entry_count = state.chain.entry_count().await?;
+    if entry_count == 0 {
+        let entries = mirror::mirrored_entries_since(
+            &state.pool,
+            state.chain.network_id(),
+            query.since_seq,
+            limit,
+            query.subject.as_deref(),
+        )
+        .await?;
+        return Ok(Json(entries.into_iter().map(Into::into).collect()));
+    }
+
     let entries = state
         .chain
         .list_entries_since_for_subject(query.since_seq, limit, query.subject.as_deref())

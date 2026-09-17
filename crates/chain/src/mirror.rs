@@ -31,6 +31,13 @@ pub struct ObservedSth {
     pub root_hash: String,
     pub signature: String,
     pub signing_key_id: String,
+    /// The STH's own `created_at`, as signed by its operator — distinct
+    /// from `observed_at` (when *this* node happened to poll it). Issue
+    /// #520: re-serving a mirrored STH later must report the value its
+    /// signature actually covers, never the moment this node happened to
+    /// see it, or an independent caller re-verifying the signature against
+    /// the pinned network key would fail.
+    pub created_at: OffsetDateTime,
     pub observed_at: OffsetDateTime,
 }
 
@@ -49,7 +56,27 @@ impl ObservedSth {
             root_hash: sth.root_hash.clone(),
             signature: sth.signature.clone(),
             signing_key_id: sth.signing_key_id.clone(),
+            created_at: sth.created_at,
             observed_at,
+        }
+    }
+}
+
+/// The mirror's own reconstruction of the STH it originally observed —
+/// issue #520, what a mirror-backed `GET /ledger/sth/*` fallback actually
+/// serves. Round-trips every signed field exactly (including `created_at`,
+/// per [`ObservedSth`]'s doc comment), so a caller re-verifying the
+/// signature against the pinned network key gets the same bytes the
+/// original operator signed, regardless of which node answered.
+impl From<ObservedSth> for SignedTreeHead {
+    fn from(obs: ObservedSth) -> Self {
+        SignedTreeHead {
+            tree_size: obs.tree_size,
+            root_hash: obs.root_hash,
+            network_id: obs.network_id,
+            signing_key_id: obs.signing_key_id,
+            signature: obs.signature,
+            created_at: obs.created_at,
         }
     }
 }
@@ -118,8 +145,8 @@ pub fn detect_equivocation(
 pub async fn insert_observation(pool: &PgPool, obs: &ObservedSth) -> Result<bool, SettlementError> {
     let result = sqlx::query(
         r#"
-        INSERT INTO observed_sths (source_url, network_id, tree_size, root_hash, signature, signing_key_id, observed_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO observed_sths (source_url, network_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (source_url, network_id, tree_size) DO NOTHING
         "#,
     )
@@ -129,6 +156,7 @@ pub async fn insert_observation(pool: &PgPool, obs: &ObservedSth) -> Result<bool
     .bind(&obs.root_hash)
     .bind(&obs.signature)
     .bind(&obs.signing_key_id)
+    .bind(obs.created_at)
     .bind(obs.observed_at)
     .execute(pool)
     .await
@@ -150,7 +178,7 @@ pub async fn observations_at(
 ) -> Result<Vec<ObservedSth>, SettlementError> {
     let rows = sqlx::query(
         r#"
-        SELECT source_url, network_id, tree_size, root_hash, signature, signing_key_id, observed_at
+        SELECT source_url, network_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at
         FROM observed_sths
         WHERE network_id = $1 AND tree_size = $2
         "#,
@@ -173,8 +201,39 @@ fn observed_sth_from_row(row: sqlx::postgres::PgRow) -> Result<ObservedSth, Sett
         root_hash: row.try_get("root_hash").map_err(get)?,
         signature: row.try_get("signature").map_err(get)?,
         signing_key_id: row.try_get("signing_key_id").map_err(get)?,
+        created_at: row.try_get("created_at").map_err(get)?,
         observed_at: row.try_get("observed_at").map_err(get)?,
     })
+}
+
+/// The one `observed_sths` row at `network_id`/`tree_size` whose
+/// `root_hash` equals `root_hash` exactly — issue #520, used to find the
+/// STH that actually corresponds to a Merkle root this node just
+/// recomputed from its own `mirrored_entries`, deliberately excluding any
+/// other (necessarily disagreeing) observation recorded at the same
+/// `network_id`/`tree_size`. `None` means either no peer ever reported
+/// this exact STH, or this node hasn't backfilled up to `tree_size` yet.
+pub async fn observed_sth_matching_root(
+    pool: &PgPool,
+    network_id: &str,
+    tree_size: i64,
+    root_hash: &str,
+) -> Result<Option<ObservedSth>, SettlementError> {
+    let row = sqlx::query(
+        r#"
+        SELECT source_url, network_id, tree_size, root_hash, signature, signing_key_id, created_at, observed_at
+        FROM observed_sths
+        WHERE network_id = $1 AND tree_size = $2 AND root_hash = $3
+        LIMIT 1
+        "#,
+    )
+    .bind(network_id)
+    .bind(tree_size)
+    .bind(root_hash)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    row.map(observed_sth_from_row).transpose()
 }
 
 /// Durably records `finding` in `equivocation_findings` and emits a loud,
@@ -495,6 +554,133 @@ pub struct MirrorProgress {
     pub verified_count: i64,
 }
 
+fn mirrored_entry_from_row(row: sqlx::postgres::PgRow) -> Result<MirroredEntry, SettlementError> {
+    let get = |e: sqlx::Error| SettlementError::Storage(e.to_string());
+    Ok(MirroredEntry {
+        source_url: row.try_get("source_url").map_err(get)?,
+        network_id: row.try_get("network_id").map_err(get)?,
+        seq: row.try_get("seq").map_err(get)?,
+        event_id: row.try_get("event_id").map_err(get)?,
+        kind: row.try_get("kind").map_err(get)?,
+        issuer: row.try_get("issuer").map_err(get)?,
+        subject: row.try_get("subject").map_err(get)?,
+        payload: row.try_get("payload").map_err(get)?,
+        event_timestamp: row.try_get("event_timestamp").map_err(get)?,
+        version: row.try_get("version").map_err(get)?,
+        prev_hash: row.try_get("prev_hash").map_err(get)?,
+        entry_hash: row.try_get("entry_hash").map_err(get)?,
+        batch_id: row.try_get("batch_id").map_err(get)?,
+        verified_tree_size: row.try_get("verified_tree_size").map_err(get)?,
+    })
+}
+
+/// Issue #520 — mirror-side equivalent of
+/// `PostgresSettlementProvider::list_entries_since_for_subject`: entries
+/// with `seq` strictly greater than `since_seq`, oldest first, pre-filtered
+/// to one `subject` when `Some`. What `GET /ledger/entries` falls back to
+/// once this node has no locally-authored entries of its own to serve.
+pub async fn mirrored_entries_since(
+    pool: &PgPool,
+    network_id: &str,
+    since_seq: i64,
+    limit: i64,
+    subject: Option<&str>,
+) -> Result<Vec<MirroredEntry>, SettlementError> {
+    let rows = match subject {
+        Some(subject) => sqlx::query(
+            r#"
+            SELECT source_url, network_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size
+            FROM mirrored_entries
+            WHERE network_id = $1 AND seq > $2 AND subject = $4
+            ORDER BY seq ASC
+            LIMIT $3
+            "#,
+        )
+        .bind(network_id)
+        .bind(since_seq)
+        .bind(limit)
+        .bind(subject)
+        .fetch_all(pool)
+        .await,
+        None => sqlx::query(
+            r#"
+            SELECT source_url, network_id, seq, event_id, kind, issuer, subject, payload, event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size
+            FROM mirrored_entries
+            WHERE network_id = $1 AND seq > $2
+            ORDER BY seq ASC
+            LIMIT $3
+            "#,
+        )
+        .bind(network_id)
+        .bind(since_seq)
+        .bind(limit)
+        .fetch_all(pool)
+        .await,
+    }
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+
+    rows.into_iter().map(mirrored_entry_from_row).collect()
+}
+
+/// Issue #520 — mirror-side equivalent of
+/// `PostgresSettlementProvider::entry_hashes_up_to`: the first `tree_size`
+/// mirrored entries' `entry_hash`, oldest first. Deliberately count-based
+/// (`ORDER BY seq ASC LIMIT`, not `WHERE seq <= tree_size`), same rationale
+/// as the authority-side version — and the same rank a mirror already
+/// assigned each entry's leaf index while backfilling
+/// (`mirror_watcher::backfill`'s `progress.verified_count`), so this
+/// reproduces the exact same tree an inclusion proof was originally
+/// verified against.
+pub async fn mirrored_entry_hashes_up_to(
+    pool: &PgPool,
+    network_id: &str,
+    tree_size: i64,
+) -> Result<Vec<String>, SettlementError> {
+    let rows = sqlx::query(
+        "SELECT entry_hash FROM mirrored_entries WHERE network_id = $1 ORDER BY seq ASC LIMIT $2",
+    )
+    .bind(network_id)
+    .bind(tree_size)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    rows.into_iter()
+        .map(|row| {
+            row.try_get::<String, _>("entry_hash")
+                .map_err(|e| SettlementError::Storage(e.to_string()))
+        })
+        .collect()
+}
+
+/// Issue #520 — mirror-side equivalent of
+/// `PostgresSettlementProvider::leaf_index_for_seq`: the 0-indexed Merkle
+/// leaf position of the mirrored entry at `seq`, among this network's
+/// mirrored entries ordered by `seq`. `None` if no mirrored entry has this
+/// exact `seq`.
+pub async fn mirrored_leaf_index_for_seq(
+    pool: &PgPool,
+    network_id: &str,
+    seq: i64,
+) -> Result<Option<i64>, SettlementError> {
+    let row = sqlx::query(
+        r#"
+        SELECT (SELECT COUNT(*) FROM mirrored_entries e2 WHERE e2.network_id = $1 AND e2.seq <= e1.seq) - 1 AS leaf_index
+        FROM mirrored_entries e1
+        WHERE e1.network_id = $1 AND e1.seq = $2
+        "#,
+    )
+    .bind(network_id)
+    .bind(seq)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    row.map(|r| {
+        r.try_get("leaf_index")
+            .map_err(|e| SettlementError::Storage(e.to_string()))
+    })
+    .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +693,7 @@ mod tests {
             root_hash: root_hash.to_string(),
             signature: "deadbeef".to_string(),
             signing_key_id: "test-key".to_string(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
             observed_at: OffsetDateTime::UNIX_EPOCH,
         }
     }
