@@ -1,10 +1,14 @@
 # Distributed Topology (Target Shape)
 
-**This is where the network is designed to end up, not what runs today.**
-Milestone 1 is one `avalon-server` process, one Postgres database, one
-settlement authority (see each linked doc's own "Today in the repo"
-section for the honest current state). This document exists so the
-multi-shard, multi-node, interest-routed direction decided across
+**Section 1 (Settlement) is now real, not just target shape** — as of
+2026-09-17 a genuine second settlement shard runs on a physically separate
+machine (`avalon-peer`), proving #527/#529/#532/#543 compose end to end
+across real hardware, not just local processes sharing one Postgres. See
+each diagram's own "Today in the repo" note below for exactly what's live
+versus still design. **Section 2 (Realtime) is still target shape** — one
+in-process broadcast channel today, no cross-node interest routing yet.
+This document exists so the multi-shard, multi-node, interest-routed
+direction decided across
 [#527](https://github.com/LunarVagabond/avalon-protocol/issues/527),
 [#535](https://github.com/LunarVagabond/avalon-protocol/issues/535), and
 [#542](https://github.com/LunarVagabond/avalon-protocol/issues/542) has one
@@ -29,21 +33,33 @@ They never share a mechanism. A node can run either, both, or neither.
 
 ## 1. Settlement: sharded authority, no designated aggregator
 
+**Real as of 2026-09-17, not just this diagram's target shape** — the two
+shards below are the primary sandbox node (`core`) and `avalon-peer`, a
+physically separate machine that mirrors `core` *and* independently
+authors its own real `game:...` shard with its own registered
+`shard_settlement` key. This is the smallest possible live instance of the
+picture: two shards, one witness (the primary, computing the cross-shard
+root over both). Nothing here is simulated or run as two local processes
+sharing one Postgres — see [settlement.md](settlement.md)'s "Cross-machine,
+real end to end" section for the exact proof.
+
 ```mermaid
 graph TD
-    subgraph "Shard: Integrator A"
-        A1[Integrator A's<br/>settlement node]
-        A2[Integrator A's<br/>own hash-chained log]
+    subgraph "Shard: core (primary sandbox node)"
+        A1[Primary settlement node<br/>real, running]
+        A2[core's<br/>own hash-chained log]
         A1 --> A2
     end
 
-    subgraph "Shard: Integrator B"
-        B1[Integrator B's<br/>settlement node]
-        B2[Integrator B's<br/>own hash-chained log]
+    subgraph "Shard: game:peer-shard-demo (avalon-peer)"
+        B1[avalon-peer<br/>real, physically separate machine]
+        B2[avalon-peer's<br/>own hash-chained log]
         B1 --> B2
+        BM[avalon-peer also mirrors<br/>the core shard above —<br/>mirror + authority, same node,<br/>different shards]
+        BM -.- B1
     end
 
-    subgraph "Shard: Integrator C (managed)"
+    subgraph "Shard: Integrator C (managed, target shape)"
         C1[Managed hosting node<br/>runs infra only]
         C2[Integrator C's<br/>own hash-chained log]
         C1 --> C2
@@ -53,14 +69,11 @@ graph TD
 
     A2 -- gossips its STH --> W
     B2 -- gossips its STH --> W
-    C2 -- gossips its STH --> W
+    C2 -. "target shape:<br/>not live yet" .-> W
 
-    W["Witness / mirror nodes<br/>(anyone can run one)"]
-    W -- "independently computes<br/>the SAME cross-shard root<br/>from public gossiped STHs" --> R1[Node X's computed<br/>global root]
-    W -- "independently computes<br/>the SAME cross-shard root" --> R2[Node Y's computed<br/>global root]
-
-    R1 -.- Check{{"R1 == R2 ?<br/>always yes, or it's<br/>cryptographically detectable"}}
-    R2 -.- Check
+    W["Witness / mirror nodes<br/>(anyone can run one —<br/>the primary plays this role today)"]
+    W -- "independently computes<br/>the cross-shard root<br/>from gossiped STHs —<br/>real today: shard_count 2, partial false" --> R1[Primary's computed<br/>cross-shard root]
+    W -.- R2["A second independent<br/>witness computing the same<br/>root — target shape,<br/>only one witness exists live today"]
 ```
 
 - Each shard is authoritative for its own events only — one legitimate
@@ -69,18 +82,29 @@ graph TD
 - **No node "does the gluing."** The cross-shard root is a fixed, public
   recipe over gossiped shard STHs — any witness computes the identical
   result independently. Losing any one witness changes nothing; there is
-  no privileged aggregator role to lose.
+  no privileged aggregator role to lose. Today only one witness (the
+  primary) actually computes it live — the "no privileged aggregator"
+  property is a design invariant of the recipe itself, not yet proven by
+  running a second, independent witness that agrees.
 - A shard operator can be the integrator itself, or a managed host running
   infrastructure on the integrator's behalf — the signing key never
-  leaves the integrator either way (`#531`).
-- A witness's `Check` step above isn't just "does the math match" — it
+  leaves the integrator either way (`#531`, still design-only, not the
+  live `avalon-peer` shard above which is self-hosted directly).
+- A witness's check step above isn't just "does the math match" — it
   also confirms each contributing shard's STH is signed by a key actually
   authorized for that shard (`#543`,
   [`./network-trust-anchors.md`](./network-trust-anchors.md)'s "Per-shard
   trust anchors" section), catching a consistent-but-unauthorized shard,
-  not just a math error.
+  not just a math error. This check is real and live-verified, not
+  simulated — `avalon-peer`'s shard STH is resolved and checked against
+  its actual DB-registered key.
+- A single node can hold **both** roles at once for **different** shards —
+  `avalon-peer` above mirrors `core` while authoring its own shard. See
+  [nodes.md](nodes.md)'s "A node's three configuration axes are
+  independent" section; this used to be a real bug (#573) before every
+  `/ledger/*` read became shard-scoped.
 - Tracked by: [#528](https://github.com/LunarVagabond/avalon-protocol/issues/528)
-  epic, sub-issues
+  epic (all sub-issues implemented and merged except #544), sub-issues
   [#529](https://github.com/LunarVagabond/avalon-protocol/issues/529)–[#533](https://github.com/LunarVagabond/avalon-protocol/issues/533),
   [#543](https://github.com/LunarVagabond/avalon-protocol/issues/543).
 
@@ -133,10 +157,15 @@ graph TD
 
 ## Today in the repo
 
-- Exactly one settlement authority exists (`avalon-server`, one Postgres).
-  Nothing described in section 1 is implemented yet — see
-  [settlement.md](settlement.md) and [nodes.md](nodes.md) for the current,
-  honest state.
+- Section 1 is real: two independent settlement authorities exist today
+  (the primary's `core` shard, `avalon-peer`'s `game:...` shard), on two
+  physically separate machines, with the primary computing a real
+  cross-shard root over both. What's still missing versus the full target
+  picture: only one witness exists (no second, independent witness has
+  been stood up to *prove* agreement rather than just compute it once),
+  and the managed-hosting shard (subgraph C above) is design-only (#531).
+  See [settlement.md](settlement.md) and [nodes.md](nodes.md) for the
+  current, honest state and exact live numbers.
 - Realtime fan-out is one in-process `tokio::broadcast` channel
   (`crates/server/src/presence.rs`) — it does not cross process boundaries
   at all today, let alone route by interest. Section 2's "small-mesh
