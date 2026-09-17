@@ -246,6 +246,17 @@ distinct self-hosting category — see
 for exactly how that stays unambiguous from both mirroring and a
 disconnected private fork.
 
+**A pure mirror's "nothing here yet" 404 says so (#519).** Before a mirror
+node has backfilled anything for a given shard, `GET /ledger/sth/latest`
+(and `/ledger/sth/{tree_size}`) 404 — same as a genuinely empty Settlement
+authority that hasn't committed anything either, which used to make the
+two indistinguishable to a caller. When the requested shard has a
+configured mirror source (`AVALON_MIRROR_PEERS`), the 404 body now
+includes `is_mirror: true` and `mirror_peers`, naming the peer to ask
+instead, rather than looking like a broken/misconfigured node. A genuine
+empty authority's 404 is unchanged — this never fabricates or synthesizes
+an STH, only enriches the error body explaining *why* nothing was found.
+
 ## Discovery
 
 A developer should not need to know `postgres://...` or
