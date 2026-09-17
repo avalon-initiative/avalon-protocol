@@ -146,6 +146,68 @@ section. The two are related only in that both exist because `network_id`
 identity has to be established and enforced somewhere once `dev`/`int`/
 `mainnet` are real, separate deployments; neither implements the other.
 
+## Per-shard trust anchors (#527 decided, #543 design)
+
+[#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)
+(decided) shards settlement authority per-integrator. That reopens this
+document's own core claim — a bare identifier proves nothing — one level
+down: a `shard_id` alone is exactly as untrustworthy as a bare
+`network_id` was before this document's mechanism existed. This section
+answers #543: how a client (or a witness computing #529's cross-shard
+root) verifies a shard's STH is genuinely signed by its claimed
+integrator, without inventing a second trust-anchor list.
+
+**Reuse issuer-key registration (#80/#84) rather than duplicating it.**
+"This key legitimately speaks for Integrator X" is already exactly what
+issuer-key registration establishes — today, scoped to attestation
+issuance. A shard's settlement-signing key is authorized the identical
+way: the integrator's root key authors an `issuer.key_added` event with a
+new `purpose: "shard_settlement"` field (alongside today's implicit
+`"attestation"` purpose), through the same root-authorizes-operational-key
+flow [`./issuers.md`](./issuers.md) already documents. Rotation and
+compromise reuse `issuer.key_revoked` unchanged — no new revocation
+mechanism, no new key-domain lifecycle. This key is still a distinct
+domain from an issuer's attestation-signing key (see `issuers.md`'s
+"Three key domains, kept apart" table, extended below) — they're
+authorized through the same event shape, never treated as
+interchangeable.
+
+**No second static trust-anchor file.** `trusted-networks.json` stays
+exactly what it is — one PR-reviewed entry per `network_id`, pinning the
+one key that matters at that granularity: the **core shard's** verify key
+(#532's reserved shard for identity/social/guild history). A
+per-integrator shard's trust anchor is never a second committed file
+entry (shard creation happens at integrator-registration velocity, not
+PR-review velocity) — it's the `issuer.key_added(purpose:
+shard_settlement)` event itself, which is already durable, signed,
+append-only history. Trusting a shard's key reduces to: fetch an
+inclusion proof for that event against the **core shard's** STH (the one
+thing actually pinned by `trusted-networks.json`), verify it the same way
+any inclusion proof is verified today. One pinned key at the root; every
+shard's authorization is transitively provable from it — not N
+independently-pinned keys to maintain trust in.
+
+**Composes with #529's cross-shard root.** A witness verifying the
+cross-shard root already fetches every contributing shard's STH; #543
+adds one more check per shard: resolve that shard's currently-authorized
+`shard_settlement` key(s) via the core-shard inclusion proof above, and
+confirm the shard's STH signature verifies against one of them —
+catching an internally-consistent-but-unauthorized shard (correct
+Merkle math, wrong or revoked signer), not just aggregation math.
+
+**Extends the key-domain table:**
+
+| Key | Belongs to | Governs | Tracked in |
+|---|---|---|---|
+| identity key | the identity | mutations to the identity's own data | #73 |
+| issuer key (`attestation`) | the integrator | attestations the integrator issues | #80 / #84 |
+| issuer key (`shard_settlement`) | the integrator, as a shard operator | signing that integrator's own shard's log entries / tree heads | #80 / #84 / #543 |
+| log operator key (core shard) | the core shard's operator | signing the core shard's log entries / tree heads | #39 |
+
+Implementation (the `purpose` field, per-shard key resolution via
+inclusion proof, and the witness-side cross-shard-root check) is separate
+follow-up work under epic #528, not part of this design pass.
+
 ## Today in the repo
 
 - `docs/trusted-networks.json` — the canonical list (one `local-dev`

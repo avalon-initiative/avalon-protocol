@@ -133,6 +133,15 @@ specified by #80's decision.
 They may share primitives; they are never the same key and never the same
 lifecycle.
 
+Sharded settlement (#527/#543) adds a fourth row, not a fourth mechanism:
+a shard operator's settlement-signing key is authorized through this exact
+same issuer-key registration flow, scoped with a `purpose:
+"shard_settlement"` field alongside the implicit `"attestation"` purpose
+above — see [`./network-trust-anchors.md`](./network-trust-anchors.md)'s
+"Per-shard trust anchors" section for the full design. Registration,
+rotation, and revocation all reuse this section's existing mechanics
+unchanged; only what the key is authorized to sign differs by purpose.
+
 ## Scenarios
 
 **E — Integrator A rotates its (operational) signing key.** Its root key authors

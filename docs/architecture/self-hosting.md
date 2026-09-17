@@ -69,6 +69,12 @@ operator both share it; a private instance does not.
   unreachable" and "this deployment deliberately forked" stays legible
   from the outside, by construction, the same way this document's mirror/
   fork boundary already is (see below).
+- **A `shard_id` alone proves nothing — the same standing rule this
+  document already applies to `network_id`.** See
+  [`./network-trust-anchors.md`](./network-trust-anchors.md)'s "Per-shard
+  trust anchors" section (#543) for how a client verifies a shard
+  operator's key is genuinely authorized for that shard, reusing issuer-key
+  registration rather than a second trust mechanism.
 
 ### Managed hosting for a shard operator without their own infrastructure (#531)
 
