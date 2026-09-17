@@ -56,6 +56,36 @@ pub struct IdentitySigningKeyRevokedPayload {
     pub signing_key_id: Uuid,
 }
 
+/// Issue #523: a WebAuthn passkey's *public* credential material only —
+/// never anything secret, since a platform authenticator never gives the
+/// server (or, by extension, replayed ledger history) anything but this in
+/// the first place. `passkey_data` is `webauthn-rs`'s own serialized
+/// `Passkey` (COSE public key, signature counter, transports, backup
+/// state) — the exact JSON `identity_keys.passkey_data` already stores,
+/// carried through unchanged so a mirror-only node can reconstruct a
+/// verification-ready credential from replayed history alone, not just an
+/// opaque blob. `credential_id` is base64-encoded, same convention
+/// `IdentitySigningKeyAddedPayload::public_key` already uses for raw bytes
+/// in a JSON payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IdentityPasskeyRegisteredPayload {
+    pub passkey_id: Uuid,
+    pub identity_id: Uuid,
+    pub credential_id: String,
+    pub passkey_data: serde_json::Value,
+    pub label: Option<String>,
+}
+
+/// Issue #523: network-attributed, same milestone-1 precedent
+/// `IdentitySigningKeyRevokedPayload`/`friend.requested` already use —
+/// revocation only ever narrows trust, so it doesn't need a higher signing
+/// bar than registration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IdentityPasskeyRevokedPayload {
+    pub passkey_id: Uuid,
+    pub identity_id: Uuid,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityRecoveryConfiguredPayload {
     pub guardian_ids: Vec<Uuid>,
@@ -614,6 +644,46 @@ mod tests {
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
             serde_json::from_value::<IdentitySigningKeyRevokedPayload>(json).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn identity_passkey_registered_round_trips() {
+        let payload = IdentityPasskeyRegisteredPayload {
+            passkey_id: Uuid::nil(),
+            identity_id: Uuid::nil(),
+            credential_id: "base64credentialid".to_string(),
+            passkey_data: serde_json::json!({"cred": "data"}),
+            label: Some("Work laptop".to_string()),
+        };
+        let json = serde_json::json!({
+            "passkey_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": "00000000-0000-0000-0000-000000000000",
+            "credential_id": "base64credentialid",
+            "passkey_data": {"cred": "data"},
+            "label": "Work laptop",
+        });
+        assert_eq!(serde_json::to_value(&payload).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<IdentityPasskeyRegisteredPayload>(json).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn identity_passkey_revoked_round_trips() {
+        let payload = IdentityPasskeyRevokedPayload {
+            passkey_id: Uuid::nil(),
+            identity_id: Uuid::nil(),
+        };
+        let json = serde_json::json!({
+            "passkey_id": "00000000-0000-0000-0000-000000000000",
+            "identity_id": "00000000-0000-0000-0000-000000000000",
+        });
+        assert_eq!(serde_json::to_value(&payload).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<IdentityPasskeyRevokedPayload>(json).unwrap(),
             payload
         );
     }

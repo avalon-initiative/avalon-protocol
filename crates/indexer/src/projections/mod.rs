@@ -17,6 +17,7 @@
 pub mod attestations;
 pub mod friendships;
 pub mod guild_rosters;
+pub mod identity_passkeys;
 pub mod integrator_bindings;
 pub mod integrator_data_instances;
 pub mod integrator_recognitions;

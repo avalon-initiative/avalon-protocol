@@ -14,22 +14,40 @@
 //! tables with different security properties, so they get different
 //! endpoints rather than being folded into one.
 //!
-//! No protocol event is emitted for adding or revoking a passkey:
-//! `docs/architecture/identity.md`'s durability table classifies WebAuthn
-//! passkeys as "operational state, not an event" — same as the very first
-//! passkey `handlers::register_finish` writes today, which has never emitted
-//! anything of its own beyond `identity.created`.
+//! **Issue #523** (Part 1 of #521's decision): registering or revoking a
+//! passkey now also emits a durable, mirrorable
+//! `identity.passkey_registered`/`.passkey_revoked` event carrying the
+//! credential's *public* material only — so a node that only ever mirrored
+//! an identity's ledger history (never ran the WebAuthn ceremony itself)
+//! can still independently verify a fresh login for it. `identity_keys`
+//! itself stays this (live, authoring) node's own local source of truth,
+//! unchanged — the new event exists for `avalon_indexer::projections::identity_passkeys`
+//! (populated here via `state.indexer.apply_in_tx` alongside the outbox
+//! enqueue, same dual-write shape `recognitions.rs` already uses), which a
+//! mirror-only node's replay reconstructs the same table from. Passkeys
+//! registered before this landed have no such event — see
+//! `docs/architecture/identity.md`'s durability table for the honest
+//! "only new registrations are portable" note this leaves.
 //!
-//! Revoking a passkey is a hard delete, not a soft `revoked_at` flag (unlike
-//! `identity_signing_keys`): nothing else references a `identity_keys` row
-//! by id (no event payload, no other table's foreign key), and
-//! `handlers::fetch_passkeys` has no revoked-state filter to keep in sync —
-//! a deleted row simply can no longer authenticate, which is exactly what
-//! "revoke a login credential" should mean.
+//! Revoking a passkey stays a hard delete from `identity_keys` (unlike
+//! `identity_signing_keys`'s soft `revoked_at`): nothing else references an
+//! `identity_keys` row by id, and `handlers::fetch_passkeys` has no
+//! revoked-state filter to keep in sync — a deleted row simply can no
+//! longer authenticate locally. The new `identity.passkey_revoked` event
+//! (and `indexer_identity_passkeys.revoked_at`, soft on purpose so a
+//! mirror-only node keeps an audit trail) is what lets a *different* node
+//! learn the same fact.
 
+use avalon_protocol::event_payloads::{
+    IdentityPasskeyRegisteredPayload, IdentityPasskeyRevokedPayload,
+};
+use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
+use avalon_protocol::ids::GlobalId;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
@@ -38,7 +56,12 @@ use webauthn_rs::prelude::*;
 
 use crate::error::AppError;
 use crate::handlers::authenticate;
+use crate::outbox;
 use crate::state::AppState;
+
+fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
+    GlobalId::new("identity", &identity_id.to_string(), "self", verb)
+}
 
 const CEREMONY_TTL_MINUTES: i64 = 5;
 const ADD_PASSKEY_CEREMONY_KIND: &str = "add_passkey";
@@ -199,6 +222,8 @@ pub async fn register_finish(
     let passkey_json = serde_json::to_value(&passkey).expect("Passkey should serialize");
     let credential_id: &[u8] = passkey.cred_id().as_ref();
 
+    let mut tx = state.pool.begin().await?;
+
     let inserted = sqlx::query(
         r#"
         INSERT INTO identity_keys (identity_id, credential_id, passkey_data, label)
@@ -210,13 +235,43 @@ pub async fn register_finish(
     .bind(credential_id)
     .bind(&passkey_json)
     .bind(&body.label)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+    let passkey_id: Uuid = inserted.try_get("id")?;
+    let added_at: OffsetDateTime = inserted.try_get("added_at")?;
+
+    // Issue #523: durable, mirrorable public credential material — see
+    // this module's own doc comment update and
+    // `avalon_protocol::event_payloads::IdentityPasskeyRegisteredPayload`'s
+    // doc comment for why this carries the full serialized `Passkey`
+    // rather than just an opaque reference.
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: ProtocolEventKindVariant::IdentityPasskeyRegistered
+            .as_str()
+            .to_string(),
+        issuer: identity_ref(identity_id, "passkey_registered"),
+        subject: identity_ref(identity_id, "passkey_registered"),
+        payload: serde_json::to_value(IdentityPasskeyRegisteredPayload {
+            passkey_id,
+            identity_id,
+            credential_id: BASE64.encode(credential_id),
+            passkey_data: passkey_json,
+            label: body.label.clone(),
+        })
+        .expect("IdentityPasskeyRegisteredPayload should serialize"),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
+
+    tx.commit().await?;
 
     Ok(Json(PasskeyResponse {
-        id: inserted.try_get("id")?,
+        id: passkey_id,
         label: body.label,
-        added_at: inserted.try_get("added_at")?,
+        added_at,
     }))
 }
 
@@ -352,6 +407,29 @@ pub async fn revoke_passkey(
     if deleted.rows_affected() == 0 {
         return Err(AppError::PasskeyNotFound);
     }
+
+    // Issue #523: a mirror-only node must reject a login against a
+    // credential it has also seen revoked, via mirrored history alone —
+    // same "revocation must be durable, not just locally deleted"
+    // invariant `devices::revoke_device`'s `identity.signing_key_revoked`
+    // already establishes for the signing-key domain.
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: ProtocolEventKindVariant::IdentityPasskeyRevoked
+            .as_str()
+            .to_string(),
+        issuer: identity_ref(identity_id, "passkey_revoked"),
+        subject: identity_ref(identity_id, "passkey_revoked"),
+        payload: serde_json::to_value(IdentityPasskeyRevokedPayload {
+            passkey_id,
+            identity_id,
+        })
+        .expect("IdentityPasskeyRevokedPayload should serialize"),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    outbox::enqueue(&mut tx, &event).await?;
+    state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
 

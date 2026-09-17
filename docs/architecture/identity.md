@@ -88,7 +88,7 @@ explicitly cleared, and an absent key means it was untouched.
 | `location` | yes | `profile.updated` | free text, capped at 100 characters, self-described only — never IP-derived or geocoded (#372) |
 | `main_guild` | yes | `profile.updated` | a pointer to one of this identity's own current guild memberships (no ticket — see below); must name a guild the identity is currently a member of, checked server-side against `guild_members`; also cleared automatically, in the same transaction, if the identity leaves the guild it points at |
 | future title / labels | classify when added | `profile.updated` | the rule: promised-durable means it emits, or it isn't promised |
-| WebAuthn passkey(s) | operational state, not an event | — | `identity_keys` table; see below |
+| WebAuthn passkey(s) | yes, as of #523 (Part 1 of #521's decision) | `identity.passkey_registered`/`.passkey_revoked` | `identity_keys` table (authoring node's own local source of truth) / `indexer_identity_passkeys` projection (what a mirror-only node reconstructs from replayed history alone); see below. Public credential material only, never anything secret. Passkeys registered before #523 landed have no such event — only newly-registered credentials are portable this way; a pre-existing passkey still works for local login on the node it was registered on, it just isn't verifiable from a different node's mirrored history |
 | event-signing public key | yes, at registration | `identity.created`'s issuer | see below |
 | credentials (password hash) | **no**, pruned entirely | — | #73, done |
 | sessions / tokens | **no** | — | ephemeral server state |
@@ -118,7 +118,13 @@ once):
   another, and each is independently nameable and revocable — mirroring the
   #135/#145 signing-key device list's UX, but against `identity_keys`, a
   different table with a different security property (see #200's own note
-  below).
+  below). As of #523, registering or revoking a passkey also emits a durable
+  `identity.passkey_registered`/`.passkey_revoked` event carrying its public
+  credential material — so a node that only ever mirrored this identity's
+  ledger history can independently verify a fresh login for it, not just the
+  node the passkey was originally registered on. This is a separate,
+  additive fact about the *passkey* only; it does not change anything about
+  how the signing key below is stored or recovered.
 - **A raw Ed25519 key** (`identity_signing_keys` table) proves authorship of a
   specific durable event. It signs `identity.created` at registration —
   `issuer` on that event is `identity:<id>:self:created`, not
@@ -314,7 +320,10 @@ key* (what authenticates an identity's authored events) — recovering or
 granting one never by itself authenticates a login. The WebAuthn passkey
 has no equivalent client-storage decision here: it never leaves the
 platform authenticator, already synced across devices by whatever passkey
-provider the identity's owner uses.
+provider the identity's owner uses. Separately, as of #523, the passkey's
+*public* credential material (never anything secret, same as everything
+above) is now durable/mirrored — a distinct fact from this section's
+signing-key custody story, not a change to it.
 
 ### Social recovery via M-of-N guardians (#201)
 

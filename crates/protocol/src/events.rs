@@ -43,6 +43,8 @@ pub enum ProtocolEventKindVariant {
     IdentityCreated,
     IdentitySigningKeyAdded,
     IdentitySigningKeyRevoked,
+    IdentityPasskeyRegistered,
+    IdentityPasskeyRevoked,
     IdentityRecoveryConfigured,
     IdentityRecoveryRequested,
     IdentityRecoveryApproved,
@@ -109,6 +111,8 @@ impl ProtocolEventKind {
         ProtocolEventKindVariant::IdentityCreated,
         ProtocolEventKindVariant::IdentitySigningKeyAdded,
         ProtocolEventKindVariant::IdentitySigningKeyRevoked,
+        ProtocolEventKindVariant::IdentityPasskeyRegistered,
+        ProtocolEventKindVariant::IdentityPasskeyRevoked,
         ProtocolEventKindVariant::IdentityRecoveryConfigured,
         ProtocolEventKindVariant::IdentityRecoveryRequested,
         ProtocolEventKindVariant::IdentityRecoveryApproved,
@@ -173,6 +177,8 @@ impl ProtocolEventKindVariant {
             ProtocolEventKindVariant::IdentityCreated => "identity.created",
             ProtocolEventKindVariant::IdentitySigningKeyAdded => "identity.signing_key_added",
             ProtocolEventKindVariant::IdentitySigningKeyRevoked => "identity.signing_key_revoked",
+            ProtocolEventKindVariant::IdentityPasskeyRegistered => "identity.passkey_registered",
+            ProtocolEventKindVariant::IdentityPasskeyRevoked => "identity.passkey_revoked",
             ProtocolEventKindVariant::IdentityRecoveryConfigured => "identity.recovery_configured",
             ProtocolEventKindVariant::IdentityRecoveryRequested => "identity.recovery_requested",
             ProtocolEventKindVariant::IdentityRecoveryApproved => "identity.recovery_approved",
@@ -348,6 +354,14 @@ mod tests {
             (
                 ProtocolEventKindVariant::IdentitySigningKeyRevoked,
                 "identity.signing_key_revoked",
+            ),
+            (
+                ProtocolEventKindVariant::IdentityPasskeyRegistered,
+                "identity.passkey_registered",
+            ),
+            (
+                ProtocolEventKindVariant::IdentityPasskeyRevoked,
+                "identity.passkey_revoked",
             ),
             (
                 ProtocolEventKindVariant::IdentityRecoveryConfigured,

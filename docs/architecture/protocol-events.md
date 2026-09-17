@@ -211,6 +211,19 @@ where an emitter is genuinely signed, it's called out explicitly.
   Ed25519 key, verified the same way as `identity.created`) and
   `identity.signing_key_revoked` when a key is revoked
   (network-attributed).
+- **`crates/server/src/passkeys.rs`** and **`crates/server/src/handlers.rs`**
+  (#523, Part 1 of #521's decision) — `identity.passkey_registered` (the
+  identity's very first passkey, from `handlers::register_finish`, and every
+  later one from `passkeys::register_finish`) and `identity.passkey_revoked`
+  (`passkeys::revoke_passkey`), both network-attributed. Payload carries the
+  credential's *public* material only (base64 `credential_id`, the full
+  serialized WebAuthn `Passkey`, an optional `label`) — never anything
+  secret. Lets a node that only ever mirrored an identity's ledger history
+  verify a fresh login for it; `avalon_indexer::projections::identity_passkeys`
+  is what a mirror-only node's replay reconstructs
+  (`indexer_identity_passkeys`), while an authoring node keeps writing
+  `identity_keys` directly as before, applying the same event to its own
+  projection alongside it (same dual-write shape `recognitions.rs` uses).
 - **`crates/server/src/integrators.rs`** (#26) — `game.registered` on
   `POST /integrations`. `issuer`/`subject` are both `game:<slug>:self:registered`
   (`integrator_ref`). Network-attributed rather than integrator-key-signed — nothing has
