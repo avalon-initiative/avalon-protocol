@@ -42,6 +42,7 @@ protobuf-parse.workspace = true
 protobuf-json-mapping.workspace = true
 tempfile.workspace = true
 semver.workspace = true
+redis.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

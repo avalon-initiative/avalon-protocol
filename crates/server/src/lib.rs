@@ -35,6 +35,7 @@ pub mod realtime_relay;
 pub mod rebuild;
 pub mod recognitions;
 pub mod recovery;
+pub mod redis_limits;
 pub mod registry;
 pub mod retention;
 pub mod settlement;
@@ -94,7 +95,7 @@ fn cors_layer_from_env() -> CorsLayer {
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 256;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: u64 = 600;
 
-fn max_concurrent_requests_from_env() -> usize {
+pub(crate) fn max_concurrent_requests_from_env() -> usize {
     std::env::var("AVALON_MAX_CONCURRENT_REQUESTS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -102,7 +103,7 @@ fn max_concurrent_requests_from_env() -> usize {
         .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS)
 }
 
-fn rate_limit_per_minute_from_env() -> u64 {
+pub(crate) fn rate_limit_per_minute_from_env() -> u64 {
     std::env::var("AVALON_RATE_LIMIT_PER_MINUTE")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -137,7 +138,13 @@ impl KeyExtractor for IntegratorOrIpKeyExtractor {
     }
 }
 
-pub fn router(state: AppState) -> Router {
+/// `redis_limiter` is `Some` only when `AVALON_REDIS_URL` is configured
+/// (issue #545) — built by the caller (`main.rs`), since connecting to
+/// Redis is async and this function isn't. `None` (the default) keeps
+/// every layer below exactly as it's always been; see
+/// `crate::redis_limits`'s own module doc comment for what changes when
+/// it's `Some`.
+pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterState>) -> Router {
     let max_concurrent_requests = max_concurrent_requests_from_env();
     let rate_limit_per_minute = rate_limit_per_minute_from_env();
     let governor_config = GovernorConfigBuilder::default()
@@ -149,7 +156,7 @@ pub fn router(state: AppState) -> Router {
         .finish()
         .expect("per_minute is always > 0, so period/burst_size are always non-zero");
 
-    Router::new()
+    let router = Router::new()
         .route("/identities/register/start", post(handlers::register_start))
         .route(
             "/identities/register/finish",
@@ -605,11 +612,31 @@ pub fn router(state: AppState) -> Router {
         // span — this is what makes request-scoped log correlation work
         // without hand-threading a request id through every handler.
         .layer(TraceLayer::new_for_http())
-        .layer(cors_layer_from_env())
-        // Issue #363: concurrency backpressures (bounded wait), never
-        // silently drops a request without a response.
-        .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
-        // Issue #363: per-key GCRA rate limit, 429 + Retry-After past the
-        // configured ceiling — see `IntegratorOrIpKeyExtractor`.
-        .layer(GovernorLayer::new(governor_config))
+        .layer(cors_layer_from_env());
+
+    // Issue #545: `AVALON_REDIS_URL` swaps both resource-limit layers for
+    // their Redis-backed equivalents (`crate::redis_limits`) — per-hoster
+    // shared state across that operator's own processes, never network-
+    // wide. Unset (the default), the in-process layers below are
+    // unchanged from #363.
+    match redis_limiter {
+        Some(limiter) => router
+            // Concurrency first, same relative order the in-process
+            // layers already use below.
+            .layer(axum::middleware::from_fn_with_state(
+                limiter.clone(),
+                redis_limits::concurrency_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                limiter,
+                redis_limits::rate_limit_middleware,
+            )),
+        None => router
+            // Issue #363: concurrency backpressures (bounded wait), never
+            // silently drops a request without a response.
+            .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
+            // Issue #363: per-key GCRA rate limit, 429 + Retry-After past
+            // the configured ceiling — see `IntegratorOrIpKeyExtractor`.
+            .layer(GovernorLayer::new(governor_config)),
+    }
 }
