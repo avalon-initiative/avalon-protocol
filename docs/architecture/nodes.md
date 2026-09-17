@@ -390,25 +390,34 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
   server-to-server mechanism, not yet consumed by client-side routing.
 - No export format for the log (that's #40).
-- **A real, physically-separate second node exists and is live-verified**
-  (`avalon-peer`, a distinct host on the same LAN, `~/avalon-protocol`
-  there, always reachable via `ssh avalon-peer` in this sandbox — see
-  `.claude/CLAUDE.md`). Deployed with `make stack-up-no-redis` (its own
-  Docker-Compose Postgres container, genuinely separate storage from the
-  primary's), `AVALON_NETWORK_ID=avalon-dev-local` (matching the primary,
-  required for its STHs to verify against the same pinned trust anchor —
-  see `docs/trusted-networks.json`), and `AVALON_MIRROR_PEERS=http://<primary-LAN-IP>:8080`
-  — no `AVALON_SETTLEMENT_SIGNING_KEY` needed at all, since a pure mirror
-  never calls local `chain.commit`. Fully converged (its `mirrored_entries`
-  count matches the primary's real `tree_size` exactly, same root hash) via
-  the existing mirror-watcher/backfill mechanism, no new code. **Read
-  availability during an outage is live-proven, not just structural**: with
-  the primary process stopped entirely (`make stop`, confirmed
-  connection-refused), `avalon-peer`'s `GET /ledger/sth/latest` and
-  `GET /ledger/entries` kept answering correctly from its own independently
-  -verified data — see the retention section's updated honesty note above
-  for exactly what this does and doesn't close (write availability during
-  an outage remains open).
+- **A real, physically-separate second node exists, is live-verified, and
+  now plays a dual role** (`avalon-peer`, a distinct host on the same LAN,
+  `~/avalon-protocol` there, always reachable via `ssh avalon-peer` in this
+  sandbox — see `.claude/CLAUDE.md`). Deployed with `make stack-up-no-redis`
+  (its own Docker-Compose Postgres container, genuinely separate storage
+  from the primary's), `AVALON_NETWORK_ID=avalon-dev-local` (matching the
+  primary, required for its STHs to verify against the same pinned trust
+  anchor — see `docs/trusted-networks.json`).
+  - **Mirrors the primary's core shard** (`AVALON_MIRROR_PEERS=http://<primary-LAN-IP>:8080`).
+    Fully converged (its `mirrored_entries` count matches the primary's
+    real `tree_size` exactly, same root hash) via the existing
+    mirror-watcher/backfill mechanism, no new code. **Read availability
+    during an outage is live-proven, not just structural**: with the
+    primary process stopped entirely (`make stop`, confirmed
+    connection-refused), `avalon-peer`'s `GET /ledger/sth/latest` and
+    `GET /ledger/entries` kept answering correctly from its own
+    independently-verified data — see the retention section's updated
+    honesty note above for exactly what this does and doesn't close
+    (write availability during an outage remains open).
+  - **Also independently authors a second, distinct shard** (2026-09-17):
+    `AVALON_SETTLEMENT_SIGNING_KEY` set to a real, registered
+    `shard_settlement` operational key (not a shared node-operator key —
+    see `docs/architecture/settlement.md`'s "Cross-machine, real end to
+    end" section for the full proof). Nothing here needed new code —
+    mirroring and authoring are independent capabilities a node can hold
+    simultaneously, and #532's routing + #543's DB-resolved trust already
+    composed correctly the first time they were pointed at two genuinely
+    separate machines.
 - **Archive-confirmation gating (#569) is real, implemented, and
   live-verified.** `GET /ledger/mirror-progress?network_id={id}`
   (`crate::settlement::mirror_progress`) plus
