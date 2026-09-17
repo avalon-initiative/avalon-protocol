@@ -998,6 +998,23 @@ pub struct LedgerBatchView {
 }
 
 impl PostgresSettlementProvider {
+    /// Issue #564: `commit`/`finalize`'s shared idempotency check —
+    /// `Ok(None)` if `batch_id` has never been committed on this node,
+    /// `Ok(Some(commitment))` if it has (a replayed retry). A thin
+    /// `Option`-returning wrapper around [`SettlementProvider::get_commitment`],
+    /// which itself returns `Err(BatchNotFound)` for "no such batch" — a
+    /// perfectly normal outcome here, not an error to propagate.
+    async fn existing_commitment(
+        &self,
+        batch_id: Uuid,
+    ) -> Result<Option<Commitment>, SettlementError> {
+        match self.get_commitment(batch_id).await {
+            Ok(commitment) => Ok(Some(commitment)),
+            Err(SettlementError::BatchNotFound) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
     /// Inserts `batch`'s events as `ledger_entries`, computes the
     /// resulting Merkle tree size/root, and inserts the `ledger_batches`
     /// row — everything `commit`/`finalize` (issue #531) share, up to but
@@ -1247,6 +1264,20 @@ impl PostgresSettlementProvider {
     /// signature both fail signature verification here — one check
     /// closes both failure modes, and the transaction rolls back on
     /// either, so a rejected finalize never burns real `seq`/tree state.
+    ///
+    /// **Idempotent on a replayed `batch_id`** (issue #564): if `batch.id`
+    /// already has a `ledger_batches` row — this exact finalize call was
+    /// already applied, e.g. the caller retried after a timeout without
+    /// knowing whether its first attempt landed — this returns that
+    /// existing [`Commitment`] directly rather than re-inserting (which
+    /// would otherwise fail on `ledger_batches`' `batch_id` primary key)
+    /// or re-verifying the signature against what may now be a stale tip.
+    /// This only ever de-duplicates retries against *this same node*; it
+    /// cannot and does not prevent two independent managed-hosting nodes
+    /// from each finalizing this `batch_id` into their own separate
+    /// ledgers — avoiding that is the caller's responsibility (finalize a
+    /// given batch against at most one host at a time; see
+    /// `avalon_sdk::managed_hosting`'s prepare-race/finalize-once client).
     pub async fn finalize(
         &self,
         batch: &EventBatch,
@@ -1255,6 +1286,20 @@ impl PostgresSettlementProvider {
         signature_hex: &str,
         verify_key: &ed25519_dalek::VerifyingKey,
     ) -> Result<Commitment, SettlementError> {
+        if let Some(existing) = self.existing_commitment(batch.id).await? {
+            // A normal (non-replayed) `finalize` reports `committed_at` as
+            // the caller-signed `created_at`, not `ledger_batches`' own DB
+            // timestamp (see this method's return below) — a legitimate
+            // replay resends that exact same `created_at`, so echo it back
+            // here too rather than the DB row's insert time, keeping a
+            // replayed call's return value indistinguishable from the
+            // original's.
+            return Ok(Commitment {
+                committed_at: created_at,
+                ..existing
+            });
+        }
+
         let mut tx = self
             .pool
             .begin()
@@ -1300,7 +1345,13 @@ impl PostgresSettlementProvider {
 
 #[async_trait]
 impl SettlementProvider for PostgresSettlementProvider {
+    /// Issue #564: same replayed-`batch_id` idempotency as [`Self::finalize`]
+    /// — see its doc comment.
     async fn commit(&self, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+        if let Some(existing) = self.existing_commitment(batch.id).await? {
+            return Ok(existing);
+        }
+
         let mut tx = self
             .pool
             .begin()
