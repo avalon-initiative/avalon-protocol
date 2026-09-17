@@ -65,12 +65,13 @@ services:
       # 0.0.0.0 so the process actually accepts connections from outside
       # its own container — this is not the same exposure as binding
       # 0.0.0.0 on the host directly; the port publish below is what
-      # controls host-side reachability, kept loopback-only exactly like
-      # the native dev flow's 127.0.0.1:8080 default (see .env.example's
-      # own comment on AVALON_SERVER_ADDR).
+      # controls host-side reachability. Bound to this host's LAN IP (via
+      # AVALON_HOST_IP, not 0.0.0.0) so a peer node on the same LAN can
+      # reach it. Defaults to loopback-only if unset, matching the native
+      # dev flow's 127.0.0.1:8080 default (see .env.example).
       AVALON_SERVER_ADDR: 0.0.0.0:8080
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${AVALON_HOST_IP:-127.0.0.1}:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
