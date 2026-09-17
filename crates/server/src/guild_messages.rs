@@ -96,7 +96,7 @@ fn validate_message_body(body: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub channel_id: Uuid,
@@ -311,6 +311,11 @@ pub async fn send_message(
     // broadcast, no receivers is not an error); a client falls back to the
     // paginated `GET` above if it misses this.
     state.chat.publish_channel_message(response.clone());
+    // Issue #539: reach subscribers connected to a different node.
+    tokio::spawn(crate::realtime_relay::relay_to_peers(
+        state.clone(),
+        crate::realtime_relay::RelayEvent::ChannelMessage(response.clone()),
+    ));
     Ok(Json(response))
 }
 
@@ -446,6 +451,14 @@ pub async fn delete_message(
     state
         .chat
         .publish_channel_message_deleted(channel_id, message_id);
+    // Issue #539: reach subscribers connected to a different node.
+    tokio::spawn(crate::realtime_relay::relay_to_peers(
+        state.clone(),
+        crate::realtime_relay::RelayEvent::ChannelMessageDeleted {
+            channel_id,
+            message_id,
+        },
+    ));
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 

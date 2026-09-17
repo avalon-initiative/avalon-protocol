@@ -30,6 +30,7 @@ pub mod outbox;
 pub mod passkeys;
 pub mod presence;
 pub mod proto_schema;
+pub mod realtime_relay;
 pub mod rebuild;
 pub mod recognitions;
 pub mod recovery;
@@ -587,6 +588,9 @@ pub fn router(state: AppState) -> Router {
         .route("/nodes/announce", post(nodes::announce))
         .route("/nodes/peers", get(nodes::list_peers))
         .route("/nodes/status", get(nodes::status))
+        // Issue #539: one-hop live realtime event relay across nodes,
+        // built on the peer table above — see `crate::realtime_relay`.
+        .route("/nodes/relay", post(realtime_relay::relay_handler))
         .with_state(state)
         // Issue #265: every HTTP request gets a tracing span
         // (method/path/status/latency), and any `tracing::info!`/`error!`

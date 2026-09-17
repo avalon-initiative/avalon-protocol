@@ -100,6 +100,37 @@ impl PresenceStore {
         active_in: Option<Uuid>,
     ) -> OffsetDateTime {
         let now = OffsetDateTime::now_utc();
+        self.apply(identity_id, status, active_in, now);
+        now
+    }
+
+    /// Issue #539: applies a presence update this node received via
+    /// cross-node relay (`crate::realtime_relay`), rather than one
+    /// published directly by a caller of this node. Never itself
+    /// triggers another relay — `realtime_relay::relay_handler` calls
+    /// this instead of `set` precisely so a relayed update updates this
+    /// node's own local store/broadcast without bouncing back out again.
+    /// `updated_at` is the *origin* node's timestamp, preserved as-is
+    /// rather than re-stamped with this node's own clock — `seen_at`
+    /// (this node's own TTL clock) is still `Instant::now()`, since TTL
+    /// expiry is inherently a per-node concept.
+    pub fn apply_relayed(
+        &self,
+        identity_id: Uuid,
+        status: PresenceStatus,
+        active_in: Option<Uuid>,
+        updated_at: OffsetDateTime,
+    ) {
+        self.apply(identity_id, status, active_in, updated_at);
+    }
+
+    fn apply(
+        &self,
+        identity_id: Uuid,
+        status: PresenceStatus,
+        active_in: Option<Uuid>,
+        updated_at: OffsetDateTime,
+    ) {
         {
             let mut entries = self.entries.write().expect("presence lock poisoned");
             entries.insert(
@@ -107,7 +138,7 @@ impl PresenceStore {
                 PresenceEntry {
                     status,
                     active_in,
-                    updated_at: now,
+                    updated_at,
                     seen_at: Instant::now(),
                 },
             );
@@ -118,9 +149,8 @@ impl PresenceStore {
             identity_id,
             status,
             active_in,
-            updated_at: now,
+            updated_at,
         });
-        now
     }
 
     /// A missing entry reads as `Offline` with no invented history — never
@@ -183,7 +213,7 @@ struct PresenceView {
     updated_at: OffsetDateTime,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PresenceResponse {
     pub identity_id: Uuid,
     pub status: PresenceStatus,
@@ -298,12 +328,20 @@ pub async fn update_my_presence(
         set_hide_active_in(&state, identity_id, hide).await?;
     }
     let updated_at = state.presence.set(identity_id, body.status, None);
-    Ok(Json(PresenceResponse {
+    let response = PresenceResponse {
         identity_id,
         status: body.status,
         active_in: None,
         updated_at,
-    }))
+    };
+    // Issue #539: reach subscribers connected to a different node, not
+    // just this one — spawned, never awaited inline, so an unreachable
+    // peer never delays this response.
+    tokio::spawn(crate::realtime_relay::relay_to_peers(
+        state.clone(),
+        crate::realtime_relay::RelayEvent::Presence(response.clone()),
+    ));
+    Ok(Json(response))
 }
 
 /// The one rule an integrator's presence claim must satisfy: `active_in`, if set at
@@ -368,12 +406,17 @@ pub async fn update_integrator_presence(
     require_capability(&caller, Capability::PresencePublish, &state).await?;
 
     let updated_at = state.presence.set(identity_id, body.status, body.active_in);
-    Ok(Json(PresenceResponse {
+    let response = PresenceResponse {
         identity_id,
         status: body.status,
         active_in: body.active_in,
         updated_at,
-    }))
+    };
+    tokio::spawn(crate::realtime_relay::relay_to_peers(
+        state.clone(),
+        crate::realtime_relay::RelayEvent::Presence(response.clone()),
+    ));
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]

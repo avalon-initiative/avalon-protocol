@@ -313,7 +313,19 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   capability-aware routing (the SDK's own discovery, below, still takes a
   bare `server_url`) and any use of the peer table by settlement/mirror
   sync itself — this is purely peer discovery, independent of #40/#299's
-  trust model.
+  trust model. **One real consumer now exists**: #539's realtime relay
+  (`crate::realtime_relay`, see [`presence.md`](./presence.md)/
+  [`communication.md`](./communication.md)) reads each peer's `roles` to
+  decide who a live presence/chat event gets forwarded to — the first
+  place this peer table's `roles` field is actually read for anything
+  beyond bookkeeping.
+- **One-hop live realtime relay across nodes (#539, implementing #535's
+  decision)**: `POST /nodes/relay` (`crate::realtime_relay`) — see
+  [`presence.md`](./presence.md) and [`communication.md`](./communication.md)'s
+  own "Today in the repo" entries for the full mechanics. No auth (same
+  posture `GET /nodes/peers` already takes); single-hop by construction,
+  not by an origin-tracking field — see #542 for what changes once the
+  peer mesh stops being small and fully interconnected.
 - **Mirror-watcher verification is per-`network_id`, not one process-wide
   key** (#513/#515, closing a real gap the two-node LAN sandbox surfaced:
   `AVALON_MIRROR_PEERS` used to be verified against a single globally

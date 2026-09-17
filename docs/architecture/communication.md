@@ -254,6 +254,28 @@ into a Hub-only or integrator-only corner.
   ticket's own design note — `POST /conversations`'s
   idempotent-on-participant-set behavior is what makes "start or open" a
   single call.
+- **Cross-node relay (#539, implementing #535's decision).** `GET
+  /ws/messages` above is one process's own `ChatBus` broadcast — until
+  #539, it never reached a different `avalon-server` process, so a
+  guildmate connected to a different node than the sender simply never got
+  the live push (the paginated `GET` still eventually showed the message,
+  just without the live-push immediacy). `guild_messages::send_message`/
+  `delete_message` and `conversations::send_message` now also call
+  `crate::realtime_relay::relay_to_peers` right after their own local
+  `ChatBus::publish_*` call, posting once to every same-`network_id` peer
+  advertising a `realtime`/`gateway`/`combined` role. The receiving node's
+  `POST /nodes/relay` handler calls the exact same `ChatBus::publish_*`
+  methods directly — a relayed chat event only ever feeds that node's
+  local fan-out, **never** `guild_messages`/`conversation_messages`
+  Postgres tables (async at-rest replication of chat history to additional
+  nodes is #540, a separate, explicitly out-of-scope concern here). Single
+  hop by construction: the relay handler never calls `relay_to_peers`
+  again, so no origin-node bookkeeping is needed to prevent a loop — see
+  `crate::realtime_relay`'s own module doc comment, including the #542
+  caveat about what changes once the peer mesh stops being small and fully
+  interconnected. Live-verified with two real `avalon-server` processes
+  sharing one Postgres and a real websocket subscriber on the second node
+  (`crates/server/tests/realtime_relay.rs`).
 
 ## Decisions and tickets
 
