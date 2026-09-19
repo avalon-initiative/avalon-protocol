@@ -63,15 +63,24 @@ public class LiveTests
     }
 
     /// <summary>Presence reads default to friends-only visibility, so any test checking one
-    /// identity's view of another's real presence needs this first.</summary>
+    /// identity's view of another's real presence needs this first. Writes
+    /// `indexer_friendships` directly, not the old `friendships` table — that table has been
+    /// dead since issue #506 retargeted `crates/server/src/friends.rs` to read the indexer
+    /// projection instead, and a row seeded there is invisible to every read path now.</summary>
     private static async Task SeedFriendshipAsync(NpgsqlConnection conn, Guid x, Guid y)
     {
         var (a, b) = x.CompareTo(y) < 0 ? (x, y) : (y, x);
-        await using var cmd = new NpgsqlCommand("INSERT INTO friendships (a, b) VALUES ($1, $2)", conn);
+        await using var cmd = new NpgsqlCommand(
+            "INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())", conn);
         cmd.Parameters.AddWithValue(a);
         cmd.Parameters.AddWithValue(b);
         await cmd.ExecuteNonQueryAsync();
     }
+
+    /// <summary>A fresh, unique guild tag respecting the server's 2-5 character bound
+    /// (`crates/server/src/guilds.rs::validate_tag`) — pure hex, no prefix, so all 5
+    /// characters carry real entropy against this shared, long-lived Postgres instance.</summary>
+    private static string FreshGuildTag() => Guid.NewGuid().ToString("N").Substring(0, 5);
 
     private static async Task<Guid> CreateGuildAsync(HttpClient http, string baseUrl, string token, string tag)
     {
@@ -133,7 +142,7 @@ public class LiveTests
 
         var session = await Client().AuthenticateAsync(token);
         var granted = SessionForCapabilities(session, "guilds.read");
-        var guildId = await CreateGuildAsync(new HttpClient(), ServerUrl!, token, $"tag{Guid.NewGuid():N}".Substring(0, 8));
+        var guildId = await CreateGuildAsync(new HttpClient(), ServerUrl!, token, FreshGuildTag());
 
         var memberships = await granted.GuildsAsync();
 
@@ -150,7 +159,7 @@ public class LiveTests
         var (_, token) = await SeedIdentitySessionAsync(conn, $"guild-chatter-{Guid.NewGuid():N}");
 
         var http = new HttpClient();
-        var guildId = await CreateGuildAsync(http, ServerUrl!, token, $"tag{Guid.NewGuid():N}".Substring(0, 8));
+        var guildId = await CreateGuildAsync(http, ServerUrl!, token, FreshGuildTag());
 
         var session = await Client().AuthenticateAsync(token);
         var granted = SessionForCapabilities(session, "guilds.read", "guilds.chat");
@@ -173,6 +182,9 @@ public class LiveTests
         await conn.OpenAsync();
         var (aliceId, aliceToken) = await SeedIdentitySessionAsync(conn, $"alice-dm-{Guid.NewGuid():N}");
         var (bobId, bobToken) = await SeedIdentitySessionAsync(conn, $"bob-dm-{Guid.NewGuid():N}");
+        // Issue #269: conversation creation requires an existing relationship
+        // between every participant.
+        await SeedFriendshipAsync(conn, aliceId, bobId);
 
         var aliceSession = SessionForCapabilities(await Client().AuthenticateAsync(aliceToken), "messages.read", "messages.send");
         var bobSession = SessionForCapabilities(await Client().AuthenticateAsync(bobToken), "messages.read", "messages.send");
