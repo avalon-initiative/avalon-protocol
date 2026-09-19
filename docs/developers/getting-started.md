@@ -73,6 +73,47 @@ println!("Identity id: {}", session.identity().id.0);
 No capability grant needed for this much — `GET /me` only requires a valid
 session.
 
+## C# / Unity equivalent
+
+`bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works unmodified
+in Unity/IL2CPP) mirrors the same four steps — same method names translated
+to C# idiom, same two-call `authenticate` (`GET /me` + `GET /me/grants`),
+same typed exceptions in place of `SdkError`:
+
+```csharp
+using Avalon.Sdk;
+
+var client = new AvalonClient(new AvalonConfig(
+    serverUrl: "http://127.0.0.1:8080",
+    // Your integrator's own registered credential key id — empty string is
+    // fine for read-only calls that need no grant at all.
+    integratorCredentialKeyId: ""));
+
+Session session;
+try
+{
+    session = await client.AuthenticateAsync(sessionToken);
+}
+catch (AuthenticationFailedException)
+{
+    // The token itself was rejected — distinct from CapabilityNotGrantedException,
+    // which means the token is fine but a specific method's capability isn't granted.
+    throw;
+}
+
+Console.WriteLine($"Hello, {session.Profile.DisplayName}");
+Console.WriteLine($"Identity id: {session.Identity.Id}");
+```
+
+`AvalonClient`'s `HttpClient` is constructor-injected (`new AvalonClient(config, myHttpClient)`)
+so a Unity project can supply its own handler; a fresh one is used by default.
+See [`achievements.md`](achievements.md) for `GetAchievementsAsync`/
+`IssueAchievementAsync`, which additionally need `AvalonConfig.IntegratorSlug`/
+`SigningKey` — the C# `IssueAchievementAsync` signs with a pure-managed
+`BouncyCastle.Cryptography` Ed25519 implementation rather than a native
+library, keeping the core package Unity/IL2CPP-safe with no engine
+dependency.
+
 ## Where to go next
 
 - [`capabilities.md`](capabilities.md) — what else you can ask for, and what

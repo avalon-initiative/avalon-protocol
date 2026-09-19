@@ -345,27 +345,48 @@ protocol and the domain model in `crates/protocol`; they never pull in
   replays the same attestation id rather than minting a second one).
 - `AvalonConfig { server_url }` is the opposite of the `connect()` target; that
   gap is [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91).
-- `bindings/csharp/AvalonSdk/` — a real, building C# port of the friends/
-  presence, guilds, conversations, and sync-journal surface (issue #396):
-  `Social.cs` (`FriendsAsync`/`PresenceAsync`/`PresenceOfAsync`/
-  `UpdatePresenceAsync`/`SubscribePresenceAsync`, the last over
-  `ClientWebSocket` and a `System.Threading.Channels.ChannelReader<Presence>`),
-  `Guilds.cs` (`GuildsAsync`, `Guild(id)` → `GuildHandle` with `RosterAsync`/
-  `ChannelsAsync`/`EventsAsync`, `ChannelHandle` with `MessagesAsync`/
-  `SendAsync`), `Conversations.cs` (`ConversationsAsync`, `Conversation(id)` →
-  `ConversationHandle`, `DmAsync`), and `SyncJournal.cs` (an `ISyncJournal`
-  interface plus `FileJournal`, the same append-only `fsync`-per-write
-  JSON-lines reference implementation and crash-recovery behavior as the Rust
-  `FileJournal`, unit-tested against the same scenarios). `Session.cs`/
-  `AvalonClient.cs` grew the HTTP/token plumbing (`AuthenticateAsync` now
-  calls a real `GET /me` + `GET /me/grants`) the rest of the port needs — the
-  achievements stub from #51 is left as-is, out of #396's scope. Same
+- `bindings/csharp/AvalonSdk/` — a real, building C# port of the auth/session,
+  friends/presence, guilds, conversations, sync-journal, and achievements
+  surface (issues #51/#396): `AvalonClient.cs`/`Session.cs`
+  (`AuthenticateAsync` calls a real `GET /me` + `GET /me/grants` and
+  populates `Session.Identity`/`Session.Profile`, mirroring the Rust SDK's
+  `Session::identity()`/`profile()`), `Social.cs`
+  (`FriendsAsync`/`PresenceAsync`/`PresenceOfAsync`/`UpdatePresenceAsync`/
+  `SubscribePresenceAsync`, the last over `ClientWebSocket` and a
+  `System.Threading.Channels.ChannelReader<Presence>`), `Guilds.cs`
+  (`GuildsAsync`, `Guild(id)` → `GuildHandle` with
+  `RosterAsync`/`ChannelsAsync`/`EventsAsync`, `ChannelHandle` with
+  `MessagesAsync`/`SendAsync`), `Conversations.cs` (`ConversationsAsync`,
+  `Conversation(id)` → `ConversationHandle`, `DmAsync`), `SyncJournal.cs` (an
+  `ISyncJournal` interface plus `FileJournal`, the same append-only
+  `fsync`-per-write JSON-lines reference implementation and crash-recovery
+  behavior as the Rust `FileJournal`, unit-tested against the same
+  scenarios), and `Achievements.cs` (`GetAchievementsAsync`/
+  `IssueAchievementAsync`, the same challenge-response-plus-embedded-
+  signature ceremony as `crates/sdk/src/achievements.rs`'s single-claim
+  path, signed with a pure-managed `BouncyCastle.Cryptography` Ed25519
+  implementation rather than a native library — the smallest change that
+  keeps this Unity/IL2CPP-safe — and the same `Authenticity`/`Validity`/
+  `history` split, never a combined "trusted" boolean, per ADR #76). Bulk
+  issuance (#495) and revocation (#498) are Rust-side-only so far, no C#
+  equivalent yet. Typed exceptions
+  (`AuthenticationFailedException`/`CapabilityNotGrantedException`/
+  `AvalonRequestException`/`MissingIssuerCredentialsException`/
+  `AvalonWebSocketException`/`NotConversationParticipantException`) mirror
+  the Rust `SdkError` variants this SDK has real coverage for.
+  `AvalonClient`'s `HttpClient` is constructor-injected (a fresh instance by
+  default), so a Unity project or a test can supply its own handler. Same
   capability-check-before-any-request and no-visibility-scoping-yet (#87)
   posture as the Rust SDK throughout. `AvalonSdk.Tests/` covers it with
   `HttpMessageHandler`-stubbed unit tests plus opt-in live tests
-  (`AVALON_SERVER_URL`/`DATABASE_URL`) mirroring `crates/sdk/tests/social.rs`,
-  `guilds.rs`, and `conversations.rs`. `make csharp-build`/`make csharp-test`
-  pass.
+  (`AVALON_SERVER_URL`/`DATABASE_URL`, the latter an Npgsql-style
+  keyword/value string rather than `.env`'s own `postgres://` URI) mirroring
+  `crates/sdk/tests/social.rs`, `guilds.rs`, `conversations.rs`, and
+  `achievements.rs` — live-verified end to end against a real `avalon-server`
+  and Postgres: issuing an achievement and reading it back with its
+  authenticity/validity populated, and the no-signing-key-configured case
+  rejecting client-side without an HTTP call. `make csharp-build`/`make
+  csharp-test` pass.
 
 ## Decisions and tickets
 
