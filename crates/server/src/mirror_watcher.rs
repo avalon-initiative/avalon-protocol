@@ -702,13 +702,19 @@ async fn send_with_rate_limit_retry(
         {
             return Ok(response);
         }
+        // Issue #604: a `Retry-After: 0` (this rate limiter's GCRA
+        // algorithm regenerates tokens continuously, so "0 whole seconds"
+        // is a real, common answer, not "retry immediately") still needs
+        // a real, non-zero floor — retrying in an actual tight loop just
+        // re-hits the same still-exhausted token bucket.
         let wait = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
             .map(std::time::Duration::from_secs)
-            .unwrap_or(DEFAULT_BACKOFF);
+            .unwrap_or(DEFAULT_BACKOFF)
+            .max(DEFAULT_BACKOFF);
         attempt += 1;
         tracing::warn!(
             attempt,

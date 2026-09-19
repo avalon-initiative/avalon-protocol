@@ -141,13 +141,17 @@ async fn get_json_with_rate_limit_retry(
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
             && attempt < MAX_RATE_LIMIT_RETRIES
         {
+            // Issue #604: a `Retry-After: 0` still needs a real,
+            // non-zero floor — see the production fix's own comment in
+            // `crate::mirror_watcher::send_with_rate_limit_retry`.
             let wait = response
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok())
                 .map(std::time::Duration::from_secs)
-                .unwrap_or(DEFAULT_BACKOFF);
+                .unwrap_or(DEFAULT_BACKOFF)
+                .max(DEFAULT_BACKOFF);
             attempt += 1;
             tokio::time::sleep(wait).await;
             continue;
