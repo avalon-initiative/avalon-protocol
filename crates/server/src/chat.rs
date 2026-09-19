@@ -6,7 +6,7 @@
 //! [ADR #437](https://github.com/LunarVagabond/avalon-protocol/issues/437)'s
 //! freshness-tier policy for why chat/DMs are push, not poll.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -18,6 +18,7 @@ use crate::conversations;
 use crate::error::AppError;
 use crate::guild_messages;
 use crate::handlers::authenticate_token;
+use crate::interest::{InterestGuard, InterestScope};
 use crate::state::AppState;
 
 /// Same rationale as `presence::UPDATE_CHANNEL_CAPACITY`: bounded so a burst
@@ -126,8 +127,17 @@ enum ChatClientMessage {
 }
 
 async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid) {
-    let mut subscribed_channels: HashSet<Uuid> = HashSet::new();
-    let mut subscribed_conversations: HashSet<Uuid> = HashSet::new();
+    // Issue #583: one `InterestGuard` per subscribed channel/conversation,
+    // registering this connection's interest in the DHT (when enabled) for
+    // as long as it's held. Dropping the whole map when this function
+    // returns — any return path, not just a clean close — releases every
+    // guard it still holds, which is exactly "this connection's interest
+    // goes away" with no separate cleanup step needed. `HashMap` (not the
+    // `HashSet`s this replaced) since the guard itself, not just the id,
+    // needs to live somewhere; `.contains_key` below reads identically to
+    // the old `.contains`.
+    let mut subscribed_channels: HashMap<Uuid, InterestGuard> = HashMap::new();
+    let mut subscribed_conversations: HashMap<Uuid, InterestGuard> = HashMap::new();
     let mut updates = state.chat.subscribe();
 
     loop {
@@ -149,7 +159,9 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                                 let authorized = crate::channels::require_member(&state, guild_id, caller).await.is_ok()
                                     && crate::channels::fetch_channel(&state, guild_id, channel_id).await.is_ok();
                                 if authorized {
-                                    subscribed_channels.insert(channel_id);
+                                    subscribed_channels
+                                        .entry(channel_id)
+                                        .or_insert_with(|| state.interest.register(InterestScope::Channel(channel_id)));
                                 }
                             }
                             ChatClientMessage::SubscribeConversation { conversation_id } => {
@@ -158,7 +170,9 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                                 // block exists among participants) silently
                                 // drops the subscribe attempt.
                                 if conversations::require_unblocked_participant(&state, conversation_id, caller).await.is_ok() {
-                                    subscribed_conversations.insert(conversation_id);
+                                    subscribed_conversations
+                                        .entry(conversation_id)
+                                        .or_insert_with(|| state.interest.register(InterestScope::Conversation(conversation_id)));
                                 }
                             }
                         }
@@ -171,9 +185,9 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                 match update {
                     Ok(update) => {
                         let relevant = match &update {
-                            ChatUpdate::ChannelMessage(m) => subscribed_channels.contains(&m.channel_id),
-                            ChatUpdate::ChannelMessageDeleted { channel_id, .. } => subscribed_channels.contains(channel_id),
-                            ChatUpdate::ConversationMessage(m) => subscribed_conversations.contains(&m.conversation_id),
+                            ChatUpdate::ChannelMessage(m) => subscribed_channels.contains_key(&m.channel_id),
+                            ChatUpdate::ChannelMessageDeleted { channel_id, .. } => subscribed_channels.contains_key(channel_id),
+                            ChatUpdate::ConversationMessage(m) => subscribed_conversations.contains_key(&m.conversation_id),
                         };
                         if !relevant {
                             continue;

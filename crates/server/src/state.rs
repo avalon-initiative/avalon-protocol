@@ -71,4 +71,18 @@ pub struct AppState {
     /// map, for `crate::settlement`'s shard-scoped mirror reads. See
     /// `crate::settlement::ShardMirrorSources`'s own doc comment.
     pub shard_mirror_sources: crate::settlement::ShardMirrorSources,
+    /// Issue #583: local guild-channel/conversation subscriber refcounts —
+    /// always present (cheap, no config needed) regardless of whether the
+    /// DHT itself is enabled, so `crate::chat`'s subscribe handlers have
+    /// one code path either way. Only actually reaches the DHT when
+    /// `dht_commands` below is `Some`; see `crate::interest`'s own module
+    /// doc comment.
+    pub interest: crate::interest::InterestRegistry,
+    /// Issue #583: `Some` only when `AVALON_DHT_ENABLED` is set — the
+    /// handle #584's relay path (and this node's own interest-refresh
+    /// worker) send `crate::dht::DhtCommand`s through. `None` means this
+    /// node has no DHT identity at all yet (#582's own default-off
+    /// posture), so nothing here can look anything up or register
+    /// anything either.
+    pub dht_commands: Option<crate::dht::DhtCommandSender>,
 }

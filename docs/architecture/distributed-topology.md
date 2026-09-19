@@ -137,19 +137,28 @@ graph TD
   with total network size — a network with millions of nodes and a guild
   with 5 online members costs the same as a small network with the same
   5 members.
-- **Open, not yet decided:** what actually implements the rendezvous
-  lookup and the interest registry (a Redis-backed node per region/shard
-  is one candidate raised in discussion, not settled), and — critically —
-  **how that lookup itself avoids becoming a new single point of failure.**
-  If "who's interested in Guild-42" lives on exactly one box, losing that
-  box silently breaks delivery for every guild it was tracking, which is
-  the same class of mistake this whole redesign exists to avoid. Whatever
-  answers this must itself be mirrored to more than one node — the exact
-  mechanism is genuinely open, tracked in
-  [#542](https://github.com/LunarVagabond/avalon-protocol/issues/542).
-- Today's actual implementation (`#539`) is the small-mesh degenerate case
-  of this picture: full broadcast to a full peer table, correct for a
-  handful of nodes, explicitly flagged as not the end state.
+- **Decided (#542, closed): a libp2p Kademlia DHT (`rust-libp2p`'s `kad`
+  module) is the rendezvous lookup**, not a Redis-backed node per region
+  or any other single-box design — the "avoids becoming a new single
+  point of failure" requirement above is answered by kad's own
+  replication (a record lives on the several nodes closest to its key,
+  not one operator-chosen box), the production-proven approach IPFS/
+  Filecoin/Ethereum already use for the same problem. Tracked as epic
+  [#580](https://github.com/LunarVagabond/avalon-protocol/issues/580).
+  A node's `PeerId`/bootstrap into the DHT (`crate::dht`) is real, live-
+  verified across the two-node LAN sandbox (#582); registering/looking up
+  interest itself (`crate::interest`, "registers interest"/"looks up who
+  else cares" in the diagram above) is also real and live-verified —
+  `crate::interest::run_worker` re-puts a `PutRecord` under a hash of the
+  guild-channel/conversation id for as long as a local subscriber exists,
+  a lookup is a `GetRecord` against that same key (#583). **Not yet
+  wired into actual relay decisions** — `crate::realtime_relay` still
+  does today's full peer-table loop below; re-scoping it to call
+  `interest::lookup` instead is #584, still open.
+- Today's actual relay implementation (`#539`) is the small-mesh
+  degenerate case of this picture: full broadcast to a full peer table,
+  correct for a handful of nodes, explicitly flagged as not the end
+  state — see the #584 note just above for what replaces it.
 - Tracked by: [#538](https://github.com/LunarVagabond/avalon-protocol/issues/538)
   epic (implementation), [#542](https://github.com/LunarVagabond/avalon-protocol/issues/542)
   (the interest-scoping decision this section describes), [#362](https://github.com/LunarVagabond/avalon-protocol/issues/362)/[#292](https://github.com/LunarVagabond/avalon-protocol/issues/292)
@@ -167,10 +176,13 @@ graph TD
   See [settlement.md](settlement.md) and [nodes.md](nodes.md) for the
   current, honest state and exact live numbers.
 - Realtime fan-out is one in-process `tokio::broadcast` channel
-  (`crates/server/src/presence.rs`) — it does not cross process boundaries
-  at all today, let alone route by interest. Section 2's "small-mesh
-  degenerate case" isn't built yet either; it's the near-term target for
-  [#539](https://github.com/LunarVagabond/avalon-protocol/issues/539).
+  (`crates/server/src/presence.rs`/`crates/server/src/chat.rs`) fanned out
+  cross-node by `crate::realtime_relay`'s full-peer-table loop (#539) —
+  real, but not yet interest-scoped. Section 2's actual interest-scoped
+  mesh is now partly real: DHT bootstrap (#582) and the interest
+  registration/lookup primitive itself (#583) both work, live-verified;
+  `realtime_relay` calling that lookup instead of looping every peer is
+  #584, still open.
 - This document itself is new (filed alongside
   [#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)/[#535](https://github.com/LunarVagabond/avalon-protocol/issues/535)/[#542](https://github.com/LunarVagabond/avalon-protocol/issues/542))
   and will drift out of date as those tickets land — treat the linked
@@ -186,8 +198,9 @@ graph TD
   decided: one-hop realtime relay (small-mesh case), async at-rest
   replication, failover as a consequence
 - [#542](https://github.com/LunarVagabond/avalon-protocol/issues/542) —
-  open: interest-scoped routing and peer discovery at real scale,
-  including the still-unresolved rendezvous-availability question above
+  decided (closed): interest-scoped routing and peer discovery at real
+  scale via a libp2p Kademlia DHT — see section 2 above for the current
+  implementation state (epic #580)
 - [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) —
   no validator/consensus layer; still the reasoning both meshes rely on
 - [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) —

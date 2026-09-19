@@ -25,6 +25,7 @@ pub mod integrator_data;
 pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
 pub mod integrators;
+pub mod interest;
 pub mod issuer_registration;
 pub mod migrate;
 pub mod mirror_watcher;

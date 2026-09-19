@@ -118,16 +118,36 @@ async fn main() {
         tracing::error!("refusing to start: {e}");
         std::process::exit(1);
     });
-    let dht_identity = if let Some(dht_config) = dht_config {
+    let mut dht_identity = None;
+    let mut dht_commands = None;
+    if let Some(dht_config) = dht_config {
         let handle = avalon_server::dht::start(peers.clone(), dht_config).await;
         tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
-        Some(avalon_server::nodes::DhtIdentity {
+        dht_identity = Some(avalon_server::nodes::DhtIdentity {
             peer_id: handle.peer_id.to_string(),
             listen_addrs: handle.listen_addrs.iter().map(|a| a.to_string()).collect(),
-        })
-    } else {
-        None
-    };
+        });
+        dht_commands = Some(handle.commands);
+    }
+
+    // Moved ahead of `state`'s own construction (from its previous
+    // location just before `nodes::run_worker`'s spawn) so `own_base_url`
+    // is available here too, for issue #583's interest-refresh worker
+    // below — reusing the exact same `AVALON_NODE_URL` identity rather
+    // than a second parse of it.
+    let announce_config = avalon_server::nodes::AnnounceConfig::from_env(chain.network_id());
+
+    // Issue #583: always constructed (cheap, no config) so `crate::chat`'s
+    // subscribe handlers have one code path regardless of whether the DHT
+    // itself is enabled — see `AppState::interest`'s own doc comment.
+    let interest = avalon_server::interest::InterestRegistry::new();
+    if let Some(dht_commands) = dht_commands.clone() {
+        tokio::spawn(avalon_server::interest::run_worker(
+            interest.clone(),
+            dht_commands,
+            announce_config.own_base_url.clone(),
+        ));
+    }
 
     // Issue #313/#532: built here (rather than down by `run_worker`'s own
     // spawn, its previous location) so its issue #526 failure-tracking
@@ -178,6 +198,8 @@ async fn main() {
         // means zero behavior change.
         own_shard_id: std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string()),
         shard_mirror_sources: avalon_server::settlement::ShardMirrorSources::from_env(),
+        interest,
+        dht_commands,
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -231,8 +253,8 @@ async fn main() {
     // unconditionally, unlike the mirror-watcher above: even this
     // network's anchor node (an empty resolved peer list) still needs to
     // serve announce/list-peers requests from everyone else. See
-    // `crate::nodes`'s module doc for why.
-    let announce_config = avalon_server::nodes::AnnounceConfig::from_env(chain.network_id());
+    // `crate::nodes`'s module doc for why. (`announce_config` itself is
+    // built earlier now — see that site's comment.)
     tokio::spawn(avalon_server::nodes::run_worker(
         chain.clone(),
         peers,
