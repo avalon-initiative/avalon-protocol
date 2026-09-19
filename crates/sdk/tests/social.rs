@@ -74,10 +74,18 @@ fn client() -> AvalonClient {
 /// Presence reads default to friends-only visibility (`presence.rs`'s
 /// module doc comment) — a non-friend reads identically to a missing entry
 /// (`Offline`), so any test checking one identity's view of another's real
-/// presence needs this first.
+/// presence needs this first. Writes `indexer_friendships` directly, not
+/// the old `friendships` table — that table has been dead since issue
+/// #506 retargeted `crates/server/src/friends.rs` to read the indexer
+/// projection instead, and a row seeded there is invisible to every read
+/// path now (found live: this exact staleness was silently failing
+/// `presence_of_reflects_multiple_published_statuses` and
+/// `subscribe_presence_receives_a_live_update_pushed_by_another_identity`
+/// below, both of which depend on friends-only visibility actually seeing
+/// the seeded pair as friends).
 async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
-    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
         .bind(b)
         .execute(pool)

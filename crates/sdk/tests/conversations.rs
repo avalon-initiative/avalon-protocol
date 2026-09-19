@@ -57,10 +57,15 @@ async fn seed_identity_session(pool: &PgPool, display_name: &str) -> (Uuid, Stri
 }
 
 /// Issue #269: conversation creation now requires an existing relationship
-/// between every participant, so these tests need one seeded first.
+/// between every participant, so these tests need one seeded first. Writes
+/// `indexer_friendships` directly, not the old `friendships` table — that
+/// table has been dead since issue #506 retargeted
+/// `crates/server/src/friends.rs` to read the indexer projection instead,
+/// and a row seeded there is invisible to `create_conversation`'s
+/// relationship check now.
 async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
     let (a, b) = if x < y { (x, y) } else { (y, x) };
-    sqlx::query("INSERT INTO friendships (a, b) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO indexer_friendships (a, b, since) VALUES ($1, $2, now())")
         .bind(a)
         .bind(b)
         .execute(pool)
