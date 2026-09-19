@@ -48,6 +48,23 @@ pub struct PeerInfo {
     pub network_id: String,
     #[serde(with = "time::serde::rfc3339")]
     pub last_announced_at: OffsetDateTime,
+    /// Issue #582: this peer's libp2p `PeerId` (`to_string()`'s base58
+    /// form), when it runs the DHT (`AVALON_DHT_ENABLED`) — #580's own
+    /// identity, held *in addition to* this `base_url`-keyed one, not a
+    /// replacement (see `crate::dht`'s module doc for why no existing
+    /// identity in this codebase could be reused for it). `#[serde(default)]`
+    /// so an older peer's announce/response JSON (no such field yet)
+    /// deserializes as `None` rather than failing outright — the same
+    /// forward-compatibility posture #368's protocol-version floor already
+    /// established for this exact struct.
+    #[serde(default)]
+    pub libp2p_peer_id: Option<String>,
+    /// This peer's dialable libp2p multiaddrs, as reported by its own DHT
+    /// swarm at startup — empty when `libp2p_peer_id` is `None`, or when
+    /// the peer's own bind produced no externally-visible address in time
+    /// (see `crate::dht::start`).
+    #[serde(default)]
+    pub libp2p_listen_addrs: Vec<String>,
 }
 
 /// `Arc<RwLock<_>>` around a plain map, cheap to clone into [`AppState`] —
@@ -146,6 +163,12 @@ pub struct AnnounceRequest {
     pub roles: Vec<String>,
     pub protocol_version: String,
     pub network_id: String,
+    /// Issue #582 — see `PeerInfo::libp2p_peer_id`.
+    #[serde(default)]
+    pub libp2p_peer_id: Option<String>,
+    /// Issue #582 — see `PeerInfo::libp2p_listen_addrs`.
+    #[serde(default)]
+    pub libp2p_listen_addrs: Vec<String>,
 }
 
 /// `Deserialize` too: this is also the shape `run_worker` parses back out
@@ -183,6 +206,8 @@ pub async fn announce(
         protocol_version: body.protocol_version,
         network_id: body.network_id,
         last_announced_at: OffsetDateTime::now_utc(),
+        libp2p_peer_id: body.libp2p_peer_id,
+        libp2p_listen_addrs: body.libp2p_listen_addrs,
     });
 
     Ok(Json(AnnounceResponse {
@@ -238,6 +263,18 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
         stale,
         newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
     })
+}
+
+/// This node's own libp2p DHT identity (issue #582), computed once at
+/// startup by `crate::dht::start` — `None` when `AVALON_DHT_ENABLED` isn't
+/// set, in which case this node announces exactly as it did before #582
+/// existed. Threaded into [`run_worker`] so every outbound announce also
+/// tells peers how to find this node in the DHT, the same way `roles`/
+/// `protocol_version` already do for the HTTP peer table.
+#[derive(Debug, Clone)]
+pub struct DhtIdentity {
+    pub peer_id: String,
+    pub listen_addrs: Vec<String>,
 }
 
 /// This node's own outbound announce/bootstrap configuration.
@@ -351,6 +388,7 @@ pub async fn run_worker(
     chain: PostgresSettlementProvider,
     peers: PeerTable,
     config: AnnounceConfig,
+    dht_identity: Option<DhtIdentity>,
 ) {
     if config.peers.is_empty() {
         tracing::info!(
@@ -379,7 +417,16 @@ pub async fn run_worker(
     loop {
         if let Some(own_base_url) = &config.own_base_url {
             for peer in &config.peers {
-                match announce_to(&client, peer, own_base_url, &roles, &network_id).await {
+                match announce_to(
+                    &client,
+                    peer,
+                    own_base_url,
+                    &roles,
+                    &network_id,
+                    dht_identity.as_ref(),
+                )
+                .await
+                {
                     Ok(discovered) => {
                         for info in discovered {
                             if info.network_id == network_id {
@@ -405,6 +452,7 @@ async fn announce_to(
     own_base_url: &str,
     roles: &[String],
     network_id: &str,
+    dht_identity: Option<&DhtIdentity>,
 ) -> Result<Vec<PeerInfo>, String> {
     let response = client
         .post(format!("{peer_base_url}/nodes/announce"))
@@ -413,6 +461,10 @@ async fn announce_to(
             roles: roles.to_vec(),
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
             network_id: network_id.to_string(),
+            libp2p_peer_id: dht_identity.map(|d| d.peer_id.clone()),
+            libp2p_listen_addrs: dht_identity
+                .map(|d| d.listen_addrs.clone())
+                .unwrap_or_default(),
         })
         .send()
         .await
@@ -437,6 +489,8 @@ mod tests {
             protocol_version: "0.1.0".to_string(),
             network_id: "avalon-dev-local".to_string(),
             last_announced_at: announced_at,
+            libp2p_peer_id: None,
+            libp2p_listen_addrs: Vec::new(),
         }
     }
 
@@ -483,6 +537,8 @@ mod tests {
             protocol_version: protocol_version.to_string(),
             network_id: "avalon-dev-local".to_string(),
             last_announced_at: OffsetDateTime::now_utc(),
+            libp2p_peer_id: None,
+            libp2p_listen_addrs: Vec::new(),
         }
     }
 
@@ -600,5 +656,37 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_NODE_ROLES");
         }
+    }
+
+    #[test]
+    fn peer_info_deserializes_without_libp2p_fields_for_backward_compat() {
+        // Issue #582: a peer running a pre-#582 binary never sends these
+        // fields at all — `#[serde(default)]` must make that a `None`/
+        // empty deserialize, not a hard failure.
+        let json = r#"{
+            "base_url": "http://old-peer",
+            "roles": ["combined"],
+            "protocol_version": "0.1.0",
+            "network_id": "avalon-dev-local",
+            "last_announced_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let info: PeerInfo =
+            serde_json::from_str(json).expect("should deserialize without the new fields");
+        assert_eq!(info.libp2p_peer_id, None);
+        assert!(info.libp2p_listen_addrs.is_empty());
+    }
+
+    #[test]
+    fn announce_request_deserializes_without_libp2p_fields_for_backward_compat() {
+        let json = r#"{
+            "base_url": "http://old-peer",
+            "roles": ["combined"],
+            "protocol_version": "0.1.0",
+            "network_id": "avalon-dev-local"
+        }"#;
+        let req: AnnounceRequest =
+            serde_json::from_str(json).expect("should deserialize without the new fields");
+        assert_eq!(req.libp2p_peer_id, None);
+        assert!(req.libp2p_listen_addrs.is_empty());
     }
 }

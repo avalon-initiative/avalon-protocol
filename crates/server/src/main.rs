@@ -109,6 +109,26 @@ async fn main() {
 
     let peers = avalon_server::nodes::PeerTable::new();
 
+    // Issue #582/#580: this node's libp2p DHT identity, if
+    // `AVALON_DHT_ENABLED` is set — resolved (and, if enabled, the swarm
+    // bound and its worker spawned) before `announce_config` below so this
+    // node's very first outbound announce already carries it. `None` is
+    // every deployment's current behavior, unchanged.
+    let dht_config = avalon_server::dht::DhtConfig::from_env().unwrap_or_else(|e| {
+        tracing::error!("refusing to start: {e}");
+        std::process::exit(1);
+    });
+    let dht_identity = if let Some(dht_config) = dht_config {
+        let handle = avalon_server::dht::start(peers.clone(), dht_config).await;
+        tracing::info!(peer_id = %handle.peer_id, "avalon-server: libp2p DHT identity");
+        Some(avalon_server::nodes::DhtIdentity {
+            peer_id: handle.peer_id.to_string(),
+            listen_addrs: handle.listen_addrs.iter().map(|a| a.to_string()).collect(),
+        })
+    } else {
+        None
+    };
+
     // Issue #313/#532: built here (rather than down by `run_worker`'s own
     // spawn, its previous location) so its issue #526 failure-tracking
     // handle can be threaded into `AppState` below, before `remote_submit`
@@ -217,6 +237,7 @@ async fn main() {
         chain.clone(),
         peers,
         announce_config,
+        dht_identity,
     ));
 
     // Issue #545: per-hoster shared rate-limit/concurrency-ceiling state

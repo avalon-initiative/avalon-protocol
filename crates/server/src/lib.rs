@@ -12,6 +12,7 @@ pub mod conversations;
 pub mod cross_shard;
 pub mod device_pairing;
 pub mod devices;
+pub mod dht;
 pub mod discovery;
 pub mod error;
 pub mod friends;
