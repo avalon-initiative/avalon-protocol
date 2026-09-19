@@ -450,13 +450,53 @@ explicit peer configuration at all.
 Live-verified across the sandbox's three real, physically separate
 machines (primary sandbox host plus `avalon-peer`/`avalon-peer-two`; see
 `docs/architecture/nodes.md`'s own "Today in the repo" section for the
-exact topology and results): a node bootstrapped only from a second node,
-which was itself bootstrapped only from a third, discovered and began
-actively exchanging with the third node it was never directly configured
-to talk to; a shard authoritative on one machine was discovered, resolved,
-and verified from a peer with zero prior config about it; and a node
-configured with `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` began mirroring
-a shard it never had in `AVALON_MIRROR_PEERS`/`AVALON_KNOWN_SHARDS`.
+exact topology): a node bootstrapped only from a second node, which was
+itself bootstrapped only from a third, discovered and began actively
+exchanging with the third node it was never directly configured to talk
+to; a shard authoritative on one machine was discovered, resolved, and
+verified from a peer with zero prior config about it.
+
+**Two real bugs this live verification itself caught, not just
+theorized**, both fixed before this shipped:
+
+- `compute_for_this_node` used to be an either/or branch — a node's own
+  locally-authored shard silently dropped out of its own
+  `GET /ledger/cross-shard-root` response entirely (not even appearing in
+  `missing_shard_ids`) the moment *any* other shard became known via
+  config or gossip. Present since #529, never hit before because nothing
+  previously made "a node that both authors a shard and knows about
+  others" a common case — exactly what gossip now makes routine. Fixed to
+  always union the local shard in, never gated on anything else being
+  known too; a regression test
+  (`a_node_authoring_its_own_shard_keeps_it_once_another_shard_is_also_known`,
+  `crates/server/tests/shard_discovery.rs`) covers it.
+- `discover_and_verify_shard_peers` (the auto-mirror opt-in's own
+  verification step) fetched a discovered shard's STH with a bare
+  `GET /ledger/sth/latest`, omitting the `?shard_id=` query param
+  `crate::cross_shard`'s own fetch already knows to send (issue #573's
+  documented footgun) — so against a peer serving more than one shard
+  (mirroring one, authoring another, exactly `avalon-peer`'s own real
+  role in this sandbox), it silently fetched and then failed to verify
+  the *wrong* shard's STH, never auto-mirroring anything. `fetch_latest_sth`
+  now takes an explicit `shard_id: Option<&str>`, sent as a query param
+  when given.
+
+**Not fully verified end to end**: `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`
+actually beginning to mirror a discovered shard's entries. After the
+second fix above, the discovered shard's STH verifies correctly (confirmed
+live), but backfill on the test node was blocked by pre-existing,
+unrelated equivocation findings already recorded in this sandbox's shared
+database (`avalon list-equivocations` — synthetic-looking `peer-a-`/`peer-b-`
+sourced findings with an all-`f` root hash, almost certainly test
+contamination from earlier in this environment's life, not a real
+incident) — resolving those needs a deliberate operator action
+(`avalon resolve-equivocation`, see
+[`../maintainers/equivocation-response.md`](../maintainers/equivocation-response.md))
+this pass didn't have standing authorization to take unilaterally. The
+verification step it depends on (STH fetch + signature check against the
+correct shard) is confirmed correct; the final backfill-and-land-rows step
+is not yet independently confirmed and is worth a follow-up check once
+that database is cleaned up.
 
 ### Discovering a forwarding node's configured authority (#526)
 

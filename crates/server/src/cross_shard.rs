@@ -327,29 +327,45 @@ pub async fn fetch_and_compute(
     (root, shards)
 }
 
-/// Builds the response `GET /ledger/cross-shard-root` serves — either the
-/// full multi-shard fetch-and-aggregate path (`AVALON_KNOWN_SHARDS` set
-/// and/or at least one shard discovered via gossip, issue #599), or the
-/// one-shard degenerate default (neither): this node's own local STH
-/// alone, computed directly, no network calls.
+/// Builds the response `GET /ledger/cross-shard-root` serves. This node's
+/// own locally-authored shard (`state.own_shard_id`, `"core"` by default)
+/// is always included when it has any local history at all, resolved
+/// directly from `state.chain` rather than an HTTP round trip to itself —
+/// never gated behind whether any *other* shard happens to be known too.
+/// Before issue #599 this was an either/or branch (either the full
+/// multi-shard fetch-and-aggregate path, or a "no other shards known"
+/// degenerate default of just the local shard) — that silently dropped a
+/// node's own shard out of the aggregation the moment it also discovered
+/// (via gossip) or was configured with any other shard, which is exactly
+/// the shape a gossip-participating shard-authority node now commonly has.
+/// Any URL entry that happens to name this node's own shard (a
+/// self-referential gossip claim or static config entry) is removed from
+/// the fetch set — the local read is always used instead of fetching from
+/// itself.
 pub async fn compute_for_this_node(
     state: &AppState,
     config: Option<&KnownShardsConfig>,
 ) -> Result<(CrossShardRoot, Vec<ShardTreeHead>), avalon_chain::SettlementError> {
-    let urls = combined_shard_urls(config, &state.shard_registry);
-    if !urls.is_empty() {
+    let mut urls = combined_shard_urls(config, &state.shard_registry);
+    urls.remove(&state.own_shard_id);
+
+    let (mut shards, mut known): (Vec<ShardTreeHead>, BTreeSet<String>) = if urls.is_empty() {
+        (Vec::new(), BTreeSet::new())
+    } else {
         let static_verify_keys = config.map(|c| c.verify_keys.clone()).unwrap_or_default();
-        return Ok(fetch_and_compute(&state.pool, &urls, &static_verify_keys).await);
+        let (_urls_only_root, ext_shards) =
+            fetch_and_compute(&state.pool, &urls, &static_verify_keys).await;
+        (ext_shards, urls.keys().cloned().collect())
+    };
+
+    if let Some(sth) = state.chain.latest_signed_tree_head().await? {
+        known.insert(state.own_shard_id.clone());
+        shards.push(ShardTreeHead {
+            shard_id: state.own_shard_id.clone(),
+            sth,
+        });
     }
 
-    let shards = match state.chain.latest_signed_tree_head().await? {
-        Some(sth) => vec![ShardTreeHead {
-            shard_id: "core".to_string(),
-            sth,
-        }],
-        None => Vec::new(),
-    };
-    let known: BTreeSet<String> = shards.iter().map(|s| s.shard_id.clone()).collect();
     let root = compute_cross_shard_root_checked(&known, shards.clone(), OffsetDateTime::now_utc());
     Ok((root, shards))
 }

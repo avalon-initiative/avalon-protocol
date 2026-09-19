@@ -183,7 +183,7 @@ async fn discover_and_verify_shard_peers(
             continue;
         }
 
-        match fetch_latest_sth(client, &url).await {
+        match fetch_latest_sth(client, &url, Some(&shard_id)).await {
             Ok((sth, _peer_protocol_version)) => {
                 if db_keys.iter().any(|key| sth::verify_tree_head(key, &sth)) {
                     tracing::info!(
@@ -456,7 +456,7 @@ async fn fetch_and_verify_sth(
     anchors: &[avalon_sdk::network::TrustAnchorEntry],
     peer: &str,
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
-    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer).await?;
+    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer, None).await?;
     check_peer_version(peer, &peer_protocol_version)?;
 
     let Some(verify_key) = verify_key_for_network(anchors, &sth.network_id) else {
@@ -507,13 +507,29 @@ fn verify_key_for_network(
 /// `protocol_version` — kept apart from [`SignedTreeHead`] itself (see
 /// `SignedTreeHeadDto`'s own doc comment): the version is never part of
 /// the signed payload.
+///
+/// `shard_id`, when given, is sent as an explicit `?shard_id=` query
+/// param — issue #573's own footgun, restated here since [`discover_and_verify_shard_peers`]
+/// found it live: a peer serving more than one shard (mirroring one,
+/// authoring another, same as `avalon-peer` in this project's own sandbox
+/// topology) answers a bare `/ledger/sth/latest` with whichever shard
+/// *it* treats as its own default, not necessarily the one being asked
+/// about — silently fetching and then failing to verify the wrong
+/// shard's STH entirely. `None` preserves the original bare-request
+/// behavior for callers that already know they're talking to a
+/// single-shard peer (or are deliberately asking for that peer's own
+/// default).
 async fn fetch_latest_sth(
     client: &reqwest::Client,
     peer: &str,
+    shard_id: Option<&str>,
 ) -> Result<(SignedTreeHead, String), MirrorWatcherError> {
     let url = format!("{peer}/ledger/sth/latest");
-    let dto: SignedTreeHeadDto = client
-        .get(&url)
+    let mut request = client.get(&url);
+    if let Some(shard_id) = shard_id {
+        request = request.query(&[("shard_id", shard_id)]);
+    }
+    let dto: SignedTreeHeadDto = request
         .send()
         .await?
         .error_for_status()?

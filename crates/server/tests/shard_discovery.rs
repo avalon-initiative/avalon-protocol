@@ -213,3 +213,68 @@ async fn a_node_with_auto_mirror_enabled_starts_mirroring_a_discovered_shard() {
         tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
     }
 }
+
+/// Regression test for a real bug this ticket's own live verification
+/// caught (present since #529, not introduced by #599, but only actually
+/// hit once a node commonly both authors its own shard *and* has other
+/// shards known via config or gossip — exactly what #599 makes common):
+/// `compute_for_this_node` used to be an either/or branch between "fetch
+/// every externally-known shard" and "fall back to my own local shard,
+/// only when nothing else is known" — the moment any other shard became
+/// known, a node's own locally-authored shard silently dropped out of its
+/// own `GET /ledger/cross-shard-root` response entirely, not even
+/// appearing in `missing_shard_ids`. Fixed to always include the local
+/// shard directly from `state.chain`, unioned with whatever else is known
+/// — never gated on whether anything else happens to be known too.
+///
+/// `AVALON_NODE_A_OWN_SHARD_ID` names node A's own shard id (defaults to
+/// `"core"`, matching `AVALON_OWN_SHARD_ID`'s own default). Reuses
+/// `AVALON_SHARD_DISCOVERY_SHARD_ID` for the other, externally-known
+/// shard this test also asserts is present alongside it.
+#[tokio::test]
+#[ignore]
+async fn a_node_authoring_its_own_shard_keeps_it_once_another_shard_is_also_known() {
+    let Some(node_a) = node_a_url() else {
+        eprintln!("skipping: AVALON_NODE_A_URL not set — see this file's module doc");
+        return;
+    };
+    let Some(other_shard_id) = std::env::var("AVALON_SHARD_DISCOVERY_SHARD_ID").ok() else {
+        eprintln!(
+            "skipping: AVALON_SHARD_DISCOVERY_SHARD_ID not set — names the other, externally-\
+             known shard this test expects to see alongside node A's own"
+        );
+        return;
+    };
+    let own_shard_id =
+        std::env::var("AVALON_NODE_A_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
+    let http = reqwest::Client::new();
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(180);
+    loop {
+        let response: serde_json::Value = http
+            .get(format!("{node_a}/ledger/cross-shard-root"))
+            .send()
+            .await
+            .expect("GET /ledger/cross-shard-root failed")
+            .json()
+            .await
+            .expect("response was not JSON");
+
+        let shards = response["shards"].as_array().cloned().unwrap_or_default();
+        let has_own = shards.iter().any(|s| s["shard_id"] == own_shard_id);
+        let has_other = shards.iter().any(|s| s["shard_id"] == other_shard_id);
+
+        if has_own && has_other {
+            return;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "node A's own shard ({own_shard_id}, present: {has_own}) and/or the other \
+                 known shard ({other_shard_id}, present: {has_other}) missing from \
+                 /ledger/cross-shard-root within the deadline — full response: {response:?}"
+            );
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    }
+}
