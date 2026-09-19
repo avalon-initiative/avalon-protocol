@@ -23,6 +23,17 @@
 //! `ChatUpdate` actually routes on — a guild **channel** id, not a guild
 //! id (a guild can have channels with very different subscriber sets), and
 //! a conversation id.
+//!
+//! **Issue #596 reuses this exact mechanism for mirror-sync push
+//! addressing.** `InterestScope::Network` (derived deterministically from
+//! a `network_id` via [`InterestScope::for_network`]) is what
+//! `crate::mirror_watcher` registers once it discovers, via its own
+//! verified STH polling, which network(s) it's actually mirroring, and
+//! what `crate::mirror_push` looks up from the committing side to resolve
+//! which peers to notify. No new registration/lookup path was built —
+//! this ticket's whole point is that #583 already solved "peers register
+//! interest in a specific thing via the DHT, and the owner looks up who's
+//! interested instead of broadcasting" for a different scope kind.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -139,15 +150,49 @@ impl RedisFastPath {
 }
 
 /// What a node can hold local-subscriber interest in — the two shapes
-/// `crate::chat::ChatUpdate` actually routes on. Not `PartialOrd`/`Ord`:
-/// nothing here needs to sort scopes, only hash/compare them.
+/// `crate::chat::ChatUpdate` actually routes on, plus (issue #596) a
+/// mirror's interest in a specific settlement `network_id`'s STH stream.
+/// Not `PartialOrd`/`Ord`: nothing here needs to sort scopes, only
+/// hash/compare them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InterestScope {
     Channel(Uuid),
     Conversation(Uuid),
+    /// Issue #596: never constructed directly — see [`Self::for_network`],
+    /// which derives this deterministically from a `network_id` string so
+    /// `InterestScope` can stay `Copy`/fixed-size like every other variant
+    /// rather than growing a `String` payload that would force every
+    /// existing call site (registration, lookup, the DHT/Redis worker
+    /// loops) off `Copy` for the sake of one variant.
+    Network(Uuid),
 }
 
+/// Fixed, arbitrary namespace UUID (issue #596) used only to derive
+/// [`InterestScope::Network`] deterministically from a `network_id`
+/// string via `Uuid::new_v5` — never persisted or exposed, just a domain
+/// separator so two different processes deriving a scope for the same
+/// `network_id` (the registering mirror and the looking-up authority)
+/// always land on the same value, without needing to store the raw string
+/// anywhere.
+const NETWORK_SCOPE_NAMESPACE: Uuid = Uuid::from_bytes([
+    0xa1, 0xba, 0x10, 0x0d, 0x59, 0x6e, 0x4c, 0x59, 0x8e, 0x1a, 0x6d, 0x69, 0x72, 0x72, 0x6f, 0x72,
+]);
+
 impl InterestScope {
+    /// Issue #596: the scope a mirror registers interest in for a given
+    /// settlement `network_id` — the same shape a client already registers
+    /// interest in a guild channel, extended to mirror-sync push
+    /// addressing per that ticket's decided design. Deterministic: calling
+    /// this twice with the same `network_id` (whether on the registering
+    /// mirror or the looking-up authority) always derives the same
+    /// [`InterestScope::Network`].
+    pub fn for_network(network_id: &str) -> Self {
+        InterestScope::Network(Uuid::new_v5(
+            &NETWORK_SCOPE_NAMESPACE,
+            network_id.as_bytes(),
+        ))
+    }
+
     /// The DHT key this scope's interest is stored under. Kademlia hashes
     /// the key bytes itself for routing (XOR distance over a multihash of
     /// this key, not the raw bytes) — no need to pre-hash here, just make
@@ -169,6 +214,10 @@ impl InterestScope {
                 bytes.push(b'd');
                 bytes.extend_from_slice(id.as_bytes());
             }
+            InterestScope::Network(id) => {
+                bytes.push(b'n');
+                bytes.extend_from_slice(id.as_bytes());
+            }
         }
         bytes
     }
@@ -180,6 +229,7 @@ impl InterestScope {
         match self {
             InterestScope::Channel(id) => format!("avalon:interest:channel:{id}"),
             InterestScope::Conversation(id) => format!("avalon:interest:conversation:{id}"),
+            InterestScope::Network(id) => format!("avalon:interest:network:{id}"),
         }
     }
 }
@@ -449,6 +499,41 @@ mod tests {
         assert_eq!(
             InterestScope::Channel(id).dht_key(),
             InterestScope::Channel(id).dht_key()
+        );
+    }
+
+    // Issue #596: the whole point of `for_network` deriving a `Uuid`
+    // rather than accepting a random one is that two independent callers
+    // (the registering mirror, the looking-up authority) computing this
+    // scope for the same `network_id` string must always land on the same
+    // DHT key.
+    #[test]
+    fn for_network_is_deterministic_for_the_same_network_id() {
+        assert_eq!(
+            InterestScope::for_network("avalon-dev-local").dht_key(),
+            InterestScope::for_network("avalon-dev-local").dht_key()
+        );
+    }
+
+    #[test]
+    fn for_network_differs_across_network_ids() {
+        assert_ne!(
+            InterestScope::for_network("avalon-dev-local").dht_key(),
+            InterestScope::for_network("avalon-mainnet-1").dht_key()
+        );
+    }
+
+    #[test]
+    fn network_scope_never_collides_with_channel_or_conversation() {
+        let id = Uuid::new_v4();
+        let network_scope = InterestScope::for_network(&id.to_string());
+        assert_ne!(
+            network_scope.dht_key(),
+            InterestScope::Channel(id).dht_key()
+        );
+        assert_ne!(
+            network_scope.dht_key(),
+            InterestScope::Conversation(id).dht_key()
         );
     }
 

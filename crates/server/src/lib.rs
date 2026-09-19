@@ -28,6 +28,7 @@ pub mod integrators;
 pub mod interest;
 pub mod issuer_registration;
 pub mod migrate;
+pub mod mirror_push;
 pub mod mirror_watcher;
 pub mod nodes;
 pub mod outbox;
@@ -621,6 +622,11 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         // Issue #539: one-hop live realtime event relay across nodes,
         // built on the peer table above — see `crate::realtime_relay`.
         .route("/nodes/relay", post(realtime_relay::relay_handler))
+        // Issue #596: push-based mirror-sync notification — see
+        // `crate::mirror_push`. No auth, same public posture as the
+        // `/ledger/*` block above: the body is never trusted for anything
+        // beyond waking this node's own mirror-watcher loop early.
+        .route("/mirror/notify", post(mirror_push::notify))
         // Issue #540: async at-rest chat/conversation replication — see
         // `crate::chat_replication`.
         .route(
