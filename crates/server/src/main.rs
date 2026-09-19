@@ -140,10 +140,11 @@ async fn main() {
     // Issue #583: always constructed (cheap, no config) so `crate::chat`'s
     // subscribe handlers have one code path regardless of whether the DHT
     // itself is enabled — see `AppState::interest`'s own doc comment.
-    let interest = avalon_server::interest::InterestRegistry::new();
+    let (interest, interest_newly_active) = avalon_server::interest::InterestRegistry::new();
     if let Some(dht_commands) = dht_commands.clone() {
         tokio::spawn(avalon_server::interest::run_worker(
             interest.clone(),
+            interest_newly_active,
             dht_commands,
             announce_config.own_base_url.clone(),
         ));
@@ -200,6 +201,7 @@ async fn main() {
         shard_mirror_sources: avalon_server::settlement::ShardMirrorSources::from_env(),
         interest,
         dht_commands,
+        own_base_url: announce_config.own_base_url.clone(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing

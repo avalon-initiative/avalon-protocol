@@ -477,22 +477,35 @@ genuinely-incompatible-crypto-change case none of the above can cover.
 - **Interest registration and lookup over the DHT (#583, part of epic
   #580)**: `crate::interest` — a local guild-channel/conversation
   subscription (`crate::chat::handle_chat_socket`) now holds an
-  `InterestGuard` for as long as it's subscribed, and
-  `interest::run_worker` re-`PutRecord`s this node's `AVALON_NODE_URL`
-  under a hash of that channel/conversation id every 45s (a 135s TTL,
-  the same `PRUNE_INTERVAL_MULTIPLE`-style margin #362's peer table
-  already uses) for as long as at least one subscriber remains — no
-  explicit deregister call exists; a disconnected subscriber's guard
-  drops, the refcount hits zero, and the record simply lapses.
-  `interest::lookup` is a `GetRecord` against that same key, live-
-  verified two-nodes-for-real
-  (`crates/server/tests/interest_dht.rs`, `--ignored`): a real finding
-  from that test was `get_record` reporting the same value more than
-  once (one per DHT replica that answered), so `lookup` deduplicates
-  before returning. **Still not wired into any actual relay decision**
-  — `crate::realtime_relay` still loops every peer in the HTTP peer
-  table regardless of interest; re-scoping it to call `interest::lookup`
-  instead is #584, still open.
+  `InterestGuard` for as long as it's subscribed. `interest::run_worker`
+  `PutRecord`s this node's `AVALON_NODE_URL` under a hash of that
+  channel/conversation id *immediately* on a scope's first subscriber
+  (a real bug caught live: waiting for the first 45s refresh tick left a
+  fresh subscription invisible to a lookup for far too long), then again
+  every 45s (a 135s TTL, the same `PRUNE_INTERVAL_MULTIPLE`-style margin
+  #362's peer table already uses) for as long as at least one subscriber
+  remains — no explicit deregister call exists; a disconnected
+  subscriber's guard drops, the refcount hits zero, and the record
+  simply lapses. `interest::lookup` is a `GetRecord` against that same
+  key, deduplicated (`get_record` was live-observed reporting the same
+  value more than once — one per DHT replica that answered).
+- **DHT-scoped relay delivery (#584, part of epic #580, closed)**:
+  `crate::realtime_relay::relay_to_peers` now calls `interest::lookup`
+  for `ChannelMessage`/`ChannelMessageDeleted`/`ConversationMessage`
+  events instead of #539's original full peer-table loop — that loop
+  still runs unconditionally for `Presence` (no channel/conversation
+  scope exists to look up) and as the fallback for any node with no DHT
+  identity (`AVALON_DHT_ENABLED` unset), so every pre-#584 deployment's
+  behavior is unchanged. This node's own `base_url` is filtered out of a
+  DHT lookup's results (a node with a local subscriber for the same
+  scope it's relaying for would otherwise relay-POST to itself).
+  Live-verified against two real, separately-running processes sharing
+  one Postgres (`crates/server/tests/realtime_relay.rs`, `--ignored`),
+  run both with `AVALON_DHT_ENABLED` unset (regression: unchanged
+  behavior) and set (the new path actually exercised and delivering).
+  **Known limitation, not solved here:** the DHT keyspace has no
+  `network_id` segregation the way the HTTP peer table does — see
+  `crate::realtime_relay`'s own module doc comment.
 - **One-hop live realtime relay across nodes (#539, implementing #535's
   decision)**: `POST /nodes/relay` (`crate::realtime_relay`) — see
   [`presence.md`](./presence.md) and [`communication.md`](./communication.md)'s
