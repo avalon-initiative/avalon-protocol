@@ -393,6 +393,8 @@ mod live_tests {
             remote_submit_status: None,
             own_shard_id: "core".to_string(),
             shard_mirror_sources: crate::settlement::ShardMirrorSources::default(),
+            interest: crate::interest::InterestRegistry::new(),
+            dht_commands: None,
         }
     }
 

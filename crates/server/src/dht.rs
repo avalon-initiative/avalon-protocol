@@ -1,10 +1,13 @@
 //! Interest-scoped realtime routing via a libp2p Kademlia DHT — issue #582,
-//! part of epic #580 implementing #542's decision. This module owns exactly
-//! two things: this node's libp2p identity, and bootstrapping that identity
-//! into a live DHT routing table using #362's *existing* HTTP peer table
-//! (`crate::nodes`) as the seed/bootstrap list, rather than inventing a
-//! second, separate discovery mechanism. No interest registration/lookup
-//! logic lives here yet — that's #583.
+//! part of epic #580 implementing #542's decision. This module owns two
+//! things: this node's libp2p identity/bootstrap (#582), and a small
+//! command channel exposing the swarm's `put_record`/`get_record` to the
+//! rest of the process (#583) — the swarm itself still lives entirely
+//! inside [`run_worker`]'s spawned task, so any other code that wants to
+//! touch the DHT does it by sending a [`DhtCommand`] rather than reaching
+//! into the swarm directly. `crate::interest` is the one real caller today,
+//! for guild-channel/conversation interest registration and lookup; no
+//! actual relay re-scoping happens here — that's #584.
 //!
 //! **A libp2p `PeerId` is a brand-new identity domain, not a reuse of any
 //! existing key.** This codebase already has three separate key domains
@@ -31,15 +34,56 @@
 //! dependency footprint; every existing deployment should see zero behavior
 //! change until an operator opts in.
 
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use libp2p::futures::StreamExt;
-use libp2p::kad::{self, store::MemoryStore, Mode};
+use libp2p::kad::{self, store::MemoryStore, Mode, QueryId};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{identify, identity, noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::nodes::{PeerInfo, PeerTable};
+
+/// Bounded so a burst of interest registrations/lookups can't grow this
+/// unboundedly if [`run_worker`] is momentarily busy — same rationale
+/// `chat::UPDATE_CHANNEL_CAPACITY` already documents for its own bounded
+/// channel. A full channel backs the sender's `.send().await` up rather
+/// than dropping silently, which is the right tradeoff here: a missed
+/// interest registration is a real, if temporary, routing gap, not a
+/// disposable UI tick.
+const COMMAND_CHANNEL_CAPACITY: usize = 256;
+
+/// A request from elsewhere in this process to the DHT swarm — the only
+/// way anything outside [`run_worker`] touches `kad`, since the swarm
+/// itself never leaves that task. See [`DhtHandle::commands`].
+pub enum DhtCommand {
+    /// Stores `value` under `key`, expiring after `ttl` — the caller
+    /// (`crate::interest`) is expected to re-send this periodically for as
+    /// long as the registration should stay live; there is no separate
+    /// "deregister" command; letting a record's TTL lapse is the only way
+    /// a registration goes away, matching #583's own ticket design (no
+    /// explicit cleanup needed on every disconnect path).
+    PutRecord {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        ttl: Duration,
+    },
+    /// Looks up every value currently stored under `key`, however many
+    /// distinct publishers that turns out to be, and reports them once the
+    /// query completes (bounded by kad's own internal query timeout —
+    /// never hangs forever).
+    GetRecord {
+        key: Vec<u8>,
+        respond_to: oneshot::Sender<Vec<Vec<u8>>>,
+    },
+}
+
+pub type DhtCommandSender = mpsc::Sender<DhtCommand>;
+
+/// One in-flight `get_record` query's response channel plus whatever
+/// values it's accumulated so far — see [`run_worker`]'s `pending_gets`.
+type PendingGet = (oneshot::Sender<Vec<Vec<u8>>>, Vec<Vec<u8>>);
 
 /// Sent as part of libp2p's `identify` exchange — purely informational
 /// (never version-gates anything the way `crate::version` does for the
@@ -48,11 +92,15 @@ use crate::nodes::{PeerInfo, PeerTable};
 const IDENTIFY_PROTOCOL_VERSION: &str = "/avalon/dht/1.0.0";
 
 /// How often [`run_worker`] re-scans `PeerTable` for DHT identities it
-/// hasn't dialed yet. `PeerTable` itself already refreshes on
+/// hasn't dialed yet, when `AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS` is
+/// unset. `PeerTable` itself already refreshes on
 /// `AVALON_ANNOUNCE_INTERVAL_SECS` (default 180s); scanning noticeably
 /// faster than that just means a newly-announced peer's DHT identity is
-/// picked up sooner without needing its own separate signal.
-const BOOTSTRAP_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+/// picked up sooner without needing its own separate signal. Configurable
+/// (issue #583) so a live test can turn this down without waiting out a
+/// real deployment's cadence — see
+/// `crates/server/tests/interest_dht.rs`.
+const DEFAULT_BOOTSTRAP_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How long [`start`] waits, at most, to observe this node's own listen
 /// addresses before returning — binding `0.0.0.0` normally yields one
@@ -126,6 +174,10 @@ pub struct DhtConfig {
     /// purposes — the local bind still happens on `listen_addr` as normal,
     /// this only changes what other peers are told to dial.
     pub external_addr: Option<Multiaddr>,
+    /// `AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS`, defaulting to
+    /// [`DEFAULT_BOOTSTRAP_SCAN_INTERVAL`] — see that constant's own doc
+    /// comment.
+    pub bootstrap_scan_interval: Duration,
 }
 
 impl DhtConfig {
@@ -159,22 +211,31 @@ impl DhtConfig {
                 })
             })
             .transpose()?;
+        let bootstrap_scan_interval = std::env::var("AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|secs| *secs > 0)
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_BOOTSTRAP_SCAN_INTERVAL);
 
         Ok(Some(Self {
             identity,
             listen_addr,
             external_addr,
+            bootstrap_scan_interval,
         }))
     }
 }
 
 /// This node's own DHT identity, as observed once at startup — handed to
 /// `crate::nodes::run_worker` so it rides along on every outbound announce
-/// (see this module's own doc comment), and to callers needing
-/// `PeerId::to_string()`/dialable addresses for anything else later (#583).
+/// (see this module's own doc comment), plus the [`DhtCommandSender`]
+/// (#583) any other code uses to issue `put_record`/`get_record` against
+/// the swarm this handle was created from.
 pub struct DhtHandle {
     pub peer_id: PeerId,
     pub listen_addrs: Vec<Multiaddr>,
+    pub commands: DhtCommandSender,
 }
 
 fn build_swarm(identity: identity::Keypair) -> Swarm<DhtBehaviour> {
@@ -206,6 +267,7 @@ fn build_swarm(identity: identity::Keypair) -> Swarm<DhtBehaviour> {
 /// `main.rs`'s call site.
 pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
     let external_addr = config.external_addr.clone();
+    let bootstrap_scan_interval = config.bootstrap_scan_interval;
     let mut swarm = build_swarm(config.identity);
     let local_peer_id = *swarm.local_peer_id();
     swarm.behaviour_mut().kad.set_mode(Some(Mode::Server));
@@ -248,11 +310,18 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         listen_addrs
     };
 
-    tokio::spawn(run_worker(swarm, peers));
+    let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+    tokio::spawn(run_worker(
+        swarm,
+        peers,
+        commands_rx,
+        bootstrap_scan_interval,
+    ));
 
     DhtHandle {
         peer_id: local_peer_id,
         listen_addrs: announced_addrs,
+        commands: commands_tx,
     }
 }
 
@@ -282,16 +351,55 @@ fn new_dht_peer(info: &PeerInfo, known: &HashSet<PeerId>) -> Option<(PeerId, Vec
 /// Never returns. Handles `identify` responses (feeding a directly-dialed
 /// peer's own reported listen addresses into `kad` — without this, a fresh
 /// connection never actually populates the DHT routing table; #581's spike
-/// hit exactly this) and, on [`BOOTSTRAP_SCAN_INTERVAL`], scans `peers` for
-/// any DHT identity not yet dialed.
-async fn run_worker(mut swarm: Swarm<DhtBehaviour>, peers: PeerTable) {
+/// hit exactly this), on `bootstrap_scan_interval` scans `peers` for any
+/// DHT identity not yet dialed, and (#583) services [`DhtCommand`]s from
+/// `commands`.
+async fn run_worker(
+    mut swarm: Swarm<DhtBehaviour>,
+    peers: PeerTable,
+    mut commands: mpsc::Receiver<DhtCommand>,
+    bootstrap_scan_interval: Duration,
+) {
     let mut known_peers: HashSet<PeerId> = HashSet::new();
-    let mut scan_interval = tokio::time::interval(BOOTSTRAP_SCAN_INTERVAL);
+    let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
     // The first tick fires immediately; bootstrap from whatever #362
     // already knows about right away rather than waiting a full interval.
 
+    // #583: one entry per in-flight `get_record` query, accumulating
+    // `FoundRecord` values until `ProgressStep::last` says the query is
+    // done — a `get_record` can (and usually does) yield more than one
+    // `OutboundQueryProgressed` event before it finishes.
+    let mut pending_gets: HashMap<QueryId, PendingGet> = HashMap::new();
+
     loop {
         tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    // The sender half (`DhtHandle::commands`) was dropped —
+                    // only happens if the whole process is tearing down,
+                    // since `AppState`/`main.rs` hold it for the process
+                    // lifetime. Nothing left to service; end the worker
+                    // rather than spin on a closed channel forever.
+                    return;
+                };
+                match command {
+                    DhtCommand::PutRecord { key, value, ttl } => {
+                        let record = kad::Record {
+                            key: key.into(),
+                            value,
+                            publisher: None,
+                            expires: Some(Instant::now() + ttl),
+                        };
+                        if let Err(e) = swarm.behaviour_mut().kad.put_record(record, kad::Quorum::One) {
+                            tracing::warn!("avalon-dht: put_record rejected locally: {e}");
+                        }
+                    }
+                    DhtCommand::GetRecord { key, respond_to } => {
+                        let query_id = swarm.behaviour_mut().kad.get_record(key.into());
+                        pending_gets.insert(query_id, (respond_to, Vec::new()));
+                    }
+                }
+            }
             _ = scan_interval.tick() => {
                 for info in peers.list_all() {
                     if let Some((peer_id, addrs)) = new_dht_peer(&info, &known_peers) {
@@ -344,6 +452,38 @@ async fn run_worker(mut swarm: Swarm<DhtBehaviour>, peers: PeerTable) {
                 {
                     for addr in info.listen_addrs {
                         swarm.behaviour_mut().kad.add_address(&peer_id, addr);
+                    }
+                } else if let SwarmEvent::Behaviour(DhtBehaviourEvent::Kad(
+                    kad::Event::OutboundQueryProgressed { id, result, step, .. },
+                )) = event
+                {
+                    match result {
+                        kad::QueryResult::PutRecord(Err(e)) => {
+                            // Fire-and-forget from the caller's perspective
+                            // (`crate::interest` just re-puts on its own
+                            // refresh timer) — nowhere else to surface this
+                            // but a log. Expected in a small network per
+                            // #581's own finding (quorum counts *other*
+                            // peers, not this node's own local store).
+                            tracing::warn!("avalon-dht: put_record failed: {e}");
+                        }
+                        kad::QueryResult::GetRecord(result) => {
+                            let done = step.last;
+                            if let Some((_, values)) = pending_gets.get_mut(&id) {
+                                if let Ok(kad::GetRecordOk::FoundRecord(found)) = result {
+                                    values.push(found.record.value);
+                                }
+                            }
+                            if done {
+                                if let Some((respond_to, values)) = pending_gets.remove(&id) {
+                                    // The receiver may already be gone if
+                                    // the caller stopped waiting (e.g. its
+                                    // own timeout) — nothing to do then.
+                                    let _ = respond_to.send(values);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
