@@ -597,9 +597,21 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   "bound worst-case staleness if a push is ever missed," which doesn't
   need a 30s cadence, and the wider default also cuts every deployment's
   at-idle polling overhead 4x regardless of whether push is reaching it.
-  Live-verified against two real `avalon-server` processes sharing one
-  Postgres (`crates/server/tests/mirror_push.rs`, `--ignored`) — see that
-  file's own module doc for the exact two/three-node setup this needs.
+  `crates/server/tests/mirror_push.rs` (`--ignored`) is written against
+  two/three real, separately-running `avalon-server` processes sharing one
+  Postgres — see that file's own module doc for the exact setup. **Partially
+  live-verified**: starting up a real three-node topology this way
+  confirmed a mirror registers its interest correctly at startup
+  (`mirror-watcher: registering interest for push-based mirror sync`) and
+  that a peer discovered via announce is picked up as a DHT bootstrap
+  target, but the test's actual latency/convergence assertions were not
+  independently confirmed in this pass — backfill on the test node was
+  blocked by pre-existing, unrelated equivocation findings already
+  recorded in this sandbox's shared database (see
+  `docs/architecture/settlement.md`'s #599 section for the same blocker
+  hit there), which needs a deliberate `avalon resolve-equivocation`
+  operator action to clear before this test's actual timing claims can be
+  independently confirmed end to end.
 - No SDK-side discovery yet: `AvalonConfig { server_url, .. }` in
   `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
   server-to-server mechanism, not yet consumed by client-side routing.
