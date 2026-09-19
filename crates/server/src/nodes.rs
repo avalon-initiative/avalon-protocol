@@ -240,6 +240,14 @@ pub struct NodeStatusResponse {
     /// The newest `protocol_version` any known peer currently reports, if
     /// any peer is known and its version parses.
     pub newest_known_peer_version: Option<String>,
+    /// Issue #517: this node's own host resource metrics — CPU/memory/disk/
+    /// process, plus the DB pool's own tracked size/in-use. Diagnostic-only,
+    /// same posture as `stale` above: never used to gate protocol behavior
+    /// (peer admission, mirroring, consensus), never a request failure when
+    /// a metric can't be read on a given platform (every leaf field is its
+    /// own `Option`). See `crate::resources`'s module doc comment for why
+    /// `sysinfo` rather than hand-rolled `/proc` parsing.
+    pub resources: crate::resources::NodeResourceMetrics,
 }
 
 /// `GET /nodes/status` — read-only, same public posture as `list_peers`.
@@ -257,11 +265,27 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
         _ => false,
     };
 
+    let (cpu, memory, disks, open_file_count, process_uptime_seconds) =
+        state.host_metrics.current();
+    let pool_size = state.pool.size();
+    let resources = crate::resources::NodeResourceMetrics {
+        cpu,
+        memory,
+        disks,
+        process_uptime_seconds: Some(process_uptime_seconds),
+        open_file_count,
+        db_pool: crate::resources::DbPoolMetrics {
+            size: Some(pool_size),
+            in_use: Some(pool_size.saturating_sub(state.pool.num_idle() as u32)),
+        },
+    };
+
     Json(NodeStatusResponse {
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         network_id: state.chain.network_id().to_string(),
         stale,
         newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
+        resources,
     })
 }
 
@@ -656,6 +680,32 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_NODE_ROLES");
         }
+    }
+
+    /// Issue #517: `NodeStatusResponse` must still be valid JSON when every
+    /// resource metric is unavailable (stubbed here as an unrefreshed
+    /// sampler, the same shape a platform this crate can't read any
+    /// `sysinfo` stat on would produce) — the endpoint itself never fails
+    /// just because a host metric couldn't be read.
+    #[test]
+    fn node_status_response_serializes_with_stubbed_resource_metrics() {
+        let response = NodeStatusResponse {
+            protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
+            network_id: "avalon-dev-local".to_string(),
+            stale: false,
+            newest_known_peer_version: None,
+            resources: crate::resources::NodeResourceMetrics::default(),
+        };
+        let json = serde_json::to_value(&response).expect("must serialize even when empty");
+        assert!(json.get("resources").is_some());
+        assert_eq!(
+            json["resources"]["cpu"]["usage_percent"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json["resources"]["db_pool"]["size"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

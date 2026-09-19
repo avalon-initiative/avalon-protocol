@@ -177,6 +177,64 @@ async fn an_announcement_below_the_version_floor_is_excluded_but_not_rejected() 
     );
 }
 
+/// Issue #517: `GET /nodes/status`'s `resources` block against a real
+/// running node — asserts the block is present and internally consistent
+/// (`used <= total` wherever both are reported), never that every field is
+/// populated, since availability is platform-dependent and best-effort by
+/// design.
+#[tokio::test]
+#[ignore]
+async fn node_status_reports_internally_consistent_resource_metrics() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http
+        .get(format!("{base}/nodes/status"))
+        .send()
+        .await
+        .expect("GET /nodes/status failed — is `make start` running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+
+    let body: serde_json::Value = response.json().await.expect("response was not JSON");
+    let resources = &body["resources"];
+    assert!(
+        resources.is_object(),
+        "expected a `resources` object, got {resources:?}"
+    );
+
+    let used_at_most_total = |used: &serde_json::Value, total: &serde_json::Value| {
+        if let (Some(used), Some(total)) = (used.as_u64(), total.as_u64()) {
+            assert!(used <= total, "used ({used}) must be <= total ({total})");
+        }
+    };
+
+    used_at_most_total(
+        &resources["memory"]["used_bytes"],
+        &resources["memory"]["total_bytes"],
+    );
+    used_at_most_total(
+        &resources["memory"]["swap_used_bytes"],
+        &resources["memory"]["swap_total_bytes"],
+    );
+    if let Some(disks) = resources["disks"].as_array() {
+        for disk in disks {
+            used_at_most_total(&disk["used_bytes"], &disk["total_bytes"]);
+        }
+    }
+    used_at_most_total(
+        &resources["db_pool"]["in_use"],
+        &resources["db_pool"]["size"],
+    );
+
+    // The DB pool is real and already connected by the time this endpoint
+    // is reachable at all, so its size is the one field this test can
+    // assert is actually populated, not just internally consistent.
+    assert!(
+        resources["db_pool"]["size"].as_u64().is_some(),
+        "db_pool.size should be populated once the server has a live pool: {resources:?}"
+    );
+}
+
 /// Requires `AVALON_SECOND_NODE_SERVER_URL` — a second real `avalon-server`
 /// process sharing this network's `network_id` (any Postgres is fine,
 /// shared or separate, since the peer table is in-memory per process).
