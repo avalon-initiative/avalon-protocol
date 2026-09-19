@@ -298,8 +298,9 @@ realtime relay at real network scale routes over a libp2p Kademlia DHT
 instead of #539's full-mesh broadcast (see [`communication.md`](./communication.md)'s
 own note on that decision) — #582 is the identity/bootstrap piece of that
 work, not the routing logic itself (that's #583). A node running the DHT
-(`AVALON_DHT_ENABLED`, off by default — see `crate::dht`'s module doc for
-the full rationale) holds a libp2p `PeerId`, a *fourth* independent key
+(`AVALON_DHT_ENABLED`, on by default as of ADR #593 — an opt-*out* escape
+hatch, not an opt-in gate; see `crate::dht`'s module doc for the full
+rationale) holds a libp2p `PeerId`, a *fourth* independent key
 domain alongside player keys (#73), issuer keys (#80/#84), and the
 settlement log operator's key (#39) — none of those fit a peer-transport
 identity, so this is genuinely new rather than reused. Bootstrap reuses
@@ -458,9 +459,9 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   place this peer table's `roles` field is actually read for anything
   beyond bookkeeping.
 - **A second real consumer of the peer table: DHT bootstrap (#582, part
-  of epic #580)**: `crate::dht`, gated behind `AVALON_DHT_ENABLED`
-  (off by default — every deployment's behavior is unchanged until an
-  operator opts in). `PeerInfo` now also carries `libp2p_peer_id`/
+  of epic #580)**: `crate::dht`, gated behind `AVALON_DHT_ENABLED` (off by
+  default at the time #582 landed; **on by default since ADR #593** — see
+  this section's own note above). `PeerInfo` now also carries `libp2p_peer_id`/
   `libp2p_listen_addrs`; `dht::run_worker` scans the peer table every 30s
   for identities it hasn't dialed into its `rust-libp2p` `kad` swarm yet.
   Live-verified across the two-node LAN sandbox (`avalon-peer`): a peer
