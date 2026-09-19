@@ -17,7 +17,7 @@
 //! `docs/architecture/nodes.md`'s "Today in the repo" section).
 
 use avalon_chain::merkle;
-use avalon_chain::mirror::{self, MirroredEntry, ObservedSth};
+use avalon_chain::mirror::{self, MirroredEntry, ObservedSth, CORE_SHARD_ID};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -40,6 +40,7 @@ fn mirrored_entry(network_id: &str, seq: i64, entry_hash: &str, subject: &str) -
     MirroredEntry {
         source_url: "http://peer".to_string(),
         network_id: network_id.to_string(),
+        shard_id: CORE_SHARD_ID.to_string(),
         seq,
         event_id: Uuid::new_v4(),
         kind: "identity.created".to_string(),
@@ -79,32 +80,42 @@ async fn mirrored_entries_since_paginates_and_filters_by_subject() {
         .expect("insert_mirrored_entry failed");
     }
 
-    let all = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, None, None)
+    let all = mirror::mirrored_entries_since(&pool, &network_id, CORE_SHARD_ID, 0, 100, None, None)
         .await
         .expect("mirrored_entries_since failed");
     assert_eq!(all.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
 
-    let since_one = mirror::mirrored_entries_since(&pool, &network_id, 1, 100, None, None)
-        .await
-        .expect("mirrored_entries_since failed");
+    let since_one =
+        mirror::mirrored_entries_since(&pool, &network_id, CORE_SHARD_ID, 1, 100, None, None)
+            .await
+            .expect("mirrored_entries_since failed");
     assert_eq!(
         since_one.iter().map(|e| e.seq).collect::<Vec<_>>(),
         vec![2, 3],
         "since_seq must exclude the row at exactly that seq"
     );
 
-    let only_a = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, Some(subject_a), None)
-        .await
-        .expect("mirrored_entries_since failed");
+    let only_a = mirror::mirrored_entries_since(
+        &pool,
+        &network_id,
+        CORE_SHARD_ID,
+        0,
+        100,
+        Some(subject_a),
+        None,
+    )
+    .await
+    .expect("mirrored_entries_since failed");
     assert_eq!(
         only_a.iter().map(|e| e.seq).collect::<Vec<_>>(),
         vec![1, 3],
         "subject filter must scope to that subject's own entries only"
     );
 
-    let capped = mirror::mirrored_entries_since(&pool, &network_id, 0, 1, None, None)
-        .await
-        .expect("mirrored_entries_since failed");
+    let capped =
+        mirror::mirrored_entries_since(&pool, &network_id, CORE_SHARD_ID, 0, 1, None, None)
+            .await
+            .expect("mirrored_entries_since failed");
     assert_eq!(capped.len(), 1, "limit must cap the returned rows");
     assert_eq!(capped[0].seq, 1);
 }
@@ -117,9 +128,10 @@ async fn mirrored_entries_since_on_an_empty_network_is_an_empty_list() {
     let pool = test_pool().await;
     let network_id = unique_network_id("entries-since-empty");
 
-    let entries = mirror::mirrored_entries_since(&pool, &network_id, 0, 100, None, None)
-        .await
-        .expect("mirrored_entries_since failed");
+    let entries =
+        mirror::mirrored_entries_since(&pool, &network_id, CORE_SHARD_ID, 0, 100, None, None)
+            .await
+            .expect("mirrored_entries_since failed");
     assert!(entries.is_empty());
 }
 
@@ -150,12 +162,13 @@ async fn mirrored_entry_hashes_up_to_reproduces_the_verified_tree() {
         .expect("insert_mirrored_entry failed");
     }
 
-    let up_to_three = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, 3, None)
-        .await
-        .expect("mirrored_entry_hashes_up_to failed");
+    let up_to_three =
+        mirror::mirrored_entry_hashes_up_to(&pool, &network_id, CORE_SHARD_ID, 3, None)
+            .await
+            .expect("mirrored_entry_hashes_up_to failed");
     assert_eq!(up_to_three, hashes[..3]);
 
-    let up_to_all = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, 5, None)
+    let up_to_all = mirror::mirrored_entry_hashes_up_to(&pool, &network_id, CORE_SHARD_ID, 5, None)
         .await
         .expect("mirrored_entry_hashes_up_to failed");
     assert_eq!(up_to_all, hashes);
@@ -194,25 +207,25 @@ async fn mirrored_leaf_index_for_seq_ranks_entries_zero_indexed() {
     }
 
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 10, None)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, CORE_SHARD_ID, 10, None)
             .await
             .expect("query failed"),
         Some(0)
     );
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 20, None)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, CORE_SHARD_ID, 20, None)
             .await
             .expect("query failed"),
         Some(1)
     );
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 30, None)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, CORE_SHARD_ID, 30, None)
             .await
             .expect("query failed"),
         Some(2)
     );
     assert_eq!(
-        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, 999, None)
+        mirror::mirrored_leaf_index_for_seq(&pool, &network_id, CORE_SHARD_ID, 999, None)
             .await
             .expect("query failed"),
         None,
@@ -238,6 +251,7 @@ async fn observed_sth_matching_root_ignores_disagreeing_observations_at_the_same
         &ObservedSth {
             source_url: "peer-a".to_string(),
             network_id: network_id.clone(),
+            shard_id: CORE_SHARD_ID.to_string(),
             tree_size: 10,
             root_hash: good_root.clone(),
             signature: "sig-a".to_string(),
@@ -253,6 +267,7 @@ async fn observed_sth_matching_root_ignores_disagreeing_observations_at_the_same
         &ObservedSth {
             source_url: "peer-b".to_string(),
             network_id: network_id.clone(),
+            shard_id: CORE_SHARD_ID.to_string(),
             tree_size: 10,
             root_hash: bad_root,
             signature: "sig-b".to_string(),
@@ -264,17 +279,24 @@ async fn observed_sth_matching_root_ignores_disagreeing_observations_at_the_same
     .await
     .expect("insert_observation failed");
 
-    let matched = mirror::observed_sth_matching_root(&pool, &network_id, 10, &good_root, None)
-        .await
-        .expect("observed_sth_matching_root failed")
-        .expect("the matching observation should be found");
+    let matched =
+        mirror::observed_sth_matching_root(&pool, &network_id, CORE_SHARD_ID, 10, &good_root, None)
+            .await
+            .expect("observed_sth_matching_root failed")
+            .expect("the matching observation should be found");
     assert_eq!(matched.source_url, "peer-a");
     assert_eq!(matched.root_hash, good_root);
 
-    let no_match =
-        mirror::observed_sth_matching_root(&pool, &network_id, 10, &"33".repeat(32), None)
-            .await
-            .expect("observed_sth_matching_root failed");
+    let no_match = mirror::observed_sth_matching_root(
+        &pool,
+        &network_id,
+        CORE_SHARD_ID,
+        10,
+        &"33".repeat(32),
+        None,
+    )
+    .await
+    .expect("observed_sth_matching_root failed");
     assert!(
         no_match.is_none(),
         "a root nobody actually reported must never match"
@@ -299,6 +321,7 @@ async fn observed_sth_round_trips_the_signed_created_at_not_the_observed_at() {
         &ObservedSth {
             source_url: "peer-a".to_string(),
             network_id: network_id.clone(),
+            shard_id: CORE_SHARD_ID.to_string(),
             tree_size: 1,
             root_hash: "44".repeat(32),
             signature: "sig".to_string(),
@@ -310,10 +333,17 @@ async fn observed_sth_round_trips_the_signed_created_at_not_the_observed_at() {
     .await
     .expect("insert_observation failed");
 
-    let fetched = mirror::observed_sth_matching_root(&pool, &network_id, 1, &"44".repeat(32), None)
-        .await
-        .expect("observed_sth_matching_root failed")
-        .expect("row should exist");
+    let fetched = mirror::observed_sth_matching_root(
+        &pool,
+        &network_id,
+        CORE_SHARD_ID,
+        1,
+        &"44".repeat(32),
+        None,
+    )
+    .await
+    .expect("observed_sth_matching_root failed")
+    .expect("row should exist");
     assert_eq!(fetched.created_at, signed_created_at);
     assert_ne!(
         fetched.created_at, fetched.observed_at,

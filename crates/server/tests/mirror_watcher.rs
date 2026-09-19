@@ -111,6 +111,62 @@ async fn entry_rank(pool: &PgPool, seq: i64) -> i64 {
         .expect("c column")
 }
 
+/// This shared dev ledger's history has grown large enough over this
+/// project's life that a test walking every entry/proof up to a real
+/// `tree_size` can legitimately trip this server's own rate limiter
+/// (issue #363/#545, `AVALON_RATE_LIMIT_PER_MINUTE`) mid-loop — discovered
+/// live while investigating what looked at first like unrelated flakiness
+/// here (issue #604's own investigation). A 429 isn't a real failure, just
+/// this test being a genuinely busy client of its own target server;
+/// retrying with backoff (respecting `Retry-After` when the server sends
+/// one) is what a real client should do too — see
+/// `crate::mirror_watcher::send_with_rate_limit_retry` for the same fix
+/// applied to the actual production backfill path this test exercises.
+async fn get_json_with_rate_limit_retry(
+    http: &reqwest::Client,
+    url: &str,
+    query: &[(&str, i64)],
+) -> serde_json::Value {
+    const MAX_RATE_LIMIT_RETRIES: u32 = 10;
+    const DEFAULT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+
+    let mut attempt = 0u32;
+    loop {
+        let response = http
+            .get(url)
+            .query(query)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+            && attempt < MAX_RATE_LIMIT_RETRIES
+        {
+            // Issue #604: a `Retry-After: 0` still needs a real,
+            // non-zero floor — see the production fix's own comment in
+            // `crate::mirror_watcher::send_with_rate_limit_retry`.
+            let wait = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(DEFAULT_BACKOFF)
+                .max(DEFAULT_BACKOFF);
+            attempt += 1;
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .unwrap_or_else(|e| panic!("GET {url}: failed to read response body: {e}"));
+        return serde_json::from_str(&body_text).unwrap_or_else(|e| {
+            panic!("GET {url}: non-JSON response, status={status} body={body_text:?}: {e}")
+        });
+    }
+}
+
 fn hash32(hex_str: &str) -> [u8; 32] {
     let bytes = hex::decode(hex_str).expect("should be valid hex");
     <[u8; 32]>::try_from(bytes).expect("should be exactly 32 bytes")
@@ -228,15 +284,14 @@ async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
             .last()
             .and_then(|e: &serde_json::Value| e["seq"].as_i64())
             .unwrap_or(0);
-        let page: Vec<serde_json::Value> = http
-            .get(format!("{base}/ledger/entries"))
-            .query(&[("since_seq", since_seq), ("limit", 1000)])
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+        let page_json = get_json_with_rate_limit_retry(
+            &http,
+            &format!("{base}/ledger/entries"),
+            &[("since_seq", since_seq), ("limit", 1000)],
+        )
+        .await;
+        let page: Vec<serde_json::Value> = serde_json::from_value(page_json)
+            .expect("GET /ledger/entries should return a JSON array");
         if page.is_empty() {
             break;
         }
@@ -250,15 +305,12 @@ async fn a_mirror_can_backfill_and_verify_real_entries_against_a_real_sth() {
     let mut verified_count = 0usize;
     for entry in entries.iter().take(tree_size as usize) {
         let entry_seq = entry["seq"].as_i64().unwrap();
-        let proof_json: serde_json::Value = http
-            .get(format!("{base}/ledger/proof/inclusion"))
-            .query(&[("seq", entry_seq), ("tree_size", tree_size)])
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+        let proof_json = get_json_with_rate_limit_retry(
+            &http,
+            &format!("{base}/ledger/proof/inclusion"),
+            &[("seq", entry_seq), ("tree_size", tree_size)],
+        )
+        .await;
 
         assert_eq!(proof_json["root_hash"], sth_json["root_hash"]);
         assert_eq!(
@@ -315,8 +367,12 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     let source_a = format!("peer-a-{}", Uuid::new_v4());
     let source_b = format!("peer-b-{}", Uuid::new_v4());
 
-    let observation_a =
-        ObservedSth::from_sth(&source_a, &real_sth, time::OffsetDateTime::now_utc());
+    let observation_a = ObservedSth::from_sth(
+        &source_a,
+        mirror::CORE_SHARD_ID,
+        &real_sth,
+        time::OffsetDateTime::now_utc(),
+    );
     let is_new_a = mirror::insert_observation(&pool, &observation_a)
         .await
         .expect("insert_observation failed");
@@ -328,16 +384,25 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     // size" scenario #40 defines as equivocation.
     let mut corrupted = real_sth.clone();
     corrupted.root_hash = "ff".repeat(32);
-    let observation_b =
-        ObservedSth::from_sth(&source_b, &corrupted, time::OffsetDateTime::now_utc());
+    let observation_b = ObservedSth::from_sth(
+        &source_b,
+        mirror::CORE_SHARD_ID,
+        &corrupted,
+        time::OffsetDateTime::now_utc(),
+    );
     let is_new_b = mirror::insert_observation(&pool, &observation_b)
         .await
         .expect("insert_observation failed");
     assert!(is_new_b);
 
-    let existing = mirror::observations_at(&pool, &real_sth.network_id, real_sth.tree_size)
-        .await
-        .expect("observations_at failed");
+    let existing = mirror::observations_at(
+        &pool,
+        &real_sth.network_id,
+        mirror::CORE_SHARD_ID,
+        real_sth.tree_size,
+    )
+    .await
+    .expect("observations_at failed");
     let findings = mirror::detect_equivocation(&existing, &observation_b);
     assert_eq!(
         findings.len(),
@@ -366,14 +431,23 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     // Sanity: two consistent observations of the *same* correct STH from a
     // third source must never be flagged.
     let source_c = format!("peer-c-{}", Uuid::new_v4());
-    let observation_c =
-        ObservedSth::from_sth(&source_c, &real_sth, time::OffsetDateTime::now_utc());
+    let observation_c = ObservedSth::from_sth(
+        &source_c,
+        mirror::CORE_SHARD_ID,
+        &real_sth,
+        time::OffsetDateTime::now_utc(),
+    );
     mirror::insert_observation(&pool, &observation_c)
         .await
         .expect("insert_observation failed");
-    let existing_after_c = mirror::observations_at(&pool, &real_sth.network_id, real_sth.tree_size)
-        .await
-        .expect("observations_at failed");
+    let existing_after_c = mirror::observations_at(
+        &pool,
+        &real_sth.network_id,
+        mirror::CORE_SHARD_ID,
+        real_sth.tree_size,
+    )
+    .await
+    .expect("observations_at failed");
     let findings_against_a = mirror::detect_equivocation(
         &existing_after_c
             .iter()

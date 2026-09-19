@@ -481,22 +481,38 @@ theorized**, both fixed before this shipped:
   now takes an explicit `shard_id: Option<&str>`, sent as a query param
   when given.
 
-**Not fully verified end to end**: `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`
-actually beginning to mirror a discovered shard's entries. After the
-second fix above, the discovered shard's STH verifies correctly (confirmed
-live), but backfill on the test node was blocked by pre-existing,
-unrelated equivocation findings already recorded in this sandbox's shared
-database (`avalon list-equivocations` — synthetic-looking `peer-a-`/`peer-b-`
-sourced findings with an all-`f` root hash, almost certainly test
-contamination from earlier in this environment's life, not a real
-incident) — resolving those needs a deliberate operator action
-(`avalon resolve-equivocation`, see
-[`../maintainers/equivocation-response.md`](../maintainers/equivocation-response.md))
-this pass didn't have standing authorization to take unilaterally. The
-verification step it depends on (STH fetch + signature check against the
-correct shard) is confirmed correct; the final backfill-and-land-rows step
-is not yet independently confirmed and is worth a follow-up check once
-that database is cleaned up.
+**Now fully verified end to end (issue #604).** The equivocation findings
+noted above were confirmed as exactly what they looked like — synthetic
+test contamination from `crates/server/tests/mirror_watcher.rs`'s own
+`a_deliberately_corrupted_sth_is_detected_as_equivocation` (deliberately
+fabricates a corrupted STH and records it, by design never resolving it
+afterward) — and resolved via `avalon resolve-equivocation`. Doing so
+exposed a real, separate, deeper bug: mirror storage/verification
+(`mirrored_entries`/`observed_sths`/`equivocation_findings`) had always
+been keyed on `network_id` alone, with no `shard_id` at all, even though
+every shard has its own independent `seq`/`tree_size` numbering. A node
+mirroring more than one shard of the same network got its inclusion-proof
+verification state silently corrupted between shards — present since
+#529, and #573's own closed ticket had explicitly flagged this exact gap
+as a known, separate follow-up on the backfill side (it only fixed the
+analogous *read/serving* path). Fixed in #604: migration
+`0071_mirror_shard_scoping` adds `shard_id` throughout, and every
+`avalon_chain::mirror` function now takes it as a required parameter, not
+an afterthought. `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` now correctly
+lands real, verified rows for a discovered shard — confirmed live against
+the exact scenario that first surfaced the bug (a node with its own local
+`core` history discovering and auto-mirroring `avalon-peer`'s real second
+shard end to end).
+
+**A second, unrelated bug found investigating the first**: this shared
+sandbox's ledger has grown large enough from months of live testing that
+a client walking every entry/proof up to its current `tree_size` can
+legitimately trip this server's own rate limiter (#363/#545) — and
+`mirror_watcher.rs`'s own backfill fetches had no handling for an HTTP 429
+at all, meaning a real backfill of a sufficiently large history would
+simply fail the tick outright instead of slowing down and continuing.
+Fixed with `send_with_rate_limit_retry` (respects `Retry-After`, bounded
+attempts) used by every backfill fetch.
 
 ### Discovering a forwarding node's configured authority (#526)
 

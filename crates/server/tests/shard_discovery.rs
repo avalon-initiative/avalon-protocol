@@ -191,14 +191,25 @@ async fn a_node_with_auto_mirror_enabled_starts_mirroring_a_discovered_shard() {
         );
         return;
     }
+    let Some(shard_id) = std::env::var("AVALON_SHARD_DISCOVERY_SHARD_ID").ok() else {
+        eprintln!(
+            "skipping: AVALON_SHARD_DISCOVERY_SHARD_ID not set — the discovered shard's own \
+             shard_id, needed to scope the mirrored_progress check (issue #604)"
+        );
+        return;
+    };
     let pool = live_test_pool().await;
 
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(180);
     loop {
-        let progress =
-            avalon_chain::mirror::mirrored_progress(&pool, &network_id, Some(&shard_url))
-                .await
-                .expect("mirrored_progress query failed");
+        let progress = avalon_chain::mirror::mirrored_progress(
+            &pool,
+            &network_id,
+            &shard_id,
+            Some(&shard_url),
+        )
+        .await
+        .expect("mirrored_progress query failed");
         if progress.verified_count > 0 {
             return;
         }

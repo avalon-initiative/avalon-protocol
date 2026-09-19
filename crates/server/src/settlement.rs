@@ -179,7 +179,7 @@ pub async fn latest_sth(
         }
     }
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
-    let sth = mirror_latest_sth(&state.pool, state.chain.network_id(), source_url)
+    let sth = mirror_latest_sth(&state.pool, state.chain.network_id(), shard_id, source_url)
         .await?
         .ok_or_else(|| sth_not_found_error(source_url))?;
     Ok(Json(sth.into()))
@@ -229,9 +229,15 @@ pub async fn sth_at_tree_size(
         }
     }
     let source_url = state.shard_mirror_sources.source_url_for(shard_id);
-    let sth = mirror_sth_at(&state.pool, state.chain.network_id(), tree_size, source_url)
-        .await?
-        .ok_or_else(|| sth_not_found_error(source_url))?;
+    let sth = mirror_sth_at(
+        &state.pool,
+        state.chain.network_id(),
+        shard_id,
+        tree_size,
+        source_url,
+    )
+    .await?
+    .ok_or_else(|| sth_not_found_error(source_url))?;
     Ok(Json(sth.into()))
 }
 
@@ -247,13 +253,21 @@ pub async fn sth_at_tree_size(
 async fn mirror_latest_sth(
     pool: &sqlx::PgPool,
     network_id: &str,
+    shard_id: &str,
     source_url: Option<&str>,
 ) -> Result<Option<SignedTreeHead>, AppError> {
-    let progress = mirror::mirrored_progress(pool, network_id, source_url).await?;
+    let progress = mirror::mirrored_progress(pool, network_id, shard_id, source_url).await?;
     if progress.verified_count == 0 {
         return Ok(None);
     }
-    mirror_sth_at(pool, network_id, progress.verified_count, source_url).await
+    mirror_sth_at(
+        pool,
+        network_id,
+        shard_id,
+        progress.verified_count,
+        source_url,
+    )
+    .await
 }
 
 /// Issue #520: `GET /ledger/sth/{tree_size}`'s mirror-backed fallback — see
@@ -266,11 +280,13 @@ async fn mirror_latest_sth(
 async fn mirror_sth_at(
     pool: &sqlx::PgPool,
     network_id: &str,
+    shard_id: &str,
     tree_size: i64,
     source_url: Option<&str>,
 ) -> Result<Option<SignedTreeHead>, AppError> {
     let hashes =
-        mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size, source_url).await?;
+        mirror::mirrored_entry_hashes_up_to(pool, network_id, shard_id, tree_size, source_url)
+            .await?;
     if (hashes.len() as i64) < tree_size {
         return Ok(None);
     }
@@ -279,6 +295,7 @@ async fn mirror_sth_at(
     let observed = mirror::observed_sth_matching_root(
         pool,
         network_id,
+        shard_id,
         tree_size,
         &hex::encode(root),
         source_url,
@@ -334,6 +351,7 @@ pub async fn consistency_proof(
         return mirror_consistency_proof(
             &state.pool,
             state.chain.network_id(),
+            shard_id,
             first,
             second,
             source_url,
@@ -396,17 +414,18 @@ pub async fn consistency_proof(
 async fn mirror_consistency_proof(
     pool: &sqlx::PgPool,
     network_id: &str,
+    shard_id: &str,
     first: i64,
     second: i64,
     source_url: Option<&str>,
 ) -> Result<Json<ConsistencyProofResponse>, AppError> {
-    let progress = mirror::mirrored_progress(pool, network_id, source_url).await?;
+    let progress = mirror::mirrored_progress(pool, network_id, shard_id, source_url).await?;
     if second > progress.verified_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
     let hashes_to_second =
-        mirror::mirrored_entry_hashes_up_to(pool, network_id, second, source_url).await?;
+        mirror::mirrored_entry_hashes_up_to(pool, network_id, shard_id, second, source_url).await?;
     let second_root = merkle::mth_of_hex_hashes(&hashes_to_second)
         .map_err(avalon_chain::SettlementError::Storage)?;
     let first_root = if first == 0 {
@@ -489,6 +508,7 @@ pub async fn inclusion_proof(
         return mirror_inclusion_proof(
             &state.pool,
             state.chain.network_id(),
+            shard_id,
             seq,
             tree_size,
             source_url,
@@ -543,18 +563,20 @@ pub async fn inclusion_proof(
 async fn mirror_inclusion_proof(
     pool: &sqlx::PgPool,
     network_id: &str,
+    shard_id: &str,
     seq: i64,
     tree_size: i64,
     source_url: Option<&str>,
 ) -> Result<Json<InclusionProofResponse>, AppError> {
-    let progress = mirror::mirrored_progress(pool, network_id, source_url).await?;
+    let progress = mirror::mirrored_progress(pool, network_id, shard_id, source_url).await?;
     if tree_size > progress.verified_count {
         return Err(AppError::LedgerRangeNotCommitted);
     }
 
-    let leaf_index = mirror::mirrored_leaf_index_for_seq(pool, network_id, seq, source_url)
-        .await?
-        .ok_or(AppError::InvalidProofQuery)?;
+    let leaf_index =
+        mirror::mirrored_leaf_index_for_seq(pool, network_id, shard_id, seq, source_url)
+            .await?
+            .ok_or(AppError::InvalidProofQuery)?;
     if leaf_index >= tree_size {
         return Err(AppError::InvalidProofQuery);
     }
@@ -562,7 +584,8 @@ async fn mirror_inclusion_proof(
     let tree_size_usize = tree_size as usize;
 
     let hashes =
-        mirror::mirrored_entry_hashes_up_to(pool, network_id, tree_size, source_url).await?;
+        mirror::mirrored_entry_hashes_up_to(pool, network_id, shard_id, tree_size, source_url)
+            .await?;
     let leaf_hash_hex = hashes[leaf_index_usize].clone();
     let proof = merkle::inclusion_proof_of_hex_hashes(leaf_index_usize, &hashes)
         .map_err(avalon_chain::SettlementError::Storage)?;
@@ -719,6 +742,7 @@ pub async fn list_entries(
         let entries = mirror::mirrored_entries_since(
             &state.pool,
             state.chain.network_id(),
+            shard_id,
             query.since_seq,
             limit,
             query.subject.as_deref(),
@@ -738,6 +762,14 @@ pub async fn list_entries(
 #[derive(Deserialize)]
 pub struct MirrorProgressQuery {
     pub network_id: String,
+    /// Issue #604: which shard this progress check is about — defaults to
+    /// `"core"`, matching every other handler's `default_shard_id()`
+    /// convention, so a pre-#604 caller (nothing sends this yet — see
+    /// `crate::retention::peer_confirms_coverage`'s own doc comment on
+    /// that being a known, separate follow-up) keeps its exact prior
+    /// behavior.
+    #[serde(default)]
+    pub shard_id: Option<String>,
     /// Issue #573: the *caller's own* base URL, when it knows one
     /// (`AVALON_NODE_URL`) — scopes the answer to specifically how far
     /// this node has mirrored *that* caller, not every peer it happens to
@@ -780,9 +812,14 @@ pub async fn mirror_progress(
     State(state): State<AppState>,
     Query(query): Query<MirrorProgressQuery>,
 ) -> Result<Json<MirrorProgressResponse>, AppError> {
-    let progress =
-        mirror::mirrored_progress(&state.pool, &query.network_id, query.source_url.as_deref())
-            .await?;
+    let shard_id = query.shard_id.as_deref().unwrap_or(default_shard_id());
+    let progress = mirror::mirrored_progress(
+        &state.pool,
+        &query.network_id,
+        shard_id,
+        query.source_url.as_deref(),
+    )
+    .await?;
     Ok(Json(MirrorProgressResponse {
         network_id: query.network_id,
         last_seq: progress.last_seq,

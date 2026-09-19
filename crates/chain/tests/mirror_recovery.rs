@@ -17,7 +17,7 @@
 
 use avalon_chain::mirror::{
     self, discard_mirrored_entries_from, resolve_equivocation, unresolved_equivocations,
-    EquivocationFinding, MirroredEntry,
+    EquivocationFinding, MirroredEntry, CORE_SHARD_ID,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -48,6 +48,7 @@ async fn insert_finding(
         pool,
         &EquivocationFinding {
             network_id: network_id.to_string(),
+            shard_id: CORE_SHARD_ID.to_string(),
             tree_size,
             source_a: "peer-a".to_string(),
             root_hash_a: root_hash_a.to_string(),
@@ -65,6 +66,7 @@ fn mirrored_entry(network_id: &str, seq: i64, verified_tree_size: i64) -> Mirror
     MirroredEntry {
         source_url: "http://peer".to_string(),
         network_id: network_id.to_string(),
+        shard_id: CORE_SHARD_ID.to_string(),
         seq,
         event_id: Uuid::new_v4(),
         kind: "identity.created".to_string(),
@@ -105,7 +107,7 @@ async fn a_finding_stays_unresolved_until_explicitly_resolved() {
     .await;
     insert_finding(&pool, &network_id, 20, &"ee".repeat(32), &"ff".repeat(32)).await;
 
-    let unresolved = unresolved_equivocations(&pool, &network_id)
+    let unresolved = unresolved_equivocations(&pool, &network_id, CORE_SHARD_ID)
         .await
         .expect("unresolved_equivocations failed");
     assert_eq!(
@@ -115,12 +117,13 @@ async fn a_finding_stays_unresolved_until_explicitly_resolved() {
     );
 
     // Resolve only the tree_size=10 finding.
-    let resolved_count = resolve_equivocation(&pool, &network_id, 10, &"aa".repeat(32))
-        .await
-        .expect("resolve_equivocation failed");
+    let resolved_count =
+        resolve_equivocation(&pool, &network_id, CORE_SHARD_ID, 10, &"aa".repeat(32))
+            .await
+            .expect("resolve_equivocation failed");
     assert_eq!(resolved_count, 1);
 
-    let unresolved_after = unresolved_equivocations(&pool, &network_id)
+    let unresolved_after = unresolved_equivocations(&pool, &network_id, CORE_SHARD_ID)
         .await
         .expect("unresolved_equivocations failed");
     assert_eq!(
@@ -131,7 +134,7 @@ async fn a_finding_stays_unresolved_until_explicitly_resolved() {
     assert_eq!(unresolved_after[0].tree_size, 20);
 
     // The unrelated network's finding must be untouched by any of this.
-    let other_unresolved = unresolved_equivocations(&pool, &other_network_id)
+    let other_unresolved = unresolved_equivocations(&pool, &other_network_id, CORE_SHARD_ID)
         .await
         .expect("unresolved_equivocations failed");
     assert_eq!(
@@ -141,9 +144,10 @@ async fn a_finding_stays_unresolved_until_explicitly_resolved() {
     );
 
     // Re-resolving an already-resolved finding is a no-op, not an error.
-    let resolved_again = resolve_equivocation(&pool, &network_id, 10, &"aa".repeat(32))
-        .await
-        .expect("re-resolving must not error");
+    let resolved_again =
+        resolve_equivocation(&pool, &network_id, CORE_SHARD_ID, 10, &"aa".repeat(32))
+            .await
+            .expect("re-resolving must not error");
     assert_eq!(resolved_again, 0);
 }
 
@@ -158,7 +162,7 @@ async fn resolving_records_the_legitimate_root_hash_and_timestamp() {
 
     insert_finding(&pool, &network_id, 42, &legitimate, &"cd".repeat(32)).await;
 
-    let resolved_count = resolve_equivocation(&pool, &network_id, 42, &legitimate)
+    let resolved_count = resolve_equivocation(&pool, &network_id, CORE_SHARD_ID, 42, &legitimate)
         .await
         .expect("resolve_equivocation failed");
     assert_eq!(resolved_count, 1);
@@ -199,12 +203,12 @@ async fn discard_only_removes_entries_at_or_after_the_conflicting_tree_size() {
             .expect("insert_mirrored_entry failed");
     }
 
-    let progress_before = mirror::mirrored_progress(&pool, &network_id, None)
+    let progress_before = mirror::mirrored_progress(&pool, &network_id, CORE_SHARD_ID, None)
         .await
         .expect("mirrored_progress failed");
     assert_eq!(progress_before.verified_count, 3);
 
-    let discarded = discard_mirrored_entries_from(&pool, &network_id, 10)
+    let discarded = discard_mirrored_entries_from(&pool, &network_id, CORE_SHARD_ID, 10)
         .await
         .expect("discard_mirrored_entries_from failed");
     assert_eq!(
@@ -212,7 +216,7 @@ async fn discard_only_removes_entries_at_or_after_the_conflicting_tree_size() {
         "should discard the entries at tree_size 10 and 15"
     );
 
-    let progress_after = mirror::mirrored_progress(&pool, &network_id, None)
+    let progress_after = mirror::mirrored_progress(&pool, &network_id, CORE_SHARD_ID, None)
         .await
         .expect("mirrored_progress failed");
     assert_eq!(
@@ -234,7 +238,7 @@ async fn discard_on_a_network_with_no_mirrored_entries_is_a_harmless_no_op() {
     let pool = test_pool().await;
     let network_id = unique_network_id("discard-empty");
 
-    let discarded = discard_mirrored_entries_from(&pool, &network_id, 1)
+    let discarded = discard_mirrored_entries_from(&pool, &network_id, CORE_SHARD_ID, 1)
         .await
         .expect("discard_mirrored_entries_from failed");
     assert_eq!(discarded, 0);
@@ -279,7 +283,7 @@ async fn full_recovery_lifecycle_leaves_only_pre_conflict_entries_and_clears_the
     .await;
 
     // Gate: the network is not eligible for further backfill while unresolved.
-    let unresolved = unresolved_equivocations(&pool, &network_id)
+    let unresolved = unresolved_equivocations(&pool, &network_id, CORE_SHARD_ID)
         .await
         .expect("unresolved_equivocations failed");
     assert_eq!(
@@ -289,14 +293,19 @@ async fn full_recovery_lifecycle_leaves_only_pre_conflict_entries_and_clears_the
     );
 
     // Investigation concludes: legitimate_root was genuine.
-    let resolved_count =
-        resolve_equivocation(&pool, &network_id, conflict_tree_size, &legitimate_root)
-            .await
-            .expect("resolve_equivocation failed");
+    let resolved_count = resolve_equivocation(
+        &pool,
+        &network_id,
+        CORE_SHARD_ID,
+        conflict_tree_size,
+        &legitimate_root,
+    )
+    .await
+    .expect("resolve_equivocation failed");
     assert_eq!(resolved_count, 1);
 
     // Gate clears.
-    let unresolved_after = unresolved_equivocations(&pool, &network_id)
+    let unresolved_after = unresolved_equivocations(&pool, &network_id, CORE_SHARD_ID)
         .await
         .expect("unresolved_equivocations failed");
     assert!(
@@ -308,12 +317,13 @@ async fn full_recovery_lifecycle_leaves_only_pre_conflict_entries_and_clears_the
     // design — see discard_mirrored_entries_from's own doc comment) so the
     // next backfill tick re-fetches and re-verifies from the now-trusted
     // branch rather than trusting what was already stored.
-    let discarded = discard_mirrored_entries_from(&pool, &network_id, conflict_tree_size)
-        .await
-        .expect("discard_mirrored_entries_from failed");
+    let discarded =
+        discard_mirrored_entries_from(&pool, &network_id, CORE_SHARD_ID, conflict_tree_size)
+            .await
+            .expect("discard_mirrored_entries_from failed");
     assert_eq!(discarded, 1);
 
-    let progress = mirror::mirrored_progress(&pool, &network_id, None)
+    let progress = mirror::mirrored_progress(&pool, &network_id, CORE_SHARD_ID, None)
         .await
         .expect("mirrored_progress failed");
     assert_eq!(

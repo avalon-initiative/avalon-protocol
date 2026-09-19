@@ -300,10 +300,13 @@ async fn main() {
             chain.clone(),
             state.indexer.clone(),
             mirror_config,
-            state.interest.clone(),
-            shard_registry.clone(),
-            state.own_base_url.clone(),
-            mirror_wake.clone(),
+            mirror_watcher::MirrorWatcherHandles {
+                interest: state.interest.clone(),
+                shard_registry: shard_registry.clone(),
+                own_base_url: state.own_base_url.clone(),
+                wake: mirror_wake.clone(),
+                own_shard_id: own_shard_id.clone(),
+            },
         ));
     }
 
