@@ -188,10 +188,16 @@ graph TD
   relay a channel/conversation event to via a real DHT interest lookup
   (#582/#583/#584) instead of #539's original full peer-table loop —
   presence, which has no channel/conversation scope, and any node
-  without a DHT identity still use that original loop. Section 2's
+  without a DHT identity still use that original loop. That lookup now
+  also has an optional per-hoster Redis fast-path in front of it (#585,
+  reusing #545's existing optional Redis) — checked first, and only a
+  same-fleet latency shortcut: an empty or failed Redis check falls
+  straight through to the DHT exactly as if no fast path were configured
+  at all, so it's never load-bearing for correctness. Section 2's
   interest-scoped mesh is real for the guild-channel/conversation case;
-  epic #580's remaining open sub-issues are #585 (local Redis fast-path)
-  and #586 (docs writeup once the mechanism settles further).
+  epic #580's one remaining open sub-issue is #586 (docs writeup once the
+  mechanism settles further — much of it has already landed here as each
+  ticket merged).
 - This document itself is new (filed alongside
   [#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)/[#535](https://github.com/LunarVagabond/avalon-protocol/issues/535)/[#542](https://github.com/LunarVagabond/avalon-protocol/issues/542))
   and will drift out of date as those tickets land — treat the linked

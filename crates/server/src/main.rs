@@ -141,12 +141,19 @@ async fn main() {
     // subscribe handlers have one code path regardless of whether the DHT
     // itself is enabled — see `AppState::interest`'s own doc comment.
     let (interest, interest_newly_active) = avalon_server::interest::InterestRegistry::new();
+    // Issue #585: resolved here (ahead of `redis_limiter` below, which is
+    // #545's own separate, differently-scoped Redis use) so it's ready
+    // before `interest::run_worker` spawns just below. `AVALON_REDIS_URL`
+    // being unset returns `None` here exactly as it does for
+    // `RedisLimiterState::from_env()`.
+    let interest_redis_fast_path = avalon_server::interest::RedisFastPath::from_env().await;
     if let Some(dht_commands) = dht_commands.clone() {
         tokio::spawn(avalon_server::interest::run_worker(
             interest.clone(),
             interest_newly_active,
             dht_commands,
             announce_config.own_base_url.clone(),
+            interest_redis_fast_path.clone(),
         ));
     }
 
@@ -202,6 +209,7 @@ async fn main() {
         interest,
         dht_commands,
         own_base_url: announce_config.own_base_url.clone(),
+        interest_redis_fast_path,
     };
 
     // Node-tiered durable history retention (issue #208, implementing

@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use redis::AsyncCommands;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -52,6 +53,90 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(45);
 /// generous enough that one or two missed refresh ticks (a transient
 /// hiccup) never drops a genuinely live subscription out of the DHT.
 const RECORD_TTL: Duration = Duration::from_secs(135);
+
+/// Optional per-hoster Redis fast-path in front of the DHT lookup (issue
+/// #585, reusing #545's already-decided optional per-hoster Redis —
+/// see `crate::redis_limits`'s own module doc comment for that precedent's
+/// full "strictly per-hoster, never network-wide" rationale, which applies
+/// identically here). [`run_worker`] writes to it on every `PutRecord`
+/// (in addition to, never instead of, the real DHT put — Redis is never
+/// the only place a registration lives); [`lookup`] checks it first and
+/// only falls through to a real DHT `GetRecord` when Redis has no answer,
+/// skipping a network hop for the common case where an interested peer is
+/// in this operator's own fleet.
+///
+/// **Never required for correctness.** Unset (the default) or
+/// momentarily unreachable both fall straight through to the DHT, exactly
+/// #583/#584's original behavior before this ticket — the DHT, not Redis,
+/// is the one thing assumed to exist and answer correctly.
+///
+/// **Known simplification, accepted rather than solved here**, same
+/// honesty-note posture `crate::redis_limits`'s own module doc takes for
+/// its fixed-window rate limiter: a scope's Redis entry is one `SET` with
+/// a single whole-key TTL, not a per-member one, so a fleet member whose
+/// own subscriber left keeps appearing in a Redis-fast-path lookup for as
+/// long as *any other* fleet member keeps refreshing that same scope.
+/// Worst case this produces one extra, harmless relay POST to a node with
+/// nobody left to deliver to — never a missed delivery, since the DHT
+/// lookup (unaffected by this) remains the source of truth whenever this
+/// fast path is unset or empty.
+#[derive(Clone)]
+pub struct RedisFastPath {
+    conn: redis::aio::ConnectionManager,
+}
+
+impl RedisFastPath {
+    /// `None` when `AVALON_REDIS_URL` is unset — every caller here treats
+    /// that identically to "Redis didn't have the answer," so nothing
+    /// downstream needs its own separate unconfigured-vs-empty branch.
+    pub async fn from_env() -> Option<Self> {
+        let url = std::env::var("AVALON_REDIS_URL")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let client =
+            redis::Client::open(url).expect("AVALON_REDIS_URL must be a valid redis:// URL");
+        let conn = redis::aio::ConnectionManager::new(client).await.expect(
+            "failed to connect to AVALON_REDIS_URL — check the Redis instance is reachable",
+        );
+        Some(Self { conn })
+    }
+
+    /// Adds `own_base_url` to `scope`'s member set and refreshes the
+    /// whole key's TTL — called alongside every real DHT `PutRecord`,
+    /// never instead of it (see this struct's own doc comment on why a
+    /// Redis-only registration isn't safe to rely on).
+    async fn put(&self, scope: InterestScope, own_base_url: &str) {
+        let mut conn = self.conn.clone();
+        let key = scope.redis_key();
+        let result: redis::RedisResult<()> = async {
+            conn.sadd::<_, _, ()>(&key, own_base_url).await?;
+            conn.expire::<_, ()>(&key, RECORD_TTL.as_secs() as i64)
+                .await?;
+            Ok(())
+        }
+        .await;
+        if let Err(err) = result {
+            tracing::warn!(error = %err, "avalon-interest: redis fast-path put failed, DHT put still went through");
+        }
+    }
+
+    /// Every base URL currently in `scope`'s member set, or `None` if
+    /// Redis has nothing for it (an empty set and a missing key are the
+    /// same "no answer" to a caller, and both are, correctly, not
+    /// distinguished from "Redis is momentarily unreachable" either — see
+    /// this struct's own doc comment).
+    async fn lookup(&self, scope: InterestScope) -> Option<Vec<String>> {
+        let mut conn = self.conn.clone();
+        match conn.smembers::<_, Vec<String>>(scope.redis_key()).await {
+            Ok(members) if !members.is_empty() => Some(members),
+            Ok(_) => None,
+            Err(err) => {
+                tracing::warn!(error = %err, "avalon-interest: redis fast-path lookup failed, falling through to the DHT");
+                None
+            }
+        }
+    }
+}
 
 /// What a node can hold local-subscriber interest in — the two shapes
 /// `crate::chat::ChatUpdate` actually routes on. Not `PartialOrd`/`Ord`:
@@ -86,6 +171,16 @@ impl InterestScope {
             }
         }
         bytes
+    }
+
+    /// This scope's key in the optional Redis fast-path (#585) — same
+    /// namespacing intent as [`dht_key`](Self::dht_key), just a plain
+    /// string since Redis keys are conventionally that, not raw bytes.
+    fn redis_key(&self) -> String {
+        match self {
+            InterestScope::Channel(id) => format!("avalon:interest:channel:{id}"),
+            InterestScope::Conversation(id) => format!("avalon:interest:conversation:{id}"),
+        }
     }
 }
 
@@ -216,8 +311,23 @@ impl InterestRegistry {
 /// channel.
 ///
 /// #584 is the ticket that actually calls this from the relay path; #583
-/// only has to prove it works.
-pub async fn lookup(dht_commands: &DhtCommandSender, scope: InterestScope) -> Vec<String> {
+/// only has to prove it works. `redis_fast_path`, when `Some` (#585),
+/// is checked first — a non-empty answer from it skips the DHT `GetRecord`
+/// entirely; `None`/empty falls straight through to the DHT exactly as if
+/// no fast path were configured at all.
+pub async fn lookup(
+    dht_commands: &DhtCommandSender,
+    scope: InterestScope,
+    redis_fast_path: Option<&RedisFastPath>,
+) -> Vec<String> {
+    if let Some(redis_fast_path) = redis_fast_path {
+        if let Some(mut members) = redis_fast_path.lookup(scope).await {
+            members.sort_unstable();
+            members.dedup();
+            return members;
+        }
+    }
+
     let (respond_to, receiver) = tokio::sync::oneshot::channel();
     if dht_commands
         .send(DhtCommand::GetRecord {
@@ -267,6 +377,7 @@ pub async fn run_worker(
     mut newly_active: mpsc::UnboundedReceiver<InterestScope>,
     dht_commands: DhtCommandSender,
     own_base_url: Option<String>,
+    redis_fast_path: Option<RedisFastPath>,
 ) {
     let Some(own_base_url) = own_base_url else {
         tracing::warn!(
@@ -282,6 +393,9 @@ pub async fn run_worker(
         tokio::select! {
             _ = refresh_interval.tick() => {
                 for scope in registry.active_scopes() {
+                    if let Some(redis_fast_path) = &redis_fast_path {
+                        redis_fast_path.put(scope, &own_base_url).await;
+                    }
                     if dht_commands.send(put_command(scope, &own_base_url, RECORD_TTL)).await.is_err() {
                         // The DHT worker is gone (process shutting down) —
                         // no point looping further, every future send
@@ -298,6 +412,9 @@ pub async fn run_worker(
                     // case above.
                     return;
                 };
+                if let Some(redis_fast_path) = &redis_fast_path {
+                    redis_fast_path.put(scope, &own_base_url).await;
+                }
                 if dht_commands.send(put_command(scope, &own_base_url, RECORD_TTL)).await.is_err() {
                     return;
                 }
@@ -332,6 +449,24 @@ mod tests {
         assert_eq!(
             InterestScope::Channel(id).dht_key(),
             InterestScope::Channel(id).dht_key()
+        );
+    }
+
+    #[test]
+    fn redis_key_never_collides_between_channel_and_conversation() {
+        let id = Uuid::new_v4();
+        assert_ne!(
+            InterestScope::Channel(id).redis_key(),
+            InterestScope::Conversation(id).redis_key()
+        );
+    }
+
+    #[test]
+    fn redis_key_is_deterministic_for_the_same_scope() {
+        let id = Uuid::new_v4();
+        assert_eq!(
+            InterestScope::Channel(id).redis_key(),
+            InterestScope::Channel(id).redis_key()
         );
     }
 
