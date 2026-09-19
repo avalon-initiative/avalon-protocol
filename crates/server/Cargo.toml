@@ -57,6 +57,7 @@ public-suffix.workspace = true
 # testing relay delivery only indirectly.
 tokio-tungstenite = "0.29"
 futures-util = { workspace = true }
+libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "tokio", "macros"] }
 
 [[bin]]
 name = "avalon-server"
