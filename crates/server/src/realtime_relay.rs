@@ -43,15 +43,17 @@
 //! who's actually subscribed," so the small-mesh case stays correct as a
 //! natural degenerate case rather than needing its own special path.
 //!
-//! **Known limitation, not solved here:** the DHT keyspace itself has no
-//! `network_id` segregation the way #362's HTTP peer table does (a
-//! different-network announce is rejected outright by `nodes::announce`,
-//! and mirror-watcher verifies per claimed `network_id`) — in practice
-//! this doesn't leak across networks today only because #582's bootstrap
-//! can itself only ever reach peers already admitted into this same
-//! network's peer table, not because the DHT layer enforces it directly.
-//! Worth a dedicated look if/when more than one network's nodes might
-//! ever share reachable infrastructure.
+//! **Cross-network reachability closed (#608)**: `crate::dht`'s Kademlia
+//! protocol id is now `network_id`-scoped, so a differently-networked peer
+//! can no longer negotiate a Kademlia RPC with this swarm at all — this
+//! module's own DHT lookups are structurally bounded to this node's own
+//! network now, not merely protected by #582's bootstrap incidentally
+//! never reaching a foreign peer. **Known limitation, not solved here
+//! (tracked as #610):** nothing yet authorizes *which scope* an
+//! already-admitted, same-network node can register interest in — a
+//! same-network node with no real subscriber for a channel/conversation
+//! can still register interest in it and receive this relay's content for
+//! it. See #610 for the concrete leak and proposed signed-membership fix.
 //!
 //! **Never touches Postgres.** A relayed chat message only feeds this
 //! node's `ChatBus` (live push to already-connected clients) — it is

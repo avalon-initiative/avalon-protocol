@@ -44,7 +44,9 @@ use std::time::{Duration, Instant};
 use libp2p::futures::StreamExt;
 use libp2p::kad::{self, store::MemoryStore, Mode, QueryId};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
-use libp2p::{identify, identity, noise, tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder};
+use libp2p::{
+    identify, identity, noise, tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::nodes::{PeerInfo, PeerTable};
@@ -89,11 +91,48 @@ pub type DhtCommandSender = mpsc::Sender<DhtCommand>;
 /// values it's accumulated so far — see [`run_worker`]'s `pending_gets`.
 type PendingGet = (oneshot::Sender<Vec<Vec<u8>>>, Vec<Vec<u8>>);
 
-/// Sent as part of libp2p's `identify` exchange — purely informational
-/// (never version-gates anything the way `crate::version` does for the
-/// HTTP peer table), but namespaced so this is never confused with some
-/// other project's libp2p protocol on the wire.
+/// Base namespace for the informational `identify` exchange — see
+/// [`identify_protocol_version`], which appends this node's `network_id`.
 const IDENTIFY_PROTOCOL_VERSION: &str = "/avalon/dht/1.0.0";
+
+/// Base namespace for this swarm's actual Kademlia wire protocol — see
+/// [`kad_protocol_name`], which appends this node's `network_id`. Unlike
+/// `IDENTIFY_PROTOCOL_VERSION`, this one is load-bearing: libp2p's
+/// multistream-select negotiates substreams by exact protocol-id string
+/// match, so two swarms configured with different `kad_protocol_name`
+/// values genuinely cannot exchange a single Kademlia RPC with each other —
+/// not "the message gets ignored," the substream negotiation itself fails.
+const KAD_PROTOCOL_VERSION: &str = "/avalon/kad/1.0.0";
+
+/// Issue #608: every network this node's DHT swarm exists for gets its own
+/// namespaced Kademlia protocol id, so a peer configured for a different
+/// `network_id` can never negotiate a Kademlia substream with this node at
+/// all — the real fix for the gap #584/#596 originally left as a known,
+/// accepted limitation ("the DHT keyspace itself has no `network_id`
+/// segregation... in practice this doesn't leak across networks today only
+/// because #582's bootstrap can itself only ever reach peers already
+/// admitted into this same network's peer table, not because the DHT layer
+/// enforces it directly"). This closes that gap structurally: reachability
+/// at the DHT layer is now bounded to `network_id`, not merely incidental
+/// on `nodes::announce`'s own HTTP-layer rejection of a mismatched
+/// `network_id` upstream of it. Two nodes with the same `network_id` still
+/// interoperate exactly as before — this changes nothing about behavior
+/// within one network, only what's reachable across two different ones.
+fn kad_protocol_name(network_id: &str) -> StreamProtocol {
+    StreamProtocol::try_from_owned(format!("{KAD_PROTOCOL_VERSION}/{network_id}"))
+        .expect("a network_id-scoped protocol string always starts with '/'")
+}
+
+/// The `identify` protocol-version string this node advertises — informs
+/// [`run_worker`]'s own defense-in-depth check (disconnecting a peer whose
+/// advertised value doesn't match, rather than relying solely on
+/// [`kad_protocol_name`] silently failing to negotiate). Purely an
+/// exchanged application-level field, not a wire protocol id the way
+/// [`kad_protocol_name`] is — `identify`'s own substream protocol id is
+/// fixed by the `identify` crate itself and isn't network-scoped by this.
+fn identify_protocol_version(network_id: &str) -> String {
+    format!("{IDENTIFY_PROTOCOL_VERSION}/{network_id}")
+}
 
 /// How often [`run_worker`] re-scans `PeerTable` for DHT identities it
 /// hasn't dialed yet, when `AVALON_DHT_BOOTSTRAP_SCAN_INTERVAL_SECS` is
@@ -166,6 +205,13 @@ pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, Identit
 /// all — every pre-#582 deployment's behavior, unchanged.
 pub struct DhtConfig {
     pub identity: identity::Keypair,
+    /// Issue #608: this node's own `chain.network_id()`, threaded through to
+    /// [`build_swarm`] so the Kademlia protocol id — and the `identify`
+    /// exchange's advertised version — are both scoped to it. Every
+    /// `DhtConfig` is built from a real, already-validated `network_id`
+    /// (`AVALON_NETWORK_ID` is required at startup, never defaulted — see
+    /// `main.rs`), so this is never empty in practice.
+    pub network_id: String,
     pub listen_addr: Multiaddr,
     /// Issue #582, discovered live against the two-node LAN sandbox's
     /// actual Docker-deployed shape: a containerized node's own
@@ -194,7 +240,7 @@ impl DhtConfig {
     /// convention (e.g. `AVALON_SERVER_ADDR`). `AVALON_LIBP2P_EXTERNAL_ADDR`
     /// is unset by default (native, non-containerized deployments don't
     /// need it — see `external_addr`'s own doc comment).
-    pub fn from_env() -> Result<Option<Self>, String> {
+    pub fn from_env(network_id: &str) -> Result<Option<Self>, String> {
         let enabled = std::env::var("AVALON_DHT_ENABLED")
             .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
             .unwrap_or(true);
@@ -225,6 +271,7 @@ impl DhtConfig {
 
         Ok(Some(Self {
             identity,
+            network_id: network_id.to_string(),
             listen_addr,
             external_addr,
             bootstrap_scan_interval,
@@ -243,8 +290,9 @@ pub struct DhtHandle {
     pub commands: DhtCommandSender,
 }
 
-fn build_swarm(identity: identity::Keypair) -> Swarm<DhtBehaviour> {
+fn build_swarm(identity: identity::Keypair, network_id: &str) -> Swarm<DhtBehaviour> {
     let peer_id = PeerId::from(identity.public());
+    let kad_config = kad::Config::new(kad_protocol_name(network_id));
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
         .with_tcp(
@@ -254,9 +302,9 @@ fn build_swarm(identity: identity::Keypair) -> Swarm<DhtBehaviour> {
         )
         .expect("TCP/noise/yamux transport construction is infallible for these fixed configs")
         .with_behaviour(|key| DhtBehaviour {
-            kad: kad::Behaviour::new(peer_id, MemoryStore::new(peer_id)),
+            kad: kad::Behaviour::with_config(peer_id, MemoryStore::new(peer_id), kad_config),
             identify: identify::Behaviour::new(identify::Config::new(
-                IDENTIFY_PROTOCOL_VERSION.to_string(),
+                identify_protocol_version(network_id),
                 key.public(),
             )),
         })
@@ -273,7 +321,8 @@ fn build_swarm(identity: identity::Keypair) -> Swarm<DhtBehaviour> {
 pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
     let external_addr = config.external_addr.clone();
     let bootstrap_scan_interval = config.bootstrap_scan_interval;
-    let mut swarm = build_swarm(config.identity);
+    let expected_identify_version = identify_protocol_version(&config.network_id);
+    let mut swarm = build_swarm(config.identity, &config.network_id);
     let local_peer_id = *swarm.local_peer_id();
     swarm.behaviour_mut().kad.set_mode(Some(Mode::Server));
     swarm
@@ -321,6 +370,7 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         peers,
         commands_rx,
         bootstrap_scan_interval,
+        expected_identify_version,
     ));
 
     DhtHandle {
@@ -359,11 +409,20 @@ fn new_dht_peer(info: &PeerInfo, known: &HashSet<PeerId>) -> Option<(PeerId, Vec
 /// hit exactly this), on `bootstrap_scan_interval` scans `peers` for any
 /// DHT identity not yet dialed, and (#583) services [`DhtCommand`]s from
 /// `commands`.
+///
+/// **Issue #608**: `expected_identify_version` is this node's own
+/// `identify_protocol_version(network_id)`. A peer whose reported
+/// `protocol_version` doesn't match it is immediately disconnected —
+/// defense in depth on top of [`kad_protocol_name`]'s own hard protocol-id
+/// mismatch (which already prevents any Kademlia RPC from working between
+/// differently-networked swarms regardless of this check): a mismatched
+/// peer is dropped outright here rather than left connected-but-useless.
 async fn run_worker(
     mut swarm: Swarm<DhtBehaviour>,
     peers: PeerTable,
     mut commands: mpsc::Receiver<DhtCommand>,
     bootstrap_scan_interval: Duration,
+    expected_identify_version: String,
 ) {
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
@@ -455,6 +514,23 @@ async fn run_worker(
                     identify::Event::Received { peer_id, info, .. },
                 )) = event
                 {
+                    if info.protocol_version != expected_identify_version {
+                        // Issue #608: a peer identifying for a different
+                        // network — its own kad protocol id already
+                        // couldn't negotiate a single RPC with this swarm
+                        // (see `kad_protocol_name`'s own doc comment), but
+                        // disconnect explicitly rather than leave a
+                        // connected-but-useless peer sitting in this node's
+                        // connection table indefinitely.
+                        tracing::warn!(
+                            %peer_id,
+                            expected = %expected_identify_version,
+                            got = %info.protocol_version,
+                            "avalon-dht: peer identified for a different network — disconnecting"
+                        );
+                        let _ = swarm.disconnect_peer_id(peer_id);
+                        continue;
+                    }
                     for addr in info.listen_addrs {
                         swarm.behaviour_mut().kad.add_address(&peer_id, addr);
                     }
@@ -499,6 +575,30 @@ async fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kad_protocol_name_differs_across_network_ids() {
+        assert_ne!(
+            kad_protocol_name("avalon-dev-local").as_ref(),
+            kad_protocol_name("avalon-mainnet-1").as_ref()
+        );
+    }
+
+    #[test]
+    fn kad_protocol_name_is_deterministic_for_the_same_network_id() {
+        assert_eq!(
+            kad_protocol_name("avalon-dev-local").as_ref(),
+            kad_protocol_name("avalon-dev-local").as_ref()
+        );
+    }
+
+    #[test]
+    fn identify_protocol_version_differs_across_network_ids() {
+        assert_ne!(
+            identify_protocol_version("avalon-dev-local"),
+            identify_protocol_version("avalon-mainnet-1")
+        );
+    }
 
     fn peer_info(base_url: &str, peer_id: Option<&str>, addrs: Vec<&str>) -> PeerInfo {
         PeerInfo {
@@ -575,7 +675,7 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_DHT_ENABLED");
         }
-        assert!(DhtConfig::from_env().unwrap().is_some());
+        assert!(DhtConfig::from_env("avalon-dev-local").unwrap().is_some());
     }
 
     #[test]
@@ -583,12 +683,12 @@ mod tests {
         unsafe {
             std::env::set_var("AVALON_DHT_ENABLED", "false");
         }
-        assert!(DhtConfig::from_env().unwrap().is_none());
+        assert!(DhtConfig::from_env("avalon-dev-local").unwrap().is_none());
 
         unsafe {
             std::env::set_var("AVALON_DHT_ENABLED", "0");
         }
-        assert!(DhtConfig::from_env().unwrap().is_none());
+        assert!(DhtConfig::from_env("avalon-dev-local").unwrap().is_none());
 
         unsafe {
             std::env::remove_var("AVALON_DHT_ENABLED");

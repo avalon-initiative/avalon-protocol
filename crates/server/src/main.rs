@@ -120,10 +120,11 @@ async fn main() {
     // the swarm bound and its worker spawned) before `announce_config`
     // below so this node's very first outbound announce already carries
     // it.
-    let dht_config = avalon_server::dht::DhtConfig::from_env().unwrap_or_else(|e| {
-        tracing::error!("refusing to start: {e}");
-        std::process::exit(1);
-    });
+    let dht_config =
+        avalon_server::dht::DhtConfig::from_env(chain.network_id()).unwrap_or_else(|e| {
+            tracing::error!("refusing to start: {e}");
+            std::process::exit(1);
+        });
     let mut dht_identity = None;
     let mut dht_commands = None;
     if let Some(dht_config) = dht_config {
