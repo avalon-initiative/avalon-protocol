@@ -65,6 +65,10 @@ async fn main() {
             prune_ledger(dry_run).await;
         }
         Some("rebuild-index") => rebuild_index().await,
+        Some("migrate-network") => {
+            let raw_args: Vec<String> = args.collect();
+            migrate_network(&raw_args).await;
+        }
         Some("discover-mirror-peers") => discover_mirror_peers().await,
         Some("check-switch-readiness") => {
             let raw_args: Vec<String> = args.collect();
@@ -115,7 +119,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -423,6 +427,76 @@ async fn rebuild_index() {
         "rebuilt index from {} ledger entries ({} events applied, {} skipped as undecodable) in {:.2?}",
         report.entries_read, report.events_applied, report.entries_skipped_undecodable, elapsed
     );
+}
+
+/// `avalon migrate-network --target-database-url <url> --target-network-id <id>`
+/// — issue #484's operator entry point for a deliberate
+/// `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset (per #476/
+/// #479's decision). Runs against this process's own `DATABASE_URL` as the
+/// *source* network and cuts over onto `--target-database-url`, which must
+/// already have migrations applied (`make migrate` against it) but no
+/// genesis of its own yet — `avalon_chain::migration::migrate_network`
+/// creates that genesis as part of the cutover. Safe to re-run after a
+/// partial failure; see that function's own doc comment for why.
+async fn migrate_network(raw_args: &[String]) {
+    let target_database_url = arg_value(raw_args, "--target-database-url").unwrap_or_else(|| {
+        eprintln!(
+            "usage: avalon migrate-network --target-database-url <url> --target-network-id <id>"
+        );
+        std::process::exit(1);
+    });
+    let target_network_id = arg_value(raw_args, "--target-network-id").unwrap_or_else(|| {
+        eprintln!(
+            "usage: avalon migrate-network --target-database-url <url> --target-network-id <id>"
+        );
+        std::process::exit(1);
+    });
+
+    let source_database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let source_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&source_database_url)
+        .await
+        .expect("failed to connect to source Postgres (DATABASE_URL)");
+    let target_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&target_database_url)
+        .await
+        .expect("failed to connect to target Postgres (--target-database-url)");
+
+    let report =
+        avalon_chain::migration::migrate_network(&source_pool, &target_pool, &target_network_id)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("migration failed: {e}");
+                std::process::exit(1);
+            });
+
+    println!(
+        "migrated {} (tree_size {}) -> {}{}",
+        report.source_network_id,
+        report.source_tree_size,
+        report.target_network_id,
+        if report.checkpoint_already_recorded {
+            " (checkpoint already recorded — this network was already migrated from this source; re-run is idempotent)"
+        } else {
+            ""
+        }
+    );
+    println!(
+        "carried over {} issuer registration(s) — no re-registration or re-signing required",
+        report.issuers_carried_over
+    );
+}
+
+/// Looks up `--flag <value>` in a raw CLI arg slice — shared by any command
+/// here that takes named flags instead of positional args.
+fn arg_value(raw_args: &[String], flag: &str) -> Option<String> {
+    raw_args
+        .iter()
+        .position(|a| a == flag)
+        .and_then(|i| raw_args.get(i + 1))
+        .cloned()
 }
 
 /// `avalon discover-mirror-peers` — issue #511. Closes the gap between
