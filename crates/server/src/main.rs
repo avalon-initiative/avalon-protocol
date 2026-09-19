@@ -146,6 +146,15 @@ async fn main() {
     // before `interest::run_worker` spawns just below. `AVALON_REDIS_URL`
     // being unset returns `None` here exactly as it does for
     // `RedisLimiterState::from_env()`.
+    // Issue #517: host resource metrics for `GET /nodes/status`'s
+    // `resources` block — always spawned (no config gate, unlike heavier
+    // opt-in workers above), since reading a handful of `sysinfo`-provided
+    // host stats every few seconds is cheap and diagnostic-only.
+    let host_metrics_sampler = avalon_server::resources::HostMetricsSampler::from_env();
+    tokio::spawn(avalon_server::resources::start_sampler(
+        host_metrics_sampler.clone(),
+    ));
+
     let interest_redis_fast_path = avalon_server::interest::RedisFastPath::from_env().await;
     if interest_redis_fast_path.is_some() {
         tracing::info!(
@@ -215,6 +224,7 @@ async fn main() {
         dht_commands,
         own_base_url: announce_config.own_base_url.clone(),
         interest_redis_fast_path,
+        host_metrics: host_metrics_sampler.clone(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing

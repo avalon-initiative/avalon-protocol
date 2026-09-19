@@ -100,4 +100,10 @@ pub struct AppState {
     /// required for correctness; the DHT lookup this sits in front of
     /// stays authoritative either way.
     pub interest_redis_fast_path: Option<crate::interest::RedisFastPath>,
+    /// Issue #517: host resource metrics (CPU/memory/disk/process) for
+    /// `GET /nodes/status`'s `resources` block — a shared snapshot kept
+    /// current by `crate::resources::start_sampler`, always present (no
+    /// config needed) and always best-effort. See `crate::resources`'s
+    /// own module doc comment.
+    pub host_metrics: crate::resources::HostMetricsSampler,
 }
