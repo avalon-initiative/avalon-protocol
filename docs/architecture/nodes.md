@@ -465,10 +465,18 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   for identities it hasn't dialed into its `rust-libp2p` `kad` swarm yet.
   Live-verified across the two-node LAN sandbox (`avalon-peer`): a peer
   announced over plain HTTP is picked up and successfully dialed into the
-  DHT with no separate bootstrap step. Still not built: any actual
-  interest registration/lookup over the DHT (that's #583) or re-scoping
-  #539's relay to use it (#584) — this issue is identity and bootstrap
-  only.
+  DHT with no separate bootstrap step, completing a real noise handshake
+  with the correct verified identity on both sides. A bootstrap-only
+  connection like this idles and closes after ~10s (libp2p's default
+  keep-alive timeout) since nothing yet asks anything of the DHT over
+  it — expected, not a defect; #583's actual interest queries are what
+  should keep a connection alive going forward. Also found live: a
+  Docker-deployed node needs `AVALON_LIBP2P_EXTERNAL_ADDR` set (see
+  `crate::dht`'s module doc) since it can never safely self-detect its
+  own LAN-reachable address the way a native process can. Still not
+  built: any actual interest registration/lookup over the DHT (that's
+  #583) or re-scoping #539's relay to use it (#584) — this issue is
+  identity and bootstrap only.
 - **One-hop live realtime relay across nodes (#539, implementing #535's
   decision)**: `POST /nodes/relay` (`crate::realtime_relay`) — see
   [`presence.md`](./presence.md) and [`communication.md`](./communication.md)'s
