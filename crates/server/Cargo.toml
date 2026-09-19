@@ -44,6 +44,7 @@ tempfile.workspace = true
 semver.workspace = true
 redis.workspace = true
 libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "tokio", "macros"] }
+sysinfo.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

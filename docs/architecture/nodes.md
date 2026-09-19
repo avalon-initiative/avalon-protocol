@@ -408,7 +408,16 @@ Concrete node-to-node version awareness, implemented by #368
   when known via peer gossip (#362's peer table), a `stale` flag — `true`
   when some known peer reports a *newer* version than this node's own. A
   self-diagnostic "you may want to upgrade" signal only; nothing reads it
-  to change behavior.
+  to change behavior. Since #517, the same response also carries a
+  `resources` block — this node's own host-level CPU/memory/disk/process
+  metrics plus its DB pool size/in-use — with the identical posture: every
+  field is independently optional, a metric this process can't read on a
+  given platform is `None` rather than a failed request, and nothing here
+  is ever used to gate protocol behavior (peer admission, mirroring,
+  consensus) or to signal a privileged node, per #292's "no orchestrator
+  node" decision. Reported values are always this node's own host only —
+  no cross-node resource aggregation happens in the protocol; any
+  topology/dashboard view built on this data is a separate client's job.
 
 Opt-in auto-update
 for self-hosted nodes — the further step of a node acting on a newer
@@ -751,6 +760,26 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     rather than granting it a fresh allotment), and a burst split across
     both nodes backpressured together instead of each node independently
     absorbing its own half (`crates/server/tests/redis_resource_limits.rs`).
+- **Host resource metrics on `GET /nodes/status` (#517)**: a `resources`
+  block — CPU core count/usage %/load averages, memory and swap used/total,
+  disk used/total for the node's own storage path (`AVALON_NODE_STORAGE_PATH`,
+  defaulting to the process's working directory) and, when set, a locally-
+  readable Postgres data directory (`AVALON_POSTGRES_DATA_PATH` — unset,
+  and simply omitted, for the common case of a remote/managed Postgres this
+  sandbox's own deployment already uses), process uptime, this process's
+  open-file-descriptor count as the cheapest cross-platform proxy for
+  "connections/handles currently held open," and the DB pool's own tracked
+  `size`/`in_use` (`sqlx::PgPool::size`/`num_idle`, no new instrumentation).
+  Built on the `sysinfo` crate rather than hand-rolled `/proc` parsing,
+  specifically because it abstracts Linux/macOS/Windows/BSD internally —
+  hosters aren't guaranteed to run Linux. CPU usage % needs a delta between
+  two `sysinfo` refreshes to mean anything, so a background task
+  (`crate::resources::start_sampler`, spawned unconditionally at startup)
+  keeps a shared, periodically-refreshed snapshot that the request handler
+  just reads, rather than blocking each `/nodes/status` call on a fresh
+  sample. Every leaf field is independently optional and best-effort — a
+  metric this process can't read on the host it happens to be running on
+  is `None`, never a failed request. See `crates/server/src/resources.rs`.
 
 ## Decisions and tickets
 

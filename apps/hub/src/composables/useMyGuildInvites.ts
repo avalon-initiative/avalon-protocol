@@ -4,9 +4,9 @@
 // invite showing up a little late is fine, this isn't a tier-1 realtime
 // need.
 import { onMounted, onUnmounted, ref } from 'vue'
-import * as api from '../api/client'
-import type { MyGuildInviteResponse } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import * as api from '@avalon/api-client'
+import type { MyGuildInviteResponse } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 

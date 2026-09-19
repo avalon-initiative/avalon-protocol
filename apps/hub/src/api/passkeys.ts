@@ -6,9 +6,9 @@
 // this one manages identity_keys (WebAuthn login credentials) — see
 // crates/server/src/passkeys.rs's own module doc comment for why they're
 // not the same table.
-import { runRegistrationCeremony } from '../crypto/webauthn'
-import * as api from './client'
-import type { PasskeyResponse } from './types'
+import { runRegistrationCeremony } from '@avalon/api-client'
+import * as api from '@avalon/api-client'
+import type { PasskeyResponse } from '@avalon/api-client'
 
 export async function addPasskey(token: string, label: string | null): Promise<PasskeyResponse> {
   const { ticket_id, challenge } = await api.startAddPasskey(token)

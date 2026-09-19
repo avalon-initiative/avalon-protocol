@@ -93,10 +93,27 @@ its data comes from — lives in its own file:
 [`./hub-implementation-log.md`](./hub-implementation-log.md). Everything
 below is real and implemented unless noted otherwise.
 
-- **`apps/hub/`** — Vue 3 + Vite + TypeScript, routed with `vue-router`. All
-  server traffic goes through `apps/hub/src/api/`; nothing calls `fetch`
-  directly outside it. `apps/mobile-hub/` is the same scaffold in a Tauri
-  shell, its own standalone Cargo package outside the root workspace.
+- **`apps/hub/`** — Vue 3 + Vite + TypeScript, routed with `vue-router`. The
+  fetch client, session store, and WebAuthn/signing-key auth ceremony live in
+  `packages/api-client` (`@avalon/api-client`, #60) — extracted out of
+  `apps/hub/src/api/` so nothing calls `fetch` directly outside it and
+  `apps/mobile-hub` imports the exact same code rather than a copy;
+  `apps/hub/src/api/` keeps its own domain-specific modules
+  (`guilds.ts`, `friends.ts`, ...) that build on top of it.
+- **`apps/mobile-hub/`** is the same identity/login UI and Vue3 components as
+  the web Hub, in a Tauri shell for desktop and mobile (#60), its own
+  standalone Cargo package (`src-tauri/`) outside the root workspace. The
+  session token is the one thing that differs per platform: the web Hub
+  keeps it in `localStorage`, mobile-hub stores it through the OS keychain
+  (macOS Keychain / Windows Credential Manager / Linux Secret Service) via
+  the `keyring` crate, behind a single native command in `src-tauri/src/lib.rs`
+  — everything else (the API client, the auth ceremony, session state) stays
+  in TypeScript, shared with the web Hub through `@avalon/api-client`'s
+  pluggable storage adapter. The avalon-server URL is configurable at
+  runtime from an in-app settings screen (default `http://127.0.0.1:8080`),
+  and the Tauri window's CSP is scoped to that origin rather than left
+  unset. Guild chat/friends/presence views are separate, later work under
+  epic #59 — #60's scope was wiring the shared client and auth flow only.
 - **The logged-in Hub is a persistent shell, not separate pages** —
   `HubShell.vue`'s sidebar (desktop) / bottom nav (mobile) around a
   `<RouterView />`, nested child routes that stay URL-addressable. Nav

@@ -5,10 +5,10 @@
 // merging needed, unlike the guild roster (issue #24's presence merge).
 import { ref } from 'vue'
 import { AvalonCard, AvalonConnectionCard } from '@avalon/ui'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { capabilityDescription } from '../api/connections'
 import { useMyConnections } from '../composables/useMyConnections'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import styles from '../styles/page.module.scss'
 
 const session = useSessionStore()

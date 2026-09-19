@@ -4,14 +4,14 @@
 // initiation (deliberately unauthenticated — the caller has no session for
 // the identity being recovered, so `startRecovery` below never takes a
 // token, unlike every other function in this module).
-import { runRegistrationCeremony } from '../crypto/webauthn'
-import * as api from './client'
+import { runRegistrationCeremony } from '@avalon/api-client'
+import * as api from '@avalon/api-client'
 import type {
   GuardianOfSummary,
   GuardianRequestSummary,
   GuardianSettingsResponse,
   RecoveryRequestResponse,
-} from './types'
+} from '@avalon/api-client'
 
 export function getGuardians(token: string): Promise<GuardianSettingsResponse> {
   return api.getGuardians(token)

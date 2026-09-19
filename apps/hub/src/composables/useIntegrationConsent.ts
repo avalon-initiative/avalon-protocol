@@ -3,9 +3,9 @@
 // capabilities don't change while a user is looking at the consent
 // screen), and owns the checked-capabilities set the view submits.
 import { ref, type Ref } from 'vue'
-import * as api from '../api/client'
-import type { IntegratorResponse } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import * as api from '@avalon/api-client'
+import type { IntegratorResponse } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 export function useIntegrationConsent(slug: Ref<string>) {
   const session = useSessionStore()

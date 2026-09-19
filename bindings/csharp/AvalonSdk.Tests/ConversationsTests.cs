@@ -78,7 +78,7 @@ public class ConversationsTests
         var handler = new StubHttpMessageHandler().Enqueue(HttpStatusCode.NotFound, "{}");
         var session = Session.ForTesting(new[] { "messages.read" }, handler.ToHttpClient());
 
-        var ex = await Assert.ThrowsAsync<AvalonServerException>(
+        var ex = await Assert.ThrowsAsync<AvalonRequestException>(
             () => session.Conversation(Guid.NewGuid()).MessagesAsync());
         Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
     }

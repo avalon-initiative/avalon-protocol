@@ -1,9 +1,12 @@
-// The one module allowed to call `fetch` (issue #55's invariant). Owns the
-// base URL and bearer header; every other module in apps/hub goes through
-// the typed functions below rather than touching fetch or the URL directly.
+// The one module allowed to call `fetch` (issue #55's invariant, extracted
+// into this shared package by #60 so apps/hub and apps/mobile-hub both go
+// through it rather than duplicating it). Owns the base URL and bearer
+// header; every other module goes through the typed functions below rather
+// than touching fetch or the URL directly.
 import { AvalonApiError, messageForStatus } from './errors'
-import { mintContinuationToken } from '../crypto/continuation'
-import { loadSigningKey } from '../crypto/signingKey'
+import { mintContinuationToken } from './crypto/continuation'
+import { loadSigningKey } from './crypto/signingKey'
+import { getSessionStorage } from './storage'
 import type {
   AchievementDefinitionResponse,
   AddPasskeyFinishRequest,
@@ -150,11 +153,12 @@ export function setServerUrl(url: string) {
 
 const BASE_URL = currentBaseUrl()
 
-// Issue #525's reconnect trigger reads these directly rather than
-// importing the Pinia session store — same reasoning `SERVER_URL_STORAGE_KEY`
-// above already established: this module owns fetch/localStorage access
-// and must not depend on a store that itself depends on this module.
-// Values must match `stores/session.ts`'s own storage keys exactly.
+// Issue #525's reconnect trigger reads these directly through the
+// pluggable session storage adapter (see ./storage) rather than importing
+// the Pinia session store — same reasoning as before this was extracted by
+// #60: this module owns the fetch/credential-storage access and must not
+// depend on a store that itself depends on this module. Values must match
+// `session.ts`'s own storage keys exactly.
 const SESSION_TOKEN_STORAGE_KEY = 'avalon:session:token'
 const SESSION_IDENTITY_ID_STORAGE_KEY = 'avalon:session:identityId'
 const SESSION_SIGNING_KEY_ID_STORAGE_KEY = 'avalon:session:signingKeyId'
@@ -174,17 +178,13 @@ const SESSION_SIGNING_KEY_ID_STORAGE_KEY = 'avalon:session:signingKeyId'
  * the caller falls back to surfacing the 401 as-is, same as before this
  * existed.
  */
-function tryMintReconnectToken(failedToken: string): string | null {
-  let storedToken: string | null
-  let identityId: string | null
-  let signingKeyId: string | null
-  try {
-    storedToken = localStorage.getItem(SESSION_TOKEN_STORAGE_KEY)
-    identityId = localStorage.getItem(SESSION_IDENTITY_ID_STORAGE_KEY)
-    signingKeyId = localStorage.getItem(SESSION_SIGNING_KEY_ID_STORAGE_KEY)
-  } catch {
-    return null
-  }
+async function tryMintReconnectToken(failedToken: string): Promise<string | null> {
+  const store = getSessionStorage()
+  const [storedToken, identityId, signingKeyId] = await Promise.all([
+    store.getItem(SESSION_TOKEN_STORAGE_KEY),
+    store.getItem(SESSION_IDENTITY_ID_STORAGE_KEY),
+    store.getItem(SESSION_SIGNING_KEY_ID_STORAGE_KEY),
+  ])
   if (!storedToken || storedToken !== failedToken || !identityId || !signingKeyId) {
     return null
   }
@@ -215,7 +215,7 @@ async function request<T>(
   // a node that still doesn't recognize the opaque token mints its own
   // fresh one again here, same as this one just did.
   if (response.status === 401 && options.token) {
-    const reconnectToken = tryMintReconnectToken(options.token)
+    const reconnectToken = await tryMintReconnectToken(options.token)
     if (reconnectToken) {
       response = await fetch(`${BASE_URL}${path}`, {
         method: options.method ?? 'GET',

@@ -3,8 +3,8 @@
 // GET /identities/profiles lookup api/friends.ts's listFriendsWithPresence
 // already uses. A missing profile falls back to the raw identity id,
 // same posture as Friend.displayName.
-import * as api from './client'
-import type { DiscoverPeopleResponse, PublicProfileResponse } from './types'
+import * as api from '@avalon/api-client'
+import type { DiscoverPeopleResponse, PublicProfileResponse } from '@avalon/api-client'
 
 export interface Suggestion {
   identityId: string

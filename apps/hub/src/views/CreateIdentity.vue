@@ -2,10 +2,10 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
-import { createIdentity, login } from '../api/identity'
+import { createIdentity, login } from '@avalon/api-client'
 import { findMySigningKeyId } from '../api/deviceGrants'
-import { loadSigningKey } from '../crypto/signingKey'
-import { useSessionStore } from '../stores/session'
+import { loadSigningKey } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -72,7 +72,7 @@ async function continueToHome() {
   // comment for why signing_key_id is cached here too.
   const secretKey = loadSigningKey(createdIdentityId.value)
   const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
-  session.login(token, createdIdentityId.value, signingKeyId)
+  await session.login(token, createdIdentityId.value, signingKeyId)
   await router.push({ name: 'home' })
 }
 </script>

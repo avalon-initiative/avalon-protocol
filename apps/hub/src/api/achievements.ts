@@ -9,8 +9,8 @@
 // — matching ADR #77's "the Hub renders verification results, it never
 // computes trust or rank" rule.
 import type { AchievementIconName } from '@avalon/ui'
-import * as api from './client'
-import type { AttestationHistoryEntryResponse, AttestationResponse } from './types'
+import * as api from '@avalon/api-client'
+import type { AttestationHistoryEntryResponse, AttestationResponse } from '@avalon/api-client'
 
 // `issuer` on the wire is "<namespace>:<slug>" (crates/server/src/achievements.rs's
 // `issuer_str`), never a full GlobalId with a trailing kind/verb.

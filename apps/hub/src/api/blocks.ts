@@ -4,8 +4,8 @@
 // (crates/server/src/blocks.rs's BlockListEntry has only `blocked`/
 // `created_at`), so it's resolved client-side via the same batch
 // GET /identities/profiles lookup.
-import * as api from './client'
-import type { BlockListEntry, PublicProfileResponse } from './types'
+import * as api from '@avalon/api-client'
+import type { BlockListEntry, PublicProfileResponse } from '@avalon/api-client'
 
 export interface BlockedUser {
   identityId: string

@@ -6,10 +6,10 @@
 // identity's full history render the same way, just with more rows.
 import { onMounted, onUnmounted, ref } from 'vue'
 import { AvalonCard, AvalonIcon } from '@avalon/ui'
-import { getMyHistory } from '../api/client'
+import { getMyHistory } from '@avalon/api-client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
-import type { HistoryEntryResponse } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import type { HistoryEntryResponse } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Activity.module.scss'
 

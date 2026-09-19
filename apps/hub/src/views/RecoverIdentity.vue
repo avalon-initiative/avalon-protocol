@@ -9,12 +9,12 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
-import { login } from '../api/identity'
+import { login } from '@avalon/api-client'
 import { findMySigningKeyId } from '../api/deviceGrants'
 import { finalizeRecoveryRequest, getIdentityRecoveryStatus, startRecovery } from '../api/recovery'
-import type { RecoveryRequestResponse } from '../api/types'
-import { loadSigningKey } from '../crypto/signingKey'
-import { useSessionStore } from '../stores/session'
+import type { RecoveryRequestResponse } from '@avalon/api-client'
+import { loadSigningKey } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -89,7 +89,7 @@ async function onFinalize() {
     // comment).
     const secretKey = loadSigningKey(identityId)
     const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
-    session.login(token, identityId, signingKeyId)
+    await session.login(token, identityId, signingKeyId)
     await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

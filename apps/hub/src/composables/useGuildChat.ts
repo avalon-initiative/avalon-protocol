@@ -13,12 +13,12 @@
 // not an error: every loader below short-circuits on it rather than hitting
 // the API with a malformed URL.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { hasGuildPermission, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
 import { toOldestFirst } from '../api/guildChat'
-import type { ArchivedMessageResponse, ChannelResponse, GuildResponse, MessageResponse } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import type { ArchivedMessageResponse, ChannelResponse, GuildResponse, MessageResponse } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 const MESSAGE_PAGE_SIZE = 50
 

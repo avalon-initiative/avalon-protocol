@@ -4,9 +4,9 @@
 // per membership, same "the membership endpoint doesn't embed the thing
 // the UI needs, fetch it separately" shape as friends/presence.
 import { onMounted, onUnmounted, ref } from 'vue'
-import * as api from '../api/client'
-import type { GuildResponse } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import * as api from '@avalon/api-client'
+import type { GuildResponse } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 // Guild metadata (rename, member count) isn't push-updated anywhere in
 // this build, same as friends' membership poll — 5 minutes is plenty.

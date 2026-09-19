@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatActivityTimestamp, summarizeActivityEntry } from './activityFeed'
-import type { HistoryEntryResponse } from './types'
+import type { HistoryEntryResponse } from '@avalon/api-client'
 
 function makeEntry(kind: string, payload: unknown = {}): HistoryEntryResponse {
   return {

@@ -398,6 +398,7 @@ mod live_tests {
             own_base_url: None,
             interest_redis_fast_path: None,
             mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+            host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
         }
     }
 

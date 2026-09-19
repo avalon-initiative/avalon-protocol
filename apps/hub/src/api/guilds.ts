@@ -6,7 +6,7 @@
 // and merges around for friends. Display names are resolved via
 // GET /identities/profiles (issue #161); mirrors that module's shape
 // closely.
-import * as api from './client'
+import * as api from '@avalon/api-client'
 import type {
   DiscoverGuildsParams,
   DiscoverGuildSummary,
@@ -18,7 +18,7 @@ import type {
   PresenceStatus,
   PublicProfileResponse,
   RoleResponse,
-} from './types'
+} from '@avalon/api-client'
 
 export interface GuildMember {
   identityId: string

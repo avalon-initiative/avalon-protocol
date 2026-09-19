@@ -6,7 +6,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Activity from './Activity.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 
 function mockFetchOnce(body: unknown) {
   vi.stubGlobal(

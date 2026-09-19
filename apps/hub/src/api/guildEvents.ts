@@ -3,7 +3,7 @@
 // sorting/formatting/RSVP-state, not roster/role merging or message
 // composition — following the same split guildChat.ts already documents.
 import type { AvalonRsvpRosterGroup } from '@avalon/ui'
-import type { EventResponse, RsvpRosterEntry, RsvpStatusValue } from './types'
+import type { EventResponse, RsvpRosterEntry, RsvpStatusValue } from '@avalon/api-client'
 
 // Matches crates/server/src/guild_events.rs::EVENT_TITLE_MAX_CHARS exactly
 // — surfaced here so a create/edit form can validate client-side before

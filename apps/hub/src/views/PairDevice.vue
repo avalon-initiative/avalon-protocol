@@ -8,8 +8,8 @@
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon/ui'
-import * as api from '../api/client'
-import { useSessionStore } from '../stores/session'
+import * as api from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import local from '../styles/PairDevice.module.scss'
 import styles from '../styles/page.module.scss'
 

@@ -16,9 +16,9 @@
 // rendered cards), so a poll tick briefly flipping it has no visible
 // effect on a page that already has content.
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { buildIntegratorsListQueryString } from '../api/integrations'
-import type { IntegratorSummary, ListIntegratorsParams } from '../api/types'
+import type { IntegratorSummary, ListIntegratorsParams } from '@avalon/api-client'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 

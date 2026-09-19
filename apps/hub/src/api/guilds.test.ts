@@ -33,7 +33,7 @@ import type {
   GuildMemberResponse,
   GuildResponse,
   RoleResponse,
-} from './types'
+} from '@avalon/api-client'
 
 const OWNER = 'owner-id'
 const OFFICER = 'officer-id'
