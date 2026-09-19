@@ -160,7 +160,7 @@ async fn relay_targets(state: &AppState, event: &RelayEvent) -> Vec<String> {
         return full_peer_loop_targets(state);
     };
 
-    interest::lookup(dht_commands, scope)
+    interest::lookup(dht_commands, scope, state.interest_redis_fast_path.as_ref())
         .await
         .into_iter()
         .filter(|base_url| Some(base_url) != state.own_base_url.as_ref())

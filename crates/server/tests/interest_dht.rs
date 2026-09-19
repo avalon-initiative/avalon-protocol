@@ -11,6 +11,13 @@
 //! ```text
 //! cargo test -p avalon-server --test interest_dht -- --ignored
 //! ```
+//!
+//! `redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead`
+//! (issue #585) additionally needs a real, reachable Redis —
+//! `AVALON_REDIS_URL=redis://<host>:<port> cargo test -p avalon-server
+//! --test interest_dht -- --ignored redis_fast_path`. Panics with a clear
+//! message rather than silently skipping if unset, matching this file's
+//! own `require_peer_server_url`-style convention elsewhere in this crate.
 
 use std::time::Duration;
 
@@ -94,7 +101,7 @@ async fn a_registered_channel_interest_is_found_by_a_lookup_from_a_different_nod
     // node B's get_record can find it.
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let found = interest::lookup(&node_b.commands, scope).await;
+    let found = interest::lookup(&node_b.commands, scope, None).await;
     assert_eq!(
         found,
         vec!["http://node-a.test".to_string()],
@@ -104,7 +111,58 @@ async fn a_registered_channel_interest_is_found_by_a_lookup_from_a_different_nod
     // A lookup for a channel nobody ever registered interest in finds
     // nothing — the negative case, proving this isn't just always
     // returning *something*.
-    let never_registered =
-        interest::lookup(&node_b.commands, InterestScope::Channel(Uuid::new_v4())).await;
+    let never_registered = interest::lookup(
+        &node_b.commands,
+        InterestScope::Channel(Uuid::new_v4()),
+        None,
+    )
+    .await;
     assert!(never_registered.is_empty());
+}
+
+/// Issue #585's own live acceptance test, against a real Redis
+/// (`AVALON_REDIS_URL`, required — panics with a clear message if unset
+/// rather than silently skipping). Proves the fast path actually answers
+/// on its own, not just alongside a working DHT: `run_worker` registers
+/// real interest (writing to both Redis and a real DHT swarm, as
+/// production does), but the *lookup* half is deliberately handed a dead
+/// DHT command channel (its receiver dropped before the call) — any
+/// attempt to actually fall through to the DHT would find nobody home. If
+/// this still finds the right answer, Redis alone must have supplied it.
+#[tokio::test]
+#[ignore]
+async fn redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead() {
+    let redis_fast_path = interest::RedisFastPath::from_env()
+        .await
+        .expect("AVALON_REDIS_URL must be set (and reachable) to run this test");
+
+    let node_peers = PeerTable::new();
+    let node = dht::start(node_peers, test_config()).await;
+
+    let (registry, newly_active) = InterestRegistry::new();
+    tokio::spawn(interest::run_worker(
+        registry.clone(),
+        newly_active,
+        node.commands.clone(),
+        Some("http://node-a.test".to_string()),
+        Some(redis_fast_path.clone()),
+    ));
+
+    let scope = InterestScope::Channel(Uuid::new_v4());
+    let _guard = registry.register(scope);
+
+    // Real network round trip for run_worker's immediate-on-registration
+    // put (both the Redis SADD and the DHT put_record) to actually land.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let (dead_commands, dead_receiver) = tokio::sync::mpsc::channel(1);
+    drop(dead_receiver);
+
+    let found = interest::lookup(&dead_commands, scope, Some(&redis_fast_path)).await;
+    assert_eq!(
+        found,
+        vec!["http://node-a.test".to_string()],
+        "the Redis fast path should answer on its own even though the DHT command \
+         channel handed to this lookup is already dead"
+    );
 }

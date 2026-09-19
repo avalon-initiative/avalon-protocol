@@ -506,6 +506,27 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   **Known limitation, not solved here:** the DHT keyspace has no
   `network_id` segregation the way the HTTP peer table does — see
   `crate::realtime_relay`'s own module doc comment.
+- **Local Redis fast-path in front of the interest lookup (#585, part of
+  epic #580)**: `crate::interest::RedisFastPath`, reusing #545's
+  already-decided optional per-hoster `AVALON_REDIS_URL` — checked first
+  on both registration and lookup, a same-fleet `SADD`/`SMEMBERS` shortcut
+  in front of the real DHT `PutRecord`/`GetRecord`, never a replacement
+  for it. Registration always writes to the DHT regardless of whether
+  Redis is configured; a lookup only skips the DHT hop when Redis
+  actually has a non-empty answer, falling straight through otherwise —
+  unset, unreachable, and empty are all handled identically. Live-
+  verified against a real Redis instance
+  (`crates/server/tests/interest_dht.rs`'s
+  `redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead`,
+  `--ignored`, requires `AVALON_REDIS_URL`): the lookup is handed a
+  deliberately-dead DHT command channel, so the only way it can find the
+  right answer is Redis alone. **Known simplification, accepted rather
+  than solved**: a scope's Redis entry has one whole-key TTL, not a
+  per-member one, so a departed fleet member's `base_url` can keep
+  appearing in a fast-path answer for as long as any other fleet member
+  keeps refreshing that same scope — worst case one extra harmless relay
+  POST, never a missed delivery, since the DHT remains the correctness
+  backstop.
 - **One-hop live realtime relay across nodes (#539, implementing #535's
   decision)**: `POST /nodes/relay` (`crate::realtime_relay`) — see
   [`presence.md`](./presence.md) and [`communication.md`](./communication.md)'s

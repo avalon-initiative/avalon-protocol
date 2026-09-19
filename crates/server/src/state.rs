@@ -94,4 +94,10 @@ pub struct AppState {
     /// itself anywhere (`AnnounceConfig`'s own degenerate case), so
     /// nothing to filter either.
     pub own_base_url: Option<String>,
+    /// Issue #585: the optional per-hoster Redis fast-path in front of
+    /// interest lookups — `None` unless `AVALON_REDIS_URL` is set (see
+    /// `crate::interest::RedisFastPath`'s own module doc comment). Never
+    /// required for correctness; the DHT lookup this sits in front of
+    /// stays authoritative either way.
+    pub interest_redis_fast_path: Option<crate::interest::RedisFastPath>,
 }
