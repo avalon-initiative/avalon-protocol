@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use avalon_server::{
-    auth, guild_messages, migrate, mirror_watcher, outbox, retention, state::AppState,
+    auth, guild_messages, migrate, mirror_push, mirror_watcher, outbox, retention, state::AppState,
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::layer::SubscriberExt;
@@ -162,6 +162,22 @@ async fn main() {
         ));
     }
 
+    // Issue #596: `Some` only when this node has a DHT identity to look
+    // up interested peers through at all — `None` end to end makes
+    // `outbox`'s push call site a no-op, exactly its behavior before this
+    // ticket existed. See `crate::mirror_push`'s own module doc comment.
+    let mirror_push_config = dht_commands.clone().map(|dht_commands| {
+        mirror_push::MirrorPushConfig::new(
+            dht_commands,
+            interest_redis_fast_path.clone(),
+            announce_config.own_base_url.clone(),
+        )
+    });
+    // Issue #596: shared between `mirror_watcher::run_worker` (if spawned)
+    // and `POST /mirror/notify`'s handler — always constructed, same
+    // "cheap, no config" posture as `interest` above.
+    let mirror_wake = std::sync::Arc::new(tokio::sync::Notify::new());
+
     // Issue #313/#532: built here (rather than down by `run_worker`'s own
     // spawn, its previous location) so its issue #526 failure-tracking
     // handle can be threaded into `AppState` below, before `remote_submit`
@@ -215,6 +231,7 @@ async fn main() {
         dht_commands,
         own_base_url: announce_config.own_base_url.clone(),
         interest_redis_fast_path,
+        mirror_wake: mirror_wake.clone(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -243,6 +260,7 @@ async fn main() {
         pool.clone(),
         chain.clone(),
         remote_submit,
+        mirror_push_config,
     ));
 
     // Hard-deletes guild message archive rows past their retention window —
@@ -261,6 +279,9 @@ async fn main() {
             chain.clone(),
             state.indexer.clone(),
             mirror_config,
+            state.interest.clone(),
+            state.own_base_url.clone(),
+            mirror_wake.clone(),
         ));
     }
 

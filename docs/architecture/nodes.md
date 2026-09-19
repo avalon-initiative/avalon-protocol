@@ -550,6 +550,47 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   (`MirrorWatcherError::UnpinnedNetwork`), not silently stored. Adding a
   trust anchor for a private/local network requires an entry in
   `docs/trusted-networks.json`, not just an env var.
+- **Push-based mirror sync (#596), on top of #299's polling, not
+  replacing it.** Two deliberate tiers now exist, not a legacy fallback
+  bolted onto a new feature: *(1) permissionless* — any mirror can watch
+  `AVALON_MIRROR_PEERS` with zero registration, exactly as before this
+  ticket, forever; *(2) push-registered* — a mirror additionally gets a
+  low-latency nudge the moment a peer it mirrors commits something new.
+  Addressing reuses #583's DHT-backed interest registration rather than a
+  new mechanism: `mirror_watcher::run_worker` registers this node's
+  interest in every `network_id` it successfully verifies an STH for
+  (`InterestScope::for_network`, `crates/server/src/interest.rs`) — never
+  an unverified one, so a hostile or unpinned network_id claim is never
+  registered. `crates/server/src/outbox.rs`'s drain worker, right after a
+  batch it just committed *locally* (never after a remote-submit — that
+  authority's own outbox pushes when it commits), resolves who's
+  registered for that `network_id` via the same DHT lookup and POSTs a
+  small `{network_id, tree_size}` body to each
+  (`crate::mirror_push::notify_peers`). **Delivery transport is plain
+  HTTP to the peer's known base URL**, not a libp2p stream — chosen
+  because a `reqwest::Client`, the peer's reachable `base_url` (from
+  #362's peer table via interest registration), and an axum route to
+  receive it all already exist for this exact shape of problem, while a
+  stream would need a new request-response protocol added to
+  `crate::dht`'s swarm (today only Kademlia put/get plus `identify`) for
+  a one-shot notification that never needs a persistent connection. The
+  DHT still does the actual addressing — only the last hop is HTTP.
+  `POST /mirror/notify`'s handler never trusts the body for anything: it
+  only wakes `mirror_watcher::run_worker`'s loop early
+  (`AppState::mirror_wake`, a `tokio::sync::Notify`), which then runs its
+  exact existing verify/corroborate/backfill pipeline — #300/#316's
+  multi-peer corroboration gate applies completely unchanged, since a
+  push only changes *when* a tick runs, never what it trusts once it
+  does. A missed or dropped push is never fatal: the same loop still
+  falls back to its normal poll tick regardless. Because push now covers
+  the common case, `AVALON_MIRROR_POLL_INTERVAL_SECS`'s default rose from
+  30s to 120s — poll's job for a push-registered peer shrinks to
+  "bound worst-case staleness if a push is ever missed," which doesn't
+  need a 30s cadence, and the wider default also cuts every deployment's
+  at-idle polling overhead 4x regardless of whether push is reaching it.
+  Live-verified against two real `avalon-server` processes sharing one
+  Postgres (`crates/server/tests/mirror_push.rs`, `--ignored`) — see that
+  file's own module doc for the exact two/three-node setup this needs.
 - No SDK-side discovery yet: `AvalonConfig { server_url, .. }` in
   `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
   server-to-server mechanism, not yet consumed by client-side routing.
@@ -718,7 +759,11 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   consensus (transparency log on Postgres instead, superseding part of #93);
   #40 log design and mirror sync (validator/consensus design dropped) —
   [#299](https://github.com/LunarVagabond/avalon-protocol/issues/299)
-  (implemented) is the actual mirror-watcher built against that design
+  (implemented) is the actual mirror-watcher built against that design.
+  [#596](https://github.com/LunarVagabond/avalon-protocol/issues/596)
+  (implemented) adds a push-registered fast path on top of #299's polling,
+  reusing #583's interest-registration design rather than a new
+  addressing mechanism — see the "Today in the repo" section above.
 - #180 (decided) / [#208](https://github.com/LunarVagabond/avalon-protocol/issues/208)
   (implemented) — node-tiered durable history retention: retention-tier
   config, payload pruning, the settlement-state checkpoint. The

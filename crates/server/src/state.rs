@@ -100,4 +100,12 @@ pub struct AppState {
     /// required for correctness; the DHT lookup this sits in front of
     /// stays authoritative either way.
     pub interest_redis_fast_path: Option<crate::interest::RedisFastPath>,
+    /// Issue #596: shared with `mirror_watcher::run_worker` (when spawned)
+    /// so `POST /mirror/notify`'s handler (`crate::mirror_push::notify`)
+    /// can wake its poll loop early instead of waiting out the rest of
+    /// the current `AVALON_MIRROR_POLL_INTERVAL_SECS` tick. Always
+    /// present, same "cheap, no config needed" posture as `interest`
+    /// above — a node not running the mirror-watcher at all still has
+    /// somewhere harmless for a stray notification to land.
+    pub mirror_wake: std::sync::Arc<tokio::sync::Notify>,
 }

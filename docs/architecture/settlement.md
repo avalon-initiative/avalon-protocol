@@ -467,7 +467,12 @@ Everything below is real and implemented unless noted otherwise.
   chain and the Merkle root, and both must pass.
 - **Mirror-facing proof/sync endpoints** (#211) and a **mirror-watcher**
   (#299) — a mirror can independently verify authenticity rather than
-  trusting whichever node answered its request.
+  trusting whichever node answered its request. **Push-registered mirrors
+  get a low-latency wake-up on top of polling (#596)** — the
+  corroboration/equivocation-detection gate below is unchanged in shape,
+  since a push only changes when a poll-equivalent tick runs, never what
+  it trusts; see [`nodes.md`](./nodes.md)'s own "Today in the repo" entry
+  for the full mechanism.
 - **`POST /ledger/submit`** (#313) — the node-to-node write endpoint.
 - **`GET /ledger/remote-submit-status`** (#526) — a forwarding node's
   discovery hint for which of its configured shard authorities is
@@ -491,6 +496,9 @@ for exact types, migrations, and algorithms behind every item above.
   + Signed Tree Heads), #211 (mirror-facing proof/sync endpoints), and #299
   (mirror-watcher: STH observation, equivocation detection, entry
   backfill) all implemented
+- [#596](https://github.com/LunarVagabond/avalon-protocol/issues/596)
+  (implemented) — push-registered mirror sync on top of #299's polling;
+  see [`nodes.md`](./nodes.md) for the mechanism.
 - #38 batching, #71 atomicity, #173 genesis/network identity,
   [#37](https://github.com/LunarVagabond/avalon-protocol/issues/37) (closed)
   the current provider

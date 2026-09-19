@@ -49,6 +49,17 @@
 //! needs zero configuration change. See
 //! `docs/architecture/settlement.md`'s "Write routing to the correct
 //! shard" section for the full design.
+//!
+//! **Push-based mirror sync (issue #596).** Right after a batch commits
+//! *locally* (never after a remote submit — that authority's own outbox
+//! fires its own push when it commits), [`drain_locked`] fetches this
+//! node's fresh `checkpoint()` and calls
+//! `crate::mirror_push::notify_peers` with it. This is the one and only
+//! place a new STH is announced to interested mirrors — see
+//! `crate::mirror_push`'s own module doc comment for the addressing/
+//! delivery/trust design. `mirror_push` being `None` (no DHT identity —
+//! `AVALON_DHT_ENABLED` unset) makes this call site a no-op, exactly
+//! `outbox`'s behavior before #596 existed.
 
 use std::collections::BTreeMap;
 
@@ -306,10 +317,11 @@ pub async fn run_worker(
     pool: PgPool,
     chain: PostgresSettlementProvider,
     remote: Option<RemoteSubmitConfig>,
+    mirror_push: Option<crate::mirror_push::MirrorPushConfig>,
 ) {
     let poll_interval = poll_interval_from_env();
     loop {
-        if let Err(err) = drain_once(&pool, &chain, remote.as_ref()).await {
+        if let Err(err) = drain_once(&pool, &chain, remote.as_ref(), mirror_push.as_ref()).await {
             tracing::error!("outbox worker: {err}");
         }
         tokio::time::sleep(poll_interval).await;
@@ -330,6 +342,7 @@ async fn drain_once(
     pool: &PgPool,
     chain: &PostgresSettlementProvider,
     remote: Option<&RemoteSubmitConfig>,
+    mirror_push: Option<&crate::mirror_push::MirrorPushConfig>,
 ) -> Result<(), sqlx::Error> {
     let mut conn = pool.acquire().await?;
 
@@ -344,7 +357,7 @@ async fn drain_once(
         return Ok(());
     }
 
-    let result = drain_locked(&mut conn, chain, remote).await;
+    let result = drain_locked(&mut conn, chain, remote, mirror_push).await;
 
     let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
         .bind(OUTBOX_DRAIN_LOCK_KEY)
@@ -358,6 +371,7 @@ async fn drain_locked(
     conn: &mut sqlx::PgConnection,
     chain: &PostgresSettlementProvider,
     remote: Option<&RemoteSubmitConfig>,
+    mirror_push: Option<&crate::mirror_push::MirrorPushConfig>,
 ) -> Result<(), sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, event FROM protocol_outbox WHERE committed_at IS NULL ORDER BY enqueued_at LIMIT $1",
@@ -450,6 +464,48 @@ async fn drain_locked(
                     .bind(commitment.batch_id)
                     .execute(&mut *conn)
                     .await?;
+                }
+
+                // Issue #596: only for a batch this node itself just
+                // committed locally — a remote-submit's authority fires
+                // its own push from its own outbox tick when it commits,
+                // so pushing here too would just be a second, redundant
+                // notification for the same STH. `checkpoint()` re-reads
+                // the STH `commit` just signed/stored rather than
+                // threading `tree_size` back out of `Commitment` itself
+                // (which is also the wire shape `POST /ledger/submit`
+                // returns, so widening it would touch more than this one
+                // call site for no real benefit).
+                if remote_target.is_none() {
+                    if let Some(mirror_push) = mirror_push {
+                        match chain.checkpoint().await {
+                            Ok(Some(sth)) => {
+                                crate::mirror_push::notify_peers(
+                                    mirror_push,
+                                    chain.network_id(),
+                                    sth.tree_size,
+                                )
+                                .await;
+                            }
+                            Ok(None) => {
+                                // Should never happen — a commit just
+                                // succeeded, so a checkpoint must exist.
+                                // Not fatal either way: the next tick's
+                                // commit (or the poll fallback) still
+                                // covers it.
+                                tracing::warn!(
+                                    "outbox worker: commit succeeded but checkpoint() found no \
+                                     STH — skipping this tick's push notification"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    "outbox worker: failed to read checkpoint for push \
+                                     notification, relying on peers' poll fallback: {err}"
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -555,8 +611,8 @@ mod tests {
         // rows, and both call `chain.commit` with them — one ledger entry
         // per event per racing drain instead of one, total.
         let (r1, r2) = tokio::join!(
-            drain_once(&pool, &chain, None),
-            drain_once(&pool, &chain, None),
+            drain_once(&pool, &chain, None, None),
+            drain_once(&pool, &chain, None, None),
         );
         r1.expect("drain 1 failed");
         r2.expect("drain 2 failed");
@@ -700,7 +756,7 @@ mod tests {
         // documented, correct behavior), retried on the next poll rather
         // than a bug.
         for _ in 0..20 {
-            let _ = drain_once(&pool, &chain, None).await;
+            let _ = drain_once(&pool, &chain, None, None).await;
             let both_committed: i64 =
                 sqlx::query_scalar("SELECT count(*) FROM ledger_entries WHERE event_id = ANY($1)")
                     .bind([core_event.id, game_event.id])

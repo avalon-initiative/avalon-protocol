@@ -397,6 +397,7 @@ mod live_tests {
             dht_commands: None,
             own_base_url: None,
             interest_redis_fast_path: None,
+            mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
         }
     }
 

@@ -4,6 +4,27 @@
 //! repo" section for the multi-peer polling/backfill/equivocation-
 //! detection design and why it lives in-process rather than as a CLI
 //! daemon.
+//!
+//! **Two deliberate tiers (issue #596).** Polling every configured peer on
+//! [`MirrorWatcherConfig::poll_interval`] is the permissionless baseline —
+//! mirroring this way needs zero registration and never will, since a
+//! public transparency log must never gate reading on registering with
+//! anyone. On top of that, this worker also registers this node's own
+//! interest (via `crate::interest::InterestScope::for_network`, the exact
+//! same DHT-backed registration #583 built for guild-channel/conversation
+//! routing) in every `network_id` it successfully verifies an STH for —
+//! never in one it merely hopes to mirror, so a hostile or unpinned
+//! `network_id` a peer might claim is never registered either. A
+//! committing authority (`crate::mirror_push::notify_peers`) resolves that
+//! registration and pushes a lightweight "go check" notification straight
+//! to this node, which wakes [`run_worker`]'s loop early via
+//! `AppState::mirror_wake` — see `crate::mirror_push`'s own module doc for
+//! the delivery mechanics and why a push is never trusted directly. Poll's
+//! role for a peer that's actually receiving pushes shrinks to "bound
+//! worst-case staleness if a push is ever missed or this node's DHT
+//! identity is disabled" — which is why [`MirrorWatcherConfig::from_env`]'s
+//! default interval is now meaningfully longer than it was pre-#596; see
+//! its own doc comment.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -73,11 +94,20 @@ impl MirrorWatcherConfig {
     /// entirely, the same "only spawn if configured" pattern
     /// `retention::RetentionConfig::should_prune` already uses.
     ///
-    /// Poll interval defaults to 30s, overridable via
-    /// `AVALON_MIRROR_POLL_INTERVAL_SECS` — an STH is a few hundred bytes
-    /// of JSON, so bandwidth isn't the constraint; this is node-to-node
-    /// traffic only (never touches end-user clients), and 30-60s is a
-    /// sensible default cadence rather than a tight poll loop.
+    /// Poll interval defaults to 120s (raised from 30s by issue #596),
+    /// overridable via `AVALON_MIRROR_POLL_INTERVAL_SECS` — an STH is a
+    /// few hundred bytes of JSON, so bandwidth was never the constraint;
+    /// 30s was originally chosen as a sensible cadence for a purely
+    /// poll-driven design. Now that a registered peer additionally gets a
+    /// low-latency push the moment a new STH actually exists (see this
+    /// module's own doc comment), polling's remaining job for that peer is
+    /// only to bound worst-case staleness if a push is ever missed — which
+    /// doesn't need a 30s cadence. 120s keeps that bound comfortably tight
+    /// (a missed push costs at most two minutes of extra staleness, not
+    /// thirty seconds) while cutting this worker's at-idle HTTP overhead
+    /// by 4x for every deployment, registered or not — see
+    /// `docs/architecture/nodes.md`'s mirror-sync section for the same
+    /// reasoning written up for operators.
     pub fn from_env() -> Option<Self> {
         let raw = std::env::var("AVALON_MIRROR_PEERS").ok()?;
         let peers: Vec<String> = parse_mirror_peers(&raw)
@@ -91,7 +121,7 @@ impl MirrorWatcherConfig {
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .map(Duration::from_secs)
-            .unwrap_or(Duration::from_secs(30));
+            .unwrap_or(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS));
         Some(Self {
             peers,
             poll_interval,
@@ -99,17 +129,33 @@ impl MirrorWatcherConfig {
     }
 }
 
+/// See [`MirrorWatcherConfig::from_env`]'s own doc comment for why this
+/// changed from 30 to 120 (issue #596).
+const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
+
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
 /// returns `Some`. Never returns. See module docs for the two-phase
 /// per-tick shape: every peer is polled for its STH independently first
 /// (phase 1), then peers are grouped by `network_id` and backfilled
 /// together (phase 2) — one unreachable/misbehaving peer never stops the
 /// others from being watched or from covering for it during backfill.
+///
+/// `interest`/`own_base_url` (issue #596) register this node's own
+/// interest in every `network_id` phase 1 actually verifies an STH for —
+/// harmless, no-op bookkeeping if `AVALON_DHT_ENABLED` is unset (see
+/// `crate::interest`'s own module doc comment on that). `wake` is woken by
+/// `crate::mirror_push::notify`'s handler on an incoming push
+/// notification, short-circuiting the rest of the current poll interval —
+/// see this module's own doc comment for the two-tier design this
+/// implements.
 pub async fn run_worker(
     pool: PgPool,
     chain: PostgresSettlementProvider,
     indexer: PostgresIndexer,
     config: MirrorWatcherConfig,
+    interest: crate::interest::InterestRegistry,
+    own_base_url: Option<String>,
+    wake: std::sync::Arc<tokio::sync::Notify>,
 ) {
     let client = reqwest::Client::new();
 
@@ -119,6 +165,21 @@ pub async fn run_worker(
         config.poll_interval,
         config.peers.join(", ")
     );
+    if own_base_url.is_none() {
+        tracing::info!(
+            "mirror-watcher: AVALON_NODE_URL is unset — this node can still receive push \
+             notifications targeted at whatever interest it registers, but registered peers \
+             pushing to it will only reach it once it has a reachable base URL to advertise"
+        );
+    }
+
+    // Issue #596: held for the life of this worker, one guard per
+    // network_id this tick's phase 1 has ever verified an STH for — never
+    // dropped, since this node keeps mirroring that network for as long as
+    // it's configured to. Registering here (only once an STH has actually
+    // verified, never on a bare, unverified peer URL) is what keeps a
+    // hostile or unpinned network_id claim from ever reaching the DHT.
+    let mut network_interest: HashMap<String, crate::interest::InterestGuard> = HashMap::new();
 
     loop {
         // Phase 1: poll every peer independently for its latest STH,
@@ -142,6 +203,18 @@ pub async fn run_worker(
                                     tracing::error!("mirror-watcher: {peer}: {err}");
                                 }
                             }
+                            network_interest
+                                .entry(sth.network_id.clone())
+                                .or_insert_with(|| {
+                                    tracing::info!(
+                                        network_id = %sth.network_id,
+                                        "mirror-watcher: registering interest for push-based \
+                                         mirror sync (issue #596)"
+                                    );
+                                    interest.register(crate::interest::InterestScope::for_network(
+                                        &sth.network_id,
+                                    ))
+                                });
                             verified_by_network
                                 .entry(sth.network_id.clone())
                                 .or_default()
@@ -165,7 +238,19 @@ pub async fn run_worker(
             }
         }
 
-        tokio::time::sleep(config.poll_interval).await;
+        // Issue #596: wait for whichever comes first — the normal poll
+        // interval, or a push notification waking this loop early. Either
+        // way the next iteration runs the exact same verify/corroborate/
+        // backfill pipeline above; a push only ever changes *when* that
+        // runs, never what it trusts.
+        tokio::select! {
+            _ = tokio::time::sleep(config.poll_interval) => {}
+            _ = wake.notified() => {
+                tracing::info!(
+                    "mirror-watcher: woke early due to a push notification, re-polling now"
+                );
+            }
+        }
     }
 }
 
@@ -989,7 +1074,10 @@ mod tests {
             config.peers,
             vec!["http://localhost:8081", "http://localhost:8082"]
         );
-        assert_eq!(config.poll_interval, Duration::from_secs(30));
+        assert_eq!(
+            config.poll_interval,
+            Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)
+        );
 
         unsafe {
             std::env::remove_var("AVALON_MIRROR_PEERS");
