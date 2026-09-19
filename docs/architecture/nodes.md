@@ -311,6 +311,29 @@ peer's announce without these fields still deserializes fine), and
 `crate::dht`'s worker watches that same table for identities it hasn't
 dialed into the DHT yet.
 
+**Peer-set growth past the bootstrap list, and shard-existence gossip
+(#599).** Before this, `nodes::run_worker` only ever re-announced to
+whatever `AVALON_BOOTSTRAP_PEERS` (or a network's `seed_nodes`) resolved
+to at startup — a peer discovered one hop further out was recorded in the
+passive `PeerTable` but never itself became an ongoing announce target, so
+propagation stopped one hop past the bootstrap set. Now the worker keeps
+its own growing `active_peers` list, seeded from the bootstrap set (still
+never evicted — it's still how a brand-new node reaches the mesh at all on
+a cold start) and extended, bounded by `AVALON_NODE_MAX_PEERS` (default
+50), with peers discovered through those announce exchanges — the same
+bounded-fan-out/full-eventual-reach property Kademlia's own k-bucket
+routing-table maintenance and gossip-membership protocols (SWIM,
+HyParView) rely on. Riding on the exact same mechanism, `AnnounceRequest`/
+`AnnounceResponse` now also carry a `known_shards` snapshot — a node
+authoritative for a shard (real, local, signed settlement history for it)
+gossips that fact, and every shard it's otherwise learned about, to its
+active peer-exchange partners; a node's `crate::nodes::ShardRegistry`
+accumulates this into a full picture of "every shard that exists on this
+network" without any operator manually listing them (see
+[`./settlement.md`](./settlement.md)'s own "Automatic shard discovery"
+section for the trust/verification side, which is completely unchanged
+by any of this).
+
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
 presence for identities *publishing through* that node lapses until they
@@ -537,6 +560,18 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   keeps refreshing that same scope — worst case one extra harmless relay
   POST, never a missed delivery, since the DHT remains the correctness
   backstop.
+- **Automatic peer-set growth and shard discovery (#599)**:
+  `nodes::run_worker` no longer announces only to `AVALON_BOOTSTRAP_PEERS`
+  forever — it keeps a growing `active_peers` list (bootstrap peers plus
+  peers promoted from discovery, capped by `AVALON_NODE_MAX_PEERS`,
+  default 50), and `AnnounceRequest`/`AnnounceResponse` now also gossip a
+  `ShardRegistry` snapshot bidirectionally. `crate::cross_shard`'s
+  aggregation and `crate::mirror_watcher`'s opt-in
+  `AVALON_MIRROR_ALL_DISCOVERED_SHARDS` both consume the same registry —
+  see [`settlement.md`](./settlement.md)'s "Automatic shard discovery"
+  section for the full design and live-verification results (a genuine
+  three-machine topology: this sandbox, `avalon-peer`, and
+  `avalon-peer-two`).
 - **One-hop live realtime relay across nodes (#539, implementing #535's
   decision)**: `POST /nodes/relay` (`crate::realtime_relay`) — see
   [`presence.md`](./presence.md) and [`communication.md`](./communication.md)'s

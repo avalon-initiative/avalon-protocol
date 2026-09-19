@@ -108,6 +108,12 @@ async fn main() {
     let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
 
     let peers = avalon_server::nodes::PeerTable::new();
+    // Issue #599, Layer 2: this node's anti-entropy view of every shard it
+    // currently knows exists — see `avalon_server::nodes::ShardRegistry`'s
+    // own doc comment. Always constructed (no config needed); starts empty
+    // and grows purely from gossip plus this node's own authoritative
+    // shard, if any.
+    let shard_registry = avalon_server::nodes::ShardRegistry::new();
 
     // Issue #582/#580: this node's libp2p DHT identity — on by default as
     // of ADR #593 (`AVALON_DHT_ENABLED=false`/`0` opts out), resolved (and
@@ -196,6 +202,12 @@ async fn main() {
         tracing::info!("avalon-server: outbox committing via remote Settlement authority (AVALON_SETTLEMENT_REMOTE_URL set)");
     }
 
+    // Issue #573: `AVALON_OWN_SHARD_ID`, defaulting to `"core"` — every
+    // pre-#573 deployment's implicit single shard. Resolved here (rather
+    // than inline in `state` below, its previous location) so #599's
+    // shard-gossip worker can be told the same value.
+    let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
+
     let state = AppState {
         pool: pool.clone(),
         chain: chain.clone(),
@@ -231,10 +243,7 @@ async fn main() {
         // Issue #526: `None` when `remote_submit` itself is `None` —
         // nothing this node could ever report as failing.
         remote_submit_status: remote_submit.as_ref().map(|r| r.status()),
-        // Issue #573: `AVALON_OWN_SHARD_ID`, defaulting to `"core"` —
-        // every pre-#573 deployment's implicit single shard, so unset
-        // means zero behavior change.
-        own_shard_id: std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string()),
+        own_shard_id: own_shard_id.clone(),
         shard_mirror_sources: avalon_server::settlement::ShardMirrorSources::from_env(),
         interest,
         dht_commands,
@@ -242,6 +251,7 @@ async fn main() {
         interest_redis_fast_path,
         mirror_wake: mirror_wake.clone(),
         host_metrics: host_metrics_sampler.clone(),
+        shard_registry: shard_registry.clone(),
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -281,8 +291,9 @@ async fn main() {
     // watches whatever peers `AVALON_MIRROR_PEERS` names, verifying and
     // storing their STHs, detecting equivocation, and backfilling entry
     // content — see crates/server/src/mirror_watcher.rs. Only spawned when
-    // configured, same "only run what's actually turned on" pattern the
-    // retention worker above uses.
+    // configured (either `AVALON_MIRROR_PEERS` or, per issue #599,
+    // `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`), same "only run what's
+    // actually turned on" pattern the retention worker above uses.
     if let Some(mirror_config) = mirror_watcher::MirrorWatcherConfig::from_env() {
         tokio::spawn(mirror_watcher::run_worker(
             pool.clone(),
@@ -290,6 +301,7 @@ async fn main() {
             state.indexer.clone(),
             mirror_config,
             state.interest.clone(),
+            shard_registry.clone(),
             state.own_base_url.clone(),
             mirror_wake.clone(),
         ));
@@ -304,6 +316,8 @@ async fn main() {
     tokio::spawn(avalon_server::nodes::run_worker(
         chain.clone(),
         peers,
+        shard_registry.clone(),
+        own_shard_id.clone(),
         announce_config,
         dht_identity,
     ));

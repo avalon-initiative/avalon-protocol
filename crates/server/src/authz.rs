@@ -399,6 +399,7 @@ mod live_tests {
             interest_redis_fast_path: None,
             mirror_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
+            shard_registry: crate::nodes::ShardRegistry::new(),
         }
     }
 

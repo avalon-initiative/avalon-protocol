@@ -103,10 +103,21 @@ graph TD
   [nodes.md](nodes.md)'s "A node's three configuration axes are
   independent" section; this used to be a real bug (#573) before every
   `/ledger/*` read became shard-scoped.
+- **A witness no longer needs to be told which shards exist in advance**
+  (#599). The diagram above still shows `W` gossiping/aggregating over
+  shards it was configured to check — that was the only mechanism before
+  #599; now a witness with zero `AVALON_KNOWN_SHARDS` configured can learn
+  a shard exists (and where to reach it) purely by being on the same
+  bounded peer mesh #362 already maintains, via the two-layer gossip
+  design [`nodes.md`](nodes.md) and [`settlement.md`](settlement.md)'s
+  "Automatic shard discovery" section describe — not a registry/directory
+  node, not a change to who's authoritative or how trust is checked, only
+  to how a witness finds out what to check in the first place.
 - Tracked by: [#528](https://github.com/LunarVagabond/avalon-protocol/issues/528)
   epic (all sub-issues implemented and merged except #544), sub-issues
   [#529](https://github.com/LunarVagabond/avalon-protocol/issues/529)–[#533](https://github.com/LunarVagabond/avalon-protocol/issues/533),
-  [#543](https://github.com/LunarVagabond/avalon-protocol/issues/543).
+  [#543](https://github.com/LunarVagabond/avalon-protocol/issues/543),
+  [#599](https://github.com/LunarVagabond/avalon-protocol/issues/599).
 
 ## 2. Realtime: interest-scoped mesh, not full broadcast
 
@@ -181,7 +192,11 @@ graph TD
   been stood up to *prove* agreement rather than just compute it once),
   and the managed-hosting shard (subgraph C above) is design-only (#531).
   See [settlement.md](settlement.md) and [nodes.md](nodes.md) for the
-  current, honest state and exact live numbers.
+  current, honest state and exact live numbers. **Which shards a witness
+  even knows to check is no longer purely config-based either** (#599) —
+  see [settlement.md](settlement.md)'s "Automatic shard discovery" section
+  for the two-layer gossip mechanism, live-verified across three real,
+  physically separate machines.
 - Realtime fan-out is one in-process `tokio::broadcast` channel
   (`crates/server/src/presence.rs`/`crates/server/src/chat.rs`) fanned out
   cross-node by `crate::realtime_relay`, which now resolves *who* to

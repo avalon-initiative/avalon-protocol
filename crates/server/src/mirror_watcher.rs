@@ -25,8 +25,32 @@
 //! identity is disabled" — which is why [`MirrorWatcherConfig::from_env`]'s
 //! default interval is now meaningfully longer than it was pre-#596; see
 //! its own doc comment.
+//!
+//! **Issue #599: `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` opts a node
+//! into auto-mirroring every shard it discovers via peer-announce gossip
+//! (`crate::nodes::ShardRegistry`), on top of whatever `AVALON_MIRROR_PEERS`
+//! explicitly names.** [`discover_and_verify_shard_peers`] is the
+//! deliberately separate verification path this needs: a
+//! statically-configured `AVALON_MIRROR_PEERS` entry is verified against
+//! this process's pinned `docs/trusted-networks.json` network trust
+//! anchor (`fetch_and_verify_sth`, below) — the right check for mirroring
+//! another *whole network*. A gossip-discovered shard is a different
+//! shard *within this node's own network*, signed with an
+//! integrator-registered `shard_settlement` key (#543), which almost
+//! never matches this network's root trust-anchor key — so a discovered
+//! shard's STH is verified via `crate::cross_shard::resolve_shard_verify_keys_from_db`
+//! instead, the exact same #543 mechanism `crate::cross_shard`'s own
+//! aggregation already uses. Only a shard whose STH verifies this way is
+//! ever added to this tick's backfill targets; discovering a shard's
+//! existence never implies trusting it (same invariant #599's own ticket
+//! states explicitly). `AVALON_MIRROR_PEERS`/`AVALON_KNOWN_SHARDS` remain
+//! valid, unchanged, narrower configuration — this is additive. #596's push
+//! registration and #599's discovered-shard auto-mirroring are independent
+//! of each other and compose without special-casing: a discovered shard is
+//! just another network-scoped mirror target as far as push/interest
+//! registration is concerned.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
@@ -84,14 +108,26 @@ pub struct MirrorWatcherConfig {
     /// (`crate::settlement::ShardMirrorSources`) needs that mapping.
     pub peers: Vec<String>,
     pub poll_interval: Duration,
+    /// Every `shard_id` explicitly named in `AVALON_MIRROR_PEERS`
+    /// (`"core"` for a bare, un-prefixed entry) — issue #599's
+    /// auto-discovery pass skips these, since an operator who explicitly
+    /// configured a shard already gets it mirrored via `peers` above and
+    /// verified via the network-trust-anchor path; auto-discovery only
+    /// ever adds a shard this config doesn't already name.
+    pub known_shard_ids: BTreeSet<String>,
+    /// `AVALON_MIRROR_ALL_DISCOVERED_SHARDS` (issue #599) — see this
+    /// module's own doc comment. Opt-in, independent of whether `peers`
+    /// above is empty: a node can auto-mirror discovered shards with zero
+    /// explicit `AVALON_MIRROR_PEERS` configuration at all.
+    pub auto_mirror_discovered: bool,
 }
 
 impl MirrorWatcherConfig {
-    /// `AVALON_MIRROR_PEERS` — comma-separated peer base URLs, each
-    /// optionally `shard_id=`-prefixed (see [`parse_mirror_peers`]).
-    /// Unset or empty means this node isn't watching anyone; `None` here
-    /// is the signal `main.rs` uses to skip spawning the watcher
-    /// entirely, the same "only spawn if configured" pattern
+    /// `Some` when either `AVALON_MIRROR_PEERS` names at least one peer,
+    /// or `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` (issue #599) — either
+    /// alone is enough for this worker to have something to do; `None`
+    /// (neither set) is the signal `main.rs` uses to skip spawning the
+    /// watcher entirely, the same "only spawn if configured" pattern
     /// `retention::RetentionConfig::should_prune` already uses.
     ///
     /// Poll interval defaults to 120s (raised from 30s by issue #596),
@@ -109,14 +145,24 @@ impl MirrorWatcherConfig {
     /// `docs/architecture/nodes.md`'s mirror-sync section for the same
     /// reasoning written up for operators.
     pub fn from_env() -> Option<Self> {
-        let raw = std::env::var("AVALON_MIRROR_PEERS").ok()?;
-        let peers: Vec<String> = parse_mirror_peers(&raw)
+        let raw = std::env::var("AVALON_MIRROR_PEERS")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let parsed = raw.as_deref().map(parse_mirror_peers).unwrap_or_default();
+        let peers: Vec<String> = parsed.iter().map(|(_shard_id, url)| url.clone()).collect();
+        let known_shard_ids: BTreeSet<String> = parsed
             .into_iter()
-            .map(|(_shard_id, url)| url)
+            .map(|(shard_id, _url)| shard_id)
             .collect();
-        if peers.is_empty() {
+
+        let auto_mirror_discovered = std::env::var("AVALON_MIRROR_ALL_DISCOVERED_SHARDS")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+
+        if peers.is_empty() && !auto_mirror_discovered {
             return None;
         }
+
         let poll_interval = std::env::var("AVALON_MIRROR_POLL_INTERVAL_SECS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -125,6 +171,8 @@ impl MirrorWatcherConfig {
         Some(Self {
             peers,
             poll_interval,
+            known_shard_ids,
+            auto_mirror_discovered,
         })
     }
 }
@@ -132,6 +180,77 @@ impl MirrorWatcherConfig {
 /// See [`MirrorWatcherConfig::from_env`]'s own doc comment for why this
 /// changed from 30 to 120 (issue #596).
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
+
+/// Issue #599: verifies (never trusts by discovery alone) every
+/// gossip-discovered shard this node hasn't already explicitly
+/// configured, when `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`. See this
+/// module's own doc comment for why this uses a different verification
+/// path (`crate::cross_shard::resolve_shard_verify_keys_from_db`, #543)
+/// than [`fetch_and_verify_sth`] below. Returns `(url, SignedTreeHead)`
+/// for every discovered shard whose STH verified — a shard that's
+/// unreachable, has no #543-registered key yet, or fails verification is
+/// simply left out this tick (retried again next tick, never trusted on
+/// spec alone).
+async fn discover_and_verify_shard_peers(
+    client: &reqwest::Client,
+    pool: &PgPool,
+    shard_registry: &crate::nodes::ShardRegistry,
+    own_base_url: Option<&str>,
+    already_configured: &BTreeSet<String>,
+) -> Vec<(String, SignedTreeHead)> {
+    let mut verified = Vec::new();
+    for shard_id in shard_registry.known_shard_ids() {
+        if already_configured.contains(&shard_id) {
+            continue;
+        }
+        let Some(url) = shard_registry.best_url(&shard_id) else {
+            continue;
+        };
+        if Some(url.as_str()) == own_base_url {
+            continue;
+        }
+
+        let db_keys = crate::cross_shard::resolve_shard_verify_keys_from_db(pool, &shard_id).await;
+        if db_keys.is_empty() {
+            tracing::info!(
+                shard_id,
+                url = %url,
+                "mirror-watcher: discovered shard has no #543-registered shard_settlement key \
+                 resolved yet — not auto-mirroring until one is",
+            );
+            continue;
+        }
+
+        match fetch_latest_sth(client, &url, Some(&shard_id)).await {
+            Ok((sth, _peer_protocol_version)) => {
+                if db_keys.iter().any(|key| sth::verify_tree_head(key, &sth)) {
+                    tracing::info!(
+                        event = "auto_mirror_discovered_shard",
+                        shard_id,
+                        url = %url,
+                        "auto-mirroring a newly discovered shard whose STH verified against a \
+                         #543-registered shard_settlement key",
+                    );
+                    verified.push((url, sth));
+                } else {
+                    tracing::warn!(
+                        shard_id,
+                        url = %url,
+                        "mirror-watcher: discovered shard's STH failed verification against \
+                         every #543-registered key — not auto-mirroring",
+                    );
+                }
+            }
+            Err(err) => tracing::warn!(
+                shard_id,
+                url = %url,
+                error = %err,
+                "mirror-watcher: failed to fetch STH for a discovered shard",
+            ),
+        }
+    }
+    verified
+}
 
 /// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
 /// returns `Some`. Never returns. See module docs for the two-phase
@@ -147,24 +266,40 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 /// `crate::mirror_push::notify`'s handler on an incoming push
 /// notification, short-circuiting the rest of the current poll interval —
 /// see this module's own doc comment for the two-tier design this
-/// implements.
+/// implements. `shard_registry`/`own_base_url` also feed
+/// [`discover_and_verify_shard_peers`] (issue #599), folded into the same
+/// `verified_by_network` map phase 1 builds (same
+/// `insert_observation`/equivocation-check/backfill treatment either
+/// way) whenever `config.auto_mirror_discovered` is set — a discovered
+/// shard peer is otherwise indistinguishable from a statically-configured
+/// one from phase 2 onward.
 pub async fn run_worker(
     pool: PgPool,
     chain: PostgresSettlementProvider,
     indexer: PostgresIndexer,
     config: MirrorWatcherConfig,
     interest: crate::interest::InterestRegistry,
+    shard_registry: crate::nodes::ShardRegistry,
     own_base_url: Option<String>,
     wake: std::sync::Arc<tokio::sync::Notify>,
 ) {
     let client = reqwest::Client::new();
 
-    tracing::info!(
-        "mirror-watcher: watching {} peer(s) every {:?}: {}",
-        config.peers.len(),
-        config.poll_interval,
-        config.peers.join(", ")
-    );
+    if config.peers.is_empty() {
+        tracing::info!(
+            "mirror-watcher: no statically-configured peers (AVALON_MIRROR_PEERS unset) — \
+             auto_mirror_discovered={}",
+            config.auto_mirror_discovered
+        );
+    } else {
+        tracing::info!(
+            "mirror-watcher: watching {} peer(s) every {:?}: {} (auto_mirror_discovered={})",
+            config.peers.len(),
+            config.poll_interval,
+            config.peers.join(", "),
+            config.auto_mirror_discovered
+        );
+    }
     if own_base_url.is_none() {
         tracing::info!(
             "mirror-watcher: AVALON_NODE_URL is unset — this node can still receive push \
@@ -224,6 +359,34 @@ pub async fn run_worker(
                     }
                 }
                 Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
+            }
+        }
+
+        if config.auto_mirror_discovered {
+            let discovered = discover_and_verify_shard_peers(
+                &client,
+                &pool,
+                &shard_registry,
+                own_base_url.as_deref(),
+                &config.known_shard_ids,
+            )
+            .await;
+            for (peer, sth) in discovered {
+                let observed = ObservedSth::from_sth(&peer, &sth, OffsetDateTime::now_utc());
+                match mirror::insert_observation(&pool, &observed).await {
+                    Ok(is_new) => {
+                        if is_new {
+                            if let Err(err) = check_equivocation(&pool, &chain, &observed).await {
+                                tracing::error!("mirror-watcher: {peer}: {err}");
+                            }
+                        }
+                        verified_by_network
+                            .entry(sth.network_id.clone())
+                            .or_default()
+                            .push((peer.clone(), sth));
+                    }
+                    Err(err) => tracing::error!("mirror-watcher: {peer}: {err}"),
+                }
             }
         }
 
@@ -379,7 +542,7 @@ async fn fetch_and_verify_sth(
     anchors: &[avalon_sdk::network::TrustAnchorEntry],
     peer: &str,
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
-    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer).await?;
+    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer, None).await?;
     check_peer_version(peer, &peer_protocol_version)?;
 
     let Some(verify_key) = verify_key_for_network(anchors, &sth.network_id) else {
@@ -430,13 +593,29 @@ fn verify_key_for_network(
 /// `protocol_version` — kept apart from [`SignedTreeHead`] itself (see
 /// `SignedTreeHeadDto`'s own doc comment): the version is never part of
 /// the signed payload.
+///
+/// `shard_id`, when given, is sent as an explicit `?shard_id=` query
+/// param — issue #573's own footgun, restated here since [`discover_and_verify_shard_peers`]
+/// found it live: a peer serving more than one shard (mirroring one,
+/// authoring another, same as `avalon-peer` in this project's own sandbox
+/// topology) answers a bare `/ledger/sth/latest` with whichever shard
+/// *it* treats as its own default, not necessarily the one being asked
+/// about — silently fetching and then failing to verify the wrong
+/// shard's STH entirely. `None` preserves the original bare-request
+/// behavior for callers that already know they're talking to a
+/// single-shard peer (or are deliberately asking for that peer's own
+/// default).
 async fn fetch_latest_sth(
     client: &reqwest::Client,
     peer: &str,
+    shard_id: Option<&str>,
 ) -> Result<(SignedTreeHead, String), MirrorWatcherError> {
     let url = format!("{peer}/ledger/sth/latest");
-    let dto: SignedTreeHeadDto = client
-        .get(&url)
+    let mut request = client.get(&url);
+    if let Some(shard_id) = shard_id {
+        request = request.query(&[("shard_id", shard_id)]);
+    }
+    let dto: SignedTreeHeadDto = request
         .send()
         .await?
         .error_for_status()?
@@ -1053,12 +1232,19 @@ mod tests {
     // `cargo test` runs tests in the same binary concurrently by default,
     // and both cases mutate the same process-wide `AVALON_MIRROR_PEERS` env
     // var — two separate tests racing on it would be flaky.
+    // All `AVALON_MIRROR_PEERS`/`AVALON_MIRROR_ALL_DISCOVERED_SHARDS`
+    // cases live in this one test (rather than separate `#[test]` fns),
+    // same reasoning as the comment above: `cargo test` runs tests in one
+    // binary concurrently by default, and every case here mutates the
+    // same process-wide env vars — separate tests racing on them would be
+    // flaky.
     #[test]
     fn from_env_reads_peers_and_poll_interval() {
         // SAFETY: test-only env mutation of vars no other test in this
         // binary touches.
         unsafe {
             std::env::remove_var("AVALON_MIRROR_PEERS");
+            std::env::remove_var("AVALON_MIRROR_ALL_DISCOVERED_SHARDS");
         }
         assert!(MirrorWatcherConfig::from_env().is_none());
 
@@ -1078,9 +1264,42 @@ mod tests {
             config.poll_interval,
             Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)
         );
+        assert!(!config.auto_mirror_discovered);
+        assert!(
+            config.known_shard_ids.contains("core"),
+            "a bare, un-prefixed AVALON_MIRROR_PEERS entry is the implicit core shard"
+        );
+
+        // Issue #599: `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` is enough
+        // on its own — no `AVALON_MIRROR_PEERS` required — since a node
+        // should be able to opt into auto-mirroring with zero explicit
+        // peer configuration at all.
+        unsafe {
+            std::env::remove_var("AVALON_MIRROR_PEERS");
+            std::env::set_var("AVALON_MIRROR_ALL_DISCOVERED_SHARDS", "true");
+        }
+        let config =
+            MirrorWatcherConfig::from_env().expect("auto_mirror_discovered alone should be enough");
+        assert!(config.peers.is_empty());
+        assert!(config.auto_mirror_discovered);
+        assert!(config.known_shard_ids.is_empty());
+
+        // Issue #599: `known_shard_ids` picks up a `shard_id=url` entry's
+        // shard_id, not just its url.
+        unsafe {
+            std::env::set_var(
+                "AVALON_MIRROR_PEERS",
+                "game:ashen-realms=http://shard-a, http://bare-core-peer",
+            );
+            std::env::remove_var("AVALON_MIRROR_ALL_DISCOVERED_SHARDS");
+        }
+        let config = MirrorWatcherConfig::from_env().expect("peers were set");
+        assert!(config.known_shard_ids.contains("game:ashen-realms"));
+        assert!(config.known_shard_ids.contains("core"));
 
         unsafe {
             std::env::remove_var("AVALON_MIRROR_PEERS");
+            std::env::remove_var("AVALON_MIRROR_ALL_DISCOVERED_SHARDS");
         }
     }
 

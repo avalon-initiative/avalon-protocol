@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use webauthn_rs::prelude::Webauthn;
 
 use crate::chat::ChatBus;
-use crate::nodes::PeerTable;
+use crate::nodes::{PeerTable, ShardRegistry};
 use crate::presence::PresenceStore;
 
 #[derive(Clone)]
@@ -114,4 +114,12 @@ pub struct AppState {
     /// config needed) and always best-effort. See `crate::resources`'s
     /// own module doc comment.
     pub host_metrics: crate::resources::HostMetricsSampler,
+    /// Issue #599, Layer 2: this node's anti-entropy view of every shard it
+    /// currently knows exists, gossiped over the same announce mechanism
+    /// #362 already runs. Always present (no config needed — the registry
+    /// starts empty and grows purely from what peers gossip plus this
+    /// node's own authoritative shard, if any). See `crate::nodes::ShardRegistry`'s
+    /// own doc comment; consumed by `crate::cross_shard` (aggregation) and
+    /// `crate::mirror_watcher` (opt-in auto-mirroring).
+    pub shard_registry: ShardRegistry,
 }
