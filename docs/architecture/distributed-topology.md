@@ -149,16 +149,23 @@ graph TD
   verified across the two-node LAN sandbox (#582); registering/looking up
   interest itself (`crate::interest`, "registers interest"/"looks up who
   else cares" in the diagram above) is also real and live-verified —
-  `crate::interest::run_worker` re-puts a `PutRecord` under a hash of the
-  guild-channel/conversation id for as long as a local subscriber exists,
-  a lookup is a `GetRecord` against that same key (#583). **Not yet
-  wired into actual relay decisions** — `crate::realtime_relay` still
-  does today's full peer-table loop below; re-scoping it to call
-  `interest::lookup` instead is #584, still open.
-- Today's actual relay implementation (`#539`) is the small-mesh
-  degenerate case of this picture: full broadcast to a full peer table,
-  correct for a handful of nodes, explicitly flagged as not the end
-  state — see the #584 note just above for what replaces it.
+  `crate::interest::run_worker` `PutRecord`s under a hash of the
+  guild-channel/conversation id immediately on a scope's first local
+  subscriber, then again every 45s for as long as one remains; a lookup
+  is a `GetRecord` against that same key (#583). **Now actually wired
+  into relay decisions (#584, closed):** `crate::realtime_relay::
+  relay_to_peers` calls that lookup for channel/conversation events
+  instead of #539's original full peer-table loop, which now only
+  remains as the path for presence (no channel/conversation scope
+  exists to look up) and as the fallback for any node with no DHT
+  identity at all. Live-verified against two real, separately-running
+  processes sharing one Postgres
+  (`crates/server/tests/realtime_relay.rs`) with the DHT path actually
+  exercised, not just the pre-existing full-peer-loop path.
+- The diagram's "small-mesh degenerate case" framing (#539, still the
+  literal delivery mechanism — a `POST /nodes/relay` to each resolved
+  target) is now correctly narrowed by the DHT lookup above rather than
+  being the *only* targeting mechanism.
 - Tracked by: [#538](https://github.com/LunarVagabond/avalon-protocol/issues/538)
   epic (implementation), [#542](https://github.com/LunarVagabond/avalon-protocol/issues/542)
   (the interest-scoping decision this section describes), [#362](https://github.com/LunarVagabond/avalon-protocol/issues/362)/[#292](https://github.com/LunarVagabond/avalon-protocol/issues/292)
@@ -177,12 +184,14 @@ graph TD
   current, honest state and exact live numbers.
 - Realtime fan-out is one in-process `tokio::broadcast` channel
   (`crates/server/src/presence.rs`/`crates/server/src/chat.rs`) fanned out
-  cross-node by `crate::realtime_relay`'s full-peer-table loop (#539) —
-  real, but not yet interest-scoped. Section 2's actual interest-scoped
-  mesh is now partly real: DHT bootstrap (#582) and the interest
-  registration/lookup primitive itself (#583) both work, live-verified;
-  `realtime_relay` calling that lookup instead of looping every peer is
-  #584, still open.
+  cross-node by `crate::realtime_relay`, which now resolves *who* to
+  relay a channel/conversation event to via a real DHT interest lookup
+  (#582/#583/#584) instead of #539's original full peer-table loop —
+  presence, which has no channel/conversation scope, and any node
+  without a DHT identity still use that original loop. Section 2's
+  interest-scoped mesh is real for the guild-channel/conversation case;
+  epic #580's remaining open sub-issues are #585 (local Redis fast-path)
+  and #586 (docs writeup once the mechanism settles further).
 - This document itself is new (filed alongside
   [#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)/[#535](https://github.com/LunarVagabond/avalon-protocol/issues/535)/[#542](https://github.com/LunarVagabond/avalon-protocol/issues/542))
   and will drift out of date as those tickets land — treat the linked

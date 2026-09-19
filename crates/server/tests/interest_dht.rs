@@ -71,7 +71,7 @@ async fn a_registered_channel_interest_is_found_by_a_lookup_from_a_different_nod
     // racing the very first tick.
     tokio::time::sleep(TEST_SCAN_INTERVAL * 6).await;
 
-    let registry = InterestRegistry::new();
+    let (registry, _newly_active) = InterestRegistry::new();
     let channel_id = Uuid::new_v4();
     let scope = InterestScope::Channel(channel_id);
     let _guard = registry.register(scope);

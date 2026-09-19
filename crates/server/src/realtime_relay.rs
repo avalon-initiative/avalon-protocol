@@ -24,8 +24,34 @@
 //! calls [`relay_to_peers`] again. There is nothing structurally capable of
 //! producing a second hop, so no origin-node bookkeeping is needed to
 //! prevent one — today's peer mesh is small and fully interconnected, so
-//! one hop already reaches everyone (see #542 for what changes once that
-//! stops being true at real scale).
+//! one hop already reaches everyone.
+//!
+//! **DHT-scoped delivery for guild-channel/conversation events (#584,
+//! implementing #542's decision).** [`relay_targets`] looks up
+//! `crate::interest`'s DHT-backed registry for exactly who has a local
+//! subscriber for the event's own channel/conversation id, instead of
+//! posting to every realtime-capable peer in the full HTTP peer table —
+//! the actual behavior change this whole epic (#580) exists for. Two
+//! things still take the original full-peer-loop path unconditionally:
+//! `RelayEvent::Presence` (presence has no guild/conversation scope to
+//! look anything up by — see `crate::interest`'s own module doc on this),
+//! and *any* event on a node with no DHT identity at all
+//! (`AVALON_DHT_ENABLED` unset) — every pre-#584 deployment's behavior,
+//! unchanged, exactly the same "unconfigured node behaves as it always
+//! did" posture #582/#583 already established. A DHT lookup against a
+//! small, fully-interconnected mesh trivially resolves back to "everyone
+//! who's actually subscribed," so the small-mesh case stays correct as a
+//! natural degenerate case rather than needing its own special path.
+//!
+//! **Known limitation, not solved here:** the DHT keyspace itself has no
+//! `network_id` segregation the way #362's HTTP peer table does (a
+//! different-network announce is rejected outright by `nodes::announce`,
+//! and mirror-watcher verifies per claimed `network_id`) — in practice
+//! this doesn't leak across networks today only because #582's bootstrap
+//! can itself only ever reach peers already admitted into this same
+//! network's peer table, not because the DHT layer enforces it directly.
+//! Worth a dedicated look if/when more than one network's nodes might
+//! ever share reachable infrastructure.
 //!
 //! **Never touches Postgres.** A relayed chat message only feeds this
 //! node's `ChatBus` (live push to already-connected clients) — it is
@@ -54,6 +80,7 @@ use uuid::Uuid;
 
 use crate::conversations;
 use crate::guild_messages;
+use crate::interest::{self, InterestScope};
 use crate::presence::PresenceResponse;
 use crate::state::AppState;
 
@@ -86,25 +113,76 @@ fn relay_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(reqwest::Client::new)
 }
 
-/// Posts `event` once to every same-`network_id` peer this node's own
-/// peer table currently knows about that advertises a realtime-capable
-/// role — a no-op (network name never resolves, nothing sent) when this
-/// node has no peers, matching #539's "a single-node deployment behaves
-/// exactly as today" invariant. Takes `state` by value (a cheap `Arc`-backed
-/// clone, same as every request handler already gets via axum's `State`
-/// extractor) rather than by reference, so callers can `tokio::spawn` this
-/// directly instead of awaiting it inline — see module doc comment.
+/// Every realtime-capable peer's base URL from #362's peer table — #539's
+/// original, unscoped behavior. Still used unconditionally for
+/// [`RelayEvent::Presence`] and as the fallback for every event type on a
+/// node with no DHT identity — see [`relay_targets`].
+fn full_peer_loop_targets(state: &AppState) -> Vec<String> {
+    state
+        .peers
+        .list_all()
+        .into_iter()
+        .filter(|peer| advertises_realtime_relay_role(&peer.roles))
+        .map(|peer| peer.base_url)
+        .collect()
+}
+
+/// Which [`InterestScope`] `event` should be looked up by, or `None` for
+/// an event with no guild-channel/conversation scope at all (presence) —
+/// pure and unit-testable independent of an actual DHT lookup, same "pure
+/// function behind the real (here, async) work" split
+/// `crate::nodes::resolve_bootstrap_peers`/`crate::dht::new_dht_peer`
+/// already establish elsewhere in this crate.
+fn interest_scope_for(event: &RelayEvent) -> Option<InterestScope> {
+    match event {
+        RelayEvent::Presence(_) => None,
+        RelayEvent::ChannelMessage(message) => Some(InterestScope::Channel(message.channel_id)),
+        RelayEvent::ChannelMessageDeleted { channel_id, .. } => {
+            Some(InterestScope::Channel(*channel_id))
+        }
+        RelayEvent::ConversationMessage(message) => {
+            Some(InterestScope::Conversation(message.conversation_id))
+        }
+    }
+}
+
+/// Resolves who `event` should actually be posted to (issue #584) — a DHT
+/// interest lookup scoped to `event`'s own channel/conversation id when
+/// this node has a DHT identity and `event` has such a scope to look up in
+/// the first place, [`full_peer_loop_targets`] otherwise. This node's own
+/// `base_url` is filtered out of a DHT lookup's results: a node with a
+/// local subscriber for the same scope it's relaying for would otherwise
+/// see itself come back from `interest::lookup` and relay-POST to itself
+/// (`full_peer_loop_targets` never has this problem — #362's peer table
+/// never contains an entry for this node's own `base_url`).
+async fn relay_targets(state: &AppState, event: &RelayEvent) -> Vec<String> {
+    let (Some(scope), Some(dht_commands)) = (interest_scope_for(event), &state.dht_commands) else {
+        return full_peer_loop_targets(state);
+    };
+
+    interest::lookup(dht_commands, scope)
+        .await
+        .into_iter()
+        .filter(|base_url| Some(base_url) != state.own_base_url.as_ref())
+        .collect()
+}
+
+/// Posts `event` once to whichever peers [`relay_targets`] resolves — a
+/// no-op (nothing resolves, nothing sent) when this node has no relay
+/// targets at all, matching #539's original "a single-node deployment
+/// behaves exactly as today" invariant. Takes `state` by value (a cheap
+/// `Arc`-backed clone, same as every request handler already gets via
+/// axum's `State` extractor) rather than by reference, so callers can
+/// `tokio::spawn` this directly instead of awaiting it inline — see module
+/// doc comment.
 pub async fn relay_to_peers(state: AppState, event: RelayEvent) {
-    let peers = state.peers.list_all();
-    if peers.is_empty() {
+    let targets = relay_targets(&state, &event).await;
+    if targets.is_empty() {
         return;
     }
     let client = relay_client();
-    for peer in peers {
-        if !advertises_realtime_relay_role(&peer.roles) {
-            continue;
-        }
-        let url = format!("{}/nodes/relay", peer.base_url);
+    for base_url in targets {
+        let url = format!("{base_url}/nodes/relay");
         let event = event.clone();
         let client = client.clone();
         tokio::spawn(async move {
@@ -162,6 +240,7 @@ pub async fn relay_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::OffsetDateTime;
 
     #[test]
     fn combined_role_is_eligible() {
@@ -182,5 +261,65 @@ mod tests {
     #[test]
     fn empty_roles_is_not_eligible() {
         assert!(!advertises_realtime_relay_role(&[]));
+    }
+
+    fn sample_time() -> OffsetDateTime {
+        OffsetDateTime::UNIX_EPOCH
+    }
+
+    #[test]
+    fn presence_has_no_interest_scope() {
+        let event = RelayEvent::Presence(PresenceResponse {
+            identity_id: Uuid::new_v4(),
+            status: avalon_protocol::social::PresenceStatus::Online,
+            active_in: None,
+            updated_at: sample_time(),
+        });
+        assert!(interest_scope_for(&event).is_none());
+    }
+
+    #[test]
+    fn channel_message_scopes_by_its_channel_id() {
+        let channel_id = Uuid::new_v4();
+        let event = RelayEvent::ChannelMessage(guild_messages::MessageResponse {
+            id: Uuid::new_v4(),
+            channel_id,
+            author: Uuid::new_v4(),
+            body: "hi".to_string(),
+            sent_at: sample_time(),
+        });
+        assert_eq!(
+            interest_scope_for(&event),
+            Some(InterestScope::Channel(channel_id))
+        );
+    }
+
+    #[test]
+    fn channel_message_deleted_scopes_by_its_channel_id() {
+        let channel_id = Uuid::new_v4();
+        let event = RelayEvent::ChannelMessageDeleted {
+            channel_id,
+            message_id: Uuid::new_v4(),
+        };
+        assert_eq!(
+            interest_scope_for(&event),
+            Some(InterestScope::Channel(channel_id))
+        );
+    }
+
+    #[test]
+    fn conversation_message_scopes_by_its_conversation_id() {
+        let conversation_id = Uuid::new_v4();
+        let event = RelayEvent::ConversationMessage(conversations::MessageResponse {
+            id: Uuid::new_v4(),
+            conversation_id,
+            author: Uuid::new_v4(),
+            body: "hi".to_string(),
+            sent_at: sample_time(),
+        });
+        assert_eq!(
+            interest_scope_for(&event),
+            Some(InterestScope::Conversation(conversation_id))
+        );
     }
 }

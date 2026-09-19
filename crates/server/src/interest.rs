@@ -1,17 +1,13 @@
 //! DHT-backed interest registration and lookup — issue #583, part of epic
 //! #580 implementing #542's decision. A node with a local subscriber to a
 //! guild channel or conversation registers that interest as a
-//! [`crate::dht::DhtCommand::PutRecord`], refreshed on [`REFRESH_INTERVAL`]
-//! for as long as at least one local subscriber remains; a node about to
-//! relay an event looks up who else is interested via
-//! [`lookup`]/`GetRecord` instead of #539's "loop over every peer"
-//! (`crate::realtime_relay::relay_to_peers`).
-//!
-//! **This module does not change how relay actually happens** — no
-//! `realtime_relay.rs` call site is touched here. #584 is the ticket that
-//! re-scopes the relay loop itself to call [`lookup`] instead of iterating
-//! every peer; #583 only has to deliver a working, live-verified
-//! registration/lookup primitive for it to call.
+//! [`crate::dht::DhtCommand::PutRecord`] — immediately on first
+//! registration (see [`InterestRegistry::register`]'s own doc comment for
+//! why waiting on the first [`REFRESH_INTERVAL`] tick isn't good enough),
+//! then re-put every `REFRESH_INTERVAL` for as long as at least one local
+//! subscriber remains. `crate::realtime_relay::relay_to_peers` (#584) is
+//! the one real caller of [`lookup`]/`GetRecord`, looking up who else is
+//! interested instead of #539's original "loop over every peer."
 //!
 //! **Registration has no explicit "deregister"**, by the ticket's own
 //! design: a record's TTL ([`RECORD_TTL`], refreshed every
@@ -32,6 +28,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::dht::{DhtCommand, DhtCommandSender};
@@ -98,9 +95,17 @@ impl InterestScope {
 /// already establish for shared in-process state. Never persisted: a
 /// restart naturally drops to zero subscribers until clients reconnect and
 /// re-subscribe, at which point registration resumes on its own.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct InterestRegistry {
     counts: Arc<Mutex<HashMap<InterestScope, usize>>>,
+    /// Fires once a scope goes from zero to one active guard — see
+    /// [`register`](Self::register)/[`run_worker`]'s own doc comments for
+    /// why a scope can't just wait for the next [`REFRESH_INTERVAL`] tick.
+    /// `unbounded`: a `register()` call is synchronous (no `.await` point
+    /// to apply backpressure at) and firing rarely enough in practice
+    /// (once per newly-active scope, not once per subscriber) that an
+    /// unbounded channel's usual downside doesn't apply here.
+    newly_active: mpsc::UnboundedSender<InterestScope>,
 }
 
 /// Holds one scope's refcount up by one for as long as this guard lives —
@@ -130,18 +135,43 @@ impl Drop for InterestGuard {
 }
 
 impl InterestRegistry {
-    pub fn new() -> Self {
-        Self::default()
+    /// Returns the registry plus the receiving half of its "newly active"
+    /// signal — [`run_worker`] is the one intended consumer, handed this
+    /// receiver once at startup (see `main.rs`'s wiring), the same
+    /// "constructor hands back the one channel half its caller needs"
+    /// shape `crate::dht::start`/`DhtHandle` already establish. Dropping
+    /// the receiver without ever running `run_worker` (e.g.
+    /// `AVALON_DHT_ENABLED` unset) is fine — every future `register()`
+    /// still tracks refcounts correctly, its `send` just has nowhere to
+    /// go and is ignored.
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<InterestScope>) {
+        let (newly_active, receiver) = mpsc::unbounded_channel();
+        (
+            Self {
+                counts: Arc::new(Mutex::new(HashMap::new())),
+                newly_active,
+            },
+            receiver,
+        )
     }
 
     /// Registers one local subscriber's interest in `scope`, returning a
     /// guard that un-registers it on drop. Multiple guards for the same
     /// scope (e.g. two different local connections both watching the same
     /// channel) are independent — the scope stays registered until every
-    /// guard for it has dropped.
+    /// guard for it has dropped. The scope's first registration (0 -> 1)
+    /// signals [`run_worker`] to `PutRecord` immediately rather than
+    /// waiting out a full [`REFRESH_INTERVAL`] — live-testing this against
+    /// a real relay (`crates/server/tests/realtime_relay.rs`) found a
+    /// fresh subscription otherwise invisible to a lookup for up to 45s,
+    /// far too slow to be useful.
     pub fn register(&self, scope: InterestScope) -> InterestGuard {
         let mut counts = self.counts.lock().expect("interest registry lock poisoned");
-        *counts.entry(scope).or_insert(0) += 1;
+        let count = counts.entry(scope).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            let _ = self.newly_active.send(scope);
+        }
         InterestGuard {
             registry: self.clone(),
             scope,
@@ -212,18 +242,29 @@ pub async fn lookup(dht_commands: &DhtCommandSender, scope: InterestScope) -> Ve
     base_urls
 }
 
-/// Never returns. Every [`REFRESH_INTERVAL`], re-`PutRecord`s
-/// `own_base_url` under every currently-active scope in `registry` — the
-/// one thing this node ever advertises into the DHT for interest routing,
+fn put_command(scope: InterestScope, own_base_url: &str, ttl: Duration) -> DhtCommand {
+    DhtCommand::PutRecord {
+        key: scope.dht_key(),
+        value: own_base_url.as_bytes().to_vec(),
+        ttl,
+    }
+}
+
+/// Never returns. `PutRecord`s `own_base_url` under a scope immediately
+/// when [`InterestRegistry::register`] signals it just went active (via
+/// `newly_active`, the receiver [`InterestRegistry::new`] hands back), and
+/// again every [`REFRESH_INTERVAL`] for every still-active scope — the one
+/// thing this node ever advertises into the DHT for interest routing,
 /// reusing the exact same `base_url` identity #362's HTTP peer table
 /// already announces rather than inventing a second way to name this node.
 /// `None` (matching `AnnounceConfig::own_base_url`'s own "can be announced
 /// TO but can't announce" degenerate case) means this node has nothing
 /// useful to put — the worker still runs so it starts advertising
 /// correctly the moment `AVALON_NODE_URL` is set and the process restarts,
-/// but does nothing on every tick until then.
+/// but does nothing, on a tick or otherwise, until then.
 pub async fn run_worker(
     registry: InterestRegistry,
+    mut newly_active: mpsc::UnboundedReceiver<InterestScope>,
     dht_commands: DhtCommandSender,
     own_base_url: Option<String>,
 ) {
@@ -238,18 +279,28 @@ pub async fn run_worker(
 
     let mut refresh_interval = tokio::time::interval(REFRESH_INTERVAL);
     loop {
-        refresh_interval.tick().await;
-        for scope in registry.active_scopes() {
-            let command = DhtCommand::PutRecord {
-                key: scope.dht_key(),
-                value: own_base_url.clone().into_bytes(),
-                ttl: RECORD_TTL,
-            };
-            if dht_commands.send(command).await.is_err() {
-                // The DHT worker is gone (process shutting down) — no
-                // point looping further this tick, and every future tick
-                // would hit the same closed channel.
-                return;
+        tokio::select! {
+            _ = refresh_interval.tick() => {
+                for scope in registry.active_scopes() {
+                    if dht_commands.send(put_command(scope, &own_base_url, RECORD_TTL)).await.is_err() {
+                        // The DHT worker is gone (process shutting down) —
+                        // no point looping further, every future send
+                        // would hit the same closed channel.
+                        return;
+                    }
+                }
+            }
+            scope = newly_active.recv() => {
+                let Some(scope) = scope else {
+                    // Every `InterestRegistry` clone (and so every sender
+                    // half) is gone — only happens alongside the whole
+                    // process tearing down, same as the channel-closed
+                    // case above.
+                    return;
+                };
+                if dht_commands.send(put_command(scope, &own_base_url, RECORD_TTL)).await.is_err() {
+                    return;
+                }
             }
         }
     }
@@ -286,7 +337,7 @@ mod tests {
 
     #[test]
     fn registering_twice_for_the_same_scope_keeps_it_active_until_both_drop() {
-        let registry = InterestRegistry::new();
+        let (registry, _newly_active) = InterestRegistry::new();
         let scope = InterestScope::Channel(Uuid::new_v4());
 
         let first = registry.register(scope);
@@ -304,12 +355,33 @@ mod tests {
 
     #[test]
     fn unrelated_scopes_do_not_affect_each_others_count() {
-        let registry = InterestRegistry::new();
+        let (registry, _newly_active) = InterestRegistry::new();
         let a = InterestScope::Channel(Uuid::new_v4());
         let b = InterestScope::Conversation(Uuid::new_v4());
 
         let _guard_a = registry.register(a);
         assert_eq!(registry.count(a), 1);
         assert_eq!(registry.count(b), 0);
+    }
+
+    #[test]
+    fn the_first_registration_of_a_scope_signals_newly_active() {
+        let (registry, mut newly_active) = InterestRegistry::new();
+        let scope = InterestScope::Channel(Uuid::new_v4());
+
+        let _guard = registry.register(scope);
+        assert_eq!(newly_active.try_recv(), Ok(scope));
+    }
+
+    #[test]
+    fn a_second_registration_of_an_already_active_scope_does_not_signal_again() {
+        let (registry, mut newly_active) = InterestRegistry::new();
+        let scope = InterestScope::Channel(Uuid::new_v4());
+
+        let _first = registry.register(scope);
+        newly_active.try_recv().expect("first registration signals");
+
+        let _second = registry.register(scope);
+        assert!(newly_active.try_recv().is_err());
     }
 }

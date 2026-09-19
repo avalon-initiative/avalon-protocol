@@ -85,4 +85,13 @@ pub struct AppState {
     /// posture), so nothing here can look anything up or register
     /// anything either.
     pub dht_commands: Option<crate::dht::DhtCommandSender>,
+    /// Issue #584: this node's own `AVALON_NODE_URL`
+    /// (`AnnounceConfig::own_base_url`), so `crate::realtime_relay` can
+    /// filter its own base URL out of a DHT interest lookup's results —
+    /// a node with a local subscriber for the same scope it's relaying
+    /// for would otherwise see itself come back from `interest::lookup`
+    /// and relay-POST to itself. `None` means this node can't announce
+    /// itself anywhere (`AnnounceConfig`'s own degenerate case), so
+    /// nothing to filter either.
+    pub own_base_url: Option<String>,
 }
