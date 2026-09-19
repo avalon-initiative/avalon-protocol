@@ -4,12 +4,12 @@
 // setup>` of whichever page needs it; only one page is mounted at a time,
 // so only one presence socket is ever open.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import * as api from '../api/client'
-import type { PresenceSocket } from '../api/client'
+import * as api from '@avalon/api-client'
+import type { PresenceSocket } from '@avalon/api-client'
 import { listFriendsWithPresence, splitFriendRequests } from '../api/friends'
 import type { Friend, FriendRequestView } from '../api/friends'
-import type { PresenceResponse } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import type { PresenceResponse } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 // Presence itself is live via the websocket — this poll only catches
 // friend-*list* membership changes (a request accepted/declined/withdrawn,

@@ -20,8 +20,8 @@
 // Convention: no <style> block, styling in the sibling styles/.module.scss;
 // script stays glue over the api client plus local load/error state.
 import { computed, ref, watch } from 'vue'
-import * as api from '../api/client'
-import type { GuildResourceKind, PermissionOverrideResponse, RoleResponse } from '../api/types'
+import * as api from '@avalon/api-client'
+import type { GuildResourceKind, PermissionOverrideResponse, RoleResponse } from '@avalon/api-client'
 import styles from '../styles/ResourcePermissionOverrides.module.scss'
 
 const props = defineProps<{

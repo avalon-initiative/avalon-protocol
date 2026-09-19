@@ -14,10 +14,10 @@
 // starts the first time `refresh()` actually runs, not unconditionally —
 // no point polling a board nobody has opened yet.
 import { onUnmounted, ref, watch } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { buildDiscoverQueryString } from '../api/guilds'
-import type { DiscoverGuildSummary, DiscoverGuildsParams } from '../api/types'
-import { useSessionStore } from '../stores/session'
+import type { DiscoverGuildSummary, DiscoverGuildsParams } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 

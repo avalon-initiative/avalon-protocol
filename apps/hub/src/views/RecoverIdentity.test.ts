@@ -11,13 +11,18 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simp
 const runRegistrationCeremonyMock = vi.fn<(options: unknown) => Promise<RegistrationResponseJSON>>()
 const runAuthenticationCeremonyMock = vi.fn<(options: unknown) => Promise<AuthenticationResponseJSON>>()
 
-vi.mock('../crypto/webauthn', () => ({
+// This view's `login`/`startRecovery` calls reach the WebAuthn ceremony
+// through @avalon/api-client's *internal* ./crypto/webauthn import (identity.ts
+// calls it directly, not via the package's own barrel) — mocking that
+// resolved submodule, rather than the @avalon/api-client entrypoint, is what
+// actually intercepts it.
+vi.mock('@avalon/api-client/src/crypto/webauthn', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
   runAuthenticationCeremony: (options: unknown) => runAuthenticationCeremonyMock(options),
 }))
 
 import RecoverIdentity from './RecoverIdentity.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 
 const requestBase = {
   id: 'req1',

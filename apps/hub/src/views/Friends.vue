@@ -14,12 +14,12 @@ import {
   AvalonSuggestionRow,
   AvalonTextField,
 } from '@avalon/ui'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { listSuggestions } from '../api/discovery'
 import type { Suggestion } from '../api/discovery'
-import type { SearchResultIdentity } from '../api/types'
+import type { SearchResultIdentity } from '@avalon/api-client'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { isIdentityId } from '../utils/identity'
 import styles from '../styles/page.module.scss'
 

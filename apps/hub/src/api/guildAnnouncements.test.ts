@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { GuildAnnouncementAlert } from './types'
+import type { GuildAnnouncementAlert } from '@avalon/api-client'
 import { countUnread, isUnread, loadLastSeen, markChannelSeen, previewBody } from './guildAnnouncements'
 
 function alert(overrides: Partial<GuildAnnouncementAlert> = {}): GuildAnnouncementAlert {

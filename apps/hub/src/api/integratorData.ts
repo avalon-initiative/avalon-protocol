@@ -3,8 +3,8 @@
 // client-side, mirroring achievements.ts's issuer-resolution pattern —
 // the response itself only carries a raw schema id and integrator_id,
 // no display name.
-import * as api from './client'
-import type { VisibleIntegratorDataInstanceResponse } from './types'
+import * as api from '@avalon/api-client'
+import type { VisibleIntegratorDataInstanceResponse } from '@avalon/api-client'
 
 // Schema ids are "game:<slug>:schema:<version>"
 // (crates/server/src/integrator_schemas.rs::schema_ref) — the slug is

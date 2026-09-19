@@ -11,7 +11,7 @@ import {
   totalRsvps,
   validateEventForm,
 } from './guildEvents'
-import type { EventResponse, RsvpRosterEntry } from './types'
+import type { EventResponse, RsvpRosterEntry } from '@avalon/api-client'
 
 function makeEvent(overrides: Partial<EventResponse> = {}): EventResponse {
   return {

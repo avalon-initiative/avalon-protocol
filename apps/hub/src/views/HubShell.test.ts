@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
 import Friends from './Friends.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {

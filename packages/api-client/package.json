@@ -1,0 +1,28 @@
+{
+  "name": "@avalon/api-client",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared avalon-server API client + session store for Avalon's clients (hub, mobile-hub) — the one place fetch/WebSocket calls and the WebAuthn/signing-key auth ceremony live, so neither client duplicates the other's API code (issue #55/#60). Session token persistence is pluggable per app: hub keeps its existing localStorage default, mobile-hub injects a platform secure-storage adapter.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "NODE_OPTIONS=--no-experimental-webstorage vitest run"
+  },
+  "dependencies": {
+    "pinia": "^4.0.3",
+    "@simplewebauthn/browser": "^14.0.0",
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
+    "@scure/bip39": "^1.5.0"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^8.3.0",
+    "vitest": "^2.1.0",
+    "jsdom": "^25.0.0"
+  }
+}

@@ -1,7 +1,7 @@
 // Pure direct-message logic (issue #105), kept separate from
 // apps/hub/src/api/client.ts for the same reason guildChat.ts is split out
 // from guilds.ts — composition/ordering, not roster/relationship merging.
-import type { ConversationMessageResponse, ConversationResponse } from './types'
+import type { ConversationMessageResponse, ConversationResponse } from '@avalon/api-client'
 
 // Matches crates/server/src/conversations.rs::MESSAGE_BODY_MAX_CHARS
 // exactly — same cap as guild chat (guildChat.ts's own constant), kept as

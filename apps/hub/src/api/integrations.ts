@@ -1,7 +1,7 @@
 // Pure helpers for the integrator directory (issue #270) — no fetch/token
 // awareness here, same "logic stays out of client.ts" split
 // apps/hub/src/api/guilds.ts already established for guilds.
-import type { IntegratorRegistryResponse, ListIntegratorsParams, MetricResponse } from './types'
+import type { IntegratorRegistryResponse, ListIntegratorsParams, MetricResponse } from '@avalon/api-client'
 
 // Builds the `?q=&sort=&limit=&cursor=` query string for GET /integrations from a
 // params object — mirrors

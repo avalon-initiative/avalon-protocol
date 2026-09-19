@@ -5,8 +5,8 @@ import {
   finalizeApprovedGrant,
   findMySigningKeyId,
 } from './deviceGrants'
-import { bytesToBase64, generateGrantRequestKeyPair, loadSigningKey } from '../crypto/signingKey'
-import type { DeviceGrantResponse, DeviceResponse } from './types'
+import { bytesToBase64, generateGrantRequestKeyPair, loadSigningKey } from '@avalon/api-client'
+import type { DeviceGrantResponse, DeviceResponse } from '@avalon/api-client'
 import { ed25519 } from '@noble/curves/ed25519'
 
 function mockFetchOnce(body: unknown) {

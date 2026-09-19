@@ -756,7 +756,7 @@ This is not a new pillar.
 
 Presence, guild channels, and friends already live at the network layer, not the game layer. That is what makes this possible.
 
-A mobile app and a web app are simply additional clients of the Hub.
+A mobile app and a web app are simply additional clients of the Hub — the same identity, login, and session model underneath, just a different shell around it. The device itself only ever holds one secret worth protecting: the session token, kept in whatever secure storage that platform actually offers rather than plain browser storage.
 
 A companion app could offer:
 

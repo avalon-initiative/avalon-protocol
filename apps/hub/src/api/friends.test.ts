@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mergeFriend, splitFriendRequests } from './friends'
-import type { FriendRequestResponse, FriendshipResponse } from './types'
+import type { FriendRequestResponse, FriendshipResponse } from '@avalon/api-client'
 
 const SELF = 'self-id'
 const OTHER = 'other-id'

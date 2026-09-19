@@ -28,8 +28,8 @@ import {
   AvalonRsvpRosterPanel,
   AvalonTextField,
 } from '@avalon/ui'
-import * as api from '../api/client'
-import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId, EventResponse } from '../api/types'
+import * as api from '@avalon/api-client'
+import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId, EventResponse } from '@avalon/api-client'
 import ResourcePermissionOverrides from '../components/ResourcePermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, toLocalDateTimeInput, validateEventForm } from '../api/guildEvents'
@@ -58,7 +58,7 @@ import {
 import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useRsvpRoster } from '../composables/useRsvpRoster'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { isIdentityId } from '../utils/identity'
 import local from '../styles/Guild.module.scss'
 import styles from '../styles/page.module.scss'

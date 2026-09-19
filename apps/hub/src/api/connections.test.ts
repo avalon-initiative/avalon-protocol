@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { activeCapabilities, capabilityDescription, CAPABILITY_DESCRIPTIONS } from './connections'
-import type { IntegratorBindingResponse } from './types'
+import type { IntegratorBindingResponse } from '@avalon/api-client'
 
 describe('capabilityDescription', () => {
   it('returns the plain-language description for a known capability', () => {

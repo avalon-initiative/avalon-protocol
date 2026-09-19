@@ -6,14 +6,14 @@
 // Rust — same shape, ported to TypeScript for the Hub, which doesn't
 // consume the Rust SDK directly. Display names are resolved via
 // GET /identities/profiles (issue #161).
-import * as api from './client'
+import * as api from '@avalon/api-client'
 import type {
   FriendRequestResponse,
   FriendshipResponse,
   PresenceResponse,
   PresenceStatus,
   PublicProfileResponse,
-} from './types'
+} from '@avalon/api-client'
 
 export interface Friend {
   identityId: string

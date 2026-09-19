@@ -13,12 +13,12 @@ import {
   AvalonModal,
   AvalonTextField,
 } from '@avalon/ui'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
 import { useMyGuildInvites } from '../composables/useMyGuildInvites'
 import { useMyGuilds } from '../composables/useMyGuilds'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import local from '../styles/Guilds.module.scss'
 import styles from '../styles/page.module.scss'
 

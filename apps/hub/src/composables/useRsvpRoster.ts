@@ -10,10 +10,10 @@
 // pattern useGuildChat's resolveAuthorNames and api/guilds.ts's
 // listMembersWithPresence already use.
 import { ref, type Ref } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { groupRsvpRoster } from '../api/guildEvents'
 import type { AvalonRsvpRosterGroup } from '@avalon/ui'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 
 export function useRsvpRoster(guildId: Ref<string>) {
   const session = useSessionStore()
