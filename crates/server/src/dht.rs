@@ -27,12 +27,16 @@
 //! own; it only watches `PeerTable` (already kept fresh by
 //! `nodes::run_worker`) for peers whose DHT identity it hasn't dialed yet.
 //!
-//! Gated behind `AVALON_DHT_ENABLED` (default off) — unlike #362's
-//! announce worker (always on, since serving the peer table is cheap and
-//! has no attack surface beyond what already exists), running an actual
-//! libp2p swarm is new, unproven-at-scale code with its own listen port and
-//! dependency footprint; every existing deployment should see zero behavior
-//! change until an operator opts in.
+//! **`AVALON_DHT_ENABLED` defaults to on (ADR #593)** — an opt-*out*
+//! escape hatch, not an opt-in gate. There are no real deployments of
+//! this software outside this project's own development sandbox yet, so
+//! there was no one to protect with an opt-in default, and DHT-based
+//! interest routing only becomes useful once nodes actually participate
+//! in it from the start rather than each operator individually deciding
+//! to turn it on later. Set it to `false` for a single-node/private
+//! self-hoster who wants zero DHT overhead, or if a real problem surfaces
+//! while this is still genuinely young, unproven-at-real-scale code (see
+//! ADR #593 for the full reasoning).
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -181,18 +185,19 @@ pub struct DhtConfig {
 }
 
 impl DhtConfig {
-    /// `Ok(None)` when `AVALON_DHT_ENABLED` isn't truthy — the expected
-    /// state for every deployment until #580 is ready to roll out.
-    /// `AVALON_LIBP2P_LISTEN_ADDR` defaults to `/ip4/0.0.0.0/tcp/0` (an
-    /// ephemeral port on every interface), matching this repo's existing
-    /// "sane default, explicit override" convention (e.g.
-    /// `AVALON_SERVER_ADDR`). `AVALON_LIBP2P_EXTERNAL_ADDR` is unset by
-    /// default (native, non-containerized deployments don't need it — see
-    /// `external_addr`'s own doc comment).
+    /// `Ok(None)` when `AVALON_DHT_ENABLED` is explicitly set to a falsy
+    /// value (`false`/`0`) — unset defaults to *enabled* (ADR #593: an
+    /// opt-out escape hatch, not an opt-in gate — see this module's own
+    /// doc comment for why). `AVALON_LIBP2P_LISTEN_ADDR` defaults to
+    /// `/ip4/0.0.0.0/tcp/0` (an ephemeral port on every interface),
+    /// matching this repo's existing "sane default, explicit override"
+    /// convention (e.g. `AVALON_SERVER_ADDR`). `AVALON_LIBP2P_EXTERNAL_ADDR`
+    /// is unset by default (native, non-containerized deployments don't
+    /// need it — see `external_addr`'s own doc comment).
     pub fn from_env() -> Result<Option<Self>, String> {
         let enabled = std::env::var("AVALON_DHT_ENABLED")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+            .map(|v| !(v.eq_ignore_ascii_case("false") || v == "0"))
+            .unwrap_or(true);
         if !enabled {
             return Ok(None);
         }
@@ -562,13 +567,31 @@ mod tests {
     }
 
     #[test]
-    fn dht_config_from_env_is_none_when_not_enabled() {
+    fn dht_config_from_env_is_some_when_unset() {
+        // ADR #593: unset defaults to enabled now, not disabled.
         // SAFETY-of-intent note: process-global env var, same posture
         // `crate::nodes`'s own `node_roles_defaults_to_combined_when_unset`
         // test already takes.
         unsafe {
             std::env::remove_var("AVALON_DHT_ENABLED");
         }
+        assert!(DhtConfig::from_env().unwrap().is_some());
+    }
+
+    #[test]
+    fn dht_config_from_env_is_none_when_explicitly_disabled() {
+        unsafe {
+            std::env::set_var("AVALON_DHT_ENABLED", "false");
+        }
         assert!(DhtConfig::from_env().unwrap().is_none());
+
+        unsafe {
+            std::env::set_var("AVALON_DHT_ENABLED", "0");
+        }
+        assert!(DhtConfig::from_env().unwrap().is_none());
+
+        unsafe {
+            std::env::remove_var("AVALON_DHT_ENABLED");
+        }
     }
 }

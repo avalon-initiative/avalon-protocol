@@ -109,11 +109,11 @@ async fn main() {
 
     let peers = avalon_server::nodes::PeerTable::new();
 
-    // Issue #582/#580: this node's libp2p DHT identity, if
-    // `AVALON_DHT_ENABLED` is set — resolved (and, if enabled, the swarm
-    // bound and its worker spawned) before `announce_config` below so this
-    // node's very first outbound announce already carries it. `None` is
-    // every deployment's current behavior, unchanged.
+    // Issue #582/#580: this node's libp2p DHT identity — on by default as
+    // of ADR #593 (`AVALON_DHT_ENABLED=false`/`0` opts out), resolved (and
+    // the swarm bound and its worker spawned) before `announce_config`
+    // below so this node's very first outbound announce already carries
+    // it.
     let dht_config = avalon_server::dht::DhtConfig::from_env().unwrap_or_else(|e| {
         tracing::error!("refusing to start: {e}");
         std::process::exit(1);
