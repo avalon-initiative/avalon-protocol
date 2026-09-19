@@ -634,19 +634,25 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   at-idle polling overhead 4x regardless of whether push is reaching it.
   `crates/server/tests/mirror_push.rs` (`--ignored`) is written against
   two/three real, separately-running `avalon-server` processes sharing one
-  Postgres — see that file's own module doc for the exact setup. **Partially
-  live-verified**: starting up a real three-node topology this way
-  confirmed a mirror registers its interest correctly at startup
-  (`mirror-watcher: registering interest for push-based mirror sync`) and
-  that a peer discovered via announce is picked up as a DHT bootstrap
-  target, but the test's actual latency/convergence assertions were not
-  independently confirmed in this pass — backfill on the test node was
-  blocked by pre-existing, unrelated equivocation findings already
-  recorded in this sandbox's shared database (see
-  `docs/architecture/settlement.md`'s #599 section for the same blocker
-  hit there), which needs a deliberate `avalon resolve-equivocation`
-  operator action to clear before this test's actual timing claims can be
-  independently confirmed end to end.
+  Postgres — see that file's own module doc for the exact setup. **Now
+  fully live-verified end to end (issue #605)**, against an isolated
+  Postgres schema (not the shared sandbox database, whose accumulated
+  history and stale equivocation state made cold convergence slow and
+  unreliable to test against) and with node startup deliberately
+  sequenced — the authority given one real committed event before either
+  mirror starts, since a mirror's first poll tick has to succeed to
+  register DHT interest at all. Both headline assertions
+  (`a_push_notification_measurably_reduces_observed_mirror_sync_latency`,
+  `mirroring_still_converges_via_poll_alone_when_push_is_unavailable`)
+  pass. The test's own `enqueue_real_event` helper had a real bug found
+  during this verification: it hand-built the `protocol_outbox` row's
+  JSON instead of serializing an actual `ProtocolEvent`, using an RFC3339
+  string for `timestamp` where `OffsetDateTime`'s derived (non-human-
+  readable) wire format was expected — every event that helper enqueued
+  was silently dropped by the outbox worker as unparseable, so neither
+  node ever saw a second commit to converge on. Fixed by building a real
+  `ProtocolEvent` and serializing it with `serde_json::to_value`, exactly
+  as `crate::outbox::enqueue` does.
 - No SDK-side discovery yet: `AvalonConfig { server_url, .. }` in
   `crates/sdk/src/lib.rs` still takes a bare URL — #362's peer table is a
   server-to-server mechanism, not yet consumed by client-side routing.

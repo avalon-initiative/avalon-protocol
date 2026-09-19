@@ -42,6 +42,8 @@
 //! AVALON_MIRROR_PUSH_NO_DHT_PEER_SERVER_URL=http://127.0.0.1:8091   # node C, required for that one test
 //! ```
 
+use avalon_protocol::events::ProtocolEvent;
+use avalon_protocol::ids::GlobalId;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -109,17 +111,24 @@ async fn current_tree_size(http: &reqwest::Client, base_url: &str) -> Option<i64
 /// pushes the resulting STH to any peer registered as interested.
 async fn enqueue_real_event(pool: &PgPool) {
     let actor = Uuid::new_v4();
-    let event = serde_json::json!({
-        "id": Uuid::new_v4(),
-        "kind": "identity.created",
-        "issuer": format!("identity:{actor}:self:created"),
-        "subject": format!("identity:{actor}:self:created"),
-        "payload": { "display_name": format!("mirror-push-test-{actor}") },
-        "timestamp": OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap(),
-        "version": 1,
-    });
+    let subject = GlobalId::new("identity", &actor.to_string(), "self", "created");
+    let event = ProtocolEvent {
+        id: Uuid::new_v4(),
+        kind: "identity.created".to_string(),
+        issuer: subject.clone(),
+        subject,
+        payload: serde_json::json!({ "display_name": format!("mirror-push-test-{actor}") }),
+        timestamp: OffsetDateTime::now_utc(),
+        version: 1,
+    };
+    // Serialized exactly the way `crate::outbox::enqueue` does — a hand-built
+    // JSON literal here (rather than a real `ProtocolEvent`) previously used
+    // an RFC3339 string timestamp, which doesn't match `OffsetDateTime`'s
+    // actual (non-human-readable) derived wire format, so the outbox worker
+    // silently dropped every row this test enqueued as unparseable.
+    let event_json = serde_json::to_value(&event).expect("ProtocolEvent should serialize");
     sqlx::query("INSERT INTO protocol_outbox (event) VALUES ($1)")
-        .bind(event)
+        .bind(event_json)
         .execute(pool)
         .await
         .expect("failed to enqueue a real event directly into protocol_outbox");
