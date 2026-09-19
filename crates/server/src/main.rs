@@ -147,6 +147,11 @@ async fn main() {
     // being unset returns `None` here exactly as it does for
     // `RedisLimiterState::from_env()`.
     let interest_redis_fast_path = avalon_server::interest::RedisFastPath::from_env().await;
+    if interest_redis_fast_path.is_some() {
+        tracing::info!(
+            "avalon-server: interest-lookup Redis fast-path enabled (AVALON_REDIS_URL set)"
+        );
+    }
     if let Some(dht_commands) = dht_commands.clone() {
         tokio::spawn(avalon_server::interest::run_worker(
             interest.clone(),
