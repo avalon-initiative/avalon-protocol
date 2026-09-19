@@ -6,31 +6,39 @@
 //! already uses — no new transport), verifying each, and serving the
 //! result at `GET /ledger/cross-shard-root`.
 //!
-//! **Shard discovery is still config-based (`AVALON_KNOWN_SHARDS`) — which
-//! shards to even ask about isn't discovered automatically. Trust is not**:
-//! #543's real mechanism, [`resolve_shard_verify_keys_from_db`], resolves
-//! a shard's authorized key(s) directly from this node's own `issuer_keys`
-//! table (`purpose = 'shard_settlement'`) — the same registration flow
-//! attestation-issuance keys already use, not a second registry — and is
-//! tried first. `AVALON_SHARD_VERIFY_KEYS` is a fallback for a shard whose
-//! key hasn't resolved from the DB at all (e.g. this node has never seen
-//! that integrator's registration), the same "interim, per-node config"
-//! shape issue #531's `AVALON_MANAGED_HOSTING_VERIFY_KEY` established.
-//! Live-verified across two genuinely separate machines
-//! (`docs/architecture/settlement.md`'s "Cross-machine, real end to end"
-//! section). A shard with no key resolved from either source, or whose
-//! STH fails to fetch or verify, is treated exactly like a shard this
-//! node has never heard an STH for — folded into `missing_shard_ids`,
-//! never silently included unverified (see
+//! **Shard discovery (issue #599): `AVALON_KNOWN_SHARDS` is now additive,
+//! not the only source.** Before #599, which shards to even ask about was
+//! purely config-based — this module's own doc comment used to say so
+//! plainly. Now [`combined_shard_urls`] unions `AVALON_KNOWN_SHARDS`'s
+//! static map with whatever `crate::nodes::ShardRegistry` has learned via
+//! peer-announce gossip (#599's Layer 2), so a node with zero
+//! `AVALON_KNOWN_SHARDS` configured at all can still aggregate a real,
+//! multi-shard cross-shard root purely from what it's discovered. Trust is
+//! unchanged either way: #543's real mechanism,
+//! [`resolve_shard_verify_keys_from_db`], resolves a shard's authorized
+//! key(s) directly from this node's own `issuer_keys` table (`purpose =
+//! 'shard_settlement'`) — the same registration flow attestation-issuance
+//! keys already use, not a second registry — and is tried first, for a
+//! statically-configured shard and a discovered one alike.
+//! `AVALON_SHARD_VERIFY_KEYS` is a fallback for a statically-configured
+//! shard whose key hasn't resolved from the DB at all (e.g. this node has
+//! never seen that integrator's registration) — a purely
+//! gossip-discovered shard has no static verify key at all, so it relies
+//! on the DB resolution alone, which is the point: discovering it is
+//! enough, an operator never has to also hand-configure its key. A shard
+//! with no key resolved from either source, or whose STH fails to fetch
+//! or verify, is treated exactly like a shard this node has never heard
+//! an STH for — folded into `missing_shard_ids`, never silently included
+//! unverified (see
 //! `avalon_chain::cross_shard::compute_cross_shard_root_checked`'s own
 //! doc comment).
 //!
-//! **Unset (the default): the one-shard degenerate case, no network
-//! calls.** `AVALON_KNOWN_SHARDS` unset means this node's own local STH
-//! (if it has one) is the entire cross-shard root, computed directly from
-//! `state.chain` rather than an HTTP round trip to itself — exactly
-//! #529's own "a network with one shard degenerates to a tree over a
-//! single leaf" case, not a separate code path.
+//! **Neither configured nor discovered: the one-shard degenerate case, no
+//! network calls.** This node's own local STH (if it has one) is the
+//! entire cross-shard root, computed directly from `state.chain` rather
+//! than an HTTP round trip to itself — exactly #529's own "a network with
+//! one shard degenerates to a tree over a single leaf" case, not a
+//! separate code path.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -40,10 +48,11 @@ use axum::extract::State;
 use axum::Json;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
-use sqlx::Row;
+use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 
 use crate::error::AppError;
+use crate::nodes::ShardRegistry;
 use crate::state::AppState;
 
 #[derive(Clone)]
@@ -111,6 +120,38 @@ impl KnownShardsConfig {
     pub fn known_shard_ids(&self) -> BTreeSet<String> {
         self.urls.keys().cloned().collect()
     }
+
+    /// Issue #599: read access for [`combined_shard_urls`]/mirror_watcher's
+    /// own auto-discovery pass, which need to know what's *already*
+    /// explicitly configured so they don't treat an explicit entry as a
+    /// newly-discovered one.
+    pub fn urls(&self) -> &HashMap<String, String> {
+        &self.urls
+    }
+}
+
+/// Unions `config`'s static `AVALON_KNOWN_SHARDS` map with whatever
+/// `registry` has learned via peer-announce gossip (issue #599) — the
+/// static config wins for a `shard_id` present in both, since an operator
+/// who explicitly configured a URL presumably wants that one used, not
+/// whatever a peer happens to be gossiping. A `shard_id` known only to the
+/// registry uses its most-recently-seen URL ([`ShardRegistry::best_url`]);
+/// still independently verified below exactly like any other shard — this
+/// only decides which URL is worth trying.
+pub fn combined_shard_urls(
+    config: Option<&KnownShardsConfig>,
+    registry: &ShardRegistry,
+) -> HashMap<String, String> {
+    let mut urls = config.map(|c| c.urls.clone()).unwrap_or_default();
+    for shard_id in registry.known_shard_ids() {
+        if urls.contains_key(&shard_id) {
+            continue;
+        }
+        if let Some(url) = registry.best_url(&shard_id) {
+            urls.insert(shard_id, url);
+        }
+    }
+    urls
 }
 
 fn parse_verify_key(hex_value: &str) -> Option<VerifyingKey> {
@@ -159,7 +200,10 @@ impl From<FetchedSth> for SignedTreeHead {
 /// integrator that has never registered a `shard_settlement` key. Only
 /// currently-unrevoked keys are returned — rotation/compromise reuses
 /// `issuer.key_revoked` unchanged, per this mechanism's own design.
-async fn resolve_shard_verify_keys_from_db(state: &AppState, shard_id: &str) -> Vec<VerifyingKey> {
+pub(crate) async fn resolve_shard_verify_keys_from_db(
+    pool: &PgPool,
+    shard_id: &str,
+) -> Vec<VerifyingKey> {
     let Some((namespace, owner)) = shard_id.split_once(':') else {
         return Vec::new();
     };
@@ -175,7 +219,7 @@ async fn resolve_shard_verify_keys_from_db(state: &AppState, shard_id: &str) -> 
     )
     .bind(owner)
     .bind(namespace)
-    .fetch_all(&state.pool)
+    .fetch_all(pool)
     .await
     .unwrap_or_default();
 
@@ -188,31 +232,34 @@ async fn resolve_shard_verify_keys_from_db(state: &AppState, shard_id: &str) -> 
         .collect()
 }
 
-/// Fetches, verifies, and aggregates every configured known shard's
-/// current STH. Returns the [`CrossShardRoot`] plus the exact
-/// `(shard_id, SignedTreeHead)` pairs it was computed from — #529's own
-/// "publishes the root plus the full list it used, so anyone can
-/// independently verify by recomputing" requirement.
+/// Fetches, verifies, and aggregates every known shard's current STH —
+/// "known" meaning [`combined_shard_urls`]'s union of static config and
+/// gossip-discovered shards (issue #599). Returns the [`CrossShardRoot`]
+/// plus the exact `(shard_id, SignedTreeHead)` pairs it was computed from
+/// — #529's own "publishes the root plus the full list it used, so anyone
+/// can independently verify by recomputing" requirement.
 ///
 /// **Verification order (#543 composing with #529)**: a shard's STH is
 /// checked against every currently-authorized `shard_settlement` key this
 /// node can resolve from its own `issuer_keys` table first — the real
-/// mechanism — and, if none resolve (e.g. `"core"`, or an integrator that
-/// hasn't registered one yet), falls back to the interim
-/// `AVALON_SHARD_VERIFY_KEYS` static config. Either source succeeding is
-/// sufficient; neither resolving at all is exactly "no verify key
-/// configured," folded into `missing_shard_ids` like any other
-/// unverifiable shard.
+/// mechanism, and the *only* one available for a purely gossip-discovered
+/// shard — and, if none resolve (e.g. `"core"`, or an integrator that
+/// hasn't registered one yet), falls back to `static_verify_keys`
+/// (`AVALON_SHARD_VERIFY_KEYS`, only ever populated for a
+/// statically-configured shard). Either source succeeding is sufficient;
+/// neither resolving at all is exactly "no verify key configured," folded
+/// into `missing_shard_ids` like any other unverifiable shard.
 pub async fn fetch_and_compute(
-    state: &AppState,
-    config: &KnownShardsConfig,
+    pool: &PgPool,
+    urls: &HashMap<String, String>,
+    static_verify_keys: &HashMap<String, VerifyingKey>,
 ) -> (CrossShardRoot, Vec<ShardTreeHead>) {
     let client = reqwest::Client::new();
     let mut shards = Vec::new();
 
-    for (shard_id, url) in &config.urls {
-        let db_keys = resolve_shard_verify_keys_from_db(state, shard_id).await;
-        let static_key = config.verify_keys.get(shard_id);
+    for (shard_id, url) in urls {
+        let db_keys = resolve_shard_verify_keys_from_db(pool, shard_id).await;
+        let static_key = static_verify_keys.get(shard_id);
         if db_keys.is_empty() && static_key.is_none() {
             tracing::warn!(
                 shard_id,
@@ -275,21 +322,24 @@ pub async fn fetch_and_compute(
         });
     }
 
-    let known = config.known_shard_ids();
+    let known: BTreeSet<String> = urls.keys().cloned().collect();
     let root = compute_cross_shard_root_checked(&known, shards.clone(), OffsetDateTime::now_utc());
     (root, shards)
 }
 
 /// Builds the response `GET /ledger/cross-shard-root` serves — either the
-/// full multi-shard fetch-and-aggregate path (`AVALON_KNOWN_SHARDS` set),
-/// or the one-shard degenerate default (unset): this node's own local
-/// STH alone, computed directly, no network calls.
+/// full multi-shard fetch-and-aggregate path (`AVALON_KNOWN_SHARDS` set
+/// and/or at least one shard discovered via gossip, issue #599), or the
+/// one-shard degenerate default (neither): this node's own local STH
+/// alone, computed directly, no network calls.
 pub async fn compute_for_this_node(
     state: &AppState,
     config: Option<&KnownShardsConfig>,
 ) -> Result<(CrossShardRoot, Vec<ShardTreeHead>), avalon_chain::SettlementError> {
-    if let Some(config) = config {
-        return Ok(fetch_and_compute(state, config).await);
+    let urls = combined_shard_urls(config, &state.shard_registry);
+    if !urls.is_empty() {
+        let static_verify_keys = config.map(|c| c.verify_keys.clone()).unwrap_or_default();
+        return Ok(fetch_and_compute(&state.pool, &urls, &static_verify_keys).await);
     }
 
     let shards = match state.chain.latest_signed_tree_head().await? {
@@ -355,4 +405,66 @@ pub async fn cross_shard_root(
             })
             .collect(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry_with(shard_id: &str, url: &str) -> ShardRegistry {
+        let registry = ShardRegistry::new();
+        registry.record_own(shard_id, url, OffsetDateTime::now_utc());
+        registry
+    }
+
+    #[test]
+    fn discovered_shards_are_included_when_no_static_config_exists() {
+        let registry = registry_with("game:ashen-realms", "http://discovered.invalid");
+        let urls = combined_shard_urls(None, &registry);
+        assert_eq!(
+            urls.get("game:ashen-realms"),
+            Some(&"http://discovered.invalid".to_string())
+        );
+    }
+
+    #[test]
+    fn static_config_wins_over_a_discovered_url_for_the_same_shard() {
+        let registry = registry_with("game:ashen-realms", "http://discovered.invalid");
+        let config = KnownShardsConfig {
+            urls: HashMap::from([(
+                "game:ashen-realms".to_string(),
+                "http://configured.invalid".to_string(),
+            )]),
+            verify_keys: HashMap::new(),
+        };
+        let urls = combined_shard_urls(Some(&config), &registry);
+        assert_eq!(
+            urls.get("game:ashen-realms"),
+            Some(&"http://configured.invalid".to_string()),
+            "an explicitly configured URL must never be silently overridden by a gossiped one"
+        );
+    }
+
+    #[test]
+    fn config_and_discovered_shards_not_overlapping_are_both_present() {
+        let registry = registry_with("game:other-title", "http://discovered.invalid");
+        let config = KnownShardsConfig {
+            urls: HashMap::from([(
+                "game:ashen-realms".to_string(),
+                "http://configured.invalid".to_string(),
+            )]),
+            verify_keys: HashMap::new(),
+        };
+        let urls = combined_shard_urls(Some(&config), &registry);
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains_key("game:ashen-realms"));
+        assert!(urls.contains_key("game:other-title"));
+    }
+
+    #[test]
+    fn no_config_and_empty_registry_yields_no_urls() {
+        let registry = ShardRegistry::new();
+        let urls = combined_shard_urls(None, &registry);
+        assert!(urls.is_empty());
+    }
 }

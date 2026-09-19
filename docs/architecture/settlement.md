@@ -280,16 +280,20 @@ pairs, from wherever a node gathered them) and produce a
 uses — no new hashing scheme, no new proof type. `avalon_server::cross_shard`
 is the network-facing half: `GET /ledger/cross-shard-root` fetches each
 configured known shard's `/ledger/sth/latest` (the same read any mirror
-already uses), verifies it, and aggregates — or, with no shards
-configured, falls back to this node's own local STH as the one-shard
-degenerate case, no network calls. **Interim, config-based shard
-discovery/trust** (`AVALON_KNOWN_SHARDS`/`AVALON_SHARD_VERIFY_KEYS`):
-#543's real per-shard key resolution (via `issuer.key_added(purpose:
-shard_settlement)` inclusion proofs) isn't built yet, so an operator
-configures which shards exist and their verify keys directly for now — a
-shard with no configured key, or a failed fetch/verify, is folded into
-`missing_shard_ids` exactly like a shard this node has never heard from,
-never silently included unverified.
+already uses), verifies it, and aggregates — or, with no shards configured
+or discovered, falls back to this node's own local STH as the one-shard
+degenerate case, no network calls. **Shard discovery is no longer only
+config-based** (issue #599 — see "Automatic shard discovery" below):
+`AVALON_KNOWN_SHARDS`/`AVALON_SHARD_VERIFY_KEYS` remain valid, explicit,
+narrower configuration, but a node with none configured at all can now
+aggregate a real cross-shard root purely from shards it discovered via
+peer-announce gossip. Trust is unaffected either way: #543's real
+per-shard key resolution (`crate::cross_shard::resolve_shard_verify_keys_from_db`,
+reading `issuer_keys` rows with `purpose = 'shard_settlement'`) is tried
+first for a configured and a discovered shard alike — a shard with no key
+resolved from either that or the static fallback, or a failed fetch/verify,
+is folded into `missing_shard_ids` exactly like a shard this node has
+never heard from, never silently included unverified.
 
 Live-verified, including #529's own stated acceptance test: two
 independent `avalon-server` processes, both configured with the identical
@@ -371,6 +375,88 @@ DB-resolved key and produced a real, non-partial two-node cross-shard root
 (`shard_count: 1`, `partial: false`) — #529, #532, and #543 composing for
 real, across two physically separate machines, not the local-process
 approximation every other test here still uses.
+
+### Automatic shard discovery (#599)
+
+Everything above still assumed an operator already knew a shard existed
+and hand-listed it in `AVALON_KNOWN_SHARDS`/`AVALON_MIRROR_PEERS`. At real
+scale — many independent shard operators onboarding over a mainnet's
+life — that manual step is itself a gap: a node's own picture of "which
+shards exist on this network" can silently fragment, with no guarantee
+any given node has the full set. #599 closes it with two layers of
+epidemic/gossip-style propagation over this node's existing bounded peer
+connections, deliberately **not** a registry/directory node type (see
+`docs/architecture/distributed-topology.md`'s own "no central dependency"
+stance, and #535's prior rejection of a pub-sub broker for a related
+problem).
+
+**Layer 1 (`crates/server/src/nodes.rs`): a node's active
+announce/exchange peer set now grows past its bootstrap list.** Before
+this, `nodes::run_worker` kept re-announcing to exactly
+`AVALON_BOOTSTRAP_PEERS` forever — a peer discovered through one of those
+peers was recorded in the local, passive `PeerTable` (so it showed up in
+`GET /nodes/peers`) but never itself became an ongoing announce target, so
+propagation stopped one hop past the bootstrap set. Now `run_worker`
+maintains its own growing `active_peers` list, seeded from the bootstrap
+set (never evicted — still how a brand-new node reaches the mesh at all)
+and extended, capped by `AVALON_NODE_MAX_PEERS` (default 50), with peers
+discovered via announce responses — the same bounded-fan-out/
+full-eventual-reach property Kademlia's k-bucket maintenance and
+gossip-membership protocols (SWIM, HyParView) rely on. A peer that stops
+re-announcing is dropped both from the passive `PeerTable` (as before) and
+from `active_peers` (unless it's a bootstrap peer), freeing a slot for the
+network's continued fan-out rather than pinning a dead one forever.
+
+**Layer 2 (also `nodes.rs`): shard-existence gossip rides on the same
+mechanism**, the same way DHT identity already rides along announce
+(#582). `ShardRegistry` is this node's anti-entropy view of "every shard
+I currently know exists, and a URL claiming to serve it" — gossiped
+bidirectionally on every announce exchange (`AnnounceRequest`/
+`AnnounceResponse` both now carry a `known_shards` snapshot), not looked
+up via a single fixed key, since enumerating the *full set* of everything
+that exists is what gossip solves and a DHT's point-lookup model doesn't.
+A node authoritative for a shard (it has real local, signed settlement
+history for it — checked via `chain.latest_signed_tree_head()`) records
+its own claim into the registry every tick, so it's included in what it
+gossips out. `crate::cross_shard::combined_shard_urls` unions this
+registry with `AVALON_KNOWN_SHARDS` (static config wins on overlap) for
+`GET /ledger/cross-shard-root`'s own aggregation — so a node with zero
+`AVALON_KNOWN_SHARDS` configured at all can now compute a real, non-
+degenerate cross-shard root purely from what it discovered.
+
+**Trust is completely unchanged.** Discovering a shard's existence never
+implies trusting it — a discovered shard's STH still goes through exactly
+the same `crate::cross_shard::resolve_shard_verify_keys_from_db` (#543)
+key resolution/verification a config-listed shard already used; an
+unverifiable, unreachable, or not-yet-issuer-registered discovered shard
+is folded into `missing_shard_ids` like any other, never trusted on the
+strength of merely being gossiped.
+
+**Auto-mirroring a discovered shard is opt-in**, separate from discovery
+itself — mirroring N shards' full history is a real resource cost an
+operator should still choose. `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`
+(`crates/server/src/mirror_watcher.rs`) has the mirror-watcher scan
+`ShardRegistry` each tick for any shard not already named in
+`AVALON_MIRROR_PEERS`, verify its STH via the same #543 mechanism (a
+deliberately separate path from `AVALON_MIRROR_PEERS`'s own
+network-trust-anchor verification — a shard's settlement key is
+integrator-registered, not pinned in `docs/trusted-networks.json`), and,
+once verified, feed it into the same backfill machinery any statically
+configured mirror peer already uses. `AVALON_KNOWN_SHARDS`/
+`AVALON_MIRROR_PEERS` remain valid, unchanged, narrower configuration —
+this is additive, and a node can auto-mirror discovered shards with zero
+explicit peer configuration at all.
+
+Live-verified across the sandbox's three real, physically separate
+machines (primary sandbox host plus `avalon-peer`/`avalon-peer-two`; see
+`docs/architecture/nodes.md`'s own "Today in the repo" section for the
+exact topology and results): a node bootstrapped only from a second node,
+which was itself bootstrapped only from a third, discovered and began
+actively exchanging with the third node it was never directly configured
+to talk to; a shard authoritative on one machine was discovered, resolved,
+and verified from a peer with zero prior config about it; and a node
+configured with `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` began mirroring
+a shard it never had in `AVALON_MIRROR_PEERS`/`AVALON_KNOWN_SHARDS`.
 
 ### Discovering a forwarding node's configured authority (#526)
 
