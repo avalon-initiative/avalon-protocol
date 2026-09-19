@@ -108,13 +108,24 @@ pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, Identit
     }
 }
 
-/// `AVALON_DHT_ENABLED`/`AVALON_LIBP2P_LISTEN_ADDR` resolved once at
-/// startup. `None` (via [`from_env`](Self::from_env)) means #582/#580's DHT
-/// work doesn't run at all — every pre-#582 deployment's behavior,
-/// unchanged.
+/// `AVALON_DHT_ENABLED`/`AVALON_LIBP2P_LISTEN_ADDR`/
+/// `AVALON_LIBP2P_EXTERNAL_ADDR` resolved once at startup. `None` (via
+/// [`from_env`](Self::from_env)) means #582/#580's DHT work doesn't run at
+/// all — every pre-#582 deployment's behavior, unchanged.
 pub struct DhtConfig {
     pub identity: identity::Keypair,
     pub listen_addr: Multiaddr,
+    /// Issue #582, discovered live against the two-node LAN sandbox's
+    /// actual Docker-deployed shape: a containerized node's own
+    /// `NewListenAddr` events only ever report its container-internal
+    /// bridge/loopback addresses, never its host's LAN-reachable one —
+    /// the exact same problem `AVALON_NODE_URL` already exists to solve
+    /// for the HTTP peer table (`crate::nodes::AnnounceConfig::own_base_url`
+    /// is likewise never auto-detected). `Some` overrides
+    /// [`start`]'s observed listen addresses entirely for announcing
+    /// purposes — the local bind still happens on `listen_addr` as normal,
+    /// this only changes what other peers are told to dial.
+    pub external_addr: Option<Multiaddr>,
 }
 
 impl DhtConfig {
@@ -123,7 +134,9 @@ impl DhtConfig {
     /// `AVALON_LIBP2P_LISTEN_ADDR` defaults to `/ip4/0.0.0.0/tcp/0` (an
     /// ephemeral port on every interface), matching this repo's existing
     /// "sane default, explicit override" convention (e.g.
-    /// `AVALON_SERVER_ADDR`).
+    /// `AVALON_SERVER_ADDR`). `AVALON_LIBP2P_EXTERNAL_ADDR` is unset by
+    /// default (native, non-containerized deployments don't need it — see
+    /// `external_addr`'s own doc comment).
     pub fn from_env() -> Result<Option<Self>, String> {
         let enabled = std::env::var("AVALON_DHT_ENABLED")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -137,10 +150,20 @@ impl DhtConfig {
             .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string())
             .parse::<Multiaddr>()
             .map_err(|e| format!("AVALON_LIBP2P_LISTEN_ADDR is not a valid multiaddr: {e}"))?;
+        let external_addr = std::env::var("AVALON_LIBP2P_EXTERNAL_ADDR")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse::<Multiaddr>().map_err(|e| {
+                    format!("AVALON_LIBP2P_EXTERNAL_ADDR is not a valid multiaddr: {e}")
+                })
+            })
+            .transpose()?;
 
         Ok(Some(Self {
             identity,
             listen_addr,
+            external_addr,
         }))
     }
 }
@@ -182,6 +205,7 @@ fn build_swarm(identity: identity::Keypair) -> Swarm<DhtBehaviour> {
 /// in this node's own outbound announces from the very first one — see
 /// `main.rs`'s call site.
 pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
+    let external_addr = config.external_addr.clone();
     let mut swarm = build_swarm(config.identity);
     let local_peer_id = *swarm.local_peer_id();
     swarm.behaviour_mut().kad.set_mode(Some(Mode::Server));
@@ -203,19 +227,32 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
             }
         }
     }
-    if listen_addrs.is_empty() {
-        tracing::warn!(
-            "avalon-dht: no listen address observed within {:?} — this node's DHT identity will \
-             be announced without any dialable address until one appears",
-            INITIAL_LISTEN_COLLECTION_WINDOW
-        );
-    }
+
+    // #582, discovered live against a real Docker-deployed node: an
+    // observed listen address is only ever container-internal in that
+    // shape — never what a LAN/WAN peer should actually dial. An operator
+    // who sets AVALON_LIBP2P_EXTERNAL_ADDR is telling us so explicitly;
+    // trust that over whatever `NewListenAddr` reported, the same way
+    // `AVALON_NODE_URL` already overrides HTTP self-announcement.
+    let announced_addrs = if let Some(external_addr) = external_addr {
+        tracing::info!(%external_addr, "avalon-dht: announcing explicit external address instead of observed listen addresses");
+        vec![external_addr]
+    } else {
+        if listen_addrs.is_empty() {
+            tracing::warn!(
+                "avalon-dht: no listen address observed within {:?} — this node's DHT identity \
+                 will be announced without any dialable address until one appears",
+                INITIAL_LISTEN_COLLECTION_WINDOW
+            );
+        }
+        listen_addrs
+    };
 
     tokio::spawn(run_worker(swarm, peers));
 
     DhtHandle {
         peer_id: local_peer_id,
-        listen_addrs,
+        listen_addrs: announced_addrs,
     }
 }
 
