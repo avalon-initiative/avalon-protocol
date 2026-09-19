@@ -119,11 +119,48 @@ pub async fn chat_ws(
 /// `presence::ClientMessage::Subscribe` — subscribing to more
 /// channels/conversations grows the connection's subscription sets rather
 /// than replacing them.
+///
+/// `claim` (issue #610): an optional wire-encoded (`serde_json`)
+/// `avalon_protocol::interest_claim::InterestClaim`, self-signed by the
+/// caller's own Ed25519 event-signing key against the `base_url` this
+/// connection's own [`ChatServerMessage::NodeInfo`] just told it. `None`
+/// when the caller has no local signing key to sign one with (still a
+/// supported, if narrower, state — see `crate::interest::verify_claim`'s
+/// own doc comment) or hasn't received `NodeInfo` yet — either way this
+/// connection still gets local (in-process `ChatBus`) delivery, it just
+/// never registers DHT interest, so it won't receive delivery relayed from
+/// another node for this scope.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ChatClientMessage {
-    SubscribeChannel { guild_id: Uuid, channel_id: Uuid },
-    SubscribeConversation { conversation_id: Uuid },
+    SubscribeChannel {
+        guild_id: Uuid,
+        channel_id: Uuid,
+        #[serde(default)]
+        claim: Option<String>,
+    },
+    SubscribeConversation {
+        conversation_id: Uuid,
+        #[serde(default)]
+        claim: Option<String>,
+    },
+}
+
+/// What the server can push unprompted, beyond [`ChatUpdate`]. Issue #610:
+/// sent once, immediately after upgrade, so the client knows which
+/// `base_url` to bind into any [`ChatClientMessage`]'s signed `claim`
+/// before it sends its first subscribe — this node's own advertised
+/// address isn't something a browser can otherwise know (it may differ
+/// from whatever URL the browser actually connected through, e.g. behind a
+/// load balancer — see `AnnounceConfig::own_base_url`'s own doc comment).
+/// `null` when this node has none configured (`AVALON_NODE_URL` unset):
+/// the client just never has anything to sign a claim's `base_url` with,
+/// same degenerate "local-only" state as a caller with no local signing
+/// key.
+#[derive(Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum ChatServerMessage {
+    NodeInfo { base_url: Option<String> },
 }
 
 async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid) {
@@ -133,12 +170,27 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
     // returns — any return path, not just a clean close — releases every
     // guard it still holds, which is exactly "this connection's interest
     // goes away" with no separate cleanup step needed. `HashMap` (not the
-    // `HashSet`s this replaced) since the guard itself, not just the id,
-    // needs to live somewhere; `.contains_key` below reads identically to
-    // the old `.contains`.
-    let mut subscribed_channels: HashMap<Uuid, InterestGuard> = HashMap::new();
-    let mut subscribed_conversations: HashMap<Uuid, InterestGuard> = HashMap::new();
+    // `HashSet`s this replaced) since presence in the map (not the guard
+    // itself) is what `relevant` below reads for local delivery.
+    //
+    // Issue #610: the guard is now `Option` — `None` for a locally
+    // authorized subscription that never registered DHT interest at all,
+    // because the caller sent no (or no verifiable) signed claim. That
+    // connection still gets this node's own local `ChatBus` delivery
+    // (unaffected — it never depended on `crate::interest` to begin with),
+    // it just never becomes reachable via another node's relay for this
+    // scope. See `ChatClientMessage`'s own doc comment.
+    let mut subscribed_channels: HashMap<Uuid, Option<InterestGuard>> = HashMap::new();
+    let mut subscribed_conversations: HashMap<Uuid, Option<InterestGuard>> = HashMap::new();
     let mut updates = state.chat.subscribe();
+
+    let hello = serde_json::to_string(&ChatServerMessage::NodeInfo {
+        base_url: state.own_base_url.clone(),
+    })
+    .expect("ChatServerMessage always serializes");
+    if socket.send(Message::Text(hello.into())).await.is_err() {
+        return;
+    }
 
     loop {
         tokio::select! {
@@ -149,7 +201,10 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                             continue;
                         };
                         match msg {
-                            ChatClientMessage::SubscribeChannel { guild_id, channel_id } => {
+                            ChatClientMessage::SubscribeChannel { guild_id, channel_id, claim } => {
+                                if subscribed_channels.contains_key(&channel_id) {
+                                    continue;
+                                }
                                 // Same membership/existence check
                                 // `guild_messages::list_messages` runs — a
                                 // subscribe attempt for a channel the caller
@@ -158,22 +213,50 @@ async fn handle_chat_socket(mut socket: WebSocket, state: AppState, caller: Uuid
                                 // `presence`'s posture for an unauthorized id.
                                 let authorized = crate::channels::require_member(&state, guild_id, caller).await.is_ok()
                                     && crate::channels::fetch_channel(&state, guild_id, channel_id).await.is_ok();
-                                if authorized {
-                                    subscribed_channels
-                                        .entry(channel_id)
-                                        .or_insert_with(|| state.interest.register(InterestScope::Channel(channel_id)));
+                                if !authorized {
+                                    continue;
                                 }
+                                let scope = InterestScope::Channel(channel_id);
+                                let guard = match claim {
+                                    Some(wire) => {
+                                        // An unverifiable claim is treated the
+                                        // same as none at all, never as a
+                                        // reason to reject the whole subscribe
+                                        // — a client that's simply out of sync
+                                        // with this node's `base_url` (a stale
+                                        // `NodeInfo`, reconnected elsewhere)
+                                        // still deserves local delivery.
+                                        match crate::interest::verify_claim(&state, &wire, scope, caller).await {
+                                            Some(_) => Some(state.interest.register_with_claim(scope, wire)),
+                                            None => None,
+                                        }
+                                    }
+                                    None => None,
+                                };
+                                subscribed_channels.insert(channel_id, guard);
                             }
-                            ChatClientMessage::SubscribeConversation { conversation_id } => {
+                            ChatClientMessage::SubscribeConversation { conversation_id, claim } => {
+                                if subscribed_conversations.contains_key(&conversation_id) {
+                                    continue;
+                                }
                                 // Same gate `conversations::list_messages`
                                 // runs — not currently a participant (or a
                                 // block exists among participants) silently
                                 // drops the subscribe attempt.
-                                if conversations::require_unblocked_participant(&state, conversation_id, caller).await.is_ok() {
-                                    subscribed_conversations
-                                        .entry(conversation_id)
-                                        .or_insert_with(|| state.interest.register(InterestScope::Conversation(conversation_id)));
+                                if conversations::require_unblocked_participant(&state, conversation_id, caller).await.is_err() {
+                                    continue;
                                 }
+                                let scope = InterestScope::Conversation(conversation_id);
+                                let guard = match claim {
+                                    Some(wire) => {
+                                        match crate::interest::verify_claim(&state, &wire, scope, caller).await {
+                                            Some(_) => Some(state.interest.register_with_claim(scope, wire)),
+                                            None => None,
+                                        }
+                                    }
+                                    None => None,
+                                };
+                                subscribed_conversations.insert(conversation_id, guard);
                             }
                         }
                     }

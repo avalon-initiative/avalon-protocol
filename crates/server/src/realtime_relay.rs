@@ -162,7 +162,11 @@ async fn relay_targets(state: &AppState, event: &RelayEvent) -> Vec<String> {
         return full_peer_loop_targets(state);
     };
 
-    interest::lookup(dht_commands, scope, state.interest_redis_fast_path.as_ref())
+    // Issue #610: `Channel`/`Conversation` interest is now claim-verified —
+    // see `interest::lookup_claimed`'s own doc comment for why this can no
+    // longer reuse the Redis fast-path `interest::lookup` still does for
+    // `crate::mirror_push`'s unrelated `Network`-scope use.
+    interest::lookup_claimed(state, dht_commands, scope)
         .await
         .into_iter()
         .filter(|base_url| Some(base_url) != state.own_base_url.as_ref())

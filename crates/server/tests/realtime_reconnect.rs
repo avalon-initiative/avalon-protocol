@@ -27,6 +27,8 @@
 //! documents (`AVALON_SERVER_URL` for node A,
 //! `AVALON_REALTIME_RELAY_PEER_SERVER_URL` for node B).
 
+use avalon_protocol::interest_claim::{signing_bytes, ClaimedScope, InterestClaim};
+use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -81,6 +83,62 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
         .expect("failed to seed session");
 
     (identity_id, token)
+}
+
+/// Same fixture `crates/server/tests/realtime_relay.rs::seed_signing_key`
+/// establishes — this identity is a direct-insert fixture, never having run
+/// the real WebAuthn registration ceremony, but issue #610's claim
+/// verification only ever reads `indexer_identity_signing_keys`.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let signing_key_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(signing_key_id)
+    .bind(identity_id)
+    .bind(signing_key.verifying_key().to_bytes().to_vec())
+    .execute(pool)
+    .await
+    .expect("failed to seed signing key");
+    (signing_key_id, signing_key)
+}
+
+/// Same claim-minting helper `realtime_relay.rs::mint_channel_claim`
+/// establishes.
+fn mint_channel_claim(
+    identity_id: Uuid,
+    signing_key_id: Uuid,
+    signing_key: &SigningKey,
+    channel_id: Uuid,
+    base_url: &str,
+) -> String {
+    let scope = ClaimedScope::Channel { channel_id };
+    let nonce = Uuid::new_v4();
+    let issued_at = time::OffsetDateTime::now_utc();
+    let expires_at = issued_at + time::Duration::hours(1);
+    let bytes = signing_bytes(
+        identity_id,
+        signing_key_id,
+        scope,
+        base_url,
+        nonce,
+        issued_at,
+        expires_at,
+    );
+    let signature = signing_key.sign(&bytes);
+    let claim = InterestClaim {
+        identity_id,
+        signing_key_id,
+        scope,
+        base_url: base_url.to_string(),
+        nonce,
+        issued_at,
+        expires_at,
+        signature: hex::encode(signature.to_bytes()),
+    };
+    serde_json::to_string(&claim).expect("InterestClaim always serializes")
 }
 
 async fn wait_until_peered(http: &reqwest::Client, peer_base: &str, origin_base: &str) {
@@ -155,22 +213,59 @@ async fn create_guild_with_general_channel(
     (guild_id, channel_id)
 }
 
+async fn read_node_info_base_url(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> String {
+    loop {
+        match socket.next().await {
+            Some(Ok(WsMessage::Text(text))) => {
+                let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if msg["type"] == "node_info" {
+                    return msg["data"]["base_url"]
+                        .as_str()
+                        .expect(
+                            "this node has no AVALON_NODE_URL configured — this test needs it \
+                             set so a claim can be minted against it",
+                        )
+                        .to_string();
+                }
+            }
+            other => panic!("expected node_info as the first message, got {other:?}"),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn subscribe_channel_socket(
     base: &str,
     token: &str,
     guild_id: &str,
     channel_id: &str,
+    identity_id: Uuid,
+    signing_key_id: Uuid,
+    signing_key: &SigningKey,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let (mut socket, _) =
         tokio_tungstenite::connect_async(ws_url(base, &format!("/ws/messages?token={token}")))
             .await
             .expect("websocket connect failed");
+    let base_url = read_node_info_base_url(&mut socket).await;
+    let claim = mint_channel_claim(
+        identity_id,
+        signing_key_id,
+        signing_key,
+        channel_id.parse().unwrap(),
+        &base_url,
+    );
     socket
         .send(WsMessage::text(
             serde_json::json!({
                 "type": "subscribe_channel",
                 "guild_id": guild_id,
                 "channel_id": channel_id,
+                "claim": claim,
             })
             .to_string(),
         ))
@@ -222,12 +317,22 @@ async fn reconnecting_to_a_different_node_resumes_live_delivery_with_no_special_
     wait_until_peered(&http, &node_b, &node_a).await;
     wait_until_peered(&http, &node_a, &node_b).await;
 
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, identity_id).await;
     let (guild_id, channel_id) = create_guild_with_general_channel(&http, &node_a, &token).await;
 
     // Connected to node A — a message sent (anywhere) is delivered here,
     // the same baseline #539 already proves.
-    let mut socket_a = subscribe_channel_socket(&node_a, &token, &guild_id, &channel_id).await;
+    let mut socket_a = subscribe_channel_socket(
+        &node_a,
+        &token,
+        &guild_id,
+        &channel_id,
+        identity_id,
+        signing_key_id,
+        &signing_key,
+    )
+    .await;
     let send_while_on_a = http
         .post(format!(
             "{node_a}/guilds/{guild_id}/channels/{channel_id}/messages"
@@ -252,7 +357,16 @@ async fn reconnecting_to_a_different_node_resumes_live_delivery_with_no_special_
         .close(None)
         .await
         .expect("closing node A's socket failed");
-    let mut socket_b = subscribe_channel_socket(&node_b, &token, &guild_id, &channel_id).await;
+    let mut socket_b = subscribe_channel_socket(
+        &node_b,
+        &token,
+        &guild_id,
+        &channel_id,
+        identity_id,
+        signing_key_id,
+        &signing_key,
+    )
+    .await;
 
     // First message after reconnecting — proves delivery resumed at all.
     let send_after_reconnect_1 = http

@@ -39,11 +39,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use avalon_protocol::interest_claim::{ClaimedScope, InterestClaim};
 use redis::AsyncCommands;
+use time::OffsetDateTime;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::auth::verify_event_signature;
 use crate::dht::{DhtCommand, DhtCommandSender};
+use crate::state::AppState;
 
 /// Domain-separates this module's DHT keyspace from any other future use
 /// of the same swarm (nothing else uses it yet, but #580's epic explicitly
@@ -243,6 +247,19 @@ impl InterestScope {
 #[derive(Clone)]
 pub struct InterestRegistry {
     counts: Arc<Mutex<HashMap<InterestScope, usize>>>,
+    /// Issue #610: the currently-registered
+    /// [`InterestClaim`](avalon_protocol::interest_claim::InterestClaim), wire-
+    /// encoded, for each `Channel`/`Conversation` scope that has one —
+    /// [`run_worker`] `PutRecord`s these bytes verbatim instead of a bare
+    /// `own_base_url` for those two variants (see [`InterestRegistry::dht_value`]).
+    /// Never populated for `Network` scope: issue #596's mirror-sync use of
+    /// this same mechanism is node-to-node, not identity-scoped, and is
+    /// deliberately out of scope for #610 (see `crate::interest_claim`'s
+    /// module doc comment). Overwritten, never merged, by each
+    /// [`register_with_claim`](Self::register_with_claim) call for the same
+    /// scope — any one currently-valid claim is enough to route delivery to
+    /// this node, so the most recent registration simply wins.
+    claims: Arc<Mutex<HashMap<InterestScope, String>>>,
     /// Fires once a scope goes from zero to one active guard — see
     /// [`register`](Self::register)/[`run_worker`]'s own doc comments for
     /// why a scope can't just wait for the next [`REFRESH_INTERVAL`] tick.
@@ -274,6 +291,16 @@ impl Drop for InterestGuard {
             *count -= 1;
             if *count == 0 {
                 counts.remove(&self.scope);
+                // Only clear a stored claim once the scope has no active
+                // guard left at all — a different still-live guard for the
+                // same scope (e.g. a second connection subscribed to the
+                // same channel) may have registered its own claim, and this
+                // guard dropping must never blow that one away.
+                self.registry
+                    .claims
+                    .lock()
+                    .expect("interest registry lock poisoned")
+                    .remove(&self.scope);
             }
         }
     }
@@ -294,6 +321,7 @@ impl InterestRegistry {
         (
             Self {
                 counts: Arc::new(Mutex::new(HashMap::new())),
+                claims: Arc::new(Mutex::new(HashMap::new())),
                 newly_active,
             },
             receiver,
@@ -310,7 +338,34 @@ impl InterestRegistry {
     /// a real relay (`crates/server/tests/realtime_relay.rs`) found a
     /// fresh subscription otherwise invisible to a lookup for up to 45s,
     /// far too slow to be useful.
+    ///
+    /// Only ever used for [`InterestScope::Network`] (issue #596's mirror
+    /// registration — never identity-scoped, see this struct's own
+    /// `claims` field doc comment). `Channel`/`Conversation` registration
+    /// goes through [`register_with_claim`](Self::register_with_claim)
+    /// instead as of issue #610.
     pub fn register(&self, scope: InterestScope) -> InterestGuard {
+        self.bump(scope)
+    }
+
+    /// Registers one local subscriber's interest in a `Channel`/
+    /// `Conversation` `scope` (issue #610), storing `claim` (the wire-
+    /// encoded, already-verified [`InterestClaim`] — see
+    /// `crate::interest::verify_claim`, which every caller of this must run
+    /// first) as exactly what [`run_worker`] will `PutRecord` for as long as
+    /// this guard, or another guard for the same scope, stays alive. Stored
+    /// before the refcount bump below so a concurrent `run_worker` reacting
+    /// to the immediate `newly_active` signal a fresh 0 -> 1 registration
+    /// sends never finds `scope` active with no claim to put yet.
+    pub fn register_with_claim(&self, scope: InterestScope, claim: String) -> InterestGuard {
+        self.claims
+            .lock()
+            .expect("interest registry lock poisoned")
+            .insert(scope, claim);
+        self.bump(scope)
+    }
+
+    fn bump(&self, scope: InterestScope) -> InterestGuard {
         let mut counts = self.counts.lock().expect("interest registry lock poisoned");
         let count = counts.entry(scope).or_insert(0);
         *count += 1;
@@ -320,6 +375,28 @@ impl InterestRegistry {
         InterestGuard {
             registry: self.clone(),
             scope,
+        }
+    }
+
+    /// The bytes [`run_worker`] should `PutRecord` for `scope` right now, or
+    /// `None` when there's nothing valid to advertise yet — a `Channel`/
+    /// `Conversation` scope between [`bump`]'s refcount increment and
+    /// [`register_with_claim`]'s claim being stored (shouldn't be
+    /// observable given the storage-before-bump order above, but `run_worker`
+    /// treats it as "skip this tick, try again next refresh" rather than
+    /// panicking either way), or a `Network` scope, which was never
+    /// claim-based to begin with (issue #596, unaffected by #610 — see
+    /// `claims`' own doc comment) and just advertises `own_base_url`
+    /// directly, exactly as before this ticket.
+    fn dht_value(&self, scope: InterestScope, own_base_url: &str) -> Option<Vec<u8>> {
+        match scope {
+            InterestScope::Channel(_) | InterestScope::Conversation(_) => self
+                .claims
+                .lock()
+                .expect("interest registry lock poisoned")
+                .get(&scope)
+                .map(|claim| claim.as_bytes().to_vec()),
+            InterestScope::Network(_) => Some(own_base_url.as_bytes().to_vec()),
         }
     }
 
@@ -402,10 +479,181 @@ pub async fn lookup(
     base_urls
 }
 
-fn put_command(scope: InterestScope, own_base_url: &str, ttl: Duration) -> DhtCommand {
+/// Issue #610's replacement for [`lookup`] on `Channel`/`Conversation`
+/// scopes — `crate::realtime_relay`'s only caller for those two variants
+/// now, `lookup` itself remaining exactly as it was for `crate::mirror_push`'s
+/// `Network`-scope use (see `crate::interest_claim`'s module doc comment on
+/// why that path is out of scope here). Decodes each raw DHT value as a
+/// wire-encoded [`InterestClaim`] rather than a bare base URL, and only
+/// returns a claim's `base_url` once this node has independently verified
+/// both its signature ([`verify_claim_signature`]) *and*, separately, that
+/// the claim's own `identity_id` is still a real member of `scope` right
+/// now — checked fresh against this node's own local, ledger-derived
+/// membership tables (`crate::channels::is_member_of_channel` /
+/// `crate::conversations::require_unblocked_participant`), never trusted
+/// from the DHT record itself. A claim that fails either check is silently
+/// dropped, exactly like a malformed record already was before this ticket
+/// — a forged/stale registration and "nobody's actually interested" must
+/// look identical to this relay path.
+///
+/// **No Redis fast-path** (#585): that cache only ever stored a bare
+/// `own_base_url` string (see `RedisFastPath::put`'s call sites in
+/// [`run_worker`], unchanged by this ticket) with no claim/signature
+/// attached to verify — trusting it here would silently reopen exactly the
+/// hole this function exists to close. Every `Channel`/`Conversation`
+/// lookup now always takes the real DHT `GetRecord` round trip.
+pub async fn lookup_claimed(
+    state: &AppState,
+    dht_commands: &DhtCommandSender,
+    scope: InterestScope,
+) -> Vec<String> {
+    let (respond_to, receiver) = tokio::sync::oneshot::channel();
+    if dht_commands
+        .send(DhtCommand::GetRecord {
+            key: scope.dht_key(),
+            respond_to,
+        })
+        .await
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let values = receiver.await.unwrap_or_default();
+
+    let mut base_urls = Vec::new();
+    for value in values {
+        let Ok(wire) = String::from_utf8(value) else {
+            continue;
+        };
+        let Some(claim) = verify_claim_signature(state, &wire, scope).await else {
+            continue;
+        };
+        let still_a_member = match claim.scope {
+            ClaimedScope::Channel { channel_id } => {
+                crate::channels::is_member_of_channel(state, channel_id, claim.identity_id)
+                    .await
+                    .unwrap_or(false)
+            }
+            ClaimedScope::Conversation { conversation_id } => {
+                crate::conversations::require_unblocked_participant(
+                    state,
+                    conversation_id,
+                    claim.identity_id,
+                )
+                .await
+                .is_ok()
+            }
+        };
+        if still_a_member {
+            base_urls.push(claim.base_url);
+        }
+    }
+    base_urls.sort_unstable();
+    base_urls.dedup();
+    base_urls
+}
+
+/// Small allowance for clock drift between the minting client and this
+/// node, same rationale (and value) as
+/// `crate::continuation::CLOCK_SKEW_ALLOWANCE`.
+const CLOCK_SKEW_ALLOWANCE: time::Duration = time::Duration::seconds(5);
+
+/// Core verification shared by both call sites below: well-formed JSON,
+/// names `expected_scope`, a validity window that hasn't expired, isn't
+/// claiming to have been issued in the future beyond clock-skew allowance,
+/// isn't longer than the protocol's own documented cap, and carries a
+/// signature that actually verifies against `signing_key_id`'s current
+/// (non-revoked) public key. Does **not** check `identity_id` against any
+/// expected caller, and does **not** check `base_url` against anything —
+/// callers that need either do so themselves, since the two real callers
+/// need opposite things here (see [`verify_claim`] and
+/// [`lookup_claimed`]'s own doc comments).
+async fn verify_claim_signature(
+    state: &AppState,
+    wire: &str,
+    expected_scope: InterestScope,
+) -> Option<InterestClaim> {
+    let claim: InterestClaim = serde_json::from_str(wire).ok()?;
+
+    let scope_matches = match (claim.scope, expected_scope) {
+        (ClaimedScope::Channel { channel_id }, InterestScope::Channel(expected)) => {
+            channel_id == expected
+        }
+        (ClaimedScope::Conversation { conversation_id }, InterestScope::Conversation(expected)) => {
+            conversation_id == expected
+        }
+        _ => false,
+    };
+    if !scope_matches {
+        return None;
+    }
+
+    let now = OffsetDateTime::now_utc();
+    if claim.expires_at < now || claim.issued_at > now + CLOCK_SKEW_ALLOWANCE {
+        return None;
+    }
+    if claim.expires_at - claim.issued_at
+        > time::Duration::seconds(avalon_protocol::interest_claim::DEFAULT_TTL_SECONDS)
+    {
+        return None;
+    }
+
+    let key = avalon_indexer::projections::identity_signing_keys::find_active_by_id(
+        &state.pool,
+        claim.signing_key_id,
+    )
+    .await
+    .ok()??;
+    // The verified key's own `identity_id`, never the claim's claimed one —
+    // same posture `crate::continuation::verify` already takes for exactly
+    // the same reason.
+    if key.identity_id != claim.identity_id {
+        return None;
+    }
+    let signature_bytes = hex::decode(&claim.signature).ok()?;
+    if !verify_event_signature(&key.public_key, &claim.signing_bytes(), &signature_bytes) {
+        return None;
+    }
+
+    Some(claim)
+}
+
+/// Registration-side verification (issue #610) — run by `crate::chat`
+/// before ever calling [`InterestRegistry::register_with_claim`]. Beyond
+/// [`verify_claim_signature`]'s checks, requires `claim.identity_id` to
+/// equal `expected_identity` (the already-authenticated websocket caller —
+/// a connection only ever registers a claim for the identity that
+/// authenticated it, never on behalf of some other identity whose claim it
+/// happened to be handed) and `claim.base_url` to equal this node's own
+/// `own_base_url` exactly. That second check is the one that actually
+/// closes #610's redirection risk: `base_url` lives *inside* the signed
+/// bytes precisely so a client can't have it silently rewritten later, but
+/// nothing stops a malicious or compromised client from self-signing a
+/// claim naming some *other* node's `base_url` in the first place — this
+/// node must refuse to register a claim that isn't actually naming itself,
+/// or it would just be relaying a genuine member's forged registration
+/// toward an attacker-controlled destination instead of that member's own
+/// node.
+pub async fn verify_claim(
+    state: &AppState,
+    wire: &str,
+    expected_scope: InterestScope,
+    expected_identity: Uuid,
+) -> Option<InterestClaim> {
+    let claim = verify_claim_signature(state, wire, expected_scope).await?;
+    if claim.identity_id != expected_identity {
+        return None;
+    }
+    if state.own_base_url.as_deref() != Some(claim.base_url.as_str()) {
+        return None;
+    }
+    Some(claim)
+}
+
+fn put_command(scope: InterestScope, value: Vec<u8>, ttl: Duration) -> DhtCommand {
     DhtCommand::PutRecord {
         key: scope.dht_key(),
-        value: own_base_url.as_bytes().to_vec(),
+        value,
         ttl,
     }
 }
@@ -443,10 +691,26 @@ pub async fn run_worker(
         tokio::select! {
             _ = refresh_interval.tick() => {
                 for scope in registry.active_scopes() {
-                    if let Some(redis_fast_path) = &redis_fast_path {
-                        redis_fast_path.put(scope, &own_base_url).await;
+                    let Some(value) = registry.dht_value(scope, &own_base_url) else {
+                        // A `Channel`/`Conversation` scope with no claim
+                        // stored yet — see `InterestRegistry::dht_value`'s
+                        // own doc comment on when this can happen. Skip
+                        // this tick, try again next refresh.
+                        continue;
+                    };
+                    // Issue #610: the Redis fast-path (#585) only ever
+                    // cached a bare `own_base_url`, never a verifiable
+                    // claim — `interest::lookup_claimed` no longer
+                    // consults it at all for `Channel`/`Conversation`
+                    // scopes (see that function's own doc comment), so
+                    // populating it for those scopes now would just be
+                    // dead writes.
+                    if matches!(scope, InterestScope::Network(_)) {
+                        if let Some(redis_fast_path) = &redis_fast_path {
+                            redis_fast_path.put(scope, &own_base_url).await;
+                        }
                     }
-                    if dht_commands.send(put_command(scope, &own_base_url, RECORD_TTL)).await.is_err() {
+                    if dht_commands.send(put_command(scope, value, RECORD_TTL)).await.is_err() {
                         // The DHT worker is gone (process shutting down) —
                         // no point looping further, every future send
                         // would hit the same closed channel.
@@ -462,10 +726,15 @@ pub async fn run_worker(
                     // case above.
                     return;
                 };
-                if let Some(redis_fast_path) = &redis_fast_path {
-                    redis_fast_path.put(scope, &own_base_url).await;
+                let Some(value) = registry.dht_value(scope, &own_base_url) else {
+                    continue;
+                };
+                if matches!(scope, InterestScope::Network(_)) {
+                    if let Some(redis_fast_path) = &redis_fast_path {
+                        redis_fast_path.put(scope, &own_base_url).await;
+                    }
                 }
-                if dht_commands.send(put_command(scope, &own_base_url, RECORD_TTL)).await.is_err() {
+                if dht_commands.send(put_command(scope, value, RECORD_TTL)).await.is_err() {
                     return;
                 }
             }
@@ -603,5 +872,282 @@ mod tests {
 
         let _second = registry.register(scope);
         assert!(newly_active.try_recv().is_err());
+    }
+
+    // Issue #610's own live acceptance test: a claim with a perfectly valid
+    // signature must still be rejected by `lookup_claimed` unless its own
+    // `identity_id` is a *current* member of the channel it names — the
+    // actual leak #608 left open (an already-admitted node registering
+    // interest in a channel/conversation it has no real member in). Needs a
+    // real Postgres (`indexer_identity_signing_keys`/`indexer_guild_members`)
+    // but no real libp2p swarm — a tiny in-process fake stands in for
+    // `crate::dht::run_worker` on the "GetRecord returns whatever was last
+    // PutRecord'd under this key" level `lookup_claimed` actually depends
+    // on, exactly like `crates/server/tests/interest_dht.rs` proves that
+    // primitive itself against two real swarms.
+    mod claim_verification_live {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use avalon_protocol::interest_claim::{signing_bytes, ClaimedScope, InterestClaim};
+        use ed25519_dalek::{Signer, SigningKey};
+        use sqlx::postgres::PgPoolOptions;
+        use sqlx::PgPool;
+
+        use super::*;
+        use crate::state::AppState;
+
+        async fn test_pool() -> PgPool {
+            let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+            PgPoolOptions::new()
+                .connect(&database_url)
+                .await
+                .expect("failed to connect to Postgres — is it reachable?")
+        }
+
+        /// Same throwaway-`AppState` construction `crate::authz`'s own test
+        /// module establishes, minus the outbox worker and real WebAuthn
+        /// env vars — nothing here performs a ceremony.
+        async fn test_state(pool: PgPool, own_base_url: Option<String>) -> AppState {
+            let webauthn = Arc::new(
+                crate::auth::build_webauthn("localhost", "http://localhost:8080")
+                    .expect("failed to build a throwaway Webauthn instance for this test"),
+            );
+            let chain = avalon_chain::PostgresSettlementProvider::new(pool.clone(), "avalon-test");
+            let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
+            AppState {
+                pool,
+                chain,
+                indexer,
+                webauthn,
+                presence: crate::presence::PresenceStore::from_env(),
+                chat: crate::chat::ChatBus::new(),
+                settlement_submit_key: None,
+                peers: crate::nodes::PeerTable::new(),
+                managed_hosting_verify_key: None,
+                known_shards: None,
+                remote_submit_status: None,
+                own_shard_id: "core".to_string(),
+                shard_mirror_sources: crate::settlement::ShardMirrorSources::default(),
+                interest: InterestRegistry::new().0,
+                dht_commands: None,
+                own_base_url,
+                interest_redis_fast_path: None,
+                mirror_wake: Arc::new(tokio::sync::Notify::new()),
+                host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
+                shard_registry: crate::nodes::ShardRegistry::new(),
+            }
+        }
+
+        /// A minimal fake standing in for a real DHT swarm's `PutRecord`/
+        /// `GetRecord` handling (`crate::dht::run_worker`'s own real
+        /// version) — this test isn't exercising the network primitive
+        /// itself (that's `interest_dht.rs`'s job), only what
+        /// `lookup_claimed` does with whatever a `GetRecord` happens to
+        /// return.
+        fn fake_dht() -> DhtCommandSender {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<DhtCommand>(8);
+            let store: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>> = Arc::new(Mutex::new(HashMap::new()));
+            tokio::spawn(async move {
+                while let Some(command) = rx.recv().await {
+                    match command {
+                        DhtCommand::PutRecord { key, value, .. } => {
+                            store.lock().unwrap().insert(key, value);
+                        }
+                        DhtCommand::GetRecord { key, respond_to } => {
+                            let values = store
+                                .lock()
+                                .unwrap()
+                                .get(&key)
+                                .cloned()
+                                .into_iter()
+                                .collect();
+                            let _ = respond_to.send(values);
+                        }
+                    }
+                }
+            });
+            tx
+        }
+
+        async fn seed_identity_with_signing_key(pool: &PgPool) -> (Uuid, Uuid, SigningKey) {
+            let identity_id = Uuid::new_v4();
+            sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+                .bind(identity_id)
+                .execute(pool)
+                .await
+                .expect("failed to seed identity");
+
+            let signing_key = SigningKey::generate(&mut rand::rng());
+            let signing_key_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO indexer_identity_signing_keys \
+                 (signing_key_id, identity_id, public_key, added_at) VALUES ($1, $2, $3, now())",
+            )
+            .bind(signing_key_id)
+            .bind(identity_id)
+            .bind(signing_key.verifying_key().to_bytes().to_vec())
+            .execute(pool)
+            .await
+            .expect("failed to seed signing key");
+
+            (identity_id, signing_key_id, signing_key)
+        }
+
+        async fn seed_guild_channel(pool: &PgPool) -> (Uuid, Uuid) {
+            let owner_id = Uuid::new_v4();
+            sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+                .bind(owner_id)
+                .execute(pool)
+                .await
+                .expect("failed to seed guild owner identity");
+
+            let guild_id = Uuid::new_v4();
+            // `tag` is unique (case-insensitively) and capped at 5 chars —
+            // a fixed literal collides across this file's two tests
+            // (and any repeat run), so it's derived from `guild_id` instead.
+            let tag = guild_id.simple().to_string()[..5].to_uppercase();
+            sqlx::query("INSERT INTO guilds (id, name, tag, owner) VALUES ($1, $2, $3, $4)")
+                .bind(guild_id)
+                .bind(format!("interest-claim-test-{guild_id}"))
+                .bind(tag)
+                .bind(owner_id)
+                .execute(pool)
+                .await
+                .expect("failed to seed guild");
+
+            let channel_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO guild_channels (id, guild_id, name) VALUES ($1, $2, 'general')",
+            )
+            .bind(channel_id)
+            .bind(guild_id)
+            .execute(pool)
+            .await
+            .expect("failed to seed channel");
+
+            (guild_id, channel_id)
+        }
+
+        async fn add_member(pool: &PgPool, guild_id: Uuid, identity_id: Uuid) {
+            sqlx::query(
+                "INSERT INTO indexer_guild_members (guild_id, identity_id, role_index, joined_at) \
+                 VALUES ($1, $2, 0, now())",
+            )
+            .bind(guild_id)
+            .bind(identity_id)
+            .execute(pool)
+            .await
+            .expect("failed to seed membership projection row");
+        }
+
+        fn mint_claim(
+            identity_id: Uuid,
+            signing_key_id: Uuid,
+            signing_key: &SigningKey,
+            channel_id: Uuid,
+            base_url: &str,
+        ) -> String {
+            let scope = ClaimedScope::Channel { channel_id };
+            let nonce = Uuid::new_v4();
+            let issued_at = OffsetDateTime::now_utc();
+            let expires_at = issued_at + time::Duration::hours(1);
+            let bytes = signing_bytes(
+                identity_id,
+                signing_key_id,
+                scope,
+                base_url,
+                nonce,
+                issued_at,
+                expires_at,
+            );
+            let signature = signing_key.sign(&bytes);
+            let claim = InterestClaim {
+                identity_id,
+                signing_key_id,
+                scope,
+                base_url: base_url.to_string(),
+                nonce,
+                issued_at,
+                expires_at,
+                signature: hex::encode(signature.to_bytes()),
+            };
+            serde_json::to_string(&claim).expect("InterestClaim always serializes")
+        }
+
+        #[tokio::test]
+        #[ignore]
+        async fn a_claim_naming_a_channel_the_identity_never_joined_is_rejected() {
+            let pool = test_pool().await;
+            let dht_commands = fake_dht();
+            let (identity_id, signing_key_id, signing_key) =
+                seed_identity_with_signing_key(&pool).await;
+            let (_guild_id, channel_id) = seed_guild_channel(&pool).await;
+            // Deliberately never added as a member of the guild that owns
+            // `channel_id`.
+
+            let base_url = "http://attacker-controlled.example";
+            let claim = mint_claim(
+                identity_id,
+                signing_key_id,
+                &signing_key,
+                channel_id,
+                base_url,
+            );
+            let scope = InterestScope::Channel(channel_id);
+            dht_commands
+                .send(put_command(
+                    scope,
+                    claim.into_bytes(),
+                    Duration::from_secs(60),
+                ))
+                .await
+                .expect("fake dht channel should still be open");
+
+            let state = test_state(pool, Some(base_url.to_string())).await;
+            let found = lookup_claimed(&state, &dht_commands, scope).await;
+            assert!(
+                found.is_empty(),
+                "a claim with a perfectly valid signature must still be rejected once its \
+                 identity is not actually a member of the channel it names"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore]
+        async fn a_claim_from_a_real_member_is_accepted() {
+            let pool = test_pool().await;
+            let dht_commands = fake_dht();
+            let (identity_id, signing_key_id, signing_key) =
+                seed_identity_with_signing_key(&pool).await;
+            let (guild_id, channel_id) = seed_guild_channel(&pool).await;
+            add_member(&pool, guild_id, identity_id).await;
+
+            let base_url = "http://legitimate-subscriber-node.example";
+            let claim = mint_claim(
+                identity_id,
+                signing_key_id,
+                &signing_key,
+                channel_id,
+                base_url,
+            );
+            let scope = InterestScope::Channel(channel_id);
+            dht_commands
+                .send(put_command(
+                    scope,
+                    claim.into_bytes(),
+                    Duration::from_secs(60),
+                ))
+                .await
+                .expect("fake dht channel should still be open");
+
+            let state = test_state(pool, Some(base_url.to_string())).await;
+            let found = lookup_claimed(&state, &dht_commands, scope).await;
+            assert_eq!(
+                found,
+                vec![base_url.to_string()],
+                "a claim signed by a real, current member should be trusted"
+            );
+        }
     }
 }
