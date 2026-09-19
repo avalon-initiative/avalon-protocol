@@ -60,6 +60,17 @@ struct MirrorProgressBody {
 /// model), so without it, "has this peer mirrored far enough" could
 /// answer using a completely different mirrored source's progress.
 /// `None` keeps the exact pre-#573 unscoped query.
+///
+/// Issue #604 note: this call doesn't send `shard_id` at all yet, so
+/// `GET /ledger/mirror-progress` answers for its default (`"core"`) shard
+/// regardless of which shard this node actually authors — correct for
+/// every deployment today (a node's own authored shard is always `"core"`
+/// unless `AVALON_OWN_SHARD_ID` is set), but a real, separate gap once a
+/// non-`"core"`-authoring node needs archive confirmation for *its own*
+/// shard specifically. Not fixed here — this function has no access to
+/// this node's own `own_shard_id` today, and threading it through is a
+/// wider change than this ticket's actual scope (mirror storage/
+/// verification collision between shards).
 async fn peer_confirms_coverage(
     client: &reqwest::Client,
     peer: &str,

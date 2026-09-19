@@ -315,8 +315,12 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     let source_a = format!("peer-a-{}", Uuid::new_v4());
     let source_b = format!("peer-b-{}", Uuid::new_v4());
 
-    let observation_a =
-        ObservedSth::from_sth(&source_a, &real_sth, time::OffsetDateTime::now_utc());
+    let observation_a = ObservedSth::from_sth(
+        &source_a,
+        mirror::CORE_SHARD_ID,
+        &real_sth,
+        time::OffsetDateTime::now_utc(),
+    );
     let is_new_a = mirror::insert_observation(&pool, &observation_a)
         .await
         .expect("insert_observation failed");
@@ -328,16 +332,25 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     // size" scenario #40 defines as equivocation.
     let mut corrupted = real_sth.clone();
     corrupted.root_hash = "ff".repeat(32);
-    let observation_b =
-        ObservedSth::from_sth(&source_b, &corrupted, time::OffsetDateTime::now_utc());
+    let observation_b = ObservedSth::from_sth(
+        &source_b,
+        mirror::CORE_SHARD_ID,
+        &corrupted,
+        time::OffsetDateTime::now_utc(),
+    );
     let is_new_b = mirror::insert_observation(&pool, &observation_b)
         .await
         .expect("insert_observation failed");
     assert!(is_new_b);
 
-    let existing = mirror::observations_at(&pool, &real_sth.network_id, real_sth.tree_size)
-        .await
-        .expect("observations_at failed");
+    let existing = mirror::observations_at(
+        &pool,
+        &real_sth.network_id,
+        mirror::CORE_SHARD_ID,
+        real_sth.tree_size,
+    )
+    .await
+    .expect("observations_at failed");
     let findings = mirror::detect_equivocation(&existing, &observation_b);
     assert_eq!(
         findings.len(),
@@ -366,14 +379,23 @@ async fn a_deliberately_corrupted_sth_is_detected_as_equivocation() {
     // Sanity: two consistent observations of the *same* correct STH from a
     // third source must never be flagged.
     let source_c = format!("peer-c-{}", Uuid::new_v4());
-    let observation_c =
-        ObservedSth::from_sth(&source_c, &real_sth, time::OffsetDateTime::now_utc());
+    let observation_c = ObservedSth::from_sth(
+        &source_c,
+        mirror::CORE_SHARD_ID,
+        &real_sth,
+        time::OffsetDateTime::now_utc(),
+    );
     mirror::insert_observation(&pool, &observation_c)
         .await
         .expect("insert_observation failed");
-    let existing_after_c = mirror::observations_at(&pool, &real_sth.network_id, real_sth.tree_size)
-        .await
-        .expect("observations_at failed");
+    let existing_after_c = mirror::observations_at(
+        &pool,
+        &real_sth.network_id,
+        mirror::CORE_SHARD_ID,
+        real_sth.tree_size,
+    )
+    .await
+    .expect("observations_at failed");
     let findings_against_a = mirror::detect_equivocation(
         &existing_after_c
             .iter()

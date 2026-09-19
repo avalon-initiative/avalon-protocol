@@ -99,14 +99,17 @@ pub(crate) fn parse_mirror_peers(raw: &str) -> Vec<(String, String)> {
 }
 
 pub struct MirrorWatcherConfig {
-    /// Base URLs of peers to watch, e.g. `http://localhost:8081` — no
-    /// trailing slash (stripped in [`Self::from_env`] if present). More
-    /// than one is a normal, supported configuration — see module docs.
-    /// Polling itself doesn't care which shard a peer represents (each
-    /// peer's own `mirrored_entries`/`observed_sths` rows are tagged with
-    /// its `source_url` regardless) — only read-serving
-    /// (`crate::settlement::ShardMirrorSources`) needs that mapping.
-    pub peers: Vec<String>,
+    /// `(shard_id, base_url)` pairs to watch, e.g.
+    /// `("core", "http://localhost:8081")` — no trailing slash on the URL
+    /// (stripped in [`Self::from_env`] if present). More than one is a
+    /// normal, supported configuration — see module docs. Issue #604:
+    /// `shard_id` is carried alongside each URL (not discarded) precisely
+    /// because polling *does* need to know which shard it's asking a peer
+    /// about — a peer serving more than one shard answers a bare
+    /// `/ledger/sth/latest` with whichever it treats as its own default,
+    /// not necessarily the one this entry means (#573's documented
+    /// footgun).
+    pub peers: Vec<(String, String)>,
     pub poll_interval: Duration,
     /// Every `shard_id` explicitly named in `AVALON_MIRROR_PEERS`
     /// (`"core"` for a bare, un-prefixed entry) — issue #599's
@@ -148,11 +151,10 @@ impl MirrorWatcherConfig {
         let raw = std::env::var("AVALON_MIRROR_PEERS")
             .ok()
             .filter(|s| !s.trim().is_empty());
-        let parsed = raw.as_deref().map(parse_mirror_peers).unwrap_or_default();
-        let peers: Vec<String> = parsed.iter().map(|(_shard_id, url)| url.clone()).collect();
-        let known_shard_ids: BTreeSet<String> = parsed
-            .into_iter()
-            .map(|(shard_id, _url)| shard_id)
+        let peers = raw.as_deref().map(parse_mirror_peers).unwrap_or_default();
+        let known_shard_ids: BTreeSet<String> = peers
+            .iter()
+            .map(|(shard_id, _url)| shard_id.clone())
             .collect();
 
         let auto_mirror_discovered = std::env::var("AVALON_MIRROR_ALL_DISCOVERED_SHARDS")
@@ -186,18 +188,18 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 /// configured, when `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`. See this
 /// module's own doc comment for why this uses a different verification
 /// path (`crate::cross_shard::resolve_shard_verify_keys_from_db`, #543)
-/// than [`fetch_and_verify_sth`] below. Returns `(url, SignedTreeHead)`
-/// for every discovered shard whose STH verified — a shard that's
-/// unreachable, has no #543-registered key yet, or fails verification is
-/// simply left out this tick (retried again next tick, never trusted on
-/// spec alone).
+/// than [`fetch_and_verify_sth`] below. Returns `(shard_id, url,
+/// SignedTreeHead)` for every discovered shard whose STH verified — a
+/// shard that's unreachable, has no #543-registered key yet, or fails
+/// verification is simply left out this tick (retried again next tick,
+/// never trusted on spec alone).
 async fn discover_and_verify_shard_peers(
     client: &reqwest::Client,
     pool: &PgPool,
     shard_registry: &crate::nodes::ShardRegistry,
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
-) -> Vec<(String, SignedTreeHead)> {
+) -> Vec<(String, String, SignedTreeHead)> {
     let mut verified = Vec::new();
     for shard_id in shard_registry.known_shard_ids() {
         if already_configured.contains(&shard_id) {
@@ -231,7 +233,7 @@ async fn discover_and_verify_shard_peers(
                         "auto-mirroring a newly discovered shard whose STH verified against a \
                          #543-registered shard_settlement key",
                     );
-                    verified.push((url, sth));
+                    verified.push((shard_id, url, sth));
                 } else {
                     tracing::warn!(
                         shard_id,
@@ -259,30 +261,50 @@ async fn discover_and_verify_shard_peers(
 /// together (phase 2) — one unreachable/misbehaving peer never stops the
 /// others from being watched or from covering for it during backfill.
 ///
-/// `interest`/`own_base_url` (issue #596) register this node's own
-/// interest in every `network_id` phase 1 actually verifies an STH for —
-/// harmless, no-op bookkeeping if `AVALON_DHT_ENABLED` is unset (see
-/// `crate::interest`'s own module doc comment on that). `wake` is woken by
-/// `crate::mirror_push::notify`'s handler on an incoming push
-/// notification, short-circuiting the rest of the current poll interval —
-/// see this module's own doc comment for the two-tier design this
-/// implements. `shard_registry`/`own_base_url` also feed
-/// [`discover_and_verify_shard_peers`] (issue #599), folded into the same
-/// `verified_by_network` map phase 1 builds (same
-/// `insert_observation`/equivocation-check/backfill treatment either
-/// way) whenever `config.auto_mirror_discovered` is set — a discovered
-/// shard peer is otherwise indistinguishable from a statically-configured
-/// one from phase 2 onward.
+/// Bundles [`run_worker`]'s dependencies beyond the core
+/// pool/chain/indexer/config quartet — `interest`/`own_base_url` (issue
+/// #596) register this node's own interest in every `network_id` phase 1
+/// actually verifies an STH for (harmless, no-op bookkeeping if
+/// `AVALON_DHT_ENABLED` is unset, see `crate::interest`'s own module doc
+/// comment on that); `wake` is woken by `crate::mirror_push::notify`'s
+/// handler on an incoming push notification, short-circuiting the rest of
+/// the current poll interval; `shard_registry`/`own_base_url` also feed
+/// [`discover_and_verify_shard_peers`] (issue #599); `own_shard_id` (issue
+/// #604) is this node's own locally-authored shard, needed so
+/// [`check_equivocation`] only folds this node's own signed history into a
+/// comparison for observations of *that* shard. Grouped into one struct
+/// purely to keep [`run_worker`]'s own signature under clippy's
+/// too-many-arguments threshold — no shared lifecycle beyond that.
+pub struct MirrorWatcherHandles {
+    pub interest: crate::interest::InterestRegistry,
+    pub shard_registry: crate::nodes::ShardRegistry,
+    pub own_base_url: Option<String>,
+    pub wake: std::sync::Arc<tokio::sync::Notify>,
+    pub own_shard_id: String,
+}
+
+/// Spawned once at startup (see `main.rs`) when [`MirrorWatcherConfig::from_env`]
+/// returns `Some`. Never returns. See module docs for the two-phase
+/// per-tick shape: every peer is polled for its STH independently first
+/// (phase 1), then peers are grouped by `network_id`/`shard_id` and
+/// backfilled together (phase 2) — one unreachable/misbehaving peer never
+/// stops the others from being watched or from covering for it during
+/// backfill. See [`MirrorWatcherHandles`]'s own doc comment for what
+/// `handles` carries and why.
 pub async fn run_worker(
     pool: PgPool,
     chain: PostgresSettlementProvider,
     indexer: PostgresIndexer,
     config: MirrorWatcherConfig,
-    interest: crate::interest::InterestRegistry,
-    shard_registry: crate::nodes::ShardRegistry,
-    own_base_url: Option<String>,
-    wake: std::sync::Arc<tokio::sync::Notify>,
+    handles: MirrorWatcherHandles,
 ) {
+    let MirrorWatcherHandles {
+        interest,
+        shard_registry,
+        own_base_url,
+        wake,
+        own_shard_id,
+    } = handles;
     let client = reqwest::Client::new();
 
     if config.peers.is_empty() {
@@ -292,11 +314,16 @@ pub async fn run_worker(
             config.auto_mirror_discovered
         );
     } else {
+        let peers_display: Vec<String> = config
+            .peers
+            .iter()
+            .map(|(shard_id, url)| format!("{shard_id}={url}"))
+            .collect();
         tracing::info!(
             "mirror-watcher: watching {} peer(s) every {:?}: {} (auto_mirror_discovered={})",
             config.peers.len(),
             config.poll_interval,
-            config.peers.join(", "),
+            peers_display.join(", "),
             config.auto_mirror_discovered
         );
     }
@@ -319,21 +346,31 @@ pub async fn run_worker(
     loop {
         // Phase 1: poll every peer independently for its latest STH,
         // verify + store + equivocation-check each one. Peers that
-        // succeed are grouped by the network_id they reported, since
-        // that's what phase 2 backfills over — usually every configured
-        // peer is the same network, but nothing here assumes it.
-        let mut verified_by_network: HashMap<String, Vec<(String, SignedTreeHead)>> =
+        // succeed are grouped by (network_id, shard_id), since that's
+        // what phase 2 backfills over and (issue #604) two different
+        // shards under the same network_id must never be corroborated or
+        // backfilled together, even if they happen to report the same
+        // tree_size.
+        let mut verified_by_shard: HashMap<(String, String), Vec<(String, SignedTreeHead)>> =
             HashMap::new();
-        for peer in &config.peers {
-            match fetch_and_verify_sth(&client, avalon_sdk::network::bundled_trust_anchors(), peer)
-                .await
+        for (shard_id, peer) in &config.peers {
+            match fetch_and_verify_sth(
+                &client,
+                avalon_sdk::network::bundled_trust_anchors(),
+                peer,
+                shard_id,
+            )
+            .await
             {
                 Ok(sth) => {
-                    let observed = ObservedSth::from_sth(peer, &sth, OffsetDateTime::now_utc());
+                    let observed =
+                        ObservedSth::from_sth(peer, shard_id, &sth, OffsetDateTime::now_utc());
                     match mirror::insert_observation(&pool, &observed).await {
                         Ok(is_new) => {
                             if is_new {
-                                if let Err(err) = check_equivocation(&pool, &chain, &observed).await
+                                if let Err(err) =
+                                    check_equivocation(&pool, &chain, &own_shard_id, &observed)
+                                        .await
                                 {
                                     tracing::error!("mirror-watcher: {peer}: {err}");
                                 }
@@ -350,8 +387,8 @@ pub async fn run_worker(
                                         &sth.network_id,
                                     ))
                                 });
-                            verified_by_network
-                                .entry(sth.network_id.clone())
+                            verified_by_shard
+                                .entry((sth.network_id.clone(), shard_id.clone()))
                                 .or_default()
                                 .push((peer.clone(), sth));
                         }
@@ -371,17 +408,20 @@ pub async fn run_worker(
                 &config.known_shard_ids,
             )
             .await;
-            for (peer, sth) in discovered {
-                let observed = ObservedSth::from_sth(&peer, &sth, OffsetDateTime::now_utc());
+            for (shard_id, peer, sth) in discovered {
+                let observed =
+                    ObservedSth::from_sth(&peer, &shard_id, &sth, OffsetDateTime::now_utc());
                 match mirror::insert_observation(&pool, &observed).await {
                     Ok(is_new) => {
                         if is_new {
-                            if let Err(err) = check_equivocation(&pool, &chain, &observed).await {
+                            if let Err(err) =
+                                check_equivocation(&pool, &chain, &own_shard_id, &observed).await
+                            {
                                 tracing::error!("mirror-watcher: {peer}: {err}");
                             }
                         }
-                        verified_by_network
-                            .entry(sth.network_id.clone())
+                        verified_by_shard
+                            .entry((sth.network_id.clone(), shard_id.clone()))
                             .or_default()
                             .push((peer.clone(), sth));
                     }
@@ -390,14 +430,14 @@ pub async fn run_worker(
             }
         }
 
-        // Phase 2: for each network at least one peer reported this tick,
-        // pick a corroborated tree head and backfill against every peer
-        // that agreed on it.
-        for (network_id, observations) in &verified_by_network {
+        // Phase 2: for each (network, shard) at least one peer reported
+        // this tick, pick a corroborated tree head and backfill against
+        // every peer that agreed on it.
+        for ((network_id, shard_id), observations) in &verified_by_shard {
             if let Err(err) =
-                backfill_network(&client, &pool, &indexer, network_id, observations).await
+                backfill_network(&client, &pool, &indexer, network_id, shard_id, observations).await
             {
-                tracing::error!("mirror-watcher: {network_id}: {err}");
+                tracing::error!("mirror-watcher: {network_id}/{shard_id}: {err}");
             }
         }
 
@@ -535,14 +575,20 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
     })
 }
 
-/// Fetches `peer`'s latest STH and verifies its signature — the one step
-/// every peer goes through in phase 1, regardless of what happens next.
+/// Fetches `peer`'s latest STH for `shard_id` and verifies its signature —
+/// the one step every peer goes through in phase 1, regardless of what
+/// happens next. Issue #604: `shard_id` is sent as an explicit `?shard_id=`
+/// query param (#573's documented footgun) — a peer serving more than one
+/// shard (mirroring one, authoring another) answers a bare request with
+/// whichever it treats as its own default, not necessarily the one this
+/// config entry means.
 async fn fetch_and_verify_sth(
     client: &reqwest::Client,
     anchors: &[avalon_sdk::network::TrustAnchorEntry],
     peer: &str,
+    shard_id: &str,
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
-    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer, None).await?;
+    let (sth, peer_protocol_version) = fetch_latest_sth(client, peer, Some(shard_id)).await?;
     check_peer_version(peer, &peer_protocol_version)?;
 
     let Some(verify_key) = verify_key_for_network(anchors, &sth.network_id) else {
@@ -637,19 +683,30 @@ async fn fetch_latest_sth(
 async fn check_equivocation(
     pool: &PgPool,
     chain: &PostgresSettlementProvider,
+    own_shard_id: &str,
     observed: &ObservedSth,
 ) -> Result<(), MirrorWatcherError> {
-    let mut existing =
-        mirror::observations_at(pool, &observed.network_id, observed.tree_size).await?;
+    let mut existing = mirror::observations_at(
+        pool,
+        &observed.network_id,
+        &observed.shard_id,
+        observed.tree_size,
+    )
+    .await?;
 
     // Fold in this node's own signed history, if it has one at this exact
     // tree_size — a node that is both an authority and a mirror must catch
     // itself disagreeing with what it broadcasts, not just catch two peers
-    // disagreeing with each other.
-    if chain.network_id() == observed.network_id {
+    // disagreeing with each other. Issue #604: only when `observed` is
+    // actually about this node's own authored shard — folding it in for a
+    // *different* shard this node happens to also be mirroring would
+    // compare across two unrelated logs, exactly the bug class this
+    // ticket fixes.
+    if chain.network_id() == observed.network_id && own_shard_id == observed.shard_id {
         if let Some(own) = chain.signed_tree_head_at(observed.tree_size).await? {
             existing.push(ObservedSth::from_sth(
                 SELF_SIGNED_SOURCE,
+                own_shard_id,
                 &own,
                 own.created_at,
             ));
@@ -687,15 +744,17 @@ async fn backfill_network(
     pool: &PgPool,
     indexer: &PostgresIndexer,
     network_id: &str,
+    shard_id: &str,
     observations: &[(String, SignedTreeHead)],
 ) -> Result<(), MirrorWatcherError> {
-    let equivocations = mirror::unresolved_equivocations(pool, network_id).await?;
+    let equivocations = mirror::unresolved_equivocations(pool, network_id, shard_id).await?;
     if !equivocations.is_empty() {
         tracing::error!(
             event = "equivocation_backfill_blocked",
             network_id = %network_id,
+            shard_id = %shard_id,
             unresolved_findings = equivocations.len(),
-            "refusing to backfill — unresolved equivocation finding(s) recorded for this network; needs human investigation before further backfill can be trusted",
+            "refusing to backfill — unresolved equivocation finding(s) recorded for this shard; needs human investigation before further backfill can be trusted",
         );
         return Ok(());
     }
@@ -727,7 +786,15 @@ async fn backfill_network(
         .expect("target_tree_size/target_root_hash were derived from this exact list");
 
     let candidate_peers: Vec<String> = agreeing_peers.iter().map(|p| p.to_string()).collect();
-    backfill(client, pool, indexer, &candidate_peers, &target_sth).await
+    backfill(
+        client,
+        pool,
+        indexer,
+        shard_id,
+        &candidate_peers,
+        &target_sth,
+    )
+    .await
 }
 
 /// Fetches and independently verifies every entry between what's already
@@ -737,8 +804,10 @@ async fn backfill_network(
 /// [`backfill_network`]) for each individual request — if one is
 /// unreachable mid-backfill, the next candidate is tried before giving up
 /// for this tick, rather than aborting outright. Storage is keyed on
-/// `(network_id, seq)`, so failing over between peers never duplicates or
-/// restarts progress (see `avalon_chain::mirror::insert_mirrored_entry`'s
+/// `(network_id, shard_id, seq)`, so failing over between peers within the
+/// same shard never duplicates or restarts progress, and two different
+/// shards' entries — even at the same `seq` — are never confused for each
+/// other (issue #604; see `avalon_chain::mirror::insert_mirrored_entry`'s
 /// doc comment).
 ///
 /// Aborts (without storing anything further this pass) the moment *every*
@@ -758,6 +827,7 @@ async fn backfill(
     client: &reqwest::Client,
     pool: &PgPool,
     indexer: &PostgresIndexer,
+    shard_id: &str,
     candidate_peers: &[String],
     sth: &SignedTreeHead,
 ) -> Result<(), MirrorWatcherError> {
@@ -765,14 +835,14 @@ async fn backfill(
         return Ok(());
     }
 
-    // Issue #573: unscoped (`None`) — backfill's own "how much of this
-    // network have I mirrored" progress tracking is deliberately left
-    // exactly as it was; this fix's live-verified scope is the *read*
-    // side (`crate::settlement`'s shard-blending bug). Whether backfill
-    // itself needs equivalent per-shard scoping when `candidate_peers`
-    // spans more than one shard under the same `network_id` is a real,
-    // separate question — not something tonight's fix changes either way.
-    let mut progress = mirror::mirrored_progress(pool, &sth.network_id, None).await?;
+    // Issue #604: `shard_id` scopes this to exactly the shard `sth`
+    // belongs to — #573 left this deliberately unscoped ("how much of
+    // this *network* have I mirrored"), explicitly naming this as a real,
+    // separate follow-up question at the time. Confirmed live as a real
+    // bug, not just theoretical: a node mirroring more than one shard of
+    // the same network had its inclusion-proof verification state
+    // silently collide between shards without this.
+    let mut progress = mirror::mirrored_progress(pool, &sth.network_id, shard_id, None).await?;
     if progress.verified_count >= sth.tree_size {
         return Ok(());
     }
@@ -795,6 +865,7 @@ async fn backfill(
             client,
             candidate_peers,
             &mut peer_cursor,
+            shard_id,
             progress.last_seq,
             BACKFILL_PAGE_SIZE,
         )
@@ -837,6 +908,7 @@ async fn backfill(
                 client,
                 candidate_peers,
                 &mut peer_cursor,
+                shard_id,
                 entry.seq,
                 sth.tree_size,
             )
@@ -897,6 +969,7 @@ async fn backfill(
             let mirrored_entry = mirror::MirroredEntry {
                 source_url: used_peer.clone(),
                 network_id: sth.network_id.clone(),
+                shard_id: shard_id.to_string(),
                 seq: entry.seq,
                 event_id: entry.event_id,
                 kind: entry.kind,
@@ -1053,13 +1126,14 @@ async fn fetch_entries_from_any(
     client: &reqwest::Client,
     candidates: &[String],
     cursor: &mut usize,
+    shard_id: &str,
     since_seq: i64,
     limit: i64,
 ) -> Result<(Vec<LedgerEntryDto>, String), MirrorWatcherError> {
     for offset in 0..candidates.len() {
         let idx = (*cursor + offset) % candidates.len();
         let peer = &candidates[idx];
-        match fetch_entries(client, peer, since_seq, limit).await {
+        match fetch_entries(client, peer, shard_id, since_seq, limit).await {
             Ok(entries) => {
                 *cursor = (idx + 1) % candidates.len();
                 return Ok((entries, peer.clone()));
@@ -1078,13 +1152,14 @@ async fn fetch_inclusion_proof_from_any(
     client: &reqwest::Client,
     candidates: &[String],
     cursor: &mut usize,
+    shard_id: &str,
     seq: i64,
     tree_size: i64,
 ) -> Result<InclusionProofDto, MirrorWatcherError> {
     for offset in 0..candidates.len() {
         let idx = (*cursor + offset) % candidates.len();
         let peer = &candidates[idx];
-        match fetch_inclusion_proof(client, peer, seq, tree_size).await {
+        match fetch_inclusion_proof(client, peer, shard_id, seq, tree_size).await {
             Ok(dto) => {
                 *cursor = (idx + 1) % candidates.len();
                 return Ok(dto);
@@ -1097,15 +1172,24 @@ async fn fetch_inclusion_proof_from_any(
     Err(MirrorWatcherError::AllPeersFailed)
 }
 
+/// Issue #604: `shard_id` sent as an explicit query param, same #573
+/// footgun as [`fetch_latest_sth`] — a peer serving more than one shard
+/// answers a bare request with whichever it treats as its own default.
 async fn fetch_entries(
     client: &reqwest::Client,
     peer: &str,
+    shard_id: &str,
     since_seq: i64,
     limit: i64,
 ) -> Result<Vec<LedgerEntryDto>, MirrorWatcherError> {
-    let url = format!("{peer}/ledger/entries?since_seq={since_seq}&limit={limit}");
+    let url = format!("{peer}/ledger/entries");
     let entries: Vec<LedgerEntryDto> = client
         .get(&url)
+        .query(&[
+            ("since_seq", since_seq.to_string()),
+            ("limit", limit.to_string()),
+            ("shard_id", shard_id.to_string()),
+        ])
         .send()
         .await?
         .error_for_status()?
@@ -1115,15 +1199,23 @@ async fn fetch_entries(
     Ok(entries)
 }
 
+/// Issue #604: `shard_id` sent as an explicit query param — same reason
+/// as [`fetch_entries`].
 async fn fetch_inclusion_proof(
     client: &reqwest::Client,
     peer: &str,
+    shard_id: &str,
     seq: i64,
     tree_size: i64,
 ) -> Result<InclusionProofDto, MirrorWatcherError> {
-    let url = format!("{peer}/ledger/proof/inclusion?seq={seq}&tree_size={tree_size}");
+    let url = format!("{peer}/ledger/proof/inclusion");
     let dto: InclusionProofDto = client
         .get(&url)
+        .query(&[
+            ("seq", seq.to_string()),
+            ("tree_size", tree_size.to_string()),
+            ("shard_id", shard_id.to_string()),
+        ])
         .send()
         .await?
         .error_for_status()?
@@ -1258,7 +1350,10 @@ mod tests {
         let config = MirrorWatcherConfig::from_env().expect("peers were set");
         assert_eq!(
             config.peers,
-            vec!["http://localhost:8081", "http://localhost:8082"]
+            vec![
+                ("core".to_string(), "http://localhost:8081".to_string()),
+                ("core".to_string(), "http://localhost:8082".to_string()),
+            ]
         );
         assert_eq!(
             config.poll_interval,
@@ -1344,6 +1439,7 @@ mod tests {
         mirror::MirroredEntry {
             source_url: "http://peer".to_string(),
             network_id: "avalon-test".to_string(),
+            shard_id: mirror::CORE_SHARD_ID.to_string(),
             seq: 1,
             event_id: Uuid::new_v4(),
             kind: "identity.created".to_string(),
@@ -1410,6 +1506,7 @@ mod tests {
             &pool,
             &mirror::EquivocationFinding {
                 network_id: network_id.clone(),
+                shard_id: mirror::CORE_SHARD_ID.to_string(),
                 tree_size: 10,
                 source_a: "peer-a".to_string(),
                 root_hash_a: "aa".repeat(32),
@@ -1437,11 +1534,18 @@ mod tests {
             },
         )];
 
-        backfill_network(&client, &pool, &indexer, &network_id, &observations)
-            .await
-            .expect("backfill_network should return Ok(()) rather than error when gated");
+        backfill_network(
+            &client,
+            &pool,
+            &indexer,
+            &network_id,
+            mirror::CORE_SHARD_ID,
+            &observations,
+        )
+        .await
+        .expect("backfill_network should return Ok(()) rather than error when gated");
 
-        let progress = mirror::mirrored_progress(&pool, &network_id, None)
+        let progress = mirror::mirrored_progress(&pool, &network_id, mirror::CORE_SHARD_ID, None)
             .await
             .expect("mirrored_progress failed");
         assert_eq!(
@@ -1467,6 +1571,7 @@ mod tests {
             &pool,
             &mirror::EquivocationFinding {
                 network_id: network_id.clone(),
+                shard_id: mirror::CORE_SHARD_ID.to_string(),
                 tree_size: 10,
                 source_a: "peer-a".to_string(),
                 root_hash_a: "aa".repeat(32),
@@ -1479,13 +1584,20 @@ mod tests {
         .await
         .expect("record_equivocation failed");
 
-        mirror::resolve_equivocation(&pool, &network_id, 10, &"aa".repeat(32))
-            .await
-            .expect("resolve_equivocation failed");
+        mirror::resolve_equivocation(
+            &pool,
+            &network_id,
+            mirror::CORE_SHARD_ID,
+            10,
+            &"aa".repeat(32),
+        )
+        .await
+        .expect("resolve_equivocation failed");
 
-        let unresolved = mirror::unresolved_equivocations(&pool, &network_id)
-            .await
-            .expect("unresolved_equivocations failed");
+        let unresolved =
+            mirror::unresolved_equivocations(&pool, &network_id, mirror::CORE_SHARD_ID)
+                .await
+                .expect("unresolved_equivocations failed");
         assert!(
             unresolved.is_empty(),
             "gate should be clear after resolution"
@@ -1496,7 +1608,15 @@ mod tests {
         // equivocation gate (which would otherwise have returned first with
         // a distinct log line) without needing a reachable peer.
         let observations: Vec<(String, SignedTreeHead)> = Vec::new();
-        let result = backfill_network(&client, &pool, &indexer, &network_id, &observations).await;
+        let result = backfill_network(
+            &client,
+            &pool,
+            &indexer,
+            &network_id,
+            mirror::CORE_SHARD_ID,
+            &observations,
+        )
+        .await;
         assert!(result.is_ok());
     }
 }

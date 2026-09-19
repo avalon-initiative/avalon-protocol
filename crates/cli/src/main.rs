@@ -119,7 +119,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -203,8 +203,8 @@ async fn list_equivocations(network_id_arg: Option<String>) {
     println!("network_id: {network_id} — {} finding(s):", findings.len());
     for f in &findings {
         println!(
-            "┌─ tree_size {} ─────────────────────────────────────",
-            f.tree_size
+            "┌─ shard_id {} tree_size {} ─────────────────────────────────────",
+            f.shard_id, f.tree_size
         );
         println!(
             "│ source_a:  {} → root {}",
@@ -230,28 +230,45 @@ async fn list_equivocations(network_id_arg: Option<String>) {
     }
 }
 
-/// `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]`
+/// `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]`
 /// — issue #316, the write side of #300's decided equivocation response
 /// procedure. Records that an operator has completed the investigation
 /// playbook (`docs/maintainers/equivocation-response.md`) and determined
 /// which of the two disagreeing root hashes at `tree_size` was legitimate.
 ///
+/// `--shard-id` (issue #604, defaults to `"core"`) — every shard under a
+/// `network_id` has its own independent `tree_size` numbering, so a
+/// finding is only ever identified by `network_id`/`shard_id`/`tree_size`
+/// together, not `network_id`/`tree_size` alone (two unrelated shards can
+/// and normally will both have an entry at the same `tree_size`).
+///
 /// `--discard-mirrored` additionally drops any `mirrored_entries` this node
-/// already verified at or beyond `tree_size` (`avalon_chain::mirror::
-/// discard_mirrored_entries_from`) — pass it when this node's own mirrored
-/// history might include content from the losing branch, so the next
-/// mirror-watcher tick re-fetches and re-verifies from a clean point rather
-/// than resuming on top of potentially-wrong local state. Safe to omit (and
-/// re-run with it later) if unsure; it is not the default because a pure
-/// mirror that never actually advanced past `tree_size` has nothing to
-/// discard, and unconditionally deleting is needless churn for that
-/// (expected to be the more common) case.
+/// already verified at or beyond `tree_size` for this shard
+/// (`avalon_chain::mirror::discard_mirrored_entries_from`) — pass it when
+/// this node's own mirrored history might include content from the losing
+/// branch, so the next mirror-watcher tick re-fetches and re-verifies from
+/// a clean point rather than resuming on top of potentially-wrong local
+/// state. Safe to omit (and re-run with it later) if unsure; it is not the
+/// default because a pure mirror that never actually advanced past
+/// `tree_size` has nothing to discard, and unconditionally deleting is
+/// needless churn for that (expected to be the more common) case.
 async fn resolve_equivocation(raw_args: &[String]) {
     let discard_mirrored = raw_args.iter().any(|a| a == "--discard-mirrored");
-    let positional: Vec<&String> = raw_args.iter().filter(|a| !a.starts_with("--")).collect();
+    let shard_id = arg_value(raw_args, "--shard-id").unwrap_or_else(|| "core".to_string());
+    let shard_id = shard_id.as_str();
+    let skip_next = raw_args
+        .iter()
+        .position(|a| a == "--shard-id")
+        .map(|i| i + 1);
+    let positional: Vec<&String> = raw_args
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| !a.starts_with("--") && Some(*i) != skip_next)
+        .map(|(_, a)| a)
+        .collect();
     let [network_id, tree_size_raw, legitimate_root_hash] = positional[..] else {
         eprintln!(
-            "usage: avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--discard-mirrored]"
+            "usage: avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]"
         );
         std::process::exit(1);
     };
@@ -270,6 +287,7 @@ async fn resolve_equivocation(raw_args: &[String]) {
     let resolved_count = avalon_chain::mirror::resolve_equivocation(
         &pool,
         network_id,
+        shard_id,
         tree_size,
         legitimate_root_hash,
     )
@@ -277,22 +295,23 @@ async fn resolve_equivocation(raw_args: &[String]) {
     .expect("failed to resolve equivocation finding(s)");
     if resolved_count == 0 {
         println!(
-            "no unresolved finding at network_id={network_id} tree_size={tree_size} — nothing to do \
+            "no unresolved finding at network_id={network_id} shard_id={shard_id} tree_size={tree_size} — nothing to do \
              (already resolved, or never existed)"
         );
         return;
     }
     println!(
-        "resolved {resolved_count} finding(s) at network_id={network_id} tree_size={tree_size}: \
+        "resolved {resolved_count} finding(s) at network_id={network_id} shard_id={shard_id} tree_size={tree_size}: \
          legitimate root is {}",
         short_hash(legitimate_root_hash)
     );
 
     if discard_mirrored {
-        let discarded =
-            avalon_chain::mirror::discard_mirrored_entries_from(&pool, network_id, tree_size)
-                .await
-                .expect("failed to discard mirrored entries");
+        let discarded = avalon_chain::mirror::discard_mirrored_entries_from(
+            &pool, network_id, shard_id, tree_size,
+        )
+        .await
+        .expect("failed to discard mirrored entries");
         println!(
             "discarded {discarded} locally-mirrored entr(ies) verified at or beyond tree_size={tree_size} \
              — the mirror-watcher will re-fetch and re-verify them from the now-resolved branch on its next tick"
@@ -741,7 +760,10 @@ async fn check_switch_readiness(raw_args: &[String]) {
             std::process::exit(1);
         });
         let bytes: [u8; 32] = bytes.try_into().unwrap_or_else(|v: Vec<u8>| {
-            eprintln!("--verify-key must decode to exactly 32 bytes, got {}", v.len());
+            eprintln!(
+                "--verify-key must decode to exactly 32 bytes, got {}",
+                v.len()
+            );
             std::process::exit(1);
         });
         ed25519_dalek::VerifyingKey::from_bytes(&bytes).unwrap_or_else(|e| {
@@ -756,15 +778,24 @@ async fn check_switch_readiness(raw_args: &[String]) {
         .expect("failed to build HTTP client");
 
     let report_sth = |label: &str, sth: &avalon_chain::sth::SignedTreeHead| {
-        println!("{label}: tree_size={} root_hash={}", sth.tree_size, sth.root_hash);
+        println!(
+            "{label}: tree_size={} root_hash={}",
+            sth.tree_size, sth.root_hash
+        );
         if let Some(key) = &verify_key {
             let ok = avalon_chain::sth::verify_tree_head(key, sth);
             println!(
                 "{label}: signature {}",
-                if ok { "VERIFIES against --verify-key" } else { "DOES NOT VERIFY against --verify-key" }
+                if ok {
+                    "VERIFIES against --verify-key"
+                } else {
+                    "DOES NOT VERIFY against --verify-key"
+                }
             );
             if !ok {
-                println!("{label}: WARNING — do not trust this host's claim until this is resolved");
+                println!(
+                    "{label}: WARNING — do not trust this host's claim until this is resolved"
+                );
             }
         }
     };
@@ -807,7 +838,10 @@ async fn check_switch_readiness(raw_args: &[String]) {
                 Ok(sth) => report_sth("new-host", &sth.into()),
                 Err(e) => println!("new-host ({new_host}): returned an unparseable response — {e}"),
             },
-            Ok(resp) => println!("new-host ({new_host}): {} for shard '{shard_id}'", resp.status()),
+            Ok(resp) => println!(
+                "new-host ({new_host}): {} for shard '{shard_id}'",
+                resp.status()
+            ),
             Err(e) => println!("new-host ({new_host}): unreachable — {e}"),
         }
         println!(
@@ -894,7 +928,10 @@ impl SwitchVerdict {
     }
 }
 
-fn switch_verdict(old_root_hash: &str, new_root_hash_at_old_tree_size: Option<&str>) -> SwitchVerdict {
+fn switch_verdict(
+    old_root_hash: &str,
+    new_root_hash_at_old_tree_size: Option<&str>,
+) -> SwitchVerdict {
     match new_root_hash_at_old_tree_size {
         None => SwitchVerdict::NotReady,
         Some(new_root) if new_root == old_root_hash => SwitchVerdict::Ready,
