@@ -661,8 +661,7 @@ async fn fetch_latest_sth(
     if let Some(shard_id) = shard_id {
         request = request.query(&[("shard_id", shard_id)]);
     }
-    let dto: SignedTreeHeadDto = request
-        .send()
+    let dto: SignedTreeHeadDto = send_with_rate_limit_retry(request)
         .await?
         .error_for_status()?
         .json()
@@ -670,6 +669,54 @@ async fn fetch_latest_sth(
         .map_err(|e| MirrorWatcherError::Decode(e.to_string()))?;
     let protocol_version = dto.protocol_version.clone();
     Ok((dto.into(), protocol_version))
+}
+
+/// Sends `request`, retrying with backoff on HTTP 429 — issue #604's live
+/// testing surfaced this codebase's own rate limiter (#363/#545) as a real
+/// concern for backfill, not just a hypothetical: backfilling a real,
+/// busy history's worth of individual `/ledger/entries`/`/ledger/proof/inclusion`
+/// requests can legitimately exceed `AVALON_RATE_LIMIT_PER_MINUTE`
+/// mid-backfill, and treating that as an ordinary peer failure (this
+/// tick's backfill just aborts, retried whole-hog next poll interval)
+/// makes backfilling any sufficiently large history painfully slow at
+/// best. Respects a `Retry-After` header when the rate limiter sends one
+/// (issue #363's `GovernorLayer` does), else falls back to a short fixed
+/// backoff. Bounded to a handful of attempts so a persistently
+/// misbehaving/adversarial peer still surfaces as a real failure rather
+/// than retrying forever — the existing per-tick retry (next poll
+/// interval) is still the ultimate backstop.
+async fn send_with_rate_limit_retry(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
+    const MAX_RATE_LIMIT_RETRIES: u32 = 5;
+    const DEFAULT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+
+    let mut attempt = 0u32;
+    loop {
+        let this_attempt = request
+            .try_clone()
+            .expect("GET requests built here never stream a body, so cloning always succeeds");
+        let response = this_attempt.send().await?;
+        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS
+            || attempt >= MAX_RATE_LIMIT_RETRIES
+        {
+            return Ok(response);
+        }
+        let wait = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(DEFAULT_BACKOFF);
+        attempt += 1;
+        tracing::warn!(
+            attempt,
+            wait_secs = wait.as_secs_f64(),
+            "mirror-watcher: rate-limited (429) fetching from a peer, backing off and retrying"
+        );
+        tokio::time::sleep(wait).await;
+    }
 }
 
 /// Compares `observed` against every other observation this node has
@@ -1183,14 +1230,12 @@ async fn fetch_entries(
     limit: i64,
 ) -> Result<Vec<LedgerEntryDto>, MirrorWatcherError> {
     let url = format!("{peer}/ledger/entries");
-    let entries: Vec<LedgerEntryDto> = client
-        .get(&url)
-        .query(&[
-            ("since_seq", since_seq.to_string()),
-            ("limit", limit.to_string()),
-            ("shard_id", shard_id.to_string()),
-        ])
-        .send()
+    let request = client.get(&url).query(&[
+        ("since_seq", since_seq.to_string()),
+        ("limit", limit.to_string()),
+        ("shard_id", shard_id.to_string()),
+    ]);
+    let entries: Vec<LedgerEntryDto> = send_with_rate_limit_retry(request)
         .await?
         .error_for_status()?
         .json()
@@ -1209,14 +1254,12 @@ async fn fetch_inclusion_proof(
     tree_size: i64,
 ) -> Result<InclusionProofDto, MirrorWatcherError> {
     let url = format!("{peer}/ledger/proof/inclusion");
-    let dto: InclusionProofDto = client
-        .get(&url)
-        .query(&[
-            ("seq", seq.to_string()),
-            ("tree_size", tree_size.to_string()),
-            ("shard_id", shard_id.to_string()),
-        ])
-        .send()
+    let request = client.get(&url).query(&[
+        ("seq", seq.to_string()),
+        ("tree_size", tree_size.to_string()),
+        ("shard_id", shard_id.to_string()),
+    ]);
+    let dto: InclusionProofDto = send_with_rate_limit_retry(request)
         .await?
         .error_for_status()?
         .json()
