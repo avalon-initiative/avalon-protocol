@@ -536,9 +536,21 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   one Postgres (`crates/server/tests/realtime_relay.rs`, `--ignored`),
   run both with `AVALON_DHT_ENABLED` unset (regression: unchanged
   behavior) and set (the new path actually exercised and delivering).
-  **Known limitation, not solved here:** the DHT keyspace has no
-  `network_id` segregation the way the HTTP peer table does — see
-  `crate::realtime_relay`'s own module doc comment.
+  **Cross-network reachability closed (issue #608)**: the DHT swarm's own
+  Kademlia protocol id (and the informational `identify` exchange) are
+  now namespaced by `network_id` (`crate::dht::kad_protocol_name`/
+  `identify_protocol_version`) — a peer configured for a different network
+  can no longer negotiate a single Kademlia RPC with this swarm at all,
+  closing what used to be a purely incidental protection ("this doesn't
+  leak across networks today only because #582's bootstrap can itself
+  only ever reach peers already admitted into this same network's peer
+  table") into a real, structural one. **Known limitation, not solved
+  here (tracked as #610):** this closes the *network-boundary* question
+  only — it doesn't add any authorization for *which specific scope* an
+  already-admitted, same-network node can register interest in. A node
+  legitimately on the right network can still register (and #584's relay
+  will still trust) interest in a channel/conversation it has no real
+  member in — see #610 for the concrete leak and proposed fix.
 - **Local Redis fast-path in front of the interest lookup (#585, part of
   epic #580)**: `crate::interest::RedisFastPath`, reusing #545's
   already-decided optional per-hoster `AVALON_REDIS_URL` — checked first
