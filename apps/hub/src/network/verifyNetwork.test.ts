@@ -6,7 +6,7 @@
 import { ed25519 } from '@noble/curves/ed25519'
 import { bytesToHex } from '@noble/hashes/utils'
 import { describe, expect, it } from 'vitest'
-import type { SignedTreeHeadResponse } from '../api/types'
+import type { SignedTreeHeadResponse } from '@avalon/api-client'
 import { signingMessage } from './sthMessage'
 import { evaluateNetworkTrust, verifyTreeHead } from './verifyNetwork'
 import type { TrustAnchorEntry } from './trustAnchors'

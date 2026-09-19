@@ -7,10 +7,10 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonButton, AvalonCapabilityConsentRow, AvalonCard, AvalonForm } from '@avalon/ui'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { capabilityDescription } from '../api/connections'
 import { useIntegrationConsent } from '../composables/useIntegrationConsent'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import styles from '../styles/page.module.scss'
 
 const route = useRoute()

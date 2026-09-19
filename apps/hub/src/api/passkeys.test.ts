@@ -10,7 +10,9 @@ const runRegistrationCeremonyMock = vi.fn<
   (options: unknown) => Promise<RegistrationResponseJSON>
 >()
 
-vi.mock('../crypto/webauthn', () => ({
+// See recovery.test.ts's own comment on why this mocks the resolved
+// @avalon/api-client submodule rather than the package entrypoint.
+vi.mock('@avalon/api-client/src/crypto/webauthn', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
 }))
 

@@ -7,7 +7,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
 import UserProfile from './UserProfile.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { FakeWebSocket, MockErrorResponse, mockFetchByPath } from '../testing/fakes'
 
 const selfProfile = {

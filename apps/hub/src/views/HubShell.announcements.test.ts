@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { h } from 'vue'
 import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 // A trivial stand-in for the real `Guild.vue` at the target route — this

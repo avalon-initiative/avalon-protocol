@@ -5,7 +5,7 @@
 // apps/hub/src/api/guilds.ts::listMembersWithPresence, the same pattern
 // apps/hub/src/api/friends.ts's listFriendsWithPresence already uses.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { listMembersWithPresence, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
 import type {
@@ -15,8 +15,8 @@ import type {
   GuildJoinRequestResponse,
   GuildResponse,
   RoleResponse,
-} from '../api/types'
-import { useSessionStore } from '../stores/session'
+} from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 

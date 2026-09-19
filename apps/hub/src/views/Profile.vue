@@ -5,9 +5,9 @@
 // action — no open inputs sit on the page by default.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import * as api from '../api/client'
-import { AvalonApiError } from '../api/errors'
-import { recoverSigningKey } from '../api/identity'
+import * as api from '@avalon/api-client'
+import { AvalonApiError } from '@avalon/api-client'
+import { recoverSigningKey } from '@avalon/api-client'
 import {
   approveDeviceGrant,
   beginDeviceGrantRequest,
@@ -33,13 +33,13 @@ import type {
   GuardianRequestSummary,
   PasskeyResponse,
   RecoveryRequestResponse,
-} from '../api/types'
+} from '@avalon/api-client'
 import { listFriendsWithPresence, type Friend } from '../api/friends'
 import { listBlockedUsersWithNames, type BlockedUser } from '../api/blocks'
 import { markGuardianOfSeen } from '../api/notifications'
 import { useMyGuilds } from '../composables/useMyGuilds'
-import { loadSigningKey } from '../crypto/signingKey'
-import { useSessionStore } from '../stores/session'
+import { loadSigningKey } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
 import { listIanaTimezones } from '../utils/timezones'
 import { isIdentityId } from '../utils/identity'
@@ -287,7 +287,7 @@ onUnmounted(() => {
 })
 
 async function onLogout() {
-  session.logout()
+  await session.logout()
   await router.push({ name: 'login' })
 }
 
@@ -452,7 +452,7 @@ async function onRecoverSigningKey() {
     // reconnect-across-nodes becomes available without a fresh login.
     if (session.token) {
       const secretKey = loadSigningKey(identityId.value)
-      session.setSigningKeyId(secretKey ? await findMySigningKeyId(session.token, secretKey) : null)
+      await session.setSigningKeyId(secretKey ? await findMySigningKeyId(session.token, secretKey) : null)
     }
     refreshDevicesAndPendingGrants()
   } catch (e) {
@@ -494,7 +494,7 @@ async function pollMyGrant() {
       // approval instead of a recovery phrase.
       if (session.token) {
         const secretKey = loadSigningKey(identityId.value)
-        session.setSigningKeyId(
+        await session.setSigningKeyId(
           secretKey ? await findMySigningKeyId(session.token, secretKey) : null,
         )
       }

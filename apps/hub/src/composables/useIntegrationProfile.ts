@@ -6,9 +6,9 @@
 // three. All three reads are public/unauthenticated — no session token.
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import { listRegistryMetrics } from '../api/integrations'
-import type { IntegratorResponse, IssuerKeyResponse } from '../api/types'
+import type { IntegratorResponse, IssuerKeyResponse } from '@avalon/api-client'
 
 export function useIntegrationProfile(slug: Ref<string>) {
   const integrator = ref<IntegratorResponse | null>(null)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildIntegratorsListQueryString, isActiveIntegratorStatus, listRegistryMetrics } from './integrations'
-import type { IntegratorRegistryResponse } from './types'
+import type { IntegratorRegistryResponse } from '@avalon/api-client'
 
 describe('buildIntegratorsListQueryString', () => {
   it('omits every key when nothing is set', () => {

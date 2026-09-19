@@ -10,7 +10,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Guild from './Guild.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {

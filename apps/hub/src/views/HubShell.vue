@@ -10,7 +10,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
 import type { AvalonNavItem, PresenceStatus } from '@avalon/ui'
-import { getMe, getMyGuildAnnouncements, updateMyPresence } from '../api/client'
+import { getMe, getMyGuildAnnouncements, updateMyPresence } from '@avalon/api-client'
 import {
   countUnread,
   isUnread,
@@ -18,10 +18,10 @@ import {
   markChannelSeen,
   previewBody,
 } from '../api/guildAnnouncements'
-import type { GuildAnnouncementAlert } from '../api/types'
+import type { GuildAnnouncementAlert } from '@avalon/api-client'
 import NetworkStatus from '../components/NetworkStatus.vue'
 import { useNotificationSummary } from '../composables/useNotificationSummary'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import styles from '../styles/HubShell.module.scss'
 
 // Re-publish well inside the server's 120s presence TTL so the user

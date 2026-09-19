@@ -15,15 +15,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard, AvalonPresenceBadge } from '@avalon/ui'
-import { AvalonApiError } from '../api/errors'
-import * as api from '../api/client'
+import { AvalonApiError } from '@avalon/api-client'
+import * as api from '@avalon/api-client'
 import { listPublishedIntegratorData, type PublishedIntegratorData } from '../api/integratorData'
 import type {
   FriendRequestResponse,
   PresenceStatus,
   PublicIdentityProfileResponse,
-} from '../api/types'
-import { useSessionStore } from '../stores/session'
+} from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import page from '../styles/page.module.scss'
 import styles from '../styles/UserProfile.module.scss'
 

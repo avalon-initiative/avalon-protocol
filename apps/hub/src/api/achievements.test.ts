@@ -7,7 +7,7 @@ import {
   sortAchievements,
 } from './achievements'
 import type { Achievement } from './achievements'
-import type { AttestationResponse } from './types'
+import type { AttestationResponse } from '@avalon/api-client'
 
 describe('parseIssuerSlug', () => {
   it('extracts the slug from a two-part issuer ref', () => {

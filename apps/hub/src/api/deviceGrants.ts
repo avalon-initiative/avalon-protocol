@@ -10,8 +10,8 @@
 // Neither role ever sends a private key over the network — only public
 // keys and signatures, matching #134's "server never sees private key
 // material" invariant, now per-device.
-import * as api from './client'
-import type { DeviceGrantResponse } from './types'
+import * as api from '@avalon/api-client'
+import type { DeviceGrantResponse } from '@avalon/api-client'
 import {
   base64ToBytes,
   bytesToBase64,
@@ -20,7 +20,7 @@ import {
   publicKeyFromSecretKey,
   signWithKey,
   storeSigningKey,
-} from '../crypto/signingKey'
+} from '@avalon/api-client'
 
 export interface PendingDeviceGrantRequest {
   grant: DeviceGrantResponse

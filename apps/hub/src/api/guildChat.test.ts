@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MESSAGE_BODY_MAX_CHARS, toOldestFirst, validateComposerBody } from './guildChat'
-import type { MessageResponse } from './types'
+import type { MessageResponse } from '@avalon/api-client'
 
 describe('validateComposerBody', () => {
   it('rejects an empty body', () => {

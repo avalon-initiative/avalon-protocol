@@ -14,7 +14,7 @@ import {
   sortAchievements,
 } from '../api/achievements'
 import type { Achievement, AchievementSort } from '../api/achievements'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Achievements.module.scss'
 

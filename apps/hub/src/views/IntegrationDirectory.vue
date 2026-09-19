@@ -7,8 +7,8 @@ import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonIntegratorCard } from 
 import type { AvalonFilterBarSortOption } from '@avalon/ui'
 import { useDiscoverIntegrations } from '../composables/useDiscoverIntegrations'
 import { useMyConnections } from '../composables/useMyConnections'
-import { useSessionStore } from '../stores/session'
-import type { IntegratorCategory } from '../api/types'
+import { useSessionStore } from '@avalon/api-client'
+import type { IntegratorCategory } from '@avalon/api-client'
 import integratorDirectoryStyles from '../styles/IntegrationDirectory.module.scss'
 import styles from '../styles/page.module.scss'
 

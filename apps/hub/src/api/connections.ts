@@ -2,7 +2,7 @@
 // connect/consent flow (#27, #83). Mirrors apps/hub/src/api/guilds.ts's
 // shape: wire-format merging/lookup logic that's testable without a
 // network call, kept out of the view components themselves.
-import type { IntegratorBindingResponse } from './types'
+import type { IntegratorBindingResponse } from '@avalon/api-client'
 
 // One entry per crates/protocol/src/permissions.rs::Capability::KNOWN wire
 // string (Capability::as_str()) — kept in sync by hand since the Hub

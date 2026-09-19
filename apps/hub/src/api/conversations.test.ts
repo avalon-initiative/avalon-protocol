@@ -5,7 +5,7 @@ import {
   toOldestFirst,
   validateComposerBody,
 } from './conversations'
-import type { ConversationMessageResponse, ConversationResponse } from './types'
+import type { ConversationMessageResponse, ConversationResponse } from '@avalon/api-client'
 
 describe('validateComposerBody', () => {
   it('rejects an empty body', () => {

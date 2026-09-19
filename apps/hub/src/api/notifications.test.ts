@@ -7,7 +7,7 @@ import {
   markConversationSeen,
   markGuardianOfSeen,
 } from './notifications'
-import type { ConversationMessageResponse } from './types'
+import type { ConversationMessageResponse } from '@avalon/api-client'
 
 beforeEach(() => {
   localStorage.clear()

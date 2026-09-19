@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mergeIntegratorDataInstance, parseIntegratorSlugFromSchema } from './integratorData'
-import type { VisibleIntegratorDataInstanceResponse } from './types'
+import type { VisibleIntegratorDataInstanceResponse } from '@avalon/api-client'
 
 describe('parseIntegratorSlugFromSchema', () => {
   it('extracts the slug from a game:<slug>:schema:<version> ref', () => {

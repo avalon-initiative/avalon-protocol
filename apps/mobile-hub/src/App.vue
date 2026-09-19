@@ -1,18 +1,8 @@
 <script setup lang="ts">
-// Convention: no <style> blocks and no non-trivial logic in .vue files —
-// styling lives in the sibling .module.scss under styles/, logic lives in .ts files.
-import { AvalonButton } from '@avalon/ui'
-import styles from './styles/App.module.scss'
-
-// Companion-app scaffold (Proposal.md §22): guild chat/presence/friends
-// reachable without an integrator open. Same @avalon/ui components as the web hub,
-// wrapped in Tauri instead of a browser tab.
+// Issue #60: the router now owns what's on screen (login/create-identity/
+// home/settings) — this is just the mount point, same as apps/hub's App.vue.
 </script>
 
 <template>
-  <main :class="styles.main">
-    <h1>Avalon</h1>
-    <p>Your guild, wherever you are.</p>
-    <AvalonButton label="Sign in" />
-  </main>
+  <RouterView />
 </template>

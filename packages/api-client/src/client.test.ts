@@ -24,7 +24,7 @@ import {
   updateProfile,
 } from './client'
 import { AvalonApiError } from './errors'
-import { generateAndStoreSigningKey } from '../crypto/signingKey'
+import { generateAndStoreSigningKey } from './crypto/signingKey'
 
 // A minimal fake standing in for the browser's `WebSocket` — records what
 // was sent, and lets a test drive `open`/`message` events by hand rather

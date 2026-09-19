@@ -1,13 +1,13 @@
 // Orchestrates the full registration/login ceremonies: API calls + the
 // browser WebAuthn ceremony + Ed25519 signing, so views stay glue-only.
-import { runAuthenticationCeremony, runRegistrationCeremony } from '../crypto/webauthn'
+import { runAuthenticationCeremony, runRegistrationCeremony } from './crypto/webauthn'
 import {
   bytesToBase64,
   generateAndStoreSigningKey,
   identityCreatedSigningBytes,
   recoverAndStoreSigningKey,
   signWithKey,
-} from '../crypto/signingKey'
+} from './crypto/signingKey'
 import * as api from './client'
 
 function newIdentityId(): string {

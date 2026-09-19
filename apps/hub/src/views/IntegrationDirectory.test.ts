@@ -5,7 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import IntegrationDirectory from './IntegrationDirectory.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {

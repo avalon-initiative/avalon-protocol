@@ -6,14 +6,14 @@
 // genuinely-actionable-pending-state (cleared by resolving the item) vs.
 // "have I seen this yet" (cleared by visiting, client-local state).
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import * as api from '../api/client'
+import * as api from '@avalon/api-client'
 import {
   countNewGuardianOf,
   isConversationUnread,
   loadConversationsLastSeen,
   loadGuardianOfSeen,
 } from '../api/notifications'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 
 // Deliberately not as tight as Profile.vue's own in-page 5s poll (issue
 // #201/#307's approval flows) — this is an ambient, always-mounted

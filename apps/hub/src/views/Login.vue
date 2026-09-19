@@ -2,10 +2,10 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon/ui'
-import { login } from '../api/identity'
+import { login } from '@avalon/api-client'
 import { findMySigningKeyId } from '../api/deviceGrants'
-import { loadSigningKey } from '../crypto/signingKey'
-import { useSessionStore } from '../stores/session'
+import { loadSigningKey } from '@avalon/api-client'
+import { useSessionStore } from '@avalon/api-client'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -27,7 +27,7 @@ async function onSubmit() {
     // one yet), same as `session.login`'s own doc comment describes.
     const secretKey = loadSigningKey(identityId.value)
     const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
-    session.login(token, identityId.value, signingKeyId)
+    await session.login(token, identityId.value, signingKeyId)
     await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

@@ -8,7 +8,7 @@ import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AvalonEditableField } from '@avalon/ui'
 import Profile from './Profile.vue'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import { mockFetchByPath } from '../testing/fakes'
 
 const baseProfile = {

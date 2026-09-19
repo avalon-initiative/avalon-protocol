@@ -6,7 +6,7 @@
 // or a wrong-length signature/key fails closed (`false`/a rejected status),
 // never throws into the caller.
 import { ed25519 } from '@noble/curves/ed25519'
-import type { SignedTreeHeadResponse } from '../api/types'
+import type { SignedTreeHeadResponse } from '@avalon/api-client'
 import { signingMessage } from './sthMessage'
 import type { TrustAnchorEntry } from './trustAnchors'
 

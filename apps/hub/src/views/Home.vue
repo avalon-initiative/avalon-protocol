@@ -7,14 +7,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard, AvalonIcon, AvalonPresenceBadge } from '@avalon/ui'
-import { getMe, getMyHistory } from '../api/client'
+import { getMe, getMyHistory } from '@avalon/api-client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
-import type { HistoryEntryResponse } from '../api/types'
+import type { HistoryEntryResponse } from '@avalon/api-client'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useLatestGuildMessages } from '../composables/useLatestGuildMessages'
-import { useSessionStore } from '../stores/session'
+import { useSessionStore } from '@avalon/api-client'
 import styles from '../styles/Home.module.scss'
 
 const RECENT_ACTIVITY_LIMIT = 6
