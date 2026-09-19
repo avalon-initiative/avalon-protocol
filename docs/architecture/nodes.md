@@ -544,13 +544,48 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   closing what used to be a purely incidental protection ("this doesn't
   leak across networks today only because #582's bootstrap can itself
   only ever reach peers already admitted into this same network's peer
-  table") into a real, structural one. **Known limitation, not solved
-  here (tracked as #610):** this closes the *network-boundary* question
-  only — it doesn't add any authorization for *which specific scope* an
-  already-admitted, same-network node can register interest in. A node
-  legitimately on the right network can still register (and #584's relay
-  will still trust) interest in a channel/conversation it has no real
-  member in — see #610 for the concrete leak and proposed fix.
+  table") into a real, structural one. That closed the *network-boundary*
+  question only — it didn't add any authorization for *which specific
+  scope* an already-admitted, same-network node could register interest in.
+  **Per-scope interest authorization (issue #610, closed):** a DHT
+  `PutRecord` for a `Channel`/`Conversation` scope now has to carry a
+  signed `avalon_protocol::interest_claim::InterestClaim` — the same
+  Ed25519 event-signing key #525's session-continuation tokens already
+  use, binding `identity_id` and, critically, the destination `base_url`
+  itself into the signed bytes (so a claim observed in the DHT can't be
+  republished under a different `base_url` to redirect delivery). Both the
+  registering node (`crate::chat::handle_chat_socket`, before ever calling
+  `InterestRegistry::register_with_claim`) and the relaying node
+  (`crate::interest::lookup_claimed`, `crate::realtime_relay`'s only
+  caller for these two scope kinds now) verify the signature; the relaying
+  node separately re-checks *current* membership against its own local,
+  ledger-derived membership tables (`crate::channels::is_member_of_channel`
+  / `crate::conversations::require_unblocked_participant`) rather than
+  trusting anything claimed in the record — a same-network node can no
+  longer get real chat content relayed to it just by forging a raw
+  `PutRecord` for a scope it isn't actually in. The browser side mints the
+  claim with `packages/api-client/src/crypto/interestClaim.ts`, learning
+  which `base_url` to bind against from a new `node_info` hello
+  (`crate::chat::ChatServerMessage::NodeInfo`) sent once right after
+  upgrade, since a browser has no other way to know its own node's
+  announced address. A connection with no local signing key (or one that
+  hasn't yet heard `node_info`) still subscribes and gets this node's own
+  local `ChatBus` delivery — it just never registers DHT interest, so it
+  won't receive delivery relayed *from* another node for that scope, a
+  narrower version of the same tradeoff #525 already accepts for
+  cross-node session continuation. Issue #596's mirror-sync reuse of this
+  same DHT mechanism (`InterestScope::Network`) is unaffected — it's
+  node-to-node, not identity-scoped, and lower severity to begin with
+  (`mirror_push`'s own use never trusts DHT-discovered content directly,
+  only triggers a re-poll `mirror_watcher` independently verifies). Live-
+  verified: a claim naming a channel its own identity never joined is
+  rejected by `lookup_claimed` even though its signature is perfectly
+  valid, and a real member's claim is accepted
+  (`crates/server/src/interest.rs`'s `claim_verification_live` tests,
+  `--ignored`, against real Postgres); the full subscribe -> claim ->
+  cross-node relay path re-verified against two real, separately-running
+  processes (`crates/server/tests/realtime_relay.rs`,
+  `realtime_reconnect.rs`, both `--ignored`).
 - **Local Redis fast-path in front of the interest lookup (#585, part of
   epic #580)**: `crate::interest::RedisFastPath`, reusing #545's
   already-decided optional per-hoster `AVALON_REDIS_URL` — checked first

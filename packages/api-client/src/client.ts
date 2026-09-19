@@ -5,6 +5,7 @@
 // than touching fetch or the URL directly.
 import { AvalonApiError, messageForStatus } from './errors'
 import { mintContinuationToken } from './crypto/continuation'
+import { mintInterestClaim, type ClaimedScope } from './crypto/interestClaim'
 import { loadSigningKey } from './crypto/signingKey'
 import { getSessionStorage } from './storage'
 import type {
@@ -191,6 +192,30 @@ async function tryMintReconnectToken(failedToken: string): Promise<string | null
   const secretKey = loadSigningKey(identityId)
   if (!secretKey) return null
   return mintContinuationToken(identityId, signingKeyId, secretKey)
+}
+
+/**
+ * The three things needed to mint an `InterestClaim` (issue #610), read
+ * through the same pluggable storage adapter `tryMintReconnectToken` above
+ * already uses (and for the same reason: this module can't depend on
+ * `session.ts`'s Pinia store). `null` when this device has no cached
+ * identity/signing-key id, or genuinely no local signing key stored for it
+ * — a supported, narrower state (see `mintInterestClaim`'s own doc
+ * comment): the caller subscribes with no claim and gets local-only
+ * delivery.
+ */
+async function loadOwnClaimCredentials(): Promise<
+  { identityId: string; signingKeyId: string; secretKey: Uint8Array } | null
+> {
+  const store = getSessionStorage()
+  const [identityId, signingKeyId] = await Promise.all([
+    store.getItem(SESSION_IDENTITY_ID_STORAGE_KEY),
+    store.getItem(SESSION_SIGNING_KEY_ID_STORAGE_KEY),
+  ])
+  if (!identityId || !signingKeyId) return null
+  const secretKey = loadSigningKey(identityId)
+  if (!secretKey) return null
+  return { identityId, signingKeyId, secretKey }
 }
 
 async function request<T>(
@@ -1192,6 +1217,47 @@ type ChatUpdate =
   | { type: 'channel_message_deleted'; data: { channel_id: string; message_id: string } }
   | { type: 'conversation_message'; data: ConversationMessageResponse }
 
+// Issue #610: what the server sends unprompted, right after upgrade, ahead
+// of anything in `ChatUpdate` above — the `base_url` this connection's own
+// signed `InterestClaim` (if any) must bind to. See
+// `crates/server/src/chat.rs::ChatServerMessage::NodeInfo`'s own doc
+// comment for why a browser can't otherwise know this.
+type ChatServerHello = { type: 'node_info'; data: { base_url: string | null } }
+
+// Mints and sends the `subscribe_*` message for `scope` once this
+// connection's `node_info` hello has told it which `base_url` to sign a
+// claim against — the one piece of coordination both socket functions below
+// need between their `open` (nothing to send yet) and `message` (first
+// message decides whether to mint a claim) handlers. Sends with no `claim`
+// at all when this device has no local signing key
+// (`loadOwnClaimCredentials` returns `null`) or the server has no
+// `base_url` to offer (`AVALON_NODE_URL` unset) — same "local-only
+// delivery, no DHT registration" degenerate case
+// `crates/server/src/chat.rs`'s own module doc comment documents.
+async function subscribeAfterNodeInfo(
+  socket: WebSocket,
+  baseUrl: string | null,
+  scope: ClaimedScope,
+  message: Record<string, unknown>,
+): Promise<void> {
+  let claim: string | undefined
+  if (baseUrl) {
+    const credentials = await loadOwnClaimCredentials()
+    if (credentials) {
+      claim = mintInterestClaim(
+        credentials.identityId,
+        credentials.signingKeyId,
+        credentials.secretKey,
+        scope,
+        baseUrl,
+      )
+    }
+  }
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ ...message, claim }))
+  }
+}
+
 // Subscribes to one guild channel's messages. onMessage fires for every new
 // message pushed; onDeleted fires with the deleted message's id when a
 // moderator removes one — additive to, not a replacement for, the
@@ -1205,14 +1271,18 @@ export function openChannelMessageSocket(
   onDeleted: (messageId: string) => void,
 ): ChatSocket {
   const socket = new WebSocket(websocketUrl(`/ws/messages?token=${encodeURIComponent(token)}`))
-  socket.addEventListener('open', () => {
-    socket.send(
-      JSON.stringify({ type: 'subscribe_channel', guild_id: guildId, channel_id: channelId }),
-    )
-  })
+  let subscribed = false
   socket.addEventListener('message', (event) => {
-    const update = JSON.parse(event.data as string) as ChatUpdate
-    if (update.type === 'channel_message') {
+    const update = JSON.parse(event.data as string) as ChatUpdate | ChatServerHello
+    if (update.type === 'node_info') {
+      if (subscribed) return
+      subscribed = true
+      void subscribeAfterNodeInfo(socket, update.data.base_url, { kind: 'channel', channelId }, {
+        type: 'subscribe_channel',
+        guild_id: guildId,
+        channel_id: channelId,
+      })
+    } else if (update.type === 'channel_message') {
       onMessage(update.data)
     } else if (update.type === 'channel_message_deleted') {
       onDeleted(update.data.message_id)
@@ -1234,12 +1304,19 @@ export function openConversationMessageSocket(
   onMessage: (message: ConversationMessageResponse) => void,
 ): ChatSocket {
   const socket = new WebSocket(websocketUrl(`/ws/messages?token=${encodeURIComponent(token)}`))
-  socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'subscribe_conversation', conversation_id: conversationId }))
-  })
+  let subscribed = false
   socket.addEventListener('message', (event) => {
-    const update = JSON.parse(event.data as string) as ChatUpdate
-    if (update.type === 'conversation_message') {
+    const update = JSON.parse(event.data as string) as ChatUpdate | ChatServerHello
+    if (update.type === 'node_info') {
+      if (subscribed) return
+      subscribed = true
+      void subscribeAfterNodeInfo(
+        socket,
+        update.data.base_url,
+        { kind: 'conversation', conversationId },
+        { type: 'subscribe_conversation', conversation_id: conversationId },
+      )
+    } else if (update.type === 'conversation_message') {
       onMessage(update.data)
     }
   })

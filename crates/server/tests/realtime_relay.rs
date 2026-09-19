@@ -18,6 +18,8 @@
 //! AVALON_REALTIME_RELAY_PEER_SERVER_URL=http://<node-b> # the peer node to observe on
 //! ```
 
+use avalon_protocol::interest_claim::{signing_bytes, ClaimedScope, InterestClaim};
+use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -81,6 +83,97 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
         .expect("failed to seed session");
 
     (identity_id, token)
+}
+
+/// Seeds a real `indexer_identity_signing_keys` row for `identity_id` —
+/// this test's identity is a direct-insert fixture (`seed_identity_session`
+/// above), never having gone through the real WebAuthn
+/// `/identities/register/*` ceremony `crates/server/tests/session_continuation.rs`
+/// exercises, but issue #610's claim verification only ever reads this
+/// table (same "authoring vs. mirror" indifference #525's own continuation
+/// verification already has), so a direct insert of a freshly generated
+/// keypair is exactly as good a fixture here as a real ceremony would be.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let signing_key_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) \
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind(signing_key_id)
+    .bind(identity_id)
+    .bind(signing_key.verifying_key().to_bytes().to_vec())
+    .execute(pool)
+    .await
+    .expect("failed to seed signing key");
+    (signing_key_id, signing_key)
+}
+
+/// Mints a wire-encoded, self-signed `InterestClaim` (issue #610) for
+/// `channel_id`, bound to `base_url` — the same thing
+/// `packages/api-client/src/crypto/interestClaim.ts` mints in the browser,
+/// just constructed directly against `avalon_protocol`'s own types rather
+/// than round-tripping through JS.
+fn mint_channel_claim(
+    identity_id: Uuid,
+    signing_key_id: Uuid,
+    signing_key: &SigningKey,
+    channel_id: Uuid,
+    base_url: &str,
+) -> String {
+    let scope = ClaimedScope::Channel { channel_id };
+    let nonce = Uuid::new_v4();
+    let issued_at = time::OffsetDateTime::now_utc();
+    let expires_at = issued_at + time::Duration::hours(1);
+    let bytes = signing_bytes(
+        identity_id,
+        signing_key_id,
+        scope,
+        base_url,
+        nonce,
+        issued_at,
+        expires_at,
+    );
+    let signature = signing_key.sign(&bytes);
+    let claim = InterestClaim {
+        identity_id,
+        signing_key_id,
+        scope,
+        base_url: base_url.to_string(),
+        nonce,
+        issued_at,
+        expires_at,
+        signature: hex::encode(signature.to_bytes()),
+    };
+    serde_json::to_string(&claim).expect("InterestClaim always serializes")
+}
+
+/// Reads node B's `node_info` hello (issue #610) — sent once, immediately
+/// after upgrade, before this test can mint a claim bound to the right
+/// `base_url` (see `crate::chat::ChatServerMessage::NodeInfo`'s own doc
+/// comment for why a client can't just assume its own connect URL is it).
+async fn read_node_info_base_url(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> String {
+    loop {
+        match socket.next().await {
+            Some(Ok(WsMessage::Text(text))) => {
+                let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if msg["type"] == "node_info" {
+                    return msg["data"]["base_url"]
+                        .as_str()
+                        .expect(
+                            "node B has no AVALON_NODE_URL configured — this test needs it set \
+                             so a claim can be minted against it",
+                        )
+                        .to_string();
+                }
+            }
+            other => panic!("expected node_info as the first message, got {other:?}"),
+        }
+    }
 }
 
 /// Waits until `peer_base`'s own `/nodes/peers` lists `origin_base` — the
@@ -183,7 +276,8 @@ async fn a_channel_message_from_node_a_is_pushed_to_a_subscriber_on_node_b() {
 
     wait_until_peered(&http, &node_b, &node_a).await;
 
-    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, identity_id).await;
 
     let suffix = Uuid::new_v4().simple().to_string();
     let create_guild = http
@@ -227,12 +321,22 @@ async fn a_channel_message_from_node_a_is_pushed_to_a_subscriber_on_node_b() {
             .await
             .expect("websocket connect to node B failed");
 
+    let node_b_base_url = read_node_info_base_url(&mut socket).await;
+    let claim = mint_channel_claim(
+        identity_id,
+        signing_key_id,
+        &signing_key,
+        channel_id.parse().unwrap(),
+        &node_b_base_url,
+    );
+
     socket
         .send(WsMessage::text(
             serde_json::json!({
                 "type": "subscribe_channel",
                 "guild_id": guild_id,
                 "channel_id": channel_id,
+                "claim": claim,
             })
             .to_string(),
         ))

@@ -104,6 +104,29 @@ pub(crate) async fn require_member(
     }
 }
 
+/// True if `identity_id` currently holds membership in whichever guild owns
+/// `channel_id` — issue #610's `crate::interest::lookup_claimed` needs
+/// exactly this from just a channel id (an [`crate::interest_claim`] claim
+/// carries no `guild_id` of its own), without the 404-on-mismatch behavior
+/// [`fetch_channel`] exists for. `false`, not an error, for a since-deleted
+/// channel — a claim naming one simply never re-authorizes, same as a
+/// revoked membership.
+pub(crate) async fn is_member_of_channel(
+    state: &AppState,
+    channel_id: Uuid,
+    identity_id: Uuid,
+) -> Result<bool, AppError> {
+    let guild_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT guild_id FROM guild_channels WHERE id = $1")
+            .bind(channel_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(guild_id) = guild_id else {
+        return Ok(false);
+    };
+    is_guild_member(state, guild_id, identity_id).await
+}
+
 async fn require_manage_channels(
     state: &AppState,
     guild_id: Uuid,
