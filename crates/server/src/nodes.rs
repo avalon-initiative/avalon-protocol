@@ -24,8 +24,37 @@
 //! Nothing here ever brokers or is required for reads/writes on the
 //! settlement log itself — this is purely peer discovery, independent of
 //! #40/#299's mirror-sync trust model.
+//!
+//! **Issue #599, Layer 1: the active announce/exchange set grows past the
+//! bootstrap list.** Before this, [`run_worker`] only ever re-announced to
+//! `AnnounceConfig::peers` (the originally-configured bootstrap/seed list)
+//! on every tick — a peer discovered through one of those bootstrap peers
+//! was folded into the local [`PeerTable`] (so it showed up in
+//! `GET /nodes/peers`) but was never itself promoted to an ongoing announce
+//! target, so propagation stopped one hop past the bootstrap set. Now
+//! `run_worker` keeps its own growing `active_peers` list, seeded from the
+//! bootstrap set (which is never evicted — it's still how this node first
+//! reaches the mesh at all) and extended, capped by
+//! `AVALON_NODE_MAX_PEERS`, with peers discovered via announce responses —
+//! the same bounded-fan-out/full-eventual-reach property Kademlia's
+//! k-bucket maintenance and gossip-membership protocols (SWIM, HyParView)
+//! rely on. A peer that later drops out of the peer table (pruned for not
+//! re-announcing) is dropped from `active_peers` too on the next tick,
+//! making room for others rather than permanently pinning a dead slot.
+//!
+//! **Issue #599, Layer 2: shard-existence gossip rides on the same
+//! mechanism**, the same way DHT identity already rides along announce
+//! (#582). [`ShardAnnouncement`]/[`ShardRegistry`] are this node's
+//! anti-entropy view of "every shard I currently know exists, and a URL
+//! that claims to serve it" — gossiped bidirectionally on every announce
+//! exchange (both the request and the response now carry a
+//! `known_shards` snapshot), not looked up via a single fixed key. See
+//! [`ShardRegistry`]'s own doc comment for the merge/decay policy, and
+//! `crate::cross_shard`/`crate::mirror_watcher` for how a discovered shard
+//! is consumed once learned — discovering it never implies trusting it;
+//! #543's key-resolution/verification step is unconditional and unchanged.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -155,6 +184,154 @@ impl PeerTable {
     }
 }
 
+/// One shard this node currently believes exists, and a URL that claims to
+/// be able to serve it (`GET /ledger/sth/latest?shard_id=...`, the same
+/// read `crate::cross_shard`/`crate::mirror_watcher` already use). Not
+/// itself a trust claim — see [`ShardRegistry`]'s own doc comment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardAnnouncement {
+    pub shard_id: String,
+    pub url: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_seen_at: OffsetDateTime,
+}
+
+/// This node's anti-entropy view of "every shard I currently know exists,
+/// and a URL claiming to serve it" — issue #599, Layer 2. Gossiped
+/// bidirectionally on every announce exchange (see [`AnnounceRequest`]/
+/// [`AnnounceResponse`]'s own `known_shards` fields): a node merges what it
+/// learns from a peer, and reports back everything it itself knows,
+/// exactly the epidemic/anti-entropy shape membership-gossip protocols use
+/// to reconcile "here's what I know" between neighbors.
+///
+/// Unlike [`PeerTable`], there is deliberately no cap here — a node's
+/// direct-connection *count* is bounded (see `AnnounceConfig::max_peers`),
+/// but the *set of shards that exist* is an enumeration problem, and the
+/// whole point of this ticket is that every node eventually learns the
+/// full set, not a bounded sample of it.
+///
+/// More than one URL can be on record for the same `shard_id` at once
+/// (e.g. during a URL migration, or a stale/incorrect claim from a
+/// misbehaving peer) — this registry does not attempt to pick a single
+/// "correct" one; every consumer ([`crate::cross_shard`],
+/// [`crate::mirror_watcher`]) independently verifies whatever URL it tries
+/// against #543's real trust mechanism before using it for anything, so an
+/// unverifiable or stale claim is simply never acted on, never merged away
+/// silently.
+#[derive(Clone, Default)]
+pub struct ShardRegistry {
+    // shard_id -> (url -> last_seen_at)
+    shards: Arc<RwLock<HashMap<String, HashMap<String, OffsetDateTime>>>>,
+}
+
+impl ShardRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records this node's own authoritative claim (see
+    /// `run_worker`'s call site for what "authoritative" means here) —
+    /// same upsert-by-key shape [`PeerTable::upsert`] uses, refreshing
+    /// `last_seen_at` so this node's own entry never decays out of its own
+    /// gossip snapshot while it keeps running.
+    pub fn record_own(&self, shard_id: &str, url: &str, now: OffsetDateTime) {
+        self.merge(&[ShardAnnouncement {
+            shard_id: shard_id.to_string(),
+            url: url.to_string(),
+            last_seen_at: now,
+        }]);
+    }
+
+    /// Merges `incoming` (another node's gossip snapshot, or a freshly
+    /// self-recorded entry) into this registry, keeping the newest
+    /// `last_seen_at` on record for each `(shard_id, url)` pair. Returns
+    /// the `shard_id`s that were genuinely new to this node (not
+    /// previously known at all, under any URL) — purely for logging at the
+    /// call site, never used to gate anything.
+    pub fn merge(&self, incoming: &[ShardAnnouncement]) -> Vec<String> {
+        let mut newly_learned = Vec::new();
+        let mut shards = self.shards.write().expect("shard registry lock poisoned");
+        for entry in incoming {
+            let urls = shards.entry(entry.shard_id.clone()).or_insert_with(|| {
+                newly_learned.push(entry.shard_id.clone());
+                HashMap::new()
+            });
+            let refresh = urls
+                .get(&entry.url)
+                .is_none_or(|existing| entry.last_seen_at > *existing);
+            if refresh {
+                urls.insert(entry.url.clone(), entry.last_seen_at);
+            }
+        }
+        newly_learned
+    }
+
+    /// Drops any `(shard_id, url)` entry not refreshed since `cutoff` —
+    /// same decay-not-forever posture [`PeerTable::prune_older_than`]
+    /// already takes, so a shard operator that genuinely goes away (or
+    /// rotates URLs) eventually falls out rather than being remembered
+    /// forever on a stale address.
+    pub fn prune_older_than(&self, cutoff: OffsetDateTime) {
+        let mut shards = self.shards.write().expect("shard registry lock poisoned");
+        shards.retain(|_, urls| {
+            urls.retain(|_, last_seen_at| *last_seen_at >= cutoff);
+            !urls.is_empty()
+        });
+    }
+
+    /// Every `(shard_id, url, last_seen_at)` this node currently knows —
+    /// what gets attached to an outbound announce request/response as this
+    /// node's own gossip snapshot.
+    pub fn snapshot(&self) -> Vec<ShardAnnouncement> {
+        self.shards
+            .read()
+            .expect("shard registry lock poisoned")
+            .iter()
+            .flat_map(|(shard_id, urls)| {
+                urls.iter()
+                    .map(move |(url, last_seen_at)| ShardAnnouncement {
+                        shard_id: shard_id.clone(),
+                        url: url.clone(),
+                        last_seen_at: *last_seen_at,
+                    })
+            })
+            .collect()
+    }
+
+    /// Every `shard_id` currently on record, under any URL — what
+    /// `crate::cross_shard` unions with its own static config.
+    pub fn known_shard_ids(&self) -> BTreeSet<String> {
+        self.shards
+            .read()
+            .expect("shard registry lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// The most-recently-seen URL on record for `shard_id`, if any — a
+    /// reasonable single candidate for a caller that just needs one URL to
+    /// try (still independently verified before being trusted for
+    /// anything). A caller that wants every candidate uses [`Self::snapshot`]
+    /// directly.
+    pub fn best_url(&self, shard_id: &str) -> Option<String> {
+        self.shards
+            .read()
+            .expect("shard registry lock poisoned")
+            .get(shard_id)
+            .and_then(|urls| urls.iter().max_by_key(|(_, ts)| **ts))
+            .map(|(url, _)| url.clone())
+    }
+
+    #[cfg(test)]
+    fn shard_count(&self) -> usize {
+        self.shards
+            .read()
+            .expect("shard registry lock poisoned")
+            .len()
+    }
+}
+
 /// `Serialize` too: this is also the outbound request body `run_worker`
 /// sends when announcing itself to a peer.
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,6 +346,14 @@ pub struct AnnounceRequest {
     /// Issue #582 — see `PeerInfo::libp2p_listen_addrs`.
     #[serde(default)]
     pub libp2p_listen_addrs: Vec<String>,
+    /// Issue #599, Layer 2: this node's own current [`ShardRegistry`]
+    /// snapshot — gossiped to the callee on every announce, merged into
+    /// its own registry the same way [`AnnounceResponse::known_shards`] is
+    /// merged back into this node's. `#[serde(default)]` so an older
+    /// peer's announce (pre-#599) still decodes, just with nothing to
+    /// merge.
+    #[serde(default)]
+    pub known_shards: Vec<ShardAnnouncement>,
 }
 
 /// `Deserialize` too: this is also the shape `run_worker` parses back out
@@ -176,6 +361,10 @@ pub struct AnnounceRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AnnounceResponse {
     pub peers: Vec<PeerInfo>,
+    /// Issue #599, Layer 2 — see [`AnnounceRequest::known_shards`]'s own
+    /// doc comment; this is the same exchange in the other direction.
+    #[serde(default)]
+    pub known_shards: Vec<ShardAnnouncement>,
 }
 
 /// `POST /nodes/announce`. Rejects an announcement naming a different
@@ -210,8 +399,24 @@ pub async fn announce(
         libp2p_listen_addrs: body.libp2p_listen_addrs,
     });
 
+    // Issue #599, Layer 2: anti-entropy shard-gossip merge, both
+    // directions, regardless of protocol_version — same posture #368
+    // already takes for the peer table itself: a shard claim is not a
+    // security gate, it's discovery data a caller can't spoof its way
+    // around trusting (#543's verification is unconditional downstream).
+    let newly_learned = state.shard_registry.merge(&body.known_shards);
+    for shard_id in &newly_learned {
+        tracing::info!(
+            event = "shard_discovered",
+            shard_id = %shard_id,
+            from_peer = %caller_base_url,
+            "learned of a new shard via peer-announce gossip",
+        );
+    }
+
     Ok(Json(AnnounceResponse {
         peers: state.peers.list_excluding(&caller_base_url),
+        known_shards: state.shard_registry.snapshot(),
     }))
 }
 
@@ -317,6 +522,15 @@ pub struct AnnounceConfig {
     /// regardless. `None` here means this node can still be announced TO,
     /// it just can't announce itself anywhere.
     pub own_base_url: Option<String>,
+    /// `AVALON_NODE_MAX_PEERS` (issue #599, Layer 1) — the cap on this
+    /// node's *active* announce/exchange set (bootstrap peers plus
+    /// peers promoted from what's been discovered through them). Bounds
+    /// this node's own direct-connection count regardless of how large the
+    /// network as a whole grows, the same role Kademlia's k-bucket size or
+    /// a gossip-membership protocol's fanout limit plays. Bootstrap peers
+    /// are never evicted to make room — see [`run_worker`]'s own doc
+    /// comment.
+    pub max_peers: usize,
 }
 
 const DEFAULT_ANNOUNCE_INTERVAL_SECS: u64 = 180;
@@ -324,6 +538,12 @@ const DEFAULT_ANNOUNCE_INTERVAL_SECS: u64 = 180;
 /// interval is pruned — generous enough that one or two missed ticks
 /// (a transient network blip) never evicts a genuinely live peer.
 const PRUNE_INTERVAL_MULTIPLE: u32 = 3;
+/// Default for `AVALON_NODE_MAX_PEERS` — generous enough that a real
+/// small-to-mid-size deployment never bumps into it in practice, but still
+/// a real, enforced bound rather than "unlimited" (issue #599's own stated
+/// invariant: a node's direct-connection count must stay bounded
+/// regardless of network size).
+const DEFAULT_MAX_PEERS: usize = 50;
 
 /// Pure resolution logic, split out for direct unit testing (same "pure
 /// function behind the env-reading wrapper" pattern `registry::coarsen`
@@ -377,10 +597,17 @@ impl AnnounceConfig {
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty());
 
+        let max_peers = std::env::var("AVALON_NODE_MAX_PEERS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(DEFAULT_MAX_PEERS);
+
         Self {
             peers,
             interval,
             own_base_url,
+            max_peers,
         }
     }
 }
@@ -402,15 +629,85 @@ fn node_roles() -> Vec<String> {
         .unwrap_or_else(|| vec!["combined".to_string()])
 }
 
+/// Bounded promotion of newly-discovered peers into the active
+/// announce/exchange set — issue #599, Layer 1's actual fix, split out
+/// pure/unit-testable from [`run_worker`]'s async plumbing (same "pure
+/// function behind the real worker" pattern `crate::dht::new_dht_peer`
+/// already establishes). `active_peers` is mutated in place (preserving
+/// insertion order — bootstrap peers first, since they were seeded into it
+/// before this is ever called); a discovered peer already present, or
+/// naming this node's own `own_base_url`, is skipped; anything beyond
+/// `max_peers` is left undiscovered for now rather than promoted — it's
+/// still in the passive [`PeerTable`] (via the caller's own
+/// `admit_if_supported` call), just not an active announce target yet.
+/// Returns whichever base URLs were newly promoted this call, purely for
+/// logging at the call site.
+fn promote_discovered_peers(
+    active_peers: &mut Vec<String>,
+    discovered: &[PeerInfo],
+    own_base_url: &str,
+    max_peers: usize,
+) -> Vec<String> {
+    let mut promoted = Vec::new();
+    for info in discovered {
+        if info.base_url == own_base_url {
+            continue;
+        }
+        if active_peers.len() >= max_peers {
+            break;
+        }
+        if active_peers.iter().any(|p| p == &info.base_url) {
+            continue;
+        }
+        active_peers.push(info.base_url.clone());
+        promoted.push(info.base_url.clone());
+    }
+    promoted
+}
+
+/// Drops any `active_peers` entry that's no longer known to `peers` at
+/// all — i.e. it was pruned from the [`PeerTable`] this tick for not
+/// re-announcing — *unless* it's one of `bootstrap_peers`, which are never
+/// evicted (they're still how this node reaches the mesh at all on a cold
+/// start, even if temporarily unreachable). Freeing a dead slot here is
+/// what lets [`promote_discovered_peers`] keep making room for genuinely
+/// live peers over time rather than permanently pinning a stale one.
+fn retain_reachable_active_peers(
+    active_peers: &mut Vec<String>,
+    bootstrap_peers: &[String],
+    known_base_urls: &HashSet<String>,
+) {
+    active_peers.retain(|p| bootstrap_peers.iter().any(|b| b == p) || known_base_urls.contains(p));
+}
+
 /// Spawned unconditionally at startup (see `main.rs`) — unlike the
 /// mirror-watcher, this always runs: even a network's anchor node (with an
 /// empty resolved peer list) still needs to serve `announce`/`list_peers`
 /// requests from everyone else, and an operator can always add
 /// `AVALON_BOOTSTRAP_PEERS` later without a restart-time config check
 /// gating whether this task exists at all. Never returns.
+///
+/// Issue #599, Layer 1: unlike before, the set of peers actually announced
+/// to each tick (`active_peers`) is not simply `config.peers` — it starts
+/// there, but grows (capped at `config.max_peers`) as peers are discovered
+/// through those bootstrap peers' own announce responses, via
+/// [`promote_discovered_peers`]. A peer that stops re-announcing is pruned
+/// from the passive [`PeerTable`] as before, and (via
+/// [`retain_reachable_active_peers`]) from `active_peers` too, unless it's
+/// a bootstrap peer — freeing room for the network's fan-out to keep
+/// growing this node's active set even as individual peers within it come
+/// and go.
+///
+/// Issue #599, Layer 2: `shard_registry` is gossiped bidirectionally on
+/// every announce exchange, over the exact same `active_peers` set — a
+/// shard's existence propagates over strictly more edges, over enough
+/// ticks, than this node's own bounded direct-connection count, which is
+/// the entire point (see this module's own doc comment).
 pub async fn run_worker(
     chain: PostgresSettlementProvider,
     peers: PeerTable,
+    shard_registry: ShardRegistry,
+    own_shard_id: String,
     config: AnnounceConfig,
     dht_identity: Option<DhtIdentity>,
 ) {
@@ -427,9 +724,11 @@ pub async fn run_worker(
         );
     } else {
         tracing::info!(
-            "node-announce: announcing to {} peer(s) every {:?}: {}",
+            "node-announce: announcing to {} bootstrap peer(s) every {:?} (max active peer \
+             set size {}): {}",
             config.peers.len(),
             config.interval,
+            config.max_peers,
             config.peers.join(", ")
         );
     }
@@ -437,10 +736,25 @@ pub async fn run_worker(
     let client = reqwest::Client::new();
     let roles = node_roles();
     let network_id = chain.network_id().to_string();
+    let mut active_peers: Vec<String> = config.peers.clone();
 
     loop {
+        // Issue #599, Layer 2: before announcing, refresh this node's own
+        // authoritative claim (if it has one) so it's part of the
+        // snapshot gossiped out this tick. "Authoritative" here means this
+        // node actually has local, signed settlement history for
+        // `own_shard_id` — a pure mirror with no local writes of its own
+        // has nothing to claim authority over and gossips only what it's
+        // learned from others.
         if let Some(own_base_url) = &config.own_base_url {
-            for peer in &config.peers {
+            if let Ok(Some(_)) = chain.latest_signed_tree_head().await {
+                shard_registry.record_own(&own_shard_id, own_base_url, OffsetDateTime::now_utc());
+            }
+        }
+
+        if let Some(own_base_url) = &config.own_base_url {
+            let targets = active_peers.clone();
+            for peer in &targets {
                 match announce_to(
                     &client,
                     peer,
@@ -448,14 +762,44 @@ pub async fn run_worker(
                     &roles,
                     &network_id,
                     dht_identity.as_ref(),
+                    &shard_registry.snapshot(),
                 )
                 .await
                 {
                     Ok(discovered) => {
-                        for info in discovered {
-                            if info.network_id == network_id {
-                                peers.admit_if_supported(info);
+                        let mut admitted = Vec::new();
+                        for info in discovered.peers {
+                            if info.network_id == network_id
+                                && peers.admit_if_supported(info.clone())
+                            {
+                                admitted.push(info);
                             }
+                        }
+                        let promoted = promote_discovered_peers(
+                            &mut active_peers,
+                            &admitted,
+                            own_base_url,
+                            config.max_peers,
+                        );
+                        for base_url in &promoted {
+                            tracing::info!(
+                                event = "peer_promoted_to_active_set",
+                                peer = %base_url,
+                                via = %peer,
+                                active_peer_count = active_peers.len(),
+                                "promoted a peer discovered via gossip into the active \
+                                 announce/exchange set",
+                            );
+                        }
+
+                        let newly_learned = shard_registry.merge(&discovered.known_shards);
+                        for shard_id in &newly_learned {
+                            tracing::info!(
+                                event = "shard_discovered",
+                                shard_id = %shard_id,
+                                from_peer = %peer,
+                                "learned of a new shard via peer-announce gossip",
+                            );
                         }
                     }
                     Err(err) => tracing::error!("node-announce: {peer}: {err}"),
@@ -465,6 +809,11 @@ pub async fn run_worker(
 
         let cutoff = OffsetDateTime::now_utc() - config.interval * PRUNE_INTERVAL_MULTIPLE;
         peers.prune_older_than(cutoff);
+        shard_registry.prune_older_than(cutoff);
+
+        let known_base_urls: HashSet<String> =
+            peers.list_all().into_iter().map(|p| p.base_url).collect();
+        retain_reachable_active_peers(&mut active_peers, &config.peers, &known_base_urls);
 
         tokio::time::sleep(config.interval).await;
     }
@@ -477,7 +826,8 @@ async fn announce_to(
     roles: &[String],
     network_id: &str,
     dht_identity: Option<&DhtIdentity>,
-) -> Result<Vec<PeerInfo>, String> {
+    known_shards: &[ShardAnnouncement],
+) -> Result<AnnounceResponse, String> {
     let response = client
         .post(format!("{peer_base_url}/nodes/announce"))
         .json(&AnnounceRequest {
@@ -489,6 +839,7 @@ async fn announce_to(
             libp2p_listen_addrs: dht_identity
                 .map(|d| d.listen_addrs.clone())
                 .unwrap_or_default(),
+            known_shards: known_shards.to_vec(),
         })
         .send()
         .await
@@ -498,8 +849,10 @@ async fn announce_to(
         return Err(format!("HTTP {}", response.status()));
     }
 
-    let body: AnnounceResponse = response.json().await.map_err(|e| e.to_string())?;
-    Ok(body.peers)
+    response
+        .json::<AnnounceResponse>()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -738,5 +1091,192 @@ mod tests {
             serde_json::from_str(json).expect("should deserialize without the new fields");
         assert_eq!(req.libp2p_peer_id, None);
         assert!(req.libp2p_listen_addrs.is_empty());
+    }
+
+    // Issue #599, Layer 1: `promote_discovered_peers` unit tests.
+
+    fn discovered_peer(base_url: &str) -> PeerInfo {
+        peer(base_url, OffsetDateTime::now_utc())
+    }
+
+    #[test]
+    fn a_newly_discovered_peer_is_promoted_when_under_the_cap() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let discovered = vec![discovered_peer("http://new-peer")];
+        let promoted = promote_discovered_peers(&mut active, &discovered, "http://self", 10);
+        assert_eq!(promoted, vec!["http://new-peer".to_string()]);
+        assert_eq!(
+            active,
+            vec![
+                "http://bootstrap".to_string(),
+                "http://new-peer".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn already_active_peers_are_never_promoted_twice() {
+        let mut active = vec![
+            "http://bootstrap".to_string(),
+            "http://new-peer".to_string(),
+        ];
+        let discovered = vec![discovered_peer("http://new-peer")];
+        let promoted = promote_discovered_peers(&mut active, &discovered, "http://self", 10);
+        assert!(promoted.is_empty());
+        assert_eq!(active.len(), 2);
+    }
+
+    #[test]
+    fn a_peer_naming_this_nodes_own_base_url_is_never_promoted() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let discovered = vec![discovered_peer("http://self")];
+        let promoted = promote_discovered_peers(&mut active, &discovered, "http://self", 10);
+        assert!(promoted.is_empty());
+        assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn promotion_stops_once_the_cap_is_reached() {
+        let mut active = vec![
+            "http://bootstrap-a".to_string(),
+            "http://bootstrap-b".to_string(),
+        ];
+        let discovered = vec![
+            discovered_peer("http://new-1"),
+            discovered_peer("http://new-2"),
+            discovered_peer("http://new-3"),
+        ];
+        // Cap of 3: room for exactly one more beyond the two bootstrap
+        // peers already active.
+        let promoted = promote_discovered_peers(&mut active, &discovered, "http://self", 3);
+        assert_eq!(promoted, vec!["http://new-1".to_string()]);
+        assert_eq!(active.len(), 3);
+    }
+
+    #[test]
+    fn a_full_active_set_promotes_nothing_regardless_of_bootstrap_membership() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let discovered = vec![discovered_peer("http://new-peer")];
+        let promoted = promote_discovered_peers(&mut active, &discovered, "http://self", 1);
+        assert!(promoted.is_empty());
+        assert_eq!(active, vec!["http://bootstrap".to_string()]);
+    }
+
+    // Issue #599, Layer 1: `retain_reachable_active_peers` unit tests.
+
+    #[test]
+    fn a_pruned_non_bootstrap_peer_is_dropped_from_the_active_set() {
+        let mut active = vec!["http://bootstrap".to_string(), "http://gone".to_string()];
+        let bootstrap = vec!["http://bootstrap".to_string()];
+        let known: HashSet<String> = ["http://bootstrap".to_string()].into_iter().collect();
+        retain_reachable_active_peers(&mut active, &bootstrap, &known);
+        assert_eq!(active, vec!["http://bootstrap".to_string()]);
+    }
+
+    #[test]
+    fn a_bootstrap_peer_is_retained_even_if_temporarily_unreachable() {
+        let mut active = vec!["http://bootstrap".to_string()];
+        let bootstrap = vec!["http://bootstrap".to_string()];
+        let known: HashSet<String> = HashSet::new();
+        retain_reachable_active_peers(&mut active, &bootstrap, &known);
+        assert_eq!(
+            active,
+            vec!["http://bootstrap".to_string()],
+            "a bootstrap/seed peer must never be evicted just because it's momentarily out of \
+             the peer table"
+        );
+    }
+
+    // Issue #599, Layer 2: `ShardRegistry` unit tests.
+
+    fn shard_announcement(shard_id: &str, url: &str, at: OffsetDateTime) -> ShardAnnouncement {
+        ShardAnnouncement {
+            shard_id: shard_id.to_string(),
+            url: url.to_string(),
+            last_seen_at: at,
+        }
+    }
+
+    #[test]
+    fn merging_a_new_shard_reports_it_as_newly_learned() {
+        let registry = ShardRegistry::new();
+        let newly_learned = registry.merge(&[shard_announcement(
+            "game:ashen-realms",
+            "http://shard-a",
+            OffsetDateTime::now_utc(),
+        )]);
+        assert_eq!(newly_learned, vec!["game:ashen-realms".to_string()]);
+        assert_eq!(registry.shard_count(), 1);
+        assert!(registry.known_shard_ids().contains("game:ashen-realms"));
+    }
+
+    #[test]
+    fn merging_an_already_known_shard_again_is_not_reported_as_newly_learned() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[shard_announcement(
+            "game:ashen-realms",
+            "http://shard-a",
+            now,
+        )]);
+        let newly_learned = registry.merge(&[shard_announcement(
+            "game:ashen-realms",
+            "http://shard-a",
+            now + time::Duration::seconds(1),
+        )]);
+        assert!(newly_learned.is_empty());
+    }
+
+    #[test]
+    fn best_url_picks_the_most_recently_seen_url_for_a_shard() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[
+            shard_announcement("game:ashen-realms", "http://old-url", now),
+            shard_announcement(
+                "game:ashen-realms",
+                "http://new-url",
+                now + time::Duration::minutes(5),
+            ),
+        ]);
+        assert_eq!(
+            registry.best_url("game:ashen-realms"),
+            Some("http://new-url".to_string())
+        );
+    }
+
+    #[test]
+    fn prune_older_than_drops_stale_shard_entries_but_keeps_fresh_ones() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[
+            shard_announcement(
+                "game:stale-shard",
+                "http://stale",
+                now - time::Duration::hours(1),
+            ),
+            shard_announcement("game:fresh-shard", "http://fresh", now),
+        ]);
+
+        registry.prune_older_than(now - time::Duration::minutes(1));
+
+        let known = registry.known_shard_ids();
+        assert!(!known.contains("game:stale-shard"));
+        assert!(known.contains("game:fresh-shard"));
+    }
+
+    #[test]
+    fn record_own_refreshes_this_nodes_own_authoritative_entry() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.record_own("core", "http://self", now);
+        assert_eq!(registry.best_url("core"), Some("http://self".to_string()));
+
+        registry.record_own("core", "http://self", now + time::Duration::minutes(1));
+        assert_eq!(
+            registry.shard_count(),
+            1,
+            "re-recording must refresh, never duplicate"
+        );
     }
 }
