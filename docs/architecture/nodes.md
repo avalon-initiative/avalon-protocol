@@ -293,6 +293,23 @@ never the default even when offered; an explicit `ALL` or a blank/skipped
 prompt are the only two ways to leave with zero or every peer, never a
 silent choice made on the hoster's behalf.
 
+**DHT identity and bootstrap (#582, part of epic #580).** #542 decided that
+realtime relay at real network scale routes over a libp2p Kademlia DHT
+instead of #539's full-mesh broadcast (see [`communication.md`](./communication.md)'s
+own note on that decision) — #582 is the identity/bootstrap piece of that
+work, not the routing logic itself (that's #583). A node running the DHT
+(`AVALON_DHT_ENABLED`, off by default — see `crate::dht`'s module doc for
+the full rationale) holds a libp2p `PeerId`, a *fourth* independent key
+domain alongside player keys (#73), issuer keys (#80/#84), and the
+settlement log operator's key (#39) — none of those fit a peer-transport
+identity, so this is genuinely new rather than reused. Bootstrap reuses
+this section's own peer table rather than inventing a second discovery
+mechanism: `PeerInfo`/`POST /nodes/announce` now also carry a peer's
+`libp2p_peer_id` and dialable multiaddrs (`#[serde(default)]`, so an older
+peer's announce without these fields still deserializes fine), and
+`crate::dht`'s worker watches that same table for identities it hasn't
+dialed into the DHT yet.
+
 **Scenario K — a node disappears.** The SDK routes to another node advertising
 the needed capabilities. Durable history is unaffected (it is mirrored);
 presence for identities *publishing through* that node lapses until they
@@ -440,6 +457,26 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   decide who a live presence/chat event gets forwarded to — the first
   place this peer table's `roles` field is actually read for anything
   beyond bookkeeping.
+- **A second real consumer of the peer table: DHT bootstrap (#582, part
+  of epic #580)**: `crate::dht`, gated behind `AVALON_DHT_ENABLED`
+  (off by default — every deployment's behavior is unchanged until an
+  operator opts in). `PeerInfo` now also carries `libp2p_peer_id`/
+  `libp2p_listen_addrs`; `dht::run_worker` scans the peer table every 30s
+  for identities it hasn't dialed into its `rust-libp2p` `kad` swarm yet.
+  Live-verified across the two-node LAN sandbox (`avalon-peer`): a peer
+  announced over plain HTTP is picked up and successfully dialed into the
+  DHT with no separate bootstrap step, completing a real noise handshake
+  with the correct verified identity on both sides. A bootstrap-only
+  connection like this idles and closes after ~10s (libp2p's default
+  keep-alive timeout) since nothing yet asks anything of the DHT over
+  it — expected, not a defect; #583's actual interest queries are what
+  should keep a connection alive going forward. Also found live: a
+  Docker-deployed node needs `AVALON_LIBP2P_EXTERNAL_ADDR` set (see
+  `crate::dht`'s module doc) since it can never safely self-detect its
+  own LAN-reachable address the way a native process can. Still not
+  built: any actual interest registration/lookup over the DHT (that's
+  #583) or re-scoping #539's relay to use it (#584) — this issue is
+  identity and bootstrap only.
 - **One-hop live realtime relay across nodes (#539, implementing #535's
   decision)**: `POST /nodes/relay` (`crate::realtime_relay`) — see
   [`presence.md`](./presence.md) and [`communication.md`](./communication.md)'s

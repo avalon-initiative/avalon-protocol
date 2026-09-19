@@ -43,6 +43,7 @@ protobuf-json-mapping.workspace = true
 tempfile.workspace = true
 semver.workspace = true
 redis.workspace = true
+libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "tokio", "macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
@@ -57,7 +58,6 @@ public-suffix.workspace = true
 # testing relay delivery only indirectly.
 tokio-tungstenite = "0.29"
 futures-util = { workspace = true }
-libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "tokio", "macros"] }
 
 [[bin]]
 name = "avalon-server"

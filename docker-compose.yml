@@ -93,6 +93,15 @@ services:
       AVALON_SERVER_ADDR: 0.0.0.0:8080
     ports:
       - "${AVALON_HOST_IP:-127.0.0.1}:8080:8080"
+      # Issue #582: only meaningful when AVALON_DHT_ENABLED=true and
+      # AVALON_LIBP2P_LISTEN_ADDR binds this same port inside the
+      # container (e.g. /ip4/0.0.0.0/tcp/4001) — a harmless unused publish
+      # otherwise. Same AVALON_HOST_IP posture as the port above: a peer on
+      # another host needs this published on the real LAN IP, and
+      # AVALON_LIBP2P_EXTERNAL_ADDR set to that same reachable address —
+      # see crate::dht's module doc for why the container can't safely
+      # self-detect it.
+      - "${AVALON_HOST_IP:-127.0.0.1}:4001:4001"
     depends_on:
       postgres:
         condition: service_healthy
