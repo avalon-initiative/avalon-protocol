@@ -121,12 +121,40 @@ A complete, runnable version: `crates/sdk/examples/issue_achievement.rs` —
 `cargo run -p avalon-sdk --example issue_achievement`. `avalon-cli`'s
 `issue-achievement` command drives the exact same SDK call.
 
+**C#**: same shape, `IssueAchievementAsync`, requires
+`AvalonConfig.IntegratorSlug`/`SigningKey` (a 32-byte Ed25519 seed) —
+throws `MissingIssuerCredentialsException`, without making any HTTP call,
+if either is missing.
+
+```csharp
+var client = new AvalonClient(new AvalonConfig(
+    serverUrl: "http://127.0.0.1:8080",
+    integratorCredentialKeyId: keyId,
+    integratorSlug: slug,
+    signingKey: signingKeyBytes));
+
+var session = await client.AuthenticateAsync(playerSessionToken);
+var attestationId = await session.IssueAchievementAsync("dragon_slayer");
+```
+
 ## 6. Read a player's history
 
 ```rust
 let history = session.achievements().await?; // requires achievements.read
 for attestation in history {
     println!("{}: {:?} / {:?}", attestation.achievement, attestation.authenticity, attestation.validity);
+}
+```
+
+**C#**: `GetAchievementsAsync()` returns `Authenticity`/`Validity` as
+separate fields too — `IsAuthentic`/`IsValid` convenience booleans reflect
+each individually, never a single combined "trusted" verdict:
+
+```csharp
+var history = await session.GetAchievementsAsync(); // requires achievements.read
+foreach (var attestation in history)
+{
+    Console.WriteLine($"{attestation.Achievement}: authentic={attestation.Authenticity.IsAuthentic} valid={attestation.Validity.IsValid}");
 }
 ```
 
