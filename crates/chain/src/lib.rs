@@ -11,13 +11,14 @@ pub mod attestations;
 pub mod cross_shard;
 pub mod incremental_merkle;
 pub mod merkle;
+pub mod migration;
 pub mod mirror;
 mod postgres;
 pub mod retention;
 pub mod sth;
 
 pub use postgres::{
-    IssuerHistoryEntry, LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
+    GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
 };
 
 use async_trait::async_trait;

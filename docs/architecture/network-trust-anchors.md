@@ -237,6 +237,48 @@ reads back with its purpose over the real API, and purpose-gating is
 unit-tested directly (`crates/protocol/src/integrators.rs`,
 `crates/server/tests/shard_trust_anchors.rs`).
 
+## Genesis reset / migration (#484, per #476/#479's decision)
+
+A deliberate `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset —
+always a rare, maintainer-decided event, never routine (see
+[`../stakeholders/Proposal.md`](../stakeholders/Proposal.md) and the
+`chain_genesis` singleton discussion above) — does not start the new
+network from nothing, and does not ask any issuer to re-sign anything.
+Since attestation/event signatures are deliberately network-agnostic
+(#479), a signature that verified on `mainnet-N` verifies identically
+against `mainnet-(N+1)` without modification; the only two things a
+migration actually has to carry forward are the outgoing network's final
+ledger checkpoint (for auditability — the new network's history is a
+documented continuation, not an unexplained fresh start) and its issuer
+admission registry (#481's `issuer_network_registrations`), so no issuer —
+including one no longer reachable — has to take any action to remain
+admitted on the new network.
+
+`avalon_chain::migration::migrate_network` (`crates/chain/src/migration.rs`)
+does this in one call, given a source pool (the outgoing network) and a
+target pool (a fresh database with migrations applied but no genesis of
+its own yet):
+
+1. Reads the source's `network_id` and latest Signed Tree Head (or a
+   zero-`tree_size` checkpoint if the source has a genesis but has never
+   actually committed anything).
+2. Establishes the target's own genesis (`PostgresSettlementProvider::connect`),
+   failing fast if the target database already belongs to some other
+   network — the same guarantee every other boot path against
+   `chain_genesis` gets.
+3. Records that checkpoint on the target, in
+   `network_migration_checkpoints` — an append-only audit trail of which
+   source network(s) this one was migrated from, queryable after the fact.
+4. Bulk-carries every row of the source's `issuer_network_registrations`
+   onto the target (`ON CONFLICT DO NOTHING`, so a retried run after a
+   partial failure is always safe to just re-run).
+
+`avalon migrate-network --target-database-url <url> --target-network-id <id>`
+(`crates/cli/src/main.rs`) is the operator-facing entry point, run against
+the outgoing network's own `DATABASE_URL` as the source. It never touches
+the source beyond reading it — a migration can be attempted, inspected,
+and re-run without any risk to the network being migrated from.
+
 ## Today in the repo
 
 - `docs/trusted-networks.json` — the canonical list (one `local-dev`
@@ -290,3 +332,6 @@ unit-tested directly (`crates/protocol/src/integrators.rs`,
   node discovery, the related-but-distinct "finding a node" problem.
 - [#482](https://github.com/LunarVagabond/avalon-protocol/issues/482) —
   this document's SDK-side counterpart, `crates/sdk/src/network.rs`.
+- [#484](https://github.com/LunarVagabond/avalon-protocol/issues/484) —
+  the genesis reset/migration tooling this document's own new section
+  covers, `avalon_chain::migration` + `avalon migrate-network`.
