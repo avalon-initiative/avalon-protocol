@@ -327,6 +327,17 @@ async fn run_worker(mut swarm: Swarm<DhtBehaviour>, peers: PeerTable) {
                         .kad
                         .add_address(&peer_id, endpoint.get_remote_address().clone());
                     known_peers.insert(peer_id);
+                } else if let SwarmEvent::OutgoingConnectionError { peer_id, error, .. } = event {
+                    // Otherwise a dial that fails asynchronously (bad
+                    // multiaddr, handshake mismatch, unreachable host)
+                    // fails completely silently — the scan branch above
+                    // only logs the *attempt*, never its outcome. Not
+                    // removed from `known_peers`: a persistently
+                    // unreachable peer just doesn't get retried until it
+                    // re-announces (matching #362's own peer table's
+                    // pruning-based recovery, not an independent retry
+                    // policy here).
+                    tracing::warn!(?peer_id, "avalon-dht: outgoing connection failed: {error}");
                 } else if let SwarmEvent::Behaviour(DhtBehaviourEvent::Identify(
                     identify::Event::Received { peer_id, info, .. },
                 )) = event
