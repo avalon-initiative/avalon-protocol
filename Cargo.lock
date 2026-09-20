@@ -385,6 +385,7 @@ dependencies = [
  "url",
  "uuid",
  "webauthn-rs",
+ "wiremock",
 ]
 
 [[package]]

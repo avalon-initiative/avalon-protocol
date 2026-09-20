@@ -11,6 +11,7 @@ pub mod continuation;
 pub mod conversations;
 pub mod cross_node_login;
 pub mod cross_shard;
+pub mod cross_shard_fetch;
 pub mod device_pairing;
 pub mod devices;
 pub mod dht;

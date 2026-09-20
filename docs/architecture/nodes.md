@@ -556,14 +556,49 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   timestamps went from identical to evenly spaced) and unit-tested
   (`identity_locator::tests`, using `tokio::time::pause` rather than real
   sleeps). The module's other known simplification — a full rescan every
-  tick, not an incremental one — is unchanged. **Still not built**: cross-shard proof
-  resolution (#636 — this locator only ever answers "where," never fetches
-  or verifies the actual remote projection state, so #634's verification
-  still can't complete for an identity whose signing-key projection isn't
-  already local to the node being logged into), both SDKs (#637/#638),
-  Hub/mobile-hub approval UI (#639/#640), rate limiting (#641), and the
-  phishing-context decision (#642, open) gating what the approval screen is
-  even allowed to render.
+  tick, not an incremental one — is unchanged.
+- **Cross-shard projection resolution with inclusion proof has also landed
+  (#636)**: `crate::cross_shard_fetch::fetch_verified_entries`
+  (`crates/server/src/cross_shard_fetch.rs`) — given a `shard_id` +
+  `base_url` (typically from #635's locator), fetches every ledger entry
+  for a `subject` from that remote node and verifies each one end-to-end
+  before trusting its payload: a signature-checked Signed Tree Head
+  (against `crate::cross_shard::resolve_shard_verify_keys_from_db`'s same
+  #543 trust-anchor mechanism `crate::cross_shard`'s own cross-shard-root
+  aggregation already uses — deliberately not a second trust mechanism), a
+  real RFC 6962 inclusion proof checked against that STH's root, and —
+  the real gap this closes — the entry's `entry_hash` **independently
+  recomputed** from its fetched content and compared against both the
+  claimed `entry_hash` and the proof's `leaf_hash`. Without that last
+  check, a remote node could hand back a genuine inclusion proof for *some*
+  real entry alongside a completely different, forged payload, and
+  signature/proof verification alone would still pass — `avalon_chain`'s
+  previously-private `hash_entry`/`EntryContent` (`crates/chain/src/postgres.rs`)
+  are now `pub`, exposed for exactly this, and `InclusionProofResponse`
+  (`GET /ledger/proof/inclusion`) now also returns `leaf_index`, which a
+  one-off cross-shard verifier has no other way to learn (unlike a
+  continuously-backfilling mirror, which already tracks its own next
+  `leaf_index` from its own backfill progress). Live-verified against a
+  real server and real Postgres: a freshly registered identity's real
+  `identity.signing_key_added` entry fetched and fully verified, an unknown
+  subject resolving to no entries, and two fail-closed trust-anchor cases
+  (no verify key resolves; a real-but-wrong verify key) — all
+  `crates/server/tests/cross_shard_fetch.rs`, `--ignored`. The one
+  adversarial case a real server would never itself produce — a forged
+  payload paired with a genuinely valid proof for the real content — is
+  exercised separately against a mocked remote node
+  (`crates/server/tests/cross_shard_fetch_tamper_detection.rs`, `wiremock`,
+  not gated `--ignored`, no live infra needed). **Deliberately generic**:
+  returns every verified entry for a subject rather than picking "the
+  one" — #636's own scope is the fetch-and-verify primitive, not
+  identity-signing-key-specific business logic (which key is still active,
+  revocation) that a caller like #634's verification path would own for
+  itself; that actual wiring — having #634 call this when a grant's
+  `signing_key_id` isn't found locally — is **still not built**, tracked
+  as the concrete remaining gap in #634's own verification path. **Still
+  not built** otherwise: both SDKs (#637/#638), Hub/mobile-hub approval UI
+  (#639/#640), rate limiting (#641), and the phishing-context decision
+  (#642, open) gating what the approval screen is even allowed to render.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
