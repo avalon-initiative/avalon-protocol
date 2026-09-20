@@ -215,6 +215,7 @@ pub async fn publish_instance(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(IntegratorDataInstanceResponse {
         id: id.to_string(),
@@ -321,6 +322,7 @@ pub async fn delete_instance(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(()))
 }

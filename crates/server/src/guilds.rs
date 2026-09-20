@@ -774,6 +774,7 @@ pub async fn create_guild(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(
         guild_response(
@@ -1995,14 +1996,14 @@ async fn fetch_pending_invite(
 /// same transaction, so the check and the write can't race against each
 /// other via another request.
 async fn add_member(
-    indexer: &avalon_indexer::postgres::PostgresIndexer,
+    indexer: &crate::state::IndexerHandle,
     tx: &mut sqlx::Transaction<'_, Postgres>,
     guild_id: Uuid,
     identity_id: Uuid,
     role_index: i32,
     actor: Uuid,
     via: &str,
-) -> Result<OffsetDateTime, AppError> {
+) -> Result<(OffsetDateTime, ProtocolEvent), AppError> {
     if guild_rosters::is_member(&mut **tx, guild_id, identity_id).await? {
         return Err(AppError::AlreadyGuildMember);
     }
@@ -2029,7 +2030,7 @@ async fn add_member(
     indexer.apply_in_tx(tx, &event).await?;
     outbox::enqueue(tx, &event).await?;
 
-    Ok(joined_at)
+    Ok((joined_at, event))
 }
 
 pub async fn accept_invite(
@@ -2058,7 +2059,7 @@ pub async fn accept_invite(
         return Err(AppError::GuildInviteNotFound);
     }
 
-    let joined_at = add_member(
+    let (joined_at, member_added_event) = add_member(
         &state.indexer,
         &mut tx,
         guild_id,
@@ -2070,6 +2071,10 @@ pub async fn accept_invite(
     .await?;
 
     tx.commit().await?;
+    state
+        .indexer
+        .apply_after_commit(&member_added_event)
+        .await?;
 
     Ok(Json(GuildMemberResponse {
         guild_id,
@@ -2114,7 +2119,7 @@ pub async fn join_guild(
 
     let mut tx = state.pool.begin().await?;
 
-    let joined_at = add_member(
+    let (joined_at, member_added_event) = add_member(
         &state.indexer,
         &mut tx,
         guild_id,
@@ -2126,6 +2131,10 @@ pub async fn join_guild(
     .await?;
 
     tx.commit().await?;
+    state
+        .indexer
+        .apply_after_commit(&member_added_event)
+        .await?;
 
     Ok(Json(GuildMemberResponse {
         guild_id,
@@ -2171,8 +2180,9 @@ pub async fn leave_guild(
             .fetch_optional(&mut *tx)
             .await?
             .flatten();
+    let mut clear_main_guild_event = None;
     if current_main_guild == Some(guild_id) {
-        let clear_main_guild_event = ProtocolEvent {
+        let event = ProtocolEvent {
             id: Uuid::new_v4(),
             kind: ProtocolEventKindVariant::ProfileUpdated
                 .as_str()
@@ -2196,11 +2206,9 @@ pub async fn leave_guild(
             timestamp: OffsetDateTime::now_utc(),
             version: 1,
         };
-        state
-            .indexer
-            .apply_in_tx(&mut tx, &clear_main_guild_event)
-            .await?;
-        outbox::enqueue(&mut tx, &clear_main_guild_event).await?;
+        state.indexer.apply_in_tx(&mut tx, &event).await?;
+        outbox::enqueue(&mut tx, &event).await?;
+        clear_main_guild_event = Some(event);
     }
 
     let event = ProtocolEvent {
@@ -2224,6 +2232,13 @@ pub async fn leave_guild(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    if let Some(clear_main_guild_event) = &clear_main_guild_event {
+        state
+            .indexer
+            .apply_after_commit(clear_main_guild_event)
+            .await?;
+    }
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(())
 }
@@ -2273,6 +2288,7 @@ pub async fn remove_member(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(())
 }
@@ -2547,7 +2563,7 @@ pub async fn approve_join_request(
         return Err(AppError::GuildJoinRequestNotFound);
     }
 
-    let joined_at = add_member(
+    let (joined_at, member_added_event) = add_member(
         &state.indexer,
         &mut tx,
         guild_id,
@@ -2559,6 +2575,10 @@ pub async fn approve_join_request(
     .await?;
 
     tx.commit().await?;
+    state
+        .indexer
+        .apply_after_commit(&member_added_event)
+        .await?;
 
     Ok(Json(GuildMemberResponse {
         guild_id,
@@ -2702,6 +2722,7 @@ pub async fn update_member_role(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(GuildMemberResponse {
         guild_id,

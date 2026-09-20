@@ -152,6 +152,33 @@ a first-class scaling dimension — see
   ever` metrics (#261); `integrator_schemas` (#255) backs schema-version discovery
   — see [`./registry.md`](./registry.md). No history projections
   yet.
+- **A Gateway-only deployment can now run without a local `PostgresIndexer`
+  (#662)**, building on #661's `RemoteIndexer`/`/internal/indexer/*`
+  protocol (see `docs/architecture/nodes.md`'s "Today in the repo" section
+  for the startup-mode/env-var wiring). Every call site above that used to
+  hold a bare `PostgresIndexer` now holds `crates/server/src/state.rs`'s
+  `IndexerHandle` (`Local(PostgresIndexer)` or `Remote(RemoteIndexer)`),
+  and every write that used to be a single `apply_in_tx` call is now two:
+  `apply_in_tx`, inside the same Postgres transaction as the app-data
+  write as before, followed by `apply_after_commit`, called once that
+  transaction has actually committed. For `Local`, this is exactly the old
+  behavior: `apply_in_tx` does the real, atomic write, `apply_after_commit`
+  is a no-op — a combined-binary deployment (still every deployment this
+  codebase ships by default) is byte-for-byte unaffected. For `Remote`,
+  it's the reverse, and it's a genuine, deliberately accepted
+  eventual-consistency tradeoff, not full atomicity: `apply_in_tx` is a
+  no-op (a `RemoteIndexer` talks over HTTP — it cannot join a caller's
+  local Postgres transaction), and `apply_after_commit` makes the real
+  remote `apply` call afterward. Between the local transaction committing
+  and that call completing — or for however long a transient failure
+  there takes to be corrected — the app-data write is already durable and
+  is the source of truth, but the remote indexer's projection can lag
+  behind it, or miss it outright if the call fails. A failure there is
+  logged loudly (`tracing::error!`) but does not fail the request itself,
+  since the app-data write genuinely already succeeded; the existing
+  rebuild-from-events guarantee above is what lets the projection catch up
+  later. A background retry/backfill mechanism specifically for this gap
+  is a possible future improvement, not built as part of #662.
 
 ## Decisions and tickets
 

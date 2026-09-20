@@ -12,8 +12,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use avalon_server::{
-    auth, guild_messages, migrate, mirror_push, mirror_watcher, outbox, replication, retention,
-    state::AppState,
+    auth, guild_messages, internal_role, migrate, mirror_push, mirror_watcher, nodes, outbox,
+    replication, retention,
+    state::{AppState, IndexerHandle},
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::layer::SubscriberExt;
@@ -68,10 +69,48 @@ async fn main() {
     let log_reload_handle = init_tracing();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let addr = std::env::var("AVALON_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    let webauthn_rp_id =
-        std::env::var("AVALON_WEBAUTHN_RP_ID").expect("AVALON_WEBAUTHN_RP_ID must be set");
-    let webauthn_origin =
-        std::env::var("AVALON_WEBAUTHN_ORIGIN").expect("AVALON_WEBAUTHN_ORIGIN must be set");
+
+    // Issue #664: `AVALON_NODE_ROLES` stops being purely advisory here —
+    // `settlement_only` is the one combination this process actually gates
+    // startup on (see `avalon_server::nodes::is_settlement_only`'s own doc
+    // comment for why it's deliberately narrow). Every other roles value,
+    // including the `combined` default, gets exactly today's behavior.
+    let node_roles = avalon_server::nodes::node_roles();
+    let settlement_only = avalon_server::nodes::is_settlement_only(&node_roles);
+    // Gateway-facing modules (WebAuthn, sessions, guilds, presence,
+    // friends, the identity locator, ...) are wired up for every roles
+    // configuration except a standalone Settlement node.
+    let gateway_enabled = !settlement_only;
+    tracing::info!(
+        roles = %node_roles.join(","),
+        settlement_only,
+        "avalon-server: resolved node roles"
+    );
+
+    // Issue #664: WebAuthn is a Gateway-only concept (login/registration) —
+    // a Settlement-only node never mounts a single auth route, so it
+    // neither needs `AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`
+    // configured nor gets a real `Webauthn` instance built from them. The
+    // placeholder built here is never reachable from any handler
+    // (`router_settlement_only` mounts none of `crate::auth`/`passkeys`/
+    // `recovery`/`device_pairing`'s routes) — it only exists because
+    // `AppState::webauthn` is a plain `Arc<Webauthn>`, not `Option`, to
+    // keep every Gateway handler's own signature unchanged.
+    let webauthn = if gateway_enabled {
+        let webauthn_rp_id =
+            std::env::var("AVALON_WEBAUTHN_RP_ID").expect("AVALON_WEBAUTHN_RP_ID must be set");
+        let webauthn_origin =
+            std::env::var("AVALON_WEBAUTHN_ORIGIN").expect("AVALON_WEBAUTHN_ORIGIN must be set");
+        Arc::new(
+            auth::build_webauthn(&webauthn_rp_id, &webauthn_origin)
+                .expect("failed to build Webauthn instance — check AVALON_WEBAUTHN_RP_ID/AVALON_WEBAUTHN_ORIGIN"),
+        )
+    } else {
+        Arc::new(
+            auth::build_webauthn("localhost", "http://localhost")
+                .expect("placeholder Settlement-only Webauthn config must itself be valid"),
+        )
+    };
     // Issue #173: which network this process believes it's part of — e.g.
     // `avalon-mainnet-1` or `avalon-dev-<name>`. Never defaulted; a missing
     // value is a misconfiguration, not "assume dev."
@@ -98,10 +137,6 @@ async fn main() {
         .await
         .expect("failed to run migrations");
 
-    let webauthn = Arc::new(
-        auth::build_webauthn(&webauthn_rp_id, &webauthn_origin)
-            .expect("failed to build Webauthn instance — check AVALON_WEBAUTHN_RP_ID/AVALON_WEBAUTHN_ORIGIN"),
-    );
     // Creates this ledger's genesis on a fresh database, or refuses to start
     // at all if it's already rooted in a different network_id (issue #173) —
     // deliberately fatal, before anything binds a listener or serves a
@@ -113,7 +148,35 @@ async fn main() {
             std::process::exit(1);
         });
     tracing::info!(network_id = %chain.network_id(), "avalon-server: ledger network_id");
-    let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
+
+    // Issue #662: `AVALON_NODE_ROLES` now load-bearing for the Indexer role
+    // specifically (`combined`, the default, counts as every role — same
+    // semantics `docs/architecture/nodes.md`'s capability table already
+    // assumes) — a process that doesn't include `indexer` in its roles has
+    // no local `PostgresIndexer` at all, and instead routes every indexer
+    // read/write over #661's `RemoteIndexer`/`/internal/indexer/*`
+    // protocol to another node that does. Resolved once here so both
+    // `AppState`'s own `indexer` field and the mirror-watcher spawn below
+    // (which always gets its own independent local `PostgresIndexer` —
+    // see that spawn's own comment) can be built off the same decision.
+    let node_roles = nodes::node_roles();
+    let indexer = if nodes::indexer_role_is_local(&node_roles) {
+        IndexerHandle::Local(avalon_indexer::postgres::PostgresIndexer::new(pool.clone()))
+    } else {
+        internal_role::RemoteIndexer::from_env()
+            .map(IndexerHandle::Remote)
+            .unwrap_or_else(|| {
+                tracing::error!(
+                    "refusing to start: AVALON_NODE_ROLES={node_roles:?} excludes \"indexer\" \
+                     (and isn't \"combined\"), but AVALON_INDEXER_REMOTE_URL is unset — this \
+                     process has no way to reach an Indexer role, local or remote; set \
+                     AVALON_INDEXER_REMOTE_URL (and AVALON_INTERNAL_ROLE_KEY) to point at a node \
+                     that does, or include \"indexer\"/\"combined\" in AVALON_NODE_ROLES to run \
+                     one locally"
+                );
+                std::process::exit(1);
+            })
+    };
 
     let peers = avalon_server::nodes::PeerTable::new();
     // Issue #599, Layer 2: this node's anti-entropy view of every shard it
@@ -189,10 +252,17 @@ async fn main() {
         // on a real DHT identity existing, same as `interest::run_worker`
         // just above, whose already-running refresh loop is what actually
         // keeps each registration's DHT record alive.
-        tokio::spawn(avalon_server::identity_locator::run_worker(
-            pool.clone(),
-            interest.clone(),
-        ));
+        //
+        // Issue #664: also gated on `gateway_enabled` — a Settlement-only
+        // node never runs `crate::auth`/`passkeys`, so it never durably
+        // holds an `identity_signing_keys` row for anything; this worker
+        // would just be an empty scan on every tick.
+        if gateway_enabled {
+            tokio::spawn(avalon_server::identity_locator::run_worker(
+                pool.clone(),
+                interest.clone(),
+            ));
+        }
     }
 
     // Issue #596: `Some` only when this node has a DHT identity to look
@@ -218,6 +288,28 @@ async fn main() {
     let remote_submit = outbox::RemoteSubmitConfig::from_env();
     if remote_submit.is_some() {
         tracing::info!("avalon-server: outbox committing via remote Settlement authority (AVALON_SETTLEMENT_REMOTE_URL set)");
+    }
+    // Issue #664: `AVALON_NODE_ROLES` excluding `settlement` declares that
+    // this process isn't meant to be a Settlement authority of its own —
+    // #313's `remote_submit` (above) is the mechanism that actually makes
+    // that true for the outbox write path. This doesn't hard-fail when the
+    // two disagree (a `chain`/ledger still exists locally either way, per
+    // `AppState::chain`'s own required field — see `docs/architecture/nodes.md`'s
+    // "Today in the repo" entry for this ticket for the full reasoning), but
+    // it's worth a loud warning: without `AVALON_SETTLEMENT_REMOTE_URL(S)`,
+    // this node's outbox worker falls back to committing locally despite
+    // its own declared roles saying it shouldn't be a Settlement authority.
+    if !node_roles
+        .iter()
+        .any(|r| r == "combined" || r == "settlement")
+        && remote_submit.is_none()
+    {
+        tracing::warn!(
+            roles = %node_roles.join(","),
+            "avalon-server: AVALON_NODE_ROLES excludes settlement but AVALON_SETTLEMENT_REMOTE_URL(S) \
+             is unset — this node will still commit outbox writes to its own local ledger, not a \
+             remote Settlement authority; set AVALON_SETTLEMENT_REMOTE_URL(S) if that's not intended"
+        );
     }
 
     // Issue #573: `AVALON_OWN_SHARD_ID`, defaulting to `"core"` — every
@@ -345,16 +437,31 @@ async fn main() {
     // batch to a remote Settlement authority; unset (the default), nothing
     // changes. `remote_submit` itself was built earlier, above `state`'s
     // own construction — see that site's comment.
-    tokio::spawn(outbox::run_worker(
-        pool.clone(),
-        chain.clone(),
-        remote_submit,
-        mirror_push_config,
-    ));
+    //
+    // Issue #664: gated on `gateway_enabled` — the outbox table only ever
+    // gets rows from Gateway-facing handlers (identity/guild/etc. writes
+    // sharing a transaction with their own outbox insert); a Settlement-only
+    // node never runs any of those handlers, so its own outbox table stays
+    // empty and this worker would have nothing to drain. Managed-hosting's
+    // two-phase flow (#531, `POST /ledger/prepare-batch`/`finalize-batch`)
+    // and #313's own `POST /ledger/submit` commit directly, bypassing the
+    // outbox entirely — neither depends on this worker running.
+    if gateway_enabled {
+        tokio::spawn(outbox::run_worker(
+            pool.clone(),
+            chain.clone(),
+            remote_submit,
+            mirror_push_config,
+        ));
+    }
 
     // Hard-deletes guild message archive rows past their retention window —
-    // see crates/server/src/guild_messages.rs (issue #253).
-    tokio::spawn(guild_messages::run_archive_expiry_worker(state.clone()));
+    // see crates/server/src/guild_messages.rs (issue #253). Gateway-only
+    // (issue #664): guild chat archives only exist because a Gateway
+    // handler wrote them.
+    if gateway_enabled {
+        tokio::spawn(guild_messages::run_archive_expiry_worker(state.clone()));
+    }
 
     // Mirror-watcher (issue #299, implementing #40's decided design):
     // watches whatever peers `AVALON_MIRROR_PEERS` names, verifying and
@@ -364,10 +471,22 @@ async fn main() {
     // `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`), same "only run what's
     // actually turned on" pattern the retention worker above uses.
     if let Some(mirror_config) = mirror_watcher::MirrorWatcherConfig::from_env() {
+        // Issue #662: deliberately its own local `PostgresIndexer`, not
+        // `state.indexer.clone()` — mirror-sync (verifying/storing peers'
+        // STHs and entries, backfilling content) is a different concern
+        // from the Gateway/Indexer role split #662 is about, and isn't
+        // gated by `AVALON_NODE_ROLES` the same way. It already writes
+        // mirrored entries straight to this process's own local Postgres
+        // regardless of role; best-effort applying them to a local indexer
+        // projection too (see this module's own doc comment on why that's
+        // best-effort, not required for correctness) only makes sense
+        // against this process's own local Postgres, never over the
+        // network — a `RemoteIndexer` would just add a pointless HTTP hop
+        // to what's already a local, same-transaction savepoint apply.
         tokio::spawn(mirror_watcher::run_worker(
             pool.clone(),
             chain.clone(),
-            state.indexer.clone(),
+            avalon_indexer::postgres::PostgresIndexer::new(pool.clone()),
             mirror_config,
             mirror_watcher::MirrorWatcherHandles {
                 interest: state.interest.clone(),
@@ -418,7 +537,17 @@ async fn main() {
             "avalon-server: rate limit / concurrency ceiling backed by Redis (AVALON_REDIS_URL set)"
         );
     }
-    let app = avalon_server::router(state, redis_limiter);
+    // Issue #664: a genuinely standalone Settlement node gets the reduced
+    // route table (`/ledger/*`, `/nodes/*`, `/mirror/notify` only) — every
+    // other roles configuration, including the `combined` default, gets
+    // today's full router unchanged. See
+    // `avalon_server::router_settlement_only`'s own doc comment.
+    let app = if settlement_only {
+        tracing::info!("avalon-server: Settlement-only mode — no Gateway-facing routes mounted");
+        avalon_server::router_settlement_only(state, redis_limiter)
+    } else {
+        avalon_server::router(state, redis_limiter)
+    };
 
     tracing::info!(%addr, "avalon-server listening");
     let listener = tokio::net::TcpListener::bind(&addr)

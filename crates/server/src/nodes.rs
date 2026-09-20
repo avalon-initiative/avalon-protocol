@@ -727,15 +727,16 @@ impl AnnounceConfig {
 /// to `combined` — milestone 1's "one `avalon-server` process" reality, per
 /// that doc's own capability table.
 ///
-/// Issue #663: this is now a real, load-bearing gate for the `Realtime`
-/// role (previously it was purely advertised metadata, read only by
-/// `crate::realtime_relay::advertises_realtime_relay_role` to decide who to
-/// relay *to*, never to decide what *this* process itself runs) — `pub` so
-/// `main.rs` can read it once at startup to decide whether to run local
-/// presence/WebSocket handling at all. See [`role_included`] for the
-/// case-insensitive, `combined`-implies-everything membership check every
-/// caller of this (this module's own `run_worker` included) should use
-/// rather than a raw `.contains(...)`.
+/// This used to be purely advisory (peer-table bookkeeping and #539's
+/// realtime relay routing only) — `main.rs` now also reads it to decide
+/// what actually gets wired up at startup: whether to run local presence/
+/// WebSocket handling at all (issue #663, see [`role_included`]/
+/// [`realtime_mode_from_env`]), whether to construct a local
+/// `PostgresIndexer` or a `RemoteIndexer` (issue #662, see
+/// [`indexer_role_is_local`]), and whether this process is a genuinely
+/// standalone Settlement node (issue #664, see [`is_settlement_only`]).
+/// `pub` for all three reasons, and so `main.rs` doesn't reimplement the
+/// same env-var parsing.
 pub fn node_roles() -> Vec<String> {
     std::env::var("AVALON_NODE_ROLES")
         .ok()
@@ -801,6 +802,43 @@ pub fn realtime_mode_from_env(roles: &[String]) -> Result<Option<String>, String
     url::Url::parse(&trimmed)
         .map_err(|e| format!("AVALON_REALTIME_URL is not a valid URL: {e}"))?;
     Ok(Some(trimmed))
+}
+
+/// Issue #662: does this process's configured `AVALON_NODE_ROLES` include
+/// the Indexer role — i.e. should it run its own local `PostgresIndexer`,
+/// or route indexer reads/writes to a remote one instead?
+///
+/// Pure/unit-testable, same "pure function behind the real config read"
+/// pattern [`promote_discovered_peers`]/[`retain_reachable_active_peers`]
+/// already establish in this module — takes the already-parsed roles list
+/// rather than reading the env var itself, so it's trivially testable
+/// without touching process-global state.
+///
+/// `combined` means "every role" (the table in `docs/architecture/nodes.md`'s
+/// "Capabilities" section — Settlement/Indexer/Realtime/Gateway — describes
+/// `combined` as running all four, not as a fifth, distinct role name), so
+/// it counts as including `indexer` here exactly as it already implicitly
+/// has for every other role check this codebase makes.
+pub fn indexer_role_is_local(roles: &[String]) -> bool {
+    roles.iter().any(|r| r == "combined" || r == "indexer")
+}
+
+/// Issue #664: true only when `roles` is *exactly* `["settlement"]` — a
+/// genuinely standalone Settlement node, not `combined` (which still runs
+/// everything, including Settlement) and not some other future combination
+/// #662/#663 may introduce (`["settlement", "indexer"]`, say) that this
+/// ticket deliberately doesn't try to have an opinion on. This is the one
+/// predicate `main.rs`/`lib.rs::router_settlement_only` gate on: every other
+/// roles configuration gets today's full router and worker set, unchanged.
+///
+/// The mirror case — Gateway pointed at a *remote* Settlement authority —
+/// doesn't need a new predicate here at all: #313's `AVALON_SETTLEMENT_REMOTE_URL(S)`
+/// already exists and is checked independently by `crate::outbox`, so a
+/// node can already run `combined` (or any roles list) while forwarding its
+/// own outbox writes elsewhere. See `docs/architecture/nodes.md`'s "Today in
+/// the repo" section for why these are one config surface, not two.
+pub fn is_settlement_only(roles: &[String]) -> bool {
+    roles.len() == 1 && roles[0] == "settlement"
 }
 
 /// Bounded promotion of newly-discovered peers into the active
@@ -1281,6 +1319,51 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_REALTIME_URL");
         }
+    }
+
+    #[test]
+    fn indexer_role_is_local_treats_combined_as_every_role() {
+        assert!(indexer_role_is_local(&["combined".to_string()]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_true_when_indexer_explicitly_listed() {
+        assert!(indexer_role_is_local(&[
+            "settlement".to_string(),
+            "indexer".to_string()
+        ]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_false_when_indexer_excluded() {
+        assert!(!indexer_role_is_local(&[
+            "gateway".to_string(),
+            "realtime".to_string()
+        ]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_false_for_an_empty_list() {
+        assert!(!indexer_role_is_local(&[]));
+    }
+
+    /// Issue #664: pure function, no env involved — `is_settlement_only`
+    /// only ever gates on the resolved roles list, never reads
+    /// `AVALON_NODE_ROLES` itself.
+    #[test]
+    fn is_settlement_only_requires_exactly_one_settlement_role() {
+        assert!(is_settlement_only(&["settlement".to_string()]));
+        assert!(!is_settlement_only(&["combined".to_string()]));
+        assert!(!is_settlement_only(&[]));
+        assert!(!is_settlement_only(&[
+            "settlement".to_string(),
+            "gateway".to_string()
+        ]));
+        assert!(!is_settlement_only(&[
+            "settlement".to_string(),
+            "indexer".to_string()
+        ]));
+        assert!(!is_settlement_only(&["gateway".to_string()]));
     }
 
     /// Issue #517: `NodeStatusResponse` must still be valid JSON when every

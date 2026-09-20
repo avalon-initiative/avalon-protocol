@@ -382,7 +382,7 @@ mod live_tests {
         AppState {
             pool,
             chain,
-            indexer,
+            indexer: crate::state::IndexerHandle::Local(indexer),
             webauthn,
             presence: PresenceStore::from_env(),
             chat: crate::chat::ChatBus::new(),
