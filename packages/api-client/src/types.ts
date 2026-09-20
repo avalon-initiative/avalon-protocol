@@ -328,6 +328,13 @@ export interface LookupCrossNodeLoginResponse {
   status: 'pending' | 'denied' | 'expired' | 'approved'
   requesting_context: string
   expires_in: number
+  /** Epic #623 issue #649, implementing #642's decided requirement: whether
+   * the requesting node resolves to a real, registered integrator (or a
+   * known network anchor). Never a hard gate — an unverified requester
+   * still gets a prompt, just a clearly flagged one. */
+  integrator_verified: boolean
+  /** Only ever present when `integrator_verified` is `true`. */
+  display_name?: string
 }
 
 export interface SubmitCrossNodeLoginGrantRequest {

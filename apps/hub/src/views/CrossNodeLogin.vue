@@ -15,7 +15,7 @@
 // single-tap default.
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon/ui'
+import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
 import * as api from '@avalon/api-client'
 import { useSessionStore } from '@avalon/api-client'
 import { loadSigningKey, mintCrossNodeLoginGrant } from '@avalon/api-client'
@@ -28,6 +28,11 @@ const session = useSessionStore()
 const nodeBaseUrl = ref(typeof route.query.node === 'string' ? route.query.node : '')
 const userCode = ref(typeof route.query.user_code === 'string' ? route.query.user_code : '')
 const requestingContext = ref('')
+// Epic #623 issue #649: whether the requesting node resolves to a real,
+// registered integrator (or a known network anchor) — #642's decided
+// visual distinction, never a hard gate against an unverified requester.
+const integratorVerified = ref(false)
+const displayName = ref('')
 const lookupStatus = ref<'pending' | 'denied' | 'expired' | 'approved' | null>(null)
 const submitting = ref(false)
 const looking = ref(false)
@@ -45,6 +50,8 @@ async function onLookUp() {
     const result = await api.lookupCrossNodeLogin(node, code)
     lookupStatus.value = result.status
     requestingContext.value = result.requesting_context
+    integratorVerified.value = result.integrator_verified
+    displayName.value = result.display_name ?? ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -104,6 +111,8 @@ function onStartOver() {
   lookupStatus.value = null
   userCode.value = ''
   requestingContext.value = ''
+  integratorVerified.value = false
+  displayName.value = ''
   error.value = ''
 }
 </script>
@@ -129,6 +138,18 @@ function onStartOver() {
       </template>
       <template v-else-if="lookupStatus === 'pending'">
         <p v-if="error" :class="styles.error">{{ error }}</p>
+        <div v-if="integratorVerified" :class="[local.context, local.verified]">
+          <AvalonIcon name="shield" :class="local.verifiedIcon" />
+          <div>
+            <span :class="local.contextLabel">Verified requester</span>
+            <span :class="local.contextValue">{{ displayName }}</span>
+          </div>
+        </div>
+        <AvalonWarningBanner
+          v-else
+          title="Unverified requester"
+          :message="`${requestingContext} is not a registered integrator on this network. Only approve if you recognize it.`"
+        />
         <div :class="local.context">
           <span :class="local.contextLabel">Requesting node</span>
           <span :class="local.contextValue">{{ requestingContext }}</span>

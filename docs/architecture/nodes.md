@@ -694,9 +694,35 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   cross-node-login, separate from the shared per-IP budget every other
   unauthenticated route also draws from, would be new scope beyond what
   #641 asked for — a real future option, not assumed needed here.
-  **Still not built**: #649's server-side verification-status resolution
-  (both approval screens render the raw `requesting_context` string for
-  now, no verified/unverified visual distinction yet).
+- **#649's verification-status resolution has landed — epic #623's last
+  open sub-issue, now closed.** `GET /auth/cross-node/lookup`'s response
+  gained `integrator_verified`/`display_name`
+  (`crate::cross_node_login::resolve_requester_verification`), reusing
+  #543's existing shard-trust mechanism rather than a second registry —
+  two paths: an owned shard (`"{namespace}:{owner}"`, `game`/`app`/`service`)
+  is verified iff `owner` resolves to a real integrator currently holding
+  an unrevoked `shard_settlement`-purpose issuer key for exactly that shard
+  (the identical join `crate::cross_shard::resolve_shard_verify_keys_from_db`
+  already trusts for STH verification); the default, unowned `"core"` shard
+  has no integrator to check, so it's verified iff `own_base_url` is one of
+  the network's real seed nodes
+  (`docs/trusted-networks.json`/`avalon_sdk::network::bundled_trust_anchors`).
+  The anchor-matching logic (`is_verified_seed_node`) is pulled out as a
+  pure function and directly unit-tested with a controlled anchor list —
+  this sandbox's own trusted-networks.json entry has an empty `seed_nodes`,
+  so a live test against the real bundled file could only ever prove the
+  "not verified" branch. Live-verified: the owned-shard path flips from
+  unverified to verified, live, on the same running node, the moment the
+  matching integrator registers its `shard_settlement` key (no restart, no
+  snapshot staleness); the default-shard path confirmed unverified against
+  this sandbox's own real config
+  (`crates/server/tests/cross_node_login_verification.rs`, `--ignored`,
+  the owned-shard test needing a `AVALON_OWN_SHARD_ID=game:...`-configured
+  server per its own module doc comment). #639/#640 both now render a real
+  verified/unverified distinction (a green `AvalonWarningBanner`-adjacent
+  badge with the registered name, vs. an explicit `AvalonWarningBanner`
+  warning) instead of the raw `requesting_context` string alone — never a
+  hard gate, per #642's own decision.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
@@ -1131,8 +1157,9 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   verified-vs-unverified distinction instead, and mobile-hub's QR flow
   must never auto-approve — see the "Today in the repo" section above.
   [#649](https://github.com/LunarVagabond/avalon-protocol/issues/649)
-  (open) is the concrete server-side follow-up: actually resolving
-  verified-vs-unverified status.
+  (closed, implemented) is the concrete server-side follow-up: actually
+  resolving verified-vs-unverified status — see the "Today in the repo"
+  section above.
 - #70 mirrors of a public log, not federation
 - #79 long-term settlement backend; #186 decided no blockchain/validator
   consensus (transparency log on Postgres instead, superseding part of #93);
