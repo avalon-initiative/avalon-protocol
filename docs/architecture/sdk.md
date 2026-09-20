@@ -243,6 +243,33 @@ protocol and the domain model in `crates/protocol`; they never pull in
   identity's profile once `POST /auth/device/approve` is called against
   the seeded `user_code`, and `wait()` surfacing `DeviceLoginDenied` once
   `POST /auth/device/deny` is called instead.
+- `crates/sdk/src/cross_node_login.rs` (epic #623, issue #637) —
+  `AvalonClient::cross_node_login()` wraps #634's cross-node login
+  (`POST /auth/cross-node/start`), almost identical in shape to
+  `device_login`'s own start/poll dance: from a caller's perspective both
+  flows look the same. The one real difference: the response carries no
+  `verification_uri` the way device pairing's does — there's no Hub route
+  for cross-node approval yet (#639, not built), just a `user_code` and
+  `requesting_context` to show however the integrator's own UI displays a
+  pairing code. `CrossNodeLogin::wait()` drives `POST /auth/cross-node/poll`
+  to completion with the identical backoff shape `DeviceLogin::wait` uses,
+  resolving to a real `Session` on `approved` or a typed
+  `SdkError::CrossNodeLoginDenied`/`CrossNodeLoginExpired` on
+  `denied`/`expired`. Also exposes the same-device fast path epic #623's own
+  scope note describes: `AvalonClient::submit_cross_node_login_grant`
+  mints, signs (with a caller-supplied `ed25519_dalek::SigningKey`), and
+  submits a `CrossNodeLoginGrant` directly, skipping the start/poll dance
+  entirely — real for a caller that directly controls some identity's key
+  material (e.g. a service/bot identity), not the common case for this
+  SDK's usual integrator-backend callers, who never hold a *player's* own
+  key.
+- `crates/sdk/tests/cross_node_login.rs` — live tests (`make test-live`)
+  covering `wait()` resolving to a session once a real signed grant is
+  submitted against the seeded `user_code` (simulating the Hub approval
+  #639 will eventually provide), `wait()` surfacing
+  `CrossNodeLoginDenied` once `POST /auth/cross-node/deny` is called
+  instead, the same-device fast path resolving directly to a session with
+  no polling at all, and a grant signed by the wrong key being rejected.
 - `crates/sdk/tests/authenticate.rs` — live test (`make test-live`) covering a
   successful authenticate, an invalid token, and a capability being rejected.
 - `crates/sdk/tests/social.rs` — live tests (`make test-live`) covering
@@ -327,7 +354,8 @@ protocol and the domain model in `crates/protocol`; they never pull in
 - `crates/sdk/src/http.rs` (#47) — `send`/`map_error_response`/
   `retry_write`, the shared machinery behind the "Error handling and
   retries" section above; every HTTP call site in this crate (achievements,
-  conversations, device_login, guilds, registry, schema, social) goes
+  conversations, cross_node_login, device_login, guilds, registry, schema,
+  social) goes
   through it now instead of a raw `reqwest` call with ad hoc status
   matching. `crates/server/src/error.rs::AppError::code` gives every
   variant a stable, mechanically-generated (one per Rust variant name)
