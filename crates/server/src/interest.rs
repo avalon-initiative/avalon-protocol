@@ -169,6 +169,18 @@ pub enum InterestScope {
     /// existing call site (registration, lookup, the DHT/Redis worker
     /// loops) off `Copy` for the sake of one variant.
     Network(Uuid),
+    /// Epic #623, issue #635: the identity-locator scope — registered by
+    /// `crate::identity_locator::run_worker` for every identity this node
+    /// durably has (authors or mirrors) `identity_signing_keys` for, so any
+    /// node can resolve *every* shard an identity has real history on, not
+    /// just wherever `identity.created` happened to land. Same trust model
+    /// as `Network` (a bare `own_base_url`, no signed claim): a node
+    /// advertising this scope is asserting a fact about its own local data,
+    /// not vouching for the identity itself — a consumer still verifies
+    /// whatever it actually fetches from a resolved location independently
+    /// (issue #636), so a false or stale registration here only ever wastes
+    /// a lookup, never a security bypass.
+    Identity(Uuid),
 }
 
 /// Fixed, arbitrary namespace UUID (issue #596) used only to derive
@@ -222,6 +234,10 @@ impl InterestScope {
                 bytes.push(b'n');
                 bytes.extend_from_slice(id.as_bytes());
             }
+            InterestScope::Identity(id) => {
+                bytes.push(b'i');
+                bytes.extend_from_slice(id.as_bytes());
+            }
         }
         bytes
     }
@@ -234,6 +250,7 @@ impl InterestScope {
             InterestScope::Channel(id) => format!("avalon:interest:channel:{id}"),
             InterestScope::Conversation(id) => format!("avalon:interest:conversation:{id}"),
             InterestScope::Network(id) => format!("avalon:interest:network:{id}"),
+            InterestScope::Identity(id) => format!("avalon:interest:identity:{id}"),
         }
     }
 }
@@ -396,7 +413,9 @@ impl InterestRegistry {
                 .expect("interest registry lock poisoned")
                 .get(&scope)
                 .map(|claim| claim.as_bytes().to_vec()),
-            InterestScope::Network(_) => Some(own_base_url.as_bytes().to_vec()),
+            InterestScope::Network(_) | InterestScope::Identity(_) => {
+                Some(own_base_url.as_bytes().to_vec())
+            }
         }
     }
 
@@ -705,7 +724,7 @@ pub async fn run_worker(
                     // scopes (see that function's own doc comment), so
                     // populating it for those scopes now would just be
                     // dead writes.
-                    if matches!(scope, InterestScope::Network(_)) {
+                    if matches!(scope, InterestScope::Network(_) | InterestScope::Identity(_)) {
                         if let Some(redis_fast_path) = &redis_fast_path {
                             redis_fast_path.put(scope, &own_base_url).await;
                         }
@@ -729,7 +748,7 @@ pub async fn run_worker(
                 let Some(value) = registry.dht_value(scope, &own_base_url) else {
                     continue;
                 };
-                if matches!(scope, InterestScope::Network(_)) {
+                if matches!(scope, InterestScope::Network(_) | InterestScope::Identity(_)) {
                     if let Some(redis_fast_path) = &redis_fast_path {
                         redis_fast_path.put(scope, &own_base_url).await;
                     }
@@ -753,6 +772,15 @@ mod tests {
             InterestScope::Channel(id).dht_key(),
             InterestScope::Conversation(id).dht_key()
         );
+    }
+
+    #[test]
+    fn identity_scope_keys_never_collide_with_another_variant_of_the_same_uuid() {
+        let id = Uuid::new_v4();
+        let identity_key = InterestScope::Identity(id).dht_key();
+        assert_ne!(identity_key, InterestScope::Channel(id).dht_key());
+        assert_ne!(identity_key, InterestScope::Conversation(id).dht_key());
+        assert_ne!(identity_key, InterestScope::Network(id).dht_key());
     }
 
     #[test]

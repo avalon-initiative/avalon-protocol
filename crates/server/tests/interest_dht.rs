@@ -125,6 +125,56 @@ async fn a_registered_channel_interest_is_found_by_a_lookup_from_a_different_nod
     assert!(never_registered.is_empty());
 }
 
+/// Epic #623, issue #635's own live DHT-level acceptance test: an
+/// `InterestScope::Identity` record round-trips through a real two-swarm
+/// `put`/`get` exactly like a `Channel` scope already does above — proving
+/// the new scope kind actually works at the DHT layer in isolation, before
+/// `crates/server/tests/identity_locator.rs` exercises the full
+/// worker+HTTP path against real Postgres.
+#[tokio::test]
+#[ignore]
+async fn a_registered_identity_locator_scope_is_found_by_a_lookup_from_a_different_node() {
+    let node_a_peers = PeerTable::new();
+    let node_b_peers = PeerTable::new();
+
+    let node_a = dht::start(node_a_peers.clone(), test_config()).await;
+    let node_b = dht::start(node_b_peers.clone(), test_config()).await;
+
+    cross_register(&node_b_peers, &node_a, "http://node-a.test");
+    cross_register(&node_a_peers, &node_b, "http://node-b.test");
+
+    tokio::time::sleep(TEST_SCAN_INTERVAL * 6).await;
+
+    let identity_id = Uuid::new_v4();
+    let scope = InterestScope::Identity(identity_id);
+    node_a
+        .commands
+        .send(avalon_server::dht::DhtCommand::PutRecord {
+            key: scope.dht_key(),
+            value: b"http://node-a.test".to_vec(),
+            ttl: Duration::from_secs(60),
+        })
+        .await
+        .expect("dht command channel should still be open");
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let found = interest::lookup(&node_b.commands, scope, None).await;
+    assert_eq!(
+        found,
+        vec!["http://node-a.test".to_string()],
+        "node B's lookup should find node A's real, live-put identity-locator record"
+    );
+
+    let never_registered = interest::lookup(
+        &node_b.commands,
+        InterestScope::Identity(Uuid::new_v4()),
+        None,
+    )
+    .await;
+    assert!(never_registered.is_empty());
+}
+
 /// Issue #608's own live acceptance test: two real swarms configured for
 /// *different* `network_id`s never see each other's interest records, even
 /// when each is explicitly told the other's real DHT identity/address (the

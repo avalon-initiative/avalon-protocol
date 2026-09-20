@@ -22,6 +22,7 @@ pub mod guild_messages;
 pub mod guilds;
 pub mod handlers;
 pub mod idempotency;
+pub mod identity_locator;
 pub mod integrator_data;
 pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
@@ -197,6 +198,12 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         .route(
             "/identities/{id}/profile",
             get(handlers::get_identity_profile),
+        )
+        // Epic #623, issue #635: identity locator — see
+        // `crate::identity_locator`'s module docs.
+        .route(
+            "/identities/{id}/locations",
+            get(identity_locator::get_locations),
         )
         .route("/me/presence", put(presence::update_my_presence))
         .route(
