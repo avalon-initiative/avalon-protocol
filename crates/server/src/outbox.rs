@@ -246,17 +246,46 @@ impl RemoteSubmitConfig {
                     continue;
                 };
                 let shard_id = shard_id.trim().to_string();
-                let url = url.trim().trim_end_matches('/').to_string();
-                if !shard_id.is_empty() && !url.is_empty() {
-                    targets.insert(shard_id, url);
+                if shard_id.is_empty() || url.trim().is_empty() {
+                    continue;
+                }
+                // Issue #665: same well-formedness check
+                // `nodes::realtime_mode_from_env`/`internal_role::RemoteIndexer::from_env`
+                // use for their own backing-service URLs — a malformed
+                // per-shard entry is logged and skipped (this var's
+                // existing "ignore this one entry" posture, unlike
+                // Indexer/Realtime's hard failure — see
+                // `crate::backing_services`'s own doc comment for why),
+                // rather than silently used as-is and only failing later
+                // on the first real submit attempt.
+                match crate::backing_services::normalize_and_validate_url(
+                    "AVALON_SETTLEMENT_REMOTE_URLS",
+                    url,
+                ) {
+                    Ok(url) => {
+                        targets.insert(shard_id, url);
+                    }
+                    Err(e) => tracing::error!(
+                        entry,
+                        "outbox: AVALON_SETTLEMENT_REMOTE_URLS entry malformed — ignoring: {e}"
+                    ),
                 }
             }
         }
 
         if let Ok(url) = std::env::var("AVALON_SETTLEMENT_REMOTE_URL") {
-            let url = url.trim().trim_end_matches('/').to_string();
-            if !url.is_empty() {
-                targets.entry("core".to_string()).or_insert(url);
+            if !url.trim().is_empty() {
+                match crate::backing_services::normalize_and_validate_url(
+                    "AVALON_SETTLEMENT_REMOTE_URL",
+                    &url,
+                ) {
+                    Ok(url) => {
+                        targets.entry("core".to_string()).or_insert(url);
+                    }
+                    Err(e) => tracing::error!(
+                        "outbox: AVALON_SETTLEMENT_REMOTE_URL malformed — ignoring: {e}"
+                    ),
+                }
             }
         }
 
@@ -287,6 +316,13 @@ impl RemoteSubmitConfig {
     /// this node commits that shard's batches locally.
     fn target_for_shard(&self, shard_id: &str) -> Option<&str> {
         self.targets.get(shard_id).map(String::as_str)
+    }
+
+    /// Every configured `(shard_id, base_url)` pair — read by `main.rs`'s
+    /// issue #665 startup reachability check, so it doesn't need its own
+    /// second parse of `AVALON_SETTLEMENT_REMOTE_URL(S)`.
+    pub fn targets(&self) -> &std::collections::HashMap<String, String> {
+        &self.targets
     }
 
     async fn submit(&self, url: &str, batch: &EventBatch) -> Result<Commitment, SettlementError> {
@@ -898,6 +934,43 @@ mod tests {
             "AVALON_SETTLEMENT_REMOTE_URLS naming core explicitly must win over the singular \
              fallback, not be silently overwritten by it"
         );
+        clear_remote_submit_env_vars();
+    }
+
+    /// Issue #665: a malformed URL in `AVALON_SETTLEMENT_REMOTE_URLS` is
+    /// logged and skipped, same as an entry missing `=` already was —
+    /// never silently accepted as-is (which would only fail later, on the
+    /// first real submit attempt) and never a hard startup failure either
+    /// (this var stays optional even when malformed, unlike Indexer/
+    /// Realtime — see `crate::backing_services`'s own doc comment).
+    #[test]
+    fn a_malformed_entry_in_the_plural_var_is_skipped_not_accepted() {
+        clear_remote_submit_env_vars();
+        unsafe {
+            std::env::set_var(
+                "AVALON_SETTLEMENT_REMOTE_URLS",
+                "game:ashen-realms=not a url, core=https://core.example",
+            );
+        }
+        let config = RemoteSubmitConfig::from_env().expect("core entry alone should be Some");
+        assert_eq!(config.target_for_shard("game:ashen-realms"), None);
+        assert_eq!(
+            config.target_for_shard("core"),
+            Some("https://core.example")
+        );
+        clear_remote_submit_env_vars();
+    }
+
+    /// A malformed singular `AVALON_SETTLEMENT_REMOTE_URL` with no plural
+    /// var set at all falls back to no configured targets, not a panic or
+    /// a silently-broken one.
+    #[test]
+    fn a_malformed_singular_url_with_nothing_else_configured_returns_none() {
+        clear_remote_submit_env_vars();
+        unsafe {
+            std::env::set_var("AVALON_SETTLEMENT_REMOTE_URL", "not a url");
+        }
+        assert!(RemoteSubmitConfig::from_env().is_none());
         clear_remote_submit_env_vars();
     }
 

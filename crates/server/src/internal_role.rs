@@ -193,22 +193,40 @@ impl RemoteIndexer {
         }
     }
 
-    /// `AVALON_INDEXER_REMOTE_URL`/`AVALON_INTERNAL_ROLE_KEY` — `None` when
-    /// the URL isn't set, meaning this node has no remote Indexer role
-    /// configured at all. Not wired into `main.rs`'s own `AppState`
-    /// construction yet (see this module's doc comment — that's #662's
-    /// job); exposed here so a caller (a future Gateway-only binary/mode,
-    /// or this ticket's own live test) can build one from the same env-var
-    /// convention every other remote-role config in this crate already
-    /// uses (`RemoteSubmitConfig::from_env`, `KnownShardsConfig::from_env`).
-    pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var("AVALON_INDEXER_REMOTE_URL")
+    /// `AVALON_INDEXER_REMOTE_URL`/`AVALON_INTERNAL_ROLE_KEY`. `Ok(None)`
+    /// when the URL isn't set, meaning this node has no remote Indexer role
+    /// configured at all — `main.rs`'s own call site (#662) is what turns
+    /// that into a hard startup failure when the Indexer role is also
+    /// excluded locally, exactly the same shape
+    /// `nodes::realtime_mode_from_env` already establishes for
+    /// `AVALON_REALTIME_URL`. `Err` when the URL is set but not
+    /// well-formed — issue #665: previously this only checked
+    /// non-emptiness, so a malformed `AVALON_INDEXER_REMOTE_URL` would
+    /// silently build a `RemoteIndexer` whose every request then failed
+    /// with a confusing runtime error instead of a clear one at startup;
+    /// now shares `crate::backing_services::normalize_and_validate_url`
+    /// with the other two backing-service vars, so all three fail the same
+    /// way on a malformed value.
+    pub fn from_env() -> Result<Option<Self>, String> {
+        let Some(raw) = std::env::var("AVALON_INDEXER_REMOTE_URL")
             .ok()
-            .filter(|s| !s.is_empty())?;
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let base_url =
+            crate::backing_services::normalize_and_validate_url("AVALON_INDEXER_REMOTE_URL", &raw)?;
         let role_key = std::env::var("AVALON_INTERNAL_ROLE_KEY")
             .ok()
             .filter(|s| !s.is_empty());
-        Some(Self::new(base_url, role_key))
+        Ok(Some(Self::new(base_url, role_key)))
+    }
+
+    /// This remote Indexer role's own base URL — read by `main.rs`'s issue
+    /// #665 reachability check, so it doesn't need to re-derive or re-parse
+    /// `AVALON_INDEXER_REMOTE_URL` a second time.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {

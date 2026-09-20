@@ -79,6 +79,79 @@ for its own separate `game:peer-shard-demo-*` shard. See this file's
 [`./settlement.md`](./settlement.md)'s "Cross-machine, real end to end"
 section for the full write-up.
 
+### Backing-service discovery for a Gateway process (#665)
+
+Once a process can be configured to *not* run Indexer/Realtime/Settlement
+locally (#662/#663/#664), it needs a way to actually find which backing-
+service URLs to use — this section is the one coherent place to look for
+that whole surface, rather than three separate paragraphs scattered across
+each extraction ticket's own entry. Deliberately **static config, not a
+dynamic service registry** — a fixed deployment doesn't need discovery
+more elaborate than "an operator wrote the URL down," and #665's own
+ticket body treats anything more dynamic as an explicit non-goal for this
+first pass.
+
+| Role | Env var | Shape | Required when role excluded, and no local role either? |
+|---|---|---|---|
+| Indexer | `AVALON_INDEXER_REMOTE_URL` (+ `AVALON_INTERNAL_ROLE_KEY`) | Single base URL | Yes — hard startup failure if unset or malformed (`internal_role::RemoteIndexer::from_env`) |
+| Realtime | `AVALON_REALTIME_URL` | Single base URL | Yes — hard startup failure if unset or malformed (`nodes::realtime_mode_from_env`) |
+| Settlement | `AVALON_SETTLEMENT_REMOTE_URL` (singular) / `AVALON_SETTLEMENT_REMOTE_URLS` (per-shard map) | One URL, or a `shard_id=url` map | No — #664 already established this stays a warning, not a hard failure, since `AppState::chain` is a required field regardless of declared role (a node can always still commit to its own local ledger) |
+
+**Why Settlement stays the odd one out, on purpose.** Indexer and Realtime
+are each a single, all-or-nothing target: if the role isn't running
+locally, there is exactly one place to route that traffic, and having no
+valid URL for it means this process genuinely cannot serve that role at
+all — the same "refuse to start rather than silently degrade" precedent
+`network_id` genesis-mismatch and DHT config checks already establish for
+this file's other startup-time checks. Settlement is a per-shard *map*,
+and #664 already decided (see that section's own entry below) that a node
+whose declared roles exclude `settlement` but has no remote authority
+configured simply keeps committing to its own local ledger — a real,
+working, if perhaps unintended, configuration, not a broken one. #665
+didn't revisit that decision; it only made the *parsing* of all three
+vars consistent (see below).
+
+**What's shared across all three, and what isn't
+(`crates/server/src/backing_services.rs`).** All three vars name an
+operator-configured base URL, and all three now go through one shared
+`normalize_and_validate_url` helper: trim whitespace, strip a trailing
+slash, reject anything that doesn't parse as a well-formed URL — closing
+a real inconsistency that existed before this ticket, where
+`AVALON_REALTIME_URL` was already validated this way but
+`AVALON_INDEXER_REMOTE_URL` was only checked for non-emptiness (a
+malformed value would silently build a `RemoteIndexer` whose every request
+then failed with a confusing runtime error, rather than failing clearly at
+startup). What's deliberately *not* unified into one function is the
+required-vs-optional/hard-vs-soft-failure question — Indexer and Realtime
+keep their own `Result`-returning resolver (`Ok(None)` role held locally,
+`Ok(Some(url))` remote configured and valid, `Err` malformed or genuinely
+required-but-missing); `outbox::RemoteSubmitConfig::from_env` keeps its
+own per-entry parsing for the settlement map, just reusing the same
+well-formedness check and logging (then skipping) any one malformed entry
+rather than failing the whole process over it, matching #664's existing
+"a Settlement mismatch is diagnostic, not fatal" posture.
+
+**Reachability, genuinely new in #665.** Before this ticket, none of
+#662/#663/#664's checks confirmed a configured backing-service URL was
+actually *reachable* — only that it parsed. `backing_services::check_reachable`/
+`check_all_reachable` add a real startup-time probe: `GET {base_url}/nodes/status`
+(the same read-only, no-auth endpoint every role already serves) against
+every currently-configured backing-service target, logged as a
+`tracing::warn!` naming the backing service and the failure if it doesn't
+succeed. **Deliberately a warning, never a hard failure** — unlike the
+missing/malformed cases above, an unreachable-but-well-formed URL is
+exactly the shape of problem a rolling restart produces transiently (this
+process's own backing service simply hasn't come up yet, or is between
+two instances during a redeploy): failing to start over that would make
+every process in a multi-process deployment fragile to whatever order its
+peers happen to come up in, for no correctness benefit — every real
+request already gets its own live reachability signal (a `503
+RemoteRoleUnreachable`/proxy failure/remote-submit failure) the moment it
+actually needs the backing service, which is the check that matters. A
+malformed or absent URL, by contrast, can never self-heal without an
+operator changing config, which is why those two stay fatal exactly as
+#662/#663 already established.
+
 ### Settlement retention tiers
 
 Not every Settlement node is expected to store and serve *all* durable
@@ -1506,6 +1579,44 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `identity.signing_key_added` entries appeared on the Settlement-only
   node's own `/ledger/entries`, with `/ledger/sth/latest`'s `tree_size`
   past them (`crates/server/tests/settlement_only.rs`, `--ignored`).
+- **Backing-service discovery for a Gateway process (#665), the last of
+  #291's five sub-issues.** #662/#663/#664 each already made their own
+  role's remote URL load-bearing; this ticket made the *set* of all three
+  coherent rather than adding a fourth mechanism — see "Backing-service
+  discovery for a Gateway process (#665)" above for the full config-surface
+  writeup. Two concrete things are genuinely new here, not just
+  reorganization: (1) `AVALON_INDEXER_REMOTE_URL` is now validated as a
+  well-formed URL at startup, the same way `AVALON_REALTIME_URL` already
+  was — previously it was only checked for non-emptiness, a real
+  inconsistency this closes (`internal_role::RemoteIndexer::from_env` now
+  returns `Result<Option<Self>, String>`, mirroring
+  `nodes::realtime_mode_from_env`'s own shape); and (2) every configured
+  backing-service URL now gets an actual startup-time reachability probe
+  (`GET /nodes/status`), not just a well-formedness check — logged as a
+  warning, never a hard failure, since an unreachable-but-valid URL is the
+  normal shape of a rolling restart, not a misconfiguration (see this
+  file's own "Reachability, genuinely new in #665" paragraph above for why
+  that's the right failure mode). `crates/server/src/backing_services.rs`
+  is the whole new module: `normalize_and_validate_url` (now shared by
+  Indexer, Realtime, and Settlement's per-entry parsing) and
+  `check_reachable`/`check_all_reachable`. Also closed a small,
+  independently-discovered gap while auditing the three vars for
+  consistency: `AVALON_INDEXER_REMOTE_URL`/`AVALON_INTERNAL_ROLE_KEY` were
+  load-bearing since #661/#662 but had never actually been documented in
+  `.env.example` — they are now, alongside the two vars this ticket itself
+  added no new names for (reusing #662/#663/#313's existing ones, per this
+  ticket's own explicit non-goal of inventing a fourth naming scheme).
+  Live-verified: a real Gateway process
+  (`AVALON_NODE_ROLES=gateway`) with `AVALON_INDEXER_REMOTE_URL`/
+  `AVALON_REALTIME_URL` both pointed at a closed local port starts
+  cleanly, serves a real `GET /nodes/status` request, and logs one
+  `tracing::warn!` per unreachable backing service naming it by role and
+  URL; the same process with `AVALON_INDEXER_REMOTE_URL` unset (indexer
+  role excluded, no local role either) still refuses to start with
+  exactly #662's original error message, and a malformed
+  `AVALON_REALTIME_URL` still refuses to start with exactly #663's
+  original error message — confirming the new reachability check is
+  purely additive and doesn't change either existing hard-failure path.
 
 ## Decisions and tickets
 

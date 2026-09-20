@@ -798,10 +798,14 @@ pub fn realtime_mode_from_env(roles: &[String]) -> Result<Option<String>, String
              connections to"
                 .to_string()
         })?;
-    let trimmed = raw.trim().trim_end_matches('/').to_string();
-    url::Url::parse(&trimmed)
-        .map_err(|e| format!("AVALON_REALTIME_URL is not a valid URL: {e}"))?;
-    Ok(Some(trimmed))
+    // Issue #665: shared normalization/validation, same helper
+    // `internal_role::RemoteIndexer::from_env` now uses for
+    // `AVALON_INDEXER_REMOTE_URL` — see `crate::backing_services`'s own
+    // module doc comment for why this part (trim, strip trailing slash,
+    // well-formed check) is unified across all three backing-service vars
+    // while the required-vs-optional question above stays this function's
+    // own.
+    crate::backing_services::normalize_and_validate_url("AVALON_REALTIME_URL", &raw).map(Some)
 }
 
 /// Issue #662: does this process's configured `AVALON_NODE_ROLES` include
