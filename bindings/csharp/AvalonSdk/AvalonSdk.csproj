@@ -27,9 +27,12 @@
     <!-- BouncyCastle.Cryptography: netstandard2.1 has no built-in Ed25519. This is a
          pure-managed implementation (no native binary), which matters for Unity/IL2CPP
          targets that can't easily bundle a per-platform native library the way
-         NSec.Cryptography/libsodium would need. Used only by Achievements.cs, for signing
-         an integrator's own attestation issuance requests — never for the identity/session
-         layer, which is HTTP-token-based, not signature-based, on this SDK's side. -->
+         NSec.Cryptography/libsodium would need. Used by Achievements.cs (signing an
+         integrator's own attestation issuance requests) and, as of epic #623 issue #638,
+         CrossNodeLogin.cs's same-device fast path — the one place this SDK signs with a
+         *player's* own identity-level Ed25519 key rather than an integrator's issuer key.
+         Every other identity/session interaction stays HTTP-token-based, not
+         signature-based, on this SDK's side. -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
   </ItemGroup>
 

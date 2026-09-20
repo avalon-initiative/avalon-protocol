@@ -415,6 +415,26 @@ protocol and the domain model in `crates/protocol`; they never pull in
   authenticity/validity populated, and the no-signing-key-configured case
   rejecting client-side without an HTTP call. `make csharp-build`/`make
   csharp-test` pass.
+- `bindings/csharp/AvalonSdk/CrossNodeLogin.cs` (epic #623, issue #638) —
+  ports the Rust SDK's `cross_node_login` shape: `AvalonClient.CrossNodeLoginAsync`/
+  `CrossNodeLogin.WaitAsync` (identical start-then-poll dance and backoff to
+  the Rust side), and the same-device fast path
+  `AvalonClient.SubmitCrossNodeLoginGrantAsync`, which signs with a
+  caller-supplied 32-byte Ed25519 identity-key seed — the first place this
+  SDK signs with a *player's* own key rather than an integrator's issuer
+  key (see `AvalonSdk.csproj`'s updated `BouncyCastle.Cryptography` comment).
+  `CrossNodeLoginDeniedException`/`CrossNodeLoginExpiredException` mirror
+  `SdkError::CrossNodeLoginDenied`/`CrossNodeLoginExpired`.
+  `AvalonSdk.Tests/CrossNodeLoginTests.cs` covers the orchestration
+  (start/poll/backoff/approved/denied/expired, and the same-device path)
+  against a stubbed `HttpMessageHandler`; `LiveTests.cs` adds three
+  end-to-end cases against a real server and Postgres — same-device submit
+  resolving directly to a session, a wrong-key grant rejected, and the
+  cross-device `WaitAsync` resolving once a real signed grant is submitted
+  against its `UserCode` (a "simulated Hub," since #639 isn't built yet) —
+  seeding the identity's real Ed25519 keypair directly into
+  `indexer_identity_signing_keys` rather than a WebAuthn ceremony, since
+  that's the one table cross-node-login verification actually reads.
 
 ## Decisions and tickets
 

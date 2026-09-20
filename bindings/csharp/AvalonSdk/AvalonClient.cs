@@ -109,10 +109,21 @@ namespace Avalon.Sdk
     /// works only through the returned <see cref="Session"/>, which
     /// enforces whichever capabilities were actually granted.
     /// </summary>
-    public sealed class AvalonClient
+    public sealed partial class AvalonClient
     {
         private readonly AvalonConfig _config;
         private readonly HttpClient _http;
+
+        /// <summary>See <see cref="AvalonConfig.ServerUrl"/> — exposed internally so
+        /// <see cref="CrossNodeLogin"/> (a separate class, not a partial member of this one) can
+        /// address the node this client talks to without this SDK's HTTP details becoming public
+        /// API. Mirrors the Rust SDK's <c>AvalonClient::config.server_url</c> access from
+        /// <c>cross_node_login.rs</c>.</summary>
+        internal string ServerUrl => _config.ServerUrl;
+
+        /// <summary>See the constructor's own doc comment on why this is injected. Exposed
+        /// internally for the same reason <see cref="ServerUrl"/> is.</summary>
+        internal HttpClient Http => _http;
 
         /// <summary>
         /// <paramref name="httpClient"/> is injected rather than always
