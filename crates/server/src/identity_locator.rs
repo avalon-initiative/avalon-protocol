@@ -24,6 +24,21 @@
 //! instead of a full rescan. `identity_signing_keys::distinct_identity_ids`
 //! is the one query this would need to change.
 //!
+//! **Registrations found within one tick are staggered ([`REGISTRATION_STAGGER`]),
+//! not fired all at once.** `InterestRegistry::register`'s 0 -> 1 transition
+//! always signals `interest::run_worker` to `PutRecord` immediately (issue
+//! #583's own reasoning for why a fresh registration can't wait out a full
+//! refresh interval) — right, for a genuinely new registration, but a node
+//! with a real backlog of already-known local identities (typically right
+//! after a fresh process start, before the very first scan has run at all)
+//! would otherwise fire a burst of simultaneous immediate `PutRecord`s, most
+//! of them landing before the DHT swarm has bootstrapped/connected to any
+//! peer yet. Live-observed as a real `put_record failed: the quorum failed`
+//! burst before this existed — harmless (each registration's own refresh
+//! loop retries regardless), but real, avoidable noise a hoster's logs
+//! don't need. Pacing registrations out fixes it directly rather than just
+//! tolerating the noise.
+//!
 //! **Depends on #629 (minimum replication guarantee) for the locator to be
 //! meaningful**, not just mechanically correct: a locator entry pointing at
 //! a shard with zero durable mirrors is a dead end regardless of how
@@ -60,6 +75,14 @@ fn scan_interval() -> Duration {
         .unwrap_or(Duration::from_secs(DEFAULT_SCAN_INTERVAL_SECS))
 }
 
+/// How long to wait between registering consecutive newly-discovered
+/// identities found within the same scan tick — see this module's own doc
+/// comment on the startup-backlog burst this paces out. Short enough that
+/// even a few hundred identities clear within seconds, long enough that
+/// each immediate `PutRecord` lands as its own distinct DHT command rather
+/// than all of them queuing up in the same instant.
+const REGISTRATION_STAGGER: Duration = Duration::from_millis(100);
+
 /// Never returns. Periodically registers DHT interest
 /// (`InterestScope::Identity`) for every identity this node has durable
 /// `identity_signing_keys` for, holding one [`InterestGuard`] per identity
@@ -82,11 +105,28 @@ pub async fn run_worker(pool: sqlx::PgPool, registry: InterestRegistry) {
                     continue;
                 }
             };
-        for identity_id in identity_ids {
-            guards
-                .entry(identity_id)
-                .or_insert_with(|| registry.register(InterestScope::Identity(identity_id)));
+        register_new(identity_ids, &mut guards, &registry).await;
+    }
+}
+
+/// Registers any `identity_id` in `identity_ids` not already in `guards`,
+/// pausing [`REGISTRATION_STAGGER`] between each one — pulled out of
+/// [`run_worker`]'s loop body so it's directly unit-testable without a real
+/// Postgres pool.
+async fn register_new(
+    identity_ids: Vec<Uuid>,
+    guards: &mut HashMap<Uuid, InterestGuard>,
+    registry: &InterestRegistry,
+) {
+    for identity_id in identity_ids {
+        if guards.contains_key(&identity_id) {
+            continue;
         }
+        guards.insert(
+            identity_id,
+            registry.register(InterestScope::Identity(identity_id)),
+        );
+        tokio::time::sleep(REGISTRATION_STAGGER).await;
     }
 }
 
@@ -127,4 +167,56 @@ pub async fn get_locations(
     Json(LocationsResponse {
         locations: resolve(&state, identity_id).await,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Proves the stagger primitive itself, without a real Postgres pool or
+    /// DHT swarm: registering several identities found within one (fake)
+    /// scan takes at least `REGISTRATION_STAGGER` per registration, not all
+    /// at once — the actual fix for the live-observed startup-backlog burst
+    /// this module's own doc comment describes. `start_paused` fast-forwards
+    /// simulated time rather than actually sleeping.
+    #[tokio::test(start_paused = true)]
+    async fn registrations_found_in_one_scan_are_staggered_not_simultaneous() {
+        let (registry, _newly_active) = InterestRegistry::new();
+        let ids = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let mut guards: HashMap<Uuid, InterestGuard> = HashMap::new();
+
+        let start = tokio::time::Instant::now();
+        register_new(ids.clone(), &mut guards, &registry).await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(guards.len(), ids.len());
+        assert!(
+            elapsed >= REGISTRATION_STAGGER * (ids.len() as u32),
+            "expected at least {:?} of staggered delay for {} registrations, got {:?}",
+            REGISTRATION_STAGGER * (ids.len() as u32),
+            ids.len(),
+            elapsed
+        );
+    }
+
+    /// An identity already in `guards` (already registered by an earlier
+    /// scan) is skipped entirely — no re-registration, no stagger delay
+    /// spent on it.
+    #[tokio::test(start_paused = true)]
+    async fn an_already_registered_identity_is_never_re_registered() {
+        let (registry, _newly_active) = InterestRegistry::new();
+        let id = Uuid::new_v4();
+        let mut guards: HashMap<Uuid, InterestGuard> = HashMap::new();
+        guards.insert(id, registry.register(InterestScope::Identity(id)));
+
+        let start = tokio::time::Instant::now();
+        register_new(vec![id], &mut guards, &registry).await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(guards.len(), 1);
+        assert!(
+            elapsed < REGISTRATION_STAGGER,
+            "an already-registered identity should be skipped with no stagger delay, got {elapsed:?}"
+        );
+    }
 }
