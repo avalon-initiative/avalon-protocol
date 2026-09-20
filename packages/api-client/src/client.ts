@@ -23,6 +23,7 @@ import type {
   ConnectIntegratorResponse,
   ConversationMessageResponse,
   ConversationResponse,
+  CrossNodeLoginDenyResponse,
   CreateChannelRequest,
   CreateConversationRequest,
   CreateEventRequest,
@@ -56,6 +57,7 @@ import type {
   ListEventsQuery,
   ListIntegratorsResponse,
   ListMyAchievementsResponse,
+  LookupCrossNodeLoginResponse,
   MessageResponse,
   MyConnectionsResponse,
   MyGuildInviteResponse,
@@ -93,6 +95,8 @@ import type {
   SetGuardiansRequest,
   SetPermissionOverrideRequest,
   SignedTreeHeadResponse,
+  SubmitCrossNodeLoginGrantRequest,
+  SubmitCrossNodeLoginGrantResponse,
   TransferOwnershipRequest,
   UpdateChannelRequest,
   UpdateEventRequest,
@@ -310,6 +314,78 @@ export function denyPairing(
   body: UserCodeRequest,
 ): Promise<ResolvePairingResponse> {
   return request('/auth/device/deny', { method: 'POST', body, token })
+}
+
+// Cross-node login (epic #623, issue #639): unlike every other call in this
+// file, these three target an arbitrary requesting node's own base_url —
+// the whole point of cross-node login is that the node a human is
+// approving login *into* is routinely not this Hub's own configured
+// server, so `request()`'s fixed `BASE_URL` doesn't apply here.
+// Unauthenticated on the wire (no Hub session token sent): `lookup`/`deny`
+// only ever need a `user_code`, and `submit`'s real credential is the
+// signed grant itself, not a bearer token — same posture
+// `crates/server/src/cross_node_login.rs`'s own handlers take.
+
+async function crossNodeLoginRequest<T>(
+  baseUrl: string,
+  path: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: options.method ?? 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  })
+  if (!response.ok) {
+    let serverMessage: string | undefined
+    try {
+      const body: unknown = await response.json()
+      if (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string') {
+        serverMessage = (body as { error: string }).error
+      }
+    } catch {
+      // Body wasn't JSON (or was empty) — fall back to the generic mapping.
+    }
+    throw new AvalonApiError(response.status, messageForStatus(response.status, serverMessage))
+  }
+  const text = await response.text()
+  return (text.length === 0 ? undefined : JSON.parse(text)) as T
+}
+
+/** `GET {baseUrl}/auth/cross-node/lookup?user_code=...` — what the approval
+ * screen calls before rendering a prompt at all, per #642's decided
+ * phishing-context requirement: real context shown before a human can act,
+ * never just a bare "approve?". */
+export function lookupCrossNodeLogin(
+  baseUrl: string,
+  userCode: string,
+): Promise<LookupCrossNodeLoginResponse> {
+  return crossNodeLoginRequest(
+    baseUrl,
+    `/auth/cross-node/lookup?user_code=${encodeURIComponent(userCode)}`,
+  )
+}
+
+/** `POST {baseUrl}/auth/cross-node/submit` — submits a grant this browser
+ * already minted (`crypto/crossNodeLogin.ts::mintCrossNodeLoginGrant`) with
+ * `user_code` attached, resolving the pending request an unfamiliar
+ * device/console started. */
+export function submitCrossNodeLoginGrant(
+  baseUrl: string,
+  body: SubmitCrossNodeLoginGrantRequest,
+): Promise<SubmitCrossNodeLoginGrantResponse> {
+  return crossNodeLoginRequest(baseUrl, '/auth/cross-node/submit', { method: 'POST', body })
+}
+
+/** `POST {baseUrl}/auth/cross-node/deny` — deliberately unauthenticated
+ * server-side (see that handler's own doc comment): the approver's session,
+ * if any, routinely lives on a different node than the one this request
+ * was started on. */
+export function denyCrossNodeLogin(
+  baseUrl: string,
+  body: UserCodeRequest,
+): Promise<CrossNodeLoginDenyResponse> {
+  return crossNodeLoginRequest(baseUrl, '/auth/cross-node/deny', { method: 'POST', body })
 }
 
 export function getMe(token: string): Promise<ProfileResponse> {

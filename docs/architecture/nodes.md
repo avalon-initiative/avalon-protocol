@@ -622,10 +622,44 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `SubmitCrossNodeLoginGrantAsync`, the first place this SDK signs with a
   *player's* own Ed25519 identity key rather than an integrator's issuer
   key — see [`sdk.md`](./sdk.md)'s own "Today in the repo" entry for the
-  full detail. **Still not built**: Hub/mobile-hub approval UI itself
-  (#639/#640, the actual Hub route this epic's own login flow needs to be
-  usable by an ordinary player at all), #649's server-side
-  verification-status resolution, and rate limiting (#641).
+  full detail.
+- **Hub approval screen has landed (#639)**: `apps/hub/src/views/CrossNodeLogin.vue`
+  (route `cross-node-login`, a `?node=...&user_code=...` deep link) — real,
+  not stubbed, and it's what surfaced a genuine missing server piece:
+  `submit`/`deny` only ever took a `user_code` with no read path to go with
+  it, so an approval screen had nothing to show before a human decided.
+  Added `GET /auth/cross-node/lookup?user_code=...`
+  (`crates/server/src/cross_node_login.rs::lookup`) to close that gap —
+  unauthenticated, returns `status`/`requesting_context`/`expires_in`,
+  deliberately never the polling device's own `request_code`. The Hub
+  screen calls `lookup` before rendering anything approvable (#642's
+  decided requirement), then — on approve — mints and signs a real grant
+  locally (`packages/api-client/src/crypto/crossNodeLogin.ts::mintCrossNodeLoginGrant`,
+  reading the identity's signing key the same way `continuation.ts`/
+  `interestClaim.ts` already do) and submits it directly to the
+  *requesting* node's own `base_url`, never this Hub's own configured
+  server — a genuinely new client-side capability (`client.ts`'s new
+  `crossNodeLoginRequest` helper takes an explicit `baseUrl` per call,
+  unlike every other function in that file, which always targets this
+  Hub's own fixed `BASE_URL`). Live-verified: `crates/server/tests/cross_node_login.rs`'s
+  three new `lookup` tests (pending, denied, unknown-code-404), plus
+  `packages/api-client/src/crypto/crossNodeLogin.test.ts` proving the
+  signed bytes match the Rust side exactly and a destination swap breaks
+  the signature, same as `interestClaim.test.ts` already proves for #610.
+  **#639's own session also found and fixed a real, unrelated bug**: the
+  root `npm install` had never been rerun since `packages/api-client` was
+  added as a workspace, so `node_modules/@avalon/api-client` was simply
+  missing — the "known pre-existing issue" earlier sessions documented
+  (`vue-tsc -b apps/hub`/`npm run -w apps/hub test` both failing with a
+  pile of `Cannot find module '@avalon/api-client'` errors) was never a
+  real code problem, just a stale `node_modules`. A plain `npm install` at
+  the repo root fixed it completely — `vue-tsc -b apps/hub` is now clean,
+  and `npm run -w apps/hub test` passes all 472 tests. **Still not built**:
+  mobile-hub's own approval screen (#640, the QR/deep-link entry point —
+  #639's Hub screen is what it routes into once built), #649's server-side
+  verification-status resolution (#639 renders the raw `requesting_context`
+  string for now, no verified/unverified visual distinction yet), and rate
+  limiting (#641).
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in

@@ -618,3 +618,96 @@ async fn polling_an_unknown_request_code_is_unauthorized() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+/// Issue #639's own gap: an approval screen has to be able to read a
+/// pending request's context by `user_code` before deciding, without
+/// ever learning its `request_code` (the polling device's own bearer
+/// credential).
+#[tokio::test]
+#[ignore]
+async fn lookup_by_user_code_returns_pending_status_and_context() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let start: serde_json::Value = http
+        .post(format!("{base}/auth/cross-node/start"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let user_code = start["user_code"].as_str().unwrap().to_string();
+    let requesting_context = start["requesting_context"].as_str().unwrap().to_string();
+
+    let looked_up: serde_json::Value = http
+        .get(format!("{base}/auth/cross-node/lookup"))
+        .query(&[("user_code", &user_code)])
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .expect("lookup should succeed for a real, pending user_code")
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(looked_up["status"], "pending");
+    assert_eq!(looked_up["requesting_context"], requesting_context);
+    assert!(looked_up["expires_in"].as_i64().unwrap() > 0);
+    // Never exposes the polling device's own bearer credential.
+    assert!(looked_up.get("request_code").is_none());
+}
+
+/// A denied request's lookup reflects `denied`, not a generic not-found —
+/// the approval screen needs to tell "already resolved" apart from "never
+/// existed."
+#[tokio::test]
+#[ignore]
+async fn lookup_reflects_denied_status() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let start: serde_json::Value = http
+        .post(format!("{base}/auth/cross-node/start"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let user_code = start["user_code"].as_str().unwrap().to_string();
+
+    let deny = http
+        .post(format!("{base}/auth/cross-node/deny"))
+        .json(&serde_json::json!({ "user_code": user_code }))
+        .send()
+        .await
+        .unwrap();
+    assert!(deny.status().is_success());
+
+    let looked_up: serde_json::Value = http
+        .get(format!("{base}/auth/cross-node/lookup"))
+        .query(&[("user_code", &user_code)])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(looked_up["status"], "denied");
+}
+
+#[tokio::test]
+#[ignore]
+async fn lookup_of_an_unknown_user_code_is_not_found() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http
+        .get(format!("{base}/auth/cross-node/lookup"))
+        .query(&[("user_code", "NOTAREALCODE")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}

@@ -8,6 +8,7 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser'
+import type { CrossNodeLoginGrant } from './crypto/crossNodeLogin'
 
 export interface RegisterStartRequest {
   identity_id: string
@@ -315,6 +316,31 @@ export interface UserCodeRequest {
 
 export interface ResolvePairingResponse {
   status: 'approved' | 'denied'
+}
+
+// Cross-node login (epic #623), matching
+// crates/server/src/cross_node_login.rs field-for-field. Unlike device
+// pairing above, these calls target an arbitrary requesting node's own
+// base_url, not this Hub's own configured server — see
+// api/crossNodeLogin.ts's own module doc comment for why.
+
+export interface LookupCrossNodeLoginResponse {
+  status: 'pending' | 'denied' | 'expired' | 'approved'
+  requesting_context: string
+  expires_in: number
+}
+
+export interface SubmitCrossNodeLoginGrantRequest {
+  user_code?: string
+  grant: CrossNodeLoginGrant
+}
+
+export interface SubmitCrossNodeLoginGrantResponse {
+  token?: string
+}
+
+export interface CrossNodeLoginDenyResponse {
+  status: 'denied'
 }
 
 // Multi-passkey registration (issue #200), matching
