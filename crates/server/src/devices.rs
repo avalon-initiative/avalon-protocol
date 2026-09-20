@@ -380,6 +380,7 @@ pub async fn approve_device_grant(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(DeviceResponse {
         id: new_key_id,
@@ -506,6 +507,7 @@ pub async fn revoke_device(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(())
 }

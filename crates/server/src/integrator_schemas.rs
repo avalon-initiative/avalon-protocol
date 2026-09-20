@@ -249,6 +249,7 @@ pub async fn publish_schema_version(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     // Warms `proto_schema`'s in-process root-message cache immediately —
     // parsing happens here, once, rather than being deferred to (and

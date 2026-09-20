@@ -132,6 +132,7 @@ pub async fn publish_recognition(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(RecognitionResponse {
         recognizer_slug: slug,
@@ -171,6 +172,7 @@ pub async fn revoke_recognition(
     .execute(&mut *tx)
     .await?;
 
+    let mut recognition_revoked_event = None;
     if updated.rows_affected() > 0 {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
@@ -189,9 +191,13 @@ pub async fn revoke_recognition(
         };
         outbox::enqueue(&mut tx, &event).await?;
         state.indexer.apply_in_tx(&mut tx, &event).await?;
+        recognition_revoked_event = Some(event);
     }
 
     tx.commit().await?;
+    if let Some(event) = &recognition_revoked_event {
+        state.indexer.apply_after_commit(event).await?;
+    }
     Ok(Json(
         serde_json::json!({ "revoked": updated.rows_affected() > 0 }),
     ))

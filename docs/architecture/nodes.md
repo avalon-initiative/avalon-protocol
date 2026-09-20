@@ -1354,6 +1354,37 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `PostgresIndexer::apply_in_tx`, a coupling that has to be unpicked
   first) — that wiring, and turning this from "proven pattern" into
   "an actual Gateway-only deployment mode," is #662's job.
+- **Extracting the Indexer role into its own deployment mode (#662).**
+  `AVALON_NODE_ROLES` is load-bearing now, for the Indexer role
+  specifically — this is the point where "exactly one node type exists"
+  (this section's own opening claim) stops being true. `AppState.indexer`
+  is no longer a bare `PostgresIndexer`; it's `IndexerHandle`
+  (`crates/server/src/state.rs`), an enum over `Local(PostgresIndexer)`
+  and `Remote(RemoteIndexer)`. `main.rs` decides which at startup, off
+  `nodes::indexer_role_is_local(&nodes::node_roles())`: any role list
+  including `"indexer"` or `"combined"` (the default) gets `Local`,
+  exactly today's behavior. Anything else needs `AVALON_INDEXER_REMOTE_URL`
+  (and `AVALON_INTERNAL_ROLE_KEY`) set — reusing #661's existing env var
+  rather than inventing a second name for the same concept — and gets
+  `Remote`; if that URL is unset, the process refuses to start
+  (`tracing::error!` + `std::process::exit(1)`, the same "refusing to
+  start" posture the `network_id` genesis-mismatch and DHT-config checks
+  above already establish), rather than silently falling back to a local
+  index or serving reads that would quietly diverge from what a real
+  Gateway-only deployment needs. Every call site that used to call
+  `PostgresIndexer::apply_in_tx` directly (~20, across `handlers.rs` and
+  every other domain module) now goes through `IndexerHandle::apply_in_tx`
+  followed by `IndexerHandle::apply_after_commit` once its transaction has
+  committed — see `docs/architecture/query-and-indexing.md`'s "Today in
+  the repo" section for what those two calls actually do for each variant,
+  and the real consistency tradeoff `Remote` accepts. `mirror_watcher.rs`
+  was deliberately left alone: it already builds and uses its own
+  independent local `PostgresIndexer` (never through `AppState.indexer`),
+  since mirror-sync applies verified peer entries straight to this
+  process's own local Postgres regardless of `AVALON_NODE_ROLES` — a
+  different concern (mirror sync) from the Gateway/Indexer role split this
+  ticket is about, so it keeps its own local indexer rather than being
+  routed through `IndexerHandle`.
 - **Settlement as its own standalone node has landed (#664)**, the third
   of #291's four role-extraction tickets — a genuinely separable
   Settlement deployment, not just #313's remote-submit *config flag*

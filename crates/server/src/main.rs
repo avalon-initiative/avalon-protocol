@@ -12,8 +12,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use avalon_server::{
-    auth, guild_messages, migrate, mirror_push, mirror_watcher, outbox, replication, retention,
-    state::AppState,
+    auth, guild_messages, internal_role, migrate, mirror_push, mirror_watcher, nodes, outbox,
+    replication, retention,
+    state::{AppState, IndexerHandle},
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::layer::SubscriberExt;
@@ -147,7 +148,35 @@ async fn main() {
             std::process::exit(1);
         });
     tracing::info!(network_id = %chain.network_id(), "avalon-server: ledger network_id");
-    let indexer = avalon_indexer::postgres::PostgresIndexer::new(pool.clone());
+
+    // Issue #662: `AVALON_NODE_ROLES` now load-bearing for the Indexer role
+    // specifically (`combined`, the default, counts as every role — same
+    // semantics `docs/architecture/nodes.md`'s capability table already
+    // assumes) — a process that doesn't include `indexer` in its roles has
+    // no local `PostgresIndexer` at all, and instead routes every indexer
+    // read/write over #661's `RemoteIndexer`/`/internal/indexer/*`
+    // protocol to another node that does. Resolved once here so both
+    // `AppState`'s own `indexer` field and the mirror-watcher spawn below
+    // (which always gets its own independent local `PostgresIndexer` —
+    // see that spawn's own comment) can be built off the same decision.
+    let node_roles = nodes::node_roles();
+    let indexer = if nodes::indexer_role_is_local(&node_roles) {
+        IndexerHandle::Local(avalon_indexer::postgres::PostgresIndexer::new(pool.clone()))
+    } else {
+        internal_role::RemoteIndexer::from_env()
+            .map(IndexerHandle::Remote)
+            .unwrap_or_else(|| {
+                tracing::error!(
+                    "refusing to start: AVALON_NODE_ROLES={node_roles:?} excludes \"indexer\" \
+                     (and isn't \"combined\"), but AVALON_INDEXER_REMOTE_URL is unset — this \
+                     process has no way to reach an Indexer role, local or remote; set \
+                     AVALON_INDEXER_REMOTE_URL (and AVALON_INTERNAL_ROLE_KEY) to point at a node \
+                     that does, or include \"indexer\"/\"combined\" in AVALON_NODE_ROLES to run \
+                     one locally"
+                );
+                std::process::exit(1);
+            })
+    };
 
     let peers = avalon_server::nodes::PeerTable::new();
     // Issue #599, Layer 2: this node's anti-entropy view of every shard it
@@ -414,10 +443,22 @@ async fn main() {
     // `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`), same "only run what's
     // actually turned on" pattern the retention worker above uses.
     if let Some(mirror_config) = mirror_watcher::MirrorWatcherConfig::from_env() {
+        // Issue #662: deliberately its own local `PostgresIndexer`, not
+        // `state.indexer.clone()` — mirror-sync (verifying/storing peers'
+        // STHs and entries, backfilling content) is a different concern
+        // from the Gateway/Indexer role split #662 is about, and isn't
+        // gated by `AVALON_NODE_ROLES` the same way. It already writes
+        // mirrored entries straight to this process's own local Postgres
+        // regardless of role; best-effort applying them to a local indexer
+        // projection too (see this module's own doc comment on why that's
+        // best-effort, not required for correctness) only makes sense
+        // against this process's own local Postgres, never over the
+        // network — a `RemoteIndexer` would just add a pointless HTTP hop
+        // to what's already a local, same-transaction savepoint apply.
         tokio::spawn(mirror_watcher::run_worker(
             pool.clone(),
             chain.clone(),
-            state.indexer.clone(),
+            avalon_indexer::postgres::PostgresIndexer::new(pool.clone()),
             mirror_config,
             mirror_watcher::MirrorWatcherHandles {
                 interest: state.interest.clone(),

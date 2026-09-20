@@ -275,6 +275,7 @@ pub async fn accept_friend_request(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(FriendshipResponse { a, b, since }))
 }
@@ -339,6 +340,7 @@ pub async fn remove_friend(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(())
 }

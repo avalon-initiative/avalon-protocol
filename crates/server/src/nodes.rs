@@ -727,11 +727,13 @@ impl AnnounceConfig {
 /// to `combined` — milestone 1's "one `avalon-server` process" reality, per
 /// that doc's own capability table.
 ///
-/// Issue #664: this used to be purely advisory (peer-table bookkeeping and
-/// #539's realtime relay routing only) — `main.rs` now also reads it to
-/// decide what actually gets wired up at startup for the one role
-/// combination it treats as load-bearing (see [`is_settlement_only`]).
-/// `pub` for that reason, and so `main.rs` doesn't reimplement the same
+/// This used to be purely advisory (peer-table bookkeeping and #539's
+/// realtime relay routing only) — `main.rs` now also reads it to decide
+/// what actually gets wired up at startup: whether to construct a local
+/// `PostgresIndexer` or a `RemoteIndexer` (issue #662, see
+/// [`indexer_role_is_local`]), and whether this process is a genuinely
+/// standalone Settlement node (issue #664, see [`is_settlement_only`]).
+/// `pub` for both reasons, and so `main.rs` doesn't reimplement the same
 /// env-var parsing.
 pub fn node_roles() -> Vec<String> {
     std::env::var("AVALON_NODE_ROLES")
@@ -744,6 +746,25 @@ pub fn node_roles() -> Vec<String> {
         })
         .filter(|roles| !roles.is_empty())
         .unwrap_or_else(|| vec!["combined".to_string()])
+}
+
+/// Issue #662: does this process's configured `AVALON_NODE_ROLES` include
+/// the Indexer role — i.e. should it run its own local `PostgresIndexer`,
+/// or route indexer reads/writes to a remote one instead?
+///
+/// Pure/unit-testable, same "pure function behind the real config read"
+/// pattern [`promote_discovered_peers`]/[`retain_reachable_active_peers`]
+/// already establish in this module — takes the already-parsed roles list
+/// rather than reading the env var itself, so it's trivially testable
+/// without touching process-global state.
+///
+/// `combined` means "every role" (the table in `docs/architecture/nodes.md`'s
+/// "Capabilities" section — Settlement/Indexer/Realtime/Gateway — describes
+/// `combined` as running all four, not as a fifth, distinct role name), so
+/// it counts as including `indexer` here exactly as it already implicitly
+/// has for every other role check this codebase makes.
+pub fn indexer_role_is_local(roles: &[String]) -> bool {
+    roles.iter().any(|r| r == "combined" || r == "indexer")
 }
 
 /// Issue #664: true only when `roles` is *exactly* `["settlement"]` — a
@@ -1168,6 +1189,32 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_NODE_ROLES");
         }
+    }
+
+    #[test]
+    fn indexer_role_is_local_treats_combined_as_every_role() {
+        assert!(indexer_role_is_local(&["combined".to_string()]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_true_when_indexer_explicitly_listed() {
+        assert!(indexer_role_is_local(&[
+            "settlement".to_string(),
+            "indexer".to_string()
+        ]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_false_when_indexer_excluded() {
+        assert!(!indexer_role_is_local(&[
+            "gateway".to_string(),
+            "realtime".to_string()
+        ]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_false_for_an_empty_list() {
+        assert!(!indexer_role_is_local(&[]));
     }
 
     /// Issue #664: pure function, no env involved — `is_settlement_only`
