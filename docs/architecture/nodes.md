@@ -595,10 +595,20 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   revocation) that a caller like #634's verification path would own for
   itself; that actual wiring — having #634 call this when a grant's
   `signing_key_id` isn't found locally — is **still not built**, tracked
-  as the concrete remaining gap in #634's own verification path. **Still
-  not built** otherwise: both SDKs (#637/#638), Hub/mobile-hub approval UI
-  (#639/#640), rate limiting (#641), and the phishing-context decision
-  (#642, open) gating what the approval screen is even allowed to render.
+  as the concrete remaining gap in #634's own verification path.
+- **Rust SDK support has landed (#637)**: `AvalonClient::cross_node_login`/
+  `CrossNodeLogin::wait` (`crates/sdk/src/cross_node_login.rs`) mirror
+  `device_login`'s own start/poll shape — see
+  [`sdk.md`](./sdk.md)'s own "Today in the repo" entry for the full
+  detail, including the same-device fast path
+  (`submit_cross_node_login_grant`) and why this SDK's usual
+  integrator-backend callers rarely use it (they never hold a *player's*
+  own signing key). **Still not built**: the C# SDK (#638, meant to mirror
+  this one's shape once it's proven out — done now), Hub/mobile-hub
+  approval UI (#639/#640, the actual Hub route this epic's own login flow
+  needs to be usable by an ordinary player at all), rate limiting (#641),
+  and the phishing-context decision (#642, open) gating what the approval
+  screen is even allowed to render.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in

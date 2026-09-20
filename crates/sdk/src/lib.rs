@@ -43,6 +43,7 @@
 
 pub mod achievements;
 pub mod conversations;
+pub mod cross_node_login;
 pub mod device_login;
 pub mod guilds;
 mod http;
@@ -156,6 +157,16 @@ pub enum SdkError {
     /// approved or denied.
     #[error("device pairing expired before it was approved")]
     DeviceLoginExpired,
+    /// `cross_node_login::CrossNodeLogin::wait` (epic #623, issue #637):
+    /// the request was explicitly denied (`POST /auth/cross-node/deny`).
+    #[error("cross-node login was denied")]
+    CrossNodeLoginDenied,
+    /// `cross_node_login::CrossNodeLogin::wait` (epic #623, issue #637):
+    /// the request's ~10-minute TTL
+    /// (`crates/server/src/cross_node_login.rs`) elapsed before it was
+    /// approved or denied.
+    #[error("cross-node login expired before it was approved")]
+    CrossNodeLoginExpired,
 }
 
 /// Everything an integrator supplies to construct an [`AvalonClient`] — the
