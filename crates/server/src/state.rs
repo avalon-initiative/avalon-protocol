@@ -157,4 +157,17 @@ pub struct AppState {
     /// `AVALON_MIRROR_GRACE_PERIOD_HOURS`), read once at startup. See
     /// `crate::replication`'s own module doc comment.
     pub replication_gate: crate::replication::ReplicationGateConfig,
+    /// Issue #663: `Some(base_url)` when this process's own `AVALON_NODE_ROLES`
+    /// excludes `realtime` — the resolved, already-validated
+    /// `AVALON_REALTIME_URL` of the remote Realtime node `presence::presence_ws`/
+    /// `chat::chat_ws` proxy every WebSocket connection through instead of
+    /// running `handle_presence_socket`/`handle_chat_socket` locally. `None`
+    /// (the default, `combined` or any role list that includes `realtime`)
+    /// means this process *is* a Realtime role and serves those sockets
+    /// itself, exactly as before this issue. See `crate::realtime_proxy`'s
+    /// own module doc comment for the connection-topology decision this
+    /// implements (closed ADR, referenced there) and why proxy-through-
+    /// Gateway was chosen over telling the client to connect to the
+    /// Realtime node directly.
+    pub realtime_remote_url: Option<String>,
 }

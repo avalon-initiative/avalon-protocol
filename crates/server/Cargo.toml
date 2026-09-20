@@ -46,6 +46,13 @@ semver.workspace = true
 redis.workspace = true
 libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "kad", "identify", "tokio", "macros"] }
 sysinfo.workspace = true
+# Issue #663: `crate::realtime_proxy` dials a remote Realtime node's own
+# `/ws/presence`/`/ws/messages` as a real websocket client — promoted from
+# a dev-only dependency (where issue #539 first pulled it in for
+# `crates/server/tests/realtime_relay.rs`) to a real one, since proxying is
+# now part of `avalon-server`'s own runtime behavior, not just its tests.
+tokio-tungstenite = "0.29"
+futures-util.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
@@ -53,13 +60,6 @@ passkey-types.workspace = true
 passkey-client.workspace = true
 passkey-authenticator.workspace = true
 public-suffix.workspace = true
-# Issue #539: a real websocket client for the cross-node relay live test —
-# already pulled in transitively via axum's own ws support, promoted to a
-# direct dev-dependency so `crates/server/tests/realtime_relay.rs` can
-# drive `GET /ws/chat` the same way an actual client does, rather than
-# testing relay delivery only indirectly.
-tokio-tungstenite = "0.29"
-futures-util = { workspace = true }
 # Issue #636: a mocked remote node for the cross-shard-fetch tamper-
 # detection test — already used the same way by `crates/sdk`.
 wiremock.workspace = true

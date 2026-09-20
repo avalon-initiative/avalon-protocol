@@ -106,12 +106,24 @@ pub struct ChatWsQuery {
 /// `GET /ws/messages?token=…` — additive to the existing paginated
 /// `GET .../messages` endpoints, not a replacement. Authenticates before
 /// upgrading, same as `presence::presence_ws`.
+///
+/// Issue #663: same proxy-through-Gateway behavior `presence::presence_ws`
+/// documents — when `state.realtime_remote_url` is `Some`, this connection
+/// (and therefore `handle_chat_socket`'s DHT interest registration for it,
+/// via `crate::interest`) runs on the remote Realtime node instead of
+/// here; see `crate::realtime_proxy`'s own module doc comment.
 pub async fn chat_ws(
     State(state): State<AppState>,
     Query(query): Query<ChatWsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
     let caller = authenticate_token(&state, &query.token).await?;
+    if let Some(remote_url) = state.realtime_remote_url.clone() {
+        let token = query.token.clone();
+        return Ok(ws.on_upgrade(move |socket| {
+            crate::realtime_proxy::proxy_websocket(socket, remote_url, "/ws/messages", token)
+        }));
+    }
     Ok(ws.on_upgrade(move |socket| handle_chat_socket(socket, state, caller)))
 }
 

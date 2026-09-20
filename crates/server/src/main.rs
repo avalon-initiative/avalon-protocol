@@ -234,6 +234,33 @@ async fn main() {
     let mirror_confirmations = avalon_server::replication::MirrorConfirmationRegistry::new();
     let replication_gate = replication::ReplicationGateConfig::from_env();
 
+    // Issue #663: extends `AVALON_NODE_ROLES` from purely-advertised
+    // metadata into a real, load-bearing gate for the `realtime` role —
+    // same mechanism #662 (Indexer) and #664 (Settlement) also use for
+    // consistency. `realtime_remote_url` is `None` when this process
+    // holds the role itself (serves `/ws/presence`/`/ws/messages`
+    // locally, exactly as every deployment before this issue); `Some(url)`
+    // proxies every WebSocket connection through to that remote Realtime
+    // node instead (see `crate::realtime_proxy`'s module doc comment for
+    // the full design and its own referenced ADR). A role list excluding
+    // `realtime` with no valid `AVALON_REALTIME_URL` refuses to start,
+    // same "fail loudly, never silently degrade" precedent every other
+    // startup-time check in this function already establishes.
+    let node_roles = avalon_server::nodes::node_roles();
+    let realtime_remote_url = avalon_server::nodes::realtime_mode_from_env(&node_roles)
+        .unwrap_or_else(|e| {
+            tracing::error!("refusing to start: {e}");
+            std::process::exit(1);
+        });
+    match &realtime_remote_url {
+        None => {
+            tracing::info!(roles = ?node_roles, "avalon-server: serving realtime (presence/chat WebSocket) locally")
+        }
+        Some(url) => {
+            tracing::info!(roles = ?node_roles, remote = %url, "avalon-server: proxying realtime WebSocket connections to a remote Realtime node")
+        }
+    }
+
     let state = AppState {
         pool: pool.clone(),
         chain: chain.clone(),
@@ -293,6 +320,7 @@ async fn main() {
             .filter(|s| !s.is_empty()),
         mirror_confirmations: mirror_confirmations.clone(),
         replication_gate,
+        realtime_remote_url,
     };
 
     // Node-tiered durable history retention (issue #208, implementing
