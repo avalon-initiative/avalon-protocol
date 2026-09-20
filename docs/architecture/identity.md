@@ -525,6 +525,34 @@ its invariants.
   [`./nodes.md`](./nodes.md)) exists in large part to keep that true by
   construction rather than by promise.
 
+## Portability means mirrored, not movable (issue #613, decided)
+
+"Your identity isn't trapped in one game's world" is a claim about
+*mirrored history* (this file's own model, [`./nodes.md`](./nodes.md)'s
+"Mirrors, not federation" section), not about an end user ever needing to
+export and re-import their own data to change which node they primarily
+use. An identity's durable facts — friend/guild/achievement events — are
+already visible from any node mirroring the network's history, the same
+way #582/#583's node-to-node infrastructure already lets a Settlement
+node be reached from anywhere in the mesh. There is currently no
+user-facing export bundle, and none is planned: there is nothing to
+export, because there is nothing a person is trapped inside in the first
+place.
+
+**The real limit, stated honestly**: an identity's *authentication*
+ceremony (WebAuthn passkey registration, `identity_keys`) is local to the
+node it was registered on, distinct from the durable facts above — and
+this one is a real, load-bearing gap, not a footnote. A passkey
+registered on node A cannot be presented in a WebAuthn ceremony against
+node B at all (RP-ID scoping is part of the WebAuthn spec's own security
+model, not something Avalon's protocol design can route around). #525's
+session-continuation tokens solve the *already-logged-in* half of
+reaching a different node, but were deliberately decided (#122) to never
+count as a login credential by themselves — they prove key possession,
+not human presence. Genuinely proving identity to a node you've never
+registered on, for the first time, is tracked as its own decision:
+[#620](https://github.com/LunarVagabond/avalon-protocol/issues/620).
+
 ## Today in the repo
 
 - `crates/protocol/src/identity.rs` — `Identity { id, created_at }` and
@@ -807,5 +835,14 @@ its invariants.
   was never run. See the section above.
 - [#395](https://github.com/LunarVagabond/avalon-protocol/issues/395) —
   credential-friction decision #397 feeds into.
+- [#613](https://github.com/LunarVagabond/avalon-protocol/issues/613) —
+  decided: end-user portability is mirrored history, not a movable export
+  bundle — no export/import primitive is planned. See "Portability means
+  mirrored, not movable" above.
+- [#620](https://github.com/LunarVagabond/avalon-protocol/issues/620) —
+  open, high-priority: proving identity to a node you've never registered
+  a passkey on. Leaning toward extending #307's approve/deny pattern with
+  a signed, human-approved, cross-node assertion rather than a shared
+  login domain. See "Portability means mirrored, not movable" above.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:
   Identity & Player Profile.
