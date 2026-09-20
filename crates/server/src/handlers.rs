@@ -134,6 +134,29 @@ pub async fn register_start(
     State(state): State<AppState>,
     Json(body): Json<RegisterStartRequest>,
 ) -> Result<Json<RegisterStartResponse>, AppError> {
+    // Issue #629, implementing #622's decision: a shard past its
+    // bootstrap grace period with too few independently-confirmed
+    // mirrors doesn't get to accept a brand-new identity — checked first,
+    // before this handler burns a WebAuthn ceremony or even touches the
+    // display-name/identity-id uniqueness checks below, since none of
+    // that matters if the shard itself isn't eligible. See
+    // `crate::replication`'s own module doc comment; never affects an
+    // identity already registered here.
+    let now = OffsetDateTime::now_utc();
+    let confirmed_mirror_count = state.mirror_confirmations.confirmed_count(
+        &state.own_shard_id,
+        now - crate::replication::CONFIRMATION_FRESHNESS_WINDOW,
+    );
+    if !crate::replication::registration_eligible(
+        state.shard_registry.first_seen_at(&state.own_shard_id),
+        now,
+        state.replication_gate.grace_period,
+        confirmed_mirror_count,
+        state.replication_gate.min_confirmations,
+    ) {
+        return Err(AppError::ShardBelowMinimumReplication);
+    }
+
     let existing = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
         .bind(body.identity_id)
         .fetch_optional(&state.pool)

@@ -379,6 +379,15 @@ pub enum AppError {
     /// establishes.
     #[error("failed to read or apply the live log filter")]
     LogReloadFailed,
+    /// Issue #629, implementing #622's decision: this shard has passed its
+    /// bootstrap grace period and doesn't yet have enough
+    /// independently-confirmed mirrors (`AVALON_MIN_MIRROR_CONFIRMATIONS`)
+    /// to accept a *new* identity registration — see
+    /// `crate::replication`'s own module doc comment. Only ever returned
+    /// from `crate::handlers::register_start`; never affects an identity
+    /// already registered on the shard.
+    #[error("this shard does not yet have enough independently-confirmed mirrors to accept new registrations")]
+    ShardBelowMinimumReplication,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -572,6 +581,7 @@ impl AppError {
             AppError::PeerNetworkMismatch => "PEER_NETWORK_MISMATCH",
             AppError::InvalidLogFilter => "INVALID_LOG_FILTER",
             AppError::LogReloadFailed => "LOG_RELOAD_FAILED",
+            AppError::ShardBelowMinimumReplication => "SHARD_BELOW_MINIMUM_REPLICATION",
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
             AppError::Index(..) => "INDEX",
@@ -819,6 +829,12 @@ impl IntoResponse for AppError {
             AppError::InvalidEntriesQuery => StatusCode::BAD_REQUEST,
             AppError::InvalidLogFilter => StatusCode::BAD_REQUEST,
             AppError::LogReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            // 503, not 409/403: the request itself is fine and the
+            // identity_id/display_name are both still available — this is
+            // a temporary, shard-wide condition that resolves on its own
+            // once enough peers confirm mirroring (or, if not, is a signal
+            // for the operator, not the caller, to act on).
+            AppError::ShardBelowMinimumReplication => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

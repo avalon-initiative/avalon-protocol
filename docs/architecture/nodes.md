@@ -132,6 +132,20 @@ via environment configuration, the same pattern `AVALON_NETWORK_ID`/
   entry point has no `reqwest` dependency in a `--no-default-features`
   build and refuses to run a real (non-`--dry-run`) prune at all when this
   is configured, rather than silently skipping the safety gate.
+- `AVALON_MIN_MIRROR_CONFIRMATIONS`/`AVALON_MIRROR_GRACE_PERIOD_HOURS`/
+  `AVALON_REPLICATION_POLL_INTERVAL_SECS` (issue #629, implementing
+  #622's decision) — extends the #569 mechanism above to a different
+  trigger point: not "is it safe for this node to prune its own local
+  history," but "does a shard have enough independently-confirmed
+  mirrors to accept a brand-new identity registration at all." Always
+  on (no opt-in env var; defaults are `1` confirmation, a `24`-hour
+  bootstrap grace period, and a 300s poll cadence) — unlike #569's
+  pruning gate, which only matters for an operator who has opted into
+  hot-tier retention, #629's gate protects every identity a shard is
+  about to durably take on, so it applies by default rather than
+  requiring configuration to turn on. See "Minimum replication guarantee
+  for new registrations" in this file's "Today in the repo" section
+  below for the full mechanism.
 
 Pruning only ever `NULL`s out `ledger_entries.payload` (nullable as of the
 `0027_ledger_payload_retention` migration) — `seq`, `entry_hash`,
@@ -173,11 +187,12 @@ question #40 still owns. The first is now decided, not open — see
 the `core` shard specifically; tracked as
 [#630](https://github.com/LunarVagabond/avalon-protocol/issues/630)) and
 [#622](https://github.com/LunarVagabond/avalon-protocol/issues/622)
-(decided: a minimum confirmed-mirror count before a shard is trusted
-with new identity registrations at all, extending this same
-archive-confirmation mechanism to a new trigger point; tracked as
-[#629](https://github.com/LunarVagabond/avalon-protocol/issues/629)) —
-deliberately never automatic election/failover, which would reopen #186.
+(decided and implemented: a minimum confirmed-mirror count before a
+shard is trusted with new identity registrations at all, extending this
+same archive-confirmation mechanism to a new trigger point —
+[#629](https://github.com/LunarVagabond/avalon-protocol/issues/629), see
+below) — deliberately never automatic election/failover, which would
+reopen #186.
 What this second node/mechanism already solves today: a genuine second,
 independently-verifiable copy of Settlement history no longer depends on
 one physical database being up (reads against `avalon-peer` succeed today
@@ -1065,6 +1080,96 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   this check itself (no `reqwest` in a `--no-default-features` build) and
   refuses to run a real prune when the loaded config requires it, rather
   than silently bypassing the gate the background worker enforces.
+- **Minimum replication guarantee for new registrations (#629,
+  implementing #622's decision) is real, implemented, and
+  live-verified.** #569's mechanism above answers "is it safe for *this*
+  node to stop keeping a full local copy of its own history"; #629
+  answers a different question at a different trigger point — "does a
+  shard have enough independently-confirmed mirrors to be trusted with a
+  *brand-new* identity registration at all." A single-operator shard has
+  zero durability guarantee beyond that operator's own uptime, and a
+  locator that resolves an identity to a shard (epic #623, closed) is
+  only as useful as the guarantee that shard's data actually persists
+  somewhere.
+  - **Mechanism, `crates/server/src/replication.rs`.** A background
+    worker (`replication::run_worker`, spawned unconditionally at
+    startup, same posture the #362 announce worker takes) polls every
+    known peer's (`crate::nodes::PeerTable`) own
+    `GET /ledger/mirror-progress?network_id={id}&shard_id={id}` for every
+    known shard (this node's own `own_shard_id` plus whatever
+    `crate::nodes::ShardRegistry` has gossiped in) on a
+    `AVALON_REPLICATION_POLL_INTERVAL_SECS`-second cadence (default
+    300s). Unlike #569's boundary-`seq` question, this only asks whether
+    a peer has mirrored *anything at all* for that shard (`last_seq >
+    0`) — populating `replication::MirrorConfirmationRegistry`, an
+    in-process, non-durable count of distinct confirming peers per
+    shard, same posture every other piece of `crate::nodes` gossip state
+    already takes.
+  - **The gate itself**, `crate::replication::registration_eligible`
+    (pure, unit-tested), is consulted once, at the very start of
+    `crate::handlers::register_start` — before the WebAuthn ceremony or
+    even the display-name/identity-id uniqueness checks, since neither
+    matters if the shard itself isn't eligible. A shard is eligible for
+    a *new* registration when either it's still within its bootstrap
+    grace period, or it has at least `AVALON_MIN_MIRROR_CONFIRMATIONS`
+    (default `1`) distinct, currently-fresh (within 15 minutes)
+    confirmed mirrors. A shard already past the grace period with too
+    few confirmed mirrors gets a new `AppError::ShardBelowMinimumReplication`
+    (HTTP 503) — the request is otherwise well-formed, this is a
+    temporary, shard-wide condition, not a rejection of the caller.
+    **Never disrupts an identity already registered on the shard** —
+    this is only ever consulted at the start of a brand-new
+    registration.
+  - **The bootstrap decision**: a brand-new, legitimately
+    single-operator shard hasn't had time to attract a mirror yet, so
+    `AVALON_MIRROR_GRACE_PERIOD_HOURS` (default `24`) exempts a shard
+    from the gate entirely while it's younger than that window. "How old
+    is this shard" comes from `crate::nodes::ShardRegistry::first_seen_at`
+    — the *earliest* `last_seen_at` this node has ever recorded for that
+    shard, across both its own `record_own` claims and peer gossip
+    (deliberately tracked separately from the registry's existing
+    per-URL `last_seen_at`, which only ever tracks the newest
+    observation). A shard whose age can't be determined at all yet
+    (`None` — e.g. right after this node's own restart, before either
+    worker has run a first tick) is treated as within the grace period:
+    the safe direction for this specific unknown to lean is "briefly,
+    harmlessly exempt," never "wrongly gate a shard this node simply
+    hasn't observed yet."
+  - **Visible before the fact, not just as a rejection reason**:
+    `GET /nodes/status` now includes an `own_shard_replication` block
+    (`confirmed_mirror_count`, `min_confirmations_required`,
+    `first_seen_at`, `within_grace_period`,
+    `eligible_for_new_registrations`) — issue #599's shard registry is
+    where operators already look for shard-existence facts, and this is
+    the same idea applied to a shard's durability, so an operator (and
+    eventually an end user choosing where to register) can see it before
+    trusting a shard with anything, not just discover it via a failed
+    registration attempt.
+  - **Deliberate v1 simplifications**, called out explicitly rather than
+    left implicit: one configured minimum applies uniformly to every
+    shard regardless of whether it's a `core`-like, identity-bearing
+    shard or an individual integrator's own dedicated one — no
+    per-shard-type configuration surface exists yet. And because
+    `ShardRegistry`/`MirrorConfirmationRegistry` are both in-process and
+    non-durable (same posture every other piece of `crate::nodes` state
+    already takes), a shard's apparent age resets to "unknown" (treated
+    as within grace period) on this node's own restart — a restart can
+    only ever briefly re-extend a shard's grace period, never wrongly
+    lock it out, which is the safe direction for that specific gap to
+    lean.
+  - **Tested**: pure grace-period/count logic and the
+    `MirrorConfirmationRegistry`/`ShardRegistry::first_seen_at`
+    bookkeeping are unit-tested (`crates/server/src/replication.rs`,
+    `crates/server/src/nodes.rs`) with an in-process fake-peer HTTP
+    server for the actual `GET /ledger/mirror-progress` polling call;
+    live-verified end to end with multiple local `avalon-server`
+    processes against real Postgres (distinct schemas, one primary node
+    plus peer nodes acting as mirrors) — a shard within its grace period
+    accepted registration regardless of confirmed-mirror count, a shard
+    forced past a near-zero grace period with no confirmed mirrors
+    rejected registration with `SHARD_BELOW_MINIMUM_REPLICATION`, and
+    registration succeeded again once a peer's confirmed mirroring was
+    recorded.
 - No distinct "archive" node *type*/binary exists, and #208 deliberately
   didn't invent one: retention tier is operational configuration on the
   one existing Settlement role (`AVALON_RETENTION_TIER=full`), not a fifth
