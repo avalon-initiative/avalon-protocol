@@ -678,10 +678,25 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   desktop/linux capability schemas) plus a real hosted domain's
   `.well-known` association files, both out of scope here. Manual
   node/code entry (typed by hand) always works regardless of any of this.
+- **Rate limiting (#641) turned out to already be covered, verified live
+  rather than assumed** — closed with no new code. `crate::router`
+  (`crates/server/src/lib.rs`) wraps the *entire* router in the #545/#363
+  mechanism this issue asked to reuse (`GovernorLayer`/`ConcurrencyLimitLayer`,
+  or their Redis-backed equivalents when `AVALON_REDIS_URL` is set, keyed by
+  peer IP for any unauthenticated route) — there's no route-group scoping
+  in how the router is built, so every `/auth/cross-node/*` endpoint
+  inherited it the moment #634 added those routes, same as any other
+  endpoint in the file. Confirmed live: with
+  `AVALON_RATE_LIMIT_PER_MINUTE=5`, 5 rapid `POST /auth/cross-node/start`
+  calls from one IP returned `200`, the next 5 returned `429`, and a
+  `POST /auth/cross-node/submit` right after also `429`'d from the same
+  exhausted per-IP bucket. A *tighter, dedicated* ceiling specifically for
+  cross-node-login, separate from the shared per-IP budget every other
+  unauthenticated route also draws from, would be new scope beyond what
+  #641 asked for — a real future option, not assumed needed here.
   **Still not built**: #649's server-side verification-status resolution
   (both approval screens render the raw `requesting_context` string for
-  now, no verified/unverified visual distinction yet) and rate limiting
-  (#641).
+  now, no verified/unverified visual distinction yet).
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
