@@ -267,6 +267,7 @@ pub async fn register_finish(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(PasskeyResponse {
         id: passkey_id,
@@ -432,6 +433,7 @@ pub async fn revoke_passkey(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(())
 }

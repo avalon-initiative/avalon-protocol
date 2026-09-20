@@ -136,6 +136,7 @@ pub async fn connect(
         (binding_id, now, true)
     };
 
+    let mut binding_established_event = None;
     if newly_created {
         let event = ProtocolEvent {
             id: Uuid::new_v4(),
@@ -160,6 +161,7 @@ pub async fn connect(
         // same as register_finish/update_profile do for their own events.
         state.indexer.apply_in_tx(&mut tx, &event).await?;
         outbox::enqueue(&mut tx, &event).await?;
+        binding_established_event = Some(event);
     }
 
     let mut granted_capabilities = Vec::with_capacity(body.capabilities.len());
@@ -229,6 +231,9 @@ pub async fn connect(
     }
 
     tx.commit().await?;
+    if let Some(event) = &binding_established_event {
+        state.indexer.apply_after_commit(event).await?;
+    }
 
     Ok(Json(ConnectResponse {
         binding_id,
@@ -371,6 +376,7 @@ pub async fn disconnect(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(serde_json::json!({ "ended": true })))
 }

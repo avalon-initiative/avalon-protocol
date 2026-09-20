@@ -214,6 +214,7 @@ pub async fn publish_mapping(
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
 
     Ok(Json(mapping_response(
         integrator_id,

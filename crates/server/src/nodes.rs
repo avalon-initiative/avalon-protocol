@@ -725,8 +725,10 @@ impl AnnounceConfig {
 /// `AVALON_NODE_ROLES` — comma-separated (matching `docs/architecture/nodes.md`'s
 /// `Settlement`/`Indexer`/`Realtime`/`Gateway` capability names), defaulting
 /// to `combined` — milestone 1's "one `avalon-server` process" reality, per
-/// that doc's own capability table.
-fn node_roles() -> Vec<String> {
+/// that doc's own capability table. `pub` (issue #662) so `main.rs` can read
+/// it too, to decide whether this process should construct a local
+/// `PostgresIndexer` or a `RemoteIndexer` — see [`indexer_role_is_local`].
+pub fn node_roles() -> Vec<String> {
     std::env::var("AVALON_NODE_ROLES")
         .ok()
         .map(|raw| {
@@ -737,6 +739,25 @@ fn node_roles() -> Vec<String> {
         })
         .filter(|roles| !roles.is_empty())
         .unwrap_or_else(|| vec!["combined".to_string()])
+}
+
+/// Issue #662: does this process's configured `AVALON_NODE_ROLES` include
+/// the Indexer role — i.e. should it run its own local `PostgresIndexer`,
+/// or route indexer reads/writes to a remote one instead?
+///
+/// Pure/unit-testable, same "pure function behind the real config read"
+/// pattern [`promote_discovered_peers`]/[`retain_reachable_active_peers`]
+/// already establish in this module — takes the already-parsed roles list
+/// rather than reading the env var itself, so it's trivially testable
+/// without touching process-global state.
+///
+/// `combined` means "every role" (the table in `docs/architecture/nodes.md`'s
+/// "Capabilities" section — Settlement/Indexer/Realtime/Gateway — describes
+/// `combined` as running all four, not as a fifth, distinct role name), so
+/// it counts as including `indexer` here exactly as it already implicitly
+/// has for every other role check this codebase makes.
+pub fn indexer_role_is_local(roles: &[String]) -> bool {
+    roles.iter().any(|r| r == "combined" || r == "indexer")
 }
 
 /// Bounded promotion of newly-discovered peers into the active
@@ -1143,6 +1164,32 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_NODE_ROLES");
         }
+    }
+
+    #[test]
+    fn indexer_role_is_local_treats_combined_as_every_role() {
+        assert!(indexer_role_is_local(&["combined".to_string()]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_true_when_indexer_explicitly_listed() {
+        assert!(indexer_role_is_local(&[
+            "settlement".to_string(),
+            "indexer".to_string()
+        ]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_false_when_indexer_excluded() {
+        assert!(!indexer_role_is_local(&[
+            "gateway".to_string(),
+            "realtime".to_string()
+        ]));
+    }
+
+    #[test]
+    fn indexer_role_is_local_false_for_an_empty_list() {
+        assert!(!indexer_role_is_local(&[]));
     }
 
     /// Issue #517: `NodeStatusResponse` must still be valid JSON when every

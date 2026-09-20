@@ -1,23 +1,155 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use avalon_chain::PostgresSettlementProvider;
 use avalon_indexer::postgres::PostgresIndexer;
-use sqlx::PgPool;
+use avalon_indexer::{IndexError, Indexer};
+use avalon_protocol::events::ProtocolEvent;
+use sqlx::{PgPool, Postgres, Transaction};
 use webauthn_rs::prelude::Webauthn;
 
 use crate::chat::ChatBus;
+use crate::internal_role::RemoteIndexer;
 use crate::nodes::{PeerTable, ShardRegistry};
 use crate::presence::PresenceStore;
+
+/// Issue #662: the polymorphic replacement for a bare `PostgresIndexer` on
+/// `AppState`, so a Gateway-only deployment (`AVALON_NODE_ROLES` excluding
+/// `indexer`) can route every indexer read/write through a remote Indexer
+/// role instead of requiring a local one — see `crate::internal_role`'s own
+/// module doc comment for the wire protocol this rides on (#661), and
+/// `crate::nodes::node_roles`/`indexer_role_is_local` for how a process
+/// decides which variant to build.
+///
+/// Every combined-binary (`AVALON_NODE_ROLES=combined`, the default) call
+/// site is unaffected: `Local` behaves byte-for-byte like the bare
+/// `PostgresIndexer` this replaced.
+#[derive(Clone)]
+pub enum IndexerHandle {
+    /// A real local `PostgresIndexer` — today's only configuration, and
+    /// still every combined-binary deployment's configuration.
+    Local(PostgresIndexer),
+    /// A `RemoteIndexer` (issue #661) pointed at another process's
+    /// `/internal/indexer/*` endpoints — a Gateway-only deployment's
+    /// configuration, per `AVALON_INDEXER_REMOTE_URL`.
+    Remote(RemoteIndexer),
+}
+
+impl IndexerHandle {
+    /// The same-transaction, atomic half of an indexer write.
+    ///
+    /// For [`Self::Local`], this is exactly `PostgresIndexer::apply_in_tx`
+    /// as it always was: the app-data write and the projection update
+    /// commit or roll back together, inside the caller's own transaction.
+    ///
+    /// For [`Self::Remote`], this is a deliberate no-op. A `RemoteIndexer`
+    /// talks over HTTP — it cannot join a local Postgres transaction, so
+    /// true same-transaction atomicity between the app-data write and the
+    /// remote projection update is simply not possible for a Gateway-only
+    /// deployment. Rather than silently pretending otherwise, this call
+    /// becomes the deliberate deferral point: the actual remote apply
+    /// happens in [`Self::apply_after_commit`], once the local transaction
+    /// this call is nested inside has actually committed.
+    pub async fn apply_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: &ProtocolEvent,
+    ) -> Result<(), IndexError> {
+        match self {
+            IndexerHandle::Local(indexer) => indexer.apply_in_tx(tx, event).await,
+            IndexerHandle::Remote(_) => Ok(()),
+        }
+    }
+
+    /// The eventual-consistency half of an indexer write, called once the
+    /// transaction `apply_in_tx` above was nested inside has committed.
+    ///
+    /// For [`Self::Local`], a no-op — the projection update already
+    /// happened, atomically, inside that transaction.
+    ///
+    /// For [`Self::Remote`], this makes the real HTTP call
+    /// (`RemoteIndexer::apply`) that actually applies `event` to the
+    /// remote Indexer role's projections. This is the accepted tradeoff of
+    /// a Gateway-only deployment: for the short window between the local
+    /// transaction committing and this call completing — or for however
+    /// long a transient failure here takes to be corrected — the app-data
+    /// write is already durable and is the source of truth, but the
+    /// remote indexer's projection can lag behind it or, if this call
+    /// fails outright, miss it entirely. A failure here is logged loudly
+    /// (`tracing::error!`) but deliberately does **not** fail the overall
+    /// request: the app-data write already committed, so the request
+    /// genuinely succeeded from the caller's point of view. The indexer
+    /// can catch up later via `avalon rebuild-index`'s existing
+    /// rebuild-from-events guarantee (#43/#75); a background retry/backfill
+    /// mechanism for this specific gap is a possible future improvement,
+    /// not built here.
+    ///
+    /// Deliberately infallible (always returns `Ok(())`, even when the
+    /// remote call itself failed): every call site uses `?` right after
+    /// this, and by design that must never turn a genuinely-committed
+    /// app-data write into a failed HTTP response. A caller that needs to
+    /// know whether the remote apply itself succeeded (none does today)
+    /// should watch this log line rather than this return value.
+    pub async fn apply_after_commit(&self, event: &ProtocolEvent) -> Result<(), IndexError> {
+        match self {
+            IndexerHandle::Local(_) => {}
+            IndexerHandle::Remote(remote) => {
+                if let Err(err) = remote.apply(event).await {
+                    tracing::error!(
+                        event_id = %event.id,
+                        event_kind = %event.kind,
+                        "indexer: remote apply_after_commit failed — app-data write already \
+                         committed and remains the source of truth, but the remote indexer's \
+                         projection is now behind (will catch up on a future rebuild): {err}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Lets `IndexerHandle` be used anywhere an `impl Indexer`/`dyn Indexer` is
+/// expected (e.g. `crate::internal_role`'s own server-side handlers, which
+/// call `state.indexer.apply`/`.rebuild` directly when this node is itself
+/// acting as the Indexer role for a remote caller) — delegates to whichever
+/// concrete implementation this handle wraps.
+#[async_trait]
+impl Indexer for IndexerHandle {
+    async fn apply(&self, event: &ProtocolEvent) -> Result<(), IndexError> {
+        match self {
+            IndexerHandle::Local(indexer) => indexer.apply(event).await,
+            IndexerHandle::Remote(remote) => remote.apply(event).await,
+        }
+    }
+
+    async fn rebuild(&self, events: &[ProtocolEvent]) -> Result<(), IndexError> {
+        match self {
+            IndexerHandle::Local(indexer) => indexer.rebuild(events).await,
+            IndexerHandle::Remote(remote) => remote.rebuild(events).await,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub chain: PostgresSettlementProvider,
-    /// The query/index layer (issue #42) — `handlers::register_finish` and
-    /// `update_profile` call `indexer.apply_in_tx` in the same transaction
-    /// as the identity/outbox rows instead of writing `profiles`
-    /// themselves. See `docs/architecture/query-and-indexing.md`.
-    pub indexer: PostgresIndexer,
+    /// The query/index layer (issue #42/#662) — `handlers::register_finish`
+    /// and `update_profile` (and every other app-data write with a
+    /// projection) call `indexer.apply_in_tx` in the same transaction as
+    /// the identity/outbox rows, then `indexer.apply_after_commit` right
+    /// after that transaction commits. For [`IndexerHandle::Local`] (every
+    /// combined-binary deployment) this is exactly the old behavior:
+    /// `apply_in_tx` does the real, atomic write and `apply_after_commit`
+    /// is a no-op. For [`IndexerHandle::Remote`] (a Gateway-only
+    /// deployment, #662) it's the reverse: `apply_in_tx` is a no-op (a
+    /// remote indexer can't join this transaction) and
+    /// `apply_after_commit` makes the real HTTP call once the app-data
+    /// write is durable — an accepted eventual-consistency window, not
+    /// full atomicity. See `IndexerHandle`'s own doc comment and
+    /// `docs/architecture/query-and-indexing.md`.
+    pub indexer: IndexerHandle,
     /// Built once at startup from `AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`.
     /// `Webauthn` itself isn't cheap to reconstruct (origin parsing/validation),
     /// so it's shared behind an `Arc` rather than rebuilt per request.

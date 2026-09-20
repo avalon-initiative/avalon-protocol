@@ -454,6 +454,9 @@ pub async fn register_finish(
     outbox::enqueue(&mut tx, &event).await?;
 
     tx.commit().await?;
+    state.indexer.apply_after_commit(&event).await?;
+    state.indexer.apply_after_commit(&passkey_event).await?;
+    state.indexer.apply_after_commit(&signing_key_event).await?;
 
     Ok(Json(RegisterFinishResponse {
         identity_id: ceremony.identity_id,
@@ -1457,6 +1460,9 @@ pub async fn update_profile(
     };
 
     tx.commit().await?;
+    if let Some(event) = &event {
+        state.indexer.apply_after_commit(event).await?;
+    }
 
     Ok(Json(profile_view_to_response(
         identity_id,
