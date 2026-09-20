@@ -15,6 +15,7 @@
 // parse the URI form.
 
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -351,4 +352,155 @@ public class LiveTests
     /// (issues #26-#28 aren't built yet, so every AuthenticateAsync today returns no grants).</summary>
     private static Session SessionForCapabilities(Session authenticated, params string[] capabilities) =>
         Session.ForTesting(capabilities, authenticated.Http, authenticated.ServerUrl, authenticated.Token, authenticated.IdentityGuid);
+
+    /// <summary>Seeds an identity plus a real Ed25519 keypair directly into
+    /// <c>indexer_identity_signing_keys</c> — what cross-node-login verification
+    /// (<c>crates/server/src/cross_node_login.rs</c>) actually reads from, on any node,
+    /// authoring or mirror-only alike, same as the Rust SDK's own live test seeding. No
+    /// WebAuthn ceremony needed: this SDK never creates identities itself, and cross-node
+    /// login's verification path only ever checks this one table, not the live-write
+    /// <c>identity_signing_keys</c> a real registration would also populate. Returns the
+    /// identity id, the assigned signing_key_id, and the real private key seed to sign with.</summary>
+    private static async Task<(Guid IdentityId, Guid SigningKeyId, byte[] SigningKeySeed)> SeedIdentityWithSigningKeyAsync(
+        NpgsqlConnection conn, string displayName)
+    {
+        var identityId = Guid.NewGuid();
+        await using (var cmd = new NpgsqlCommand("INSERT INTO identities (id) VALUES ($1)", conn))
+        {
+            cmd.Parameters.AddWithValue(identityId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        await using (var cmd = new NpgsqlCommand("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)", conn))
+        {
+            cmd.Parameters.AddWithValue(identityId);
+            cmd.Parameters.AddWithValue(displayName);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        var generator = new Ed25519KeyPairGenerator();
+        generator.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
+        var keyPair = generator.GenerateKeyPair();
+        var privateKey = (Ed25519PrivateKeyParameters)keyPair.Private;
+        var publicKey = (Ed25519PublicKeyParameters)keyPair.Public;
+
+        var signingKeyId = Guid.NewGuid();
+        await using (var cmd = new NpgsqlCommand(
+            "INSERT INTO indexer_identity_signing_keys (signing_key_id, identity_id, public_key, added_at) " +
+            "VALUES ($1, $2, $3, now())", conn))
+        {
+            cmd.Parameters.AddWithValue(signingKeyId);
+            cmd.Parameters.AddWithValue(identityId);
+            cmd.Parameters.AddWithValue(publicKey.GetEncoded());
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        return (identityId, signingKeyId, privateKey.GetEncoded());
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/cross_node_login.rs's
+    /// submit_cross_node_login_grant_resolves_directly_to_a_session — the same-device fast
+    /// path, minting and submitting a real signed grant with no start/poll at all.</summary>
+    [Fact]
+    public async Task SubmitCrossNodeLoginGrantAsync_ResolvesDirectlyToASession()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var displayName = $"sdk-cross-node-login-csharp-{Guid.NewGuid():N}";
+        var (identityId, signingKeyId, signingKeySeed) =
+            await SeedIdentityWithSigningKeyAsync(conn, displayName);
+
+        var session = await Client().SubmitCrossNodeLoginGrantAsync(identityId, signingKeyId, signingKeySeed);
+
+        Assert.Equal(displayName, session.Profile.DisplayName);
+        Assert.Equal(identityId, session.Identity.Id);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/cross_node_login.rs's
+    /// submit_cross_node_login_grant_rejects_a_grant_signed_by_the_wrong_key — proves this
+    /// isn't just trusting whatever identity_id/signing_key_id the caller claims.</summary>
+    [Fact]
+    public async Task SubmitCrossNodeLoginGrantAsync_RejectsAGrantSignedByTheWrongKey()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, signingKeyId, _realSigningKeySeed) = await SeedIdentityWithSigningKeyAsync(
+            conn, $"sdk-cross-node-login-wrongkey-csharp-{Guid.NewGuid():N}");
+
+        var generator = new Ed25519KeyPairGenerator();
+        generator.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
+        var impostorKey = (Ed25519PrivateKeyParameters)generator.GenerateKeyPair().Private;
+
+        await Assert.ThrowsAsync<AvalonRequestException>(() =>
+            Client().SubmitCrossNodeLoginGrantAsync(identityId, signingKeyId, impostorKey.GetEncoded()));
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/cross_node_login.rs's
+    /// wait_resolves_to_a_real_session_once_a_grant_is_submitted — the cross-device flow:
+    /// CrossNodeLoginAsync starts a request, WaitAsync polls it, and a "simulated Hub"
+    /// submits a real signed grant against its user_code shortly after, the same way
+    /// crates/server/tests/cross_node_login.rs's own live test simulates approval.</summary>
+    [Fact]
+    public async Task CrossNodeLogin_WaitAsync_ResolvesOnceAGrantIsSubmitted()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var displayName = $"sdk-cross-node-login-wait-csharp-{Guid.NewGuid():N}";
+        var (identityId, signingKeyId, signingKeySeed) =
+            await SeedIdentityWithSigningKeyAsync(conn, displayName);
+
+        var client = Client();
+        var pending = await client.CrossNodeLoginAsync();
+        Assert.NotEmpty(pending.UserCode);
+        Assert.NotEmpty(pending.RequestingContext);
+        Assert.True(pending.ExpiresIn > 0);
+
+        var http = new HttpClient();
+        var submitTask = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+            var issuedAt = DateTimeOffset.UtcNow;
+            var expiresAt = issuedAt.AddSeconds(30);
+            var nonce = Guid.NewGuid();
+            var signingBytes = Encoding.UTF8.GetBytes(
+                $"avalon:cross-node-login:v1:{identityId}:{signingKeyId}:{ServerUrl}:{ServerUrl}:{nonce}:" +
+                $"{issuedAt.ToUnixTimeSeconds()}:{expiresAt.ToUnixTimeSeconds()}");
+            var signer = new Ed25519Signer();
+            signer.Init(true, new Ed25519PrivateKeyParameters(signingKeySeed, 0));
+            signer.BlockUpdate(signingBytes, 0, signingBytes.Length);
+            var signature = signer.GenerateSignature();
+            var signatureHex = string.Concat(signature.Select(b => b.ToString("x2")));
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/cross-node/submit");
+            request.Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                user_code = pending.UserCode,
+                grant = new
+                {
+                    identity_id = identityId,
+                    signing_key_id = signingKeyId,
+                    destination_base_url = ServerUrl,
+                    requesting_context = ServerUrl,
+                    nonce,
+                    issued_at = issuedAt,
+                    expires_at = expiresAt,
+                    signature = signatureHex,
+                },
+            }), Encoding.UTF8, "application/json");
+            using var response = await http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+        });
+
+        var session = await pending.WaitAsync();
+        await submitTask;
+
+        Assert.Equal(displayName, session.Profile.DisplayName);
+        Assert.Equal(identityId, session.Identity.Id);
+    }
 }

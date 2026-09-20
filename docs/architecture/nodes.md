@@ -615,12 +615,17 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   step. Actually resolving verified-vs-unverified status server-side is
   its own new piece of work (#649, sub-issue of this epic) — #639/#640
   aren't blocked on it landing first, they can ship the visual-distinction
-  UI against a stubbed value and wire #649 in once it exists. **Still not
-  built**: the C# SDK (#638, meant to mirror the Rust SDK's now-proven
-  shape), Hub/mobile-hub approval UI itself (#639/#640, the actual Hub
-  route this epic's own login flow needs to be usable by an ordinary
-  player at all), #649's server-side verification-status resolution, and
-  rate limiting (#641).
+  UI against a stubbed value and wire #649 in once it exists.
+- **C# SDK support has also landed (#638)**: `CrossNodeLogin.cs` ports
+  #637's Rust shape directly — `AvalonClient.CrossNodeLoginAsync`/
+  `CrossNodeLogin.WaitAsync` and the same-device fast path
+  `SubmitCrossNodeLoginGrantAsync`, the first place this SDK signs with a
+  *player's* own Ed25519 identity key rather than an integrator's issuer
+  key — see [`sdk.md`](./sdk.md)'s own "Today in the repo" entry for the
+  full detail. **Still not built**: Hub/mobile-hub approval UI itself
+  (#639/#640, the actual Hub route this epic's own login flow needs to be
+  usable by an ordinary player at all), #649's server-side
+  verification-status resolution, and rate limiting (#641).
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
