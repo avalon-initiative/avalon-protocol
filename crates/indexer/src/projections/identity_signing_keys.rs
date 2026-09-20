@@ -137,6 +137,21 @@ pub async fn find_active_by_id(
     row.map(signing_key_row_from_row).transpose()
 }
 
+/// Every distinct `identity_id` this node has at least one signing-key row
+/// for (active or revoked) — issue #635's identity locator uses this to
+/// know which identities to keep registering DHT interest for. Includes
+/// identities whose only key is revoked (their history is still real and
+/// still worth locating), so this is "identities this node knows about,"
+/// not "identities this node can currently authenticate."
+pub async fn distinct_identity_ids(pool: &sqlx::PgPool) -> Result<Vec<Uuid>, IndexError> {
+    let rows = sqlx::query("SELECT DISTINCT identity_id FROM indexer_identity_signing_keys")
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(|row| row.try_get("identity_id").map_err(IndexError::from))
+        .collect()
+}
+
 fn signing_key_row_from_row(row: sqlx::postgres::PgRow) -> Result<SigningKeyRow, IndexError> {
     Ok(SigningKeyRow {
         signing_key_id: row.try_get("signing_key_id")?,

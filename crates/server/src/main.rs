@@ -176,6 +176,15 @@ async fn main() {
             announce_config.own_base_url.clone(),
             interest_redis_fast_path.clone(),
         ));
+        // Epic #623, issue #635: identity locator — registers DHT interest
+        // for every identity this node durably has signing keys for. Gated
+        // on a real DHT identity existing, same as `interest::run_worker`
+        // just above, whose already-running refresh loop is what actually
+        // keeps each registration's DHT record alive.
+        tokio::spawn(avalon_server::identity_locator::run_worker(
+            pool.clone(),
+            interest.clone(),
+        ));
     }
 
     // Issue #596: `Some` only when this node has a DHT identity to look

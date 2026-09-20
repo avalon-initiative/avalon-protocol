@@ -524,15 +524,41 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   process: same-device fast-path submit, cross-device start/submit/poll
   round-trip, destination-mismatch rejection, replay rejection, expiry/TTL
   rejection, wrong-key rejection, and deny-then-blocked-submit
-  (`crates/server/tests/cross_node_login.rs`, `--ignored`). **Not yet
-  built**: the identity locator over the DHT (#635 — this node's own
-  verification only ever checks its *local* `identity_signing_keys`, so an
-  identity whose signing-key projection isn't already replicated to the
-  node being logged into can't yet complete this flow end-to-end),
-  cross-shard proof resolution (#636), both SDKs (#637/#638), Hub/mobile-hub
-  approval UI (#639/#640), rate limiting (#641), and the phishing-context
-  decision (#642, open) gating what the approval screen is even allowed to
-  render.
+  (`crates/server/tests/cross_node_login.rs`, `--ignored`). **The identity
+  locator over the DHT has also landed (#635)**: `crate::identity_locator`
+  reuses `crate::interest`'s existing DHT registration/lookup shape (a new
+  `InterestScope::Identity` variant, same trust model as `Network` — a bare
+  advertised `own_base_url`, no signed claim, since a consumer still
+  verifies whatever it actually fetches from a resolved location
+  independently) rather than a second DHT mechanism.
+  `identity_locator::run_worker` periodically scans this node's own
+  `identity_signing_keys` for identities not yet registered and holds one
+  standing `InterestGuard` per identity for the life of the process, the
+  same durable-registration shape #596's mirror-sync `Network` scope
+  already established; `GET /identities/{id}/locations` (deliberately
+  unauthenticated — it has to work *before* cross-node login can complete)
+  resolves the full known set, never a single "winner," per the epic's own
+  two-layer-identity scope note. Live-verified: the DHT-level `Identity`
+  scope put/get round-trip between two real swarms
+  (`crates/server/tests/interest_dht.rs`), and the full worker+HTTP path
+  against real Postgres and a real server process
+  (`crates/server/tests/identity_locator.rs`, both `--ignored`). Live
+  testing also surfaced a real, accepted-not-solved scaling note: a node
+  with a large backlog of already-known local identities registers all of
+  them at once on the worker's very first scan tick, which can outrun the
+  DHT swarm's own bootstrap — harmless (each registration's own refresh
+  loop retries regardless of the first attempt's outcome) but a real
+  `PutRecord` failure burst observed live, not just a theoretical
+  possibility; noted in `crate::identity_locator`'s own module doc comment
+  alongside the module's other known simplification (a full rescan every
+  tick, not an incremental one). **Still not built**: cross-shard proof
+  resolution (#636 — this locator only ever answers "where," never fetches
+  or verifies the actual remote projection state, so #634's verification
+  still can't complete for an identity whose signing-key projection isn't
+  already local to the node being logged into), both SDKs (#637/#638),
+  Hub/mobile-hub approval UI (#639/#640), rate limiting (#641), and the
+  phishing-context decision (#642, open) gating what the approval screen is
+  even allowed to render.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
