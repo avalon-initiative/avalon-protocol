@@ -17,12 +17,27 @@
 //! `start`+poll dance below exists only for the cross-device case (an
 //! unfamiliar browser, a console, a friend's machine), same distinction
 //! epic #623's own scope note draws.
+//!
+//! **Cross-shard verification fallback (issue #656)**: a fresh
+//! `identity_signing_keys` lookup only ever finds a key this node already
+//! has locally (authored or mirrored) — without a fallback, cross-node
+//! login could never complete for an identity whose signing-key
+//! projection isn't already replicated to the node being logged into,
+//! which defeats a real part of what this epic exists to unlock. When the
+//! local lookup misses, [`verify_grant`] falls back to #635's locator
+//! (`crate::identity_locator::resolve`) plus #636's cross-shard
+//! fetch-and-verify (`crate::cross_shard_fetch::fetch_verified_entries`)
+//! — see [`resolve_signing_key_cross_shard`]'s own doc comment for the
+//! shard-id simplification this relies on.
+
+use std::collections::HashMap;
 
 use avalon_indexer::projections::identity_signing_keys;
 use avalon_protocol::cross_node_login::CrossNodeLoginGrant;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use ed25519_dalek::VerifyingKey;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -32,6 +47,16 @@ use uuid::Uuid;
 use crate::auth::{generate_session_token, verify_event_signature};
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Identity-level signing keys (Layer 1, per
+/// `docs/architecture/identity-aggregate-view.md`'s two-layer model)
+/// typically live on one shared shard — using `"core"` here is a
+/// documented, honest simplification (see issue #656), not a silent
+/// assumption: #543's own per-integrator `issuer_keys` trust mechanism
+/// never resolves anything for `"core"` (it has no owning integrator by
+/// construction), so [`core_shard_verify_keys`] supplies the real trust
+/// anchor instead.
+const IDENTITY_SIGNING_KEY_SHARD_ID: &str = "core";
 
 const REQUEST_TTL_MINUTES: i64 = 10;
 /// Same lifetime `device_pairing::approve_pairing` mints — a session minted
@@ -417,12 +442,194 @@ pub struct SubmitGrantResponse {
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// Verifies `grant` against `identity_signing_keys`, this node's own
-/// `base_url`, and the anti-replay nonce table, returning the identity it
-/// authenticates. Every failure is [`AppError::Unauthorized`], same
-/// undifferentiated posture `crate::continuation::verify`'s own doc
-/// comment already establishes for the same reason (never reveal *why* a
-/// bearer credential didn't verify).
+/// Resolves the verify key for #636's cross-shard fetch of
+/// `"core"`-shard data. #543's own per-integrator `issuer_keys` mechanism
+/// never resolves anything for `"core"`, so the trust anchor here is this
+/// network's own pinned key from `docs/trusted-networks.json`
+/// (`avalon_sdk::network::bundled_trust_anchors`) — the exact same source
+/// issue #649's `resolve_requester_verification` already reuses for its
+/// own `"core"`-shard trust path. Empty (not an error) when this network
+/// has no bundled entry, or its `verify_key` doesn't parse — #636's own
+/// fetch simply reports every `"core"`-shard STH as unverifiable in that
+/// case, same as a genuinely unresolvable shard.
+fn core_shard_verify_keys(network_id: &str) -> HashMap<String, VerifyingKey> {
+    let mut keys = HashMap::new();
+    if let Some(anchor) = avalon_sdk::network::bundled_trust_anchors()
+        .iter()
+        .find(|entry| entry.network_id == network_id)
+    {
+        if let Some(key) = hex::decode(&anchor.verify_key)
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .and_then(|array| VerifyingKey::from_bytes(&array).ok())
+        {
+            keys.insert(IDENTITY_SIGNING_KEY_SHARD_ID.to_string(), key);
+        }
+    }
+    keys
+}
+
+/// The real gap issue #656 closes: falls back to #635's locator plus
+/// #636's cross-shard fetch-and-verify when `signing_key_id` isn't in this
+/// node's own local `identity_signing_keys` at all. Checks every candidate
+/// location the locator returns, in order, stopping at the first that
+/// yields a real, currently-unrevoked matching key — `None` once every
+/// candidate has been tried (or the locator found none at all). Revocation
+/// is checked per candidate against that same node's own
+/// `identity.signing_key_revoked` history, the cross-shard equivalent of
+/// local lookup's own `revoked_at IS NULL` condition.
+async fn resolve_signing_key_cross_shard(
+    state: &AppState,
+    identity_id: Uuid,
+    signing_key_id: Uuid,
+) -> Option<Vec<u8>> {
+    let locations = crate::identity_locator::resolve(state, identity_id).await;
+    if locations.is_empty() {
+        return None;
+    }
+
+    let verify_keys = core_shard_verify_keys(state.chain.network_id());
+    let signing_key_id_str = signing_key_id.to_string();
+    let added_subject = format!("identity:{identity_id}:self:signing_key_added");
+    let revoked_subject = format!("identity:{identity_id}:self:signing_key_revoked");
+
+    for base_url in locations {
+        let Ok(added) = crate::cross_shard_fetch::fetch_verified_entries(
+            &state.pool,
+            state.chain.network_id(),
+            IDENTITY_SIGNING_KEY_SHARD_ID,
+            &base_url,
+            &added_subject,
+            &verify_keys,
+        )
+        .await
+        else {
+            continue;
+        };
+        let Some(matching) = added.iter().find(|entry| {
+            entry.payload.get("signing_key_id").and_then(|v| v.as_str())
+                == Some(signing_key_id_str.as_str())
+        }) else {
+            continue;
+        };
+
+        let revoked = crate::cross_shard_fetch::fetch_verified_entries(
+            &state.pool,
+            state.chain.network_id(),
+            IDENTITY_SIGNING_KEY_SHARD_ID,
+            &base_url,
+            &revoked_subject,
+            &verify_keys,
+        )
+        .await
+        .unwrap_or_default();
+        let is_revoked = revoked.iter().any(|entry| {
+            entry.payload.get("signing_key_id").and_then(|v| v.as_str())
+                == Some(signing_key_id_str.as_str())
+        });
+        if is_revoked {
+            return None;
+        }
+
+        let Some(public_key_b64) = matching.payload.get("public_key").and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        let Ok(public_key) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, public_key_b64)
+        else {
+            continue;
+        };
+        return Some(public_key);
+    }
+    None
+}
+
+/// Companion to [`resolve_signing_key_cross_shard`]: a verified signing key
+/// alone isn't enough to actually mint a session here — `sessions.identity_id`
+/// has a real `REFERENCES identities(id)` foreign key, and `GET /me` needs a
+/// `profiles` row (`display_name`) to return anything at all. Best-effort —
+/// every failure just leaves this node without a local stub, which only
+/// matters for a *second* future call, not this one (`submit`'s caller
+/// already has everything it needs from `resolve_signing_key_cross_shard`
+/// alone). Deliberately never surfaces an error: a login that already
+/// verified via a real signature and inclusion proof must not fail just
+/// because, say, this node happens to already have an unrelated local
+/// identity with the same `display_name` (the one real collision case here
+/// — cross-shard `display_name` uniqueness isn't and can't be enforced
+/// globally by a single node's unique index).
+async fn provision_local_identity_stub(state: &AppState, identity_id: Uuid) {
+    let already_local = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
+        .bind(identity_id)
+        .fetch_optional(&state.pool)
+        .await;
+    if !matches!(already_local, Ok(None)) {
+        return;
+    }
+
+    let locations = crate::identity_locator::resolve(state, identity_id).await;
+    let verify_keys = core_shard_verify_keys(state.chain.network_id());
+    let created_subject = format!("identity:{identity_id}:self:created");
+
+    for base_url in locations {
+        let Ok(created) = crate::cross_shard_fetch::fetch_verified_entries(
+            &state.pool,
+            state.chain.network_id(),
+            IDENTITY_SIGNING_KEY_SHARD_ID,
+            &base_url,
+            &created_subject,
+            &verify_keys,
+        )
+        .await
+        else {
+            continue;
+        };
+        let Some(display_name) = created
+            .first()
+            .and_then(|entry| entry.payload.get("display_name"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+
+        let Ok(mut tx) = state.pool.begin().await else {
+            return;
+        };
+        if sqlx::query("INSERT INTO identities (id) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(identity_id)
+            .execute(&mut *tx)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        // `profiles_display_name_lower_idx` may reject this on a genuine
+        // cross-shard name collision — left uncommitted in that case,
+        // which is fine (see doc comment above).
+        if sqlx::query(
+            "INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2) \
+             ON CONFLICT (identity_id) DO NOTHING",
+        )
+        .bind(identity_id)
+        .bind(display_name)
+        .execute(&mut *tx)
+        .await
+        .is_err()
+        {
+            return;
+        }
+        let _ = tx.commit().await;
+        return;
+    }
+}
+
+/// Verifies `grant` against `identity_signing_keys` (falling back to
+/// [`resolve_signing_key_cross_shard`] when this node has no local copy —
+/// see this module's own doc comment), this node's own `base_url`, and the
+/// anti-replay nonce table, returning the identity it authenticates. Every
+/// failure is [`AppError::Unauthorized`], same undifferentiated posture
+/// `crate::continuation::verify`'s own doc comment already establishes for
+/// the same reason (never reveal *why* a bearer credential didn't verify).
 async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<Uuid, AppError> {
     let now = OffsetDateTime::now_utc();
     if grant.expires_at < now || grant.issued_at > now + CLOCK_SKEW_ALLOWANCE {
@@ -441,15 +648,34 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
         return Err(AppError::Unauthorized);
     }
 
-    let key = identity_signing_keys::find_active_by_id(&state.pool, grant.signing_key_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    if key.identity_id != grant.identity_id {
-        return Err(AppError::Unauthorized);
-    }
+    let public_key =
+        match identity_signing_keys::find_active_by_id(&state.pool, grant.signing_key_id).await? {
+            Some(key) => {
+                if key.identity_id != grant.identity_id {
+                    return Err(AppError::Unauthorized);
+                }
+                key.public_key
+            }
+            // Not local — issue #656's fallback. A cross-shard-fetched entry
+            // is already scoped to `grant.identity_id` by construction (it's
+            // fetched from that exact identity's own `identity:{id}:...`
+            // subject), so there's no separate identity-id cross-check to
+            // repeat here the way the local path needs one.
+            None => {
+                let key =
+                    resolve_signing_key_cross_shard(state, grant.identity_id, grant.signing_key_id)
+                        .await
+                        .ok_or(AppError::Unauthorized)?;
+                // Needed before `submit` can insert into `sessions` (its
+                // `identity_id` FK) or `GET /me` can return anything — see
+                // this function's own doc comment.
+                provision_local_identity_stub(state, grant.identity_id).await;
+                key
+            }
+        };
 
     let signature_bytes = hex::decode(&grant.signature).map_err(|_| AppError::Unauthorized)?;
-    if !verify_event_signature(&key.public_key, &grant.signing_bytes(), &signature_bytes) {
+    if !verify_event_signature(&public_key, &grant.signing_bytes(), &signature_bytes) {
         return Err(AppError::Unauthorized);
     }
 
@@ -468,7 +694,7 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
         return Err(AppError::Unauthorized);
     }
 
-    Ok(key.identity_id)
+    Ok(grant.identity_id)
 }
 
 /// `POST /auth/cross-node/submit` — unauthenticated (the grant itself is
