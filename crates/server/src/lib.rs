@@ -1,4 +1,5 @@
 pub mod achievements;
+pub mod admin;
 pub mod attestations;
 pub mod auth;
 pub mod authz;
@@ -638,6 +639,14 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         .route("/nodes/announce", post(nodes::announce))
         .route("/nodes/peers", get(nodes::list_peers))
         .route("/nodes/status", get(nodes::status))
+        // Issue #658: hoster-only runtime log-level control — see
+        // `crate::admin`'s own module doc comment for why this is gated on
+        // a separate `AVALON_ADMIN_TOKEN`, not the public posture every
+        // other `/nodes/*` route above takes.
+        .route(
+            "/nodes/log-level",
+            get(admin::get_log_level).post(admin::set_log_level),
+        )
         // Issue #539: one-hop live realtime event relay across nodes,
         // built on the peer table above — see `crate::realtime_relay`.
         .route("/nodes/relay", post(realtime_relay::relay_handler))

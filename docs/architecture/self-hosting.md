@@ -344,6 +344,26 @@ on the public network" — that's a real gap, not a hidden feature; see
   the human-readable dev format to one JSON object per line, the shape a
   self-hoster's log aggregator (Grafana/Loki, etc.) expects. See
   [`../maintainers/local-development.md`](../maintainers/local-development.md#logs-and-run-state).
+- **Runtime log-level control (issue #658)**: `RUST_LOG` above only ever
+  sets the *starting* filter — bumping verbosity to chase a live issue
+  used to mean a restart, losing in-memory state (DHT peer table, host-
+  metrics warm-up, in-flight requests). `GET`/`POST /nodes/log-level`
+  (`crate::admin`) reads/swaps the active filter live via
+  `tracing_subscriber::reload`, taking effect on the very next log call —
+  `POST` body is `{"filter": "<RUST_LOG-style string>"}`, an unparseable
+  one is a clean `400` that leaves the current filter untouched. **Gated on
+  a separate shared secret, `AVALON_ADMIN_TOKEN`** — deliberately not the
+  existing `AVALON_SETTLEMENT_SUBMIT_KEY` (below), since that key's trust
+  domain is "this operator's own nodes talking to each other" and may be
+  shared across two nodes one hoster runs, which would let one of *their
+  own* nodes flip the other's log level; admin control is narrower, only
+  whoever holds this one process's own credential. Unset (the default),
+  both endpoints refuse every request. Live-verified: a token-less or
+  wrong-token request 401s, a correct one reads the active filter, a
+  `POST` bumping `tower_http` to `debug` produces real `DEBUG`-level
+  `tower_http::trace` lines on the very next request with no restart, and
+  an intentionally invalid filter string 400s without changing what's
+  active.
 - Issue #564's prepare-race/finalize-once multi-host client:
   `avalon_sdk::managed_hosting::ManagedHostingClient` (`crates/sdk/src/managed_hosting.rs`),
   live-verified over real HTTP against two independently-running

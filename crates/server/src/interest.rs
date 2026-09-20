@@ -964,6 +964,11 @@ mod tests {
                 mirror_wake: Arc::new(tokio::sync::Notify::new()),
                 host_metrics: crate::resources::HostMetricsSampler::new(Vec::new()),
                 shard_registry: crate::nodes::ShardRegistry::new(),
+                admin_token: None,
+                log_reload_handle: tracing_subscriber::reload::Layer::new(
+                    tracing_subscriber::EnvFilter::new("info"),
+                )
+                .1,
             }
         }
 

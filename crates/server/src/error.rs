@@ -367,6 +367,18 @@ pub enum AppError {
     CrossNodeLoginRequestCodeGenerationFailed,
     #[error("peer announced a different network_id than this node's own")]
     PeerNetworkMismatch,
+    /// Issue #658: `body.filter` failed `tracing_subscriber::EnvFilter`'s
+    /// own parse — the currently-active filter is left untouched.
+    #[error("invalid log filter syntax")]
+    InvalidLogFilter,
+    /// Should never actually happen — the reload handle only errors if the
+    /// subscriber it points at has already been dropped, which can't occur
+    /// while this process is still up and serving requests. If it ever
+    /// does, that's an internal bug, not a client-input problem — same
+    /// "should never happen" posture `ProofVerificationFailed` already
+    /// establishes.
+    #[error("failed to read or apply the live log filter")]
+    LogReloadFailed,
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
@@ -558,6 +570,8 @@ impl AppError {
                 "CROSS_NODE_LOGIN_REQUEST_CODE_GENERATION_FAILED"
             }
             AppError::PeerNetworkMismatch => "PEER_NETWORK_MISMATCH",
+            AppError::InvalidLogFilter => "INVALID_LOG_FILTER",
+            AppError::LogReloadFailed => "LOG_RELOAD_FAILED",
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
             AppError::Index(..) => "INDEX",
@@ -803,6 +817,8 @@ impl IntoResponse for AppError {
             // in proof generation, not a client-input problem.
             AppError::ProofVerificationFailed => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::InvalidEntriesQuery => StatusCode::BAD_REQUEST,
+            AppError::InvalidLogFilter => StatusCode::BAD_REQUEST,
+            AppError::LogReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
