@@ -723,6 +723,54 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   badge with the registered name, vs. an explicit `AvalonWarningBanner`
   warning) instead of the raw `requesting_context` string alone — never a
   hard gate, per #642's own decision.
+- **#656 closes the real gap #636's own doc comment flagged as still
+  open: `verify_grant` now actually calls the cross-shard fetch-and-verify
+  path when `signing_key_id` isn't found in this node's own
+  `identity_signing_keys`.** `resolve_signing_key_cross_shard`
+  (`crate::cross_node_login`) chains #635's locator with #636's
+  `fetch_verified_entries` against each candidate `base_url` in turn,
+  matching the identity's `identity.signing_key_added`/
+  `identity.signing_key_revoked` history by `signing_key_id` and checking
+  revocation before trusting the fetched key — the same
+  `revoked_at IS NULL` semantics the local lookup already has, just against
+  a remote node's own verified history instead of a local column. Identity
+  signing keys don't carry their own shard — they're resolved against the
+  fixed `"core"` shard (`IDENTITY_SIGNING_KEY_SHARD_ID`), a documented
+  simplification rather than a silent one: #543's own issuer-key trust
+  mechanism has no owner to resolve for `"core"`, so
+  `core_shard_verify_keys` supplies the same pinned-network-anchor trust
+  `resolve_requester_verification` (#649) already uses for exactly the same
+  shard. **A verified signing key alone isn't sufficient to mint a session
+  here** — `sessions.identity_id` has a real foreign key into `identities`,
+  and `GET /me` needs a `profiles` row to return anything — so the
+  cross-shard branch also calls `provision_local_identity_stub`, which
+  cross-shard-fetches the identity's own `identity.created` entry the same
+  way and best-effort upserts a minimal local `identities`/`profiles` row
+  (silently skipped, never surfaced as a login failure, on a genuine
+  cross-shard `display_name` collision — this node's own uniqueness index
+  can't be enforced globally). Live-verified against two genuinely separate
+  `avalon-server` processes with isolated Postgres schemas, real libp2p DHT
+  bootstrap between them, and a real WebAuthn registration on one node
+  followed by a same-device-fast-path grant submitted directly to the
+  other, which had never seen the identity before
+  (`crates/server/tests/cross_node_login_cross_shard.rs`, `--ignored`).
+  **A second real gap surfaced and got fixed along the way, not papered
+  over**: the outbox pattern (`crate::outbox`) writes every event durably
+  in the same transaction as the rest of a request, but a separate
+  background worker (`AVALON_OUTBOX_POLL_INTERVAL_SECS`, 3s by default) is
+  what actually folds it into the hash-chained `ledger_entries`/Merkle tree
+  — there's a real window, on the order of that poll interval, where an
+  event is durable but not yet ledger-visible or cross-shard-fetchable.
+  #635's locator propagates independently of the outbox and can resolve
+  before the outbox worker has caught up, so a cross-node login attempted
+  in that window can still spuriously fail — not a bug in the verification
+  logic itself, an inherent, honestly-documented property of the outbox
+  pattern this epic didn't introduce. In practice this only matters for a
+  login attempted within seconds of the identity's *very first*
+  registration on its owning node; the test's own
+  `wait_for_signing_key_ledger_entry` polls the real ledger endpoint rather
+  than sleeping a fixed amount, to make this race visible rather than
+  flaky.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
