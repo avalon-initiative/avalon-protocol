@@ -146,4 +146,15 @@ pub struct AppState {
     /// "unset means closed, never silently open" posture the other two
     /// keys already establish.
     pub internal_role_key: Option<String>,
+    /// Issue #629: this node's own record of which distinct peers have
+    /// confirmed mirroring which shard, kept current by
+    /// `crate::replication::run_worker`. Always present (no config
+    /// needed, same posture `shard_registry` above already takes) —
+    /// starts empty and fills in over the first few poll ticks.
+    pub mirror_confirmations: crate::replication::MirrorConfirmationRegistry,
+    /// Issue #629: this node's resolved minimum-replication gate
+    /// configuration (`AVALON_MIN_MIRROR_CONFIRMATIONS`/
+    /// `AVALON_MIRROR_GRACE_PERIOD_HOURS`), read once at startup. See
+    /// `crate::replication`'s own module doc comment.
+    pub replication_gate: crate::replication::ReplicationGateConfig,
 }

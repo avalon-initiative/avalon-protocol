@@ -12,7 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use avalon_server::{
-    auth, guild_messages, migrate, mirror_push, mirror_watcher, outbox, retention, state::AppState,
+    auth, guild_messages, migrate, mirror_push, mirror_watcher, outbox, replication, retention,
+    state::AppState,
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::layer::SubscriberExt;
@@ -225,6 +226,14 @@ async fn main() {
     // shard-gossip worker can be told the same value.
     let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
 
+    // Issue #629, implementing #622's decision: this node's own record of
+    // which peers have confirmed mirroring which shard, plus its resolved
+    // minimum-replication gate config — see `avalon_server::replication`'s
+    // module doc comment. Both always constructed (no config needed to
+    // exist; the gate's own defaults are what apply when nothing is set).
+    let mirror_confirmations = avalon_server::replication::MirrorConfirmationRegistry::new();
+    let replication_gate = replication::ReplicationGateConfig::from_env();
+
     let state = AppState {
         pool: pool.clone(),
         chain: chain.clone(),
@@ -282,6 +291,8 @@ async fn main() {
         internal_role_key: std::env::var("AVALON_INTERNAL_ROLE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
+        mirror_confirmations: mirror_confirmations.clone(),
+        replication_gate,
     };
 
     // Node-tiered durable history retention (issue #208, implementing
@@ -339,6 +350,20 @@ async fn main() {
             },
         ));
     }
+
+    // Minimum replication guarantee (issue #629) — spawned unconditionally,
+    // same posture the announce worker just below takes: even a node with
+    // no peers known yet still needs this loop running so it picks up
+    // peers (and therefore confirmed-mirror counts) the moment any appear.
+    // See `avalon_server::replication`'s module doc comment.
+    tokio::spawn(replication::run_worker(
+        chain.network_id().to_string(),
+        peers.clone(),
+        shard_registry.clone(),
+        mirror_confirmations,
+        own_shard_id.clone(),
+        replication::ReplicationConfig::from_env(),
+    ));
 
     // Node-to-node announce/bootstrap discovery (issue #362) — spawned
     // unconditionally, unlike the mirror-watcher above: even this
