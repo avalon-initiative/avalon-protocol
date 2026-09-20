@@ -89,6 +89,16 @@ const router = createRouter({
         // #307: cross-device pairing — matches `verification_uri`'s
         // `/pair?user_code=...` shape (see crates/server/src/device_pairing.rs).
         { path: 'pair', name: 'pair-device', component: () => import('../views/PairDevice.vue') },
+        // Epic #623, issue #639: cross-node login approval — matches a
+        // `?node=...&user_code=...` deep link (see
+        // crates/server/src/cross_node_login.rs; there's no server-minted
+        // `verification_uri` for this one, unlike #307's pairing, since the
+        // requesting node isn't necessarily this Hub's own server).
+        {
+          path: 'cross-node-login',
+          name: 'cross-node-login',
+          component: () => import('../views/CrossNodeLogin.vue'),
+        },
       ],
     },
   ],

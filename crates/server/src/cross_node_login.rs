@@ -20,7 +20,7 @@
 
 use avalon_indexer::projections::identity_signing_keys;
 use avalon_protocol::cross_node_login::CrossNodeLoginGrant;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use rand::RngExt;
@@ -121,6 +121,62 @@ pub async fn start(
         }
     }
     Err(AppError::CrossNodeLoginRequestCodeGenerationFailed)
+}
+
+#[derive(Deserialize)]
+pub struct LookupQuery {
+    pub user_code: String,
+}
+
+#[derive(Serialize)]
+pub struct LookupCrossNodeLoginResponse {
+    /// One of `pending`, `denied`, `expired`, `approved` — an approval
+    /// screen only ever meaningfully acts on `pending`; the others let it
+    /// show a clear "this code was already used/expired" state instead of
+    /// a generic not-found.
+    pub status: String,
+    pub requesting_context: String,
+    pub expires_in: i64,
+}
+
+/// `GET /auth/cross-node/lookup?user_code=...` — unauthenticated, epic
+/// #623 issue #639's own gap: the Hub/mobile-hub approval screen has to
+/// show real context (#642's decided phishing-context requirement)
+/// *before* a human decides whether to approve, but `submit`/`deny` only
+/// ever take a `user_code` with no read path to go with it. Deliberately
+/// returns nothing beyond what's needed to render the prompt — never
+/// `request_code` (the polling device's own bearer credential, not the
+/// approver's business).
+pub async fn lookup(
+    State(state): State<AppState>,
+    Query(query): Query<LookupQuery>,
+) -> Result<Json<LookupCrossNodeLoginResponse>, AppError> {
+    let now = OffsetDateTime::now_utc();
+    let row = sqlx::query(
+        "SELECT status, requesting_base_url, expires_at FROM cross_node_login_requests WHERE user_code = $1",
+    )
+    .bind(&query.user_code)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::CrossNodeLoginRequestNotFound)?;
+
+    let mut status: String = row.try_get("status")?;
+    let requesting_base_url: String = row.try_get("requesting_base_url")?;
+    let expires_at: OffsetDateTime = row.try_get("expires_at")?;
+
+    // Same lazy-expiry posture `poll`'s own handler already takes: nothing
+    // proactively flips a stale `pending` row to `expired` on a schedule,
+    // so a read has to reconcile it itself rather than trust the stored
+    // status blindly.
+    if status == "pending" && expires_at < now {
+        status = "expired".to_string();
+    }
+
+    Ok(Json(LookupCrossNodeLoginResponse {
+        status,
+        requesting_context: requesting_base_url,
+        expires_in: (expires_at - now).whole_seconds().max(0),
+    }))
 }
 
 #[derive(Serialize)]

@@ -188,6 +188,10 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         .route("/auth/cross-node/poll", post(cross_node_login::poll))
         .route("/auth/cross-node/submit", post(cross_node_login::submit))
         .route("/auth/cross-node/deny", post(cross_node_login::deny))
+        // Epic #623, issue #639's own gap: an approval screen needs to
+        // read a pending request's context before deciding — see
+        // `crate::cross_node_login::lookup`'s own doc comment.
+        .route("/auth/cross-node/lookup", get(cross_node_login::lookup))
         .route("/me", get(handlers::me).patch(handlers::update_profile))
         .route("/me/history", get(handlers::my_history))
         .route("/me/achievements", get(attestations::list_my_achievements))
