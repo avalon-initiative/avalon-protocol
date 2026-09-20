@@ -89,6 +89,42 @@ returned as the real sub-floor count; zero is never coarsened, since
 `avalon_indexer::registry` — see
 [registry.md](./registry.md#privacy).
 
+## Erasure vs. permanence (issue #614, decided)
+
+Visibility scoping (above) answers *who can see* a fact. It does not
+answer whether a fact can ever be made to stop existing — a separate
+question this section answers honestly rather than by implication.
+
+**Ledger-authored facts — identity, friends, guild membership, achievement
+issuance — cannot be erased, by construction, not by oversight.** This
+isn't a missing feature; it's the direct consequence of two things
+already decided elsewhere: the settlement log is deliberately append-only
+and hash-chained (`docs/architecture/nodes.md`'s "Mirrors, not
+federation," ADR #70/#79), and a hot-tier node's payload pruning
+(`crates/chain/src/retention.rs`, #180/#208) is only ever allowed once an
+archive-tier node has *independently confirmed* it holds a durable copy
+(#569) — a mechanism that exists specifically to guarantee nothing is
+ever lost, which is the opposite of an erasure guarantee. Payload pruning
+also never touches the entry's metadata (issuer, subject, kind,
+timestamp) on any tier, ever — even a fully pruned entry still says who
+did what to whom and when, forever, everywhere.
+
+The real, practical lever for "I want this identity to go dark" is
+**pseudonymization**: revoke every signing key, author no further events,
+and let the identity's existing history remain exactly as durable and
+attributable as it already was. This is the same shape #80/ADR #76
+already established for issuer keys and achievement revocation — never
+rewrite history, change what's currently trusted going forward.
+
+**Chat content is a genuinely different, already-solved case.** Guild
+channel and DM message bodies were deliberately built to never touch the
+settlement ledger at all (`crates/server/tests/conversations_no_ledger.rs`
+enforces this by construction) — they live in ordinary
+`guild_messages`/`conversation_messages` tables (plus an archive tier,
+[communication.md](./communication.md)) with their own real deletion
+path. Erasing message content is realistic and already works today; it
+was simply never part of the durable-history promise to begin with.
+
 ## Today in the repo
 
 - `crates/protocol/src/permissions.rs` (#87) — `Visibility`: `Public`,
@@ -187,3 +223,8 @@ returned as the real sub-floor count; zero is never coarsened, since
   enforcement middleware (the write-side counterpart).
 - Open in [Proposal §32](../stakeholders/Proposal.md#32-open-questions): how much social
   information should be portable; cross-integrator blocking.
+- [#614](https://github.com/LunarVagabond/avalon-protocol/issues/614) —
+  decided: ledger-authored facts cannot be erased, by construction;
+  pseudonymization (key revocation) is the real lever, chat content
+  already has genuine erasure via its own separate, non-ledger lifecycle.
+  See "Erasure vs. permanence" above.

@@ -93,6 +93,44 @@ A consuming integrator verifies authenticity and validity (universal) and then
 applies its own recognition policy (contextual). The SDK exposes those three
 results separately so an integrator can *display* claims it doesn't *recognize*.
 
+## Issuer trust signals (issue #616, decided)
+
+The previous section answers *meaning* — should a specific achievement be
+recognized. It doesn't answer a layer below that: should an issuer be
+visible/considered at all. #80's key lifecycle already answers
+*authenticity* (the signature checks out, was valid when issued); nothing
+answered *recognition*'s missing third leg (ADR #76) — who decides an
+issuer is worth paying attention to in the first place, across
+potentially many independent games/apps/services.
+
+**Decided: an open, universally-visible issuer directory, never a
+federated/web-of-trust model.** Every registered issuer is always visible
+and verifiable everywhere — nothing is ever structurally hidden or gated
+behind another issuer vouching for it. This was the deciding factor over
+a web-of-trust design: vouching-gated visibility recreates exactly the
+walled-garden shape `docs/architecture/nodes.md`'s "Mirrors, not
+federation" section (#70/#79/ADR #93) already rejected for the settlement
+layer — a new issuer being invisible until someone already-inside vouches
+for it is the same problem in different clothes, and this project has
+already decided against that shape once.
+
+Instead: **objective, computable reputation signals**, not a binary trust
+verdict from any authority, attached to each issuer in the directory —
+issuance volume, issuer age, revocation rate (#80's key-lifecycle
+history already makes this a real, queryable fact), and anything else
+derivable directly from the ledger itself. Each consuming
+integrator/client sets its own *display* threshold over those signals;
+nothing is ever invisible by default, and no issuer needs anyone's
+permission to exist in the directory.
+
+**Reuse existing node/network metadata rather than building a new
+reputation subsystem.** Every signal above is either already derivable
+from the ledger (issuance counts, revocation rate) or fits naturally
+alongside what `GET /nodes/status` and the shard registry (#599) already
+expose — an issuer's signals are a read-side aggregation over data this
+protocol already keeps, not a new kind of durable state or a new trust
+primitive.
+
 ## Definitions
 
 An integrator defines its achievements before it issues them. An
@@ -351,6 +389,12 @@ uses. Neither proof substitutes for the other.
   above.
 - [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
   attestation trust model.
+- [#616](https://github.com/LunarVagabond/avalon-protocol/issues/616) —
+  decided: an open, universally-visible issuer directory with objective
+  reputation signals, never a federated/web-of-trust model, fills in
+  ADR #76's recognition leg. Tracked as epic
+  [#625](https://github.com/LunarVagabond/avalon-protocol/issues/625),
+  on hold. See "Issuer trust signals" above.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
   catalogue (the `achievement.*` kinds).
 - [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — integrator
