@@ -543,15 +543,20 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   (`crates/server/tests/interest_dht.rs`), and the full worker+HTTP path
   against real Postgres and a real server process
   (`crates/server/tests/identity_locator.rs`, both `--ignored`). Live
-  testing also surfaced a real, accepted-not-solved scaling note: a node
-  with a large backlog of already-known local identities registers all of
-  them at once on the worker's very first scan tick, which can outrun the
+  testing surfaced, and a same-day follow-up fixed, a real startup-noise
+  issue: a node with a large backlog of already-known local identities was
+  registering all of them at once on the worker's very first scan tick,
+  firing a burst of simultaneous immediate `PutRecord`s well ahead of the
   DHT swarm's own bootstrap — harmless (each registration's own refresh
-  loop retries regardless of the first attempt's outcome) but a real
-  `PutRecord` failure burst observed live, not just a theoretical
-  possibility; noted in `crate::identity_locator`'s own module doc comment
-  alongside the module's other known simplification (a full rescan every
-  tick, not an incremental one). **Still not built**: cross-shard proof
+  loop retries regardless) but real, unnecessary `put_record failed: the
+  quorum failed` log noise, live-observed, not just theoretical.
+  `identity_locator::run_worker` now paces registrations found within one
+  scan tick `REGISTRATION_STAGGER` (100ms) apart instead of firing them all
+  in the same instant — confirmed live (the failure burst's own log
+  timestamps went from identical to evenly spaced) and unit-tested
+  (`identity_locator::tests`, using `tokio::time::pause` rather than real
+  sleeps). The module's other known simplification — a full rescan every
+  tick, not an incremental one — is unchanged. **Still not built**: cross-shard proof
   resolution (#636 — this locator only ever answers "where," never fetches
   or verifies the actual remote projection state, so #634's verification
   still can't complete for an identity whose signing-key projection isn't
