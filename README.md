@@ -79,21 +79,25 @@ a game or the Hub app can.
 
 ## Status
 
-Identity and auth are real and working end to end against a live Postgres
-instance: an Avalon identity is a self-custodied keypair — a WebAuthn
-passkey for login plus a separate Ed25519 key that signs the events an
-identity authors — wired through `avalon create-identity` and the Rust SDK.
-The chain crate has a real hash-chained Postgres ledger
-(`avalon inspect-ledger`), with identity creation and its ledger entry
-committed atomically via an outbox pattern. The social graph (friend
-requests, accept/decline, blocks) and guilds (roles with a fixed permission
-vocabulary plus per-resource overrides, membership, channels, messages,
-events with per-member RSVP) are built out with real server endpoints and a
-working Hub UI, not just scaffolding. Achievements/attestations have their
-core protocol types defined but no issuance or verification flow yet, and
-the indexer/query layer and permissioned-validator settlement design are
-still early. See [`docs/architecture/`](docs/architecture/) for the current
-state of each area, one file per topic.
+The core vertical slice is real and working end to end against a live
+Postgres instance, not scaffolding. Identity and auth: a self-custodied
+keypair — a WebAuthn passkey for login plus a separate Ed25519 key that
+signs the events an identity authors — with multi-device registration,
+guardian-based social recovery, and cross-device pairing all real and
+live-tested, wired through `avalon create-identity`, the Rust SDK, and the
+C# SDK. The chain crate has a real hash-chained, Merkle-rooted Postgres
+ledger with Signed Tree Heads and mirror-facing proof/sync endpoints
+(`avalon inspect-ledger`); identity, guild, and achievement writes are
+atomic with their ledger entry via an outbox pattern. The social graph
+(friends, blocks, presence, scoped discovery) and guilds (roles with
+per-resource permission overrides, membership, channels, chat, events with
+RSVP, discovery) are built out with real server endpoints and a working Hub
+UI. Achievements/attestations are wired end to end — a category-driven
+claim vocabulary, two-tier root/operational issuer keys, signed issuance,
+authenticity/validity/recognition kept as separate questions, signed
+append-only revocation history — through both SDKs and a Hub achievements
+view. See [`docs/architecture/`](docs/architecture/) for the current state
+of each area, one file per topic.
 
 ## Running locally
 
@@ -138,6 +142,7 @@ docs/
   users/         docs for people using games/apps/services that integrate Avalon
   developers/    docs for developers integrating the SDKs
   maintainers/   docs for contributors to this repo
+  hosters/       docs for standing up and operating an avalon-server node
   stakeholders/  docs for people evaluating Avalon from the outside
 ```
 
