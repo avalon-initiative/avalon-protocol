@@ -137,6 +137,103 @@ pub struct LookupCrossNodeLoginResponse {
     pub status: String,
     pub requesting_context: String,
     pub expires_in: i64,
+    /// Epic #623, issue #649, implementing #642's decided requirement:
+    /// whether this node — the one the identity is being asked to log
+    /// into — resolves to a real, registered integrator (or a known
+    /// network anchor for the default shard). See
+    /// [`resolve_requester_verification`]'s own doc comment for exactly
+    /// what "verified" means here. `#639`/`#640` render this as a visual
+    /// distinction, never a hard gate — an unverified requester still
+    /// gets a prompt, just a clearly flagged one.
+    pub integrator_verified: bool,
+    /// A real registered display name, only ever present when
+    /// `integrator_verified` is `true` — `null` otherwise, so the
+    /// approval screen has no ambiguous "empty string vs. never checked"
+    /// state to handle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// Resolves whether this node — reached exactly the way the approver's
+/// `lookup` call reaches it, since this handler's own `state` always
+/// describes the node it's running on — is a "verified" requester for
+/// cross-node login purposes, and a real display name to show in place of
+/// the raw `base_url` when it is. Two paths, deliberately reusing #543's
+/// existing shard-trust mechanism rather than a second registry:
+///
+/// - **An owned shard** (`own_shard_id` shaped `"{namespace}:{owner}"`,
+///   `game`/`app`/`service`): verified iff `owner` resolves to a real
+///   integrator that currently holds an unrevoked `shard_settlement`-purpose
+///   issuer key for exactly this shard — the exact same join
+///   `crate::cross_shard::resolve_shard_verify_keys_from_db` already trusts
+///   for STH signature verification, not a second, weaker check.
+/// - **The default, unowned shard** (`"core"`, or anything else with no
+///   `owner`): there's no integrator to check — verified iff this node's
+///   own `own_base_url` is one of this network's real seed nodes
+///   (`docs/trusted-networks.json`, via `avalon_sdk::network::bundled_trust_anchors`)
+///   — a shared network shard has no integrator, but a canonical anchor
+///   node is still a real, checkable fact.
+async fn resolve_requester_verification(state: &AppState) -> (bool, Option<String>) {
+    if let Some((namespace, owner)) = state.own_shard_id.split_once(':') {
+        if matches!(namespace, "game" | "app" | "service") {
+            let row = sqlx::query(
+                "SELECT i.name FROM integrators i \
+                 JOIN issuer_keys ik ON ik.integrator_id = i.id \
+                 WHERE i.slug = $1 AND i.category = $2 \
+                   AND ik.purpose = 'shard_settlement' AND ik.revoked_at IS NULL \
+                 LIMIT 1",
+            )
+            .bind(owner)
+            .bind(namespace)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some(row) = row {
+                if let Ok(name) = row.try_get::<String, _>("name") {
+                    return (true, Some(name));
+                }
+            }
+        }
+        return (false, None);
+    }
+
+    let Some(base_url) = state.own_base_url.as_deref() else {
+        return (false, None);
+    };
+    let is_anchor = is_verified_seed_node(
+        base_url,
+        state.chain.network_id(),
+        avalon_sdk::network::bundled_trust_anchors(),
+    );
+    (is_anchor, is_anchor.then(|| "Avalon network".to_string()))
+}
+
+/// Pure resolution logic behind [`resolve_requester_verification`]'s
+/// unowned-shard path, split out for direct unit testing — same "pure
+/// function behind the real-data-reading wrapper" pattern
+/// `crate::nodes::resolve_bootstrap_peers` already establishes, needed for
+/// the same reason: this sandbox's own checked-in
+/// `docs/trusted-networks.json` entry has an empty `seed_nodes` list (a
+/// lone dev node with no anchor peer yet), so a live test against the real
+/// bundled file can only ever exercise the "not an anchor" branch — a
+/// controlled anchor list is the only way to exercise the "is an anchor"
+/// branch at all.
+fn is_verified_seed_node(
+    own_base_url: &str,
+    network_id: &str,
+    anchors: &[avalon_sdk::network::TrustAnchorEntry],
+) -> bool {
+    anchors
+        .iter()
+        .find(|entry| entry.network_id == network_id)
+        .map(|entry| {
+            entry
+                .seed_nodes
+                .iter()
+                .any(|seed| seed.trim_end_matches('/') == own_base_url)
+        })
+        .unwrap_or(false)
 }
 
 /// `GET /auth/cross-node/lookup?user_code=...` — unauthenticated, epic
@@ -172,10 +269,14 @@ pub async fn lookup(
         status = "expired".to_string();
     }
 
+    let (integrator_verified, display_name) = resolve_requester_verification(&state).await;
+
     Ok(Json(LookupCrossNodeLoginResponse {
         status,
         requesting_context: requesting_base_url,
         expires_in: (expires_at - now).whole_seconds().max(0),
+        integrator_verified,
+        display_name,
     }))
 }
 
@@ -485,5 +586,80 @@ mod tests {
                 assert!(!"0O1IL".contains(c));
             }
         }
+    }
+
+    fn anchor(network_id: &str, seed_nodes: Vec<String>) -> avalon_sdk::network::TrustAnchorEntry {
+        avalon_sdk::network::TrustAnchorEntry {
+            label: network_id.to_string(),
+            network_id: network_id.to_string(),
+            verify_key: "deadbeef".to_string(),
+            signing_key_id: "k1".to_string(),
+            server_url: None,
+            environment: avalon_sdk::network::NetworkEnvironment::Dev,
+            seed_nodes,
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn a_node_matching_a_real_seed_entry_is_a_verified_anchor() {
+        let anchors = vec![anchor(
+            "avalon-mainnet-1",
+            vec!["https://anchor-a.example".to_string()],
+        )];
+        assert!(is_verified_seed_node(
+            "https://anchor-a.example",
+            "avalon-mainnet-1",
+            &anchors,
+        ));
+    }
+
+    #[test]
+    fn a_trailing_slash_on_either_side_still_matches() {
+        let anchors = vec![anchor(
+            "avalon-mainnet-1",
+            vec!["https://anchor-a.example/".to_string()],
+        )];
+        assert!(is_verified_seed_node(
+            "https://anchor-a.example",
+            "avalon-mainnet-1",
+            &anchors,
+        ));
+    }
+
+    #[test]
+    fn a_node_not_in_the_seed_list_is_not_an_anchor() {
+        let anchors = vec![anchor(
+            "avalon-mainnet-1",
+            vec!["https://anchor-a.example".to_string()],
+        )];
+        assert!(!is_verified_seed_node(
+            "https://some-other-node.example",
+            "avalon-mainnet-1",
+            &anchors,
+        ));
+    }
+
+    #[test]
+    fn a_network_with_no_matching_anchors_entry_is_never_an_anchor() {
+        let anchors = vec![anchor(
+            "some-other-network",
+            vec!["https://x.example".to_string()],
+        )];
+        assert!(!is_verified_seed_node(
+            "https://x.example",
+            "avalon-mainnet-1",
+            &anchors,
+        ));
+    }
+
+    #[test]
+    fn an_empty_seed_list_is_never_an_anchor() {
+        let anchors = vec![anchor("avalon-mainnet-1", vec![])];
+        assert!(!is_verified_seed_node(
+            "https://anchor-a.example",
+            "avalon-mainnet-1",
+            &anchors,
+        ));
     }
 }

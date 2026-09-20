@@ -23,6 +23,19 @@
   border-radius: var(--av-radius-md);
 }
 
+.verified {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--av-space-2);
+  border-color: var(--av-color-success);
+  background: var(--av-color-success-soft);
+}
+
+.verifiedIcon {
+  color: var(--av-color-success);
+  flex-shrink: 0;
+}
+
 .contextLabel {
   font-size: var(--av-text-sm);
   color: var(--av-color-text-secondary);
