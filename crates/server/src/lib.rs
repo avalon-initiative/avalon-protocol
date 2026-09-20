@@ -155,7 +155,46 @@ impl KeyExtractor for IntegratorOrIpKeyExtractor {
 /// every layer below exactly as it's always been; see
 /// `crate::redis_limits`'s own module doc comment for what changes when
 /// it's `Some`.
+///
+/// The full router — every Gateway-facing route (identity/auth, social,
+/// guilds, achievements, integrations) plus the Settlement (`/ledger/*`)
+/// and node-mesh (`/nodes/*`) surface. This is what every roles
+/// configuration other than a genuinely standalone Settlement node gets
+/// (issue #664) — `combined` (the default) is unchanged from before this
+/// ticket. See [`router_settlement_only`] for the reduced surface a
+/// Settlement-only process serves instead.
 pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterState>) -> Router {
+    apply_common_layers(full_routes(state), redis_limiter)
+}
+
+/// Issue #664: the route table a genuinely standalone Settlement node
+/// serves — `/ledger/*` (read+write, `crate::settlement`), `/nodes/*`
+/// (peer discovery, status, admin log-level — node-mesh plumbing, not
+/// Gateway-facing) and `/mirror/notify` (push-based mirror-sync wake).
+/// Deliberately excludes every WebAuthn/session/social/guild/achievement
+/// route, plus `/nodes/relay` and `/nodes/replicate-chat` (both
+/// presence/chat-relay concepts with no meaning on a node with no local
+/// Gateway traffic) and `/internal/indexer/*` (Indexer role, #662's own
+/// concern, not Settlement's). A request to any route this table doesn't
+/// define gets axum's ordinary 404, not a panic or a route that happens to
+/// work — see `crates/server/tests/settlement_only.rs` for the live check.
+pub fn router_settlement_only(
+    state: AppState,
+    redis_limiter: Option<redis_limits::RedisLimiterState>,
+) -> Router {
+    apply_common_layers(settlement_only_routes(state), redis_limiter)
+}
+
+/// The tail every router variant shares: tracing, CORS, and the
+/// concurrency/rate-limit layer pair (in-process or Redis-backed,
+/// depending on `redis_limiter` — see issue #545). Factored out of
+/// [`router`]/[`router_settlement_only`] so a Settlement-only process gets
+/// exactly the same operational posture (rate limits, request tracing,
+/// CORS) as the combined binary, not a stripped-down one.
+fn apply_common_layers(
+    router: Router,
+    redis_limiter: Option<redis_limits::RedisLimiterState>,
+) -> Router {
     let max_concurrent_requests = max_concurrent_requests_from_env();
     let rate_limit_per_minute = rate_limit_per_minute_from_env();
     let governor_config = GovernorConfigBuilder::default()
@@ -167,7 +206,92 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         .finish()
         .expect("per_minute is always > 0, so period/burst_size are always non-zero");
 
-    let router = Router::new()
+    let router = router
+        // Issue #265: every HTTP request gets a tracing span
+        // (method/path/status/latency), and any `tracing::info!`/`error!`
+        // call made while handling it is automatically correlated to that
+        // span — this is what makes request-scoped log correlation work
+        // without hand-threading a request id through every handler.
+        .layer(TraceLayer::new_for_http())
+        .layer(cors_layer_from_env());
+
+    // Issue #545: `AVALON_REDIS_URL` swaps both resource-limit layers for
+    // their Redis-backed equivalents (`crate::redis_limits`) — per-hoster
+    // shared state across that operator's own processes, never network-
+    // wide. Unset (the default), the in-process layers below are
+    // unchanged from #363.
+    match redis_limiter {
+        Some(limiter) => router
+            // Concurrency first, same relative order the in-process
+            // layers already use below.
+            .layer(axum::middleware::from_fn_with_state(
+                limiter.clone(),
+                redis_limits::concurrency_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                limiter,
+                redis_limits::rate_limit_middleware,
+            )),
+        None => router
+            // Issue #363: concurrency backpressures (bounded wait), never
+            // silently drops a request without a response.
+            .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
+            // Issue #363: per-key GCRA rate limit, 429 + Retry-After past
+            // the configured ceiling — see `IntegratorOrIpKeyExtractor`.
+            .layer(GovernorLayer::new(governor_config)),
+    }
+}
+
+/// Issue #664: the reduced route table for a genuinely standalone
+/// Settlement node — see [`router_settlement_only`]'s own doc comment for
+/// what's in/out and why.
+fn settlement_only_routes(state: AppState) -> Router {
+    Router::new()
+        // Issue #211: public, unauthenticated mirror-facing transparency-log
+        // reads.
+        .route("/ledger/sth/latest", get(settlement::latest_sth))
+        .route("/ledger/sth/{tree_size}", get(settlement::sth_at_tree_size))
+        .route(
+            "/ledger/proof/consistency",
+            get(settlement::consistency_proof),
+        )
+        .route("/ledger/proof/inclusion", get(settlement::inclusion_proof))
+        // Issue #299: bulk entry content, the read path a mirror needs.
+        .route("/ledger/entries", get(settlement::list_entries))
+        // Issue #313: node-to-node, bearer-authenticated write path.
+        .route("/ledger/submit", post(settlement::submit_ledger_batch))
+        // Issue #531: managed-hosting two-phase remote signing.
+        .route("/ledger/prepare-batch", post(settlement::prepare_batch))
+        .route("/ledger/finalize-batch", post(settlement::finalize_batch))
+        // Issue #529: cross-shard root.
+        .route(
+            "/ledger/cross-shard-root",
+            get(cross_shard::cross_shard_root),
+        )
+        // Issue #526: forwarding-node discovery hint.
+        .route(
+            "/ledger/remote-submit-status",
+            get(settlement::remote_submit_status),
+        )
+        // Issue #569: archive-confirmation gating's own read.
+        .route("/ledger/mirror-progress", get(settlement::mirror_progress))
+        // Issue #362: node-to-node peer discovery — no auth, same public
+        // posture as the `/ledger/*` block above.
+        .route("/nodes/announce", post(nodes::announce))
+        .route("/nodes/peers", get(nodes::list_peers))
+        .route("/nodes/status", get(nodes::status))
+        // Issue #658: hoster-only runtime log-level control.
+        .route(
+            "/nodes/log-level",
+            get(admin::get_log_level).post(admin::set_log_level),
+        )
+        // Issue #596: push-based mirror-sync notification.
+        .route("/mirror/notify", post(mirror_push::notify))
+        .with_state(state)
+}
+
+fn full_routes(state: AppState) -> Router {
+    Router::new()
         .route("/identities/register/start", post(handlers::register_start))
         .route(
             "/identities/register/finish",
@@ -679,37 +803,4 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
             post(internal_role::rebuild_indexer),
         )
         .with_state(state)
-        // Issue #265: every HTTP request gets a tracing span
-        // (method/path/status/latency), and any `tracing::info!`/`error!`
-        // call made while handling it is automatically correlated to that
-        // span — this is what makes request-scoped log correlation work
-        // without hand-threading a request id through every handler.
-        .layer(TraceLayer::new_for_http())
-        .layer(cors_layer_from_env());
-
-    // Issue #545: `AVALON_REDIS_URL` swaps both resource-limit layers for
-    // their Redis-backed equivalents (`crate::redis_limits`) — per-hoster
-    // shared state across that operator's own processes, never network-
-    // wide. Unset (the default), the in-process layers below are
-    // unchanged from #363.
-    match redis_limiter {
-        Some(limiter) => router
-            // Concurrency first, same relative order the in-process
-            // layers already use below.
-            .layer(axum::middleware::from_fn_with_state(
-                limiter.clone(),
-                redis_limits::concurrency_middleware,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                limiter,
-                redis_limits::rate_limit_middleware,
-            )),
-        None => router
-            // Issue #363: concurrency backpressures (bounded wait), never
-            // silently drops a request without a response.
-            .layer(ConcurrencyLimitLayer::new(max_concurrent_requests))
-            // Issue #363: per-key GCRA rate limit, 429 + Retry-After past
-            // the configured ceiling — see `IntegratorOrIpKeyExtractor`.
-            .layer(GovernorLayer::new(governor_config)),
-    }
 }

@@ -165,6 +165,20 @@ isn't built yet. Both endpoints refuse every request when it's unset,
 matching `submit_ledger_batch`'s own "exists but accepts nothing until
 configured" posture.
 
+**A managed-hosting operator is exactly who wants a genuinely
+Settlement-only deployment (#664).** This section's whole premise is that
+the host never holds the integrator's signing key — but before #664, the
+host's own `avalon-server` process still had every Gateway-facing module
+(WebAuthn, sessions, guilds, presence, friends...) mounted and reachable
+regardless, purely because that's what the combined binary always ran.
+None of that surface has any legitimate caller on a process whose only
+job is `prepare-batch`/`finalize-batch` plus ordinary `/ledger/*` reads —
+it's attack surface with no corresponding feature for this operator.
+`AVALON_NODE_ROLES=settlement` (see [`./nodes.md`](./nodes.md)'s "Today in
+the repo" entry for #664) is how that operator now gets a process that
+genuinely never mounts any of it, not just one that happens not to be
+called.
+
 ### Censorship recourse: switching hosts, or self-hosting, without losing the shard (#544)
 
 Two-phase signing means a managed host can never forge an integrator's
