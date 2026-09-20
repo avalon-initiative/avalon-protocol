@@ -3,6 +3,7 @@ pub mod admin;
 pub mod attestations;
 pub mod auth;
 pub mod authz;
+pub mod backing_services;
 pub mod blocks;
 pub mod channels;
 pub mod chat;

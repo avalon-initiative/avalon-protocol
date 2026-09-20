@@ -163,9 +163,14 @@ async fn main() {
     let indexer = if nodes::indexer_role_is_local(&node_roles) {
         IndexerHandle::Local(avalon_indexer::postgres::PostgresIndexer::new(pool.clone()))
     } else {
-        internal_role::RemoteIndexer::from_env()
-            .map(IndexerHandle::Remote)
-            .unwrap_or_else(|| {
+        // Issue #665: `RemoteIndexer::from_env` now distinguishes "unset"
+        // (`Ok(None)`) from "set but malformed" (`Err`) — both are still
+        // fatal here (this process has no way to reach an Indexer role
+        // either way), but the malformed case now gets its own clear
+        // message instead of being silently treated the same as unset.
+        match internal_role::RemoteIndexer::from_env() {
+            Ok(Some(remote)) => IndexerHandle::Remote(remote),
+            Ok(None) => {
                 tracing::error!(
                     "refusing to start: AVALON_NODE_ROLES={node_roles:?} excludes \"indexer\" \
                      (and isn't \"combined\"), but AVALON_INDEXER_REMOTE_URL is unset — this \
@@ -175,7 +180,12 @@ async fn main() {
                      one locally"
                 );
                 std::process::exit(1);
-            })
+            }
+            Err(e) => {
+                tracing::error!("refusing to start: {e}");
+                std::process::exit(1);
+            }
+        }
     };
 
     let peers = avalon_server::nodes::PeerTable::new();
@@ -350,6 +360,47 @@ async fn main() {
         }
         Some(url) => {
             tracing::info!(roles = ?node_roles, remote = %url, "avalon-server: proxying realtime WebSocket connections to a remote Realtime node")
+        }
+    }
+
+    // Issue #665: every configured backing-service URL above (Indexer,
+    // Realtime, Settlement) has now been validated as *well-formed* —
+    // this is the one place that also confirms each is actually
+    // *reachable* right now, a check none of #662/#663/#664 added on
+    // their own. Deliberately a warning, never a startup failure (see
+    // `avalon_server::backing_services`'s own module doc comment): a
+    // backing service that's briefly down (e.g. mid rolling-restart) is a
+    // normal operational moment this process should still start through,
+    // unlike the missing/malformed cases above, which stay fatal.
+    {
+        let mut backing_service_targets = Vec::new();
+        if let IndexerHandle::Remote(remote) = &indexer {
+            backing_service_targets.push(
+                avalon_server::backing_services::BackingServiceTarget::new(
+                    "indexer",
+                    remote.base_url(),
+                ),
+            );
+        }
+        if let Some(url) = &realtime_remote_url {
+            backing_service_targets.push(
+                avalon_server::backing_services::BackingServiceTarget::new("realtime", url),
+            );
+        }
+        if let Some(remote_submit) = &remote_submit {
+            for (shard_id, url) in remote_submit.targets() {
+                backing_service_targets.push(
+                    avalon_server::backing_services::BackingServiceTarget::new(
+                        format!("settlement (shard {shard_id})"),
+                        url,
+                    ),
+                );
+            }
+        }
+        if !backing_service_targets.is_empty() {
+            let client = reqwest::Client::new();
+            avalon_server::backing_services::check_all_reachable(&client, &backing_service_targets)
+                .await;
         }
     }
 
