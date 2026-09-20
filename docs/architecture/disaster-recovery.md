@@ -88,6 +88,15 @@ wasn't a kind `projections::guild_rosters::decode` recognized — is closed:
 the same upsert every other member row gets, so the projection has no gap
 between a guild's owner and its other members.
 
+`crates/cli/tests/milestone_1_walkthrough.rs` (issue #65, automating #64's
+walkthrough) is the same proof from a different angle: instead of a
+narrow, indexer-focused before/after diff, it drives the full milestone-1
+vertical slice (identity, friends, guild, channel, achievement) through
+real HTTP/SDK calls, shells out to `avalon rebuild-index`, and re-asserts
+the exact reads a Hub page would make — proving the rebuild guarantee
+holds for what a real client actually depends on, not just for the
+projection tables in isolation.
+
 ## What breaks today
 
 - ~~A `profile.updated` event for an identity with no `identity.created`

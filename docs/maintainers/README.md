@@ -88,6 +88,16 @@ Run `make help` for the full command list, including the C# SDK
 (`bindings/csharp`) build/test targets and the `avalon-cli` dev/ops commands
 (`create-identity`, `inspect-ledger`, `outbox-status`, ...).
 
+## Milestone 1 — the end-to-end vertical slice
+
+See [`milestone-1-walkthrough.md`](milestone-1-walkthrough.md) for the
+hand-run, numbered walkthrough of `Proposal.md` §23's fourteen steps (plus
+two architecture checks beyond it) — two players, a friendship, a guild
+with a channel, two games, an issued and verified achievement, all visible
+in the Hub, ending with a ledger inspection and a full projection rebuild.
+`crates/cli/tests/milestone_1_walkthrough.rs` is the automated equivalent,
+runnable via `make test-live`.
+
 ## Related projects
 
 `world_zero` is a related Rust MMO server framework and the first candidate
