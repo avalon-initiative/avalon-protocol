@@ -550,8 +550,14 @@ session-continuation tokens solve the *already-logged-in* half of
 reaching a different node, but were deliberately decided (#122) to never
 count as a login credential by themselves — they prove key possession,
 not human presence. Genuinely proving identity to a node you've never
-registered on, for the first time, is tracked as its own decision:
-[#620](https://github.com/LunarVagabond/avalon-protocol/issues/620).
+registered on, for the first time, is decided as
+[#620](https://github.com/LunarVagabond/avalon-protocol/issues/620): a
+destination-bound, human-approved signed grant, extending #307's
+cross-device pairing pattern. Tracked as epic
+[#623](https://github.com/LunarVagabond/avalon-protocol/issues/623). See
+also [`./nodes.md`](./nodes.md)'s "Identity and social actions are not
+shard-locked" section — once #623 lands, "home node" stops being an
+ongoing dependency for anything except this initial login step.
 
 ## Today in the repo
 
@@ -840,9 +846,15 @@ registered on, for the first time, is tracked as its own decision:
   bundle — no export/import primitive is planned. See "Portability means
   mirrored, not movable" above.
 - [#620](https://github.com/LunarVagabond/avalon-protocol/issues/620) —
-  open, high-priority: proving identity to a node you've never registered
-  a passkey on. Leaning toward extending #307's approve/deny pattern with
-  a signed, human-approved, cross-node assertion rather than a shared
-  login domain. See "Portability means mirrored, not movable" above.
+  decided: proving identity to a node you've never registered a passkey
+  on, via a signed, human-approved, cross-node assertion extending #307's
+  approve/deny pattern, rather than a shared login domain. Tracked as
+  epic [#623](https://github.com/LunarVagabond/avalon-protocol/issues/623).
+  See "Portability means mirrored, not movable" above.
+- [#622](https://github.com/LunarVagabond/avalon-protocol/issues/622) —
+  open: minimum replication guarantee for identity-bearing shards, so a
+  single operator's node disappearing can't strand the identities that
+  live there. #620/#623's locator assumes this has a real answer, not
+  just best-effort opt-in mirroring.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:
   Identity & Player Profile.
