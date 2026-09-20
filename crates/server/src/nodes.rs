@@ -222,6 +222,21 @@ pub struct ShardAnnouncement {
 pub struct ShardRegistry {
     // shard_id -> (url -> last_seen_at)
     shards: Arc<RwLock<HashMap<String, HashMap<String, OffsetDateTime>>>>,
+    /// Issue #629: the earliest `last_seen_at` this node has ever recorded
+    /// for a given `shard_id`, across every merge (including this node's
+    /// own `record_own` calls) — "how old is this shard," used as the
+    /// #629 registration-eligibility grace period's input
+    /// (`crate::replication::within_grace_period`). Deliberately tracked
+    /// separately from `shards` above, which only ever keeps the *newest*
+    /// `last_seen_at` per URL (it answers "is this still around," not
+    /// "how long has it been around") — and deliberately never advanced
+    /// forward once set, only ever backward if a later merge reveals an
+    /// even earlier observation (e.g. gossip from a peer that had already
+    /// known about this shard for longer than this node had). Same
+    /// in-process, non-durable posture as `shards` — see this struct's own
+    /// doc comment and `crate::replication`'s module doc comment for the
+    /// restart caveat that follows from that.
+    first_seen: Arc<RwLock<HashMap<String, OffsetDateTime>>>,
 }
 
 impl ShardRegistry {
@@ -251,6 +266,10 @@ impl ShardRegistry {
     pub fn merge(&self, incoming: &[ShardAnnouncement]) -> Vec<String> {
         let mut newly_learned = Vec::new();
         let mut shards = self.shards.write().expect("shard registry lock poisoned");
+        let mut first_seen = self
+            .first_seen
+            .write()
+            .expect("shard registry lock poisoned");
         for entry in incoming {
             let urls = shards.entry(entry.shard_id.clone()).or_insert_with(|| {
                 newly_learned.push(entry.shard_id.clone());
@@ -262,6 +281,17 @@ impl ShardRegistry {
             if refresh {
                 urls.insert(entry.url.clone(), entry.last_seen_at);
             }
+
+            // Issue #629: keep the *earliest* observation on record, never
+            // the latest — see `first_seen`'s own doc comment.
+            first_seen
+                .entry(entry.shard_id.clone())
+                .and_modify(|existing| {
+                    if entry.last_seen_at < *existing {
+                        *existing = entry.last_seen_at;
+                    }
+                })
+                .or_insert(entry.last_seen_at);
         }
         newly_learned
     }
@@ -273,10 +303,41 @@ impl ShardRegistry {
     /// forever on a stale address.
     pub fn prune_older_than(&self, cutoff: OffsetDateTime) {
         let mut shards = self.shards.write().expect("shard registry lock poisoned");
-        shards.retain(|_, urls| {
+        let mut fully_removed = Vec::new();
+        shards.retain(|shard_id, urls| {
             urls.retain(|_, last_seen_at| *last_seen_at >= cutoff);
-            !urls.is_empty()
+            let keep = !urls.is_empty();
+            if !keep {
+                fully_removed.push(shard_id.clone());
+            }
+            keep
         });
+        if !fully_removed.is_empty() {
+            // Issue #629: a shard with no URLs left on record at all is
+            // treated as genuinely gone — its recorded age goes with it,
+            // so a later re-discovery starts its grace period fresh
+            // rather than inheriting a stale, possibly very old
+            // `first_seen_at`.
+            let mut first_seen = self
+                .first_seen
+                .write()
+                .expect("shard registry lock poisoned");
+            for shard_id in fully_removed {
+                first_seen.remove(&shard_id);
+            }
+        }
+    }
+
+    /// The earliest observation this node has ever recorded for
+    /// `shard_id` — see `first_seen`'s own doc comment. `None` when this
+    /// node has never merged an announcement naming this shard at all
+    /// (including one it authored itself).
+    pub fn first_seen_at(&self, shard_id: &str) -> Option<OffsetDateTime> {
+        self.first_seen
+            .read()
+            .expect("shard registry lock poisoned")
+            .get(shard_id)
+            .copied()
     }
 
     /// Every `(shard_id, url, last_seen_at)` this node currently knows —
@@ -453,6 +514,33 @@ pub struct NodeStatusResponse {
     /// own `Option`). See `crate::resources`'s module doc comment for why
     /// `sysinfo` rather than hand-rolled `/proc` parsing.
     pub resources: crate::resources::NodeResourceMetrics,
+    /// Issue #629: this node's own authored shard's current replication
+    /// status — the visible fact the #629 ticket asked for, so an
+    /// operator (and eventually an end user choosing where to register)
+    /// can see how durable a shard actually is *before* trusting it with
+    /// anything, not just after a registration attempt is rejected.
+    pub own_shard_replication: ShardReplicationStatus,
+}
+
+/// Issue #629: how many distinct peers currently confirm mirroring a
+/// shard, whether it's still within its bootstrap grace period, and
+/// whether it's currently eligible to accept a *new* identity
+/// registration under the #629 gate (`crate::replication::registration_eligible`,
+/// enforced at `crate::handlers::register_start`). Scoped to this node's
+/// own `own_shard_id` only — deliberate v1 simplification, same posture
+/// `crate::replication`'s own module doc comment takes for its single
+/// uniform `min_confirmations`: every other shard this node merely knows
+/// *about* (via gossip) is a different operator's own durability
+/// question, not this node's to surface authoritatively.
+#[derive(Debug, Serialize)]
+pub struct ShardReplicationStatus {
+    pub shard_id: String,
+    pub confirmed_mirror_count: usize,
+    pub min_confirmations_required: usize,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub first_seen_at: Option<OffsetDateTime>,
+    pub within_grace_period: bool,
+    pub eligible_for_new_registrations: bool,
 }
 
 /// `GET /nodes/status` — read-only, same public posture as `list_peers`.
@@ -485,12 +573,34 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
         },
     };
 
+    let now = OffsetDateTime::now_utc();
+    let first_seen_at = state.shard_registry.first_seen_at(&state.own_shard_id);
+    let within_grace_period = crate::replication::within_grace_period(
+        first_seen_at,
+        now,
+        state.replication_gate.grace_period,
+    );
+    let confirmed_mirror_count = state.mirror_confirmations.confirmed_count(
+        &state.own_shard_id,
+        now - crate::replication::CONFIRMATION_FRESHNESS_WINDOW,
+    );
+    let own_shard_replication = ShardReplicationStatus {
+        shard_id: state.own_shard_id.clone(),
+        confirmed_mirror_count,
+        min_confirmations_required: state.replication_gate.min_confirmations,
+        first_seen_at,
+        within_grace_period,
+        eligible_for_new_registrations: within_grace_period
+            || confirmed_mirror_count >= state.replication_gate.min_confirmations,
+    };
+
     Json(NodeStatusResponse {
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         network_id: state.chain.network_id().to_string(),
         stale,
         newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
         resources,
+        own_shard_replication,
     })
 }
 
@@ -1048,6 +1158,14 @@ mod tests {
             stale: false,
             newest_known_peer_version: None,
             resources: crate::resources::NodeResourceMetrics::default(),
+            own_shard_replication: ShardReplicationStatus {
+                shard_id: "core".to_string(),
+                confirmed_mirror_count: 0,
+                min_confirmations_required: 1,
+                first_seen_at: None,
+                within_grace_period: true,
+                eligible_for_new_registrations: true,
+            },
         };
         let json = serde_json::to_value(&response).expect("must serialize even when empty");
         assert!(json.get("resources").is_some());
@@ -1059,6 +1177,7 @@ mod tests {
             json["resources"]["db_pool"]["size"],
             serde_json::Value::Null
         );
+        assert_eq!(json["own_shard_replication"]["shard_id"], "core");
     }
 
     #[test]
@@ -1263,6 +1382,70 @@ mod tests {
         let known = registry.known_shard_ids();
         assert!(!known.contains("game:stale-shard"));
         assert!(known.contains("game:fresh-shard"));
+    }
+
+    // Issue #629: `first_seen_at` unit tests.
+
+    #[test]
+    fn first_seen_at_is_none_for_an_unknown_shard() {
+        let registry = ShardRegistry::new();
+        assert_eq!(registry.first_seen_at("game:never-seen"), None);
+    }
+
+    #[test]
+    fn first_seen_at_records_the_first_observation() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[shard_announcement("core", "http://a", now)]);
+        assert_eq!(registry.first_seen_at("core"), Some(now));
+    }
+
+    #[test]
+    fn first_seen_at_never_advances_on_a_later_observation() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[shard_announcement("core", "http://a", now)]);
+        registry.merge(&[shard_announcement(
+            "core",
+            "http://a",
+            now + time::Duration::hours(1),
+        )]);
+        assert_eq!(
+            registry.first_seen_at("core"),
+            Some(now),
+            "a later merge must never make a shard look younger"
+        );
+    }
+
+    #[test]
+    fn first_seen_at_moves_earlier_if_an_earlier_observation_is_learned() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[shard_announcement("core", "http://a", now)]);
+        registry.merge(&[shard_announcement(
+            "core",
+            "http://b",
+            now - time::Duration::hours(1),
+        )]);
+        assert_eq!(
+            registry.first_seen_at("core"),
+            Some(now - time::Duration::hours(1))
+        );
+    }
+
+    #[test]
+    fn pruning_every_url_for_a_shard_also_clears_its_recorded_age() {
+        let registry = ShardRegistry::new();
+        let now = OffsetDateTime::now_utc();
+        registry.merge(&[shard_announcement(
+            "game:stale-shard",
+            "http://stale",
+            now - time::Duration::hours(1),
+        )]);
+
+        registry.prune_older_than(now - time::Duration::minutes(1));
+
+        assert_eq!(registry.first_seen_at("game:stale-shard"), None);
     }
 
     #[test]
