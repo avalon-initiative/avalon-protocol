@@ -246,6 +246,45 @@ distinct self-hosting category — see
 for exactly how that stays unambiguous from both mirroring and a
 disconnected private fork.
 
+## Identity and social actions are not shard-locked
+
+An identity has no "home node" in any operationally ongoing sense, and
+this is by construction, not an accident worth losing track of. Which
+shard a new event commits into is a property of *whichever node handles
+the request* (`AppState::own_shard_id`), never of the identity acting
+through it — there is no code path anywhere that requires an identity's
+actions to route back through the shard its `identity.created` event
+originally landed on. "Home" describes a historical fact (where that
+first event is durably committed, forever, by replication) — not a place
+an identity depends on continuing to reach.
+
+Concretely: a person can authenticate through any live node (once
+[#620](https://github.com/LunarVagabond/avalon-protocol/issues/620)'s
+cross-node login exists — see that decision for the actual mechanism) and
+their friend/guild/profile actions commit into *that* node's own shard,
+exactly as if they'd always used it. If the node/shard they'd been using
+disappears mid-session, reconnecting through a different live node and
+continuing is the same "reconnect elsewhere" pattern
+[#541](https://github.com/LunarVagabond/avalon-protocol/issues/541)
+already proved for realtime chat, just extended to authoring durable
+events generally rather than only receiving live pushes.
+
+**The real, narrower failure that remains** (tracked as
+[#609](https://github.com/LunarVagabond/avalon-protocol/issues/609)) is a
+*specific* integrator's own dedicated settlement shard (their achievements,
+tournament results — anything issued under that shard's own authority,
+per [`settlement.md`](./settlement.md)'s per-shard trust model) going
+down: that pauses *that integrator's own* new issuances, a real but
+contained, per-integrator blast radius — never a network-wide one, and
+never something that stops an identity from acting anywhere else.
+
+Separately, none of this helps if a shard's *data* was never durably
+copied anywhere to begin with — see
+[#622](https://github.com/LunarVagabond/avalon-protocol/issues/622)
+(open) for the distinct, more foundational question of whether any
+minimum replication guarantee should exist at all, versus today's purely
+opt-in mirroring.
+
 **A pure mirror's "nothing here yet" 404 says so (#519).** Before a mirror
 node has backfilled anything for a given shard, `GET /ledger/sth/latest`
 (and `/ledger/sth/{tree_size}`) 404 — same as a genuinely empty Settlement
