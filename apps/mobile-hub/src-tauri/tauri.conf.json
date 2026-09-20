@@ -30,5 +30,12 @@
   "bundle": {
     "active": true,
     "targets": "all"
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["avalon"]
+      }
+    }
   }
 }
