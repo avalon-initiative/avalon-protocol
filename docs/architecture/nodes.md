@@ -505,6 +505,34 @@ genuinely-incompatible-crypto-change case none of the above can cover.
 
 ## Today in the repo
 
+- **Cross-node login (epic #623) has landed its foundation, not the full
+  epic**: `avalon_protocol::cross_node_login::CrossNodeLoginGrant` (#633) —
+  a self-signed assertion, structurally close to #525's
+  `ContinuationToken` and #610's `InterestClaim`, that a human, shown real
+  requesting-node context, approved logging an identity into a specific
+  destination node — and its server-side lifecycle (#634):
+  `POST /auth/cross-node/{start,poll,submit,deny}`
+  (`crates/server/src/cross_node_login.rs`), structurally close to #307's
+  `device_pairing` create/poll/approve shape but genuinely cross-node
+  (approval never requires a live session on the requesting node itself).
+  Verification checks the grant's signature against
+  `identity_signing_keys`, destination-binds `destination_base_url` against
+  this node's own `AVALON_NODE_URL` (#610's destination-binding lesson,
+  applied here), and gates replay via `consumed_cross_node_login_nonces`
+  (migration `0072_cross_node_login`), same pattern #525 already
+  established. Live-verified against real Postgres and a real server
+  process: same-device fast-path submit, cross-device start/submit/poll
+  round-trip, destination-mismatch rejection, replay rejection, expiry/TTL
+  rejection, wrong-key rejection, and deny-then-blocked-submit
+  (`crates/server/tests/cross_node_login.rs`, `--ignored`). **Not yet
+  built**: the identity locator over the DHT (#635 — this node's own
+  verification only ever checks its *local* `identity_signing_keys`, so an
+  identity whose signing-key projection isn't already replicated to the
+  node being logged into can't yet complete this flow end-to-end),
+  cross-shard proof resolution (#636), both SDKs (#637/#638), Hub/mobile-hub
+  approval UI (#639/#640), rate limiting (#641), and the phishing-context
+  decision (#642, open) gating what the approval screen is even allowed to
+  render.
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in

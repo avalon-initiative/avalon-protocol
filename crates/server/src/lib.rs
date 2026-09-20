@@ -9,6 +9,7 @@ pub mod chat_replication;
 pub mod connections;
 pub mod continuation;
 pub mod conversations;
+pub mod cross_node_login;
 pub mod cross_shard;
 pub mod device_pairing;
 pub mod devices;
@@ -179,6 +180,12 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
             post(device_pairing::approve_pairing),
         )
         .route("/auth/device/deny", post(device_pairing::deny_pairing))
+        // Epic #623, issue #634: cross-node login — see
+        // `crate::cross_node_login`'s module docs.
+        .route("/auth/cross-node/start", post(cross_node_login::start))
+        .route("/auth/cross-node/poll", post(cross_node_login::poll))
+        .route("/auth/cross-node/submit", post(cross_node_login::submit))
+        .route("/auth/cross-node/deny", post(cross_node_login::deny))
         .route("/me", get(handlers::me).patch(handlers::update_profile))
         .route("/me/history", get(handlers::my_history))
         .route("/me/achievements", get(attestations::list_my_achievements))
