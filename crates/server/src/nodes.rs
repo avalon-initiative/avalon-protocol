@@ -726,7 +726,14 @@ impl AnnounceConfig {
 /// `Settlement`/`Indexer`/`Realtime`/`Gateway` capability names), defaulting
 /// to `combined` — milestone 1's "one `avalon-server` process" reality, per
 /// that doc's own capability table.
-fn node_roles() -> Vec<String> {
+///
+/// Issue #664: this used to be purely advisory (peer-table bookkeeping and
+/// #539's realtime relay routing only) — `main.rs` now also reads it to
+/// decide what actually gets wired up at startup for the one role
+/// combination it treats as load-bearing (see [`is_settlement_only`]).
+/// `pub` for that reason, and so `main.rs` doesn't reimplement the same
+/// env-var parsing.
+pub fn node_roles() -> Vec<String> {
     std::env::var("AVALON_NODE_ROLES")
         .ok()
         .map(|raw| {
@@ -737,6 +744,24 @@ fn node_roles() -> Vec<String> {
         })
         .filter(|roles| !roles.is_empty())
         .unwrap_or_else(|| vec!["combined".to_string()])
+}
+
+/// Issue #664: true only when `roles` is *exactly* `["settlement"]` — a
+/// genuinely standalone Settlement node, not `combined` (which still runs
+/// everything, including Settlement) and not some other future combination
+/// #662/#663 may introduce (`["settlement", "indexer"]`, say) that this
+/// ticket deliberately doesn't try to have an opinion on. This is the one
+/// predicate `main.rs`/`lib.rs::router_settlement_only` gate on: every other
+/// roles configuration gets today's full router and worker set, unchanged.
+///
+/// The mirror case — Gateway pointed at a *remote* Settlement authority —
+/// doesn't need a new predicate here at all: #313's `AVALON_SETTLEMENT_REMOTE_URL(S)`
+/// already exists and is checked independently by `crate::outbox`, so a
+/// node can already run `combined` (or any roles list) while forwarding its
+/// own outbox writes elsewhere. See `docs/architecture/nodes.md`'s "Today in
+/// the repo" section for why these are one config surface, not two.
+pub fn is_settlement_only(roles: &[String]) -> bool {
+    roles.len() == 1 && roles[0] == "settlement"
 }
 
 /// Bounded promotion of newly-discovered peers into the active
@@ -1143,6 +1168,25 @@ mod tests {
         unsafe {
             std::env::remove_var("AVALON_NODE_ROLES");
         }
+    }
+
+    /// Issue #664: pure function, no env involved — `is_settlement_only`
+    /// only ever gates on the resolved roles list, never reads
+    /// `AVALON_NODE_ROLES` itself.
+    #[test]
+    fn is_settlement_only_requires_exactly_one_settlement_role() {
+        assert!(is_settlement_only(&["settlement".to_string()]));
+        assert!(!is_settlement_only(&["combined".to_string()]));
+        assert!(!is_settlement_only(&[]));
+        assert!(!is_settlement_only(&[
+            "settlement".to_string(),
+            "gateway".to_string()
+        ]));
+        assert!(!is_settlement_only(&[
+            "settlement".to_string(),
+            "indexer".to_string()
+        ]));
+        assert!(!is_settlement_only(&["gateway".to_string()]));
     }
 
     /// Issue #517: `NodeStatusResponse` must still be valid JSON when every

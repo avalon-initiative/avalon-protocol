@@ -31,11 +31,16 @@ later without a rewrite.
 
 **Config knob**: `AVALON_NODE_ROLES` (comma-separated, e.g.
 `settlement,indexer`) — see `crates/server/src/nodes.rs::node_roles`.
-Unset defaults to `combined`, today's only actually-implemented mode
-(specialized single-role deployments are designed for, per the doc
-comment above, but not yet exercised operationally). This value is purely
+Unset defaults to `combined`. This value used to be purely
 advisory/self-reported (peer-table bookkeeping and #539's realtime relay
-routing) — it doesn't gate which endpoints a node actually serves.
+routing) and never gated which endpoints a node actually serves. **Issue
+#664 makes one specific value load-bearing**: a roles list resolving to
+*exactly* `["settlement"]` (`crates/server/src/nodes.rs::is_settlement_only`)
+now makes `main.rs` skip wiring up every Gateway-facing module at all and
+serve a reduced route table — see this file's "Today in the repo" entry
+for #664. Every other roles value, including the `combined` default,
+still behaves exactly as before this ticket: advisory only, full route
+table, every module wired up regardless of what's declared.
 
 ### A node's three configuration axes are independent
 
@@ -1349,6 +1354,58 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `PostgresIndexer::apply_in_tx`, a coupling that has to be unpicked
   first) — that wiring, and turning this from "proven pattern" into
   "an actual Gateway-only deployment mode," is #662's job.
+- **Settlement as its own standalone node has landed (#664)**, the third
+  of #291's four role-extraction tickets — a genuinely separable
+  Settlement deployment, not just #313's remote-submit *config flag*
+  inside a combined binary (that was real, working infrastructure this
+  ticket builds on, but it never took Gateway modules out of the process
+  at all — every WebAuthn/session/guild/presence handler stayed mounted
+  and reachable either way). Same mode-flag-based single-binary shape
+  #662/#663 use: `AVALON_NODE_ROLES` resolving to *exactly* `["settlement"]`
+  (`crates/server/src/nodes.rs::is_settlement_only`) is the one predicate
+  `main.rs` gates on. When it's true: no `AVALON_WEBAUTHN_RP_ID`/`ORIGIN`
+  required (a harmless placeholder `Webauthn` instance is built instead,
+  since `AppState::webauthn` is a plain `Arc<Webauthn>` and every Gateway
+  handler that would touch it is never mounted); `avalon_server::router_settlement_only`
+  (`crates/server/src/lib.rs`) replaces `router` and mounts only `/ledger/*`
+  (`crate::settlement`'s full read+write surface, including #531's
+  managed-hosting two-phase `prepare-batch`/`finalize-batch` and #529's
+  cross-shard-root), `/nodes/{announce,peers,status,log-level}` (peer
+  discovery/ops, not Gateway-facing), and `/mirror/notify` (#596's push
+  wake) — no identity/session/social/guild/achievement/integration route
+  at all; and three Gateway-only background workers (`outbox::run_worker`,
+  the guild-message archive-expiry worker, and #635's identity locator) are
+  never spawned, since none of them have anything to do when no Gateway
+  handler ever runs on this process. Retention pruning, the mirror-watcher,
+  the minimum-replication-guarantee worker, and node-to-node
+  announce/bootstrap all keep running exactly as before — genuinely
+  Settlement-side concerns, not gated on this ticket's predicate at all.
+  **The mirror-image case — a Gateway-only node with no local Settlement
+  role, pointed at a remote one — turned out to need no new mechanism**:
+  #313's `AVALON_SETTLEMENT_REMOTE_URL(S)` already worked standalone before
+  this ticket (a `combined`-labeled node with remote-submit configured is
+  already, functionally, "Gateway-only + remote Settlement"); this ticket
+  just confirmed that live rather than assuming it, and added one startup
+  warning (roles excluding `settlement` with no remote-submit configured
+  falls back to committing locally despite the declared role, same as
+  before this ticket — never a hard failure, since `AppState::chain` is a
+  required field regardless of role) so that combination isn't silently
+  invisible to an operator. So **one config surface, not two**: Settlement-
+  only, Settlement+Gateway combined, and Gateway-only-pointed-at-remote are
+  three points on the same `AVALON_NODE_ROLES` + `AVALON_SETTLEMENT_REMOTE_URL(S)`
+  surface, not separate flags. Live-verified: two real `avalon-server`
+  processes against the same Postgres via distinct schemas (the
+  `feedback_live_verify_two_local_processes` pattern) — a Settlement-only
+  node 404s cleanly on `/identities/register/start` and `/me` (no panic,
+  no route that happens to work) while `/ledger/sth/latest` still serves;
+  a separate Gateway-only node (`AVALON_NODE_ROLES=gateway`,
+  `AVALON_SETTLEMENT_REMOTE_URL` pointed at the Settlement-only node's
+  port) registered a real identity through a full WebAuthn ceremony (a
+  software authenticator, same shape `tests/identity_locator.rs` already
+  established), and that identity's `identity.passkey_registered`/
+  `identity.signing_key_added` entries appeared on the Settlement-only
+  node's own `/ledger/entries`, with `/ledger/sth/latest`'s `tree_size`
+  past them (`crates/server/tests/settlement_only.rs`, `--ignored`).
 
 ## Decisions and tickets
 
