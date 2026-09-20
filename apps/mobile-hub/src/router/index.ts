@@ -28,6 +28,16 @@ const router = createRouter({
     // Reachable whether logged in or not — a fresh install needs to be able
     // to point at a non-default server before an identity even exists.
     { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue') },
+    // Epic #623, issue #640: cross-node login approval, reached via a
+    // `?node=...&user_code=...` deep link (see `src-tauri/src/lib.rs`'s
+    // deep-link listener) or typed in by hand — same shape
+    // `apps/hub/src/views/CrossNodeLogin.vue` (#639) already established.
+    {
+      path: '/cross-node-login',
+      name: 'cross-node-login',
+      component: () => import('../views/CrossNodeLogin.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

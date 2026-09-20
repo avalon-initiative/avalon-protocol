@@ -99,6 +99,27 @@ fn secure_storage_delete(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Epic #623, issue #640: cross-node login approval reached via a
+        // deep link (`avalon://cross-node-login?node=...&user_code=...`
+        // on desktop, per tauri.conf.json's `plugins.deep-link.desktop`
+        // config) — the frontend listens for it in `main.ts`
+        // (`onOpenUrl`/`getCurrent`) and routes into
+        // `views/CrossNodeLogin.vue`. Registering the plugin is the only
+        // native-side wiring this needs; everything else is TypeScript.
+        //
+        // Known real gap, not silently assumed away: desktop's own
+        // `onOpenUrl` needs `tauri-plugin-single-instance` to route a
+        // second-launch URL into the already-running app on Windows/Linux
+        // (macOS gets it natively) — not added here, so a cold desktop
+        // launch via deep link works (`getCurrent`), but re-triggering one
+        // while already running does not yet on Windows/Linux. True iOS
+        // Universal Links / Android App Links additionally need this
+        // repo's native mobile projects initialized at all
+        // (`tauri ios init`/`tauri android init`, neither run yet — see
+        // `src-tauri/gen/` only having desktop/linux schemas) plus a real
+        // hosted domain's `.well-known` association files — out of scope
+        // here, tracked as a real follow-up rather than assumed done.
+        .plugin(tauri_plugin_deep_link::init())
         .manage(Box::new(KeyringStore) as Box<dyn SecureStore>)
         .invoke_handler(tauri::generate_handler![
             secure_storage_get,
@@ -134,7 +155,10 @@ mod tests {
         }
 
         fn set(&self, key: &str, value: &str) -> Result<(), String> {
-            self.0.lock().unwrap().insert(key.to_string(), value.to_string());
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_string());
             Ok(())
         }
 
@@ -175,7 +199,13 @@ mod tests {
         set_impl(&store, "avalon:session:token", "tok").unwrap();
         set_impl(&store, "avalon:session:identityId", "id-1").unwrap();
 
-        assert_eq!(get_impl(&store, "avalon:session:token").unwrap(), Some("tok".to_string()));
-        assert_eq!(get_impl(&store, "avalon:session:identityId").unwrap(), Some("id-1".to_string()));
+        assert_eq!(
+            get_impl(&store, "avalon:session:token").unwrap(),
+            Some("tok".to_string())
+        );
+        assert_eq!(
+            get_impl(&store, "avalon:session:identityId").unwrap(),
+            Some("id-1".to_string())
+        );
     }
 }

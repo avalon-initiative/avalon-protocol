@@ -654,12 +654,34 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   pile of `Cannot find module '@avalon/api-client'` errors) was never a
   real code problem, just a stale `node_modules`. A plain `npm install` at
   the repo root fixed it completely — `vue-tsc -b apps/hub` is now clean,
-  and `npm run -w apps/hub test` passes all 472 tests. **Still not built**:
-  mobile-hub's own approval screen (#640, the QR/deep-link entry point —
-  #639's Hub screen is what it routes into once built), #649's server-side
-  verification-status resolution (#639 renders the raw `requesting_context`
-  string for now, no verified/unverified visual distinction yet), and rate
-  limiting (#641).
+  and `npm run -w apps/hub test` passes all 472 tests.
+- **mobile-hub's own approval screen has landed (#640)**:
+  `apps/mobile-hub/src/views/CrossNodeLogin.vue` is the same approval logic
+  #639's Hub screen established (same `@avalon/api-client` functions —
+  `lookupCrossNodeLogin` before rendering anything approvable per #642,
+  `mintCrossNodeLoginGrant`/`submitCrossNodeLoginGrant`/`denyCrossNodeLogin`
+  — neither app imports the other's `.vue`, only the shared package), with
+  its own real deep-link entry point: `tauri_plugin_deep_link` registered
+  in `src-tauri/src/lib.rs`, an `avalon://` custom scheme declared in
+  `tauri.conf.json`'s `plugins.deep-link.desktop.schemes`, and
+  `deepLink.ts` parsing an incoming `avalon://cross-node-login?node=...&user_code=...`
+  URL and routing into the screen — `getCurrent()` for a cold launch,
+  `onOpenUrl()` for one that arrives while already running. #642's
+  no-auto-approve requirement holds regardless of entry point: a deep link
+  only ever prefills the form, `lookup`+an explicit tap on Approve is still
+  required. **Two real, explicitly-not-closed gaps, not silently assumed
+  done**: desktop `onOpenUrl` needs `tauri-plugin-single-instance` to route
+  a second-launch URL into the already-running app on Windows/Linux (macOS
+  gets it natively) — not added; and true iOS Universal Links / Android App
+  Links need this repo's native mobile projects initialized at all
+  (`tauri ios/android init`, neither run — `src-tauri/gen/` only has
+  desktop/linux capability schemas) plus a real hosted domain's
+  `.well-known` association files, both out of scope here. Manual
+  node/code entry (typed by hand) always works regardless of any of this.
+  **Still not built**: #649's server-side verification-status resolution
+  (both approval screens render the raw `requesting_context` string for
+  now, no verified/unverified visual distinction yet) and rate limiting
+  (#641).
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
