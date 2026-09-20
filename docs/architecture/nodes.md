@@ -603,12 +603,24 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   detail, including the same-device fast path
   (`submit_cross_node_login_grant`) and why this SDK's usual
   integrator-backend callers rarely use it (they never hold a *player's*
-  own signing key). **Still not built**: the C# SDK (#638, meant to mirror
-  this one's shape once it's proven out — done now), Hub/mobile-hub
-  approval UI (#639/#640, the actual Hub route this epic's own login flow
-  needs to be usable by an ordinary player at all), rate limiting (#641),
-  and the phishing-context decision (#642, open) gating what the approval
-  screen is even allowed to render.
+  own signing key).
+- **The phishing-context decision is now decided (#642, closed)**: no hard
+  allowlist gate on the requesting integrator (would block a brand-new,
+  not-yet-registered integrator's very first login — the exact case this
+  epic exists to unlock) — instead, the approval screen always renders,
+  but must visually distinguish a verified requester (resolved against the
+  same #543 issuer-key/integrator registry shard-settlement trust already
+  uses) from an unverified one, and mobile-hub's QR/deep-link flow must
+  never auto-approve off a scan, always routing into an explicit confirm
+  step. Actually resolving verified-vs-unverified status server-side is
+  its own new piece of work (#649, sub-issue of this epic) — #639/#640
+  aren't blocked on it landing first, they can ship the visual-distinction
+  UI against a stubbed value and wire #649 in once it exists. **Still not
+  built**: the C# SDK (#638, meant to mirror the Rust SDK's now-proven
+  shape), Hub/mobile-hub approval UI itself (#639/#640, the actual Hub
+  route this epic's own login flow needs to be usable by an ordinary
+  player at all), #649's server-side verification-status resolution, and
+  rate limiting (#641).
 - Exactly one node type exists: `avalon-server` (`crates/server/src/main.rs`)
   running Gateway + Settlement (via `PostgresSettlementProvider`) + Indexer
   (`PostgresIndexer`) + Realtime (`presence.rs`'s WebSocket service) all in
@@ -1037,6 +1049,14 @@ genuinely-incompatible-crypto-change case none of the above can cover.
 
 ## Decisions and tickets
 
+- [#642](https://github.com/LunarVagabond/avalon-protocol/issues/642)
+  decided (cross-node login's phishing-context requirement): no hard
+  registered-integrator gate on the approval prompt, a visual
+  verified-vs-unverified distinction instead, and mobile-hub's QR flow
+  must never auto-approve — see the "Today in the repo" section above.
+  [#649](https://github.com/LunarVagabond/avalon-protocol/issues/649)
+  (open) is the concrete server-side follow-up: actually resolving
+  verified-vs-unverified status.
 - #70 mirrors of a public log, not federation
 - #79 long-term settlement backend; #186 decided no blockchain/validator
   consensus (transparency log on Postgres instead, superseding part of #93);
