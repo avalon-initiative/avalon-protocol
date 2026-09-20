@@ -379,12 +379,43 @@ pub enum AppError {
     /// establishes.
     #[error("failed to read or apply the live log filter")]
     LogReloadFailed,
+    /// Issue #661: an operator-internal role this node depends on (e.g. a
+    /// remote Indexer over `crate::internal_role`'s protocol) didn't
+    /// answer — a connection failure, timeout, or non-success response.
+    /// Deliberately distinct from [`Self::Index`]/[`Self::Database`]: those
+    /// mean the dependency *did* run and reported a real failure of its
+    /// own; this means the dependency itself was unreachable, a condition
+    /// callers and operators need to be able to tell apart from "the data
+    /// doesn't exist" or "a storage bug" (see #661's own ticket). `role`
+    /// names which internal role was unreachable (e.g. `"indexer"`),
+    /// `detail` carries the underlying network error for logs/debugging —
+    /// never surfaced verbatim as trusted content, just diagnostic text.
+    #[error("remote role '{role}' is unreachable: {detail}")]
+    RemoteRoleUnreachable { role: String, detail: String },
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("ledger error")]
     Ledger(#[from] avalon_chain::SettlementError),
+    /// Deliberately hand-written rather than `#[from]`: an
+    /// [`avalon_indexer::IndexError::RemoteUnreachable`] must map to
+    /// [`Self::RemoteRoleUnreachable`] (a distinct 503, not a generic
+    /// 500) — see that variant's own doc comment.
     #[error("index error")]
-    Index(#[from] avalon_indexer::IndexError),
+    Index(avalon_indexer::IndexError),
+}
+
+impl From<avalon_indexer::IndexError> for AppError {
+    fn from(err: avalon_indexer::IndexError) -> Self {
+        match err {
+            avalon_indexer::IndexError::RemoteUnreachable(detail) => {
+                AppError::RemoteRoleUnreachable {
+                    role: "indexer".to_string(),
+                    detail,
+                }
+            }
+            other => AppError::Index(other),
+        }
+    }
 }
 
 impl AppError {
@@ -572,6 +603,7 @@ impl AppError {
             AppError::PeerNetworkMismatch => "PEER_NETWORK_MISMATCH",
             AppError::InvalidLogFilter => "INVALID_LOG_FILTER",
             AppError::LogReloadFailed => "LOG_RELOAD_FAILED",
+            AppError::RemoteRoleUnreachable { .. } => "REMOTE_ROLE_UNREACHABLE",
             AppError::Database(..) => "DATABASE",
             AppError::Ledger(..) => "LEDGER",
             AppError::Index(..) => "INDEX",
@@ -822,6 +854,11 @@ impl IntoResponse for AppError {
             AppError::Database(_) | AppError::Ledger(_) | AppError::Index(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
+            // Issue #661: a real dependency-down condition, not the
+            // client's fault and not "the data doesn't exist" — 503, the
+            // conventional status for "this server is fine but something
+            // it depends on isn't," distinct from the 500s above.
+            AppError::RemoteRoleUnreachable { .. } => StatusCode::SERVICE_UNAVAILABLE,
         };
         // Never leak internal error detail (e.g. SQL error text) to the client —
         // log it server-side once real observability exists; for now the
@@ -831,6 +868,16 @@ impl IntoResponse for AppError {
                 "internal server error".to_string()
             }
             AppError::ProofVerificationFailed => "internal server error".to_string(),
+            // Issue #661: `detail` is diagnostic text about this node's
+            // own internal deployment (which internal URL failed, the raw
+            // network error) — never worth handing to an external caller,
+            // same posture as the storage-error variants above. `role`
+            // alone (not internal-topology detail) is genuinely useful to
+            // a caller/SDK deciding whether to retry, so it stays in the
+            // message.
+            AppError::RemoteRoleUnreachable { role, .. } => {
+                format!("remote role '{role}' is unreachable")
+            }
             other => other.to_string(),
         };
         let mut body = json!({ "error": message, "code": self.code() });
@@ -839,5 +886,37 @@ impl IntoResponse for AppError {
             body["mirror_peers"] = json!(peers);
         }
         (status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #661: an `IndexError::RemoteUnreachable` (raised by
+    /// `crate::internal_role::RemoteIndexer` on a network failure or
+    /// non-success response) must map to `AppError::RemoteRoleUnreachable`
+    /// — a distinct 503, not the generic 500 `AppError::Index` carries —
+    /// never silently fall through the `#[from]`-style catch-all a plain
+    /// derive would have given every other `IndexError` variant.
+    #[test]
+    fn remote_unreachable_index_error_maps_to_remote_role_unreachable() {
+        let err: AppError =
+            avalon_indexer::IndexError::RemoteUnreachable("connection refused".to_string()).into();
+        assert!(matches!(
+            err,
+            AppError::RemoteRoleUnreachable { ref role, .. } if role == "indexer"
+        ));
+        assert_eq!(err.code(), "REMOTE_ROLE_UNREACHABLE");
+    }
+
+    /// Every other `IndexError` variant still takes the ordinary
+    /// `AppError::Index` path, so this mapping stays additive rather than
+    /// reclassifying unrelated index failures.
+    #[test]
+    fn other_index_errors_still_map_to_index() {
+        let err: AppError = avalon_indexer::IndexError::DisplayNameTaken.into();
+        assert!(matches!(err, AppError::Index(_)));
+        assert_eq!(err.code(), "INDEX");
     }
 }

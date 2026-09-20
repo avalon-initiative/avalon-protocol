@@ -133,4 +133,17 @@ pub struct AppState {
     /// env-filter, built once in `main::init_tracing` — swapping through
     /// this changes what gets logged on the very next call, no restart.
     pub log_reload_handle: crate::admin::LogReloadHandle,
+    /// `AVALON_INTERNAL_ROLE_KEY` (issue #661) — the bearer credential
+    /// `crate::internal_role`'s operator-internal, node-to-node endpoints
+    /// require (e.g. `POST /internal/indexer/apply`). A *third* distinct
+    /// shared secret, deliberately never reused from `settlement_submit_key`
+    /// or `admin_token` above — same reasoning #658 used to split
+    /// `admin_token` from `settlement_submit_key`: each covers a different
+    /// trust domain (public mirror-sync write, this-operator's-own-admin,
+    /// this-operator's-own-role-to-role RPC), and collapsing any two of
+    /// them would let a credential meant for one purpose reach another.
+    /// `None` means every request to those endpoints is refused, same
+    /// "unset means closed, never silently open" posture the other two
+    /// keys already establish.
+    pub internal_role_key: Option<String>,
 }

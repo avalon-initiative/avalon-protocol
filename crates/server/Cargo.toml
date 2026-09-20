@@ -11,6 +11,7 @@ default-run = "avalon-server"
 avalon-protocol = { path = "../protocol" }
 avalon-chain = { path = "../chain" }
 avalon-indexer = { path = "../indexer" }
+async-trait.workspace = true
 # Issue #362: reuses `avalon_sdk::network::bundled_trust_anchors()` — the
 # one canonical parse of `docs/trusted-networks.json` — for this node's
 # default announce/bootstrap seed list, rather than a second parser.

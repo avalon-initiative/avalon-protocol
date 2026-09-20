@@ -37,6 +37,20 @@ pub enum IndexError {
     /// 500.
     #[error("display_name is already taken")]
     DisplayNameTaken,
+    /// Issue #661: raised by a network-facing [`Indexer`] implementation
+    /// (`avalon_server::internal_role::RemoteIndexer`) when a request to
+    /// the remote Indexer process could not be completed — a connection
+    /// failure, timeout, or a non-success response, as opposed to
+    /// [`Self::Storage`], which means the remote (or local) Indexer *did*
+    /// run and reported a real storage failure of its own. Kept in this
+    /// crate (rather than only in `avalon-server`, which owns the actual
+    /// HTTP client) so any future `Indexer` implementation — remote or
+    /// otherwise — has one shared way to report "the role I depend on
+    /// didn't answer," instead of every caller having to guess from a
+    /// generic [`Self::Storage`] string whether the failure was local or a
+    /// downstream dependency being down.
+    #[error("remote indexer role unreachable: {0}")]
+    RemoteUnreachable(String),
 }
 
 impl From<sqlx::Error> for IndexError {
