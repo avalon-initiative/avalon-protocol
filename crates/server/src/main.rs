@@ -285,6 +285,12 @@ async fn main() {
             .ok()
             .filter(|s| !s.is_empty()),
         log_reload_handle,
+        // Issue #661: deliberately a *third* shared secret, distinct from
+        // both `settlement_submit_key` and `admin_token` above — see
+        // `AppState::internal_role_key`'s own doc comment.
+        internal_role_key: std::env::var("AVALON_INTERNAL_ROLE_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
         mirror_confirmations: mirror_confirmations.clone(),
         replication_gate,
     };

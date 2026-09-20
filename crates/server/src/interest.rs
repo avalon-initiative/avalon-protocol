@@ -969,6 +969,7 @@ mod tests {
                     tracing_subscriber::EnvFilter::new("info"),
                 )
                 .1,
+                internal_role_key: None,
                 mirror_confirmations: crate::replication::MirrorConfirmationRegistry::new(),
                 replication_gate: crate::replication::ReplicationGateConfig::from_env(),
             }

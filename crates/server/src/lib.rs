@@ -30,6 +30,7 @@ pub mod integrator_schema_mappings;
 pub mod integrator_schemas;
 pub mod integrators;
 pub mod interest;
+pub mod internal_role;
 pub mod issuer_registration;
 pub mod migrate;
 pub mod mirror_push;
@@ -661,6 +662,21 @@ pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterS
         .route(
             "/nodes/replicate-chat",
             post(chat_replication::replicate_chat_handler),
+        )
+        // Issue #661: operator-internal, node-to-node RPC (epic #291's
+        // Node Role Separation) — see `crate::internal_role`'s own module
+        // doc comment for why this is a *third*, deliberately distinct
+        // auth domain from both `/ledger/*` (issue #40, cross-operator)
+        // and `/nodes/log-level` (this operator's own admin console)
+        // above. `apply_indexer_event`/`rebuild_indexer` are the first,
+        // proven instance of the pattern — the `Indexer` role over HTTP.
+        .route(
+            "/internal/indexer/apply",
+            post(internal_role::apply_indexer_event),
+        )
+        .route(
+            "/internal/indexer/rebuild",
+            post(internal_role::rebuild_indexer),
         )
         .with_state(state)
         // Issue #265: every HTTP request gets a tracing span

@@ -1301,9 +1301,65 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   sample. Every leaf field is independently optional and best-effort — a
   metric this process can't read on the host it happens to be running on
   is `None`, never a failed request. See `crates/server/src/resources.rs`.
+- **Operator-internal node-to-node RPC (#661), the foundation epic #291's
+  four role-extraction tickets (#662 Indexer, #663 Realtime, #664
+  Settlement, #665 discovery/routing) build on.** Once a Gateway process
+  and its backing Indexer/Realtime/Settlement processes are genuinely
+  separate, a Gateway's call sites need a way to reach a role that isn't
+  in-process anymore — this is that mechanism, built once so the four
+  extraction tickets don't each invent their own wire format.
+  **Deliberately distinct from #40's `/ledger/*` mirror-sync protocol**:
+  that one is multi-operator and trust-minimized (independent Settlement
+  nodes verifying and mirroring one log); this one is operator-internal —
+  one deployment's own processes talking to each other, no independent
+  verification needed on either side. HTTP+JSON, matching every other
+  endpoint in this codebase, gated on a *third* shared-secret bearer
+  token (`AVALON_INTERNAL_ROLE_KEY`, `AppState::internal_role_key`) —
+  deliberately never reused from `AVALON_SETTLEMENT_SUBMIT_KEY` (#313,
+  can be shared across two nodes so they can submit to each other's
+  ledger) or `AVALON_ADMIN_TOKEN` (#658, meant to be held by only one
+  process's own operator console); unset means every request under
+  `/internal/*` is refused, same "closed by default" posture the other
+  two keys establish. `crate::internal_role` is the whole module — its
+  own doc comment has the full design writeup. The pattern is proven
+  concretely, not just designed on paper: `avalon_indexer::Indexer`
+  (#42 — `apply`/`rebuild`) was picked as the first target, since
+  `avalon-indexer` already depends only on `avalon-protocol`, not
+  `avalon-server`. `POST /internal/indexer/apply` and
+  `POST /internal/indexer/rebuild` are thin server-side twins of the
+  in-process calls, and `RemoteIndexer` is a real `Indexer` implementation
+  backed by HTTP calls to them — any code holding an `impl Indexer` can't
+  tell it apart from a local `PostgresIndexer`. A remote role that's
+  unreachable (down, or just hung — `RemoteIndexer`'s HTTP client carries
+  its own 10s timeout so an unresponsive peer can't make a caller hang
+  too) surfaces as `IndexError::RemoteUnreachable`, mapped by
+  `AppError::RemoteRoleUnreachable` to a `503` — a real dependency-down
+  signal, never conflated with "the data doesn't exist" (`404`) or a
+  generic storage bug (`500`). Live-verified: two real `avalon-server`
+  processes against the same Postgres via distinct schemas, one acting as
+  the Indexer role (real `PostgresIndexer` behind the new endpoints), the
+  other using only a `RemoteIndexer` pointed at it — `apply`/`rebuild`
+  over the network produce results identical to the same calls made
+  in-process against `PostgresIndexer` directly, and killing the Indexer
+  process mid-request produces the clean `RemoteRoleUnreachable`/`503`,
+  not a hang or a misleading error. **Not wired into `avalon-server`'s own
+  startup path** — every real handler still calls `PostgresIndexer`
+  in-process (several, like `register_finish`/`update_profile`, share a
+  Postgres transaction with their own app-data writes via
+  `PostgresIndexer::apply_in_tx`, a coupling that has to be unpicked
+  first) — that wiring, and turning this from "proven pattern" into
+  "an actual Gateway-only deployment mode," is #662's job.
 
 ## Decisions and tickets
 
+- [#291](https://github.com/LunarVagabond/avalon-protocol/issues/291)
+  (Node Role Separation) — [#661](https://github.com/LunarVagabond/avalon-protocol/issues/661)
+  (implemented) is its foundational sub-issue: the operator-internal
+  node-to-node RPC protocol #662 (extract Indexer), #663 (extract
+  Realtime), #664 (Settlement as its own node), and #665
+  (discovery/routing) all build on — see the "Today in the repo" section
+  above for the transport/auth decisions and the proven `Indexer`-over-HTTP
+  instance.
 - [#642](https://github.com/LunarVagabond/avalon-protocol/issues/642)
   decided (cross-node login's phishing-context requirement): no hard
   registered-integrator gate on the approval prompt, a visual
