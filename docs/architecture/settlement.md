@@ -615,6 +615,16 @@ Everything below is real and implemented unless noted otherwise.
   since a push only changes when a poll-equivalent tick runs, never what
   it trusts; see [`nodes.md`](./nodes.md)'s own "Today in the repo" entry
   for the full mechanism.
+- **`hash_entry`/`EntryContent` are now `pub`** (`crates/chain/src/postgres.rs`,
+  epic #623 issue #636) — a cross-shard verifier fetching one entry from a
+  node it doesn't mirror needs to independently recompute that entry's
+  `entry_hash` from fetched content and compare, not just trust a signed
+  root plus a structurally-valid inclusion proof (see
+  [`nodes.md`](./nodes.md)'s own "Today in the repo" entry for the full
+  fetch-and-verify primitive this enables, `crate::cross_shard_fetch`).
+  `GET /ledger/proof/inclusion`'s response also now includes `leaf_index`
+  for the same reason — a one-off verifier, unlike a continuously
+  backfilling mirror, has no local backfill progress to derive it from.
 - **`POST /ledger/submit`** (#313) — the node-to-node write endpoint.
 - **`GET /ledger/remote-submit-status`** (#526) — a forwarding node's
   discovery hint for which of its configured shard authorities is

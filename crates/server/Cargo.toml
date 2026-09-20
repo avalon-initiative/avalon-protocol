@@ -59,6 +59,9 @@ public-suffix.workspace = true
 # testing relay delivery only indirectly.
 tokio-tungstenite = "0.29"
 futures-util = { workspace = true }
+# Issue #636: a mocked remote node for the cross-shard-fetch tamper-
+# detection test — already used the same way by `crates/sdk`.
+wiremock.workspace = true
 
 [[bin]]
 name = "avalon-server"

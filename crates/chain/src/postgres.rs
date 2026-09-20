@@ -23,14 +23,22 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 /// The fields that make up an entry's content hash — grouped so recomputing
 /// a hash (at insert time from a `ProtocolEvent`, or at verify time from a
 /// stored row) takes one argument, not eight.
-struct EntryContent<'a> {
-    event_id: Uuid,
-    kind: &'a str,
-    issuer: &'a str,
-    subject: &'a str,
-    payload: &'a serde_json::Value,
-    timestamp: time::OffsetDateTime,
-    version: i32,
+///
+/// `pub` (epic #623, issue #636): a cross-shard verifier fetching a
+/// specific entry from a remote node it doesn't mirror needs to
+/// independently recompute that entry's `entry_hash` from its fetched
+/// content and compare — proving the *payload* it received is actually
+/// what the (separately, RFC 6962-)proven `leaf_hash` represents, not just
+/// that *some* leaf_hash was included in a signed root. Before this, that
+/// recomputation was only ever possible from inside this module.
+pub struct EntryContent<'a> {
+    pub event_id: Uuid,
+    pub kind: &'a str,
+    pub issuer: &'a str,
+    pub subject: &'a str,
+    pub payload: &'a serde_json::Value,
+    pub timestamp: time::OffsetDateTime,
+    pub version: i32,
 }
 
 /// Serializes `value` with object keys sorted, recursively, so the result
@@ -93,7 +101,7 @@ fn canonical_json(value: &serde_json::Value) -> String {
 /// collide with, or be mistaken for a valid link in, a chain rooted in a
 /// different one. See `PostgresSettlementProvider::connect` for where that
 /// identity is established and enforced.
-fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>) -> String {
+pub fn hash_entry(network_id: &str, prev_hash: &str, content: &EntryContent<'_>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(network_id.as_bytes());
     hasher.update(prev_hash.as_bytes());

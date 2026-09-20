@@ -469,6 +469,15 @@ pub struct InclusionProofQuery {
 pub struct InclusionProofResponse {
     pub seq: i64,
     pub tree_size: i64,
+    /// This entry's rank among all committed entries — `seq` can have gaps
+    /// (this handler's own doc comment explains why) so it's never simply
+    /// `seq - 1`, and a caller that doesn't already track this shard's own
+    /// backfill progress locally (every cross-shard verifier per epic #623
+    /// issue #636, as opposed to a continuously-backfilling mirror, which
+    /// already knows its own next `leaf_index`) has no other way to learn
+    /// it. What [`avalon_chain::merkle::verify_inclusion_proof`]'s own
+    /// `leaf_index` parameter expects.
+    pub leaf_index: i64,
     /// The entry's `entry_hash` — the exact leaf input RFC 6962 leaf-hashes
     /// under the hood, same value already exposed by `avalon
     /// inspect-ledger` / `list_entries`. Not entry payload content.
@@ -551,6 +560,7 @@ pub async fn inclusion_proof(
     Ok(Json(InclusionProofResponse {
         seq,
         tree_size,
+        leaf_index: leaf_index as i64,
         leaf_hash: leaf_hash_hex,
         root_hash: hex::encode(root),
         proof: proof.into_iter().map(hex::encode).collect(),
@@ -607,6 +617,7 @@ async fn mirror_inclusion_proof(
     Ok(Json(InclusionProofResponse {
         seq,
         tree_size,
+        leaf_index,
         leaf_hash: leaf_hash_hex,
         root_hash: hex::encode(root),
         proof: proof.into_iter().map(hex::encode).collect(),

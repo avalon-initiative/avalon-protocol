@@ -18,7 +18,8 @@ pub mod retention;
 pub mod sth;
 
 pub use postgres::{
-    GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView, PostgresSettlementProvider,
+    hash_entry, EntryContent, GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView,
+    PostgresSettlementProvider,
 };
 
 use async_trait::async_trait;
