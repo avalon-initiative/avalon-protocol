@@ -164,17 +164,27 @@ when expected. This is opt-in (`AVALON_RETENTION_ARCHIVE_PEERS` unset
 means zero behavior change from before), so it doesn't retroactively make
 every past pruning decision safe — it means a node that turns it on now
 gets a real, enforced guarantee instead of a documented risk.
-Two things this second node/mechanism does *not* by itself solve, and
-shouldn't be read as solving: **write availability** during a primary
-outage (a mirror-only node never becomes a new writer/authority — that's a
-promotion/failover story neither of these attempts) and the harder
-multi-writer/consensus question #40 still owns. What it does solve: a
-genuine second, independently-verifiable copy of Settlement history no
-longer depends on one physical database being up (reads against
-`avalon-peer` succeed today even with the primary down, served from its
-own independently-verified mirrored data), and a hot node's pruning
-decision is no longer a documented risk an operator has to manage by
-hand — it's an enforced check against real, confirmed coverage.
+Two things this second node/mechanism does *not* by itself solve: **write
+availability** during a primary outage (a mirror-only node never becomes
+a new writer/authority on its own) and the harder multi-writer/consensus
+question #40 still owns. The first is now decided, not open — see
+[#609](https://github.com/LunarVagabond/avalon-protocol/issues/609)
+(decided: a manual, operator-driven promotion runbook, prioritized for
+the `core` shard specifically; tracked as
+[#630](https://github.com/LunarVagabond/avalon-protocol/issues/630)) and
+[#622](https://github.com/LunarVagabond/avalon-protocol/issues/622)
+(decided: a minimum confirmed-mirror count before a shard is trusted
+with new identity registrations at all, extending this same
+archive-confirmation mechanism to a new trigger point; tracked as
+[#629](https://github.com/LunarVagabond/avalon-protocol/issues/629)) —
+deliberately never automatic election/failover, which would reopen #186.
+What this second node/mechanism already solves today: a genuine second,
+independently-verifiable copy of Settlement history no longer depends on
+one physical database being up (reads against `avalon-peer` succeed today
+even with the primary down, served from its own independently-verified
+mirrored data), and a hot node's pruning decision is no longer a
+documented risk an operator has to manage by hand — it's an enforced
+check against real, confirmed coverage.
 
 **Settlement-state checkpoint.** #180 also asked for a periodic
 durable-state checkpoint so a hot-tier node, or any new node, can bootstrap
@@ -761,7 +771,8 @@ genuinely-incompatible-crypto-change case none of the above can cover.
     `GET /ledger/entries` kept answering correctly from its own
     independently-verified data — see the retention section's updated
     honesty note above for exactly what this does and doesn't close
-    (write availability during an outage remains open).
+    (write availability during an outage is now decided — #609/#630 — as
+    a manual promotion runbook, not automatic failover).
   - **Also independently authors a second, distinct shard** (2026-09-17):
     `AVALON_SETTLEMENT_SIGNING_KEY` set to a real, registered
     `shard_settlement` operational key (not a shared node-operator key —
