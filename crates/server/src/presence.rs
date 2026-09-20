@@ -536,12 +536,26 @@ pub struct PresenceWsQuery {
 /// and then silently closes) and hands off to `handle_presence_socket` for
 /// the connection's lifetime. Same friends-only default visibility as
 /// `GET /presence` (see module doc comment and [`presence_visible`]).
+///
+/// Issue #663: when this node's own `AVALON_NODE_ROLES` excludes
+/// `realtime` (`state.realtime_remote_url` is `Some`), the connection is
+/// proxied through to the configured remote Realtime node instead of
+/// being handled by `handle_presence_socket` locally — see
+/// `crate::realtime_proxy`'s own module doc comment for the full design.
+/// Authentication happens here either way, before either path upgrades
+/// the socket.
 pub async fn presence_ws(
     State(state): State<AppState>,
     Query(query): Query<PresenceWsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
     let caller = authenticate_token(&state, &query.token).await?;
+    if let Some(remote_url) = state.realtime_remote_url.clone() {
+        let token = query.token.clone();
+        return Ok(ws.on_upgrade(move |socket| {
+            crate::realtime_proxy::proxy_websocket(socket, remote_url, "/ws/presence", token)
+        }));
+    }
     Ok(ws.on_upgrade(move |socket| handle_presence_socket(socket, state, caller)))
 }
 

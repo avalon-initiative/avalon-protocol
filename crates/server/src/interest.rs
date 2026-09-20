@@ -972,6 +972,7 @@ mod tests {
                 internal_role_key: None,
                 mirror_confirmations: crate::replication::MirrorConfirmationRegistry::new(),
                 replication_gate: crate::replication::ReplicationGateConfig::from_env(),
+                realtime_remote_url: None,
             }
         }
 

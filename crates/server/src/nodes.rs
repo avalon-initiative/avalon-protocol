@@ -729,12 +729,14 @@ impl AnnounceConfig {
 ///
 /// This used to be purely advisory (peer-table bookkeeping and #539's
 /// realtime relay routing only) — `main.rs` now also reads it to decide
-/// what actually gets wired up at startup: whether to construct a local
+/// what actually gets wired up at startup: whether to run local presence/
+/// WebSocket handling at all (issue #663, see [`role_included`]/
+/// [`realtime_mode_from_env`]), whether to construct a local
 /// `PostgresIndexer` or a `RemoteIndexer` (issue #662, see
 /// [`indexer_role_is_local`]), and whether this process is a genuinely
 /// standalone Settlement node (issue #664, see [`is_settlement_only`]).
-/// `pub` for both reasons, and so `main.rs` doesn't reimplement the same
-/// env-var parsing.
+/// `pub` for all three reasons, and so `main.rs` doesn't reimplement the
+/// same env-var parsing.
 pub fn node_roles() -> Vec<String> {
     std::env::var("AVALON_NODE_ROLES")
         .ok()
@@ -746,6 +748,60 @@ pub fn node_roles() -> Vec<String> {
         })
         .filter(|roles| !roles.is_empty())
         .unwrap_or_else(|| vec!["combined".to_string()])
+}
+
+/// Whether `roles` (as returned by [`node_roles`]) includes `role` —
+/// case-insensitively, and treating `combined` as implying every named
+/// capability (milestone 1's default: one process, every role). Pure and
+/// unit-testable independent of the environment, same "pure function
+/// behind the real env-reading one" split this module already establishes
+/// for `resolve_bootstrap_peers`/`promote_discovered_peers`. This is the
+/// same membership rule `crate::realtime_relay::advertises_realtime_relay_role`
+/// encodes for its own narrower `realtime`/`gateway`/`combined` set — kept
+/// as a separate function rather than reused directly, since that one is
+/// specifically "eligible relay target", not "this role is configured",
+/// and the two questions are allowed to diverge (a node can be a valid
+/// relay target for `gateway` without ever being asked whether it holds
+/// the `realtime` role itself).
+pub fn role_included(roles: &[String], role: &str) -> bool {
+    roles
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case("combined") || r.eq_ignore_ascii_case(role))
+}
+
+/// Issue #663: resolves this process's own `AppState::realtime_remote_url`
+/// from `AVALON_NODE_ROLES`/`AVALON_REALTIME_URL`, called once by `main.rs`
+/// at startup. `Ok(None)` means this process holds the `realtime` role
+/// itself (the default — `role_included`'s `combined` fallback included)
+/// and serves `/ws/presence`/`/ws/messages` locally, exactly as before
+/// this issue. `Ok(Some(url))` means it does not, and every WebSocket
+/// connection is proxied through to `url` instead (already validated as a
+/// well-formed URL here, trailing slash stripped, so
+/// `crate::realtime_proxy`'s own URL-building can treat a parse failure
+/// there as unreachable in practice — see that module's own doc comment).
+///
+/// `Err` — never a silent fallback to serving sockets locally anyway —
+/// when `realtime` is excluded but `AVALON_REALTIME_URL` is unset, blank,
+/// or not a well-formed URL. Same "refusing to start" precedent
+/// `PostgresSettlementProvider::connect`/`retention::RetentionConfig::from_env`
+/// already establish for `main.rs`'s other startup-time checks.
+pub fn realtime_mode_from_env(roles: &[String]) -> Result<Option<String>, String> {
+    if role_included(roles, "realtime") {
+        return Ok(None);
+    }
+    let raw = std::env::var("AVALON_REALTIME_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            "AVALON_NODE_ROLES excludes \"realtime\" but AVALON_REALTIME_URL is unset — this \
+             node has no local Realtime role and no remote one configured to proxy WebSocket \
+             connections to"
+                .to_string()
+        })?;
+    let trimmed = raw.trim().trim_end_matches('/').to_string();
+    url::Url::parse(&trimmed)
+        .map_err(|e| format!("AVALON_REALTIME_URL is not a valid URL: {e}"))?;
+    Ok(Some(trimmed))
 }
 
 /// Issue #662: does this process's configured `AVALON_NODE_ROLES` include
@@ -1188,6 +1244,80 @@ mod tests {
 
         unsafe {
             std::env::remove_var("AVALON_NODE_ROLES");
+        }
+    }
+
+    #[test]
+    fn role_included_matches_combined_regardless_of_which_role_is_asked_about() {
+        let roles = vec!["combined".to_string()];
+        assert!(role_included(&roles, "realtime"));
+        assert!(role_included(&roles, "settlement"));
+        assert!(role_included(&roles, "anything"));
+    }
+
+    #[test]
+    fn role_included_matches_an_explicit_role_case_insensitively() {
+        let roles = vec!["Realtime".to_string(), "Gateway".to_string()];
+        assert!(role_included(&roles, "realtime"));
+        assert!(role_included(&roles, "REALTIME"));
+        assert!(role_included(&roles, "gateway"));
+    }
+
+    #[test]
+    fn role_included_is_false_for_an_explicit_list_missing_the_role() {
+        let roles = vec!["gateway".to_string(), "indexer".to_string()];
+        assert!(!role_included(&roles, "realtime"));
+    }
+
+    #[test]
+    fn role_included_is_false_for_an_empty_role_list() {
+        assert!(!role_included(&[], "realtime"));
+    }
+
+    #[test]
+    fn realtime_mode_is_local_when_the_role_list_includes_realtime() {
+        assert_eq!(realtime_mode_from_env(&["realtime".to_string()]), Ok(None));
+        assert_eq!(realtime_mode_from_env(&["combined".to_string()]), Ok(None));
+        assert_eq!(
+            realtime_mode_from_env(&["gateway".to_string(), "realtime".to_string()]),
+            Ok(None)
+        );
+    }
+
+    /// One test, not three — `AVALON_REALTIME_URL` mutation is
+    /// process-global, same "no other test in this crate touches this env
+    /// var" posture `node_roles_defaults_to_combined_when_unset` already
+    /// takes for `AVALON_NODE_ROLES`; sequencing every case through one
+    /// test function avoids a parallel-test race on the same var.
+    #[test]
+    fn realtime_mode_from_env_covers_the_remote_and_error_cases() {
+        unsafe {
+            std::env::remove_var("AVALON_REALTIME_URL");
+        }
+        assert!(
+            realtime_mode_from_env(&["gateway".to_string()]).is_err(),
+            "realtime excluded with no AVALON_REALTIME_URL must fail loudly"
+        );
+
+        unsafe {
+            std::env::set_var("AVALON_REALTIME_URL", "not a url");
+        }
+        assert!(
+            realtime_mode_from_env(&["gateway".to_string()]).is_err(),
+            "a malformed AVALON_REALTIME_URL must fail loudly, not silently fall back to local"
+        );
+
+        unsafe {
+            std::env::set_var("AVALON_REALTIME_URL", "http://127.0.0.1:9090/");
+        }
+        assert_eq!(
+            realtime_mode_from_env(&["gateway".to_string()]),
+            Ok(Some("http://127.0.0.1:9090".to_string())),
+            "a trailing slash on AVALON_REALTIME_URL must not be preserved"
+        );
+
+        unsafe {
+            std::env::remove_var("AVALON_REALTIME_URL");
         }
     }
 

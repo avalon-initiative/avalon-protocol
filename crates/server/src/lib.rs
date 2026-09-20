@@ -40,6 +40,7 @@ pub mod outbox;
 pub mod passkeys;
 pub mod presence;
 pub mod proto_schema;
+pub mod realtime_proxy;
 pub mod realtime_relay;
 pub mod rebuild;
 pub mod recognitions;

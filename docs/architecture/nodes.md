@@ -31,16 +31,22 @@ later without a rewrite.
 
 **Config knob**: `AVALON_NODE_ROLES` (comma-separated, e.g.
 `settlement,indexer`) — see `crates/server/src/nodes.rs::node_roles`.
-Unset defaults to `combined`. This value used to be purely
-advisory/self-reported (peer-table bookkeeping and #539's realtime relay
-routing) and never gated which endpoints a node actually serves. **Issue
-#664 makes one specific value load-bearing**: a roles list resolving to
+Unset defaults to `combined`. This value used to be purely advisory/
+self-reported (peer-table bookkeeping and #539's realtime relay routing)
+and never gated which endpoints a node actually serves. Three of #291's
+role-extraction tickets have since made it genuinely load-bearing, each
+for its own role: **#662** — a roles list excluding `indexer` (and not
+`combined`) makes this process route indexer reads/writes to a remote one
+instead of running a local `PostgresIndexer`; **#663** — a roles list
+excluding `realtime` stops this process from handling `/ws/presence`/
+`/ws/messages` locally, proxying those connections through to a configured
+remote Realtime node instead; **#664** — a roles list resolving to
 *exactly* `["settlement"]` (`crates/server/src/nodes.rs::is_settlement_only`)
-now makes `main.rs` skip wiring up every Gateway-facing module at all and
-serve a reduced route table — see this file's "Today in the repo" entry
-for #664. Every other roles value, including the `combined` default,
-still behaves exactly as before this ticket: advisory only, full route
-table, every module wired up regardless of what's declared.
+makes `main.rs` skip wiring up every Gateway-facing module entirely and
+serve a reduced route table. See each ticket's own "Today in the repo"
+entry below. Every other roles value, including the `combined` default,
+still behaves exactly as before any of these tickets: full route table,
+every module wired up locally regardless of what's declared.
 
 ### A node's three configuration axes are independent
 
@@ -1385,6 +1391,69 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   different concern (mirror sync) from the Gateway/Indexer role split this
   ticket is about, so it keeps its own local indexer rather than being
   routed through `IndexerHandle`.
+- **Realtime extracted into its own deployable role (#663), the second of
+  epic #291's four extraction tickets to land.** Unlike Indexer (#662),
+  an open WebSocket connection is stateful — it has to terminate
+  somewhere real for its whole lifetime, not just answer one request at a
+  time — so this ticket had a genuine connection-topology decision to
+  make first: proxy every client WebSocket connection through the
+  Gateway to a remote Realtime node, or tell the client to connect to the
+  Realtime node directly. **Decided: proxy-through-Gateway**, recorded as
+  a closed ADR,
+  [#672](https://github.com/LunarVagabond/avalon-protocol/issues/672) —
+  keeps the "client always talks to one node's URL" invariant every other
+  role extraction in this epic preserves, and doesn't need #665's
+  discovery/routing work to exist first. `AVALON_NODE_ROLES` excluding
+  `realtime` now requires `AVALON_REALTIME_URL` (a reachable remote
+  Realtime node's base URL) or the process refuses to start
+  (`crate::nodes::realtime_mode_from_env`) — same "fail loudly, never
+  silently degrade" posture every other startup-time check in `main.rs`
+  already takes. `presence::presence_ws`/`chat::chat_ws` still
+  authenticate the caller locally first (a bad token still gets a real
+  401 before any upgrade, on either path); when a remote URL is
+  configured, the upgraded socket is handed to
+  `crate::realtime_proxy::proxy_websocket`, which dials the remote node's
+  identical endpoint (forwarding the same session token) and pumps
+  `Text`/`Binary`/`Ping`/`Pong`/`Close` frames bidirectionally until
+  either side closes — a genuinely separate remote process it's talking
+  to, not a second local code path pretending to be one. Audited (per the
+  ticket's own ask) whether `crate::chat`'s `ChatBus` fan-out and
+  `crate::interest`'s DHT interest registration assume in-process access
+  that breaks once Realtime is a separate process: they don't need
+  changes. `crate::realtime_relay` (#539/#584) already posts every
+  locally-originated presence/chat event to any same-network peer
+  advertising a `realtime`/`gateway`/`combined` role via #362's peer
+  table (DHT-scoped via #584's interest registry when available) — a
+  dedicated Realtime node is exactly such a peer, so a REST mutation
+  handled by a Gateway (e.g. `PUT /me/presence`,
+  `POST .../messages`) still reaches it exactly as it would reach any
+  other realtime-capable peer, with no new relay logic needed. And since
+  the proxied connection is a dumb byte pipe, `handle_presence_socket`/
+  `handle_chat_socket` — and therefore `crate::interest`'s
+  `InterestGuard` registration for a subscribed channel/conversation —
+  still run entirely on the Realtime node itself, exactly as they would
+  if the client had dialed it directly. Live-verified: a real Gateway
+  process (`AVALON_NODE_ROLES=gateway`) and a real Realtime-only process
+  (`AVALON_NODE_ROLES=realtime`) against the same Postgres, a real
+  WebSocket client connecting to the Gateway's `/ws/presence` and
+  receiving a presence update genuinely published by a second identity's
+  `PUT /me/presence` call against the Gateway — relayed to the Realtime
+  process and pushed down the proxied connection — plus the Realtime
+  process restarting mid-session producing a clean `Close` frame on the
+  client's proxied connection rather than a hang
+  (`crates/server/tests/realtime_proxy.rs`, `--ignored`). **Known gap,
+  not solved here**: this issue only extracts the WebSocket-serving
+  decision — a Gateway configured this way still constructs a full local
+  `PresenceStore`/`ChatBus`/`InterestRegistry` in `AppState` (unused for
+  locally-terminated sockets, fed only by whatever the relay mesh
+  delivers to `apply_relayed`/`publish_*`), since splitting `AppState`
+  itself apart per role is out of this ticket's scope. **Also a known
+  gap**: whether Hub/mobile-hub's own client-side WebSocket code
+  reconnects cleanly after the kind of clean-`Close`-then-drop this
+  proxy now produces on a Realtime restart hasn't been verified against
+  real frontend reconnect logic — the live test above confirms the
+  *server* side never silently hangs, not that every current client
+  already reconnects gracefully.
 - **Settlement as its own standalone node has landed (#664)**, the third
   of #291's four role-extraction tickets — a genuinely separable
   Settlement deployment, not just #313's remote-submit *config flag*
@@ -1447,7 +1516,11 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   Realtime), #664 (Settlement as its own node), and #665
   (discovery/routing) all build on — see the "Today in the repo" section
   above for the transport/auth decisions and the proven `Indexer`-over-HTTP
-  instance.
+  instance. [#663](https://github.com/LunarVagabond/avalon-protocol/issues/663)
+  (implemented) is the second to land — see
+  [#672](https://github.com/LunarVagabond/avalon-protocol/issues/672)
+  (closed ADR: proxy-through-Gateway, not direct-connect) and the "Today
+  in the repo" section above for the full writeup.
 - [#642](https://github.com/LunarVagabond/avalon-protocol/issues/642)
   decided (cross-node login's phishing-context requirement): no hard
   registered-integrator gate on the approval prompt, a visual
