@@ -122,4 +122,15 @@ pub struct AppState {
     /// own doc comment; consumed by `crate::cross_shard` (aggregation) and
     /// `crate::mirror_watcher` (opt-in auto-mirroring).
     pub shard_registry: ShardRegistry,
+    /// `AVALON_ADMIN_TOKEN` (issue #658) — the bearer credential
+    /// `GET`/`POST /nodes/log-level` require. Deliberately a *separate*
+    /// secret from `settlement_submit_key` above — see `crate::admin`'s
+    /// own module doc comment for why. `None` means those endpoints refuse
+    /// every request, same posture `settlement_submit_key` already
+    /// establishes for its own endpoints.
+    pub admin_token: Option<String>,
+    /// Issue #658: the live handle to this process's own `tracing`
+    /// env-filter, built once in `main::init_tracing` — swapping through
+    /// this changes what gets logged on the very next call, no restart.
+    pub log_reload_handle: crate::admin::LogReloadHandle,
 }

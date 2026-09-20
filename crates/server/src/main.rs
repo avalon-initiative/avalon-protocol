@@ -30,9 +30,15 @@ fn migrations_dir() -> std::path::PathBuf {
 /// selectable via `AVALON_LOG_FORMAT`: `json` for a log-aggregator-friendly
 /// (Grafana/Loki, etc.) shape, anything else (including unset, the default)
 /// for a human-readable dev format.
-fn init_tracing() {
+///
+/// Issue #658: the filter is wrapped in a `reload::Layer` and its `Handle`
+/// returned, so `POST /nodes/log-level` (`crate::admin`) can swap the
+/// active filter live, without a restart — the initial value below is just
+/// the *starting* filter, not a fixed-for-the-process-lifetime one anymore.
+fn init_tracing() -> avalon_server::admin::LogReloadHandle {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,tower_http=info"));
+    let (filter_layer, reload_handle) = tracing_subscriber::reload::Layer::new(env_filter);
     let json_format = std::env::var("AVALON_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
@@ -42,7 +48,7 @@ fn init_tracing() {
     // `make start`, which redirects to a file) with raw escape codes.
     let ansi = std::io::IsTerminal::is_terminal(&std::io::stdout());
 
-    let registry = tracing_subscriber::registry().with(env_filter);
+    let registry = tracing_subscriber::registry().with(filter_layer);
     if json_format {
         registry
             .with(tracing_subscriber::fmt::layer().json())
@@ -52,12 +58,13 @@ fn init_tracing() {
             .with(tracing_subscriber::fmt::layer().with_ansi(ansi))
             .init();
     }
+    reload_handle
 }
 
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    init_tracing();
+    let log_reload_handle = init_tracing();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let addr = std::env::var("AVALON_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let webauthn_rp_id =
@@ -262,6 +269,13 @@ async fn main() {
         mirror_wake: mirror_wake.clone(),
         host_metrics: host_metrics_sampler.clone(),
         shard_registry: shard_registry.clone(),
+        // Issue #658: deliberately a *separate* shared secret from
+        // `settlement_submit_key` above — see `crate::admin`'s own module
+        // doc comment for why that key's trust domain doesn't fit here.
+        admin_token: std::env::var("AVALON_ADMIN_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        log_reload_handle,
     };
 
     // Node-tiered durable history retention (issue #208, implementing
