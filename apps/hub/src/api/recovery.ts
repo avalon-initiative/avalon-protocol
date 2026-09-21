@@ -4,7 +4,7 @@
 // initiation (deliberately unauthenticated — the caller has no session for
 // the identity being recovered, so `startRecovery` below never takes a
 // token, unlike every other function in this module).
-import { runRegistrationCeremony } from '@avalon/api-client'
+import { runRegistrationCeremony, signFreshAction } from '@avalon/api-client'
 import * as api from '@avalon/api-client'
 import type {
   GuardianOfSummary,
@@ -17,12 +17,24 @@ export function getGuardians(token: string): Promise<GuardianSettingsResponse> {
   return api.getGuardians(token)
 }
 
+// #697/#698: removing a guardian or raising the threshold is signature-
+// required server-side — signs whenever this device has a local key
+// available (harmless when the server doesn't actually need it for a
+// purely-additive change) rather than replicating the removal/raise check
+// client-side.
 export function setGuardians(
   token: string,
+  identityId: string,
+  signingKeyId: string | null,
   guardianIds: string[],
   threshold: number,
 ): Promise<GuardianSettingsResponse> {
-  return api.setGuardians(token, { guardian_ids: guardianIds, threshold })
+  const signed = signFreshAction(identityId, signingKeyId, 'recovery.guardians.set', [
+    identityId,
+    [...guardianIds].sort().join(','),
+    String(threshold),
+  ])
+  return api.setGuardians(token, { guardian_ids: guardianIds, threshold, ...signed })
 }
 
 export function getMyRecoveryStatus(token: string): Promise<RecoveryRequestResponse | null> {

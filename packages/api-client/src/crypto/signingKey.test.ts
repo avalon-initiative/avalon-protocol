@@ -4,12 +4,14 @@ import {
   bytesToBase64,
   deriveSigningKeyFromMnemonic,
   deviceGrantApprovalSigningBytes,
+  freshActionSigningBytes,
   generateAndStoreSigningKey,
   generateGrantRequestKeyPair,
   identityCreatedSigningBytes,
   loadSigningKey,
   publicKeyFromSecretKey,
   recoverAndStoreSigningKey,
+  signFreshAction,
   signWithKey,
   storeSigningKey,
 } from './signingKey'
@@ -150,5 +152,56 @@ describe('device grant helpers', () => {
     const a = deviceGrantApprovalSigningBytes(crypto.randomUUID(), identityId, key)
     const b = deviceGrantApprovalSigningBytes(crypto.randomUUID(), identityId, key)
     expect(bytesToBase64(a)).not.toBe(bytesToBase64(b))
+  })
+})
+
+// #697/#698: must match crates/server/src/signature_gate.rs::canonical_message
+// byte-for-byte.
+describe('freshActionSigningBytes', () => {
+  it('matches the exact canonical_message format', () => {
+    const bytes = freshActionSigningBytes('guild.transfer_ownership', ['g1', 'owner1', 'to1'])
+    expect(new TextDecoder().decode(bytes)).toBe(
+      'avalon:guild.transfer_ownership:v1:g1:owner1:to1',
+    )
+  })
+
+  it('supports zero extra fields', () => {
+    const bytes = freshActionSigningBytes('integration.connect', [])
+    expect(new TextDecoder().decode(bytes)).toBe('avalon:integration.connect:v1')
+  })
+})
+
+describe('signFreshAction', () => {
+  it('returns a verifiable signature over the canonical message when a local key exists', () => {
+    const identityId = crypto.randomUUID()
+    const { publicKey } = generateAndStoreSigningKey(identityId)
+    const signingKeyId = crypto.randomUUID()
+
+    const result = signFreshAction(identityId, signingKeyId, 'guild.transfer_ownership', [
+      'g1',
+      identityId,
+      'to1',
+    ])
+
+    expect(result).not.toBeNull()
+    expect(result!.signing_key_id).toBe(signingKeyId)
+    const message = freshActionSigningBytes('guild.transfer_ownership', ['g1', identityId, 'to1'])
+    expect(ed25519.verify(base64ToBytes(result!.signature), message, publicKey)).toBe(true)
+  })
+
+  it('returns null when this identity has no local signing key', () => {
+    const result = signFreshAction(
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      'integration.connect',
+      ['some-slug', ''],
+    )
+    expect(result).toBeNull()
+  })
+
+  it('returns null when signingKeyId is unknown even with a local key present', () => {
+    const identityId = crypto.randomUUID()
+    generateAndStoreSigningKey(identityId)
+    expect(signFreshAction(identityId, null, 'integration.connect', ['slug', ''])).toBeNull()
   })
 })

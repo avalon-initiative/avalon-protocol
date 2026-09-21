@@ -10,6 +10,9 @@
 //! side correctly turns an approval/denial into a `Session`/`SdkError`.
 
 use avalon_sdk::{AvalonClient, AvalonConfig, SdkError};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -58,6 +61,33 @@ async fn seed_identity_session(pool: &PgPool, display_name: &str) -> (Uuid, Stri
     (identity_id, token)
 }
 
+/// #697/#698/#704: `POST /auth/device/approve` is signature-required —
+/// seeds a real signing key for `identity_id` so an approval test can
+/// produce a genuine fresh signature over HTTP.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_device_pairing_approve(
+    signing_key: &SigningKey,
+    identity_id: Uuid,
+    user_code: &str,
+) -> String {
+    let message = format!("avalon:device_pairing.approve:v1:{identity_id}:{user_code}");
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 fn client(base: &str) -> AvalonClient {
     AvalonClient::new(AvalonConfig {
         server_url: base.to_string(),
@@ -75,7 +105,8 @@ async fn wait_resolves_to_a_real_session_once_approved() {
     let pool = test_pool().await;
     let http = reqwest::Client::new();
     let display_name = format!("device-login-test-{}", Uuid::new_v4());
-    let (_approver_id, approver_token) = seed_identity_session(&pool, &display_name).await;
+    let (approver_id, approver_token) = seed_identity_session(&pool, &display_name).await;
+    let (approver_key_id, approver_signing_key) = seed_signing_key(&pool, approver_id).await;
 
     let client = client(&base);
     let pairing = client
@@ -93,10 +124,15 @@ async fn wait_resolves_to_a_real_session_once_approved() {
     // (the Hub) while this one is already waiting.
     let approval = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let signature = sign_device_pairing_approve(&approver_signing_key, approver_id, &user_code);
         let response = http
             .post(format!("{base_for_approval}/auth/device/approve"))
             .bearer_auth(&approver_token)
-            .json(&serde_json::json!({ "user_code": user_code }))
+            .json(&serde_json::json!({
+                "user_code": user_code,
+                "signing_key_id": approver_key_id,
+                "signature": signature,
+            }))
             .send()
             .await
             .expect("approve request failed");

@@ -112,18 +112,11 @@ describe('renamePasskey', () => {
 })
 
 describe('revokePasskey', () => {
-  it('omits ?confirm= when not confirming', async () => {
+  it('posts to the revoke endpoint with no signature when this device has no local key', async () => {
     mockFetchOnce(undefined)
-    await revokePasskey('token', 'p1')
-    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    await revokePasskey('token', 'identity-1', null, 'p1')
+    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(url).toContain('/me/passkeys/p1/revoke')
-    expect(url).not.toContain('confirm')
-  })
-
-  it('appends ?confirm=true when confirming', async () => {
-    mockFetchOnce(undefined)
-    await revokePasskey('token', 'p1', true)
-    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toContain('/me/passkeys/p1/revoke?confirm=true')
+    expect(JSON.parse(options.body)).toEqual({})
   })
 })

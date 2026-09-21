@@ -58,7 +58,7 @@ import {
 import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useRsvpRoster } from '../composables/useRsvpRoster'
-import { useSessionStore } from '@avalon/api-client'
+import { signFreshAction, useSessionStore } from '@avalon/api-client'
 import { isIdentityId } from '../utils/identity'
 import local from '../styles/Guild.module.scss'
 import styles from '../styles/page.module.scss'
@@ -85,6 +85,16 @@ const PERMISSION_OPTIONS = [
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+
+// #697/#698: shared helper for the guild actions on this page that require
+// a fresh signature — `null` (spread to `{}`) when this device has no
+// local signing key, same "let the server's own error surface it" posture
+// every other signed action in this app takes.
+function signGuildAction(actionTag: string, fields: string[]) {
+  return session.identityId
+    ? signFreshAction(session.identityId, session.signingKeyId, actionTag, fields)
+    : null
+}
 
 const guildId = computed(() => route.params.id as string)
 const {
@@ -768,11 +778,17 @@ async function onAddRole() {
   addRoleError.value = ''
   addingRole.value = true
   try {
+    const signed = signGuildAction('guild.role.create', [
+      guildId.value,
+      newRoleName.value.trim(),
+      newRolePermissions.value.join(','),
+    ])
     await api.createRole(session.token, guildId.value, {
       name: newRoleName.value.trim(),
       permissions: newRolePermissions.value,
       description: newRoleDescription.value.trim(),
       badge: { icon: newRoleBadgeIcon.value, color: newRoleBadgeColor.value },
+      ...(signed ?? {}),
     })
     cancelAddRole()
     await refresh()
@@ -811,7 +827,11 @@ async function onTogglePermission(role: RoleResponse, permission: string, event:
     ? role.permissions.filter((p) => p !== permission)
     : [...role.permissions, permission]
   try {
-    await api.updateRole(session.token, guildId.value, role.name_index, { permissions: next })
+    const signed = signGuildAction('guild.role.update', [guildId.value, String(role.name_index)])
+    await api.updateRole(session.token, guildId.value, role.name_index, {
+      permissions: next,
+      ...(signed ?? {}),
+    })
     await refresh()
   } catch (e) {
     // Clicking a checkbox flips its DOM state immediately (native browser
@@ -867,10 +887,12 @@ async function onSaveRoleEdits(role: RoleResponse) {
   permissionMatrixError.value = ''
   renamingRoleFor.value = role.name_index
   try {
+    const signed = signGuildAction('guild.role.update', [guildId.value, String(role.name_index)])
     await api.updateRole(session.token, guildId.value, role.name_index, {
       name,
       description: roleDescriptionDraft.value.trim(),
       badge: { icon: roleBadgeIconDraft.value, color: roleBadgeColorDraft.value },
+      ...(signed ?? {}),
     })
     await refresh()
   } catch (e) {
@@ -894,7 +916,8 @@ async function onDeleteRole(role: RoleResponse) {
   permissionMatrixError.value = ''
   deletingRoleFor.value = role.name_index
   try {
-    await api.deleteRole(session.token, guildId.value, role.name_index)
+    const signed = signGuildAction('guild.role.delete', [guildId.value, String(role.name_index)])
+    await api.deleteRole(session.token, guildId.value, role.name_index, signed ?? {})
     if (unlockedRoleIndex.value === role.name_index) unlockedRoleIndex.value = null
     await refresh()
   } catch (e) {
@@ -927,8 +950,18 @@ async function onSaveRoleChange() {
   changeRoleError.value = ''
   changingRole.value = true
   try {
+    // #697/#698: only actually enforced server-side when the new role
+    // grants manage_roles/manage_members (an escalation) — signs
+    // unconditionally when a local key is available rather than
+    // replicating that check client-side; unused otherwise.
+    const signed = signGuildAction('guild.member_role.update', [
+      guildId.value,
+      changingRoleFor.value,
+      String(roleChangeValue.value),
+    ])
     await api.updateMemberRole(session.token, guildId.value, changingRoleFor.value, {
       role_index: roleChangeValue.value,
+      ...(signed ?? {}),
     })
     changingRoleFor.value = null
     await refresh()
@@ -1111,7 +1144,13 @@ async function onTransferOwnership() {
   transferError.value = ''
   transferring.value = true
   try {
-    await api.transferOwnership(session.token, guildId.value, { to: transferTo.value.trim() })
+    const to = transferTo.value.trim()
+    const signed = signGuildAction('guild.transfer_ownership', [
+      guildId.value,
+      guild.value?.owner ?? session.identityId ?? '',
+      to,
+    ])
+    await api.transferOwnership(session.token, guildId.value, { to, ...(signed ?? {}) })
     cancelTransfer()
     await refresh()
   } catch (e) {
@@ -1873,6 +1912,8 @@ const {
           <ResourcePermissionOverrides
             v-if="activeChannel && canManageRoles"
             :token="session.token ?? ''"
+            :identity-id="session.identityId ?? ''"
+            :signing-key-id="session.signingKeyId"
             :guild-id="guildId"
             resource-kind="channel"
             :resource-id="activeChannel.id"
@@ -1964,6 +2005,8 @@ const {
             <ResourcePermissionOverrides
               v-if="editingEventId && canManageRoles"
               :token="session.token ?? ''"
+              :identity-id="session.identityId ?? ''"
+              :signing-key-id="session.signingKeyId"
               :guild-id="guildId"
               resource-kind="event"
               :resource-id="editingEventId"

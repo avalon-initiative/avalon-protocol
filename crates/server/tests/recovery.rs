@@ -22,6 +22,9 @@
 //! comparison logic, not the wall-clock wait" approach `presence.rs`'s
 //! `stale_presence_expires_to_offline` uses for TTL expiry.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
@@ -30,6 +33,34 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -160,19 +191,47 @@ async fn initiate_recovery(
 /// Configures `owner`'s guardian set to exactly `guardians` at `threshold`,
 /// via the session-authenticated endpoint (never directly via SQL) — this
 /// is itself part of what's under test: the config endpoint requires the
-/// owner's current session.
+/// owner's current session. #697/#698: a fresh signature is always
+/// supplied here since a from-empty first call always raises the
+/// threshold above the unconfigured default of 0, putting it in the
+/// signature-required case every time in practice.
 async fn configure_guardians(
     http: &reqwest::Client,
     base: &str,
+    pool: &PgPool,
+    owner_id: Uuid,
     owner_token: &str,
     guardians: &[Uuid],
     threshold: i32,
 ) {
+    let (signing_key_id, signing_key) = seed_signing_key(pool, owner_id).await;
+    let mut sorted_guardians: Vec<Uuid> = guardians.to_vec();
+    sorted_guardians.sort();
+    sorted_guardians.dedup();
+    let guardians_field = sorted_guardians
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let signature = sign_action(
+        &signing_key,
+        "recovery.guardians.set",
+        &[
+            &owner_id.to_string(),
+            &guardians_field,
+            &threshold.to_string(),
+        ],
+    );
     auth(
         http.put(format!("{base}/me/recovery/guardians")),
         owner_token,
     )
-    .json(&serde_json::json!({ "guardian_ids": guardians, "threshold": threshold }))
+    .json(&serde_json::json!({
+        "guardian_ids": guardians,
+        "threshold": threshold,
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    }))
     .send()
     .await
     .unwrap()
@@ -194,7 +253,16 @@ async fn three_guardian_two_of_three_threshold_recovers_after_backdated_delay() 
     for guardian in [g1_id, g2_id, g3_id] {
         seed_friendship(&pool, owner_id, guardian).await;
     }
-    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id, g3_id], 2).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id, g3_id],
+        2,
+    )
+    .await;
 
     let request = initiate_recovery(&http, &base, owner_id).await;
     assert_eq!(request["status"], "pending_approvals");
@@ -312,7 +380,16 @@ async fn a_guardian_below_threshold_cannot_unilaterally_recover() {
     for guardian in [g1_id, g2_id] {
         seed_friendship(&pool, owner_id, guardian).await;
     }
-    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id],
+        2,
+    )
+    .await;
 
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
@@ -371,7 +448,16 @@ async fn the_owner_vetoes_and_the_attempt_is_cancelled() {
     for guardian in [g1_id, g2_id] {
         seed_friendship(&pool, owner_id, guardian).await;
     }
-    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id],
+        2,
+    )
+    .await;
 
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
@@ -462,11 +548,20 @@ async fn a_guardian_removed_from_the_set_can_no_longer_approve_or_cancel() {
     for guardian in [g1_id, g2_id] {
         seed_friendship(&pool, owner_id, guardian).await;
     }
-    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id],
+        2,
+    )
+    .await;
 
     // Owner narrows the guardian set to just g2 — requires (and proves)
     // the owner's own current session, never g1's cooperation.
-    configure_guardians(&http, &base, &owner_token, &[g2_id], 1).await;
+    configure_guardians(&http, &base, &pool, owner_id, &owner_token, &[g2_id], 1).await;
 
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
@@ -506,6 +601,81 @@ async fn changing_the_guardian_set_requires_a_valid_session() {
     assert_eq!(unauthenticated.status().as_u16(), 401);
 }
 
+/// #697/#698: removing an existing guardian is one of the two conditions
+/// that puts this write in the signature-required tier — an unsigned
+/// removal attempt must be rejected and the guardian set left unchanged; a
+/// correctly signed one must go through.
+#[tokio::test]
+#[ignore]
+async fn removing_a_guardian_requires_a_fresh_signature() {
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (g1_id, _g1_token) = seed_identity_session(&pool).await;
+    let (g2_id, _g2_token) = seed_identity_session(&pool).await;
+    seed_friendship(&pool, owner_id, g1_id).await;
+    seed_friendship(&pool, owner_id, g2_id).await;
+
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id],
+        1,
+    )
+    .await;
+
+    // Dropping g1 without a signature is rejected outright.
+    let unsigned = auth(
+        http.put(format!("{base}/me/recovery/guardians")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "guardian_ids": [g2_id], "threshold": 1 }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(unsigned.status().as_u16(), 401);
+    let unsigned_body: serde_json::Value = unsigned.json().await.unwrap();
+    assert_eq!(unsigned_body["code"], "FRESH_SIGNATURE_REQUIRED");
+
+    let after_unsigned_attempt: serde_json::Value = auth(
+        http.get(format!("{base}/me/recovery/guardians")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let guardian_ids: Vec<String> = after_unsigned_attempt["guardian_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(guardian_ids.len(), 2, "unsigned removal must not apply");
+
+    // The same removal, correctly signed, succeeds.
+    configure_guardians(&http, &base, &pool, owner_id, &owner_token, &[g2_id], 1).await;
+
+    let after_signed: serde_json::Value = auth(
+        http.get(format!("{base}/me/recovery/guardians")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(after_signed["guardian_ids"].as_array().unwrap().len(), 1);
+}
+
 #[tokio::test]
 #[ignore]
 async fn guardians_must_be_current_friends_not_arbitrary_identities() {
@@ -543,7 +713,16 @@ async fn start_gives_no_distinguishable_signal_between_nonexistent_and_unconfigu
     let (configured_owner, configured_token) = seed_identity_session(&pool).await;
     let (guardian_id, _guardian_token) = seed_identity_session(&pool).await;
     seed_friendship(&pool, configured_owner, guardian_id).await;
-    configure_guardians(&http, &base, &configured_token, &[guardian_id], 1).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        configured_owner,
+        &configured_token,
+        &[guardian_id],
+        1,
+    )
+    .await;
     // Deliberately NOT calling configure_guardians for a second, real
     // identity — that one stays "exists but unconfigured".
     let (unconfigured_owner, _unconfigured_token) = seed_identity_session(&pool).await;
@@ -606,7 +785,16 @@ async fn a_racing_approval_never_resurrects_a_cancelled_request() {
     for guardian in [g1_id, g2_id] {
         seed_friendship(&pool, owner_id, guardian).await;
     }
-    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id],
+        2,
+    )
+    .await;
 
     let request = initiate_recovery(&http, &base, owner_id).await;
     let request_id = request["id"].as_str().unwrap().to_string();
@@ -686,7 +874,16 @@ async fn guardian_of_lists_only_identities_naming_the_caller() {
     let _ = bystander_id;
 
     seed_friendship(&pool, owner_id, guardian_id).await;
-    configure_guardians(&http, &base, &owner_token, &[guardian_id], 1).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[guardian_id],
+        1,
+    )
+    .await;
 
     let mine: Vec<serde_json::Value> = auth(
         http.get(format!("{base}/me/recovery/guardian-of")),
@@ -732,7 +929,16 @@ async fn a_guardian_can_resign_without_the_owners_cooperation() {
 
     seed_friendship(&pool, owner_id, g1_id).await;
     seed_friendship(&pool, owner_id, g2_id).await;
-    configure_guardians(&http, &base, &owner_token, &[g1_id, g2_id], 2).await;
+    configure_guardians(
+        &http,
+        &base,
+        &pool,
+        owner_id,
+        &owner_token,
+        &[g1_id, g2_id],
+        2,
+    )
+    .await;
 
     // A guardian resigning from a designation they don't hold is a no-op
     // failure, not a way to remove someone else.

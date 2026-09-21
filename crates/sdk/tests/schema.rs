@@ -42,11 +42,33 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
     format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
 }
 
+/// #697/#698: `signing_key`/`signing_key_id` let a caller sign a later
+/// signature-required action (e.g. `POST /integrations/{slug}/connect`)
+/// with the same key `register_finish` just registered as this identity's
+/// first `identity_signing_keys` row — same shape `achievements.rs`'s own
+/// copy of this helper uses.
+struct RegisteredIdentity {
+    identity_id: Uuid,
+    token: String,
+    signing_key: SigningKey,
+    signing_key_id: String,
+}
+
+/// Mirrors `crates/server/src/signature_gate.rs::canonical_message`
+/// byte-for-byte, for a `POST /integrations/{slug}/connect` call.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 async fn register_and_login(
     http: &reqwest::Client,
     base: &str,
     display_name: &str,
-) -> (Uuid, String) {
+) -> RegisteredIdentity {
     let identity_id = Uuid::new_v4();
     let origin_str = webauthn_origin();
     let origin_url =
@@ -144,7 +166,32 @@ async fn register_and_login(
         .as_str()
         .expect("sessions/finish response missing token")
         .to_string();
-    (identity_id, token)
+
+    let devices: serde_json::Value = http
+        .get(format!("{base}/me/devices"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("GET /me/devices failed")
+        .json()
+        .await
+        .expect("GET /me/devices response was not JSON");
+    let signing_key_id = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["public_key"].as_str() == Some(event_signing_public_key.as_str()))
+        .expect("register_finish's signing key should be listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    RegisteredIdentity {
+        identity_id,
+        token,
+        signing_key,
+        signing_key_id,
+    }
 }
 
 struct RegisteredIntegrator {
@@ -205,17 +252,23 @@ async fn derives_and_publishes_a_schema_then_an_instance_and_reads_it_back() {
     let base = server_url();
     let display_name = format!("sdk-schema-{}", Uuid::new_v4());
 
-    let (identity_id, token) = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
+    let identity_id = identity.identity_id;
     let integrator = register_integrator(&http, &base).await;
 
     // The user's own consent: an active binding. This ticket's own write
     // paths (`authenticate_owning_integrator`) don't check any specific
     // `permission_grants` capability — only `has_active_binding` — so the
     // connect call carries no capabilities.
+    let connect_capabilities: [&str; 0] = [];
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": [] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": connect_capabilities,
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &connect_capabilities),
+        }))
         .send()
         .await
         .unwrap();
@@ -229,7 +282,7 @@ async fn derives_and_publishes_a_schema_then_an_instance_and_reads_it_back() {
         retry: Default::default(),
     });
     let session = client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
 
@@ -318,13 +371,18 @@ async fn publishes_a_mapping_between_two_real_schema_versions_and_reads_it_back(
     let base = server_url();
     let display_name = format!("sdk-mapping-{}", Uuid::new_v4());
 
-    let (_identity_id, token) = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let integrator = register_integrator(&http, &base).await;
 
+    let connect_capabilities: [&str; 0] = [];
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": [] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": connect_capabilities,
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &connect_capabilities),
+        }))
         .send()
         .await
         .unwrap();
@@ -338,7 +396,7 @@ async fn publishes_a_mapping_between_two_real_schema_versions_and_reads_it_back(
         retry: Default::default(),
     });
     let session = client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
 

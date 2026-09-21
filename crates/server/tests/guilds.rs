@@ -7,10 +7,41 @@
 //! already documents — guild endpoints don't care how a session was
 //! established, only that it's a valid bearer token.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -116,7 +147,7 @@ async fn creating_a_role_with_description_and_badge_round_trips() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, token) = seed_identity_session(&pool).await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &token)
         .json(&unique_guild_body())
@@ -127,12 +158,20 @@ async fn creating_a_role_with_description_and_badge_round_trips() {
     let guild: serde_json::Value = create_guild.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "guild.role.create",
+        &[guild_id, "Raid Leader", "manage_members"],
+    );
     let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
         .json(&serde_json::json!({
             "name": "Raid Leader",
             "permissions": ["manage_members"],
             "description": "Leads raid nights and manages the roster.",
             "badge": { "icon": "sword", "color": "purple" },
+            "signing_key_id": signing_key_id,
+            "signature": signature,
         }))
         .send()
         .await
@@ -180,7 +219,7 @@ async fn creating_a_role_with_an_unknown_badge_icon_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, token) = seed_identity_session(&pool).await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &token)
         .json(&unique_guild_body())
@@ -190,10 +229,14 @@ async fn creating_a_role_with_an_unknown_badge_icon_is_rejected() {
     let guild: serde_json::Value = create_guild.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let signature = sign_action(&signing_key, "guild.role.create", &[guild_id, "Bogus", ""]);
     let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
         .json(&serde_json::json!({
             "name": "Bogus",
             "badge": { "icon": "not_a_real_icon", "color": "gold" },
+            "signing_key_id": signing_key_id,
+            "signature": signature,
         }))
         .send()
         .await
@@ -210,7 +253,7 @@ async fn creating_a_role_with_a_name_already_taken_in_the_guild_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, token) = seed_identity_session(&pool).await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &token)
         .json(&unique_guild_body())
@@ -220,15 +263,34 @@ async fn creating_a_role_with_a_name_already_taken_in_the_guild_is_rejected() {
     let guild: serde_json::Value = create_guild.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let first_signature = sign_action(
+        &signing_key,
+        "guild.role.create",
+        &[guild_id, "Raid Leader", ""],
+    );
     let first = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
-        .json(&serde_json::json!({ "name": "Raid Leader" }))
+        .json(&serde_json::json!({
+            "name": "Raid Leader",
+            "signing_key_id": signing_key_id,
+            "signature": first_signature,
+        }))
         .send()
         .await
         .unwrap();
     assert!(first.status().is_success());
 
+    let duplicate_signature = sign_action(
+        &signing_key,
+        "guild.role.create",
+        &[guild_id, "raid leader", ""],
+    );
     let duplicate = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
-        .json(&serde_json::json!({ "name": "raid leader" }))
+        .json(&serde_json::json!({
+            "name": "raid leader",
+            "signing_key_id": signing_key_id,
+            "signature": duplicate_signature,
+        }))
         .send()
         .await
         .unwrap();
@@ -244,7 +306,7 @@ async fn the_owner_role_can_be_renamed_but_not_have_its_permissions_changed() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, token) = seed_identity_session(&pool).await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &token)
         .json(&unique_guild_body())
@@ -254,11 +316,17 @@ async fn the_owner_role_can_be_renamed_but_not_have_its_permissions_changed() {
     let guild: serde_json::Value = create_guild.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let signature = sign_action(&signing_key, "guild.role.update", &[guild_id, "0"]);
     let rename = auth(
         http.patch(format!("{base}/guilds/{guild_id}/roles/0")),
         &token,
     )
-    .json(&serde_json::json!({ "name": "Guild Master" }))
+    .json(&serde_json::json!({
+        "name": "Guild Master",
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -266,11 +334,16 @@ async fn the_owner_role_can_be_renamed_but_not_have_its_permissions_changed() {
     let renamed: serde_json::Value = rename.json().await.unwrap();
     assert_eq!(renamed["name"].as_str().unwrap(), "Guild Master");
 
+    let signature = sign_action(&signing_key, "guild.role.update", &[guild_id, "0"]);
     let change_permissions = auth(
         http.patch(format!("{base}/guilds/{guild_id}/roles/0")),
         &token,
     )
-    .json(&serde_json::json!({ "permissions": ["manage_guild"] }))
+    .json(&serde_json::json!({
+        "permissions": ["manage_guild"],
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -286,7 +359,7 @@ async fn deleting_a_role() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, token) = seed_identity_session(&pool).await;
+    let (owner_id, token) = seed_identity_session(&pool).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &token)
         .json(&unique_guild_body())
@@ -296,38 +369,62 @@ async fn deleting_a_role() {
     let guild: serde_json::Value = create_guild.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+
     // Base roles: owner (0) and member (2) can never be deleted.
+    let signature = sign_action(&signing_key, "guild.role.delete", &[guild_id, "0"]);
     let delete_owner = auth(
         http.delete(format!("{base}/guilds/{guild_id}/roles/0")),
         &token,
     )
+    .json(&serde_json::json!({ "signing_key_id": signing_key_id, "signature": signature }))
     .send()
     .await
     .unwrap();
     assert_eq!(delete_owner.status(), reqwest::StatusCode::FORBIDDEN);
 
+    let signature = sign_action(&signing_key, "guild.role.delete", &[guild_id, "2"]);
     let delete_member = auth(
         http.delete(format!("{base}/guilds/{guild_id}/roles/2")),
         &token,
     )
+    .json(&serde_json::json!({ "signing_key_id": signing_key_id, "signature": signature }))
     .send()
     .await
     .unwrap();
     assert_eq!(delete_member.status(), reqwest::StatusCode::FORBIDDEN);
 
     // A freshly created, unassigned custom role deletes cleanly.
+    let create_signature = sign_action(
+        &signing_key,
+        "guild.role.create",
+        &[guild_id, "Temp Role", ""],
+    );
     let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
-        .json(&serde_json::json!({ "name": "Temp Role" }))
+        .json(&serde_json::json!({
+            "name": "Temp Role",
+            "signing_key_id": signing_key_id,
+            "signature": create_signature,
+        }))
         .send()
         .await
         .unwrap();
     let role: serde_json::Value = create_role.json().await.unwrap();
     let name_index = role["name_index"].as_i64().unwrap();
 
+    let delete_signature = sign_action(
+        &signing_key,
+        "guild.role.delete",
+        &[guild_id, &name_index.to_string()],
+    );
     let delete = auth(
         http.delete(format!("{base}/guilds/{guild_id}/roles/{name_index}")),
         &token,
     )
+    .json(&serde_json::json!({
+        "signing_key_id": signing_key_id,
+        "signature": delete_signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -357,7 +454,7 @@ async fn deleting_a_role_still_held_by_a_member_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (other_id, other_token) = seed_identity_session(&pool).await;
 
     let create_guild = auth(http.post(format!("{base}/guilds")), &owner_token)
@@ -368,11 +465,21 @@ async fn deleting_a_role_still_held_by_a_member_is_rejected() {
     let guild: serde_json::Value = create_guild.json().await.unwrap();
     let guild_id = guild["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let create_signature = sign_action(
+        &signing_key,
+        "guild.role.create",
+        &[guild_id, "Quartermaster", ""],
+    );
     let create_role = auth(
         http.post(format!("{base}/guilds/{guild_id}/roles")),
         &owner_token,
     )
-    .json(&serde_json::json!({ "name": "Quartermaster" }))
+    .json(&serde_json::json!({
+        "name": "Quartermaster",
+        "signing_key_id": signing_key_id,
+        "signature": create_signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -408,10 +515,19 @@ async fn deleting_a_role_still_held_by_a_member_is_rejected() {
     .unwrap();
     assert!(assign.status().is_success(), "{:?}", assign.status());
 
+    let delete_signature = sign_action(
+        &signing_key,
+        "guild.role.delete",
+        &[guild_id, &name_index.to_string()],
+    );
     let delete = auth(
         http.delete(format!("{base}/guilds/{guild_id}/roles/{name_index}")),
         &owner_token,
     )
+    .json(&serde_json::json!({
+        "signing_key_id": signing_key_id,
+        "signature": delete_signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -489,11 +605,21 @@ async fn transferring_ownership_leaves_exactly_one_owner() {
     let body: serde_json::Value = create.json().await.unwrap();
     let guild_id = body["id"].as_str().unwrap();
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "guild.transfer_ownership",
+        &[guild_id, &owner_id.to_string(), &new_owner_id.to_string()],
+    );
     let transfer = auth(
         http.post(format!("{base}/guilds/{guild_id}/transfer-ownership")),
         &owner_token,
     )
-    .json(&serde_json::json!({ "to": new_owner_id }))
+    .json(&serde_json::json!({
+        "to": new_owner_id,
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -525,6 +651,50 @@ async fn transferring_ownership_leaves_exactly_one_owner() {
     .await
     .unwrap();
     assert_eq!(second_transfer.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+/// Issue #704's gap #2: an ambient-session-only transfer (no
+/// `signing_key_id`/`signature`, owner has no registered signing key) must
+/// be rejected — a stolen bearer token alone must not be able to hand off
+/// permanent guild ownership. `guilds.owner` must stay unchanged.
+#[tokio::test]
+#[ignore]
+async fn transferring_ownership_without_a_signature_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (new_owner_id, _new_owner_token) = seed_identity_session(&pool).await;
+
+    let create = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = create.json().await.unwrap();
+    let guild_id = body["id"].as_str().unwrap();
+
+    let transfer = auth(
+        http.post(format!("{base}/guilds/{guild_id}/transfer-ownership")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "to": new_owner_id }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(transfer.status(), reqwest::StatusCode::CONFLICT);
+    let transfer_body: serde_json::Value = transfer.json().await.unwrap();
+    assert_eq!(transfer_body["code"], "NO_REGISTERED_SIGNING_KEY");
+
+    let fetched: serde_json::Value =
+        auth(http.get(format!("{base}/guilds/{guild_id}")), &owner_token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(fetched["owner"].as_str().unwrap(), owner_id.to_string());
 }
 
 #[tokio::test]
@@ -860,7 +1030,7 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (officer_a_id, officer_a_token) = seed_identity_session(&pool).await;
     let (officer_b_id, officer_b_token) = seed_identity_session(&pool).await;
 
@@ -871,6 +1041,8 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
         .unwrap();
     let body: serde_json::Value = create.json().await.unwrap();
     let guild_id = body["id"].as_str().unwrap();
+
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
 
     for (identity_id, identity_token) in [
         (officer_a_id, &officer_a_token),
@@ -897,12 +1069,23 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
         .unwrap();
 
         // Index 1 is "officer" — see the starter-role ordering asserted in
-        // `creating_a_guild_makes_the_creator_the_owner`.
+        // `creating_a_guild_makes_the_creator_the_owner`. Officer grants
+        // `manage_members`, so this promotion is an escalation and needs a
+        // fresh signature (#697/#698).
+        let signature = sign_action(
+            &signing_key,
+            "guild.member_role.update",
+            &[guild_id, &identity_id.to_string(), "1"],
+        );
         let promote = auth(
             http.patch(format!("{base}/guilds/{guild_id}/members/{identity_id}")),
             &owner_token,
         )
-        .json(&serde_json::json!({ "role_index": 1 }))
+        .json(&serde_json::json!({
+            "role_index": 1,
+            "signing_key_id": signing_key_id,
+            "signature": signature,
+        }))
         .send()
         .await
         .unwrap();
@@ -2435,4 +2618,144 @@ async fn my_join_request_then_withdraw_is_reachable_end_to_end() {
     .unwrap();
     let mine_after_body: serde_json::Value = mine_after.json().await.unwrap();
     assert!(mine_after_body.is_null());
+}
+
+/// #697/#698: `POST /guilds/{id}/roles` is signature-required — an
+/// ambient-session-only create (owner has no registered signing key) must
+/// be rejected, and no role should be created.
+#[tokio::test]
+#[ignore]
+async fn creating_a_role_without_a_signature_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let create_role = auth(http.post(format!("{base}/guilds/{guild_id}/roles")), &token)
+        .json(&serde_json::json!({ "name": "Unsigned Role" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create_role.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = create_role.json().await.unwrap();
+    assert_eq!(body["code"], "NO_REGISTERED_SIGNING_KEY");
+
+    let roles: serde_json::Value =
+        auth(http.get(format!("{base}/guilds/{guild_id}/roles")), &token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert!(roles
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["name"].as_str().unwrap() != "Unsigned Role"));
+}
+
+/// #697/#698: assigning a role that grants `manage_roles`/`manage_members`
+/// via `PATCH /guilds/{id}/members/{identity_id}` is an escalation and
+/// requires a fresh signature; an unsigned attempt must be rejected and the
+/// target's role must stay unchanged. (An ordinary, non-escalating role
+/// assignment staying ambient/unsigned is already covered by the earlier
+/// `a_role_change_by_a_non_manager_is_rejected`-adjacent flow in this file.)
+#[tokio::test]
+#[ignore]
+async fn escalating_a_member_role_without_a_signature_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (other_id, other_token) = seed_identity_session(&pool).await;
+
+    let create_guild = auth(http.post(format!("{base}/guilds")), &owner_token)
+        .json(&unique_guild_body())
+        .send()
+        .await
+        .expect("create guild failed — is `make start` running?");
+    let guild: serde_json::Value = create_guild.json().await.unwrap();
+    let guild_id = guild["id"].as_str().unwrap();
+
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, owner_id).await;
+    let create_signature = sign_action(
+        &signing_key,
+        "guild.role.create",
+        &[guild_id, "Co-Officer", "manage_roles"],
+    );
+    let create_role = auth(
+        http.post(format!("{base}/guilds/{guild_id}/roles")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({
+        "name": "Co-Officer",
+        "permissions": ["manage_roles"],
+        "signing_key_id": signing_key_id,
+        "signature": create_signature,
+    }))
+    .send()
+    .await
+    .unwrap();
+    let role: serde_json::Value = create_role.json().await.unwrap();
+    let name_index = role["name_index"].as_i64().unwrap();
+
+    let open = auth(
+        http.patch(format!("{base}/guilds/{guild_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "join_policy": "open" }))
+    .send()
+    .await
+    .unwrap();
+    assert!(open.status().is_success());
+    let join = auth(
+        http.post(format!("{base}/guilds/{guild_id}/join")),
+        &other_token,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert!(join.status().is_success());
+
+    let unsigned_assign = auth(
+        http.patch(format!("{base}/guilds/{guild_id}/members/{other_id}")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({ "role_index": name_index }))
+    .send()
+    .await
+    .unwrap();
+    // `owner_id` already has a registered signing key (seeded above for the
+    // role-creation signature), so the actionable rejection here is "you
+    // have a key, you just didn't sign this request" — not "no key at all".
+    assert_eq!(unsigned_assign.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let unsigned_body: serde_json::Value = unsigned_assign.json().await.unwrap();
+    assert_eq!(unsigned_body["code"], "FRESH_SIGNATURE_REQUIRED");
+
+    let members: serde_json::Value = auth(
+        http.get(format!("{base}/guilds/{guild_id}/members")),
+        &owner_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let other_member = members
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["identity_id"].as_str().unwrap() == other_id.to_string())
+        .expect("other identity should be a member after joining");
+    assert_ne!(other_member["role_index"].as_i64().unwrap(), name_index);
 }

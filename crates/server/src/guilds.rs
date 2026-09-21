@@ -28,7 +28,24 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::handlers::{authenticate, is_http_url};
 use crate::outbox;
+use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
+
+/// Reads `signing_key_id`/`signature` off a signature-required request body
+/// and enforces them via [`require_fresh_signature`] — factored out since
+/// every signature-required guild handler below does the same three-line
+/// dance with a different canonical message.
+async fn require_guild_action_signature(
+    state: &AppState,
+    actor: Uuid,
+    action_tag: &str,
+    fields: &[&str],
+    signing_key_id: Option<Uuid>,
+    signature: Option<&str>,
+) -> Result<(), AppError> {
+    let message = canonical_message(action_tag, fields);
+    require_fresh_signature(state, actor, &message, signing_key_id, signature).await
+}
 
 const OWNER_ROLE_INDEX: i32 = 0;
 const OFFICER_ROLE_INDEX: i32 = 1;
@@ -1134,6 +1151,10 @@ pub struct CreateRoleRequest {
     /// [`RoleBadge::DEFAULT`] — a caller ahead of Hub UI support for
     /// choosing a badge still gets a valid, renderable role.
     pub badge: Option<RoleBadgeRequest>,
+    /// #697/#698: role definitions are the guild's permission structure —
+    /// signature-required.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 pub async fn create_role(
@@ -1156,6 +1177,15 @@ pub async fn create_role(
     }
 
     let permissions = normalize_permissions(&body.permissions);
+    require_guild_action_signature(
+        &state,
+        actor,
+        "guild.role.create",
+        &[&guild_id.to_string(), &body.name, &permissions.join(",")],
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
     validate_role_description(&body.description)?;
     let badge = match body.badge {
         Some(b) => b.into_badge()?,
@@ -1233,6 +1263,10 @@ pub struct UpdateRoleRequest {
     pub description: Option<String>,
     /// Issue #152. `None` leaves the existing badge untouched.
     pub badge: Option<RoleBadgeRequest>,
+    /// #697/#698: role definitions are the guild's permission structure —
+    /// signature-required.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 pub async fn update_role(
@@ -1253,6 +1287,15 @@ pub async fn update_role(
     ) {
         return Err(AppError::MissingGuildPermission);
     }
+    require_guild_action_signature(
+        &state,
+        actor,
+        "guild.role.update",
+        &[&guild_id.to_string(), &name_index.to_string()],
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     // The owner role's authority comes from `guilds.owner`, not from this
     // row's permission list (see `has_guild_permission`) — changing its
@@ -1351,10 +1394,23 @@ fn is_base_role(name_index: i32) -> bool {
     name_index == OWNER_ROLE_INDEX || name_index == MEMBER_ROLE_INDEX
 }
 
+/// #697/#698: role deletion has no other body fields, so this exists only
+/// to carry the fresh-signature proof. `#[serde(default)]` so a bare `{}`
+/// (or, for a truly bodyless client, an empty body — `Json` still requires
+/// *some* valid JSON, so callers send `{}`) deserializes fine.
+#[derive(Deserialize, Default)]
+pub struct DeleteRoleRequest {
+    #[serde(default)]
+    pub signing_key_id: Option<Uuid>,
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
 pub async fn delete_role(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((guild_id, name_index)): Path<(Uuid, i32)>,
+    Json(body): Json<DeleteRoleRequest>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
@@ -1368,6 +1424,15 @@ pub async fn delete_role(
     ) {
         return Err(AppError::MissingGuildPermission);
     }
+    require_guild_action_signature(
+        &state,
+        actor,
+        "guild.role.delete",
+        &[&guild_id.to_string(), &name_index.to_string()],
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     if is_base_role(name_index) {
         return Err(AppError::CannotDeleteBaseRole);
@@ -1485,6 +1550,10 @@ pub struct SetPermissionOverrideRequest {
     pub resource_id: Uuid,
     pub permission: String,
     pub allow: bool,
+    /// #697/#698: changes what an entire role/resource can do guild-wide —
+    /// signature-required.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 /// `PUT /guilds/{id}/permission-overrides` — set (upsert) a grant/deny
@@ -1498,6 +1567,22 @@ pub async fn set_permission_override(
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
     require_manage_roles(&state, &guild, actor).await?;
+    require_guild_action_signature(
+        &state,
+        actor,
+        "guild.permission_override.set",
+        &[
+            &guild_id.to_string(),
+            &body.role_index.to_string(),
+            &body.resource_kind,
+            &body.resource_id.to_string(),
+            &body.permission,
+            &body.allow.to_string(),
+        ],
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     // 404s if the role doesn't exist in this guild.
     fetch_role(&state, guild_id, body.role_index).await?;
@@ -1583,14 +1668,34 @@ pub async fn list_permission_overrides(
 /// `DELETE /guilds/{id}/permission-overrides/{override_id}` — clears an
 /// override, reverting that (role, resource, permission) triple back to
 /// the role's base permission list. Requires `manage_roles`.
+/// #697/#698: no other body fields, exists only to carry the fresh-signature
+/// proof — same posture as [`DeleteRoleRequest`].
+#[derive(Deserialize, Default)]
+pub struct DeletePermissionOverrideRequest {
+    #[serde(default)]
+    pub signing_key_id: Option<Uuid>,
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
 pub async fn delete_permission_override(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((guild_id, override_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<DeletePermissionOverrideRequest>,
 ) -> Result<(), AppError> {
     let actor = authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
     require_manage_roles(&state, &guild, actor).await?;
+    require_guild_action_signature(
+        &state,
+        actor,
+        "guild.permission_override.delete",
+        &[&guild_id.to_string(), &override_id.to_string()],
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     let deleted =
         sqlx::query("DELETE FROM guild_permission_overrides WHERE id = $1 AND guild_id = $2")
@@ -1607,6 +1712,10 @@ pub async fn delete_permission_override(
 #[derive(Deserialize)]
 pub struct TransferOwnershipRequest {
     pub to: Uuid,
+    /// #704's gap #2 / #697/#698: permanently hands another identity full
+    /// ownership — signature-required.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 pub async fn transfer_ownership(
@@ -1626,6 +1735,19 @@ pub async fn transfer_ownership(
     if body.to == guild.owner {
         return Err(AppError::AlreadyGuildOwner);
     }
+    require_guild_action_signature(
+        &state,
+        actor,
+        "guild.transfer_ownership",
+        &[
+            &guild_id.to_string(),
+            &guild.owner.to_string(),
+            &body.to.to_string(),
+        ],
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     let target_exists = sqlx::query("SELECT 1 FROM identities WHERE id = $1")
         .bind(body.to)
@@ -2659,6 +2781,11 @@ pub async fn withdraw_join_request(
 #[derive(Deserialize)]
 pub struct UpdateGuildMemberRequest {
     pub role_index: i32,
+    /// #697/#698: only required when the new role grants `manage_roles` or
+    /// `manage_members` (an escalation) — see the conditional check in
+    /// `update_member_role` below.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 pub async fn update_member_role(
@@ -2688,7 +2815,30 @@ pub async fn update_member_role(
     }
 
     // 404s if the target role doesn't exist for this guild.
-    fetch_role(&state, guild_id, body.role_index).await?;
+    let target_role = fetch_role(&state, guild_id, body.role_index).await?;
+
+    // #697/#698: only an escalation (the new role grants `manage_roles` or
+    // `manage_members`) needs a fresh signature — an ordinary role change
+    // that doesn't touch either permission stays ambient, per #697's
+    // conditional reasoning.
+    let is_escalation = target_role.permissions.iter().any(|p| {
+        p == GuildPermission::ManageRoles.as_str() || p == GuildPermission::ManageMembers.as_str()
+    });
+    if is_escalation {
+        require_guild_action_signature(
+            &state,
+            actor,
+            "guild.member_role.update",
+            &[
+                &guild_id.to_string(),
+                &identity_id.to_string(),
+                &body.role_index.to_string(),
+            ],
+            body.signing_key_id,
+            body.signature.as_deref(),
+        )
+        .await?;
+    }
 
     let mut tx = state.pool.begin().await?;
 

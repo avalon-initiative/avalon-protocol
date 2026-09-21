@@ -5,10 +5,41 @@
 //! Test identities/sessions are seeded directly via SQL, same approach as
 //! `crates/server/tests/device_grants.rs`.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -91,11 +122,21 @@ async fn full_round_trip_start_approve_poll_delivers_a_real_session_exactly_once
             .unwrap();
     assert_eq!(pending["status"], "pending");
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, identity_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "device_pairing.approve",
+        &[&identity_id.to_string(), &user_code],
+    );
     let approve = auth(
         http.post(format!("{base}/auth/device/approve")),
         &approver_token,
     )
-    .json(&serde_json::json!({ "user_code": user_code }))
+    .json(&serde_json::json!({
+        "user_code": user_code,
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    }))
     .send()
     .await
     .unwrap();
@@ -137,6 +178,62 @@ async fn full_round_trip_start_approve_poll_delivers_a_real_session_exactly_once
             .unwrap();
     assert_eq!(second_poll["status"], "expired");
     assert!(second_poll["token"].is_null());
+}
+
+/// Issue #704's gap #1: an ambient-session-only approve (no
+/// `signing_key_id`/`signature` at all, and the approver has never
+/// registered a signing key) must be rejected outright — a stolen bearer
+/// token alone must not be able to mint a second session.
+#[tokio::test]
+#[ignore]
+async fn approving_with_only_the_ambient_session_and_no_signing_key_is_rejected() {
+    let http = reqwest::Client::new();
+    let pool = test_pool().await;
+    let base = server_url();
+    let (_identity_id, approver_token) = seed_identity_session(&pool).await;
+
+    let start = start_pairing(&http, &base).await;
+    let user_code = start["user_code"].as_str().unwrap().to_string();
+
+    let approve = auth(
+        http.post(format!("{base}/auth/device/approve")),
+        &approver_token,
+    )
+    .json(&serde_json::json!({ "user_code": user_code }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(approve.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = approve.json().await.unwrap();
+    assert_eq!(body["code"], "NO_REGISTERED_SIGNING_KEY");
+}
+
+/// Same gap, but the approver *does* have a registered signing key and
+/// still omits the signature — a different, more specific rejection than
+/// the no-key case above.
+#[tokio::test]
+#[ignore]
+async fn approving_with_a_registered_key_but_no_signature_is_rejected() {
+    let http = reqwest::Client::new();
+    let pool = test_pool().await;
+    let base = server_url();
+    let (identity_id, approver_token) = seed_identity_session(&pool).await;
+    seed_signing_key(&pool, identity_id).await;
+
+    let start = start_pairing(&http, &base).await;
+    let user_code = start["user_code"].as_str().unwrap().to_string();
+
+    let approve = auth(
+        http.post(format!("{base}/auth/device/approve")),
+        &approver_token,
+    )
+    .json(&serde_json::json!({ "user_code": user_code }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(approve.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let body: serde_json::Value = approve.json().await.unwrap();
+    assert_eq!(body["code"], "FRESH_SIGNATURE_REQUIRED");
 }
 
 #[tokio::test]

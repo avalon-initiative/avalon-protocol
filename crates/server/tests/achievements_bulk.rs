@@ -55,6 +55,32 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
+/// #697/#698: `POST /integrations/{slug}/connect` is signature-required
+/// -- seeds a real signing key for `identity_id` so a connect call can
+/// produce a genuine fresh signature over HTTP.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 struct RegisteredIntegrator {
     signing_key: SigningKey,
     slug: String,
@@ -180,13 +206,21 @@ async fn retire_achievement(
 async fn connect(
     http: &reqwest::Client,
     base: &str,
+    pool: &PgPool,
     integrator: &RegisteredIntegrator,
+    identity_id: Uuid,
     identity_token: &str,
 ) {
+    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let capabilities = ["achievements.issue"];
     let response = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(identity_token)
-        .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
+        .json(&serde_json::json!({
+            "capabilities": capabilities,
+            "signing_key_id": signing_key_id,
+            "signature": sign_connect(&signing_key, &integrator.slug, &capabilities),
+        }))
         .send()
         .await
         .unwrap();
@@ -212,7 +246,7 @@ struct BulkCall {
 async fn setup(http: &reqwest::Client, base: &str, pool: &PgPool) -> BulkCall {
     let (subject, identity_token) = seed_identity_session(pool).await;
     let integrator = register_integrator(http, base).await;
-    connect(http, base, &integrator, &identity_token).await;
+    connect(http, base, pool, &integrator, subject, &identity_token).await;
     BulkCall {
         integrator,
         subject,

@@ -63,7 +63,10 @@ describe('getGuardians / setGuardians', () => {
 
   it('sends the full guardian set and threshold on update', async () => {
     mockFetchOnce({ guardian_ids: ['g1', 'g2'], threshold: 2, updated_at: 'now' })
-    await setGuardians('token', ['g1', 'g2'], 2)
+    // No local signing key for 'identity-1' in this test's storage, so no
+    // signing_key_id/signature is attached — same "no key, no signature"
+    // edge case docs/architecture/identity.md already treats as expected.
+    await setGuardians('token', 'identity-1', null, ['g1', 'g2'], 2)
 
     const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(url).toContain('/me/recovery/guardians')

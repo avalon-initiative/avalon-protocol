@@ -314,6 +314,14 @@ export interface UserCodeRequest {
   user_code: string
 }
 
+// #697/#698: mints a brand-new session for a different device off the
+// approver's own ambient session alone — signature-required. `denyPairing`
+// keeps using the plain `UserCodeRequest` above; only approval is gated.
+export interface ApprovePairingRequest extends UserCodeRequest {
+  signing_key_id?: string
+  signature?: string
+}
+
 export interface ResolvePairingResponse {
   status: 'approved' | 'denied'
 }
@@ -381,12 +389,25 @@ export interface RenamePasskeyRequest {
   label: string
 }
 
+// #697/#698/#704: revoking the identity's *last* passkey now requires a
+// fresh signature, replacing the old `?confirm=true` query param —
+// revoking one of several stays ambient and this can be omitted.
+export interface RevokePasskeyRequest {
+  signing_key_id?: string
+  signature?: string
+}
+
 // Social recovery (issue #201), matching crates/server/src/recovery.rs
 // field-for-field.
 
 export interface SetGuardiansRequest {
   guardian_ids: string[]
   threshold: number
+  // #697/#698: only enforced server-side when this write removes an
+  // existing guardian or raises the threshold — see
+  // docs/architecture/identity.md.
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface GuardianSettingsResponse {
@@ -657,6 +678,9 @@ export interface CreateRoleRequest {
   description?: string
   // Issue #152. Omitted defaults to RoleBadge::DEFAULT server-side.
   badge?: RoleBadge
+  // #697/#698: signature-required.
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface UpdateRoleRequest {
@@ -666,10 +690,23 @@ export interface UpdateRoleRequest {
   description?: string
   // Issue #152. Omitted leaves it untouched.
   badge?: RoleBadge
+  // #697/#698: signature-required.
+  signing_key_id?: string
+  signature?: string
+}
+
+// #697/#698: role deletion now takes a small JSON body (previously none)
+// just to carry these.
+export interface DeleteRoleRequest {
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface TransferOwnershipRequest {
   to: string
+  // #697/#698/#704: signature-required.
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface GuildMemberResponse {
@@ -681,6 +718,11 @@ export interface GuildMemberResponse {
 
 export interface UpdateGuildMemberRequest {
   role_index: number
+  // #697/#698: only enforced server-side when `role_index`'s role grants
+  // `manage_roles`/`manage_members` (an escalation) — ordinary role
+  // changes stay ambient and these can be omitted.
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface CreateGuildInviteRequest {
@@ -819,6 +861,16 @@ export interface SetPermissionOverrideRequest {
   resource_id: string
   permission: string
   allow: boolean
+  // #697/#698: signature-required.
+  signing_key_id?: string
+  signature?: string
+}
+
+// #697/#698: override deletion now takes a small JSON body (previously
+// none) just to carry these.
+export interface DeletePermissionOverrideRequest {
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface MessageResponse {
@@ -957,6 +1009,9 @@ export interface IssuerKeyResponse {
 
 export interface ConnectIntegratorRequest {
   capabilities: string[]
+  // #697/#698: signature-required.
+  signing_key_id?: string
+  signature?: string
 }
 
 export interface ConnectIntegratorResponse {

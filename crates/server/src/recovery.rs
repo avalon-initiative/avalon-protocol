@@ -26,6 +26,7 @@ use crate::error::AppError;
 use crate::friends::friend_partners;
 use crate::handlers::authenticate;
 use crate::outbox;
+use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
 
 const CEREMONY_TTL_MINUTES: i64 = 5;
@@ -165,6 +166,12 @@ pub(crate) fn guard_rate_limit(recent_count: i64) -> Result<(), AppError> {
 pub struct SetGuardiansRequest {
     pub guardian_ids: Vec<Uuid>,
     pub threshold: i32,
+    /// #697/#698: only required when this write *removes* an existing
+    /// guardian or *raises* the threshold — see the conditional check in
+    /// `set_guardians` below. Naming/adding guardians or lowering the
+    /// threshold stays ambient.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -207,6 +214,38 @@ pub async fn set_guardians(
     let friends = friend_partners(&state, identity_id).await?;
     if !unique_guardians.iter().all(|g| friends.contains(g)) {
         return Err(AppError::InvalidGuardianSet);
+    }
+
+    // #697/#698: removing a guardian or raising the threshold can neuter
+    // the owner's own recovery path — adding guardians or lowering the
+    // threshold only ever makes recovery easier, so those stay ambient.
+    let previous = fetch_guardian_settings(&state, identity_id).await?;
+    let previous_guardian_ids: HashSet<Uuid> = previous.guardian_ids.iter().copied().collect();
+    let removes_a_guardian = !previous_guardian_ids
+        .iter()
+        .all(|g| unique_guardians.contains(g));
+    let raises_threshold = body.threshold > previous.threshold;
+    if removes_a_guardian || raises_threshold {
+        let message = canonical_message(
+            "recovery.guardians.set",
+            &[
+                &identity_id.to_string(),
+                &unique_guardians
+                    .iter()
+                    .map(Uuid::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                &body.threshold.to_string(),
+            ],
+        );
+        require_fresh_signature(
+            &state,
+            identity_id,
+            &message,
+            body.signing_key_id,
+            body.signature.as_deref(),
+        )
+        .await?;
     }
 
     let mut tx = state.pool.begin().await?;

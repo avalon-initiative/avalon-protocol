@@ -35,10 +35,35 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
     format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
 }
 
+/// #697/#698: `signing_key`/`signing_key_id` let a caller sign a later
+/// signature-required action (e.g. `POST /integrations/{slug}/connect`)
+/// with the same key `register_finish` just registered as this identity's
+/// first `identity_signing_keys` row.
+struct RegisteredIdentity {
+    token: String,
+    signing_key: SigningKey,
+    signing_key_id: String,
+}
+
+/// Mirrors `crates/server/src/signature_gate.rs::canonical_message`
+/// byte-for-byte, for a `POST /integrations/{slug}/connect` call.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 /// Registers a brand-new identity via the real HTTP ceremony, then logs it
-/// in, returning the session token — same shape as `authenticate.rs`'s own
-/// helper.
-async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &str) -> String {
+/// in, returning the session token plus the identity's own signing-key
+/// material — same shape as `authenticate.rs`'s own helper, extended for
+/// #697/#698.
+async fn register_and_login(
+    http: &reqwest::Client,
+    base: &str,
+    display_name: &str,
+) -> RegisteredIdentity {
     let identity_id = Uuid::new_v4();
     let origin_str = webauthn_origin();
     let origin_url =
@@ -132,10 +157,35 @@ async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &s
         .json()
         .await
         .expect("sessions/finish response was not JSON");
-    login_body["token"]
+    let token = login_body["token"]
         .as_str()
         .expect("sessions/finish response missing token")
-        .to_string()
+        .to_string();
+
+    let devices: serde_json::Value = http
+        .get(format!("{base}/me/devices"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("GET /me/devices failed")
+        .json()
+        .await
+        .expect("GET /me/devices response was not JSON");
+    let signing_key_id = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["public_key"].as_str() == Some(event_signing_public_key.as_str()))
+        .expect("register_finish's signing key should be listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    RegisteredIdentity {
+        token,
+        signing_key,
+        signing_key_id,
+    }
 }
 
 struct RegisteredIntegrator {
@@ -224,7 +274,7 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
     let base = server_url();
     let display_name = format!("sdk-achv-{}", Uuid::new_v4());
 
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
@@ -232,8 +282,12 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
     // capabilities the SDK's two calls below each require.
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue", "achievements.read"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &["achievements.issue", "achievements.read"]),
+        }))
         .send()
         .await
         .unwrap();
@@ -247,7 +301,7 @@ async fn issue_achievement_then_read_it_back_via_the_sdk() {
         retry: Default::default(),
     });
     let session = client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
 
@@ -289,14 +343,18 @@ async fn a_repeated_idempotency_key_replays_the_first_issuance_not_a_second_one(
     let base = server_url();
     let display_name = format!("sdk-achv-idem-{}", Uuid::new_v4());
 
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue"] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &["achievements.issue"]),
+        }))
         .send()
         .await
         .unwrap();
@@ -304,7 +362,7 @@ async fn a_repeated_idempotency_key_replays_the_first_issuance_not_a_second_one(
 
     let me: serde_json::Value = http
         .get(format!("{base}/me"))
-        .bearer_auth(&token)
+        .bearer_auth(&identity.token)
         .send()
         .await
         .unwrap()
@@ -377,14 +435,18 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let display_name = format!("sdk-achv-nokey-{}", Uuid::new_v4());
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue"] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &["achievements.issue"]),
+        }))
         .send()
         .await
         .unwrap();
@@ -400,7 +462,7 @@ async fn issue_achievement_without_a_configured_signing_key_is_rejected() {
         signing_key: None,
         retry: Default::default(),
     });
-    let session = client.authenticate(&token).await.unwrap();
+    let session = client.authenticate(&identity.token).await.unwrap();
 
     let result = session.issue_achievement("dragon_slayer").await;
     assert!(matches!(
@@ -423,15 +485,19 @@ async fn issues_multiple_achievements_via_bulk_issuance_through_the_sdk() {
     let base = server_url();
     let display_name = format!("sdk-bulk-{}", Uuid::new_v4());
 
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
     define_achievement(&http, &base, &integrator, "lost_city").await;
 
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue", "achievements.read"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &["achievements.issue", "achievements.read"]),
+        }))
         .send()
         .await
         .unwrap();
@@ -445,7 +511,7 @@ async fn issues_multiple_achievements_via_bulk_issuance_through_the_sdk() {
         retry: Default::default(),
     });
     let session = client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
 
@@ -502,14 +568,18 @@ async fn revoke_attestation_flips_validity_to_invalid() {
     let base = server_url();
     let display_name = format!("sdk-revoke-{}", Uuid::new_v4());
 
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue", "achievements.read"] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue", "achievements.read"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &["achievements.issue", "achievements.read"]),
+        }))
         .send()
         .await
         .unwrap();
@@ -523,7 +593,7 @@ async fn revoke_attestation_flips_validity_to_invalid() {
         retry: Default::default(),
     });
     let session = client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
 
@@ -571,14 +641,18 @@ async fn revoke_attestation_is_forbidden_for_a_different_issuer() {
     let base = server_url();
     let display_name = format!("sdk-revoke-forbidden-{}", Uuid::new_v4());
 
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
     let issuer = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &issuer, "dragon_slayer").await;
 
     let connect = http
         .post(format!("{base}/integrations/{}/connect", issuer.slug))
-        .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue"] }))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &issuer.slug, &["achievements.issue"]),
+        }))
         .send()
         .await
         .unwrap();
@@ -592,7 +666,7 @@ async fn revoke_attestation_is_forbidden_for_a_different_issuer() {
         retry: Default::default(),
     });
     let issuer_session = issuer_client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
     let attestation_id = issuer_session
@@ -609,7 +683,7 @@ async fn revoke_attestation_is_forbidden_for_a_different_issuer() {
         retry: Default::default(),
     });
     let impostor_session = impostor_client
-        .authenticate(&token)
+        .authenticate(&identity.token)
         .await
         .expect("authenticate() should succeed with a valid session token");
 

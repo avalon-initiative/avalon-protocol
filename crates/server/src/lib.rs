@@ -52,6 +52,7 @@ pub mod replication;
 pub mod resources;
 pub mod retention;
 pub mod settlement;
+pub mod signature_gate;
 pub mod state;
 pub mod version;
 pub mod visibility;

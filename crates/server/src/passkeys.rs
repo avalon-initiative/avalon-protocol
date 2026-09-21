@@ -43,7 +43,7 @@ use avalon_protocol::event_payloads::{
 };
 use avalon_protocol::events::{ProtocolEvent, ProtocolEventKindVariant};
 use avalon_protocol::ids::GlobalId;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -339,48 +339,40 @@ pub async fn rename_passkey(
     }))
 }
 
-#[derive(Deserialize)]
-pub struct RevokePasskeyQuery {
-    /// Explicit "I understand this may lock me out" acknowledgment (the
-    /// ticket's own invariant), required only when revoking would leave
-    /// zero passkeys — see [`guard_revoke_last_passkey`]. Any value other
-    /// than the literal string `"true"` is treated as not confirmed, same
-    /// fail-closed convention as everywhere else a boolean is read off a
-    /// query string in this codebase.
+/// #697/#698: replaces the old `?confirm=true` speed bump for the
+/// last-passkey case with a fresh-signature requirement (the ticket's own
+/// upgrade from "confirm" to "sign") — `signing_key_id`/`signature` are
+/// only enforced when this revoke would leave zero passkeys, per
+/// [`needs_fresh_signature`]. Revoking one of several passkeys stays
+/// unsigned/ambient and these fields go unused.
+#[derive(Deserialize, Default)]
+pub struct RevokePasskeyRequest {
     #[serde(default)]
-    pub confirm: Option<String>,
+    pub signing_key_id: Option<Uuid>,
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
-fn is_confirmed(query: &RevokePasskeyQuery) -> bool {
-    query.confirm.as_deref() == Some("true")
+/// Whether revoking would leave the identity with zero passkeys — the
+/// trigger for requiring a fresh signature below, factored out as a pure
+/// function so it's unit-testable without a database, same shape the old
+/// `guard_revoke_last_passkey` had.
+fn needs_fresh_signature(remaining_before_revoke: i64) -> bool {
+    remaining_before_revoke <= 1
 }
 
-/// The revoke-last-passkey guard, factored out as a pure function so it's
-/// unit-testable without a database: given how many passkeys the identity
-/// has *before* this revocation and whether the caller explicitly
-/// confirmed, decide whether the revoke may proceed. Never allows the
-/// count to silently reach zero.
-fn guard_revoke_last_passkey(
-    remaining_before_revoke: i64,
-    confirmed: bool,
-) -> Result<(), AppError> {
-    if remaining_before_revoke <= 1 && !confirmed {
-        return Err(AppError::LastPasskeyRequiresConfirmation);
-    }
-    Ok(())
-}
-
-/// `POST /me/passkeys/:id/revoke?confirm=true` — deletes one passkey.
-/// Revoking the identity's last remaining passkey requires `?confirm=true`
-/// (the ticket's explicit-confirmation invariant); revoking one of several
-/// never does. The count check and the delete happen inside one transaction
-/// so a concurrent registration/revoke from another session can't race past
-/// the guard.
+/// `POST /me/passkeys/:id/revoke` — deletes one passkey. Revoking the
+/// identity's last remaining passkey requires a fresh signature from one of
+/// the identity's registered `identity_signing_keys` (issue #704/#698 —
+/// upgraded from the old client-side `?confirm=true` speed bump); revoking
+/// one of several never does. The count check and the delete happen inside
+/// one transaction so a concurrent registration/revoke from another session
+/// can't race past the guard.
 pub async fn revoke_passkey(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(passkey_id): Path<Uuid>,
-    Query(query): Query<RevokePasskeyQuery>,
+    Json(body): Json<RevokePasskeyRequest>,
 ) -> Result<(), AppError> {
     let identity_id = authenticate(&state, &headers).await?;
 
@@ -389,7 +381,7 @@ pub async fn revoke_passkey(
     // Row-locks every passkey of this identity for the duration of the
     // transaction, so a concurrent revoke of a different passkey from
     // another session can't both read "2 remaining" and both proceed
-    // unconfirmed, leaving zero. `FOR UPDATE` can't be combined with an
+    // unsigned, leaving zero. `FOR UPDATE` can't be combined with an
     // aggregate (`COUNT(*)`) — Postgres rejects that outright — so this
     // fetches the locked rows themselves and counts them in Rust.
     let locked_rows = sqlx::query("SELECT id FROM identity_keys WHERE identity_id = $1 FOR UPDATE")
@@ -398,7 +390,20 @@ pub async fn revoke_passkey(
         .await?;
     let remaining_before_revoke: i64 = locked_rows.len() as i64;
 
-    guard_revoke_last_passkey(remaining_before_revoke, is_confirmed(&query))?;
+    if needs_fresh_signature(remaining_before_revoke) {
+        let message = crate::signature_gate::canonical_message(
+            "passkey.revoke_last",
+            &[&passkey_id.to_string(), &identity_id.to_string()],
+        );
+        crate::signature_gate::require_fresh_signature(
+            &state,
+            identity_id,
+            &message,
+            body.signing_key_id,
+            body.signature.as_deref(),
+        )
+        .await?;
+    }
 
     let deleted = sqlx::query("DELETE FROM identity_keys WHERE id = $1 AND identity_id = $2")
         .bind(passkey_id)
@@ -450,27 +455,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn revoking_the_only_passkey_without_confirmation_is_rejected() {
-        assert!(matches!(
-            guard_revoke_last_passkey(1, false),
-            Err(AppError::LastPasskeyRequiresConfirmation)
-        ));
+    fn revoking_the_only_passkey_needs_a_fresh_signature() {
+        assert!(needs_fresh_signature(1));
     }
 
     #[test]
-    fn revoking_the_only_passkey_with_confirmation_is_allowed() {
-        assert!(guard_revoke_last_passkey(1, true).is_ok());
-    }
-
-    #[test]
-    fn revoking_one_of_several_passkeys_needs_no_confirmation() {
-        assert!(guard_revoke_last_passkey(2, false).is_ok());
-        assert!(guard_revoke_last_passkey(5, false).is_ok());
-    }
-
-    #[test]
-    fn revoking_one_of_several_passkeys_still_allowed_when_confirmed_anyway() {
-        assert!(guard_revoke_last_passkey(3, true).is_ok());
+    fn revoking_one_of_several_passkeys_needs_no_signature() {
+        assert!(!needs_fresh_signature(2));
+        assert!(!needs_fresh_signature(5));
     }
 
     #[test]
@@ -479,26 +471,9 @@ mod tests {
         // least one passkey after registration), but the guard fails
         // closed rather than open for it: `remaining_before_revoke <= 1`
         // covers zero the same as one, so a data inconsistency here still
-        // demands confirmation rather than silently proceeding.
+        // demands a fresh signature rather than silently proceeding.
         // `revoke_passkey`'s own `rows_affected() == 0` check is what
         // actually reports "not found" once past this guard.
-        assert!(matches!(
-            guard_revoke_last_passkey(0, false),
-            Err(AppError::LastPasskeyRequiresConfirmation)
-        ));
-    }
-
-    #[test]
-    fn confirm_query_param_only_accepts_the_literal_true() {
-        assert!(is_confirmed(&RevokePasskeyQuery {
-            confirm: Some("true".to_string())
-        }));
-        assert!(!is_confirmed(&RevokePasskeyQuery {
-            confirm: Some("1".to_string())
-        }));
-        assert!(!is_confirmed(&RevokePasskeyQuery {
-            confirm: Some("True".to_string())
-        }));
-        assert!(!is_confirmed(&RevokePasskeyQuery { confirm: None }));
+        assert!(needs_fresh_signature(0));
     }
 }

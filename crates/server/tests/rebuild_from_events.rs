@@ -74,7 +74,10 @@ fn new_virtual_client() -> VirtualClient {
 /// Registers a brand-new identity entirely via the real HTTP ceremony (same
 /// approach `crates/server/tests/passkeys.rs::create_identity_with_one_passkey`
 /// takes), then logs it in. Returns the identity id and its session token.
-async fn register_and_login(http: &reqwest::Client, base: &str) -> (Uuid, String) {
+async fn register_and_login(
+    http: &reqwest::Client,
+    base: &str,
+) -> (Uuid, String, SigningKey, Uuid) {
     let identity_id = Uuid::new_v4();
     let display_name = format!("rebuild-test-{identity_id}");
 
@@ -146,7 +149,42 @@ async fn register_and_login(http: &reqwest::Client, base: &str) -> (Uuid, String
         .await
         .unwrap();
 
-    (identity_id, finish["token"].as_str().unwrap().to_string())
+    let token = finish["token"].as_str().unwrap().to_string();
+
+    // #697/#698: register_finish's own event_signing_public_key becomes
+    // this identity's first identity_signing_keys row — find its server-
+    // assigned id (GET /me/devices, match on public key) so a later
+    // signature-required call (e.g. POST /integrations/{slug}/connect)
+    // can name it.
+    let devices: serde_json::Value = auth(http.get(format!("{base}/me/devices")), &token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let signing_key_public = BASE64.encode(signing_key.verifying_key().to_bytes());
+    let signing_key_id: Uuid = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["public_key"].as_str() == Some(signing_key_public.as_str()))
+        .expect("register_finish's signing key should be listed")["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    (identity_id, token, signing_key, signing_key_id)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
 }
 
 fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
@@ -314,13 +352,19 @@ async fn rebuild_reproduces_integrator_data_deletion() {
     let base = server_url();
 
     let integrator = register_integrator(&http, &base).await;
-    let (subject_id, subject_token) = register_and_login(&http, &base).await;
+    let (subject_id, subject_token, subject_signing_key, subject_signing_key_id) =
+        register_and_login(&http, &base).await;
 
+    let connect_capabilities: [&str; 0] = [];
     let connect = auth(
         http.post(format!("{base}/integrations/{}/connect", integrator.slug)),
         &subject_token,
     )
-    .json(&serde_json::json!({ "capabilities": [] }))
+    .json(&serde_json::json!({
+        "capabilities": connect_capabilities,
+        "signing_key_id": subject_signing_key_id,
+        "signature": sign_connect(&subject_signing_key, &integrator.slug, &connect_capabilities),
+    }))
     .send()
     .await
     .expect("connect failed");
@@ -473,8 +517,8 @@ async fn rebuild_reproduces_projections_exactly() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (alice_id, alice_token) = register_and_login(&http, &base).await;
-    let (bob_id, bob_token) = register_and_login(&http, &base).await;
+    let (alice_id, alice_token, ..) = register_and_login(&http, &base).await;
+    let (bob_id, bob_token, ..) = register_and_login(&http, &base).await;
 
     let update = auth(http.patch(format!("{base}/me")), &alice_token)
         .json(&serde_json::json!({ "bio": "rebuild-from-events test fixture" }))
@@ -637,7 +681,7 @@ async fn replay_onto_rebuilt_index_is_noop() {
     let http = reqwest::Client::new();
     let base = server_url();
 
-    let (_alice_id, alice_token) = register_and_login(&http, &base).await;
+    let (_alice_id, alice_token, ..) = register_and_login(&http, &base).await;
     auth(http.patch(format!("{base}/me")), &alice_token)
         .json(&serde_json::json!({ "bio": "idempotency fixture" }))
         .send()

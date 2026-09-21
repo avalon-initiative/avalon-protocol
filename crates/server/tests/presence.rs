@@ -67,6 +67,32 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
+/// #697/#698: `POST /integrations/{slug}/connect` is signature-required —
+/// seeds a real signing key for `identity_id` so a connect call can
+/// produce a genuine fresh signature over HTTP.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
     request.bearer_auth(token)
 }
@@ -386,16 +412,22 @@ async fn a_bound_integrator_can_publish_its_own_playing_claim() {
     let http = reqwest::Client::new();
     let base = server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (alice_signing_key_id, alice_signing_key) = seed_signing_key(&pool, alice_id).await;
     let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
     let integrator_id = integrator["id"].as_str().unwrap();
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
+    let connect_capabilities = ["presence.publish"];
     auth(
         http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
-    .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
+    .json(&serde_json::json!({
+        "capabilities": connect_capabilities,
+        "signing_key_id": alice_signing_key_id,
+        "signature": sign_connect(&alice_signing_key, slug, &connect_capabilities),
+    }))
     .send()
     .await
     .unwrap();
@@ -441,15 +473,21 @@ async fn a_integrator_cannot_claim_to_be_playing_a_different_integrator() {
     let http = reqwest::Client::new();
     let base = server_url();
     let (alice_id, alice_token) = seed_identity_session(&pool).await;
+    let (alice_signing_key_id, alice_signing_key) = seed_signing_key(&pool, alice_id).await;
     let (integrator, signing_key) = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
     let key_id = integrator["credential"]["key_id"].as_str().unwrap();
 
+    let connect_capabilities = ["presence.publish"];
     auth(
         http.post(format!("{base}/integrations/{slug}/connect")),
         &alice_token,
     )
-    .json(&serde_json::json!({ "capabilities": ["presence.publish"] }))
+    .json(&serde_json::json!({
+        "capabilities": connect_capabilities,
+        "signing_key_id": alice_signing_key_id,
+        "signature": sign_connect(&alice_signing_key, slug, &connect_capabilities),
+    }))
     .send()
     .await
     .unwrap();
