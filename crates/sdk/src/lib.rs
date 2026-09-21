@@ -69,6 +69,7 @@ pub mod social;
 pub mod submission;
 pub mod sync_journal;
 
+pub use account::device_login::AccountDeviceLogin;
 pub use account::{AccountCredentials, AccountSession, ProfileUpdate};
 pub use http::RetryConfig;
 
