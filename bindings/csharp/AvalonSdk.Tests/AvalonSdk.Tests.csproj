@@ -14,7 +14,7 @@
     <!-- Live tests only (LiveTests.cs, gated behind AVALON_SERVER_URL/DATABASE_URL) — seeds
          a friendship directly via SQL, mirroring crates/sdk/tests/social.rs's own sqlx use;
          there is no SDK-level way to create one without a friend-request/accept flow. -->
-    <PackageReference Include="Npgsql" Version="8.0.9" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>
 
   <ItemGroup>
