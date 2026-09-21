@@ -96,7 +96,7 @@ UI. Achievements/attestations are wired end to end — a category-driven
 claim vocabulary, two-tier root/operational issuer keys, signed issuance,
 authenticity/validity/recognition kept as separate questions, signed
 append-only revocation history — through both SDKs and a Hub achievements
-view. See [`docs/architecture/`](docs/architecture/) for the current state
+view. See [`docs/projects/backend-server/architecture/`](docs/projects/backend-server/architecture/) for the current state
 of each area, one file per topic.
 
 ## Running locally
@@ -135,15 +135,20 @@ bindings/
 docs/
   README.md      doc-set map: which directory is for you, suggested reading order
   GLOSSARY.md    Avalon's vocabulary — start here if the terminology is the blocker
+  WhyAvalon.md   the case for why this needs to exist
+  users/         docs for people using games/apps/services that integrate Avalon
+  maintainers/   docs for contributors to this repo (repo-wide)
   stakeholders/
     Proposal.md  the living design document (narrative)
-  WhyAvalon.md   the case for why this needs to exist
-  architecture/  the normative architecture reference, one file per topic
-  users/         docs for people using games/apps/services that integrate Avalon
-  developers/    docs for developers integrating the SDKs
-  maintainers/   docs for contributors to this repo
-  hosters/       docs for standing up and operating an avalon-server node
-  stakeholders/  docs for people evaluating Avalon from the outside
+    README.md    docs for people evaluating Avalon from the outside
+  projects/      one folder per deployable, each self-contained enough to
+                 move to its own repo later — see projects/README.md
+    backend-server/  the network itself: architecture/, for-hosters/, for-maintainers/
+    sdks/            every official SDK (rust/, csharp/) + one shared architecture/
+    cli/             the `avalon` dev/ops CLI
+    hub/             the web client
+    mobile-hub/      the Tauri desktop/mobile shell
+    ui/              the shared Vue3 component library
 ```
 
 Architecture decisions are tracked as closed GitHub issues labeled
@@ -165,7 +170,7 @@ Ed25519 public key, so a client can verify a server's Signed Tree Heads
 rendered from [`docs/trusted-networks.json`](docs/trusted-networks.json), the
 single canonical copy — not a hand-maintained duplicate, and a Hub test fails
 if the two ever drift. See
-[`docs/architecture/network-trust-anchors.md`](docs/architecture/network-trust-anchors.md)
+[`docs/projects/backend-server/architecture/network-trust-anchors.md`](docs/projects/backend-server/architecture/network-trust-anchors.md)
 for the full model, how the Hub enforces it, and what this deliberately does
 not solve (a compromised maintainer publishing a bad key here is a
 governance problem, not one client-side pinning can fix).
@@ -184,7 +189,7 @@ deployment tiers are supported — `avalon-dev-<name>` (single-node),
 `avalon-int-<name>` (a 1-5 node interconnected test bed for verifying changes
 integrate before mainnet), and `avalon-mainnet-N` (the real, independently
 growing/shrinking validator set) — see
-[`docs/architecture/network-trust-anchors.md`](docs/architecture/network-trust-anchors.md#the-trust-anchor-list)
+[`docs/projects/backend-server/architecture/network-trust-anchors.md`](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
 
 Avalon Hub bundles this same list at build time and always shows which
@@ -196,7 +201,7 @@ an unpinned network rather than trusting it silently — see
 
 | Design | Decisions | Process |
 |---|---|---|
-| [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
+| [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
 
 ## Contributing
 

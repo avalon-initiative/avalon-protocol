@@ -3,7 +3,7 @@
 Everything needed to get the full stack — server, CLI, Hub web client,
 Storybook, and the C# SDK — running from a clean clone. This page is
 operational only; for what the code actually does and why, see
-[`../architecture/`](../architecture/) (linked from each section below, not
+[`../architecture/`](../projects/backend-server/architecture/) (linked from each section below, not
 repeated here).
 
 ## Prerequisites
@@ -88,7 +88,7 @@ make inspect-ledger
 
 `make create-identity` registers a new self-custodied identity via
 `avalon-cli` (a WebAuthn passkey ceremony plus its own Ed25519 signing key —
-see [`../architecture/identity.md`](../architecture/identity.md)).
+see [`../architecture/identity.md`](../projects/backend-server/architecture/identity.md)).
 `make inspect-ledger` pretty-prints the hash-chained settlement ledger
 (`make inspect-ledger-full` includes each entry's payload).
 
@@ -97,7 +97,7 @@ the identity you just created, with `issuer = identity:<id>:self:created`.
 `make outbox-status` should show zero pending entries once the outbox worker
 has caught up — identity creation and its ledger entry are committed
 atomically via an outbox pattern (see
-[`../architecture/settlement.md`](../architecture/settlement.md)).
+[`../architecture/settlement.md`](../projects/backend-server/architecture/settlement.md)).
 
 To log back in with an identity `create-identity` already saved locally:
 
@@ -215,7 +215,7 @@ startup (no rebuild needed to change either):
 
 Log lines for events worth alerting on (equivocation detection being the
 sharpest example — see
-[`equivocation-response.md`](equivocation-response.md)) carry their own
+[`equivocation-response.md`](../projects/backend-server/for-maintainers/equivocation-response.md)) carry their own
 data as `tracing` fields (`network_id`, `tree_size`, `event`, ...), not
 folded into the message string — with `AVALON_LOG_FORMAT=json`, those
 become real top-level JSON keys, not something an aggregator has to regex

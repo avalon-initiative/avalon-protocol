@@ -17,7 +17,7 @@ Each feature proposal or implementation should answer:
   rules — giving Avalon only the connective infrastructure between games,
   never authority over any single one — per the
   [Guiding Principles](../docs/stakeholders/Proposal.md#30-guiding-principles)
-  and the [architecture tests](../docs/architecture/README.md#architecture-tests)?
+  and the [architecture tests](../docs/projects/backend-server/architecture/README.md#architecture-tests)?
 
 If no, refine or drop the proposal.
 
@@ -74,7 +74,7 @@ read that section for the full reasoning behind each:
 
 Open work lives in GitHub Issues. Design direction lives in
 [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) (narrative)
-and [`docs/architecture/`](../docs/architecture/README.md) (normative —
+and [`docs/architecture/`](../docs/projects/backend-server/architecture/README.md) (normative —
 invariants and authority boundaries); acceptance criteria for specific work
 items live on their tracking issue, not in a docs file. Architecture
 decisions are closed GitHub issues labeled `architecture-decision-record`;
@@ -219,7 +219,7 @@ addition:
 ## Documentation-First Workflow
 
 For non-trivial work: update the relevant file in
-[`docs/architecture/`](../docs/architecture/README.md) (and
+[`docs/architecture/`](../docs/projects/backend-server/architecture/README.md) (and
 [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) if the
 narrative changes) in the same PR as the implementation, not after — a doc
 that lags the code is treated as a bug. Each architecture file ends with
@@ -229,11 +229,11 @@ tickets" (the issues that govern it); keep both current.
 ### Protocol event versioning policy
 
 Adding a new `ProtocolEvent` kind or changing an existing one's payload?
-[`docs/architecture/protocol-events.md`](../docs/architecture/protocol-events.md#versioning-policy)
+[`docs/architecture/protocol-events.md`](../docs/projects/backend-server/architecture/protocol-events.md#versioning-policy)
 is the normative versioning policy (additive fields never bump `version`;
 removing/renaming/re-meaning a field does; every version ever emitted
 stays decodable forever) and
-[`docs/architecture/protocol-events-catalogue.md`](../docs/architecture/protocol-events-catalogue.md)
+[`docs/architecture/protocol-events-catalogue.md`](../docs/projects/backend-server/architecture/protocol-events-catalogue.md)
 is the full kind-by-kind table. A new kind gets a real
 `ProtocolEventKindVariant` (`crates/protocol/src/events.rs`) and a typed
 payload struct (`crates/protocol/src/event_payloads.rs`) — never a
@@ -272,12 +272,12 @@ two.
   itself is the barrier (integrator vs. issuer vs. node, authentic vs. valid
   vs. recognized, settlement vs. chain vs. ledger, and the rest). Everything
   below assumes these terms.
-- [`docs/architecture/README.md`](../docs/architecture/README.md) — start
+- [`docs/architecture/README.md`](../docs/projects/backend-server/architecture/README.md) — start
   here: invariants, authority boundaries, the crate layout, "what survives a
   game's death," and the architecture tests every proposed change is held to
 - [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) — the
   full narrative design and phased roadmap
-- [`docs/developers/`](../docs/developers/) — the game-developer-facing SDK
+- [`docs/projects/sdks/rust/for-developers/`](../docs/projects/sdks/rust/for-developers/) — the game-developer-facing SDK
   story
 - [`docs/hosters/`](../docs/hosters/) — standing up and deploying a node,
   distinct from contributing code
