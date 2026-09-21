@@ -880,6 +880,82 @@ protocol and the domain model in `crates/protocol`; they never pull in
       port of Hub's own already-shipping, production-proven
       `packages/api-client` implementation. What's specifically
       unverified live is only the cross-node network hop itself.
+  - **Epic #712, final SDK-extension pass**: an audit comparing every
+    exported function in `packages/api-client/src/client.ts`/`identity.ts`/
+    `session.ts` against `bindings/ts` after the stage-1 pass above (and the
+    same day's websocket-subscription/continuation-reconnect/
+    network-trust-fetch/BIP39-mnemonic work) found fourteen remaining gaps,
+    all closed here — `bindings/ts` now has full feature parity with
+    `packages/api-client`'s public surface, and the actual `apps/hub`
+    migration onto it (untouched by this pass) can begin as #712's next
+    stage:
+    - Three `AccountSession` additions: `getMyAchievements()` (`GET
+      /me/achievements?limit=200`, `bindings/ts/src/accountSession/
+      achievements.ts`, a new domain file) — the player's own read of their
+      attestation history (active and revoked alike), distinct from
+      `IntegratorSession.achievements()`, which is capability-gated and
+      issuance-focused, and deliberately without a `recognition` field per
+      ADR #76; `getGameBreakdown(guildId)` (`GET
+      /guilds/{id}/integrator-breakdown`) and `getMessageArchive(guildId,
+      channelId, before?, limit?)` (`GET /guilds/{id}/channels/{channelId}/
+      messages/archive`), both added to the existing
+      `bindings/ts/src/accountSession/guildAdmin.ts` as siblings of
+      `channelMessages()`.
+    - Eleven free-standing, unauthenticated functions, matching
+      `ledger.ts`'s existing `getLatestSth(serverUrl)` convention (no
+      session, `serverUrl` as the first parameter), split across four new
+      files: `integratorDirectory.ts` (`listAchievementDefinitions`,
+      `listMilestoneDefinitions`, `getIntegrator`, `listIntegrators`,
+      `getIntegratorRegistry`, `listIssuerKeys` — all under
+      `/integrations`); `identityData.ts` (`getIdentityIntegratorData`,
+      `GET /identities/{id}/integrator-data`); `recovery.ts` (the five
+      recovery-initiation calls — `startRecoveryRequest`/
+      `finishRecoveryRequest`/`getRecoveryRequest`/
+      `finalizeRecoveryRequest`/`getIdentityRecoveryStatus` — deliberately
+      free-standing rather than `AccountSession` methods, since the caller
+      has no session yet for the identity being recovered, reusing
+      `accountSession/recovery.ts`'s own `RecoveryRequest`/`requestFromWire`
+      rather than duplicating that conversion); and `crossNodeLogin.ts`
+      (epic #623's `lookupCrossNodeLogin`/`denyCrossNodeLogin`/
+      `submitCrossNodeLoginGrant`, all taking an explicit `baseUrl` target
+      rather than the session's own configured server, matching
+      `packages/api-client`'s own three cross-node functions). The new
+      `bindings/ts/src/crypto/crossNodeLogin.ts` mints a
+      `CrossNodeLoginGrant` locally (mirroring
+      `packages/api-client/src/crypto/crossNodeLogin.ts`'s
+      `avalon:cross-node-login:v1:<identity_id>:<signing_key_id>:
+      <destination_base_url>:<requesting_context>:<nonce>:<issued_at_secs>:
+      <expires_at_secs>` signing-bytes format and hex-encoded signature
+      byte-for-byte, the same `DEFAULT_TTL_SECONDS = 60`, same convention
+      `crypto/continuation.ts`/`crypto/interestClaim.ts` already use).
+      `submitCrossNodeLoginGrant` takes raw
+      `identityId`/`signingKeyId`/`signingKeySecret` rather than an
+      `AccountSession`, matching how `apps/hub`'s own `CrossNodeLogin.vue`
+      call site already needs to shape this call: the approving browser's
+      ambient session, if any, has nothing to do with the destination node.
+    - **Unit tests**: a wire-shape/conversion test each for
+      `getGameBreakdown`/`getMessageArchive`
+      (`accountSession/guildAdmin.test.ts`, new) and `getMyAchievements`
+      (`accountSession/achievements.test.ts`, new, including an
+      empty-history case). `crypto/crossNodeLogin.test.ts` mirrors
+      `crypto/continuation.test.ts`'s own style: exact field shapes, the
+      60-second TTL, the exact signed-bytes format (hex, not base64),
+      tamper detection, nonce freshness.
+    - **Live tests** (run 2026-09-21 against this sandbox's real
+      `avalon-server`/Postgres, seeded the same way
+      `account.live.test.ts` does — direct SQL inserts rather than a
+      WebAuthn ceremony): `getMyAchievements()` on a freshly seeded
+      identity returns `[]`; `getIntegrator`/`listIntegrators` round-trip
+      against a real integrator registered directly via `POST
+      /integrations`; `getMessageArchive` round-trips (empty, since a
+      freshly sent message hasn't aged into the archive tier yet — the
+      endpoint itself is confirmed reachable and correctly shaped). The
+      five recovery-initiation functions and the three cross-node-login
+      functions were not live-verified: recovery needs guardians
+      configured first, and cross-node login needs a destination node
+      genuinely distinct from the one the grant is minted against — both
+      left to unit coverage plus the byte-for-byte format match against
+      their already-live-proven `packages/api-client` counterparts.
 
 ## Decisions and tickets
 
