@@ -7,8 +7,15 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import IntegrationProfile from './IntegrationProfile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
+
+const profile = {
+  identity_id: 'id-1',
+  identity_created_at: 'now',
+  display_name: 'Nova',
+  avatar_url: null,
+}
 
 beforeEach(() => {
   localStorage.clear()
@@ -139,8 +146,8 @@ describe('IntegrationProfile', () => {
 
   // Issue #467.
   it("reaches ConnectIntegration.vue for this slug when the caller hasn't connected", async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': profile,
       '/integrations/ashen-realms': {
         id: 'g1',
         slug: 'ashen-realms',
@@ -155,6 +162,8 @@ describe('IntegrationProfile', () => {
       '/me/connections': [],
       '/guilds/discover': { guilds: [], next_cursor: null },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/integrations/ashen-realms')
@@ -172,8 +181,8 @@ describe('IntegrationProfile', () => {
   })
 
   it('links "Guilds playing this" through to Discover, pre-filtered to this integrator', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': profile,
       '/integrations/ashen-realms': {
         id: 'g1',
         slug: 'ashen-realms',
@@ -203,6 +212,8 @@ describe('IntegrationProfile', () => {
         next_cursor: null,
       },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/integrations/ashen-realms')

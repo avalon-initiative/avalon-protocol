@@ -4,9 +4,8 @@
 // guild — a full cross-channel merge is more than a Home summary widget
 // needs; Guild.vue's own channel list is where that already happens.
 import { onUnmounted, ref, watch, type Ref } from 'vue'
-import * as api from '@avalon/api-client'
-import type { GuildResponse, MessageResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import type { AccountSession, Guild, GuildMessage } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 
@@ -14,39 +13,39 @@ export interface LatestGuildMessage {
   guildId: string
   guildName: string
   channelId: string
-  message: MessageResponse
+  message: GuildMessage
 }
 
 // Takes the caller's already-loaded guilds as a Ref (from useMyGuilds)
 // rather than fetching its own copy — this composable only adds the
 // per-guild "latest message" lookup on top.
-export function useLatestGuildMessages(guilds: Ref<GuildResponse[]>) {
+export function useLatestGuildMessages(guilds: Ref<Guild[]>) {
   const session = useSessionStore()
 
   const latestMessages = ref<LatestGuildMessage[]>([])
   const loading = ref(true)
   const error = ref('')
 
-  async function latestForGuild(token: string, guild: GuildResponse): Promise<LatestGuildMessage | null> {
-    const channels = await api.listChannels(token, guild.id)
-    const channel = channels.find((c) => !c.archived)
+  async function latestForGuild(s: AccountSession, guild: Guild): Promise<LatestGuildMessage | null> {
+    const channels = await s.listChannels(guild.id)
+    const channel = Array.isArray(channels) ? channels.find((c) => !c.archived) : undefined
     if (!channel) return null
 
-    const messages = await api.listMessages(token, guild.id, channel.id, { limit: 1 })
-    const message = messages[0]
+    const messages = await s.channelMessages(guild.id, channel.id, undefined, 1)
+    const message = Array.isArray(messages) ? messages[0] : undefined
     if (!message) return null
 
     return { guildId: guild.id, guildName: guild.name, channelId: channel.id, message }
   }
 
   async function refresh() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      const token = session.token
-      const results = await Promise.all(guilds.value.map((g) => latestForGuild(token, g)))
+      const results = await Promise.all(guilds.value.map((g) => latestForGuild(s, g)))
       latestMessages.value = results
         .filter((r): r is LatestGuildMessage => r !== null)
-        .sort((a, b) => b.message.sent_at.localeCompare(a.message.sent_at))
+        .sort((a, b) => b.message.sentAt.localeCompare(a.message.sentAt))
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {

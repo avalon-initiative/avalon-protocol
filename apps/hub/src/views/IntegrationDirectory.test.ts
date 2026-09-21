@@ -5,8 +5,15 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import IntegrationDirectory from './IntegrationDirectory.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
+
+const profile = {
+  identity_id: 'id-1',
+  identity_created_at: 'now',
+  display_name: 'Nova',
+  avatar_url: null,
+}
 
 function testRouter() {
   return createRouter({
@@ -117,8 +124,8 @@ describe('IntegrationDirectory', () => {
   // Issue #467: a Connect action reachable straight from the directory,
   // not just after already opening an integrator's own profile.
   it('reaches ConnectIntegration.vue for a card not yet connected', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': profile,
       '/integrations': {
         integrators: [
           {
@@ -135,6 +142,8 @@ describe('IntegrationDirectory', () => {
       },
       '/me/connections': [],
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/integrations')

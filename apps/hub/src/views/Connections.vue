@@ -5,10 +5,9 @@
 // merging needed, unlike the guild roster (issue #24's presence merge).
 import { ref } from 'vue'
 import { AvalonCard, AvalonConnectionCard } from '@avalon/ui'
-import * as api from '@avalon/api-client'
 import { capabilityDescription } from '../api/connections'
 import { useMyConnections } from '../composables/useMyConnections'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import styles from '../styles/page.module.scss'
 
 const session = useSessionStore()
@@ -17,10 +16,11 @@ const { bindings, loading, error, refresh } = useMyConnections()
 const actionError = ref('')
 
 async function onRevokeGrant(slug: string, capability: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.revokeGrant(session.token, slug, capability)
+    await s.revokeGrant(slug, capability)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -28,10 +28,11 @@ async function onRevokeGrant(slug: string, capability: string) {
 }
 
 async function onDisconnect(slug: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.disconnectIntegrator(session.token, slug)
+    await s.disconnectIntegrator(slug)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -55,10 +56,10 @@ async function onDisconnect(slug: string) {
       </p>
       <AvalonConnectionCard
         v-for="binding in bindings"
-        :key="binding.binding_id"
+        :key="binding.bindingId"
         :integrator-name="binding.name"
         :slug="binding.slug"
-        :established-at="binding.established_at"
+        :established-at="binding.establishedAt"
         :grants="binding.grants.map((g) => ({ capability: g.capability, description: capabilityDescription(g.capability) }))"
         @revoke-grant="onRevokeGrant(binding.slug, $event)"
         @disconnect="onDisconnect(binding.slug)"

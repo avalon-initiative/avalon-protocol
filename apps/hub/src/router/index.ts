@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 const router = createRouter({
   history: createWebHistory(),

@@ -3,27 +3,28 @@
 // needed for milestone 1" shape apps/hub/src/composables/useGuildDetail.ts
 // already establishes.
 import { onMounted, onUnmounted, ref } from 'vue'
-import * as api from '@avalon/api-client'
-import type { IntegratorBindingResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import type { MyConnection } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 
 export function useMyConnections() {
   const session = useSessionStore()
 
-  const bindings = ref<IntegratorBindingResponse[]>([])
+  const bindings = ref<MyConnection[]>([])
   const loading = ref(true)
   const error = ref('')
 
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
   async function refresh() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
       // GET /me/connections returns a bare array (only active bindings are
       // ever listed, so there's no wrapper object to unwrap).
-      bindings.value = await api.listMyConnections(session.token)
+      const result = await s.myConnections()
+      if (Array.isArray(result)) bindings.value = result
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }

@@ -8,7 +8,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -65,8 +65,9 @@ beforeEach(() => {
 
 describe('HubShell pending-actions badge', () => {
   it('shows no badge and an empty panel when nothing is pending', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/profile')
@@ -82,7 +83,6 @@ describe('HubShell pending-actions badge', () => {
   })
 
   it('sums every source into one combined count', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       ...baseRoutes(),
       '/friends/requests': [
@@ -108,6 +108,8 @@ describe('HubShell pending-actions badge', () => {
         { id: 'm1', conversation_id: 'convo1', author: 'id-other', body: 'hi', sent_at: 'now' },
       ],
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/profile')
@@ -137,7 +139,6 @@ describe('HubShell pending-actions badge', () => {
   // path) is what clears its contribution — the next poll tick picks up
   // the new localStorage state, no remount needed.
   it('drops a conversation from the unread count once its thread is opened', async () => {
-    useSessionStore().login('a-token')
     vi.useFakeTimers()
     mockFetchByPath({
       ...baseRoutes(),
@@ -146,6 +147,8 @@ describe('HubShell pending-actions badge', () => {
         { id: 'm1', conversation_id: 'convo1', author: 'id-other', body: 'hi', sent_at: 'now' },
       ],
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/profile')

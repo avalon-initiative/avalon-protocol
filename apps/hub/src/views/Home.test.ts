@@ -5,7 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Home from './Home.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -44,9 +44,14 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
+// `mockFetchByPath` must already be stubbed before this runs.
+async function loginSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Home', () => {
   it('welcomes the user by display name', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [],
@@ -55,6 +60,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
+    await loginSession()
 
     const router = testRouter()
     router.push('/')
@@ -64,7 +70,6 @@ describe('Home', () => {
   })
 
   it('renders sensible empty states with no friends and no history', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [],
@@ -73,6 +78,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
+    await loginSession()
 
     const router = testRouter()
     router.push('/')
@@ -87,7 +93,6 @@ describe('Home', () => {
   })
 
   it('shows recent activity summaries and a View all link', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [
@@ -104,6 +109,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
+    await loginSession()
 
     const router = testRouter()
     router.push('/')
@@ -114,7 +120,6 @@ describe('Home', () => {
   })
 
   it('shows connected integrators, guilds, and their latest messages', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [],
@@ -157,6 +162,7 @@ describe('Home', () => {
         { id: 'msg-1', channel_id: 'chan-1', author: 'id-2', body: "Let's run the dungeon tonight!", sent_at: new Date().toISOString() },
       ],
     })
+    await loginSession()
 
     const router = testRouter()
     router.push('/')

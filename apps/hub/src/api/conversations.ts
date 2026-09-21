@@ -1,7 +1,7 @@
 // Pure direct-message logic (issue #105), kept separate from
 // apps/hub/src/api/client.ts for the same reason guildChat.ts is split out
 // from guilds.ts — composition/ordering, not roster/relationship merging.
-import type { ConversationMessageResponse, ConversationResponse } from '@avalon/api-client'
+import type { ConversationMessage, Conversation } from '@avalon/sdk'
 
 // Matches crates/server/src/conversations.rs::MESSAGE_BODY_MAX_CHARS
 // exactly — same cap as guild chat (guildChat.ts's own constant), kept as
@@ -30,9 +30,7 @@ export function validateComposerBody(body: string): ComposerValidation {
 // GET .../messages returns newest-first (server: ORDER BY sent_at DESC, id
 // DESC) — same reversal guildChat.ts's toOldestFirst does, for the same
 // newest-at-bottom rendering.
-export function toOldestFirst(
-  messages: ConversationMessageResponse[],
-): ConversationMessageResponse[] {
+export function toOldestFirst(messages: ConversationMessage[]): ConversationMessage[] {
   return [...messages].reverse()
 }
 
@@ -41,6 +39,6 @@ export function toOldestFirst(
 // the friend's name, not the caller's own. A group conversation (more than
 // one other participant) returns all of them; callers decide how to
 // summarize that (e.g. joining names), this stays pure id-list logic.
-export function otherParticipants(conversation: ConversationResponse, selfId: string): string[] {
+export function otherParticipants(conversation: Conversation, selfId: string): string[] {
   return conversation.participants.filter((id) => id !== selfId)
 }

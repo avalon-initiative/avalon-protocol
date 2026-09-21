@@ -123,11 +123,15 @@ AccountSession.prototype.myRecoveryStatus = async function (this: AccountSession
 
 AccountSession.prototype.guardianRequests = async function (this: AccountSession): Promise<GuardianRequest[]> {
   const w = await this.get<GuardianRequestWire[]>('/me/recovery/guardian-requests')
+  // Passed through as-is on a non-array body — see listPasskeys's own
+  // comment on why this isn't coerced to `[]` here.
+  if (!Array.isArray(w)) return w as unknown as GuardianRequest[]
   return w.map((r) => ({ request: requestFromWire(r.request), alreadyApproved: r.already_approved }))
 }
 
 AccountSession.prototype.guardianOf = async function (this: AccountSession): Promise<GuardianOf[]> {
   const w = await this.get<GuardianOfWire[]>('/me/recovery/guardian-of')
+  if (!Array.isArray(w)) return w as unknown as GuardianOf[]
   return w.map((g) => ({ identityId: g.identity_id, displayName: g.display_name, addedAt: g.added_at }))
 }
 

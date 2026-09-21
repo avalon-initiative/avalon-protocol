@@ -5,40 +5,25 @@
 // action — no open inputs sit on the page by default.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import * as api from '@avalon/api-client'
-import { recoverSigningKey } from '@avalon/api-client'
 import {
-  approveDeviceGrant,
-  beginDeviceGrantRequest,
-  finalizeApprovedGrant,
-  findMySigningKeyId,
-} from '../api/deviceGrants'
-import { addPasskey, listPasskeys, renamePasskey, revokePasskey } from '../api/passkeys'
-import {
-  approveRecoveryRequest,
-  cancelRecoveryRequest,
-  getGuardianOf,
-  getGuardianRequests,
-  getGuardians,
-  getMyRecoveryStatus,
-  resignAsGuardian,
-  setGuardians,
-} from '../api/recovery'
-import type {
-  DeviceGrantResponse,
-  DeviceResponse,
-  Genre,
-  GuardianOfSummary,
-  GuardianRequestSummary,
-  PasskeyResponse,
-  RecoveryRequestResponse,
-} from '@avalon/api-client'
+  deriveSigningKeyFromMnemonic,
+  isValidMnemonic,
+  type Device,
+  type DeviceGrant,
+  type Genre,
+  type GuardianOf,
+  type GuardianRequest,
+  type Passkey,
+  type ProfileUpdate,
+  type RecoveryRequest,
+} from '@avalon/sdk'
+import { beginDeviceGrantRequest } from '../api/deviceGrants'
+import { useSessionStore } from '../api/session'
+import { loadSigningKeySeed, storeSigningKeySeed } from '../api/signingKeyStorage'
 import { listFriendsWithPresence, type Friend } from '../api/friends'
 import { listBlockedUsersWithNames, type BlockedUser } from '../api/blocks'
 import { markGuardianOfSeen } from '../api/notifications'
 import { useMyGuilds } from '../composables/useMyGuilds'
-import { loadSigningKey } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
 import { shouldShowSinglePasskeyWarning } from '../utils/singlePasskeyWarning'
 import { listIanaTimezones } from '../utils/timezones'
 import { isIdentityId } from '../utils/identity'
@@ -153,14 +138,12 @@ const savingPresenceVisibility = ref(false)
 const presenceVisibilityError = ref('')
 
 async function onSavePresenceVisibility() {
-  if (!session.token) return
+  if (!session.session) return
   presenceVisibilityError.value = ''
   savingPresenceVisibility.value = true
   try {
-    const profile = await api.updateProfile(session.token, {
-      presence_visibility: presenceVisibility.value,
-    })
-    presenceVisibility.value = profile.presence_visibility
+    await session.session.updateProfile({ presenceVisibility: presenceVisibility.value })
+    presenceVisibility.value = session.session.profile().presenceVisibility
   } catch (e) {
     presenceVisibilityError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -178,20 +161,22 @@ const blockByIdError = ref('')
 const blockingById = ref(false)
 
 async function refreshBlockedUsers() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    blockedUsers.value = await listBlockedUsersWithNames(session.token)
+    blockedUsers.value = await listBlockedUsersWithNames(s)
   } catch (e) {
     blockedUsersError.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
 }
 
 async function onUnblock(identityId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   blockedUsersError.value = ''
   unblockingId.value = identityId
   try {
-    await api.removeBlock(session.token, identityId)
+    await s.unblock(identityId)
     await refreshBlockedUsers()
   } catch (e) {
     blockedUsersError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -204,15 +189,14 @@ async function onUnblock(identityId: string) {
 // same convention Friends.vue's onAddFriend already uses for the
 // analogous "add by id/handle" flow.
 async function onBlockById() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   blockByIdError.value = ''
   blockingById.value = true
   try {
     const input = blockByIdInput.value.trim()
-    const identityId = isIdentityId(input)
-      ? input
-      : (await api.resolveHandle(session.token, input)).identity_id
-    await api.createBlock(session.token, { identity_id: identityId })
+    const identityId = isIdentityId(input) ? input : await s.resolveHandle(input)
+    await s.block(identityId)
     blockByIdInput.value = ''
     await refreshBlockedUsers()
   } catch (e) {
@@ -231,26 +215,34 @@ const hasSigningKey = ref(true)
 let pollHandle: ReturnType<typeof setInterval> | undefined
 
 onMounted(async () => {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const profile = await api.getMe(session.token)
-    displayName.value = profile.display_name
-    avatarUrl.value = profile.avatar_url ?? ''
-    identityId.value = profile.identity_id
+    await s.refreshProfile()
+    const profile = s.profile()
+    displayName.value = profile.displayName
+    avatarUrl.value = profile.avatarUrl ?? ''
+    identityId.value = s.identity().id
     bio.value = profile.bio ?? ''
     pronouns.value = profile.pronouns ?? ''
-    bannerUrl.value = profile.banner_url ?? ''
+    bannerUrl.value = profile.bannerUrl ?? ''
     status.value = profile.status ?? ''
     timezone.value = profile.timezone ?? ''
-    themeColor.value = profile.theme_color ?? ''
+    themeColor.value = profile.themeColor ?? ''
     location.value = profile.location ?? ''
-    mainGuild.value = profile.main_guild ?? ''
-    effectiveMainGuild.value = profile.effective_main_guild ?? ''
+    mainGuild.value = profile.mainGuild ?? ''
+    effectiveMainGuild.value = profile.effectiveMainGuild ?? ''
     links.value = profile.links?.length ? [...profile.links] : ['']
-    selectedGenres.value = new Set(profile.favorite_genres)
+    selectedGenres.value = new Set(profile.favoriteGenres)
     discoverable.value = profile.discoverable
-    presenceVisibility.value = profile.presence_visibility
-    hasSigningKey.value = loadSigningKey(profile.identity_id) !== null
+    presenceVisibility.value = profile.presenceVisibility
+    // resumeAccountSessionWithSigningKey (session.ts's own initialize())
+    // already validated any locally stored key against the server's own
+    // device list before this component ever mounted — unlike the old
+    // `loadSigningKey(...) !== null` check, a stale/revoked local key
+    // correctly shows "no signing key" here instead of trusting
+    // localStorage blindly.
+    hasSigningKey.value = s.signingKeyId() !== undefined
     if (hasSigningKey.value) {
       await refreshDevicesAndPendingGrants()
     }
@@ -306,20 +298,49 @@ type ProfileField =
 const savingField = ref<ProfileField | ''>('')
 const fieldErrors = ref<Partial<Record<ProfileField, string>>>({})
 
+// AvalonEditableField's own `field` vocabulary predates #712's migration
+// and stays snake_case (it's a UI-local key, not sent over the wire
+// directly) — this maps it onto AccountSession.updateProfile's camelCase
+// ProfileUpdate.
+function profileFieldUpdate(field: ProfileField, value: string): ProfileUpdate {
+  switch (field) {
+    case 'display_name':
+      return { displayName: value }
+    case 'avatar_url':
+      return { avatarUrl: value }
+    case 'bio':
+      return { bio: value }
+    case 'pronouns':
+      return { pronouns: value }
+    case 'banner_url':
+      return { bannerUrl: value }
+    case 'status':
+      return { status: value }
+    case 'timezone':
+      return { timezone: value }
+    case 'theme_color':
+      return { themeColor: value }
+    case 'location':
+      return { location: value }
+  }
+}
+
 async function saveProfileField(field: ProfileField, value: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   fieldErrors.value = { ...fieldErrors.value, [field]: undefined }
   savingField.value = field
   try {
-    const profile = await api.updateProfile(session.token, { [field]: value })
-    displayName.value = profile.display_name
-    avatarUrl.value = profile.avatar_url ?? ''
+    await s.updateProfile(profileFieldUpdate(field, value))
+    const profile = s.profile()
+    displayName.value = profile.displayName
+    avatarUrl.value = profile.avatarUrl ?? ''
     bio.value = profile.bio ?? ''
     pronouns.value = profile.pronouns ?? ''
-    bannerUrl.value = profile.banner_url ?? ''
+    bannerUrl.value = profile.bannerUrl ?? ''
     status.value = profile.status ?? ''
     timezone.value = profile.timezone ?? ''
-    themeColor.value = profile.theme_color ?? ''
+    themeColor.value = profile.themeColor ?? ''
     location.value = profile.location ?? ''
   } catch (e) {
     fieldErrors.value = {
@@ -354,14 +375,13 @@ function onToggleGenre(genre: Genre) {
 }
 
 async function onSaveGenres() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   genresError.value = ''
   savingGenres.value = true
   try {
-    const profile = await api.updateProfile(session.token, {
-      favorite_genres: [...selectedGenres.value],
-    })
-    selectedGenres.value = new Set(profile.favorite_genres)
+    await s.updateProfile({ favoriteGenres: [...selectedGenres.value] })
+    selectedGenres.value = new Set(s.profile().favoriteGenres)
   } catch (e) {
     genresError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -377,13 +397,15 @@ const effectiveMainGuildName = computed(
 )
 
 async function onSaveMainGuild() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   mainGuildError.value = ''
   savingMainGuild.value = true
   try {
-    const profile = await api.updateProfile(session.token, { main_guild: mainGuild.value })
-    mainGuild.value = profile.main_guild ?? ''
-    effectiveMainGuild.value = profile.effective_main_guild ?? ''
+    await s.updateProfile({ mainGuild: mainGuild.value })
+    const profile = s.profile()
+    mainGuild.value = profile.mainGuild ?? ''
+    effectiveMainGuild.value = profile.effectiveMainGuild ?? ''
   } catch (e) {
     mainGuildError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -402,12 +424,14 @@ function onAddLinkSlot() {
 }
 
 async function onSaveLinks() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   linksError.value = ''
   savingLinks.value = true
   try {
     const trimmed = links.value.map((l) => l.trim()).filter((l) => l.length > 0)
-    const profile = await api.updateProfile(session.token, { links: trimmed })
+    await s.updateProfile({ links: trimmed })
+    const profile = s.profile()
     links.value = profile.links?.length ? [...profile.links] : ['']
   } catch (e) {
     linksError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -420,12 +444,13 @@ async function onSaveLinks() {
 // rather than assuming the request succeeded as sent — same "trust the
 // response, not the optimistic click" posture `saveProfileField` uses.
 async function onToggleDiscoverable() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   discoverableError.value = ''
   savingDiscoverable.value = true
   try {
-    const profile = await api.updateProfile(session.token, { discoverable: !discoverable.value })
-    discoverable.value = profile.discoverable
+    await s.updateProfile({ discoverable: !discoverable.value })
+    discoverable.value = s.profile().discoverable
   } catch (e) {
     discoverableError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -439,21 +464,26 @@ const recovering = ref(false)
 const recoveryError = ref('')
 
 async function onRecoverSigningKey() {
+  const s = session.session
+  if (!s) return
   recoveryError.value = ''
   recovering.value = true
   try {
-    recoverSigningKey(identityId.value, recoveryPhrase.value.trim())
-    hasSigningKey.value = true
+    const phrase = recoveryPhrase.value.trim()
+    if (!isValidMnemonic(phrase)) {
+      throw new Error('That recovery phrase is not valid — check the words and try again.')
+    }
+    const { secretKey } = deriveSigningKeyFromMnemonic(phrase)
+    storeSigningKeySeed(identityId.value, secretKey)
+    // Issue #525: this device just gained a local signing key mid-session
+    // — attachSigningKey resolves its server-side signing_key_id (GET
+    // /me/devices, matched by public key) so every signature-required
+    // method on this session starts signing automatically, and
+    // reconnect-across-nodes becomes available without a fresh login.
+    hasSigningKey.value = await s.attachSigningKey(secretKey)
     showRecovery.value = false
     recoveryPhrase.value = ''
-    // Issue #525: this device just gained a local signing key mid-session
-    // — refresh the session store's cached signing_key_id so
-    // reconnect-across-nodes becomes available without a fresh login.
-    if (session.token) {
-      const secretKey = loadSigningKey(identityId.value)
-      await session.setSigningKeyId(secretKey ? await findMySigningKeyId(session.token, secretKey) : null)
-    }
-    refreshDevicesAndPendingGrants()
+    if (hasSigningKey.value) refreshDevicesAndPendingGrants()
   } catch (e) {
     recoveryError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -463,16 +493,17 @@ async function onRecoverSigningKey() {
 
 // The #135 grant-request path — this device has no key and no phrase at
 // hand, so it asks an already-trusted device to approve it instead.
-const pendingRequest = ref<{ grant: DeviceGrantResponse; secretKey: Uint8Array } | null>(null)
+const pendingRequest = ref<{ grant: DeviceGrant; secretKey: Uint8Array } | null>(null)
 const requestingGrant = ref(false)
 const grantRequestError = ref('')
 
 async function onRequestDeviceGrant() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   grantRequestError.value = ''
   requestingGrant.value = true
   try {
-    pendingRequest.value = await beginDeviceGrantRequest(session.token, null)
+    pendingRequest.value = await beginDeviceGrantRequest(s)
   } catch (e) {
     grantRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -481,22 +512,17 @@ async function onRequestDeviceGrant() {
 }
 
 async function pollMyGrant() {
-  if (!session.token || !pendingRequest.value) return
+  const s = session.session
+  if (!s || !pendingRequest.value) return
   try {
-    const grant = await api.getDeviceGrant(session.token, pendingRequest.value.grant.id)
+    const grant = await s.getDeviceGrant(pendingRequest.value.grant.id)
     if (grant.status === 'approved') {
-      finalizeApprovedGrant(identityId.value, pendingRequest.value.secretKey)
+      storeSigningKeySeed(identityId.value, pendingRequest.value.secretKey)
       pendingRequest.value = null
-      hasSigningKey.value = true
       // Issue #525: same reconnect-signing_key_id refresh as
       // onRecoverSigningKey above — this device just gained its key via
       // approval instead of a recovery phrase.
-      if (session.token) {
-        const secretKey = loadSigningKey(identityId.value)
-        await session.setSigningKeyId(
-          secretKey ? await findMySigningKeyId(session.token, secretKey) : null,
-        )
-      }
+      hasSigningKey.value = await s.attachSigningKey(loadSigningKeySeed(identityId.value)!)
       await refreshDevicesAndPendingGrants()
     } else if (grant.status !== 'pending') {
       grantRequestError.value = `That request was ${grant.status}. Try again, or use a recovery phrase instead.`
@@ -510,8 +536,8 @@ async function pollMyGrant() {
 
 // The approval side — only reachable once this device already has a key,
 // since approving requires signing with it.
-const pendingGrants = ref<DeviceGrantResponse[]>([])
-const myDevices = ref<DeviceResponse[]>([])
+const pendingGrants = ref<DeviceGrant[]>([])
+const myDevices = ref<Device[]>([])
 const approvingGrantId = ref('')
 const approveError = ref('')
 const revokingId = ref('')
@@ -520,12 +546,10 @@ const renamingId = ref('')
 const renameError = ref('')
 
 async function refreshDevicesAndPendingGrants() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const [devices, grants] = await Promise.all([
-      api.listDevices(session.token),
-      api.listDeviceGrants(session.token, 'pending'),
-    ])
+    const [devices, grants] = await Promise.all([s.listDevices(), s.listDeviceGrants('pending')])
     myDevices.value = devices
     pendingGrants.value = grants
   } catch (e) {
@@ -533,16 +557,16 @@ async function refreshDevicesAndPendingGrants() {
   }
 }
 
-async function onApproveGrant(grant: DeviceGrantResponse) {
-  if (!session.token) return
+async function onApproveGrant(grant: DeviceGrant) {
+  const s = session.session
+  if (!s) return
   approveError.value = ''
   approvingGrantId.value = grant.id
   try {
-    const secretKey = loadSigningKey(identityId.value)
-    if (!secretKey) throw new Error('This device has no signing key to approve with.')
-    const myKeyId = await findMySigningKeyId(session.token, secretKey)
-    if (!myKeyId) throw new Error("Couldn't find this device's own registered key.")
-    await approveDeviceGrant(session.token, identityId.value, grant, myKeyId, secretKey)
+    // Throws NoLocalSigningKeyError if this session holds no local key —
+    // the generic catch below surfaces its message the same as any other
+    // error (it extends Error).
+    await s.approveDeviceGrant(grant.id, grant.requestedSigningPublicKey)
     await refreshDevicesAndPendingGrants()
   } catch (e) {
     approveError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -551,12 +575,13 @@ async function onApproveGrant(grant: DeviceGrantResponse) {
   }
 }
 
-async function onRevokeDevice(device: DeviceResponse) {
-  if (!session.token) return
+async function onRevokeDevice(device: Device) {
+  const s = session.session
+  if (!s) return
   revokeError.value = ''
   revokingId.value = device.id
   try {
-    await api.revokeDevice(session.token, device.id)
+    await s.revokeDevice(device.id)
     await refreshDevicesAndPendingGrants()
   } catch (e) {
     revokeError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -567,12 +592,13 @@ async function onRevokeDevice(device: DeviceResponse) {
 
 // #145: every device (including the first one) can be renamed after the
 // fact — from the field's own Edit, never an always-open input.
-async function onRenameDevice(device: DeviceResponse, label: string) {
-  if (!session.token) return
+async function onRenameDevice(device: Device, label: string) {
+  const s = session.session
+  if (!s) return
   renameError.value = ''
   renamingId.value = device.id
   try {
-    await api.renameDevice(session.token, device.id, { label })
+    await s.renameDevice(device.id, label)
     await refreshDevicesAndPendingGrants()
   } catch (e) {
     renameError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -586,7 +612,7 @@ async function onRenameDevice(device: DeviceResponse, label: string) {
 // crates/server/src/passkeys.rs's module doc comment for why). Every
 // identity has at least one passkey from account creation, so this list
 // loads regardless of hasSigningKey/pendingRequest state.
-const passkeys = ref<PasskeyResponse[]>([])
+const passkeys = ref<Passkey[]>([])
 const addingPasskey = ref(false)
 const addPasskeyError = ref('')
 const renamingPasskeyId = ref('')
@@ -609,9 +635,10 @@ const showSinglePasskeyWarning = computed(() => {
 })
 
 async function refreshPasskeys() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const result = await listPasskeys(session.token)
+    const result = await s.listPasskeys()
     if (!Array.isArray(result)) {
       // A 200 with an unexpected body shape is still a failure worth
       // surfacing — throwing here routes it through the same catch below,
@@ -627,11 +654,12 @@ async function refreshPasskeys() {
 }
 
 async function onAddPasskey() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   addPasskeyError.value = ''
   addingPasskey.value = true
   try {
-    await addPasskey(session.token, null)
+    await s.addPasskey()
     await refreshPasskeys()
   } catch (e) {
     addPasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -640,12 +668,13 @@ async function onAddPasskey() {
   }
 }
 
-async function onRenamePasskey(passkey: PasskeyResponse, label: string) {
-  if (!session.token) return
+async function onRenamePasskey(passkey: Passkey, label: string) {
+  const s = session.session
+  if (!s) return
   renamePasskeyError.value = ''
   renamingPasskeyId.value = passkey.id
   try {
-    await renamePasskey(session.token, passkey.id, label)
+    await s.renamePasskey(passkey.id, label)
     await refreshPasskeys()
   } catch (e) {
     renamePasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -658,8 +687,9 @@ async function onRenamePasskey(passkey: PasskeyResponse, label: string) {
 // requires a fresh signature server-side rather than `?confirm=true` — the
 // browser confirm() here is purely a UX speed bump before signing, not the
 // security boundary anymore.
-async function onRevokePasskey(passkey: PasskeyResponse) {
-  if (!session.token) return
+async function onRevokePasskey(passkey: Passkey) {
+  const s = session.session
+  if (!s) return
   revokePasskeyError.value = ''
   const isLastPasskey = Array.isArray(passkeys.value) && passkeys.value.length <= 1
   if (isLastPasskey) {
@@ -670,7 +700,7 @@ async function onRevokePasskey(passkey: PasskeyResponse) {
   }
   revokingPasskeyId.value = passkey.id
   try {
-    await revokePasskey(session.token, session.identityId ?? '', session.signingKeyId, passkey.id)
+    await s.revokePasskey(passkey.id)
     await refreshPasskeys()
   } catch (e) {
     revokePasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -692,16 +722,14 @@ const guardiansError = ref('')
 const guardiansUpdatedAt = ref<string | null>(null)
 
 async function refreshGuardianSettings() {
-  if (!session.token || !identityId.value) return
+  const s = session.session
+  if (!s || !identityId.value) return
   try {
-    const [friendList, settings] = await Promise.all([
-      listFriendsWithPresence(session.token, identityId.value),
-      getGuardians(session.token),
-    ])
+    const [friendList, settings] = await Promise.all([listFriendsWithPresence(s), s.guardians()])
     friends.value = friendList
-    selectedGuardianIds.value = new Set(settings.guardian_ids)
+    selectedGuardianIds.value = new Set(settings.guardianIds)
     threshold.value = settings.threshold > 0 ? settings.threshold : 1
-    guardiansUpdatedAt.value = settings.updated_at
+    guardiansUpdatedAt.value = settings.updatedAt
   } catch (e) {
     guardiansError.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -730,20 +758,15 @@ const clampedThreshold = computed({
 })
 
 async function onSaveGuardians() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   guardiansError.value = ''
   savingGuardians.value = true
   try {
-    const settings = await setGuardians(
-      session.token,
-      session.identityId ?? '',
-      session.signingKeyId,
-      [...selectedGuardianIds.value],
-      threshold.value,
-    )
-    selectedGuardianIds.value = new Set(settings.guardian_ids)
+    const settings = await s.setGuardians([...selectedGuardianIds.value], threshold.value)
+    selectedGuardianIds.value = new Set(settings.guardianIds)
     threshold.value = settings.threshold
-    guardiansUpdatedAt.value = settings.updated_at
+    guardiansUpdatedAt.value = settings.updatedAt
   } catch (e) {
     guardiansError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -755,14 +778,15 @@ async function onSaveGuardians() {
 // owner through every channel that still works for them" invariant, for
 // the case this device/session still works. `GET /identities/:id/recovery/status`
 // is also public (no session needed at all), for the case it doesn't.
-const myRecoveryStatus = ref<RecoveryRequestResponse | null>(null)
+const myRecoveryStatus = ref<RecoveryRequest | null>(null)
 const cancellingMyRecovery = ref(false)
 const cancelMyRecoveryError = ref('')
 
 async function refreshMyRecoveryStatus() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    myRecoveryStatus.value = await getMyRecoveryStatus(session.token)
+    myRecoveryStatus.value = await s.myRecoveryStatus()
   } catch {
     // Non-fatal — this is a supplementary notice, not the page's primary
     // content; a failed poll just leaves the previous known state in
@@ -771,15 +795,12 @@ async function refreshMyRecoveryStatus() {
 }
 
 async function onCancelMyRecovery() {
-  if (!session.token || !myRecoveryStatus.value) return
+  const s = session.session
+  if (!s || !myRecoveryStatus.value) return
   cancelMyRecoveryError.value = ''
   cancellingMyRecovery.value = true
   try {
-    myRecoveryStatus.value = await cancelRecoveryRequest(
-      session.token,
-      myRecoveryStatus.value.id,
-      "This wasn't me",
-    )
+    myRecoveryStatus.value = await s.cancelRecoveryRequest(myRecoveryStatus.value.id, "This wasn't me")
   } catch (e) {
     cancelMyRecoveryError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -789,15 +810,16 @@ async function onCancelMyRecovery() {
 
 // Recovery attempts against *other* identities where this identity is
 // currently a guardian — the approval UI.
-const guardianRequests = ref<GuardianRequestSummary[]>([])
+const guardianRequests = ref<GuardianRequest[]>([])
 const guardianProfileNames = ref<Record<string, string>>({})
 const actingOnRequestId = ref('')
 const guardianRequestError = ref('')
 
 async function refreshGuardianRequests() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const summaries = await getGuardianRequests(session.token)
+    const summaries = await s.guardianRequests()
     // A malformed/empty response is treated as "nothing pending" rather
     // than assigned as-is — this is a polled, supplementary list (unlike
     // the passkeys list above, which throws on a bad shape), so failing
@@ -808,14 +830,14 @@ async function refreshGuardianRequests() {
       return
     }
     guardianRequests.value = summaries
-    const ids = [...new Set(summaries.map((s) => s.request.identity_id))].filter(
+    const ids = [...new Set(summaries.map((r) => r.request.identityId))].filter(
       (id) => !(id in guardianProfileNames.value),
     )
     if (ids.length > 0) {
-      const profiles = await api.getProfiles(session.token, ids)
+      const profiles = await s.profiles(ids)
       const names = { ...guardianProfileNames.value }
       for (const profile of profiles) {
-        names[profile.identity_id] = profile.display_name
+        names[profile.identityId] = profile.displayName
       }
       guardianProfileNames.value = names
     }
@@ -825,11 +847,12 @@ async function refreshGuardianRequests() {
 }
 
 async function onApproveGuardianRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   guardianRequestError.value = ''
   actingOnRequestId.value = requestId
   try {
-    await approveRecoveryRequest(session.token, requestId)
+    await s.approveRecoveryRequest(requestId)
     await refreshGuardianRequests()
   } catch (e) {
     guardianRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -839,11 +862,12 @@ async function onApproveGuardianRequest(requestId: string) {
 }
 
 async function onCancelGuardianRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   guardianRequestError.value = ''
   actingOnRequestId.value = requestId
   try {
-    await cancelRecoveryRequest(session.token, requestId, 'I do not believe this is legitimate')
+    await s.cancelRecoveryRequest(requestId, 'I do not believe this is legitimate')
     await refreshGuardianRequests()
   } catch (e) {
     guardianRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -855,14 +879,15 @@ async function onCancelGuardianRequest(requestId: string) {
 // Issue #443: identities that currently name this identity as one of
 // *their* guardians — visibility into a responsibility the owner-side
 // config (above) can otherwise hand out without the guardian ever knowing.
-const guardianOf = ref<GuardianOfSummary[]>([])
+const guardianOf = ref<GuardianOf[]>([])
 const guardianOfError = ref('')
 const resigningFrom = ref('')
 
 async function refreshGuardianOf() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const summaries = await getGuardianOf(session.token)
+    const summaries = await s.guardianOf()
     // Same "never leave this as anything but a real array" guard as
     // refreshGuardianRequests above — this is a polled, supplementary list.
     guardianOf.value = Array.isArray(summaries) ? summaries : []
@@ -870,18 +895,19 @@ async function refreshGuardianOf() {
     // guardian designation — mirrors markConversationSeen/
     // onSelectAnnouncement's own "visiting the real feature clears it"
     // idiom, not a poll succeeding in the background.
-    markGuardianOfSeen(guardianOf.value.map((g) => g.identity_id))
+    markGuardianOfSeen(guardianOf.value.map((g) => g.identityId))
   } catch {
     // Same non-fatal treatment as refreshGuardianRequests above.
   }
 }
 
 async function onResignGuardian(identityId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   guardianOfError.value = ''
   resigningFrom.value = identityId
   try {
-    await resignAsGuardian(session.token, identityId)
+    await s.resignAsGuardian(identityId)
     await refreshGuardianOf()
   } catch (e) {
     guardianOfError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1264,7 +1290,7 @@ async function onResignGuardian(identityId: string) {
                 @save="onRenamePasskey(passkey, $event)"
               />
               <div :class="styles.deviceActions">
-                <span :class="styles.listDetail">Added {{ passkey.added_at }}</span>
+                <span :class="styles.listDetail">Added {{ passkey.addedAt }}</span>
                 <AvalonButton
                   :label="revokingPasskeyId === passkey.id ? 'Revoking…' : 'Revoke'"
                   variant="danger"
@@ -1343,18 +1369,18 @@ async function onResignGuardian(identityId: string) {
               :class="styles.device"
             >
               <span :class="styles.listLabel">
-                {{ guardianProfileNames[summary.request.identity_id] ?? summary.request.identity_id }}
+                {{ guardianProfileNames[summary.request.identityId] ?? summary.request.identityId }}
               </span>
               <span :class="styles.listDetail">
-                {{ summary.request.approvals_count }} of {{ summary.request.threshold }} approvals ·
+                {{ summary.request.approvalsCount }} of {{ summary.request.threshold }} approvals ·
                 status: {{ summary.request.status }}
-                <template v-if="summary.request.delay_ends_at">
-                  · delay ends {{ summary.request.delay_ends_at }}
+                <template v-if="summary.request.delayEndsAt">
+                  · delay ends {{ summary.request.delayEndsAt }}
                 </template>
               </span>
               <div :class="styles.deviceActions">
                 <AvalonButton
-                  v-if="!summary.already_approved"
+                  v-if="!summary.alreadyApproved"
                   :label="actingOnRequestId === summary.request.id ? 'Approving…' : 'Approve'"
                   variant="primary"
                   :disabled="actingOnRequestId === summary.request.id"
@@ -1379,16 +1405,16 @@ async function onResignGuardian(identityId: string) {
         >
           <p v-if="guardianOfError" :class="page.error">{{ guardianOfError }}</p>
           <ul :class="styles.list">
-            <li v-for="entry in guardianOf" :key="entry.identity_id" :class="styles.listRow">
+            <li v-for="entry in guardianOf" :key="entry.identityId" :class="styles.listRow">
               <span :class="styles.listText">
-                <span :class="styles.listLabel">{{ entry.display_name }}</span>
-                <span :class="styles.listDetail">guardian since {{ entry.added_at }}</span>
+                <span :class="styles.listLabel">{{ entry.displayName }}</span>
+                <span :class="styles.listDetail">guardian since {{ entry.addedAt }}</span>
               </span>
               <AvalonButton
-                :label="resigningFrom === entry.identity_id ? 'Removing…' : 'Stop being a guardian'"
+                :label="resigningFrom === entry.identityId ? 'Removing…' : 'Stop being a guardian'"
                 variant="danger"
-                :disabled="resigningFrom === entry.identity_id"
-                @click="onResignGuardian(entry.identity_id)"
+                :disabled="resigningFrom === entry.identityId"
+                @click="onResignGuardian(entry.identityId)"
               />
             </li>
           </ul>
@@ -1403,8 +1429,8 @@ async function onResignGuardian(identityId: string) {
           <ul :class="styles.list">
             <li v-for="grant in pendingGrants" :key="grant.id" :class="styles.listRow">
               <span :class="styles.listText">
-                <span :class="styles.listLabel">{{ grant.device_label ?? 'A device' }}</span>
-                <span :class="styles.listDetail">requested access {{ grant.requested_at }}</span>
+                <span :class="styles.listLabel">{{ grant.deviceLabel ?? 'A device' }}</span>
+                <span :class="styles.listDetail">requested access {{ grant.requestedAt }}</span>
               </span>
               <AvalonButton
                 :label="approvingGrantId === grant.id ? 'Approving…' : 'Approve'"
@@ -1433,9 +1459,9 @@ async function onResignGuardian(identityId: string) {
                 @save="onRenameDevice(device, $event)"
               />
               <div :class="styles.deviceActions">
-                <span v-if="device.revoked_at" :class="styles.revoked">Revoked</span>
+                <span v-if="device.revokedAt" :class="styles.revoked">Revoked</span>
                 <AvalonButton
-                  v-if="!device.revoked_at"
+                  v-if="!device.revokedAt"
                   :label="revokingId === device.id ? 'Revoking…' : 'Revoke'"
                   variant="danger"
                   :disabled="revokingId === device.id"

@@ -8,7 +8,7 @@ import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AvalonEditableField } from '@avalon/ui'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 const baseProfile = {
@@ -40,10 +40,18 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Seeds a bearer token and drives the real session-store initialize() path
+// (a GET /me round trip, same as production) — the fetch stub must
+// already be in place before this runs.
+async function loginTestSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Profile self-description fields (issue #277)', () => {
   it('renders bio, pronouns, and favorite genres from GET /me', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({ '/me': baseProfile, '/me/passkeys': [] })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -60,11 +68,11 @@ describe('Profile self-description fields (issue #277)', () => {
   })
 
   it('shows empty-state text when bio/pronouns are unset', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': { ...baseProfile, bio: null, pronouns: null, favorite_genres: [] },
       '/me/passkeys': [],
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -76,8 +84,8 @@ describe('Profile self-description fields (issue #277)', () => {
   })
 
   it('renders the expanded self-description fields from GET /me (issue #372)', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({ '/me': baseProfile, '/me/passkeys': [] })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -99,7 +107,6 @@ describe('Profile self-description fields (issue #277)', () => {
   })
 
   it('shows empty-state text when the expanded fields are unset (issue #372)', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': {
         ...baseProfile,
@@ -112,6 +119,7 @@ describe('Profile self-description fields (issue #277)', () => {
       },
       '/me/passkeys': [],
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -129,18 +137,20 @@ describe('Profile self-description fields (issue #277)', () => {
 
   /**
    * Like Profile.discoverable.test.ts, this needs `/me` to answer
-   * differently for the initial GET versus the PATCH a save sends.
+   * differently for a GET (session initialize()'s own round trip, and
+   * Profile.vue's own onMounted refreshProfile() — both must still report
+   * the pre-save state) versus the PATCH a save sends (the only call that
+   * should actually reflect the updated state).
    */
-  function mockMeSequence(bodies: unknown[]) {
-    let call = 0
+  function mockMeSequence(bodies: [unknown, unknown]) {
+    const [beforeSave, afterSave] = bodies
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
         const path = new URL(url, 'http://test').pathname
         let body: unknown
         if (path === '/me') {
-          body = bodies[Math.min(call, bodies.length - 1)]
-          call += 1
+          body = init?.method === 'PATCH' ? afterSave : beforeSave
         } else if (path === '/me/passkeys') {
           body = []
         } else {
@@ -158,7 +168,7 @@ describe('Profile self-description fields (issue #277)', () => {
 
   it('saving the bio field reflects the server response', async () => {
     mockMeSequence([baseProfile, { ...baseProfile, bio: 'Updated bio.' }])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -181,7 +191,7 @@ describe('Profile self-description fields (issue #277)', () => {
 
   it('saving the status field reflects the server response (issue #372)', async () => {
     mockMeSequence([baseProfile, { ...baseProfile, status: 'Offline for the weekend.' }])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -204,7 +214,7 @@ describe('Profile self-description fields (issue #277)', () => {
 
   it('saving links reflects the server response (issue #372)', async () => {
     mockMeSequence([baseProfile, { ...baseProfile, links: ['https://example.org'] }])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -228,7 +238,7 @@ describe('Profile self-description fields (issue #277)', () => {
       { ...baseProfile, favorite_genres: [] },
       { ...baseProfile, favorite_genres: ['horror'] },
     ])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')

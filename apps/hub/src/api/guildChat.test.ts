@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MESSAGE_BODY_MAX_CHARS, toOldestFirst, validateComposerBody } from './guildChat'
-import type { MessageResponse } from '@avalon/api-client'
+import type { GuildMessage } from '@avalon/sdk'
 
 describe('validateComposerBody', () => {
   it('rejects an empty body', () => {
@@ -29,18 +29,18 @@ describe('validateComposerBody', () => {
 
 describe('toOldestFirst', () => {
   it('reverses a newest-first page into oldest-first order', () => {
-    const messages: MessageResponse[] = [
-      { id: '3', channel_id: 'c', author: 'a', body: 'third', sent_at: 't3' },
-      { id: '2', channel_id: 'c', author: 'a', body: 'second', sent_at: 't2' },
-      { id: '1', channel_id: 'c', author: 'a', body: 'first', sent_at: 't1' },
+    const messages: GuildMessage[] = [
+      { id: '3', channelId: 'c', author: 'a', body: 'third', sentAt: 't3' },
+      { id: '2', channelId: 'c', author: 'a', body: 'second', sentAt: 't2' },
+      { id: '1', channelId: 'c', author: 'a', body: 'first', sentAt: 't1' },
     ]
     expect(toOldestFirst(messages).map((m) => m.id)).toEqual(['1', '2', '3'])
   })
 
   it('does not mutate the input array', () => {
-    const messages: MessageResponse[] = [
-      { id: '2', channel_id: 'c', author: 'a', body: 'second', sent_at: 't2' },
-      { id: '1', channel_id: 'c', author: 'a', body: 'first', sent_at: 't1' },
+    const messages: GuildMessage[] = [
+      { id: '2', channelId: 'c', author: 'a', body: 'second', sentAt: 't2' },
+      { id: '1', channelId: 'c', author: 'a', body: 'first', sentAt: 't1' },
     ]
     toOldestFirst(messages)
     expect(messages.map((m) => m.id)).toEqual(['2', '1'])

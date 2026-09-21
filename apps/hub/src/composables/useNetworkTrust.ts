@@ -3,9 +3,10 @@
 // can show — always visibly, never buried in settings — whether this
 // session is actually talking to a pinned, verified Avalon network.
 import { onMounted, ref } from 'vue'
-import { getLatestSth } from '@avalon/api-client'
+import { getLatestSth } from '@avalon/sdk'
 import { getBundledTrustAnchors, type TrustAnchorEntry } from '../network/trustAnchors'
 import { evaluateNetworkTrust, type NetworkTrustStatus } from '../network/verifyNetwork'
+import { getServerUrl } from '../api/serverUrl'
 
 export type NetworkTrustState =
   | { kind: 'loading' }
@@ -21,7 +22,7 @@ export function useNetworkTrust() {
   async function refresh() {
     state.value = { kind: 'loading' }
     try {
-      const sth = await getLatestSth()
+      const sth = await getLatestSth(getServerUrl())
       if (!sth || typeof sth.network_id !== 'string') {
         throw new Error('Server did not return a usable Signed Tree Head.')
       }

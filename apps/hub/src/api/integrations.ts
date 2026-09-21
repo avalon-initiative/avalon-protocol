@@ -1,7 +1,20 @@
 // Pure helpers for the integrator directory (issue #270) — no fetch/token
 // awareness here, same "logic stays out of client.ts" split
 // apps/hub/src/api/guilds.ts already established for guilds.
-import type { IntegratorRegistryResponse, ListIntegratorsParams, MetricResponse } from '@avalon/api-client'
+import type { IntegratorRegistry, RegistryMetric } from '@avalon/sdk'
+
+// Query params for GET /integrations — mirrors
+// crates/server/src/integrations.rs::ListIntegratorsQuery. Purely a
+// request shape, not a wire response type, so it lives here rather than
+// in bindings/ts (whose own listIntegrators just takes the built query
+// string), same split apps/hub/src/api/guilds.ts's DiscoverGuildsParams
+// already establishes for guild discovery.
+export interface ListIntegratorsParams {
+  q?: string
+  sort?: 'newest' | 'name'
+  limit?: number
+  cursor?: string
+}
 
 // Builds the `?q=&sort=&limit=&cursor=` query string for GET /integrations from a
 // params object — mirrors
@@ -42,21 +55,21 @@ export function isActiveIntegratorStatus(status: string): boolean {
 // hand-written copies (and so a component test can assert "every metric
 // has a label" without duplicating this list itself). Order matches
 // docs/architecture/registry.md's metric table.
-export interface LabeledMetric extends MetricResponse {
-  key: keyof IntegratorRegistryResponse
+export interface LabeledMetric extends RegistryMetric {
+  key: keyof IntegratorRegistry
   label: string
 }
 
-const METRIC_LABELS: Record<keyof IntegratorRegistryResponse, string> = {
+const METRIC_LABELS: Record<keyof IntegratorRegistry, string> = {
   players: 'Players',
-  total_players_ever: 'Total players ever',
-  achievements_issued: 'Achievements issued',
-  achievements_revoked: 'Achievements revoked',
-  unique_achievement_holders: 'Unique achievement holders',
+  totalPlayersEver: 'Total players ever',
+  achievementsIssued: 'Achievements issued',
+  achievementsRevoked: 'Achievements revoked',
+  uniqueAchievementHolders: 'Unique achievement holders',
 }
 
-export function listRegistryMetrics(registry: IntegratorRegistryResponse): LabeledMetric[] {
-  return (Object.keys(METRIC_LABELS) as (keyof IntegratorRegistryResponse)[]).map((key) => ({
+export function listRegistryMetrics(registry: IntegratorRegistry): LabeledMetric[] {
+  return (Object.keys(METRIC_LABELS) as (keyof IntegratorRegistry)[]).map((key) => ({
     key,
     label: METRIC_LABELS[key],
     ...registry[key],

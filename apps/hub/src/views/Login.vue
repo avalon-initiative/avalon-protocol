@@ -2,10 +2,8 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon/ui'
-import { login } from '@avalon/api-client'
-import { findMySigningKeyId } from '../api/deviceGrants'
-import { loadSigningKey } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { avalonClient, useSessionStore } from '../api/session'
+import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -20,14 +18,13 @@ async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    const { token } = await login(identityId.value)
-    // Issue #525: the reconnect-across-nodes signing_key_id, when this
-    // device already holds a local signing key for this identity — `null`
-    // otherwise (e.g. this is a brand-new device that hasn't been granted
-    // one yet), same as `session.login`'s own doc comment describes.
-    const secretKey = loadSigningKey(identityId.value)
-    const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
-    await session.login(token, identityId.value, signingKeyId)
+    const accountSession = await avalonClient().loginWithIdentityId(identityId.value)
+    // The reconnect-across-nodes signing key (issue #525), when this
+    // device already holds one for this identity — a brand-new device
+    // that hasn't been granted one yet simply logs in without it.
+    const secretKey = loadSigningKeySeed(identityId.value)
+    if (secretKey) await accountSession.attachSigningKey(secretKey)
+    session.setSession(accountSession)
     await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

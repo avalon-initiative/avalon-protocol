@@ -40,6 +40,7 @@ export type {
   FavoriteGames,
   Role,
   RoleBadge,
+  RoleBadgeUpdate,
   PermissionOverride,
   GuildMember,
   MyGuildMembership,
@@ -50,6 +51,7 @@ export type {
   GuildMessage,
   RsvpCounts,
   GuildEvent,
+  RsvpStatus,
   Rsvp,
   RsvpRosterEntry,
   GuildUpdate,
@@ -126,3 +128,12 @@ export {
   base64ToBytes,
 } from './crypto/signing.js'
 export type { SigningKeyPair, SignatureFields } from './crypto/signing.js'
+
+export { runRegistrationCeremony, runAuthenticationCeremony } from './crypto/webauthn.js'
+
+export {
+  deriveSigningKeyFromMnemonic,
+  generateMnemonicSigningKey,
+  isValidMnemonic,
+} from './crypto/mnemonic.js'
+export type { GeneratedSigningKey } from './crypto/mnemonic.js'

@@ -6,10 +6,9 @@
 // identity's full history render the same way, just with more rows.
 import { onMounted, onUnmounted, ref } from 'vue'
 import { AvalonCard, AvalonIcon } from '@avalon/ui'
-import { getMyHistory } from '@avalon/api-client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
-import type { HistoryEntryResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import type { HistoryEntry } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Activity.module.scss'
 
@@ -21,16 +20,18 @@ const POLL_INTERVAL_MS = 15_000
 
 const session = useSessionStore()
 
-const entries = ref<HistoryEntryResponse[]>([])
+const entries = ref<HistoryEntry[]>([])
 const loading = ref(true)
 const error = ref('')
 
 let pollHandle: ReturnType<typeof setInterval> | undefined
 
 async function refresh() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    entries.value = await getMyHistory(session.token)
+    const result = await s.history()
+    entries.value = Array.isArray(result) ? result : []
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -59,7 +60,7 @@ onUnmounted(() => {
         No activity yet — your history starts as soon as the network processes your first event.
       </p>
       <ul v-else :class="styles.feed">
-        <li v-for="entry in entries" :key="entry.event_id" :class="styles.entry">
+        <li v-for="entry in entries" :key="entry.eventId" :class="styles.entry">
           <span :class="styles.icon"><AvalonIcon name="activity" :size="16" /></span>
           <span :class="styles.summary">{{ summarizeActivityEntry(entry) }}</span>
           <time :class="styles.timestamp" :datetime="entry.timestamp">

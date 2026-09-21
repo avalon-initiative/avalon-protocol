@@ -6,7 +6,7 @@
 // crates/server/src/guild_messages.rs's own doc comment on the endpoint):
 // read/unread is entirely this Hub's own client-local concern, computed
 // from a per-channel "last seen" timestamp kept in localStorage.
-import type { GuildAnnouncementAlert } from '@avalon/api-client'
+import type { GuildAnnouncementAlert } from '@avalon/sdk'
 
 const LAST_SEEN_STORAGE_KEY = 'avalon:guildAnnouncements:lastSeen'
 
@@ -49,9 +49,9 @@ export function markChannelSeen(channelId: string, at: string) {
 // has never been seen, or was last seen strictly before this alert was
 // sent.
 export function isUnread(alert: GuildAnnouncementAlert, lastSeen: LastSeenByChannel): boolean {
-  const seenAt = lastSeen[alert.channel_id]
+  const seenAt = lastSeen[alert.channelId]
   if (!seenAt) return true
-  return new Date(alert.sent_at).getTime() > new Date(seenAt).getTime()
+  return new Date(alert.sentAt).getTime() > new Date(seenAt).getTime()
 }
 
 export function countUnread(

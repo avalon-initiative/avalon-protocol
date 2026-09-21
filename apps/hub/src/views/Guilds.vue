@@ -13,12 +13,11 @@ import {
   AvalonModal,
   AvalonTextField,
 } from '@avalon/ui'
-import * as api from '@avalon/api-client'
 import { canApplyToJoinGuild, filterGuildsByNameOrTag } from '../api/guilds'
 import { useDiscoverGuilds } from '../composables/useDiscoverGuilds'
 import { useMyGuildInvites } from '../composables/useMyGuildInvites'
 import { useMyGuilds } from '../composables/useMyGuilds'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import local from '../styles/Guilds.module.scss'
 import styles from '../styles/page.module.scss'
 
@@ -38,13 +37,14 @@ const respondingToInvite = ref<string | null>(null)
 const inviteError = ref('')
 
 async function onAcceptInvite(invite: (typeof pendingInvites.value)[number]) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   inviteError.value = ''
   respondingToInvite.value = invite.id
   try {
-    await api.acceptGuildInvite(session.token, invite.guild_id, invite.id)
+    await s.acceptGuildInvite(invite.guildId, invite.id)
     await Promise.all([refreshInvites(), refresh()])
-    router.push({ name: 'guild', params: { id: invite.guild_id } })
+    router.push({ name: 'guild', params: { id: invite.guildId } })
   } catch (e) {
     inviteError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -53,11 +53,12 @@ async function onAcceptInvite(invite: (typeof pendingInvites.value)[number]) {
 }
 
 async function onDeclineInvite(invite: (typeof pendingInvites.value)[number]) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   inviteError.value = ''
   respondingToInvite.value = invite.id
   try {
-    await api.declineGuildInvite(session.token, invite.guild_id, invite.id)
+    await s.declineGuildInvite(invite.guildId, invite.id)
     await refreshInvites()
   } catch (e) {
     inviteError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -120,15 +121,12 @@ function cancelCreateGuild() {
 }
 
 async function onCreateGuild() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   createError.value = ''
   creating.value = true
   try {
-    const guild = await api.createGuild(session.token, {
-      name: createName.value.trim(),
-      tag: createTag.value.trim(),
-      description: createDescription.value.trim(),
-    })
+    const guild = await s.createGuild(createName.value.trim(), createTag.value.trim(), createDescription.value.trim())
     cancelCreateGuild()
     await refresh()
     router.push({ name: 'guild', params: { id: guild.id } })
@@ -156,11 +154,12 @@ const applyingTo = ref<string | null>(null)
 const applyError = ref('')
 
 async function onApplyToJoin(guildId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   applyError.value = ''
   applyingTo.value = guildId
   try {
-    await api.createJoinRequest(session.token, guildId, {})
+    await s.createJoinRequest(guildId)
     appliedGuildIds.value = new Set(appliedGuildIds.value).add(guildId)
   } catch (e) {
     applyError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -186,7 +185,7 @@ async function onApplyToJoin(guildId: string) {
       <div v-for="invite in pendingInvites" :key="invite.id" :class="local.inviteRow">
         <span>
           <strong>{{ inviterNames[invite.from] ?? invite.from }}</strong>
-          invited you to <strong>{{ invite.guild_name }}</strong>
+          invited you to <strong>{{ invite.guildName }}</strong>
         </span>
         <div :class="local.inviteActions">
           <AvalonButton
@@ -244,7 +243,7 @@ async function onApplyToJoin(guildId: string) {
           :name="guild.name"
           :tag="guild.tag"
           :description="guild.description"
-          :member-count="guild.member_count"
+          :member-count="guild.memberCount"
           :icon-url="guild.icon ?? undefined"
           :banner-url="guild.banner ?? undefined"
           @select="openGuild(guild.id)"
@@ -284,7 +283,7 @@ async function onApplyToJoin(guildId: string) {
             :name="guild.name"
             :tag="guild.tag"
             :description="guild.description"
-            :member-count="guild.member_count"
+            :member-count="guild.memberCount"
             :recruiting="guild.recruiting"
             :icon-url="guild.icon ?? undefined"
             :banner-url="guild.banner ?? undefined"

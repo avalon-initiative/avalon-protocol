@@ -7,14 +7,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard, AvalonIcon, AvalonPresenceBadge } from '@avalon/ui'
-import { getMe, getMyHistory } from '@avalon/api-client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
-import type { HistoryEntryResponse } from '@avalon/api-client'
+import type { HistoryEntry } from '@avalon/sdk'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useLatestGuildMessages } from '../composables/useLatestGuildMessages'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import styles from '../styles/Home.module.scss'
 
 const RECENT_ACTIVITY_LIMIT = 6
@@ -37,23 +36,21 @@ const homeMessages = computed(() => latestMessages.value.slice(0, HOME_MESSAGES_
 // pick — renamed from "Featured Integrator" since it isn't curated and connected
 // apps aren't only integrators.
 const featuredIntegrator = computed(() =>
-  [...connectedIntegrators.value].sort((a, b) => b.established_at.localeCompare(a.established_at))[0],
+  [...connectedIntegrators.value].sort((a, b) => b.establishedAt.localeCompare(a.establishedAt))[0],
 )
 
 const displayName = ref('')
-const recentActivity = ref<HistoryEntryResponse[]>([])
+const recentActivity = ref<HistoryEntry[]>([])
 const loading = ref(true)
 const error = ref('')
 
 onMounted(async () => {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const [profile, history] = await Promise.all([
-      getMe(session.token),
-      getMyHistory(session.token),
-    ])
-    displayName.value = profile.display_name
-    recentActivity.value = history.slice(0, RECENT_ACTIVITY_LIMIT)
+    displayName.value = s.profile().displayName
+    const history = await s.history()
+    recentActivity.value = (Array.isArray(history) ? history : []).slice(0, RECENT_ACTIVITY_LIMIT)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -84,7 +81,7 @@ const quickActions = [
         <div :class="styles.featuredText">
           <p :class="styles.featuredLabel">{{ featuredIntegrator.name }}</p>
           <p :class="styles.featuredMeta">
-            Connected {{ formatActivityTimestamp(featuredIntegrator.established_at) }}
+            Connected {{ formatActivityTimestamp(featuredIntegrator.establishedAt) }}
           </p>
         </div>
         <AvalonButton
@@ -122,7 +119,7 @@ const quickActions = [
             />
           </template>
           <ul v-else :class="styles.integratorGrid">
-            <li v-for="binding in connectedIntegrators" :key="binding.binding_id" :class="styles.integratorTile">
+            <li v-for="binding in connectedIntegrators" :key="binding.bindingId" :class="styles.integratorTile">
               <RouterLink
                 :to="{ name: 'integration-profile', params: { slug: binding.slug } }"
                 :class="styles.integratorTileLink"
@@ -142,7 +139,7 @@ const quickActions = [
             No activity yet — your history starts as soon as the network processes your first event.
           </p>
           <ul v-else :class="styles.activityList">
-            <li v-for="entry in recentActivity" :key="entry.event_id" :class="styles.activityEntry">
+            <li v-for="entry in recentActivity" :key="entry.eventId" :class="styles.activityEntry">
               <span :class="styles.activityIcon"><AvalonIcon name="activity" :size="16" /></span>
               <span :class="styles.activitySummary">{{ summarizeActivityEntry(entry) }}</span>
               <time :class="styles.activityTime" :datetime="entry.timestamp">
@@ -213,7 +210,7 @@ const quickActions = [
                 <span :class="styles.guildText">
                   <span :class="styles.guildName">{{ guild.name }}</span>
                   <span :class="styles.guildMeta"
-                    >{{ guild.tag }} · {{ guild.member_count }} members</span
+                    >{{ guild.tag }} · {{ guild.memberCount }} members</span
                   >
                 </span>
               </RouterLink>
@@ -239,8 +236,8 @@ const quickActions = [
                   <span :class="styles.messageGuild">{{ entry.guildName }}</span>
                   <span :class="styles.messageBody">{{ entry.message.body }}</span>
                 </span>
-                <time :class="styles.messageTime" :datetime="entry.message.sent_at">
-                  {{ formatActivityTimestamp(entry.message.sent_at) }}
+                <time :class="styles.messageTime" :datetime="entry.message.sentAt">
+                  {{ formatActivityTimestamp(entry.message.sentAt) }}
                 </time>
               </RouterLink>
             </li>

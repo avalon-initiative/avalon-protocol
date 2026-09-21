@@ -8,8 +8,7 @@
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonTextField } from '@avalon/ui'
-import * as api from '@avalon/api-client'
-import { signFreshAction, useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import local from '../styles/PairDevice.module.scss'
 import styles from '../styles/page.module.scss'
 
@@ -22,24 +21,15 @@ const error = ref('')
 const resolvedStatus = ref<'approved' | 'denied' | null>(null)
 
 // #697/#698/#704: mints a brand-new session for a different device off the
-// approver's own ambient session alone — signature-required.
+// approver's own ambient session alone — signature-required. Signing now
+// happens inside AccountSession.approveDevicePairing itself.
 async function onApprove() {
-  if (!session.token || !userCode.value.trim()) return
+  if (!session.session || !userCode.value.trim()) return
   error.value = ''
   submitting.value = true
   try {
-    const code = userCode.value.trim()
-    const signed = session.identityId
-      ? signFreshAction(session.identityId, session.signingKeyId, 'device_pairing.approve', [
-          session.identityId,
-          code,
-        ])
-      : null
-    const result = await api.approvePairing(session.token, {
-      user_code: code,
-      ...(signed ?? {}),
-    })
-    resolvedStatus.value = result.status
+    const status = await session.session.approveDevicePairing(userCode.value.trim())
+    resolvedStatus.value = status as 'approved' | 'denied'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -48,12 +38,12 @@ async function onApprove() {
 }
 
 async function onDeny() {
-  if (!session.token || !userCode.value.trim()) return
+  if (!session.session || !userCode.value.trim()) return
   error.value = ''
   submitting.value = true
   try {
-    const result = await api.denyPairing(session.token, { user_code: userCode.value.trim() })
-    resolvedStatus.value = result.status
+    const status = await session.session.denyDevicePairing(userCode.value.trim())
+    resolvedStatus.value = status as 'approved' | 'denied'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {

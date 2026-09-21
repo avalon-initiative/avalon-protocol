@@ -39,6 +39,6 @@ describe('README trusted-networks table', () => {
   it('links to the canonical file and the full trust-anchor model doc', () => {
     const readme = readReadme()
     expect(readme).toContain('docs/trusted-networks.json')
-    expect(readme).toContain('docs/architecture/network-trust-anchors.md')
+    expect(readme).toContain('docs/projects/backend-server/architecture/network-trust-anchors.md')
   })
 })

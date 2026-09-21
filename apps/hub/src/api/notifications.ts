@@ -16,7 +16,7 @@
 // approving/rejecting), not merely by visiting the page — unlike the two
 // "have I seen this yet" sources above, resolving is the correct signal
 // for something the caller must actually act on.
-import type { ConversationMessageResponse } from '@avalon/api-client'
+import type { ConversationMessage } from '@avalon/sdk'
 
 const DM_LAST_SEEN_STORAGE_KEY = 'avalon:conversations:lastSeen'
 const GUARDIAN_OF_SEEN_STORAGE_KEY = 'avalon:guardianOf:seen'
@@ -61,14 +61,14 @@ export function markConversationSeen(conversationId: string, at: string) {
 // all yet (never unread).
 export function isConversationUnread(
   conversationId: string,
-  lastMessage: ConversationMessageResponse | null,
+  lastMessage: ConversationMessage | null,
   selfId: string,
   lastSeen: LastSeenByConversation,
 ): boolean {
   if (!lastMessage || lastMessage.author === selfId) return false
   const seenAt = lastSeen[conversationId]
   if (!seenAt) return true
-  return new Date(lastMessage.sent_at).getTime() > new Date(seenAt).getTime()
+  return new Date(lastMessage.sentAt).getTime() > new Date(seenAt).getTime()
 }
 
 type GuardianOfSeen = string[]

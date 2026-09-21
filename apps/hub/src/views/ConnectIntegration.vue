@@ -7,10 +7,9 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonButton, AvalonCapabilityConsentRow, AvalonCard, AvalonForm } from '@avalon/ui'
-import * as api from '@avalon/api-client'
 import { capabilityDescription } from '../api/connections'
 import { useIntegrationConsent } from '../composables/useIntegrationConsent'
-import { signFreshAction, useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import styles from '../styles/page.module.scss'
 
 const route = useRoute()
@@ -26,23 +25,16 @@ const connecting = ref(false)
 const connectError = ref('')
 
 async function onConnect() {
-  if (!session.token || !integrator.value) return
+  const s = session.session
+  if (!s || !integrator.value) return
   connectError.value = ''
   connecting.value = true
   try {
     // #697/#698: hands a third party standing permission over the
-    // identity's data going forward — signature-required.
+    // identity's data going forward — signature-required, signs
+    // automatically inside AccountSession.connectIntegrator.
     const capabilities = Array.from(checkedCapabilities.value)
-    const signed = session.identityId
-      ? signFreshAction(session.identityId, session.signingKeyId, 'integration.connect', [
-          integrator.value.slug,
-          capabilities.join(','),
-        ])
-      : null
-    await api.connectIntegrator(session.token, integrator.value.slug, {
-      capabilities,
-      ...(signed ?? {}),
-    })
+    await s.connectIntegrator(integrator.value.slug, capabilities)
     router.push({ name: 'connections' })
   } catch (e) {
     connectError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -60,17 +52,17 @@ function onCancel() {
   <div v-if="!loading && integrator" :class="styles.page">
     <header :class="styles.pageHeader">
       <h1 :class="styles.title">Connect to {{ integrator.name }}</h1>
-      <p :class="styles.subtitle">{{ integrator.owner_name }}</p>
+      <p :class="styles.subtitle">{{ integrator.ownerName }}</p>
     </header>
 
     <p v-if="error" :class="styles.error">{{ error }}</p>
 
     <AvalonCard title="Requested access">
-      <p v-if="integrator.requested_capabilities.length === 0" :class="styles.empty">
+      <p v-if="integrator.requestedCapabilities.length === 0" :class="styles.empty">
         This integrator hasn't requested any capabilities.
       </p>
       <AvalonCapabilityConsentRow
-        v-for="capability in integrator.requested_capabilities"
+        v-for="capability in integrator.requestedCapabilities"
         :key="capability"
         :capability="capability"
         :description="capabilityDescription(capability)"

@@ -7,7 +7,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -29,10 +29,18 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Seeds a bearer token and drives the real session-store initialize() path
+// (a GET /me round trip, same as production) — `mockFetchByPath` must
+// already be stubbed before this runs.
+async function loginTestSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Profile blocked users', () => {
   it('shows an empty state when nothing is blocked', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({ '/me': profile, '/me/passkeys': [], '/blocks': [] })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -44,13 +52,13 @@ describe('Profile blocked users', () => {
   })
 
   it('lists a blocked user with their resolved display name and unblocks them', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/passkeys': [],
       '/blocks': [{ blocked: 'id-2', created_at: 'now' }],
       '/identities/profiles': [{ identity_id: 'id-2', display_name: 'Grief', avatar_url: null }],
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -70,8 +78,8 @@ describe('Profile blocked users', () => {
   })
 
   it('blocks by identity id typed directly into the form', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({ '/me': profile, '/me/passkeys': [], '/blocks': [] })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')

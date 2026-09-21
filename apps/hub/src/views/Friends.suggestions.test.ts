@@ -5,7 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
@@ -31,7 +31,6 @@ beforeEach(() => {
 
 describe('Friends "people you may know" polling', () => {
   it('picks up a new suggestion without a manual reload', async () => {
-    useSessionStore().login('a-token')
     vi.useFakeTimers()
     mockFetchByPath({
       '/me': profile,
@@ -40,6 +39,8 @@ describe('Friends "people you may know" polling', () => {
       '/presence': [],
       '/people/discover': { candidates: [] },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/')

@@ -4,7 +4,12 @@
 // crates/server/src/friends.rs/blocks.rs/presence.rs/discovery.rs.
 import { AccountSession } from './core.js'
 
-export type PresenceStatus = 'online' | 'away' | 'busy' | 'offline'
+// Must match crates/protocol/src/social.rs::PresenceStatus's serde
+// serialization exactly (the bare Rust enum variant names, no rename) —
+// same values realtime.ts's own PresenceStatusWire (push updates) uses,
+// duplicated here rather than imported to keep this file's point-in-time
+// reads independent of realtime.ts's push-specific module.
+export type PresenceStatus = 'Online' | 'Away' | 'DoNotDisturb' | 'Offline'
 
 export interface Friendship {
   a: string
@@ -108,6 +113,8 @@ export interface PublicIdentityProfile {
   timezone: string | null
   themeColor: string | null
   location: string | null
+  mainGuild: string | null
+  effectiveMainGuild: string | null
 }
 interface PublicIdentityProfileWire {
   identity_id: string
@@ -123,6 +130,8 @@ interface PublicIdentityProfileWire {
   timezone: string | null
   theme_color: string | null
   location: string | null
+  main_guild: string | null
+  effective_main_guild: string | null
 }
 
 export interface GuildAnnouncementAlert {
@@ -176,6 +185,11 @@ AccountSession.prototype.friends = function (this: AccountSession): Promise<Frie
 
 AccountSession.prototype.friendRequests = async function (this: AccountSession): Promise<FriendRequest[]> {
   const w = await this.get<FriendRequestWire[]>('/friends/requests')
+  // Passed through as-is on a non-array body rather than crashing on
+  // `.map` — same reasoning as listPasskeys/guardianRequests (passkeys.ts,
+  // recovery.ts): callers that want to treat a malformed response as a
+  // real failure check `Array.isArray` themselves.
+  if (!Array.isArray(w)) return w as unknown as FriendRequest[]
   return w.map((r) => ({ id: r.id, from: r.from, to: r.to, requestedAt: r.requested_at }))
 }
 
@@ -212,6 +226,7 @@ AccountSession.prototype.resolveHandle = async function (this: AccountSession, h
 
 AccountSession.prototype.blocks = async function (this: AccountSession): Promise<Block[]> {
   const w = await this.get<BlockWire[]>('/blocks')
+  if (!Array.isArray(w)) return w as unknown as Block[]
   return w.map((b) => ({ blocked: b.blocked, createdAt: b.created_at }))
 }
 
@@ -225,7 +240,8 @@ AccountSession.prototype.unblock = async function (this: AccountSession, identit
 }
 
 AccountSession.prototype.discoverPeople = async function (this: AccountSession): Promise<DiscoveryCandidate[]> {
-  const r = await this.get<{ candidates: DiscoveryCandidateWire[] }>('/people/discover')
+  const r = await this.get<{ candidates: DiscoveryCandidateWire[] } | null>('/people/discover')
+  if (!Array.isArray(r?.candidates)) return r as unknown as DiscoveryCandidate[]
   return r.candidates.map((c) => ({
     identityId: c.identity_id,
     displayName: c.display_name,
@@ -240,18 +256,21 @@ AccountSession.prototype.searchIdentities = async function (
   q: string,
 ): Promise<SearchResultIdentity[]> {
   if (q.trim().length === 0) return []
-  const r = await this.getQuery<{ results: PublicProfileWire[] }>('/identities/search', { q })
+  const r = await this.getQuery<{ results: PublicProfileWire[] } | null>('/identities/search', { q })
+  if (!Array.isArray(r?.results)) return r as unknown as SearchResultIdentity[]
   return r.results.map((p) => ({ identityId: p.identity_id, displayName: p.display_name, avatarUrl: p.avatar_url }))
 }
 
 AccountSession.prototype.profiles = async function (this: AccountSession, ids: string[]): Promise<PublicProfile[]> {
   if (ids.length === 0) return []
   const w = await this.getQuery<PublicProfileWire[]>('/identities/profiles', { ids: ids.join(',') })
+  if (!Array.isArray(w)) return w as unknown as PublicProfile[]
   return w.map((p) => ({ identityId: p.identity_id, displayName: p.display_name, avatarUrl: p.avatar_url }))
 }
 
 AccountSession.prototype.history = async function (this: AccountSession): Promise<HistoryEntry[]> {
   const w = await this.get<HistoryEntryWire[]>('/me/history')
+  if (!Array.isArray(w)) return w as unknown as HistoryEntry[]
   return w.map((h) => ({ eventId: h.event_id, kind: h.kind, subject: h.subject, payload: h.payload, timestamp: h.timestamp }))
 }
 
@@ -274,6 +293,8 @@ AccountSession.prototype.identityProfile = async function (
     timezone: w.timezone,
     themeColor: w.theme_color,
     location: w.location,
+    mainGuild: w.main_guild,
+    effectiveMainGuild: w.effective_main_guild,
   }
 }
 
@@ -281,6 +302,7 @@ AccountSession.prototype.guildAnnouncements = async function (
   this: AccountSession,
 ): Promise<GuildAnnouncementAlert[]> {
   const w = await this.get<GuildAnnouncementAlertWire[]>('/me/guild-announcements')
+  if (!Array.isArray(w)) return w as unknown as GuildAnnouncementAlert[]
   return w.map((a) => ({
     messageId: a.message_id,
     channelId: a.channel_id,
@@ -304,5 +326,6 @@ AccountSession.prototype.updatePresence = async function (
 AccountSession.prototype.presenceOf = async function (this: AccountSession, ids: string[]): Promise<Presence[]> {
   if (ids.length === 0) return []
   const w = await this.getQuery<PresenceWire[]>('/presence', { ids: ids.join(',') })
+  if (!Array.isArray(w)) return w as unknown as Presence[]
   return w.map((p) => ({ identityId: p.identity_id, status: p.status, activeIn: p.active_in, updatedAt: p.updated_at }))
 }

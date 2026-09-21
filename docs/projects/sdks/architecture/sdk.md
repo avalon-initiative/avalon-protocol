@@ -962,6 +962,30 @@ protocol and the domain model in `crates/protocol`; they never pull in
       genuinely distinct from the one the grant is minted against — both
       left to unit coverage plus the byte-for-byte format match against
       their already-live-proven `packages/api-client` counterparts.
+- **Epic #712, `apps/hub` migration off `packages/api-client` onto
+  `bindings/ts` — done.** `bindings/ts` now has a real first-party
+  consumer: `apps/hub`'s entire data-fetching surface runs on
+  `@avalon/sdk`, and `"@avalon/api-client"` is gone from
+  `apps/hub/package.json` — `grep -rl "@avalon/api-client" apps/hub/src`
+  returns nothing. Migrated batch by batch (auth-adjacent views;
+  Profile/passkeys/devices/recovery; friends/blocks/discovery/presence;
+  guilds/chat/events; conversations; integrations/connections;
+  achievements/notifications/activity; network trust; `NetworkStatus.vue`
+  plus an out-of-plan `UserProfile.vue` gap found late), each batch
+  live-verified against a real `avalon-server`/Postgres via a real
+  browser (Playwright + a CDP virtual WebAuthn authenticator), not just
+  unit-tested. Found and fixed a recurring real `bindings/ts` gap along
+  the way, not just Hub-side renames: nearly every list-returning
+  `AccountSession`/free-standing method crashed via `.map()` on a
+  non-array wire response instead of passing it through for the caller's
+  own `Array.isArray` check (now fixed across
+  `passkeys.ts`/`devices.ts`/`recovery.ts`/`social.ts`/
+  `guildAdmin.ts`/`conversations.ts`/`integrations.ts`/`identityData.ts`/
+  `integratorDirectory.ts`/`achievements.ts`), plus one real missing-field
+  gap (`PublicIdentityProfile`/`identityProfile()` was missing
+  `mainGuild`/`effectiveMainGuild`, which the real server always
+  returns). `apps/mobile-hub` stays on `packages/api-client`, untouched
+  — explicitly out of this epic's scope.
 
 ## Decisions and tickets
 

@@ -6,19 +6,38 @@
 // and merges around for friends. Display names are resolved via
 // GET /identities/profiles (issue #161); mirrors that module's shape
 // closely.
-import * as api from '@avalon/api-client'
 import type {
-  DiscoverGuildsParams,
+  AccountSession,
   DiscoverGuildSummary,
   FavoriteGameEntry,
   GameBreakdownEntry,
-  GuildMemberResponse,
-  GuildResponse,
-  PresenceResponse,
+  Guild,
+  GuildMember as SdkGuildMember,
   PresenceStatus,
-  PublicProfileResponse,
-  RoleResponse,
-} from '@avalon/api-client'
+  Role,
+} from '@avalon/sdk'
+
+// Query params for GET /guilds/discover — mirrors
+// crates/server/src/guilds.rs::DiscoverGuildsQuery. Purely a request
+// shape, not a wire response type, so it lives here rather than in
+// bindings/ts (whose discoverGuilds just takes the built query string).
+export interface DiscoverGuildsParams {
+  q?: string
+  recruiting?: boolean
+  tag?: string
+  integrator?: string
+  sort?: 'newest' | 'alphabetical' | 'most_members'
+  limit?: number
+  cursor?: string
+}
+
+// Issue #152's closed badge vocabulary, matching
+// avalon_protocol::guilds::{RoleBadgeIcon,RoleBadgeColor}::ALL exactly —
+// presentational-only, so kept here rather than in bindings/ts (whose own
+// createRole/updateRole just take `{icon: string, color: string}`, with
+// the server itself as the real authority on which ids are valid).
+export type RoleBadgeIconId = 'shield' | 'crown' | 'star' | 'sword' | 'wrench' | 'heart' | 'flag' | 'bolt'
+export type RoleBadgeColorId = 'gray' | 'red' | 'orange' | 'gold' | 'green' | 'blue' | 'purple'
 
 export interface GuildMember {
   identityId: string
@@ -47,40 +66,37 @@ export interface GuildMember {
 // so existing callers/tests that only care about status keep working
 // unchanged.
 export function mergeGuildMember(
-  member: GuildMemberResponse,
+  member: SdkGuildMember,
   presenceByStatus: Map<string, PresenceStatus>,
   displayNameById: Map<string, string> = new Map(),
   presenceByPlaying: Map<string, string | null> = new Map(),
 ): GuildMember {
   return {
-    identityId: member.identity_id,
-    displayName: displayNameById.get(member.identity_id),
-    roleIndex: member.role_index,
-    status: presenceByStatus.get(member.identity_id) ?? 'Offline',
-    playing: presenceByPlaying.get(member.identity_id) ?? null,
-    joinedAt: member.joined_at,
+    identityId: member.identityId,
+    displayName: displayNameById.get(member.identityId),
+    roleIndex: member.roleIndex,
+    status: presenceByStatus.get(member.identityId) ?? 'Offline',
+    playing: presenceByPlaying.get(member.identityId) ?? null,
+    joinedAt: member.joinedAt,
   }
 }
 
-export async function listMembersWithPresence(token: string, guildId: string): Promise<GuildMember[]> {
-  const members = await api.listMembers(token, guildId)
-  if (members.length === 0) {
+export async function listMembersWithPresence(session: AccountSession, guildId: string): Promise<GuildMember[]> {
+  const members = await session.listMembers(guildId)
+  if (!Array.isArray(members) || members.length === 0) {
     return []
   }
 
-  const ids = members.map((m) => m.identity_id)
-  const [presences, profiles] = await Promise.all([
-    api.getPresence(token, ids),
-    api.getProfiles(token, ids),
-  ])
+  const ids = members.map((m) => m.identityId)
+  const [presences, profiles] = await Promise.all([session.presenceOf(ids), session.profiles(ids)])
   const presenceByStatus = new Map<string, PresenceStatus>(
-    presences.map((p: PresenceResponse) => [p.identity_id, p.status]),
+    (Array.isArray(presences) ? presences : []).map((p) => [p.identityId, p.status]),
   )
   const presenceByPlaying = new Map<string, string | null>(
-    presences.map((p: PresenceResponse) => [p.identity_id, p.active_in]),
+    (Array.isArray(presences) ? presences : []).map((p) => [p.identityId, p.activeIn]),
   )
   const displayNameById = new Map<string, string>(
-    profiles.map((p: PublicProfileResponse) => [p.identity_id, p.display_name]),
+    (Array.isArray(profiles) ? profiles : []).map((p) => [p.identityId, p.displayName]),
   )
 
   return members.map((m) => mergeGuildMember(m, presenceByStatus, displayNameById, presenceByPlaying))
@@ -96,8 +112,8 @@ export interface RoleGroup {
 // unit-testable independent of any fetch. A role with no current members
 // is omitted rather than shown empty (the ticket's "grouped by role", not
 // "every defined role").
-export function groupMembersByRole(members: GuildMember[], roles: RoleResponse[]): RoleGroup[] {
-  const roleNameByIndex = new Map(roles.map((r) => [r.name_index, r.name]))
+export function groupMembersByRole(members: GuildMember[], roles: Role[]): RoleGroup[] {
+  const roleNameByIndex = new Map(roles.map((r) => [r.nameIndex, r.name]))
   const groups = new Map<number, GuildMember[]>()
   for (const member of members) {
     const bucket = groups.get(member.roleIndex)
@@ -141,7 +157,7 @@ export function sortMembersByPresence(members: GuildMember[]): GuildMember[] {
 // Case-insensitive, partial match against a guild's name or tag — for the
 // "my guilds" list on apps/hub/src/views/Guilds.vue. Pure, unit-testable
 // independent of any fetch.
-export function filterGuildsByNameOrTag<T extends Pick<GuildResponse, 'name' | 'tag'>>(
+export function filterGuildsByNameOrTag<T extends Pick<Guild, 'name' | 'tag'>>(
   guilds: T[],
   query: string,
 ): T[] {
@@ -192,7 +208,7 @@ export function sortMembers(members: GuildMember[], order: MemberSortOrder): Gui
 // independently and is the real authority (this is UI gating only, per the
 // ticket's invariant — a rejected 403 must not crash the page).
 export function hasGuildPermission(
-  guild: Pick<GuildResponse, 'owner'>,
+  guild: Pick<Guild, 'owner'>,
   actorIdentityId: string,
   actorPermissions: string[],
   permission: string,
@@ -215,7 +231,7 @@ const MEMBER_ROLE_INDEX = 2
 // role additionally requires `manage_roles` (or being the owner). UI
 // gating only — the server re-checks and is the real authority.
 export function canKickMember(
-  guild: Pick<GuildResponse, 'owner'>,
+  guild: Pick<Guild, 'owner'>,
   actorIdentityId: string,
   actorPermissions: string[],
   target: GuildMember,
@@ -239,7 +255,7 @@ export function canKickMember(
 // `manage_roles`, and the owner's role can never be reassigned this way
 // (ownership only moves via transfer-ownership).
 export function canChangeMemberRole(
-  guild: Pick<GuildResponse, 'owner'>,
+  guild: Pick<Guild, 'owner'>,
   actorIdentityId: string,
   actorPermissions: string[],
   target: GuildMember,
@@ -304,13 +320,13 @@ export function roleVariantForIndex(roleIndex: number): 'owner' | 'officer' | 'm
 export function permissionsForMember(
   actorIdentityId: string,
   members: GuildMember[],
-  roles: RoleResponse[],
+  roles: Role[],
 ): string[] {
   const self = members.find((m) => m.identityId === actorIdentityId)
   if (!self) {
     return []
   }
-  return roles.find((r) => r.name_index === self.roleIndex)?.permissions ?? []
+  return roles.find((r) => r.nameIndex === self.roleIndex)?.permissions ?? []
 }
 
 // Builds the `?q=&recruiting=&...` query string for GET /guilds/discover
@@ -358,7 +374,7 @@ export function buildDiscoverQueryString(params: DiscoverGuildsParams): string {
 // member can be bound to zero, one, or several integrators, so those two numbers
 // are never guaranteed equal.
 export function formatGameBreakdownEntry(entry: GameBreakdownEntry, totalMembers: number): string {
-  return `${entry.member_count} of ${totalMembers} members play ${entry.integrator_name}`
+  return `${entry.memberCount} of ${totalMembers} members play ${entry.integratorName}`
 }
 
 // True when the breakdown response itself has nothing to show — distinct
@@ -386,8 +402,8 @@ export function pinnableBreakdownEntries(
   breakdown: GameBreakdownEntry[],
   favorites: FavoriteGameEntry[],
 ): GameBreakdownEntry[] {
-  const pinnedIds = new Set(favorites.map((f) => f.integrator_id))
-  return breakdown.filter((entry) => !pinnedIds.has(entry.integrator_id))
+  const pinnedIds = new Set(favorites.map((f) => f.integratorId))
+  return breakdown.filter((entry) => !pinnedIds.has(entry.integratorId))
 }
 
 export function canPinMoreFavorites(favorites: FavoriteGameEntry[]): boolean {
@@ -399,11 +415,11 @@ export function canPinMoreFavorites(favorites: FavoriteGameEntry[]): boolean {
 // `SetFavoriteGamesRequest` (and #153's `links` before it) already
 // establishes; this module never does a partial/per-entry patch.
 export function addFavoriteGameId(favorites: FavoriteGameEntry[], integratorId: string): string[] {
-  return [...favorites.map((f) => f.integrator_id), integratorId]
+  return [...favorites.map((f) => f.integratorId), integratorId]
 }
 
 export function removeFavoriteGameId(favorites: FavoriteGameEntry[], integratorId: string): string[] {
-  return favorites.filter((f) => f.integrator_id !== integratorId).map((f) => f.integrator_id)
+  return favorites.filter((f) => f.integratorId !== integratorId).map((f) => f.integratorId)
 }
 
 // Swaps `integratorId` with its neighbor one position earlier/later. A no-op
@@ -415,7 +431,7 @@ export function reorderFavoriteGameIds(
   integratorId: string,
   direction: 'up' | 'down',
 ): string[] {
-  const ids = favorites.map((f) => f.integrator_id)
+  const ids = favorites.map((f) => f.integratorId)
   const index = ids.indexOf(integratorId)
   if (index === -1) return ids
   const swapWith = direction === 'up' ? index - 1 : index + 1
@@ -430,7 +446,7 @@ export function reorderFavoriteGameIds(
 // Renders one FavoriteGameEntry for display — flags staleness inline
 // rather than hiding it, per #207's "surface, don't silently churn" design.
 export function formatFavoriteGameEntry(entry: FavoriteGameEntry): string {
-  return entry.stale ? `${entry.integrator_name} (no longer actively played)` : entry.integrator_name
+  return entry.stale ? `${entry.integratorName} (no longer actively played)` : entry.integratorName
 }
 
 // Issue #242: whether the Discover board should offer "Apply to join" for

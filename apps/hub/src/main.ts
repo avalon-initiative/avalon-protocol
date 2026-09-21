@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from './api/session'
 // Design tokens + base page styles come from the shared component library
 // so every Avalon client (hub, mobile-hub) renders the same theme.
 import '@avalon/ui/src/styles/tokens.css'
@@ -13,11 +13,10 @@ const pinia = createPinia()
 setActivePinia(pinia)
 app.use(pinia)
 
-// Issue #60 made session storage pluggable (localStorage here, platform
-// secure storage in mobile-hub) and therefore async — hydrate before
-// mounting so the router's very first navigation guard
-// (`useSessionStore().isAuthenticated()`) sees final state, same as the
-// old synchronous `ref(localStorage.getItem(...))` did before this changed.
+// initialize() does a real GET /me round trip to build the AccountSession
+// (issue #712) — await it before mounting so the router's very first
+// navigation guard (`useSessionStore().isAuthenticated()`) sees final
+// state, not a still-loading one.
 useSessionStore()
   .initialize()
   .then(() => {

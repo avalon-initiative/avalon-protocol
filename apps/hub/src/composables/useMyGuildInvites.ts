@@ -4,31 +4,31 @@
 // invite showing up a little late is fine, this isn't a tier-1 realtime
 // need.
 import { onMounted, onUnmounted, ref } from 'vue'
-import * as api from '@avalon/api-client'
-import type { MyGuildInviteResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import type { MyGuildInvite } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 
 export function useMyGuildInvites() {
   const session = useSessionStore()
 
-  const invites = ref<MyGuildInviteResponse[]>([])
+  const invites = ref<MyGuildInvite[]>([])
   const inviterNames = ref<Record<string, string>>({})
   const loading = ref(true)
   const error = ref('')
 
-  async function resolveInviterNames(rows: MyGuildInviteResponse[]) {
-    if (!session.token) return
+  async function resolveInviterNames(rows: MyGuildInvite[]) {
+    const s = session.session
+    if (!s) return
     const unknown = [...new Set(rows.map((r) => r.from))].filter(
       (id) => !(id in inviterNames.value),
     )
     if (unknown.length === 0) return
     try {
-      const profiles = await api.getProfiles(session.token, unknown)
+      const profiles = await s.profiles(unknown)
       const resolved: Record<string, string> = {}
-      for (const profile of profiles) {
-        resolved[profile.identity_id] = profile.display_name
+      for (const profile of Array.isArray(profiles) ? profiles : []) {
+        resolved[profile.identityId] = profile.displayName
       }
       inviterNames.value = { ...inviterNames.value, ...resolved }
     } catch {
@@ -39,9 +39,10 @@ export function useMyGuildInvites() {
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
   async function refresh() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      const rows = await api.getMyGuildInvites(session.token)
+      const rows = await s.myGuildInvites()
       invites.value = Array.isArray(rows) ? rows : []
       await resolveInviterNames(invites.value)
     } catch (e) {

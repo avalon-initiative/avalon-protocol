@@ -18,6 +18,8 @@ export interface Guild {
   description: string
   owner: string
   createdAt: string
+  memberCount: number
+  integrators: string[]
   joinPolicy: string
   motd: string | null
   banner: string | null
@@ -25,6 +27,15 @@ export interface Guild {
   links: GuildLink[]
   recruiting: boolean
   public: boolean
+  // Issue #206 — whether the integrator affinity breakdown
+  // (getGameBreakdown) is shown on this guild's public profile.
+  gameBreakdownPublic: boolean
+  // Issue #207 — the guild's curated top-5 favorite integrators, always
+  // part of the public profile regardless of gameBreakdownPublic. Same
+  // shape favoriteGames(guildId) returns.
+  favoriteGames: FavoriteGameEntry[]
+  // Issue #87 — "public" | "guild_members" | "private".
+  rosterVisibility: string
 }
 interface GuildWire {
   id: string
@@ -33,6 +44,8 @@ interface GuildWire {
   description: string
   owner: string
   created_at: string
+  member_count: number
+  integrators: string[]
   join_policy: string
   motd: string | null
   banner: string | null
@@ -40,6 +53,9 @@ interface GuildWire {
   links?: GuildLink[]
   recruiting?: boolean
   public?: boolean
+  game_breakdown_public?: boolean
+  favorite_games?: FavoriteGameEntryWire[]
+  roster_visibility?: string
 }
 function guildFromWire(w: GuildWire): Guild {
   return {
@@ -49,6 +65,8 @@ function guildFromWire(w: GuildWire): Guild {
     description: w.description,
     owner: w.owner,
     createdAt: w.created_at,
+    memberCount: w.member_count,
+    integrators: w.integrators ?? [],
     joinPolicy: w.join_policy,
     motd: w.motd,
     banner: w.banner,
@@ -56,6 +74,9 @@ function guildFromWire(w: GuildWire): Guild {
     links: w.links ?? [],
     recruiting: w.recruiting ?? false,
     public: w.public ?? false,
+    gameBreakdownPublic: w.game_breakdown_public ?? false,
+    favoriteGames: (w.favorite_games ?? []).map(favoriteGameEntryFromWire),
+    rosterVisibility: w.roster_visibility ?? 'guild_members',
   }
 }
 
@@ -105,6 +126,15 @@ interface FavoriteGameEntryWire {
   position: number
   stale: boolean
 }
+function favoriteGameEntryFromWire(f: FavoriteGameEntryWire): FavoriteGameEntry {
+  return {
+    integratorId: f.integrator_id,
+    integratorSlug: f.integrator_slug,
+    integratorName: f.integrator_name,
+    position: f.position,
+    stale: f.stale,
+  }
+}
 
 export interface FavoriteGames {
   guildId: string
@@ -118,6 +148,15 @@ interface FavoriteGamesWire {
 export interface RoleBadge {
   icon: string | null
   color: string | null
+}
+
+/** The write-side shape createRole/updateRole take — unlike the read-side
+ * RoleBadge, both fields are required non-null ids the server validates
+ * against RoleBadgeIcon/RoleBadgeColor, rejecting an unrecognized one
+ * rather than silently dropping it. */
+export interface RoleBadgeUpdate {
+  icon: string
+  color: string
 }
 
 export interface Role {
@@ -305,6 +344,8 @@ interface RsvpCountsWire {
   not_going: number
 }
 
+export type RsvpStatus = 'going' | 'maybe' | 'not_going'
+
 export interface GuildEvent {
   id: string
   guildId: string
@@ -317,6 +358,16 @@ export interface GuildEvent {
   createdAt: string
   rsvpCounts: RsvpCounts
   public: boolean
+  // Issue #463 — the caller's own RSVP status, null if they haven't
+  // responded. Never another member's; lets a control pre-select
+  // correctly without a separate roster fetch.
+  myRsvp: RsvpStatus | null
+  // Issue #458 — false when the caller has `view` but not `view_details`
+  // on this event: id/guildId/title/startsAt/endsAt/createdBy/createdAt/
+  // public are real, but channelId/description/rsvpCounts/myRsvp are
+  // placeholder values, not real data. Always true for create/update/RSVP
+  // responses.
+  detailsVisible: boolean
 }
 interface GuildEventWire {
   id: string
@@ -330,6 +381,8 @@ interface GuildEventWire {
   created_at: string
   rsvp_counts: RsvpCountsWire
   public?: boolean
+  my_rsvp?: RsvpStatus | null
+  details_visible?: boolean
 }
 function eventFromWire(w: GuildEventWire): GuildEvent {
   return {
@@ -344,30 +397,32 @@ function eventFromWire(w: GuildEventWire): GuildEvent {
     createdAt: w.created_at,
     rsvpCounts: { going: w.rsvp_counts.going, maybe: w.rsvp_counts.maybe, notGoing: w.rsvp_counts.not_going },
     public: w.public ?? false,
+    myRsvp: w.my_rsvp ?? null,
+    detailsVisible: w.details_visible ?? true,
   }
 }
 
 export interface Rsvp {
   eventId: string
   identityId: string
-  status: string
+  status: RsvpStatus
   respondedAt: string
 }
 interface RsvpWire {
   event_id: string
   identity_id: string
-  status: string
+  status: RsvpStatus
   responded_at: string
 }
 
 export interface RsvpRosterEntry {
   identityId: string
-  status: string
+  status: RsvpStatus
   respondedAt: string
 }
 interface RsvpRosterEntryWire {
   identity_id: string
-  status: string
+  status: RsvpStatus
   responded_at: string
 }
 
@@ -441,8 +496,16 @@ export interface GuildUpdate {
   motd?: string
   banner?: string
   icon?: string
+  // Two-state, not three: omitted leaves it untouched, any array (incl.
+  // []) always fully replaces the stored list.
+  links?: GuildLink[]
   recruiting?: boolean
   public?: boolean
+  // "invite_only" or "open" — see Guild.joinPolicy's own doc comment.
+  joinPolicy?: string
+  gameBreakdownPublic?: boolean
+  // "public" | "guild_members" | "private".
+  rosterVisibility?: string
 }
 
 /** A partial update to a channel — `undefined` leaves that field
@@ -477,15 +540,25 @@ declare module './core.js' {
     updateGuild(guildId: string, update: GuildUpdate): Promise<Guild>
     listRoles(guildId: string): Promise<Role[]>
     /** Always signs (`guild.role.create`, `[guildId, name, permissions
-     * comma-joined]`). */
-    createRole(guildId: string, name: string, permissions: string[], description: string): Promise<Role>
-    /** Always signs (`guild.role.update`, `[guildId, nameIndex]`). */
+     * comma-joined]`). `badge` omitted entirely means the server's own
+     * default badge, not "leave unset" (there's no existing role to leave
+     * anything on). */
+    createRole(
+      guildId: string,
+      name: string,
+      permissions: string[],
+      description: string,
+      badge?: RoleBadgeUpdate,
+    ): Promise<Role>
+    /** Always signs (`guild.role.update`, `[guildId, nameIndex]`). `badge`
+     * omitted leaves the existing badge untouched. */
     updateRole(
       guildId: string,
       nameIndex: number,
       name?: string,
       permissions?: string[],
       description?: string,
+      badge?: RoleBadgeUpdate,
     ): Promise<Role>
     /** Always signs (`guild.role.delete`, `[guildId, nameIndex]`). */
     deleteRole(guildId: string, nameIndex: number): Promise<void>
@@ -550,7 +623,7 @@ declare module './core.js' {
     /** Full replacement, not partial. */
     updateEvent(guildId: string, eventId: string, fields: EventFields): Promise<GuildEvent>
     deleteEvent(guildId: string, eventId: string): Promise<void>
-    rsvpToEvent(guildId: string, eventId: string, status: 'going' | 'maybe' | 'not_going'): Promise<Rsvp>
+    rsvpToEvent(guildId: string, eventId: string, status: RsvpStatus): Promise<Rsvp>
     eventRsvps(guildId: string, eventId: string): Promise<RsvpRosterEntry[]>
     /** `GET /guilds/{id}/integrator-breakdown` — gated server-side to a
      * `manage_guild` holder (always) or anyone when the guild has set
@@ -587,6 +660,7 @@ AccountSession.prototype.discoverGuilds = async function (
   queryString: string,
 ): Promise<DiscoverGuildsPage> {
   const w = await this.get<DiscoverGuildsPageWire>(`/guilds/discover${queryString}`)
+  if (!Array.isArray(w?.guilds)) return w as unknown as DiscoverGuildsPage
   return {
     guilds: w.guilds.map((g) => ({
       id: g.id,
@@ -615,14 +689,19 @@ AccountSession.prototype.updateGuild = async function (
     motd: update.motd,
     banner: update.banner,
     icon: update.icon,
+    links: update.links,
     recruiting: update.recruiting,
     public: update.public,
+    join_policy: update.joinPolicy,
+    game_breakdown_public: update.gameBreakdownPublic,
+    roster_visibility: update.rosterVisibility,
   })
   return guildFromWire(w)
 }
 
 AccountSession.prototype.listRoles = async function (this: AccountSession, guildId: string): Promise<Role[]> {
   const w = await this.get<RoleWire[]>(`/guilds/${guildId}/roles`)
+  if (!Array.isArray(w)) return w as unknown as Role[]
   return w.map(roleFromWire)
 }
 
@@ -632,9 +711,16 @@ AccountSession.prototype.createRole = async function (
   name: string,
   permissions: string[],
   description: string,
+  badge?: RoleBadgeUpdate,
 ): Promise<Role> {
   const signature = this.sign('guild.role.create', [guildId, name, permissions.join(',')])
-  const w = await this.post<RoleWire>(`/guilds/${guildId}/roles`, { name, permissions, description, ...signature })
+  const w = await this.post<RoleWire>(`/guilds/${guildId}/roles`, {
+    name,
+    permissions,
+    description,
+    badge,
+    ...signature,
+  })
   return roleFromWire(w)
 }
 
@@ -645,12 +731,14 @@ AccountSession.prototype.updateRole = async function (
   name?: string,
   permissions?: string[],
   description?: string,
+  badge?: RoleBadgeUpdate,
 ): Promise<Role> {
   const signature = this.sign('guild.role.update', [guildId, String(nameIndex)])
   const w = await this.patch<RoleWire>(`/guilds/${guildId}/roles/${nameIndex}`, {
     name,
     permissions,
     description,
+    badge,
     ...signature,
   })
   return roleFromWire(w)
@@ -675,6 +763,7 @@ AccountSession.prototype.listPermissionOverrides = async function (
     resource_kind: resourceKind,
     resource_id: resourceId,
   })
+  if (!Array.isArray(w)) return w as unknown as PermissionOverride[]
   return w.map(overrideFromWire)
 }
 
@@ -738,6 +827,7 @@ AccountSession.prototype.listMembers = async function (
   guildId: string,
 ): Promise<GuildMember[]> {
   const w = await this.get<GuildMemberWire[]>(`/guilds/${guildId}/members`)
+  if (!Array.isArray(w)) return w as unknown as GuildMember[]
   return w.map(memberFromWire)
 }
 
@@ -765,11 +855,13 @@ AccountSession.prototype.removeMember = async function (
 
 AccountSession.prototype.myGuilds = async function (this: AccountSession): Promise<MyGuildMembership[]> {
   const w = await this.get<{ guild_id: string; role_index: number; joined_at: string }[]>('/me/guilds')
+  if (!Array.isArray(w)) return w as unknown as MyGuildMembership[]
   return w.map((m) => ({ guildId: m.guild_id, roleIndex: m.role_index, joinedAt: m.joined_at }))
 }
 
 AccountSession.prototype.myGuildInvites = async function (this: AccountSession): Promise<MyGuildInvite[]> {
   const w = await this.get<MyGuildInviteWire[]>('/me/guild-invites')
+  if (!Array.isArray(w)) return w as unknown as MyGuildInvite[]
   return w.map((i) => ({ id: i.id, guildId: i.guild_id, guildName: i.guild_name, from: i.from, createdAt: i.created_at }))
 }
 
@@ -820,6 +912,7 @@ AccountSession.prototype.listJoinRequests = async function (
   guildId: string,
 ): Promise<GuildJoinRequest[]> {
   const w = await this.get<GuildJoinRequestWire[]>(`/guilds/${guildId}/join-requests`)
+  if (!Array.isArray(w)) return w as unknown as GuildJoinRequest[]
   return w.map(joinRequestFromWire)
 }
 
@@ -862,16 +955,7 @@ AccountSession.prototype.favoriteGames = async function (
   guildId: string,
 ): Promise<FavoriteGames> {
   const w = await this.get<FavoriteGamesWire>(`/guilds/${guildId}/favorite-integrators`)
-  return {
-    guildId: w.guild_id,
-    favorites: w.favorites.map((f) => ({
-      integratorId: f.integrator_id,
-      integratorSlug: f.integrator_slug,
-      integratorName: f.integrator_name,
-      position: f.position,
-      stale: f.stale,
-    })),
-  }
+  return { guildId: w.guild_id, favorites: w.favorites.map(favoriteGameEntryFromWire) }
 }
 
 AccountSession.prototype.setFavoriteGames = async function (
@@ -882,16 +966,7 @@ AccountSession.prototype.setFavoriteGames = async function (
   const w = await this.put<FavoriteGamesWire>(`/guilds/${guildId}/favorite-integrators`, {
     integrator_ids: integratorIds,
   })
-  return {
-    guildId: w.guild_id,
-    favorites: w.favorites.map((f) => ({
-      integratorId: f.integrator_id,
-      integratorSlug: f.integrator_slug,
-      integratorName: f.integrator_name,
-      position: f.position,
-      stale: f.stale,
-    })),
-  }
+  return { guildId: w.guild_id, favorites: w.favorites.map(favoriteGameEntryFromWire) }
 }
 
 AccountSession.prototype.listChannels = async function (
@@ -899,6 +974,7 @@ AccountSession.prototype.listChannels = async function (
   guildId: string,
 ): Promise<GuildChannel[]> {
   const w = await this.get<GuildChannelWire[]>(`/guilds/${guildId}/channels`)
+  if (!Array.isArray(w)) return w as unknown as GuildChannel[]
   return w.map(channelFromWire)
 }
 
@@ -944,6 +1020,7 @@ AccountSession.prototype.channelMessages = async function (
   if (before) query.before = before
   if (limit !== undefined) query.limit = String(limit)
   const w = await this.getQuery<GuildMessageWire[]>(`/guilds/${guildId}/channels/${channelId}/messages`, query)
+  if (!Array.isArray(w)) return w as unknown as GuildMessage[]
   return w.map(guildMessageFromWire)
 }
 
@@ -977,6 +1054,7 @@ AccountSession.prototype.listEvents = async function (
   if (from) query.from = from
   if (to) query.to = to
   const w = await this.getQuery<GuildEventWire[]>(`/guilds/${guildId}/events`, query)
+  if (!Array.isArray(w)) return w as unknown as GuildEvent[]
   return w.map(eventFromWire)
 }
 
@@ -1022,7 +1100,7 @@ AccountSession.prototype.rsvpToEvent = async function (
   this: AccountSession,
   guildId: string,
   eventId: string,
-  status: 'going' | 'maybe' | 'not_going',
+  status: RsvpStatus,
 ): Promise<Rsvp> {
   const w = await this.put<RsvpWire>(`/guilds/${guildId}/events/${eventId}/rsvp`, { status })
   return { eventId: w.event_id, identityId: w.identity_id, status: w.status, respondedAt: w.responded_at }
@@ -1034,6 +1112,7 @@ AccountSession.prototype.eventRsvps = async function (
   eventId: string,
 ): Promise<RsvpRosterEntry[]> {
   const w = await this.get<RsvpRosterEntryWire[]>(`/guilds/${guildId}/events/${eventId}/rsvps`)
+  if (!Array.isArray(w)) return w as unknown as RsvpRosterEntry[]
   return w.map((r) => ({ identityId: r.identity_id, status: r.status, respondedAt: r.responded_at }))
 }
 
@@ -1058,5 +1137,6 @@ AccountSession.prototype.getMessageArchive = async function (
     `/guilds/${guildId}/channels/${channelId}/messages/archive`,
     query,
   )
+  if (!Array.isArray(w)) return w as unknown as ArchivedMessage[]
   return w.map(archivedMessageFromWire)
 }

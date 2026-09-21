@@ -87,6 +87,7 @@ AccountSession.prototype.revokeGrant = async function (
 
 AccountSession.prototype.myConnections = async function (this: AccountSession): Promise<MyConnection[]> {
   const w = await this.get<MyConnectionWire[]>('/me/connections')
+  if (!Array.isArray(w)) return w as unknown as MyConnection[]
   return w.map((c) => ({
     bindingId: c.binding_id,
     integratorId: c.integrator_id,

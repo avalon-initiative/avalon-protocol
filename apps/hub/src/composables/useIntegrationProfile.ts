@@ -6,15 +6,16 @@
 // three. All three reads are public/unauthenticated — no session token.
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
-import * as api from '@avalon/api-client'
+import { getIntegrator, getIntegratorRegistry, listIssuerKeys } from '@avalon/sdk'
+import type { Integrator, IntegratorRegistry, IssuerKey } from '@avalon/sdk'
 import { listRegistryMetrics } from '../api/integrations'
-import type { IntegratorResponse, IssuerKeyResponse } from '@avalon/api-client'
+import { getServerUrl } from '../api/serverUrl'
 
 export function useIntegrationProfile(slug: Ref<string>) {
-  const integrator = ref<IntegratorResponse | null>(null)
-  const registry = ref<Awaited<ReturnType<typeof api.getIntegratorRegistry>> | null>(null)
+  const integrator = ref<Integrator | null>(null)
+  const registry = ref<IntegratorRegistry | null>(null)
   const metrics = computed(() => (registry.value ? listRegistryMetrics(registry.value) : []))
-  const issuerKeys = ref<IssuerKeyResponse[]>([])
+  const issuerKeys = ref<IssuerKey[]>([])
   const loading = ref(true)
   const error = ref('')
 
@@ -22,14 +23,15 @@ export function useIntegrationProfile(slug: Ref<string>) {
     loading.value = true
     error.value = ''
     try {
+      const serverUrl = getServerUrl()
       const [integratorResponse, registryResponse, keysResponse] = await Promise.all([
-        api.getIntegratorPublic(slug.value),
-        api.getIntegratorRegistry(slug.value),
-        api.listIssuerKeys(slug.value),
+        getIntegrator(serverUrl, slug.value),
+        getIntegratorRegistry(serverUrl, slug.value),
+        listIssuerKeys(serverUrl, slug.value),
       ])
       integrator.value = integratorResponse
       registry.value = registryResponse
-      issuerKeys.value = keysResponse
+      issuerKeys.value = Array.isArray(keysResponse) ? keysResponse : []
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {

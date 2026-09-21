@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { GuildAnnouncementAlert } from '@avalon/api-client'
+import type { GuildAnnouncementAlert } from '@avalon/sdk'
 import { countUnread, isUnread, loadLastSeen, markChannelSeen, previewBody } from './guildAnnouncements'
 
 function alert(overrides: Partial<GuildAnnouncementAlert> = {}): GuildAnnouncementAlert {
   return {
-    message_id: 'm-1',
-    channel_id: 'c-1',
-    channel_name: 'announcements',
-    guild_id: 'g-1',
+    messageId: 'm-1',
+    channelId: 'c-1',
+    channelName: 'announcements',
+    guildId: 'g-1',
     author: 'a-1',
     body: 'server maintenance tonight',
-    sent_at: '2026-09-14T12:00:00Z',
+    sentAt: '2026-09-14T12:00:00Z',
     ...overrides,
   }
 }
@@ -26,20 +26,20 @@ describe('isUnread / countUnread', () => {
 
   it('is unread when sent after the last-seen timestamp', () => {
     const lastSeen = { 'c-1': '2026-09-14T11:00:00Z' }
-    expect(isUnread(alert({ sent_at: '2026-09-14T12:00:00Z' }), lastSeen)).toBe(true)
+    expect(isUnread(alert({ sentAt: '2026-09-14T12:00:00Z' }), lastSeen)).toBe(true)
   })
 
   it('is read when sent at or before the last-seen timestamp', () => {
     const lastSeen = { 'c-1': '2026-09-14T12:00:00Z' }
-    expect(isUnread(alert({ sent_at: '2026-09-14T12:00:00Z' }), lastSeen)).toBe(false)
-    expect(isUnread(alert({ sent_at: '2026-09-14T11:00:00Z' }), lastSeen)).toBe(false)
+    expect(isUnread(alert({ sentAt: '2026-09-14T12:00:00Z' }), lastSeen)).toBe(false)
+    expect(isUnread(alert({ sentAt: '2026-09-14T11:00:00Z' }), lastSeen)).toBe(false)
   })
 
   it('counts only the unread alerts across multiple channels', () => {
     const alerts = [
-      alert({ channel_id: 'c-1', sent_at: '2026-09-14T12:00:00Z' }),
-      alert({ channel_id: 'c-2', sent_at: '2026-09-14T12:00:00Z' }),
-      alert({ channel_id: 'c-1', message_id: 'm-2', sent_at: '2026-09-13T00:00:00Z' }),
+      alert({ channelId: 'c-1', sentAt: '2026-09-14T12:00:00Z' }),
+      alert({ channelId: 'c-2', sentAt: '2026-09-14T12:00:00Z' }),
+      alert({ channelId: 'c-1', messageId: 'm-2', sentAt: '2026-09-13T00:00:00Z' }),
     ]
     const lastSeen = { 'c-1': '2026-09-14T00:00:00Z' }
     // c-1's newer post is unread, its older post is read, c-2 has never

@@ -2,7 +2,7 @@
 // connect/consent flow (#27, #83). Mirrors apps/hub/src/api/guilds.ts's
 // shape: wire-format merging/lookup logic that's testable without a
 // network call, kept out of the view components themselves.
-import type { IntegratorBindingResponse } from '@avalon/api-client'
+import type { MyConnection } from '@avalon/sdk'
 
 // One entry per crates/protocol/src/permissions.rs::Capability::KNOWN wire
 // string (Capability::as_str()) — kept in sync by hand since the Hub
@@ -38,6 +38,6 @@ export function capabilityDescription(capability: string): string {
 // A binding with no active grants under it still shows in the connected-
 // integrators list (ending every grant doesn't itself end the binding) — this
 // only decides what capabilities are still active for display purposes.
-export function activeCapabilities(binding: IntegratorBindingResponse): string[] {
+export function activeCapabilities(binding: MyConnection): string[] {
   return binding.grants.map((g) => g.capability)
 }

@@ -10,7 +10,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Guild from './Guild.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -109,10 +109,11 @@ beforeEach(() => {
 
 describe('Guild', () => {
   it('renders Overview by default and switches tabs on click', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -131,10 +132,11 @@ describe('Guild', () => {
   })
 
   it('shows a channel sidebar and switches channels without a route navigation', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -162,10 +164,11 @@ describe('Guild', () => {
   })
 
   it('deep-links /guilds/:id/channels/:cid straight into the Channels tab', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1/channels/c2')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -179,8 +182,6 @@ describe('Guild', () => {
   // after a full 50-message first page), "load older" falls through to
   // the archive tier instead of treating that as the end of history.
   it('falls through to the archive tier once live message pagination is exhausted', async () => {
-    useSessionStore().login('a-token')
-
     const liveFirstPage = Array.from({ length: 50 }, (_, i) => ({
       id: `live-${i}`,
       channel_id: 'c1',
@@ -233,6 +234,8 @@ describe('Guild', () => {
         })
       }),
     )
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -259,8 +262,6 @@ describe('Guild', () => {
   // once both the live table and the archive both come back short of a
   // full page, pagination stops — no repeated failed/empty request loop.
   it('stops paginating cleanly when a channel has no archived messages either', async () => {
-    useSessionStore().login('a-token')
-
     const baseTable: Record<string, unknown> = baseRoutes()
     let liveMessagesCallCount = 0
     vi.stubGlobal(
@@ -297,6 +298,8 @@ describe('Guild', () => {
         })
       }),
     )
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -335,10 +338,11 @@ describe('Guild', () => {
   })
 
   it('shows the icon badge in the header when set, and nothing when unset', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -349,11 +353,12 @@ describe('Guild', () => {
   })
 
   it('shows the icon badge in the header when guild.icon is set', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       ...baseRoutes(),
       '/guilds/g1': { ...guild, icon: 'https://example.com/icon.png' },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -371,7 +376,6 @@ describe('Guild', () => {
   // guild_event_rsvps rows and resolves display names via the batched
   // profiles endpoint.
   it('opens the RSVP roster panel with resolved names when an event card is clicked', async () => {
-    useSessionStore().login('a-token')
     const event = {
       id: 'ev1',
       guild_id: 'g1',
@@ -395,6 +399,8 @@ describe('Guild', () => {
       ],
       '/identities/profiles': [{ identity_id: 'id-owner', display_name: 'Nova' }],
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -423,10 +429,11 @@ describe('Guild', () => {
   // already flipped natively before this handler ran) must snap back to
   // checked rather than being left showing a state that was never applied.
   it("rejects unchecking an owner permission and reverts the checkbox", async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -453,10 +460,11 @@ describe('Guild', () => {
   })
 
   it('creates a role with a description and badge', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -489,10 +497,11 @@ describe('Guild', () => {
   })
 
   it("saves an existing role's description and badge", async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -532,12 +541,13 @@ describe('Guild', () => {
   // rejection any more; a handle that doesn't resolve is just whatever
   // error the server returns.
   it('invites by identity id directly, or resolves a handle first', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       ...baseRoutes(),
       '/guilds/g1/invites': { id: 'inv1', guild_id: 'g1', to: 'id-outsider', status: 'pending' },
       '/friends/handle/Nova': { identity_id: '11111111-2222-3333-4444-555555555555' },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -575,7 +585,6 @@ describe('Guild', () => {
   // non-member), but that must never blank the whole page — only the
   // member-only tabs should disappear.
   it('renders a recruiting guild for a non-member despite 403s on channels/events', async () => {
-    useSessionStore().login('a-token')
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((url: string) => {
@@ -602,6 +611,8 @@ describe('Guild', () => {
         })
       }),
     )
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -626,7 +637,6 @@ describe('Guild', () => {
   // recruiting, #449) sees a read-only Events tab scoped to that guild's
   // public events, with no RSVP controls.
   it('shows only public events, read-only, to a non-member of a public guild', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       ...baseRoutes(),
       '/me': { ...profile, identity_id: 'id-outsider' },
@@ -650,6 +660,8 @@ describe('Guild', () => {
         },
       ],
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -675,7 +687,6 @@ describe('Guild', () => {
   // Issue #463: AvalonRsvpControl pre-selects the caller's own RSVP from
   // EventResponse.my_rsvp, and edit/delete are reachable for a manager.
   it("pre-selects the caller's RSVP and allows editing an event", async () => {
-    useSessionStore().login('a-token')
     const event = {
       id: 'e1',
       guild_id: 'g1',
@@ -692,6 +703,8 @@ describe('Guild', () => {
       details_visible: true,
     }
     mockFetchByPath({ ...baseRoutes(), '/guilds/g1/events': [event] })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -729,7 +742,6 @@ describe('Guild', () => {
   })
 
   it('deletes an event after confirming', async () => {
-    useSessionStore().login('a-token')
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const event = {
       id: 'e1',
@@ -751,6 +763,8 @@ describe('Guild', () => {
       '/guilds/g1/events': [event],
       '/guilds/g1/events/e1': { deleted: true },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds/g1')
@@ -781,10 +795,11 @@ describe('Guild', () => {
   // this same, still-mounted instance reacting to its own `watch(guildId,
   // load)` with a guild id that's really a user id.
   it('navigates to a member profile card when their row is clicked', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -804,10 +819,11 @@ describe('Guild', () => {
   // Issue #449: recruiting and public are independent settings, each with
   // its own toggle in the Settings tab.
   it('toggles the Public setting independently of Recruiting', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })
@@ -832,10 +848,11 @@ describe('Guild', () => {
   })
 
   it('saves a new roster visibility from the Settings tab', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath(baseRoutes())
 
     const router = testRouter()
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
     router.push('/guilds/g1')
     await router.isReady()
     const wrapper = mount(Guild, { global: { plugins: [router] } })

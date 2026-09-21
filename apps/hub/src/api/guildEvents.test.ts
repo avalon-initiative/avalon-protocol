@@ -11,23 +11,23 @@ import {
   totalRsvps,
   validateEventForm,
 } from './guildEvents'
-import type { EventResponse, RsvpRosterEntry } from '@avalon/api-client'
+import type { GuildEvent, RsvpRosterEntry } from '@avalon/sdk'
 
-function makeEvent(overrides: Partial<EventResponse> = {}): EventResponse {
+function makeEvent(overrides: Partial<GuildEvent> = {}): GuildEvent {
   return {
     id: 'e1',
-    guild_id: 'g1',
-    channel_id: null,
+    guildId: 'g1',
+    channelId: null,
     title: 'Raid night',
     description: null,
-    starts_at: '2026-09-10T20:00:00Z',
-    ends_at: null,
-    created_by: 'u1',
-    created_at: '2026-09-01T00:00:00Z',
-    rsvp_counts: { going: 0, maybe: 0, not_going: 0 },
+    startsAt: '2026-09-10T20:00:00Z',
+    endsAt: null,
+    createdBy: 'u1',
+    createdAt: '2026-09-01T00:00:00Z',
+    rsvpCounts: { going: 0, maybe: 0, notGoing: 0 },
     public: false,
-    my_rsvp: null,
-    details_visible: true,
+    myRsvp: null,
+    detailsVisible: true,
     ...overrides,
   }
 }
@@ -94,16 +94,16 @@ describe('validateEventForm', () => {
 describe('sortByStartsAt', () => {
   it('sorts soonest first', () => {
     const events = [
-      makeEvent({ id: 'later', starts_at: '2026-09-12T00:00:00Z' }),
-      makeEvent({ id: 'sooner', starts_at: '2026-09-10T00:00:00Z' }),
+      makeEvent({ id: 'later', startsAt: '2026-09-12T00:00:00Z' }),
+      makeEvent({ id: 'sooner', startsAt: '2026-09-10T00:00:00Z' }),
     ]
     expect(sortByStartsAt(events).map((e) => e.id)).toEqual(['sooner', 'later'])
   })
 
   it('does not mutate the input array', () => {
     const events = [
-      makeEvent({ id: 'later', starts_at: '2026-09-12T00:00:00Z' }),
-      makeEvent({ id: 'sooner', starts_at: '2026-09-10T00:00:00Z' }),
+      makeEvent({ id: 'later', startsAt: '2026-09-12T00:00:00Z' }),
+      makeEvent({ id: 'sooner', startsAt: '2026-09-10T00:00:00Z' }),
     ]
     sortByStartsAt(events)
     expect(events.map((e) => e.id)).toEqual(['later', 'sooner'])
@@ -114,12 +114,12 @@ describe('splitUpcoming', () => {
   const now = new Date('2026-09-10T12:00:00Z')
 
   it('buckets by ends_at when present, falling back to starts_at', () => {
-    const upcoming = makeEvent({ id: 'upcoming', starts_at: '2026-09-11T00:00:00Z' })
-    const past = makeEvent({ id: 'past', starts_at: '2026-09-01T00:00:00Z' })
+    const upcoming = makeEvent({ id: 'upcoming', startsAt: '2026-09-11T00:00:00Z' })
+    const past = makeEvent({ id: 'past', startsAt: '2026-09-01T00:00:00Z' })
     const endedButStartedBefore = makeEvent({
       id: 'still-going',
-      starts_at: '2026-09-10T10:00:00Z',
-      ends_at: '2026-09-10T13:00:00Z',
+      startsAt: '2026-09-10T10:00:00Z',
+      endsAt: '2026-09-10T13:00:00Z',
     })
     const result = splitUpcoming([upcoming, past, endedButStartedBefore], now)
     expect(result.upcoming.map((e) => e.id).sort()).toEqual(['still-going', 'upcoming'])
@@ -129,7 +129,7 @@ describe('splitUpcoming', () => {
 
 describe('totalRsvps', () => {
   it('sums all three statuses', () => {
-    const event = makeEvent({ rsvp_counts: { going: 3, maybe: 1, not_going: 2 } })
+    const event = makeEvent({ rsvpCounts: { going: 3, maybe: 1, notGoing: 2 } })
     expect(totalRsvps(event)).toBe(6)
   })
 })
@@ -176,19 +176,19 @@ describe('toLocalDateTimeInput', () => {
 describe('groupRsvpRoster', () => {
   function makeEntry(overrides: Partial<RsvpRosterEntry> = {}): RsvpRosterEntry {
     return {
-      identity_id: 'id-1',
+      identityId: 'id-1',
       status: 'going',
-      responded_at: '2026-09-10T20:00:00Z',
+      respondedAt: '2026-09-10T20:00:00Z',
       ...overrides,
     }
   }
 
   it('buckets resolved display names by status, in going/maybe/not_going order', () => {
     const entries = [
-      makeEntry({ identity_id: 'id-1', status: 'going' }),
-      makeEntry({ identity_id: 'id-2', status: 'maybe' }),
-      makeEntry({ identity_id: 'id-3', status: 'not_going' }),
-      makeEntry({ identity_id: 'id-4', status: 'going' }),
+      makeEntry({ identityId: 'id-1', status: 'going' }),
+      makeEntry({ identityId: 'id-2', status: 'maybe' }),
+      makeEntry({ identityId: 'id-3', status: 'not_going' }),
+      makeEntry({ identityId: 'id-4', status: 'going' }),
     ]
     const namesById = {
       'id-1': 'Rowan#1234',
@@ -205,7 +205,7 @@ describe('groupRsvpRoster', () => {
   })
 
   it('falls back to the raw identity id when no name has resolved yet', () => {
-    const entries = [makeEntry({ identity_id: 'unresolved-id', status: 'going' })]
+    const entries = [makeEntry({ identityId: 'unresolved-id', status: 'going' })]
     const groups = groupRsvpRoster(entries, {})
     expect(groups.find((g) => g.status === 'going')?.names).toEqual(['unresolved-id'])
   })
