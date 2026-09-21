@@ -174,3 +174,62 @@ describe('a signed call round trip', () => {
     }
   })
 })
+
+describe('AccountSession.attachSigningKey', () => {
+  it('resolves the matching signing_key_id and enables auto-signing', async () => {
+    const identity = testIdentity()
+    const { secretKey, publicKey } = generateSigningKey()
+    const publicKeyB64 = btoa(String.fromCharCode(...publicKey))
+    const signingKeyId = crypto.randomUUID()
+    const session = new AccountSession({
+      identity,
+      profile: testProfile(identity.id),
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'test-token',
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify([
+          { id: crypto.randomUUID(), public_key: 'some-other-key' },
+          { id: signingKeyId, public_key: publicKeyB64 },
+        ]),
+        { status: 200 },
+      )) as typeof fetch
+
+    try {
+      expect(session.signingKeyId()).toBeUndefined()
+      const attached = await session.attachSigningKey(secretKey)
+      expect(attached).toBe(true)
+      expect(session.signingKeyId()).toBe(signingKeyId)
+
+      const signed = session.sign('guild.transfer_ownership', ['g1', 'from1', 'to1'])
+      expect(signed.signing_key_id).toBe(signingKeyId)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('returns false and leaves signing state unchanged when the key was never registered server-side', async () => {
+    const identity = testIdentity()
+    const { secretKey } = generateSigningKey()
+    const session = new AccountSession({
+      identity,
+      profile: testProfile(identity.id),
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'test-token',
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify([]), { status: 200 })) as typeof fetch
+
+    try {
+      const attached = await session.attachSigningKey(secretKey)
+      expect(attached).toBe(false)
+      expect(session.signingKeyId()).toBeUndefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})

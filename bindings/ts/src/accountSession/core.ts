@@ -23,7 +23,13 @@
 // method signatures into the `AccountSession` interface below via
 // `declare module`.
 import { request } from '../http.js'
-import { canonicalMessage, sign as ed25519Sign, bytesToBase64, type SignatureFields } from '../crypto/signing.js'
+import {
+  canonicalMessage,
+  sign as ed25519Sign,
+  bytesToBase64,
+  publicKeyFromSecretKey,
+  type SignatureFields,
+} from '../crypto/signing.js'
 import { mintContinuationToken } from '../crypto/continuation.js'
 import { fromMeResponse, type Identity, type Profile, type MeResponseWire, type DeviceRowWire } from '../types.js'
 import { NoLocalSigningKeyError } from '../errors.js'
@@ -99,6 +105,25 @@ export class AccountSession {
    * built via `register`/`login` themselves. */
   credentials(): AccountCredentials | undefined {
     return this._credentials
+  }
+
+  /** Attaches a locally-held Ed25519 secret key to this already-built
+   * session in place — for the "this browser has no signing key stored
+   * for me yet" recovery path (issue #134's mnemonic-derived key, or any
+   * other out-of-band way a caller obtained the identity's secret key),
+   * distinct from constructing a whole new session the way
+   * `AvalonClient.resumeAccountSessionWithSigningKey` does. Resolves the
+   * key's server-side `identity_signing_keys.id` the same way (`GET
+   * /me/devices`, matched by public key) — returns `true` if a match was
+   * found and every signature-required method now signs automatically,
+   * `false` (leaving this session's signing state unchanged) if this key
+   * was never actually registered server-side for this identity. */
+  async attachSigningKey(secretKey: Uint8Array): Promise<boolean> {
+    const publicKey = publicKeyFromSecretKey(secretKey)
+    const signingKeyId = await findOwnSigningKeyId(this._serverUrl, this._token, bytesToBase64(publicKey))
+    if (!signingKeyId) return false
+    this._signing = { secretKey, publicKey, signingKeyId }
+    return true
   }
 
   /** Re-fetches `GET /me` and updates `identity()`/`profile()` in place. */

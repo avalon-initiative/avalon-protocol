@@ -805,6 +805,33 @@ protocol and the domain model in `crates/protocol`; they never pull in
       `apps/hub/src/network/verifyNetwork.ts` (issue #232) keeps its STH-
       based network-trust verification logic — this only supplies the
       fetch and the wire shape.
+    - `bindings/ts/src/crypto/mnemonic.ts` + `AvalonClient.registerWithMnemonic`/
+      `AccountSession.attachSigningKey` — found scoping the *next* stage
+      (the actual Hub migration), not in the original stage-1 pass:
+      `AvalonClient.register()` generated a purely random signing key with
+      no recovery phrase at all, which would have silently dropped a real,
+      already-shipping feature (`packages/api-client`'s `createIdentity`,
+      issue #134's BIP39-mnemonic disaster-recovery fallback) had Hub
+      migrated onto it as-is. `deriveSigningKeyFromMnemonic`/
+      `generateMnemonicSigningKey`/`isValidMnemonic` reimplement
+      `packages/api-client/src/crypto/signingKey.ts`'s derivation exactly
+      (same `DERIVATION_LABEL`, same BIP39-seed-then-SHA256 scheme) — a
+      phrase recovered through this SDK derives the identical key a
+      Hub user already has. `registerWithMnemonic` is `register()`'s
+      mnemonic-backed sibling, returning `{ session, mnemonic }`;
+      `AccountSession.attachSigningKey(secretKey)` resolves an
+      already-derived key's server-side `signing_key_id` (`GET
+      /me/devices`, matched by public key) and attaches it to an
+      *already-built* session in place — the "this browser has no signing
+      key stored for me, the user just typed their recovery phrase" path,
+      distinct from constructing a whole new session. Storage of the
+      phrase/key stays Hub's own concern, same as every other credential-
+      persistence decision in this SDK. Unit-tested
+      (`crypto/mnemonic.test.ts`, `accountSession/core.test.ts`); not
+      live-tested, same already-documented gap `register()`/`login()`
+      have (no WebAuthn-ceremony-driving authenticator available in
+      Node/vitest) — `registerWithMnemonic` shares that ceremony step, so
+      inherits the same limitation rather than introducing a new one.
     - **Unit tests**: `crypto/continuation.test.ts` covers the wire format
       byte-for-byte (mirroring `packages/api-client/src/crypto/
       continuation.test.ts`'s own test style: prefix, field shapes, exact

@@ -26,7 +26,9 @@ import {
   base64ToBytes,
   sign as ed25519Sign,
   identityCreatedSigningBytes,
+  type SigningKeyPair,
 } from './crypto/signing.js'
+import { generateMnemonicSigningKey } from './crypto/mnemonic.js'
 import { authenticate as authenticateIntegrator, type AuthenticateOptions, type IntegratorSession } from './integratorSession.js'
 
 export interface AvalonClientConfig {
@@ -63,8 +65,35 @@ export class AvalonClient {
    * bearer token. `session.credentials()` carries what `login()` needs to
    * log back into this same identity later. */
   async register(displayName: string, deviceLabel?: string): Promise<AccountSession> {
+    return this.registerWithKeyPair(displayName, deviceLabel, generateSigningKey())
+  }
+
+  /** Same as `register()`, but the event-signing key is deterministically
+   * derived from a fresh BIP39 recovery phrase (issue #134) rather than
+   * generated purely at random — the same disaster-recovery fallback
+   * `packages/api-client`'s `createIdentity` already gives Hub's users
+   * today. Returns the phrase alongside the session so the caller can
+   * show it to the user exactly once; this SDK never persists it
+   * anywhere. Use `deriveSigningKeyFromMnemonic`/`isValidMnemonic`
+   * (`crypto/mnemonic.js`) later to re-derive the same key from a saved
+   * phrase — e.g. via `AccountSession`'s own signing-key resolution, not
+   * a second registration. */
+  async registerWithMnemonic(
+    displayName: string,
+    deviceLabel?: string,
+  ): Promise<{ session: AccountSession; mnemonic: string }> {
+    const { mnemonic, ...keyPair } = generateMnemonicSigningKey()
+    const session = await this.registerWithKeyPair(displayName, deviceLabel, keyPair)
+    return { session, mnemonic }
+  }
+
+  private async registerWithKeyPair(
+    displayName: string,
+    deviceLabel: string | undefined,
+    keyPair: SigningKeyPair,
+  ): Promise<AccountSession> {
     const identityId = crypto.randomUUID()
-    const { secretKey, publicKey } = generateSigningKey()
+    const { secretKey, publicKey } = keyPair
     const eventSigningPublicKey = bytesToBase64(publicKey)
 
     const start = await request<RegisterStartResponseWire>(this.serverUrl, '/identities/register/start', {
