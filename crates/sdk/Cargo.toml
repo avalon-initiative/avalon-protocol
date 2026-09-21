@@ -34,6 +34,16 @@ base64.workspace = true
 rand.workspace = true
 # Hex-decoding trust-anchor verify keys and STH signatures (issue #482).
 hex.workspace = true
+# `AccountSession` (#699) drives a real WebAuthn registration/login
+# ceremony client-side against a virtual authenticator — the same
+# `testable`-feature approach `crates/cli/src/dev_tools.rs` already proved
+# for `avalon create-identity`/`avalon login`, now a runtime dependency of
+# this crate rather than only a dev-dependency of its own tests.
+passkey-types.workspace = true
+passkey-client.workspace = true
+passkey-authenticator.workspace = true
+coset = "0.4"
+url.workspace = true
 
 [features]
 # Exposes Session::grant_for_testing, a capability-grant escape hatch that
@@ -46,8 +56,4 @@ avalon-sdk = { path = ".", features = ["test-util"] }
 tokio.workspace = true
 sqlx.workspace = true
 rand.workspace = true
-passkey-types.workspace = true
-passkey-client.workspace = true
-passkey-authenticator.workspace = true
-url.workspace = true
 wiremock.workspace = true

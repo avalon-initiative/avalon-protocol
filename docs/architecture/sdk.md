@@ -435,6 +435,80 @@ protocol and the domain model in `crates/protocol`; they never pull in
   seeding the identity's real Ed25519 keypair directly into
   `indexer_identity_signing_keys` rather than a WebAuthn ceremony, since
   that's the one table cross-node-login verification actually reads.
+- `crates/sdk/src/account/` (issue #699, on top of #696's decision and
+  #697/#698's action-tier classification/enforcement) — `AccountSession`, a
+  second, entirely separate session type alongside the integrator `Session`
+  documented above: a first-party client for an identity's own account
+  (registration, login, recovery, passkeys, devices, full guild
+  administration, friends/blocks/presence/discovery, conversations, and
+  integrator connect/consent — the full surface `packages/api-client`
+  exposes to Hub). No `From`/`Into` exists between `Session` and
+  `AccountSession` in either direction, and no `AccountSession`
+  constructor accepts an integrator credential anywhere in its
+  signature — #696's hard invariant holds at the type level.
+  - Obtained via three entry points on `AvalonClient`, none of them
+    `authenticate()`: `register(display_name)` drives a real WebAuthn
+    registration ceremony against a virtual (software-only) authenticator
+    (`account::webauthn`, the same `passkey-authenticator`/`passkey-client`
+    `testable`-feature approach `crates/cli/src/dev_tools.rs::create_identity`
+    already proved — duplicated rather than factored into a shared crate,
+    a deliberate scoping call for #699 given how small the ceremony-driving
+    code is), generates a fresh Ed25519 event-signing key locally, then
+    immediately logs the new identity in (`register/finish` itself returns
+    only the new `identity_id`, not a bearer token) so the returned session
+    is immediately usable; `account_login(&AccountCredentials)` logs back
+    into an identity `register` already created, replaying the same
+    virtual-authenticator passkey; `resume_account_session(token)` /
+    `resume_account_session_with_signing_key(token, seed)` wrap an
+    already-minted bearer token, mirroring how Hub resumes a persisted
+    session (the `_with_signing_key` variant also resolves this device's
+    `identity_signing_keys.id` via `GET /me/devices`, matched by public
+    key, so signature-required methods keep signing automatically after a
+    resume).
+  - Every action #697 flags as signature-required signs itself
+    automatically with `AccountSession::sign` — the caller never
+    hand-constructs `signing_key_id`/`signature`. For the conditionally-
+    signed endpoints (last-passkey revoke, guardian removal/threshold-
+    raise, escalating member-role change), this crate signs
+    unconditionally rather than replicating the server's own condition
+    client-side — an unused-but-valid signature is harmless, the same
+    simplification the Hub frontend already made wiring up #698. A session
+    built via `resume_account_session` (token only, no local key) sends
+    those requests unsigned; the server's own
+    `NO_REGISTERED_SIGNING_KEY`/`FRESH_SIGNATURE_REQUIRED` split
+    (`crates/server/src/signature_gate.rs`) surfaces the real problem.
+  - Split into one file per domain, mirroring `guilds.rs`/`social.rs`'s
+    existing "impl blocks grouped by concern" convention, just for
+    `AccountSession` instead of `Session`: `passkeys.rs`, `devices.rs`
+    (signing-key devices, device grants, and cross-device pairing
+    approval — #704's `POST /auth/device/approve` gap included),
+    `recovery.rs`, `social.rs` (friends/blocks/presence/discovery/handle
+    resolution/history), `conversations.rs`, `guild_admin.rs` (the large
+    one: creation, roles, permission overrides, ownership transfer,
+    membership/invites/join-requests, channels/chat, events/RSVP,
+    favorite-integrators), and `integrations.rs` (connect/disconnect/
+    grants/`GET /me/connections`). `mod.rs` holds the type itself, the
+    shared signing/HTTP-call helpers every submodule's methods use, and
+    the three `AvalonClient` entry-point methods.
+  - `docs/architecture/identity.md`'s canonical
+    `avalon:<action_tag>:v1:<field>:<field>:...` format and per-endpoint
+    `action_tag`/field table (the #697/#698 section) is reused byte-for-
+    byte — `account::canonical_message` is unit-tested directly against
+    that exact shape, and `crates/sdk/tests/account_session.rs` (live,
+    `--ignored`) proves the auto-minted signature actually verifies
+    server-side end to end (register -> a signature-required guild-role
+    creation).
+  - Known gaps, scoped out of #699 deliberately: `ProfileUpdate` doesn't
+    yet expose `main_guild`/`discoverable`/`presence_visibility` (three of
+    `PATCH /me`'s less commonly touched fields); the unauthenticated
+    recovery-initiation calls (`POST /recovery/requests/start`/`finish`,
+    `GET /recovery/requests/{id}`, `GET /identities/{id}/recovery/status`
+    — deliberately callable with *no* session, since the whole premise is
+    the caller has none for the identity being recovered) aren't wrapped
+    yet, since they don't belong on `AccountSession` at all and weren't
+    this ticket's focus; `AccountSession` has no `subscribe_presence`/chat
+    websocket methods the way `Session` does (issue #136/#438's live-push
+    surface), read-only point-in-time polling only.
 
 ## Decisions and tickets
 
