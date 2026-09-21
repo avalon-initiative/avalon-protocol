@@ -30,10 +30,26 @@ need undoing later.
 
 ## Languages
 
+Implemented first, in shipping order:
+
 | Language | Folder | Status (2026-09-21) |
 |---|---|---|
 | Rust (`crates/sdk`) | [`rust/`](rust/README.md) | Reference implementation. Real, live-tested; friends/presence/guilds/conversations work end to end against a live server; achievement issuance still returns `NotImplemented`. |
 | C# (`bindings/csharp/AvalonSdk`, netstandard2.1, Unity-targeted) | [`csharp/`](csharp/README.md) | Real, building, tested — 52+ passing tests including opt-in live ones. The priority developer-facing surface, since it's what most integrating game studios will actually use. |
+| TypeScript (`bindings/ts`) | [`typescript/`](typescript/README.md) | Real and shipped (#701), browser-facing — drives a real WebAuthn ceremony. Also what `apps/hub` is actively migrating onto (epic #712), so it's exercised by a real production frontend, not only its own test suite. |
+
+Not yet started — listed so "is there an SDK for X?" has a real answer
+instead of silence. None of these are planned on any timeline; each gets
+built only once an actual integration needs it, same posture the SDK
+design doc takes toward every language below this line:
+
+| Language | Status |
+|---|---|
+| Go | Not yet |
+| Python | Not yet |
+| C++ | Not yet |
+| Java / Kotlin | Not yet |
+| Swift | Not yet |
 
 More languages get a subfolder here as they're added, not a new top-level
 project.
@@ -45,6 +61,7 @@ project.
 | Building a game/app/service and need to pick an SDK | The table above — pick your language |
 | Using Rust | [`rust/for-developers/getting-started.md`](rust/for-developers/getting-started.md) |
 | Using C#/Unity | [`csharp/README.md`](csharp/README.md) |
+| Using TypeScript/browser | [`typescript/README.md`](typescript/README.md) |
 | Wondering if I should build on Avalon at all | [`rust/for-developers/WhyBuildOnAvalon.md`](rust/for-developers/WhyBuildOnAvalon.md) — language-agnostic pitch, just filed under the Rust guide since that's the only one with a full guide today |
 | Looking for the shared design reference — capability grants, error taxonomy, why SDKs are shaped this way, regardless of language | [`architecture/sdk.md`](architecture/sdk.md) |
 | Wondering what's actually on the other end of these calls | [`../backend-server/README.md`](../backend-server/README.md) |
@@ -57,6 +74,8 @@ project.
 - [`rust/`](rust/README.md) — the Rust SDK, reference implementation, with
   a full developer guide.
 - [`csharp/`](csharp/README.md) — the C# SDK for Unity/game developers.
+- [`typescript/`](typescript/README.md) — the TypeScript SDK for
+  browser-facing integrations, and what `apps/hub` is migrating onto.
 
 ## Related projects
 

@@ -32,7 +32,7 @@ themselves.
 | Project | What it is |
 |---|---|
 | [`projects/backend-server/`](projects/backend-server/README.md) | The network itself — identity, social graph, guilds, achievements, settlement. What everything else talks to. |
-| [`projects/sdks/`](projects/sdks/README.md) | Every official SDK (Rust, C#), one per language, one language-agnostic design reference. |
+| [`projects/sdks/`](projects/sdks/README.md) | Every official SDK (Rust, C#, TypeScript), one per language, one language-agnostic design reference. |
 | [`projects/cli/`](projects/cli/README.md) | `avalon`, the local dev/ops CLI. |
 | [`projects/hub/`](projects/hub/README.md) | The web client — a user's first doorway into Avalon. |
 | [`projects/mobile-hub/`](projects/mobile-hub/README.md) | The Tauri desktop/mobile shell around the Hub UI. |
