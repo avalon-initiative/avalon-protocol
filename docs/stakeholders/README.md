@@ -15,5 +15,5 @@ There's no pitch-oriented summary, roadmap-status page, or risk assessment
 written for this audience specifically yet — once there's traction to report
 (adoption, a working milestone-1 demo, real integration partners), that
 belongs here alongside the Proposal above. The normative architecture
-reference lives at [`../architecture/`](../architecture/README.md) if a
+reference lives at [`../architecture/`](../projects/backend-server/architecture/README.md) if a
 technical evaluation needs the invariants rather than the narrative.

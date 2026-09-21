@@ -118,7 +118,7 @@ digital ID system, and it is not on a path to becoming one.** An Avalon
 identity identifies a keypair, not a person — there is no name, government
 ID, biometric, or any other real-world identifier anywhere in it, by
 construction, not by policy. See
-[`architecture/identity.md`](architecture/identity.md#what-identity-is-not)
+[`projects/backend-server/architecture/identity.md`](projects/backend-server/architecture/identity.md#what-identity-is-not)
 for the technical detail. The heavy commitment to decentralization
 throughout this protocol — no validator set, no platform owning identity, no
 single operator anyone could compel — is a large part of *why*: not one

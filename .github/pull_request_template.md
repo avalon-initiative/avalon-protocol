@@ -15,5 +15,5 @@ Closes #<!-- omit only for [noissue]/[hotfix]/[security] titles -->
 ## Checklist
 
 - [ ] Checks pass (or I noted why not)
-- [ ] Docs updated if behavior changed (`docs/architecture/` and/or `docs/stakeholders/Proposal.md`)
+- [ ] Docs updated if behavior changed (the relevant `docs/projects/*/architecture/` and/or `docs/stakeholders/Proposal.md`)
 - [ ] I ran `/claim` on the linked issue before starting this work
