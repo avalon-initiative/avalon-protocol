@@ -7,7 +7,7 @@ import {
   sortAchievements,
 } from './achievements'
 import type { Achievement } from './achievements'
-import type { AttestationResponse } from '@avalon/api-client'
+import type { Attestation } from '@avalon/sdk'
 
 describe('parseIssuerSlug', () => {
   it('extracts the slug from a two-part issuer ref', () => {
@@ -41,15 +41,15 @@ describe('parseAchievementRef', () => {
   })
 })
 
-function attestation(overrides: Partial<AttestationResponse> = {}): AttestationResponse {
+function attestation(overrides: Partial<Attestation> = {}): Attestation {
   return {
     id: 'a1',
     issuer: 'game:ashen-realms',
     subject: 'user-1',
     achievement: 'game:ashen-realms:achievement:dragon_slayer',
-    issued_at: '2027-03-14T00:00:00Z',
-    proof: { key_id: 'k1', algorithm: 'ed25519' },
-    authenticity: { status: 'authentic', key_id: 'k1' },
+    issuedAt: '2027-03-14T00:00:00Z',
+    proof: { keyId: 'k1', algorithm: 'ed25519' },
+    authenticity: { status: 'authentic', keyId: 'k1' },
     validity: { status: 'valid' },
     history: [{ event: 'issued', at: '2027-03-14T00:00:00Z' }],
     ...overrides,
@@ -110,7 +110,7 @@ describe('mergeAchievement', () => {
         validity: { status: 'invalid', reason: 'attestation has been revoked' },
         history: [
           { event: 'issued', at: '2027-03-14T00:00:00Z' },
-          { event: 'revoked', at: '2027-05-02T00:00:00Z', reason_code: 'cheating_detected', reason: 'cheated' },
+          { event: 'revoked', at: '2027-05-02T00:00:00Z', reasonCode: 'cheating_detected', reason: 'cheated' },
         ],
       }),
     )

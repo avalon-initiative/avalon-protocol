@@ -14,7 +14,7 @@ import {
   sortAchievements,
 } from '../api/achievements'
 import type { Achievement, AchievementSort } from '../api/achievements'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Achievements.module.scss'
 
@@ -38,9 +38,10 @@ const selectedIntegrator = ref('')
 let pollHandle: ReturnType<typeof setInterval> | undefined
 
 async function refresh() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    achievements.value = await listMyAchievements(session.token)
+    achievements.value = await listMyAchievements(s)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   }

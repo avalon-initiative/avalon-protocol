@@ -102,5 +102,6 @@ declare module './core.js' {
 
 AccountSession.prototype.getMyAchievements = async function (this: AccountSession): Promise<Attestation[]> {
   const w = await this.get<ListMyAchievementsResponseWire>('/me/achievements?limit=200')
+  if (!Array.isArray(w?.achievements)) return w as unknown as Attestation[]
   return w.achievements.map(attestationFromWire)
 }

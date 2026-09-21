@@ -9,8 +9,9 @@
 // — matching ADR #77's "the Hub renders verification results, it never
 // computes trust or rank" rule.
 import type { AchievementIconName } from '@avalon/ui'
-import * as api from '@avalon/api-client'
-import type { AttestationHistoryEntryResponse, AttestationResponse } from '@avalon/api-client'
+import { getIntegrator, listAchievementDefinitions, listMilestoneDefinitions } from '@avalon/sdk'
+import type { AccountSession, Attestation, AttestationHistoryEntry as AttestationHistoryEntryWire } from '@avalon/sdk'
+import { getServerUrl } from './serverUrl'
 
 // `issuer` on the wire is "<namespace>:<slug>" (crates/server/src/achievements.rs's
 // `issuer_str`), never a full GlobalId with a trailing kind/verb.
@@ -39,8 +40,8 @@ export interface AchievementHistoryEntry {
   reason?: string
 }
 
-function mergeHistoryEntry(entry: AttestationHistoryEntryResponse): AchievementHistoryEntry {
-  return { event: entry.event, at: entry.at, reasonCode: entry.reason_code, reason: entry.reason }
+function mergeHistoryEntry(entry: AttestationHistoryEntryWire): AchievementHistoryEntry {
+  return { event: entry.event, at: entry.at, reasonCode: entry.reasonCode, reason: entry.reason }
 }
 
 // #332's fixed built-in set — kept in sync with packages/ui's own
@@ -89,7 +90,7 @@ export interface AchievementDefinitionSummary {
 }
 
 export function mergeAchievement(
-  attestation: AttestationResponse,
+  attestation: Attestation,
   issuerNameBySlug: Map<string, string> = new Map(),
   achievementByRef: Map<string, AchievementDefinitionSummary> = new Map(),
 ): Achievement {
@@ -103,21 +104,24 @@ export function mergeAchievement(
     achievementIconUrl: definition?.iconUrl,
     issuerSlug,
     issuerName: issuerNameBySlug.get(issuerSlug),
-    issuedAt: attestation.issued_at,
+    issuedAt: attestation.issuedAt,
     status: attestation.validity.status,
     invalidReason: attestation.validity.reason,
     history: attestation.history.map(mergeHistoryEntry),
   }
 }
 
-export async function listMyAchievements(token: string): Promise<Achievement[]> {
-  const { achievements: attestations } = await api.getMyAchievements(token)
-  if (attestations.length === 0) {
+export async function listMyAchievements(session: AccountSession): Promise<Achievement[]> {
+  const attestations = await session.getMyAchievements()
+  if (!Array.isArray(attestations) || attestations.length === 0) {
     return []
   }
 
+  const serverUrl = getServerUrl()
   const issuerSlugs = [...new Set(attestations.map((a) => parseIssuerSlug(a.issuer) ?? a.issuer))]
-  const integratorsLookup = Promise.all(issuerSlugs.map((slug) => api.getIntegratorPublic(slug).catch(() => null)))
+  const integratorsLookup = Promise.all(
+    issuerSlugs.map((slug) => getIntegrator(serverUrl, slug).catch(() => null)),
+  )
 
   // One definitions-list call per distinct (namespace, slug) pair rather
   // than per attestation — a user with many claims from the same issuer
@@ -128,8 +132,8 @@ export async function listMyAchievements(token: string): Promise<Achievement[]> 
   const definitionsLookup = Promise.all(
     [...uniqueIssuers.values()].map((r) =>
       (r.namespace === 'game'
-        ? api.listAchievementDefinitions(r.slug)
-        : api.listMilestoneDefinitions(r.slug)
+        ? listAchievementDefinitions(serverUrl, r.slug)
+        : listMilestoneDefinitions(serverUrl, r.slug)
       ).catch(() => []),
     ),
   )
@@ -145,7 +149,7 @@ export async function listMyAchievements(token: string): Promise<Achievement[]> 
   definitionLists
     .flat()
     .forEach((def) =>
-      achievementByRef.set(def.id, { name: def.name, icon: def.icon, iconUrl: def.icon_url }),
+      achievementByRef.set(def.id, { name: def.name, icon: def.icon, iconUrl: def.iconUrl }),
     )
 
   return attestations.map((a) => mergeAchievement(a, issuerNameBySlug, achievementByRef))

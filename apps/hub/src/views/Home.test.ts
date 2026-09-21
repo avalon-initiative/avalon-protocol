@@ -5,7 +5,6 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Home from './Home.vue'
-import { useSessionStore as useOldSessionStore } from '@avalon/api-client'
 import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
@@ -45,13 +44,8 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
-// Home.vue itself (display name, history) hasn't migrated off
-// @avalon/api-client yet — only useFriendsPresence/useMyGuilds (#712's own
-// earlier work) have — so this still needs both stores populated until
-// Home.vue's own migration batch (#712 batch 4/7) lands. `mockFetchByPath`
-// must already be stubbed before this runs.
-async function loginBothSessions() {
-  useOldSessionStore().login('a-token')
+// `mockFetchByPath` must already be stubbed before this runs.
+async function loginSession() {
   localStorage.setItem('avalon:session:token', 'a-token')
   await useSessionStore().initialize()
 }
@@ -66,7 +60,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/')
@@ -84,7 +78,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/')
@@ -115,7 +109,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/')
@@ -168,7 +162,7 @@ describe('Home', () => {
         { id: 'msg-1', channel_id: 'chan-1', author: 'id-2', body: "Let's run the dungeon tonight!", sent_at: new Date().toISOString() },
       ],
     })
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/')

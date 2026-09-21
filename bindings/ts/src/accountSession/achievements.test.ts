@@ -103,4 +103,24 @@ describe('AccountSession.getMyAchievements', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('passes through a malformed (non-array-achievements) body instead of crashing on it', async () => {
+    const identity = testIdentity()
+    const session = new AccountSession({
+      identity,
+      profile: testProfile(identity.id),
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'test-token',
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify(null), { status: 200 })) as typeof fetch
+
+    try {
+      const result = await session.getMyAchievements()
+      expect(result).toBeNull()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })

@@ -7,14 +7,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard, AvalonIcon, AvalonPresenceBadge } from '@avalon/ui'
-import { getMe, getMyHistory } from '@avalon/api-client'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
-import type { HistoryEntryResponse } from '@avalon/api-client'
+import type { HistoryEntry } from '@avalon/sdk'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useMyGuilds } from '../composables/useMyGuilds'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useLatestGuildMessages } from '../composables/useLatestGuildMessages'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import styles from '../styles/Home.module.scss'
 
 const RECENT_ACTIVITY_LIMIT = 6
@@ -41,19 +40,17 @@ const featuredIntegrator = computed(() =>
 )
 
 const displayName = ref('')
-const recentActivity = ref<HistoryEntryResponse[]>([])
+const recentActivity = ref<HistoryEntry[]>([])
 const loading = ref(true)
 const error = ref('')
 
 onMounted(async () => {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const [profile, history] = await Promise.all([
-      getMe(session.token),
-      getMyHistory(session.token),
-    ])
-    displayName.value = profile.display_name
-    recentActivity.value = history.slice(0, RECENT_ACTIVITY_LIMIT)
+    displayName.value = s.profile().displayName
+    const history = await s.history()
+    recentActivity.value = (Array.isArray(history) ? history : []).slice(0, RECENT_ACTIVITY_LIMIT)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -142,7 +139,7 @@ const quickActions = [
             No activity yet — your history starts as soon as the network processes your first event.
           </p>
           <ul v-else :class="styles.activityList">
-            <li v-for="entry in recentActivity" :key="entry.event_id" :class="styles.activityEntry">
+            <li v-for="entry in recentActivity" :key="entry.eventId" :class="styles.activityEntry">
               <span :class="styles.activityIcon"><AvalonIcon name="activity" :size="16" /></span>
               <span :class="styles.activitySummary">{{ summarizeActivityEntry(entry) }}</span>
               <time :class="styles.activityTime" :datetime="entry.timestamp">

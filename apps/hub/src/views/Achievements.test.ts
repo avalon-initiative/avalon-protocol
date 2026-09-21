@@ -5,7 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Achievements from './Achievements.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
@@ -15,6 +15,14 @@ function testRouter() {
   })
 }
 
+const profile = {
+  identity_id: 'id-self',
+  identity_created_at: 'now',
+  display_name: 'Nova',
+  avatar_url: null,
+  discoverable: false,
+}
+
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
@@ -22,9 +30,10 @@ beforeEach(() => {
 
 describe('Achievements', () => {
   it('polls GET /me/achievements for updates without a manual reload', async () => {
-    useSessionStore().login('a-token')
     vi.useFakeTimers()
-    mockFetchByPath({ '/me/achievements': { achievements: [], next_cursor: null } })
+    mockFetchByPath({ '/me': profile, '/me/achievements': { achievements: [], next_cursor: null } })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useSessionStore().initialize()
 
     const router = testRouter()
     router.push('/')

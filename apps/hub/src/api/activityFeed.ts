@@ -1,7 +1,7 @@
 // Turns a raw HistoryEntryResponse (issue #121) into something an actual
 // user would want to read — issue #146. Kept as pure functions, testable
 // without mounting Activity.vue: given an event, what should the feed say.
-import type { HistoryEntryResponse } from '@avalon/api-client'
+import type { HistoryEntry } from '@avalon/sdk'
 
 // `payload` comes back as `unknown` — every accessor here checks its own
 // shape rather than assuming, so a malformed or future-shaped payload never
@@ -19,7 +19,7 @@ function stringField(payload: unknown, key: string): string | undefined {
  * (this list will keep growing as more event kinds ship — #82) fall back to
  * the raw `kind` string rather than throwing or rendering nothing.
  */
-export function summarizeActivityEntry(entry: HistoryEntryResponse): string {
+export function summarizeActivityEntry(entry: HistoryEntry): string {
   switch (entry.kind) {
     case 'identity.created':
       return 'You created your identity.'

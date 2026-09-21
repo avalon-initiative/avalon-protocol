@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { formatActivityTimestamp, summarizeActivityEntry } from './activityFeed'
-import type { HistoryEntryResponse } from '@avalon/api-client'
+import type { HistoryEntry } from '@avalon/sdk'
 
-function makeEntry(kind: string, payload: unknown = {}): HistoryEntryResponse {
+function makeEntry(kind: string, payload: unknown = {}): HistoryEntry {
   return {
-    event_id: 'evt-1',
+    eventId: 'evt-1',
     kind,
     subject: 'identity:id-1:self:test',
     payload,
