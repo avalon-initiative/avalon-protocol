@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getIntegrator, listIntegrators, listIssuerKeys, listAchievementDefinitions } from './integratorDirectory.js'
+import { getIntegrator, listIntegrators, listIssuerKeys, listAchievementDefinitions } from '../src/integratorDirectory.js'
 
 const originalFetch = globalThis.fetch
 

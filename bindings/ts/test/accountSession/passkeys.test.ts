@@ -5,12 +5,12 @@ const runRegistrationCeremonyMock = vi.fn<(options: unknown) => Promise<Registra
 
 // Mocking the resolved submodule, rather than this package's own barrel,
 // is what actually intercepts the internal call passkeys.ts makes.
-vi.mock('../crypto/webauthn.js', () => ({
+vi.mock('../../src/crypto/webauthn.js', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
 }))
 
-import { AccountSession } from './core.js'
-import './passkeys.js'
+import { AccountSession } from '../../src/accountSession/core.js'
+import '../../src/accountSession/passkeys.js'
 
 function testProfile(identityId: string) {
   return {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getIdentityIntegratorData } from './identityData.js'
+import { getIdentityIntegratorData } from '../src/identityData.js'
 
 const originalFetch = globalThis.fetch
 

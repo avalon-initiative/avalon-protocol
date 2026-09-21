@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountSession } from './core.js'
-import { bytesToBase64, generateSigningKey } from '../crypto/signing.js'
-import { NoLocalSigningKeyError } from '../errors.js'
+import { AccountSession } from '../../src/accountSession/core.js'
+import { bytesToBase64, generateSigningKey } from '../../src/crypto/signing.js'
+import { NoLocalSigningKeyError } from '../../src/errors.js'
 import { ed25519 } from '@noble/curves/ed25519'
-import './devices.js'
+import '../../src/accountSession/devices.js'
 
 function testProfile(identityId: string) {
   return {

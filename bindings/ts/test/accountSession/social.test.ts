@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountSession } from './core.js'
-import './social.js'
+import { AccountSession } from '../../src/accountSession/core.js'
+import '../../src/accountSession/social.js'
 
 function testProfile(identityId: string) {
   return {
