@@ -4,11 +4,13 @@ Documentation written for people who *use* the games, apps, and services that
 integrate Avalon — not for developers integrating it or contributors building
 it.
 
-Nothing lives here yet; there's no user-facing product to document. Once the
-Hub exists, this is where things like "what is an Avalon identity," "how do I
-control what an integrator can see about me," and "how do achievements and
-guilds work across games" belong — written for someone who has never heard of
-a protocol or an SDK and shouldn't need to.
+The Hub is the one user-facing product that exists today, so this audience's
+docs currently live with it rather than here:
+[`../projects/hub/for-users.md`](../projects/hub/for-users.md) — logging in
+with a passkey, guardian recovery, friends, guilds, achievements, and
+managing which games/apps/services can see what.
 
-Until then, see [`../WhyAvalon.md`](../WhyAvalon.md) for the plain-language case
-for why this exists at all.
+See [`../WhyAvalon.md`](../WhyAvalon.md) for the plain-language case for why
+this exists at all. As more user-facing surfaces appear outside the Hub
+(e.g. anything `mobile-hub`-specific), their docs will live with that
+project the same way.

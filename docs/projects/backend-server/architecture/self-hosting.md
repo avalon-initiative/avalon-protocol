@@ -281,7 +281,7 @@ integrators. What it does **not** get is the reason most of this exists:
   can only ever happen among integrators pointed at the same `network_id`.
 - None of the cross-integrator discovery, shared communities, or "your friends are
   already here" effects in
-  [`../developers/WhyBuildOnAvalon.md`](../../../developers/WhyBuildOnAvalon.md)
+  [`../developers/WhyBuildOnAvalon.md`](../../rust-sdk/for-developers/WhyBuildOnAvalon.md)
   apply — those come from the network, not the code.
 - It's a fork in substance, even though it's zero effort in practice (set a
   different `AVALON_NETWORK_ID` and stand up your own Postgres). Nothing
@@ -303,7 +303,7 @@ public network:
 
 None of these are the goal of the project. Avalon exists to be the shared
 identity and social layer between *independent* integrators — the value described
-in [`../developers/WhyBuildOnAvalon.md`](../../../developers/WhyBuildOnAvalon.md)
+in [`../developers/WhyBuildOnAvalon.md`](../../rust-sdk/for-developers/WhyBuildOnAvalon.md)
 compounds with the size of the *public* network, not with how many private
 forks of the code exist. A studio is always welcome to run their own
 instance; we'd just rather have their games on the actual network, where

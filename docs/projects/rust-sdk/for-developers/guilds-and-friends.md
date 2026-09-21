@@ -3,8 +3,8 @@
 Reading a player's social graph and guild membership, with presence
 embedded when granted. For the underlying model (what a guild is, roles,
 channels, the social graph's own invariants), see
-[`../projects/backend-server/architecture/social-graph.md`](../projects/backend-server/architecture/social-graph.md) and
-[`../projects/backend-server/architecture/guilds.md`](../projects/backend-server/architecture/guilds.md).
+[`../../backend-server/architecture/social-graph.md`](../../backend-server/architecture/social-graph.md) and
+[`../../backend-server/architecture/guilds.md`](../../backend-server/architecture/guilds.md).
 
 ## Friends
 
@@ -38,7 +38,7 @@ real status back for an identity that's currently friends with them (or
 themselves), public, or authenticated-only; everyone else reads as
 `Offline`, indistinguishable from a genuinely missing entry, the same
 posture a block already gets (issue #97). See
-[`../projects/backend-server/architecture/privacy.md`](../projects/backend-server/architecture/privacy.md) for the full
+[`../../backend-server/architecture/privacy.md`](../../backend-server/architecture/privacy.md) for the full
 scope model — this is real and enforced, not a documented gap.
 
 `session.subscribe_presence(&ids)` opens a live-push websocket channel,
@@ -83,7 +83,7 @@ block exists (issue #97's "never reveal you've been blocked" rule).
 
 Presence (`presence_of`/`presence`/`subscribe_presence`) and guild rosters
 (`roster()`) are both scoped server-side now (issue #87) — see the sections
-above and [`../projects/backend-server/architecture/privacy.md`](../projects/backend-server/architecture/privacy.md).
+above and [`../../backend-server/architecture/privacy.md`](../../backend-server/architecture/privacy.md).
 Guild `channels()`/`messages()` are **not** — any member with `guilds.chat`
 sees every channel regardless of any per-channel visibility a guild might
 eventually want, and there's no such setting yet. Don't build a

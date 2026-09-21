@@ -277,7 +277,7 @@ two.
   game's death," and the architecture tests every proposed change is held to
 - [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) — the
   full narrative design and phased roadmap
-- [`docs/developers/`](../docs/developers/) — the game-developer-facing SDK
+- [`docs/projects/rust-sdk/for-developers/`](../docs/projects/rust-sdk/for-developers/) — the game-developer-facing SDK
   story
 - [`docs/hosters/`](../docs/hosters/) — standing up and deploying a node,
   distinct from contributing code

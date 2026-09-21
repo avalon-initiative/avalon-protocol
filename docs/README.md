@@ -22,7 +22,7 @@ themselves.
 | New to the project, or the terminology is the blocker | [`GLOSSARY.md`](GLOSSARY.md) |
 | Evaluating Avalon from the outside (backing it, partnering, deciding whether to build on it) | [`stakeholders/`](stakeholders/README.md) |
 | A user of a game, app, or service that integrates Avalon | [`users/`](users/README.md) |
-| Integrating the SDK into my own game, app, or service | [`developers/`](developers/README.md) |
+| Integrating the SDK into my own game, app, or service | [`projects/rust-sdk/for-developers/`](projects/rust-sdk/for-developers/README.md) |
 | Contributing code or docs to this repository | [`maintainers/`](maintainers/README.md) |
 | Standing up an `avalon-server` node | [`projects/backend-server/for-hosters/`](projects/backend-server/for-hosters/README.md) |
 | Reading or reviewing the normative design (invariants, authority boundaries, what exists today) | [`projects/backend-server/architecture/`](projects/backend-server/architecture/README.md) |
@@ -62,12 +62,13 @@ folder.
 
 ## How this tree is organized
 
-- **Audience directories** at the top level (`users/`, `developers/`,
-  `maintainers/`, `stakeholders/`) cover things that span more than one
-  project, or haven't been split into a project folder yet. Where a doc is
-  specific to one deployable, it lives under that project's own
-  `for-<audience>/` folder instead (e.g.
-  [`projects/backend-server/for-hosters/`](projects/backend-server/for-hosters/README.md)) —
+- **Audience directories** at the top level (`users/`, `maintainers/`,
+  `stakeholders/`) cover things that span more than one project, or haven't
+  been split into a project folder yet. Where a doc is specific to one
+  deployable, it lives under that project's own `for-<audience>/` folder
+  instead — e.g.
+  [`projects/backend-server/for-hosters/`](projects/backend-server/for-hosters/README.md),
+  [`projects/rust-sdk/for-developers/`](projects/rust-sdk/for-developers/README.md) —
   see [`projects/README.md`](projects/README.md).
 - [`projects/backend-server/architecture/`](projects/backend-server/architecture/README.md)
   is the one normative reference for the protocol itself, audience-agnostic:
