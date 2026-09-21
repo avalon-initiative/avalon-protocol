@@ -86,7 +86,7 @@ protobuf-json-mapping = "3.7.2"
 # issue #386: `avalon-schema-derive`'s `#[derive(AvalonSchema)]`
 # proc-macro, generating `.proto` text from a Rust struct's own fields
 # (syn parses the struct, quote emits the generated `impl` block).
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 # `protobuf_parse::Parser`'s only public API reads `.proto` source from a
