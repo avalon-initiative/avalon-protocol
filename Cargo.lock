@@ -230,8 +230,8 @@ name = "avalon-chain"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "avalon-devenv",
  "avalon-protocol",
- "dotenvy",
  "ed25519-dalek",
  "hex",
  "rand 0.10.2",
@@ -251,12 +251,12 @@ name = "avalon-cli"
 version = "0.1.0"
 dependencies = [
  "avalon-chain",
+ "avalon-devenv",
  "avalon-protocol",
  "avalon-sdk",
  "avalon-server",
  "base64 0.23.1",
  "coset",
- "dotenvy",
  "ed25519-dalek",
  "hex",
  "passkey-authenticator",
@@ -271,6 +271,13 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "avalon-devenv"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
 ]
 
 [[package]]
@@ -348,12 +355,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "avalon-chain",
+ "avalon-devenv",
  "avalon-indexer",
  "avalon-protocol",
  "avalon-sdk",
  "axum",
  "base64 0.23.1",
- "dotenvy",
  "ed25519-dalek",
  "futures-util",
  "hex",

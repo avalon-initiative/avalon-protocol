@@ -155,7 +155,7 @@ async fn a_node_discovers_and_verifies_a_shard_it_was_never_configured_with() {
 }
 
 async fn live_test_pool() -> PgPool {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
     let database_url =
         std::env::var("AVALON_NODE_A_DATABASE_URL").expect("AVALON_NODE_A_DATABASE_URL must be set — node A's own database, to confirm auto-mirroring wrote real rows there");
     PgPoolOptions::new()

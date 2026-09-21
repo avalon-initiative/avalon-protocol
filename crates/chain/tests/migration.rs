@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 async fn test_pool() -> PgPool {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     PgPoolOptions::new()
         .connect(&database_url)

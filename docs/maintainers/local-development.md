@@ -157,6 +157,28 @@ make test-live    # cargo test --workspace -- --ignored, needs `make start` runn
 they need a real server and database — a real WebAuthn ceremony over HTTP,
 not a mock. Run `make start` first.
 
+### `.env` loading in tests and live-verification code (issue #671)
+
+Every `--ignored` live test, plus `crates/server/src/outbox.rs` and
+`crates/server/src/mirror_watcher.rs`'s own test modules, load `.env`
+through `avalon_devenv::load()` (`crates/devenv`) rather than
+`dotenvy::dotenv()` directly. `dotenvy::dotenv()` searches *upward from the
+process's current working directory* for a `.env` file — run from inside a
+git worktree with no `.env` of its own, that search walks past the
+worktree root and silently loads whatever `.env` it finds further up
+(e.g. the main checkout's, with real infrastructure values). `avalon_devenv::load()`
+instead resolves the workspace root deterministically from
+`env!("CARGO_MANIFEST_DIR")` at compile time and loads `.env` from exactly
+that path — so a worktree with no `.env` of its own gets no `.env` at all,
+never someone else's.
+
+`crates/server/src/main.rs`, `crates/server/src/bin/migrate.rs`, and
+`crates/cli/src/main.rs` use the same helper, for the same reason: nothing
+in this repo's own docs or `Makefile` targets relies on running those
+binaries from a subdirectory and having them find an ancestor `.env`, so
+there was no real workflow to preserve by keeping the ancestor search, only
+the same footgun in production entry points too.
+
 ## Tearing down
 
 ```bash
