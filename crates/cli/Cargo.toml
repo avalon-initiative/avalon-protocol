@@ -23,6 +23,10 @@ hex.workspace = true
 # `time::OffsetDateTime` — always available, same as ed25519-dalek below,
 # not gated behind `dev-tools`.
 time.workspace = true
+# `avalon logs export` (issue #659) — not dev-tools-gated, it's a read-only
+# tool operating on a log file already on disk, safe in any build.
+strip-ansi-escapes.workspace = true
+regex.workspace = true
 # Required (not dev-tools-gated): `avalon inspect-ledger`'s STH signature
 # verification (issue #210) needs `VerifyingKey` in every build, including
 # `--no-default-features` — inspect-ledger is explicitly "always available,

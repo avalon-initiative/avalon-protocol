@@ -3,7 +3,11 @@
 //! Always available, in any build: `avalon inspect-ledger`,
 //! `avalon inspect-ledger-full` (same view, plus each entry's payload),
 //! `avalon outbox-status` — read-only diagnostics, safe against any
-//! deployment including a real one. `avalon prune-ledger` (issue #208) is
+//! deployment including a real one. `avalon logs export` (issue #659)
+//! reads `avalon-server`'s own log file, strips ANSI codes, redacts
+//! known-sensitive values, and normalizes it to line-delimited JSON so a
+//! hoster can safely attach it to a filed GitHub issue — see
+//! `logs_export.rs`'s own module doc comment. `avalon prune-ledger` (issue #208) is
 //! the operator-facing entry point for node-tiered retention pruning — see
 //! `avalon_chain::retention`'s module doc comment for the full design;
 //! this command itself only reads `AVALON_RETENTION_*` from the
@@ -33,6 +37,7 @@
 
 #[cfg(feature = "dev-tools")]
 mod dev_tools;
+mod logs_export;
 
 use avalon_chain::PostgresSettlementProvider;
 use sqlx::postgres::PgPoolOptions;
@@ -77,6 +82,26 @@ async fn main() {
         Some("list-equivocations") => {
             list_equivocations(args.next()).await;
         }
+        Some("logs") => {
+            let sub = args.next();
+            match sub.as_deref() {
+                Some("export") => {
+                    let raw_args: Vec<String> = args.collect();
+                    match logs_export::ExportArgs::parse(&raw_args) {
+                        Ok(parsed) => logs_export::run(parsed),
+                        Err(message) => {
+                            eprintln!("{message}");
+                            eprintln!("{}", logs_export::USAGE);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("{}", logs_export::USAGE);
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("resolve-equivocation") => {
             let raw_args: Vec<String> = args.collect();
             resolve_equivocation(&raw_args).await;
@@ -119,7 +144,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
