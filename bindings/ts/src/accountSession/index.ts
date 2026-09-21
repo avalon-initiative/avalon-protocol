@@ -13,6 +13,7 @@ import './social.js'
 import './conversations.js'
 import './guildAdmin.js'
 import './integrations.js'
+import './realtime.js'
 
 export type { Passkey } from './passkeys.js'
 export type { Device, DeviceGrant } from './devices.js'
@@ -32,6 +33,14 @@ export type {
 } from './social.js'
 export type { Conversation, ConversationMessage } from './conversations.js'
 export type { IntegratorConnection, ConnectionGrant, MyConnection } from './integrations.js'
+export type {
+  PresenceStatusWire,
+  PresenceUpdate,
+  PresenceSubscription,
+  ChannelMessageUpdate,
+  ConversationMessageUpdate,
+  RealtimeSubscription,
+} from './realtime.js'
 export type {
   Guild,
   GuildLink,

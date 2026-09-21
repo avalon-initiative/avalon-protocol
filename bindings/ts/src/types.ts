@@ -82,3 +82,22 @@ export interface DeviceRowWire {
   id: string
   public_key: string
 }
+
+/** `GET /ledger/sth/latest`'s wire response, field-for-field — matches
+ * `crates/server/src/settlement.rs::SignedTreeHeadResponse`. Hub's own
+ * `apps/hub/src/network/verifyNetwork.ts` (issue #232) reconstructs
+ * `crates/chain/src/sth.rs::signing_message` from `tree_size`/`root_hash`/
+ * `network_id`/`created_at` itself — this type only carries the shape,
+ * verification stays Hub's own logic. */
+export interface SignedTreeHeadResponse {
+  tree_size: number
+  // Lowercase hex-encoded RFC 6962 Merkle Tree Hash.
+  root_hash: string
+  network_id: string
+  signing_key_id: string
+  // Lowercase hex-encoded Ed25519 signature (64 bytes).
+  signature: string
+  // RFC 3339.
+  created_at: string
+  protocol_version: string
+}

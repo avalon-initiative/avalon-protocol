@@ -55,12 +55,20 @@ export type {
   GuildUpdate,
   ChannelUpdate,
   EventFields,
+  PresenceStatusWire,
+  PresenceUpdate,
+  PresenceSubscription,
+  ChannelMessageUpdate,
+  ConversationMessageUpdate,
+  RealtimeSubscription,
 } from './accountSession/index.js'
 
 export { IntegratorSession } from './integratorSession.js'
 export type { Capability, Friend, GuildMembership, ConversationSummary, VerifiedAttestation } from './integratorSession.js'
 
-export type { Identity, Profile, Genre } from './types.js'
+export type { Identity, Profile, Genre, SignedTreeHeadResponse } from './types.js'
+
+export { getLatestSth } from './ledger.js'
 
 export * from './errors.js'
 

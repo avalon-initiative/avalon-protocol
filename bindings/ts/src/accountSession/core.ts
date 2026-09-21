@@ -24,6 +24,7 @@
 // `declare module`.
 import { request } from '../http.js'
 import { canonicalMessage, sign as ed25519Sign, bytesToBase64, type SignatureFields } from '../crypto/signing.js'
+import { mintContinuationToken } from '../crypto/continuation.js'
 import { fromMeResponse, type Identity, type Profile, type MeResponseWire, type DeviceRowWire } from '../types.js'
 import { NoLocalSigningKeyError } from '../errors.js'
 
@@ -157,55 +158,110 @@ export class AccountSession {
     return bytesToBase64(ed25519Sign(this._signing.secretKey, message))
   }
 
+  /** @internal Issue #525: mints a continuation token from this session's
+   * own in-memory signing key when a request 401s against this session's
+   * own token, so AccountSession keeps working across a node handoff
+   * without asking the caller to log in again. Simpler than
+   * packages/api-client's storage-adapter-based port — this session
+   * already holds identityId/signingKeyId/secretKey directly, nothing to
+   * read out of a pluggable adapter. Returns `null` (propagates the 401
+   * as-is) when this session holds no local signing key, e.g.
+   * `resumeAccountSession` without a seed or a device-pairing-login
+   * result. */
+  private async reconnect(failedToken: string): Promise<string | null> {
+    if (!this._signing || failedToken !== this._token) return null
+    return mintContinuationToken(this._identity.id, this._signing.signingKeyId, this._signing.secretKey)
+  }
+
+  /** @internal */
+  private onUnauthorized = (failedToken: string): Promise<string | null> => this.reconnect(failedToken)
+
   /** @internal */
   get<T>(path: string): Promise<T> {
-    return request<T>(this._serverUrl, path, { token: this._token })
+    return request<T>(this._serverUrl, path, { token: this._token, onUnauthorized: this.onUnauthorized })
   }
 
   /** @internal */
   getQuery<T>(path: string, query: Record<string, string>): Promise<T> {
-    return request<T>(this._serverUrl, path, { token: this._token, query })
+    return request<T>(this._serverUrl, path, { token: this._token, query, onUnauthorized: this.onUnauthorized })
   }
 
   /** @internal */
   post<T>(path: string, body: unknown): Promise<T> {
-    return request<T>(this._serverUrl, path, { method: 'POST', token: this._token, body })
+    return request<T>(this._serverUrl, path, {
+      method: 'POST',
+      token: this._token,
+      body,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal a POST with no request body at all. */
   postEmpty<T>(path: string): Promise<T> {
-    return request<T>(this._serverUrl, path, { method: 'POST', token: this._token })
+    return request<T>(this._serverUrl, path, {
+      method: 'POST',
+      token: this._token,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal a POST carrying a body whose handler returns an empty 200. */
   async postNoResponse(path: string, body: unknown): Promise<void> {
-    await request<void>(this._serverUrl, path, { method: 'POST', token: this._token, body })
+    await request<void>(this._serverUrl, path, {
+      method: 'POST',
+      token: this._token,
+      body,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal same as postNoResponse, with no request body. */
   async postEmptyNoResponse(path: string): Promise<void> {
-    await request<void>(this._serverUrl, path, { method: 'POST', token: this._token })
+    await request<void>(this._serverUrl, path, {
+      method: 'POST',
+      token: this._token,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal */
   patch<T>(path: string, body: unknown): Promise<T> {
-    return request<T>(this._serverUrl, path, { method: 'PATCH', token: this._token, body })
+    return request<T>(this._serverUrl, path, {
+      method: 'PATCH',
+      token: this._token,
+      body,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal */
   put<T>(path: string, body: unknown): Promise<T> {
-    return request<T>(this._serverUrl, path, { method: 'PUT', token: this._token, body })
+    return request<T>(this._serverUrl, path, {
+      method: 'PUT',
+      token: this._token,
+      body,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal a DELETE carrying no request body, discarding the response. */
   async del(path: string): Promise<void> {
-    await request<void>(this._serverUrl, path, { method: 'DELETE', token: this._token })
+    await request<void>(this._serverUrl, path, {
+      method: 'DELETE',
+      token: this._token,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 
   /** @internal a DELETE carrying a JSON body — three signature-required
    * endpoints take a small body on what used to be a bodyless DELETE. */
   async deleteWithBody(path: string, body: unknown): Promise<void> {
-    await request<void>(this._serverUrl, path, { method: 'DELETE', token: this._token, body })
+    await request<void>(this._serverUrl, path, {
+      method: 'DELETE',
+      token: this._token,
+      body,
+      onUnauthorized: this.onUnauthorized,
+    })
   }
 }
 

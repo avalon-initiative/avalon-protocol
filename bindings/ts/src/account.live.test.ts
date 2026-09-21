@@ -16,6 +16,8 @@ import pg from 'pg'
 import { AvalonClient } from './client.js'
 import { generateSigningKey, canonicalMessage, sign, bytesToBase64 } from './crypto/signing.js'
 import { DeviceLoginDeniedError } from './errors.js'
+import { getLatestSth } from './ledger.js'
+import type { PresenceUpdate, ChannelMessageUpdate } from './accountSession/realtime.js'
 
 const serverUrl = process.env.AVALON_SERVER_URL
 const databaseUrl = process.env.AVALON_LIVE_DATABASE_URL
@@ -147,5 +149,118 @@ maybeDescribe('AccountSession live round trips', () => {
 
     await expect(pairing.wait()).rejects.toBeInstanceOf(DeviceLoginDeniedError)
     await denialTask
+  })
+})
+
+async function waitFor(condition: () => boolean, description: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${description}`)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
+maybeDescribe('AccountSession.subscribePresence live round trip (issue #136)', () => {
+  it('receives a friend-visibility presence update pushed over the socket', async () => {
+    const { identityId: viewerId, token: viewerToken } = await seedIdentitySession(
+      `presence-ws-viewer-${crypto.randomUUID()}`,
+    )
+    const { identityId: subjectId, token: subjectToken } = await seedIdentitySession(
+      `presence-ws-subject-${crypto.randomUUID()}`,
+    )
+    // Presence defaults to friends-only visibility — the viewer needs to
+    // actually be a friend to see anything but a forced Offline view.
+    // `friend_partners` reads the indexer's own `indexer_friendships`
+    // projection, not `friendships` directly (crates/indexer/src/
+    // projections/friendships.rs::partners_of) — seed both.
+    const friendshipParams = ['LEAST($1::uuid, $2::uuid)', 'GREATEST($1::uuid, $2::uuid)', '$3']
+    await pool.query(
+      `INSERT INTO friendships (a, b, since) VALUES (${friendshipParams.join(', ')})`,
+      [viewerId, subjectId, new Date()],
+    )
+    await pool.query(
+      `INSERT INTO indexer_friendships (a, b, since) VALUES (${friendshipParams.join(', ')})`,
+      [viewerId, subjectId, new Date()],
+    )
+
+    const client = new AvalonClient({ serverUrl: serverUrl! })
+    const viewer = await client.resumeAccountSession(viewerToken)
+
+    const updates: PresenceUpdate[] = []
+    const sub = viewer.subscribePresence((p) => updates.push(p))
+    sub.subscribe([subjectId])
+
+    try {
+      // The server pushes an immediate catch-up snapshot for each
+      // newly-subscribed id — wait for that first, then clear it so the
+      // next assertion is unambiguously about the live push below.
+      await waitFor(() => updates.some((u) => u.identityId === subjectId), 'presence catch-up snapshot')
+      updates.length = 0
+
+      const response = await fetch(`${serverUrl}/me/presence`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${subjectToken}` },
+        body: JSON.stringify({ status: 'Away' }),
+      })
+      expect(response.ok).toBe(true)
+
+      await waitFor(() => updates.some((u) => u.identityId === subjectId), 'live presence update')
+      expect(updates.find((u) => u.identityId === subjectId)?.status).toBe('Away')
+    } finally {
+      sub.close()
+    }
+  })
+})
+
+maybeDescribe('AccountSession.subscribeChannelMessages live round trip (issue #438)', () => {
+  it('receives a pushed channel_message and a moderation-delete over the socket', async () => {
+    const { identityId, token } = await seedIdentitySession(`chat-ws-owner-${crypto.randomUUID()}`)
+    const { secretKey } = await seedSigningKey(identityId)
+
+    const client = new AvalonClient({ serverUrl: serverUrl! })
+    const session = await client.resumeAccountSessionWithSigningKey(token, secretKey)
+
+    const guild = await session.createGuild(
+      `Guild ${crypto.randomUUID().slice(0, 8)}`,
+      `T${crypto.randomUUID().slice(0, 4)}`,
+      'a test guild',
+    )
+    const channels = await session.listChannels(guild.id)
+    const general = channels.find((c) => c.name === 'general') ?? channels[0]
+
+    const received: ChannelMessageUpdate[] = []
+    const deletedIds: string[] = []
+    const sub = session.subscribeChannelMessages(
+      guild.id,
+      general.id,
+      (m) => received.push(m),
+      (id) => deletedIds.push(id),
+    )
+
+    try {
+      // The subscribe_channel message only goes out after the socket's
+      // own async node_info handshake completes — give that a moment
+      // before sending, or the message can beat the subscription there.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const sent = await session.sendMessage(guild.id, general.id, 'hello over the wire')
+      await waitFor(() => received.some((m) => m.id === sent.id), 'pushed channel_message')
+      expect(received.find((m) => m.id === sent.id)?.body).toBe('hello over the wire')
+
+      await session.deleteMessage(guild.id, general.id, sent.id)
+      await waitFor(() => deletedIds.includes(sent.id), 'pushed channel_message_deleted')
+    } finally {
+      sub.close()
+    }
+  })
+})
+
+maybeDescribe('getLatestSth live round trip', () => {
+  it('fetches the real GET /ledger/sth/latest response', async () => {
+    const sth = await getLatestSth(serverUrl!)
+    expect(sth.network_id).toBe('avalon-dev-local')
+    expect(typeof sth.tree_size).toBe('number')
+    expect(sth.root_hash).toMatch(/^[0-9a-f]+$/)
+    expect(sth.signature).toMatch(/^[0-9a-f]+$/)
+    expect(new Date(sth.created_at).getTime()).not.toBeNaN()
   })
 })
