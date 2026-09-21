@@ -144,6 +144,36 @@ discoverable ("tap your passkey, no identifier at all") login would need
 that wasn't built for this milestone. The meaningful property survives
 regardless: no shared secret, a real challenge-response proof every time.
 
+### Two authorization tiers: ambient session vs. a fresh signature (#696/#697/#698)
+
+The two keys above answer "how does this identity log in" and "how does
+this identity author a durable event." A third question — once an
+identity already holds a session, how much can that ambient bearer token
+alone actually do — is #696's decision: not every action an
+authenticated session can request deserves the same trust. Most
+first-party account actions (reads, chat, presence, profile edits,
+ordinary guild membership churn) stay authorized by the session's bearer
+token alone, the same as they always were. A smaller set of actions with
+real blast radius or that are hard to reverse — guild ownership transfer,
+role/permission-structure changes, approving a brand-new device into an
+identity, revoking the last remaining passkey, granting an integrator
+standing capabilities, and a few more — additionally require a *fresh*
+signature from the identity's own locally-held Ed25519 signing key
+(the same key above, reused rather than a new mechanism) at the moment of
+the action, proving the request came from a device that actually holds
+that key, not just whatever holds a copy of the bearer token. A stolen
+session token alone is no longer sufficient for that second tier.
+
+This applies uniformly across every first-party client — the Hub web app
+and every SDK's `AccountSession` type (Rust, C#, TypeScript) mint that
+signature automatically wherever it's required; a caller never
+hand-constructs one. It does **not** create any new way for a
+capability-gated integrator credential to escalate into account-level
+power — that boundary (`IntegratorSession`/the integrator `Session` in
+each SDK) is unaffected and stays exactly where it was. See "Today in the
+repo" below for the complete endpoint-by-endpoint classification, the
+exact canonical signing-message format, and which gaps this closed.
+
 ### Cross-device pairing for a WebAuthn-incapable client (#307)
 
 WebAuthn login above assumes the client has some ceremony surface — a
@@ -1016,3 +1046,13 @@ to verify against the reconstructed message gets `INVALID_FRESH_SIGNATURE`.
   just best-effort opt-in mirroring.
 - [#2](https://github.com/LunarVagabond/avalon-protocol/issues/2) — Epic:
   Identity & Player Profile.
+- [#696](https://github.com/LunarVagabond/avalon-protocol/issues/696) — Epic:
+  unify the SDK schema across languages with tiered action signing (decided
+  on [#695](https://github.com/LunarVagabond/avalon-protocol/issues/695)):
+  [#697](https://github.com/LunarVagabond/avalon-protocol/issues/697) the
+  ambient-token/signature-required classification (this doc's own "Today in
+  the repo" section), [#698](https://github.com/LunarVagabond/avalon-protocol/issues/698)
+  server enforcement, [#704](https://github.com/LunarVagabond/avalon-protocol/issues/704)
+  two concrete gaps #697 found and #698 closed. See
+  [sdk.md](./sdk.md)'s own "Decisions and tickets" for the companion
+  per-language `AccountSession` tickets (#699/#700/#701/#707).
