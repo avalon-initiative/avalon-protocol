@@ -107,7 +107,7 @@ semver = "1"
 # `crate::redis_limits`'s own module doc comment. `connection-manager`
 # gives a cheap-to-clone, auto-reconnecting async connection; `tokio-comp`
 # is this server's only async runtime.
-redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+redis = { version = "1.7", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 # Issue #517: cross-platform host resource metrics (CPU/memory/disk) for
 # `GET /nodes/status`'s `resources` block — avoids hand-rolling `/proc`
 # parsing (Linux-only) when hosters may run on macOS/Windows too. Default
