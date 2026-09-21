@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { generateSigningKey, verify } from './signing.js'
-import { mintCrossNodeLoginGrant, DEFAULT_TTL_SECONDS } from './crossNodeLogin.js'
+import { generateSigningKey, verify } from '../../src/crypto/signing.js'
+import { mintCrossNodeLoginGrant, DEFAULT_TTL_SECONDS } from '../../src/crypto/crossNodeLogin.js'
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2)
