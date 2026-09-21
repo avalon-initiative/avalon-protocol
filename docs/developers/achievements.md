@@ -5,8 +5,8 @@ Define, issue, read, verify, and revoke — the full lifecycle an integrator
 and a handful of raw HTTP calls not yet wrapped by the SDK. For the
 underlying design (issuer keys, the authenticity/validity/recognition
 split, revocation history), see
-[`../architecture/achievements-and-attestations.md`](../architecture/achievements-and-attestations.md)
-and [`../architecture/trust-model.md`](../architecture/trust-model.md) — this
+[`../projects/backend-server/architecture/achievements-and-attestations.md`](../projects/backend-server/architecture/achievements-and-attestations.md)
+and [`../projects/backend-server/architecture/trust-model.md`](../projects/backend-server/architecture/trust-model.md) — this
 page is about *doing*, not re-explaining those.
 
 ## 1. Register your integrator
@@ -22,7 +22,7 @@ Separate from integrator registration above: before you can issue on a real
 network, your integrator's signing key must be admitted to write on it
 (#479/#480's per-network isolation — a signature valid against your key
 history isn't itself enough, see
-[`../architecture/network-trust-anchors.md`](../architecture/network-trust-anchors.md)).
+[`../projects/backend-server/architecture/network-trust-anchors.md`](../projects/backend-server/architecture/network-trust-anchors.md)).
 `AvalonClient::register_issuer` requires you to **explicitly declare which
 network you mean** — either the exact `network_id`, or one of the three
 real deployment tiers — and refuses, client-side, before sending any
@@ -160,7 +160,7 @@ foreach (var attestation in history)
 
 Deliberately **no `recognition` field** — `authentic` (the signature
 verifies), `valid` (not revoked), and `recognized` are three separate
-questions per [ADR #76](../architecture/trust-model.md). The server answers
+questions per [ADR #76](../projects/backend-server/architecture/trust-model.md). The server answers
 the first two; *recognition* is inherently a judgment call only the
 consuming integrator can make (do you trust the issuer? does the claim
 matter to you?) — evaluate it yourself against
@@ -198,5 +198,5 @@ there's no separate "bulk revoke" call: pull the `attestation_id` out of
 whichever `BulkClaimOutcome::Issued` you want to remediate and call
 `revoke_attestation` on it directly.
 
-See [`../architecture/revocation.md`](../architecture/revocation.md) for
+See [`../projects/backend-server/architecture/revocation.md`](../projects/backend-server/architecture/revocation.md) for
 the full revocation-as-protocol-history model.

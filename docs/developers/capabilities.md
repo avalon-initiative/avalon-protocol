@@ -6,7 +6,7 @@ capability before making a request — a method with no grant fails fast with
 `SdkError::CapabilityNotGranted`, never a partial or silently-empty result.
 
 For the full permission-model design and how a grant is stored, see
-[`../architecture/bindings.md`](../architecture/bindings.md) and
+[`../projects/backend-server/architecture/bindings.md`](../projects/backend-server/architecture/bindings.md) and
 [Proposal §13](../stakeholders/Proposal.md#13-permission-model).
 
 ## The capability list

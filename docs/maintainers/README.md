@@ -3,17 +3,26 @@
 Documentation for people maintaining or contributing to this repository
 itself — distinct from people building *on* Avalon (see
 [`../developers/`](../developers/)) and distinct from people hosting a
-node without contributing code (see [`../hosters/`](../hosters/)).
+node without contributing code (see
+[`../projects/backend-server/for-hosters/`](../projects/backend-server/for-hosters/README.md)).
+
+This page covers the whole repository. Each project under
+[`../projects/`](../projects/README.md) also has its own maintainer-facing
+docs for things specific to that project (e.g. rotating the backend's
+settlement signing key) — see that project's own README.
 
 ## Start here
 
 - [`../../.github/CONTRIBUTING.md`](../../.github/CONTRIBUTING.md) —
   contribution workflow: branching, commit/PR title format, issue claiming,
   the docs-first rule, and the local `make` commands
-- [`../architecture/README.md`](../architecture/README.md) — the normative
-  architecture reference: invariants, authority boundaries, the three
-  verticals, what exists in each crate today, and which issue governs each
-  area. Read this before proposing or reviewing anything non-trivial.
+- [`../projects/README.md`](../projects/README.md) — the project map: what's
+  deployable in this repo and how the docs are split around it
+- [`../projects/backend-server/architecture/README.md`](../projects/backend-server/architecture/README.md) —
+  the normative architecture reference: invariants, authority boundaries,
+  the three verticals, what exists in each crate today, and which issue
+  governs each area. Read this before proposing or reviewing anything
+  non-trivial.
 - Root `README.md` — repository layout and current build status
 - [`../../.github/CODE_OF_CONDUCT.md`](../../.github/CODE_OF_CONDUCT.md) and
   [`../../.github/SECURITY.md`](../../.github/SECURITY.md)
@@ -59,22 +68,23 @@ setup, with what "it worked" looks like at each step.
 
 ## Hosting a node
 
-See [`../hosters/hosting-quickstart.md`](../hosters/hosting-quickstart.md)
+See
+[`../projects/backend-server/for-hosters/hosting-quickstart.md`](../projects/backend-server/for-hosters/hosting-quickstart.md)
 for the fastest path to a running node — `make stack-up`, no Rust/Node
 toolchain needed, just Docker — and
-[`../hosters/deployment.md`](../hosters/deployment.md) for putting
-`avalon-server` behind TLS (required before any non-local deployment),
-recommended reverse-proxy setup, example configs, and which existing env
-vars need production values. Written for anyone standing up a node, not
-just people contributing to this repository — see
-[`../hosters/README.md`](../hosters/README.md).
+[`../projects/backend-server/for-hosters/deployment.md`](../projects/backend-server/for-hosters/deployment.md)
+for putting `avalon-server` behind TLS (required before any non-local
+deployment), recommended reverse-proxy setup, example configs, and which
+existing env vars need production values. Written for anyone standing up a
+node, not just people contributing to this repository — see
+[`../projects/backend-server/for-hosters/README.md`](../projects/backend-server/for-hosters/README.md).
 
 If you're running a node that watches peers (`AVALON_MIRROR_PEERS` set) and
 its mirror-watcher reports equivocation, see
-[`equivocation-response.md`](equivocation-response.md) for the
-investigation and recovery steps. See
-[`key-rotation.md`](key-rotation.md) for rotating the settlement signing
-key itself, routine or emergency.
+[`equivocation-response.md`](../projects/backend-server/for-maintainers/equivocation-response.md)
+for the investigation and recovery steps. See
+[`key-rotation.md`](../projects/backend-server/for-maintainers/key-rotation.md)
+for rotating the settlement signing key itself, routine or emergency.
 
 Quick reference once you've read that page:
 
@@ -90,13 +100,14 @@ Run `make help` for the full command list, including the C# SDK
 
 ## Milestone 1 — the end-to-end vertical slice
 
-See [`milestone-1-walkthrough.md`](milestone-1-walkthrough.md) for the
-hand-run, numbered walkthrough of `Proposal.md` §23's fourteen steps (plus
-two architecture checks beyond it) — two players, a friendship, a guild
-with a channel, two games, an issued and verified achievement, all visible
-in the Hub, ending with a ledger inspection and a full projection rebuild.
-`crates/cli/tests/milestone_1_walkthrough.rs` is the automated equivalent,
-runnable via `make test-live`.
+See
+[`milestone-1-walkthrough.md`](../projects/backend-server/for-maintainers/milestone-1-walkthrough.md)
+for the hand-run, numbered walkthrough of `Proposal.md` §23's fourteen steps
+(plus two architecture checks beyond it) — two players, a friendship, a
+guild with a channel, two games, an issued and verified achievement, all
+visible in the Hub, ending with a ledger inspection and a full projection
+rebuild. `crates/cli/tests/milestone_1_walkthrough.rs` is the automated
+equivalent, runnable via `make test-live`.
 
 ## Related projects
 

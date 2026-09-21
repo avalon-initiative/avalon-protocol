@@ -4,8 +4,8 @@ Ten minutes: add the crate, build a client, authenticate, read a profile.
 This page is about *doing*; for the concepts behind what you're doing (what
 a session token proves, what a capability grant is, what an attestation's
 "authentic"/"valid"/"recognized" split means), see
-[`../architecture/sdk.md`](../architecture/sdk.md) and
-[`../architecture/trust-model.md`](../architecture/trust-model.md).
+[`../projects/backend-server/architecture/sdk.md`](../projects/rust-sdk/architecture/sdk.md) and
+[`../projects/backend-server/architecture/trust-model.md`](../projects/backend-server/architecture/trust-model.md).
 
 ## 1. Add the crate
 
