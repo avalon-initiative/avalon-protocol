@@ -112,4 +112,4 @@ redis = { version = "0.27", default-features = false, features = ["tokio-comp", 
 # `GET /nodes/status`'s `resources` block — avoids hand-rolling `/proc`
 # parsing (Linux-only) when hosters may run on macOS/Windows too. Default
 # features cover CPU/memory/disk/process, which is all this needs.
-sysinfo = "0.38"
+sysinfo = "0.39"
