@@ -556,7 +556,20 @@ protocol and the domain model in `crates/protocol`; they never pull in
     the same device) has no C# equivalent for the same reason. This is a
     scoping decision, not an oversight — `docs/architecture/sdk.md` (this
     section) and `AccountSession.cs`'s own header comment both call it out
-    explicitly.
+    explicitly. Filling the gap that scoping call would otherwise leave —
+    a client with no WebAuthn surface still needing to *originate* a
+    first-party login, not just resume a token minted elsewhere — issue
+    #707's `AccountSession.DeviceLogin.cs` adds
+    `AvalonClient.StartAccountDeviceLoginAsync()` -> `AccountDeviceLogin`
+    (`UserCode`/`VerificationUri`) -> `WaitAsync()`, mirroring
+    `crates/sdk/src/account/device_login.rs` (itself mirroring
+    `crates/sdk/src/device_login.rs`'s existing pattern for the integrator
+    `Session`, which this SDK has never ported at all — this is a fresh
+    port straight from the Rust `AccountSession` side). Resolves to a real
+    `AccountSession` via `ResumeAccountSessionAsync` once approved from
+    another, already-registered device, so — like any
+    `ResumeAccountSessionAsync` result — it holds no local signing key
+    until this device separately requests and gets its own approved.
   - Every action #697 flags as signature-required signs itself
     automatically with a private `Sign(actionTag, fields)` helper — the
     caller never hand-constructs `signing_key_id`/`signature`. The

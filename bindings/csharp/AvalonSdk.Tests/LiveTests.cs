@@ -591,4 +591,86 @@ public class LiveTests
         await Assert.ThrowsAsync<AvalonRequestException>(() =>
             session.CreateRoleAsync(guild.Id, "ShouldFail", Array.Empty<string>(), ""));
     }
+
+    /// <summary>Mirrors crates/sdk/tests/account_device_login.rs's own
+    /// wait_resolves_to_a_real_account_session_once_approved (issue #707) — the approving
+    /// side is exercised directly over HTTP against a seeded identity/session/signing key,
+    /// same approach the Rust test and this file's own cross-node-login test above use.</summary>
+    [Fact]
+    public async Task AccountSession_StartDeviceLogin_ResolvesOnceApproved()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var displayName = $"account-device-login-csharp-{Guid.NewGuid():N}";
+        var (approverId, approverToken) = await SeedIdentitySessionAsync(conn, displayName);
+        var (approverKeyId, approverSigningKey) = await SeedSigningKeyAsync(conn, approverId);
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var pairing = await client.StartAccountDeviceLoginAsync();
+        Assert.False(string.IsNullOrEmpty(pairing.UserCode));
+        Assert.Contains(pairing.UserCode, pairing.VerificationUri);
+        Assert.True(pairing.ExpiresIn > 0);
+
+        var http = new HttpClient();
+        var approvalTask = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            var message = Encoding.UTF8.GetBytes($"avalon:device_pairing.approve:v1:{approverId}:{pairing.UserCode}");
+            var signer = new Ed25519Signer();
+            signer.Init(true, approverSigningKey);
+            signer.BlockUpdate(message, 0, message.Length);
+            var signature = Convert.ToBase64String(signer.GenerateSignature());
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/device/approve");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", approverToken);
+            request.Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                user_code = pairing.UserCode,
+                signing_key_id = approverKeyId,
+                signature,
+            }), Encoding.UTF8, "application/json");
+            using var response = await http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+        });
+
+        var session = await pairing.WaitAsync();
+        await approvalTask;
+
+        Assert.Equal(displayName, session.Profile.DisplayName);
+        // The approving device is a *different* device with its own key — this session
+        // never had a WebAuthn ceremony of its own, so it holds no local signing key.
+        Assert.Null(session.SigningKeyId);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_device_login.rs's own
+    /// wait_returns_a_typed_error_when_denied.</summary>
+    [Fact]
+    public async Task AccountSession_StartDeviceLogin_ThrowsWhenDenied()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (_, approverToken) =
+            await SeedIdentitySessionAsync(conn, $"account-device-login-deny-csharp-{Guid.NewGuid():N}");
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var pairing = await client.StartAccountDeviceLoginAsync();
+
+        var http = new HttpClient();
+        var denialTask = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/device/deny");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", approverToken);
+            request.Content = new StringContent(JsonSerializer.Serialize(new { user_code = pairing.UserCode }), Encoding.UTF8, "application/json");
+            using var response = await http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+        });
+
+        await Assert.ThrowsAsync<AccountDeviceLoginDeniedException>(() => pairing.WaitAsync());
+        await denialTask;
+    }
 }
