@@ -2,10 +2,9 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
-import { createIdentity, login } from '@avalon/api-client'
-import { findMySigningKeyId } from '../api/deviceGrants'
-import { loadSigningKey } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { base64ToBytes, type AccountSession } from '@avalon/sdk'
+import { avalonClient, useSessionStore } from '../api/session'
+import { storeSigningKeySeed } from '../api/signingKeyStorage'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -35,15 +34,22 @@ const copied = ref(false)
 const signingKeyMnemonic = ref('')
 const mnemonicCopied = ref(false)
 
+// registerWithMnemonic() already drives the full register+login ceremony
+// and returns a ready, logged-in AccountSession — held here rather than
+// adopted into the store immediately, so the user sees/acknowledges their
+// id and recovery phrase first, same two-step UX as before.
+let pendingSession: AccountSession | null = null
+
 async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    const { identityId, signingKeyMnemonic: mnemonic } = await createIdentity(
+    const { session: newSession, mnemonic } = await avalonClient().registerWithMnemonic(
       displayName.value,
-      deviceLabel.value.trim() || null,
+      deviceLabel.value.trim() || undefined,
     )
-    createdIdentityId.value = identityId
+    pendingSession = newSession
+    createdIdentityId.value = newSession.identity().id
     signingKeyMnemonic.value = mnemonic
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -63,16 +69,12 @@ async function copyMnemonic() {
 }
 
 async function continueToHome() {
-  // Registration only proves the passkey/signing-key ceremony; it does not
-  // itself start a session — log in now that the user has acknowledged
-  // their id, rather than sending them to a second manual login step.
-  const { token } = await login(createdIdentityId.value)
-  // Issue #525: this identity's signing key was just generated/stored a
-  // moment ago by createIdentity() above — see session.login's own doc
-  // comment for why signing_key_id is cached here too.
-  const secretKey = loadSigningKey(createdIdentityId.value)
-  const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
-  await session.login(token, createdIdentityId.value, signingKeyId)
+  if (!pendingSession) return
+  const credentials = pendingSession.credentials()
+  if (credentials) {
+    storeSigningKeySeed(credentials.identityId, base64ToBytes(credentials.signingKeySecretBase64))
+  }
+  session.setSession(pendingSession)
   await router.push({ name: 'home' })
 }
 </script>
