@@ -48,6 +48,17 @@ base64 = "0.23"
 anyhow = "1"
 hex = "0.4"
 dotenvy = "0.15"
+# issue #659: `avalon logs export`'s ANSI-stripping pass, for the
+# human-readable log format (`tracing-subscriber`'s fmt layer always emits
+# color codes to a file redirect — see `crates/server/src/main.rs`'s
+# `init_tracing`). No existing dependency in the workspace already does
+# this, so it's new, but small and well-known.
+strip-ansi-escapes = "0.2"
+# issue #659: `avalon logs export`'s shape-based redaction fallback
+# (`postgres://user:pass@...` credentials, `Bearer <token>` headers) —
+# already present transitively (several dependencies pull it in), promoted
+# to a direct dependency rather than adding a new one.
+regex = "1"
 webauthn-rs = { version = "0.5", features = ["resident-key-support", "danger-allow-state-serialisation", "conditional-ui"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core", "serde"] }
 url = { version = "2", features = ["serde"] }

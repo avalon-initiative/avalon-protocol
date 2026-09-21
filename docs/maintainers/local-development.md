@@ -203,3 +203,30 @@ get reworded later without breaking an alert rule built against the field.
 This repo doesn't ship any alerting/paging integration itself (#315,
 deliberately out of scope) — the fields exist so a hoster who forwards
 `avalon-server`'s logs to their own aggregator can build one there.
+
+### Sharing logs when filing an issue
+
+Never paste raw log text straight into a filed GitHub issue — it may still
+carry ANSI color codes from the human-readable format, and worse, it can
+easily contain a real secret that ended up in a log line (a `DATABASE_URL`,
+a signing key, a bearer token). Run `avalon logs export` first (issue #659):
+
+```bash
+avalon logs export                              # _running/logs/avalon-server.log, whole file
+avalon logs export --tail 200                    # just the last 200 lines
+avalon logs export --since 2026-09-20T00:00:00Z  # only lines from that point on
+avalon logs export --file /path/to/other.log
+```
+
+It strips ANSI codes, redacts known-sensitive values (the literal value of
+any secret-shaped env var — `DATABASE_URL`,
+`AVALON_SETTLEMENT_SIGNING_KEY`, `AVALON_SETTLEMENT_SUBMIT_KEY`,
+`AVALON_ADMIN_TOKEN`, `AVALON_INTERNAL_ROLE_KEY`,
+`AVALON_MANAGED_HOSTING_VERIFY_KEY` — that happens to be set in the
+exporting shell's own environment, plus a shape-based fallback for
+`postgres://user:pass@...` credentials and `Bearer <token>` headers that
+didn't have a matching env var set), and normalizes the output to one
+line-delimited JSON object per line regardless of source format — the
+attachment a maintainer gets always has the same shape. Redaction is
+best-effort, not a guarantee: it only catches what it's specifically built
+to recognize, so still skim the output before attaching it anywhere.
