@@ -7,19 +7,19 @@ import {
   markConversationSeen,
   markGuardianOfSeen,
 } from './notifications'
-import type { ConversationMessageResponse } from '@avalon/api-client'
+import type { ConversationMessage } from '@avalon/sdk'
 
 beforeEach(() => {
   localStorage.clear()
 })
 
-function makeMessage(overrides: Partial<ConversationMessageResponse> = {}): ConversationMessageResponse {
+function makeMessage(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
   return {
     id: 'm1',
-    conversation_id: 'c1',
+    conversationId: 'c1',
     author: 'id-friend',
     body: 'hey',
-    sent_at: '2026-01-02T00:00:00Z',
+    sentAt: '2026-01-02T00:00:00Z',
     ...overrides,
   }
 }
@@ -44,7 +44,7 @@ describe('isConversationUnread', () => {
 
   it('is true again once a newer message arrives after the last seen mark', () => {
     const lastSeen = { c1: '2026-01-01T00:00:00Z' }
-    expect(isConversationUnread('c1', makeMessage({ sent_at: '2026-01-02T00:00:00Z' }), 'id-self', lastSeen)).toBe(
+    expect(isConversationUnread('c1', makeMessage({ sentAt: '2026-01-02T00:00:00Z' }), 'id-self', lastSeen)).toBe(
       true,
     )
   })

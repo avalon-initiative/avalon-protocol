@@ -167,7 +167,7 @@ function onMessageScroll(event: Event) {
                 :author-id="message.author"
                 :author-display-name="participantNames[message.author]"
                 :body="message.body"
-                :sent-at-label="new Date(message.sent_at).toLocaleString()"
+                :sent-at-label="new Date(message.sentAt).toLocaleString()"
                 :is-own="message.author === selfId"
                 :presence-status="participantPresence[message.author]"
               />

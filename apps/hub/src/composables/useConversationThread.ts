@@ -11,18 +11,17 @@
 // swaps which conversation is open without a route remount. An empty
 // `conversationId` (nothing selected yet) is a valid, quiet state.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import * as api from '@avalon/api-client'
+import type { ConversationMessage, RealtimeSubscription } from '@avalon/sdk'
 import { toOldestFirst } from '../api/conversations'
 import { markConversationSeen } from '../api/notifications'
-import type { ConversationMessageResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 const MESSAGE_PAGE_SIZE = 50
 
 export function useConversationThread(conversationId: Ref<string>) {
   const session = useSessionStore()
 
-  const messages = ref<ConversationMessageResponse[]>([]) // oldest-first
+  const messages = ref<ConversationMessage[]>([]) // oldest-first
   const loading = ref(true)
   const loadingOlder = ref(false)
   const hasMoreOlder = ref(true)
@@ -30,7 +29,7 @@ export function useConversationThread(conversationId: Ref<string>) {
   const sendError = ref('')
   const sending = ref(false)
 
-  let chatSocket: api.ChatSocket | undefined
+  let chatSocket: RealtimeSubscription | undefined
 
   function closeChatSocket() {
     chatSocket?.close()
@@ -47,18 +46,18 @@ export function useConversationThread(conversationId: Ref<string>) {
   const isEmpty = computed(() => !loading.value && messages.value.length === 0)
 
   async function loadLatestMessages(targetId: string) {
-    if (!session.token || !targetId) return
-    const page = await api.listConversationMessages(session.token, targetId, {
-      limit: MESSAGE_PAGE_SIZE,
-    })
+    const s = session.session
+    if (!s || !targetId) return
+    const page = await s.conversationMessages(targetId, undefined, MESSAGE_PAGE_SIZE)
     if (isStaleFor(targetId)) return
-    messages.value = toOldestFirst(page)
-    hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
+    const rows = Array.isArray(page) ? page : []
+    messages.value = toOldestFirst(rows)
+    hasMoreOlder.value = rows.length === MESSAGE_PAGE_SIZE
     // Opening a conversation is what "reads" it (issue #466's unread-DM
     // tracking) — mirrors HubShell.vue's onSelectAnnouncement marking a
     // guild announcement's channel seen the moment it's actually opened.
     const newest = messages.value[messages.value.length - 1]
-    if (newest) markConversationSeen(targetId, newest.sent_at)
+    if (newest) markConversationSeen(targetId, newest.sentAt)
   }
 
   // Opens the live socket for `targetId` (issue #438) — closes whatever
@@ -66,21 +65,23 @@ export function useConversationThread(conversationId: Ref<string>) {
   // connection pushing updates for one the reader left.
   function subscribeToConversation(targetId: string) {
     closeChatSocket()
-    if (!session.token || !targetId) return
-    chatSocket = api.openConversationMessageSocket(session.token, targetId, (message) => {
+    const s = session.session
+    if (!s || !targetId) return
+    chatSocket = s.subscribeConversationMessages(targetId, (message) => {
       if (isStaleFor(targetId)) return
       if (messages.value.some((m) => m.id === message.id)) return
       messages.value = [...messages.value, message]
       // The reader has this thread open right now — a message arriving
       // live counts as seen immediately, same as loadLatestMessages above.
-      markConversationSeen(targetId, message.sent_at)
+      markConversationSeen(targetId, message.sentAt)
     })
   }
 
   async function loadOlder() {
     const targetId = conversationId.value
+    const s = session.session
     if (
-      !session.token ||
+      !s ||
       !targetId ||
       loadingOlder.value ||
       !hasMoreOlder.value ||
@@ -91,13 +92,11 @@ export function useConversationThread(conversationId: Ref<string>) {
     loadingOlder.value = true
     try {
       const oldestId = messages.value[0].id
-      const page = await api.listConversationMessages(session.token, targetId, {
-        before: oldestId,
-        limit: MESSAGE_PAGE_SIZE,
-      })
+      const page = await s.conversationMessages(targetId, oldestId, MESSAGE_PAGE_SIZE)
       if (isStaleFor(targetId)) return
-      hasMoreOlder.value = page.length === MESSAGE_PAGE_SIZE
-      messages.value = [...toOldestFirst(page), ...messages.value]
+      const rows = Array.isArray(page) ? page : []
+      hasMoreOlder.value = rows.length === MESSAGE_PAGE_SIZE
+      messages.value = [...toOldestFirst(rows), ...messages.value]
     } catch (e) {
       if (!isStaleFor(targetId)) {
         error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -109,11 +108,12 @@ export function useConversationThread(conversationId: Ref<string>) {
 
   async function sendMessage(body: string) {
     const targetId = conversationId.value
-    if (!session.token || !targetId) return
+    const s = session.session
+    if (!s || !targetId) return
     sendError.value = ''
     sending.value = true
     try {
-      const message = await api.sendConversationMessage(session.token, targetId, { body })
+      const message = await s.sendConversationMessage(targetId, body)
       // Same race as useGuildChat.ts's sendMessage: the websocket push for
       // this message can arrive before this response does — dedup against
       // it, same guard subscribeToConversation's onMessage uses.
@@ -131,7 +131,7 @@ export function useConversationThread(conversationId: Ref<string>) {
 
   async function load() {
     const targetId = conversationId.value
-    if (!session.token) return
+    if (!session.session) return
     if (!targetId) {
       messages.value = []
       loading.value = false

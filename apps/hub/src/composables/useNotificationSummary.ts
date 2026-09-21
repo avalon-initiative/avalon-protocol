@@ -6,10 +6,6 @@
 // genuinely-actionable-pending-state (cleared by resolving the item) vs.
 // "have I seen this yet" (cleared by visiting, client-local state).
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-// Still on @avalon/api-client for conversations — that's #712's own later
-// migration batch, not this one; a raw bearer token works identically
-// against either package.
-import * as api from '@avalon/api-client'
 import {
   countNewGuardianOf,
   isConversationUnread,
@@ -69,7 +65,7 @@ export function useNotificationSummary() {
           s.listDeviceGrants('pending').catch(() => []),
           s.guardianRequests().catch(() => []),
           s.guardianOf().catch(() => []),
-          api.listConversations(s.token()).catch(() => []),
+          s.listConversations().catch(() => []),
         ])
 
       incomingFriendRequestCount.value = Array.isArray(friendRequests)
@@ -97,12 +93,11 @@ export function useNotificationSummary() {
       newGuardianOfCount.value = countNewGuardianOf(guardianOfIds, loadGuardianOfSeen())
 
       const conversationList = Array.isArray(conversations) ? conversations : []
-      const token = s.token()
       const lastMessages = await Promise.all(
         conversationList.map((c) =>
-          api
-            .listConversationMessages(token, c.id, { limit: 1 })
-            .then((msgs) => msgs[0] ?? null)
+          s
+            .conversationMessages(c.id, undefined, 1)
+            .then((msgs) => (Array.isArray(msgs) ? (msgs[0] ?? null) : null))
             .catch(() => null),
         ),
       )

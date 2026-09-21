@@ -14,10 +14,6 @@ import {
   AvalonSuggestionRow,
   AvalonTextField,
 } from '@avalon/ui'
-// Still on @avalon/api-client for createConversation — that's the
-// conversations migration batch, not this one; a raw bearer token works
-// identically against either package.
-import * as api from '@avalon/api-client'
 import { listSuggestions } from '../api/discovery'
 import type { Suggestion } from '../api/discovery'
 import type { SearchResultIdentity } from '@avalon/sdk'
@@ -203,12 +199,10 @@ function onViewProfile(identityId: string) {
 // straight to it — POST /conversations is idempotent on the participant
 // set, so this is never a duplicate even if one already exists.
 async function onMessageFriend(identityId: string) {
-  const token = session.token()
-  if (!token) return
+  const s = session.session
+  if (!s) return
   try {
-    const conversation = await api.createConversation(token, {
-      participants: [identityId],
-    })
+    const conversation = await s.createConversation([identityId])
     router.push({ name: 'conversation', params: { id: conversation.id } })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
