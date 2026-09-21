@@ -12,14 +12,13 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonConnectionCard, AvalonGuildCard, AvalonMetricTile } from '@avalon/ui'
-import * as api from '@avalon/api-client'
 import { isActiveIntegratorStatus } from '../api/integrations'
 import { capabilityDescription } from '../api/connections'
 import { buildDiscoverQueryString } from '../api/guilds'
-import type { DiscoverGuildSummary } from '@avalon/api-client'
+import type { DiscoverGuildSummary } from '@avalon/sdk'
 import { useIntegrationProfile } from '../composables/useIntegrationProfile'
 import { useMyConnections } from '../composables/useMyConnections'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import integratorStyles from '../styles/IntegrationProfile.module.scss'
 import styles from '../styles/page.module.scss'
 
@@ -40,10 +39,11 @@ const myBinding = computed(() =>
 const actionError = ref('')
 
 async function onRevokeGrant(capability: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.revokeGrant(session.token, slug.value, capability)
+    await s.revokeGrant(slug.value, capability)
     await myConnections.refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -51,10 +51,11 @@ async function onRevokeGrant(capability: string) {
 }
 
 async function onDisconnect() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.disconnectIntegrator(session.token, slug.value)
+    await s.disconnectIntegrator(slug.value)
     await myConnections.refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -74,13 +75,13 @@ const guildsPlaying = ref<DiscoverGuildSummary[]>([])
 const guildsPlayingError = ref('')
 
 async function refreshGuildsPlaying() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const response = await api.discoverGuilds(
-      session.token,
+    const response = await s.discoverGuilds(
       buildDiscoverQueryString({ integrator: slug.value, limit: GUILDS_PLAYING_PREVIEW_LIMIT }),
     )
-    guildsPlaying.value = response.guilds
+    if (Array.isArray(response.guilds)) guildsPlaying.value = response.guilds
   } catch (e) {
     guildsPlayingError.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
@@ -103,7 +104,7 @@ function formatKeyDate(iso: string): string {
         <h1 :class="styles.title">{{ integrator.name }}</h1>
         <span v-if="!isActiveIntegratorStatus(integrator.status)" :class="integratorStyles.statusBadge">{{ integrator.status }}</span>
       </div>
-      <p :class="styles.subtitle">{{ integrator.owner_name }} · Registered {{ formatRegisteredAt(integrator.registered_at) }}</p>
+      <p :class="styles.subtitle">{{ integrator.ownerName }} · Registered {{ formatRegisteredAt(integrator.registeredAt) }}</p>
     </header>
 
     <p v-if="error" :class="styles.error">{{ error }}</p>
@@ -125,10 +126,10 @@ function formatKeyDate(iso: string): string {
     <AvalonCard title="Issuer key history" subtitle="Every key this issuer has ever registered, and its current status.">
       <p v-if="issuerKeys.length === 0" :class="styles.empty">No keys registered.</p>
       <div v-else :class="integratorStyles.keyList">
-        <div v-for="key in issuerKeys" :key="key.key_id" :class="integratorStyles.keyRow">
+        <div v-for="key in issuerKeys" :key="key.keyId" :class="integratorStyles.keyRow">
           <span :class="integratorStyles.keyRole">{{ key.role }}</span>
-          <span v-if="key.revoked_at" :class="integratorStyles.keyStatus">Revoked {{ formatKeyDate(key.revoked_at) }}</span>
-          <span :class="integratorStyles.keyDates">Since {{ formatKeyDate(key.valid_from) }}</span>
+          <span v-if="key.revokedAt" :class="integratorStyles.keyStatus">Revoked {{ formatKeyDate(key.revokedAt) }}</span>
+          <span :class="integratorStyles.keyDates">Since {{ formatKeyDate(key.validFrom) }}</span>
         </div>
       </div>
     </AvalonCard>
@@ -146,7 +147,7 @@ function formatKeyDate(iso: string): string {
         :name="guild.name"
         :tag="guild.tag"
         :description="guild.description"
-        :member-count="guild.member_count"
+        :member-count="guild.memberCount"
         :recruiting="guild.recruiting"
         :icon-url="guild.icon ?? undefined"
         :banner-url="guild.banner ?? undefined"
@@ -164,7 +165,7 @@ function formatKeyDate(iso: string): string {
         v-else
         :integrator-name="myBinding.name"
         :slug="myBinding.slug"
-        :established-at="myBinding.established_at"
+        :established-at="myBinding.establishedAt"
         :grants="myBinding.grants.map((g) => ({ capability: g.capability, description: capabilityDescription(g.capability) }))"
         @revoke-grant="onRevokeGrant"
         @disconnect="onDisconnect"

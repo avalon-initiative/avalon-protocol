@@ -3,14 +3,11 @@
 // capabilities don't change while a user is looking at the consent
 // screen), and owns the checked-capabilities set the view submits.
 import { ref, type Ref } from 'vue'
-import * as api from '@avalon/api-client'
-import type { IntegratorResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { getIntegrator, type Integrator } from '@avalon/sdk'
+import { getServerUrl } from '../api/serverUrl'
 
 export function useIntegrationConsent(slug: Ref<string>) {
-  const session = useSessionStore()
-
-  const integrator = ref<IntegratorResponse | null>(null)
+  const integrator = ref<Integrator | null>(null)
   const loading = ref(true)
   const error = ref('')
 
@@ -19,11 +16,10 @@ export function useIntegrationConsent(slug: Ref<string>) {
   const checkedCapabilities = ref<Set<string>>(new Set())
 
   async function load() {
-    if (!session.token) return
     loading.value = true
     error.value = ''
     try {
-      integrator.value = await api.getIntegrator(session.token, slug.value)
+      integrator.value = await getIntegrator(getServerUrl(), slug.value)
       checkedCapabilities.value = new Set()
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'

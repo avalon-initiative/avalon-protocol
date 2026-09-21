@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { activeCapabilities, capabilityDescription, CAPABILITY_DESCRIPTIONS } from './connections'
-import type { IntegratorBindingResponse } from '@avalon/api-client'
+import type { MyConnection } from '@avalon/sdk'
 
 describe('capabilityDescription', () => {
   it('returns the plain-language description for a known capability', () => {
@@ -37,12 +37,12 @@ describe('capabilityDescription', () => {
 })
 
 describe('activeCapabilities', () => {
-  const baseBinding: IntegratorBindingResponse = {
-    binding_id: 'b1',
-    integrator_id: 'g1',
+  const baseBinding: MyConnection = {
+    bindingId: 'b1',
+    integratorId: 'g1',
     slug: 'ashen-realms',
     name: 'Ashen Realms',
-    established_at: '2026-09-01T00:00:00Z',
+    establishedAt: '2026-09-01T00:00:00Z',
     grants: [],
   }
 
@@ -54,8 +54,8 @@ describe('activeCapabilities', () => {
     const binding = {
       ...baseBinding,
       grants: [
-        { capability: 'friends.read', granted_at: 't1' },
-        { capability: 'presence.read', granted_at: 't2' },
+        { capability: 'friends.read', grantedAt: 't1' },
+        { capability: 'presence.read', grantedAt: 't2' },
       ],
     }
     expect(activeCapabilities(binding)).toEqual(['friends.read', 'presence.read'])

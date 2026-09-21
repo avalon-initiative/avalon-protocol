@@ -59,12 +59,16 @@ function achievementDefinitionFromWire(w: AchievementDefinitionWire): Achievemen
  * GlobalId string). */
 export async function listAchievementDefinitions(serverUrl: string, slug: string): Promise<AchievementDefinition[]> {
   const w = await request<AchievementDefinitionWire[]>(serverUrl, `/integrations/${slug}/achievements`)
+  // Passed through as-is on a non-array body rather than trusting it —
+  // same reasoning as every list-returning AccountSession method.
+  if (!Array.isArray(w)) return w as unknown as AchievementDefinition[]
   return w.map(achievementDefinitionFromWire)
 }
 
 /** `GET /integrations/{slug}/milestones`. */
 export async function listMilestoneDefinitions(serverUrl: string, slug: string): Promise<AchievementDefinition[]> {
   const w = await request<AchievementDefinitionWire[]>(serverUrl, `/integrations/${slug}/milestones`)
+  if (!Array.isArray(w)) return w as unknown as AchievementDefinition[]
   return w.map(achievementDefinitionFromWire)
 }
 
@@ -142,6 +146,7 @@ interface IntegratorsPageWire {
  * server-side. */
 export async function listIntegrators(serverUrl: string, queryString = ''): Promise<IntegratorsPage> {
   const w = await request<IntegratorsPageWire>(serverUrl, `/integrations${queryString}`)
+  if (!Array.isArray(w?.integrators)) return w as unknown as IntegratorsPage
   return {
     integrators: w.integrators.map((i) => ({
       id: i.id,
@@ -212,6 +217,7 @@ interface IssuerKeyWire {
  * public/unauthenticated visibility as `getIntegrator`/`listIntegrators`. */
 export async function listIssuerKeys(serverUrl: string, slug: string): Promise<IssuerKey[]> {
   const w = await request<IssuerKeyWire[]>(serverUrl, `/integrations/${slug}/keys`)
+  if (!Array.isArray(w)) return w as unknown as IssuerKey[]
   return w.map((k) => ({
     keyId: k.key_id,
     algorithm: k.algorithm,

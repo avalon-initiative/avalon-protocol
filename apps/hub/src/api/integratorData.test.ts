@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mergeIntegratorDataInstance, parseIntegratorSlugFromSchema } from './integratorData'
-import type { VisibleIntegratorDataInstanceResponse } from '@avalon/api-client'
+import type { VisibleIntegratorDataInstance } from '@avalon/sdk'
 
 describe('parseIntegratorSlugFromSchema', () => {
   it('extracts the slug from a game:<slug>:schema:<version> ref', () => {
@@ -14,12 +14,12 @@ describe('parseIntegratorSlugFromSchema', () => {
 
 describe('mergeIntegratorDataInstance', () => {
   function makeInstance(
-    overrides: Partial<VisibleIntegratorDataInstanceResponse> = {},
-  ): VisibleIntegratorDataInstanceResponse {
+    overrides: Partial<VisibleIntegratorDataInstance> = {},
+  ): VisibleIntegratorDataInstance {
     return {
       schema: 'game:ashen-realms:schema:1',
-      integrator_id: 'int-1',
-      published_at: '2026-01-01T00:00:00Z',
+      integratorId: 'int-1',
+      publishedAt: '2026-01-01T00:00:00Z',
       fields: { level: 42 },
       ...overrides,
     }
@@ -35,7 +35,7 @@ describe('mergeIntegratorDataInstance', () => {
     expect(merged.fields).toEqual({ level: 42 })
   })
 
-  it('falls back to the raw integrator_id when the schema ref is malformed', () => {
+  it('falls back to the raw integratorId when the schema ref is malformed', () => {
     const merged = mergeIntegratorDataInstance(makeInstance({ schema: 'not-a-ref' }))
     expect(merged.integratorSlug).toBe('int-1')
     expect(merged.integratorName).toBeUndefined()

@@ -16,9 +16,10 @@
 // rendered cards), so a poll tick briefly flipping it has no visible
 // effect on a page that already has content.
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import * as api from '@avalon/api-client'
-import { buildIntegratorsListQueryString } from '../api/integrations'
-import type { IntegratorSummary, ListIntegratorsParams } from '@avalon/api-client'
+import { listIntegrators } from '@avalon/sdk'
+import type { IntegratorSummary } from '@avalon/sdk'
+import { buildIntegratorsListQueryString, type ListIntegratorsParams } from '../api/integrations'
+import { getServerUrl } from '../api/serverUrl'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 
@@ -45,9 +46,9 @@ export function useDiscoverIntegrations() {
     loading.value = true
     error.value = ''
     try {
-      const response = await api.listIntegrators(buildIntegratorsListQueryString(currentParams()))
+      const response = await listIntegrators(getServerUrl(), buildIntegratorsListQueryString(currentParams()))
       integrators.value = response.integrators
-      nextCursor.value = response.next_cursor
+      nextCursor.value = response.nextCursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {
@@ -60,9 +61,9 @@ export function useDiscoverIntegrations() {
     loading.value = true
     error.value = ''
     try {
-      const response = await api.listIntegrators(buildIntegratorsListQueryString(currentParams(nextCursor.value)))
+      const response = await listIntegrators(getServerUrl(), buildIntegratorsListQueryString(currentParams(nextCursor.value)))
       integrators.value = [...integrators.value, ...response.integrators]
-      nextCursor.value = response.next_cursor
+      nextCursor.value = response.nextCursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {

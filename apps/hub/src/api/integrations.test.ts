@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildIntegratorsListQueryString, isActiveIntegratorStatus, listRegistryMetrics } from './integrations'
-import type { IntegratorRegistryResponse } from '@avalon/api-client'
+import type { IntegratorRegistry } from '@avalon/sdk'
 
 describe('buildIntegratorsListQueryString', () => {
   it('omits every key when nothing is set', () => {
@@ -30,12 +30,12 @@ describe('isActiveIntegratorStatus', () => {
 })
 
 describe('listRegistryMetrics', () => {
-  const registry: IntegratorRegistryResponse = {
+  const registry: IntegratorRegistry = {
     players: { value: 10, definition: 'distinct identities with an active IntegratorBinding', class: 'durable-derived' },
-    total_players_ever: { value: 12, definition: 'distinct identities that ever had a binding', class: 'durable-derived' },
-    achievements_issued: { value: 5, definition: 'count of achievement.issued events', class: 'durable-derived' },
-    achievements_revoked: { value: 1, definition: 'count of achievement.revoked events', class: 'durable-derived' },
-    unique_achievement_holders: { value: 4, definition: 'distinct subjects with >=1 valid attestation', class: 'durable-derived' },
+    totalPlayersEver: { value: 12, definition: 'distinct identities that ever had a binding', class: 'durable-derived' },
+    achievementsIssued: { value: 5, definition: 'count of achievement.issued events', class: 'durable-derived' },
+    achievementsRevoked: { value: 1, definition: 'count of achievement.revoked events', class: 'durable-derived' },
+    uniqueAchievementHolders: { value: 4, definition: 'distinct subjects with >=1 valid attestation', class: 'durable-derived' },
   }
 
   it('returns all five metrics, each with a non-empty label, definition, and class', () => {

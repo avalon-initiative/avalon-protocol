@@ -37,7 +37,7 @@ const homeMessages = computed(() => latestMessages.value.slice(0, HOME_MESSAGES_
 // pick — renamed from "Featured Integrator" since it isn't curated and connected
 // apps aren't only integrators.
 const featuredIntegrator = computed(() =>
-  [...connectedIntegrators.value].sort((a, b) => b.established_at.localeCompare(a.established_at))[0],
+  [...connectedIntegrators.value].sort((a, b) => b.establishedAt.localeCompare(a.establishedAt))[0],
 )
 
 const displayName = ref('')
@@ -84,7 +84,7 @@ const quickActions = [
         <div :class="styles.featuredText">
           <p :class="styles.featuredLabel">{{ featuredIntegrator.name }}</p>
           <p :class="styles.featuredMeta">
-            Connected {{ formatActivityTimestamp(featuredIntegrator.established_at) }}
+            Connected {{ formatActivityTimestamp(featuredIntegrator.establishedAt) }}
           </p>
         </div>
         <AvalonButton
@@ -122,7 +122,7 @@ const quickActions = [
             />
           </template>
           <ul v-else :class="styles.integratorGrid">
-            <li v-for="binding in connectedIntegrators" :key="binding.binding_id" :class="styles.integratorTile">
+            <li v-for="binding in connectedIntegrators" :key="binding.bindingId" :class="styles.integratorTile">
               <RouterLink
                 :to="{ name: 'integration-profile', params: { slug: binding.slug } }"
                 :class="styles.integratorTileLink"

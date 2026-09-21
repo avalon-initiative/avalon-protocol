@@ -25,5 +25,6 @@ export async function getIdentityIntegratorData(
   identityId: string,
 ): Promise<VisibleIntegratorDataInstance[]> {
   const w = await request<VisibleIntegratorDataInstanceWire[]>(serverUrl, `/identities/${identityId}/integrator-data`)
+  if (!Array.isArray(w)) return w as unknown as VisibleIntegratorDataInstance[]
   return w.map((d) => ({ schema: d.schema, integratorId: d.integrator_id, publishedAt: d.published_at, fields: d.fields }))
 }

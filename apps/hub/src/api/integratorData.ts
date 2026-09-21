@@ -3,8 +3,9 @@
 // client-side, mirroring achievements.ts's issuer-resolution pattern —
 // the response itself only carries a raw schema id and integrator_id,
 // no display name.
-import * as api from '@avalon/api-client'
-import type { VisibleIntegratorDataInstanceResponse } from '@avalon/api-client'
+import { getIdentityIntegratorData, getIntegrator } from '@avalon/sdk'
+import type { VisibleIntegratorDataInstance } from '@avalon/sdk'
+import { getServerUrl } from './serverUrl'
 
 // Schema ids are "game:<slug>:schema:<version>"
 // (crates/server/src/integrator_schemas.rs::schema_ref) — the slug is
@@ -27,15 +28,15 @@ export interface PublishedIntegratorData {
 }
 
 export function mergeIntegratorDataInstance(
-  instance: VisibleIntegratorDataInstanceResponse,
+  instance: VisibleIntegratorDataInstance,
   integratorNameBySlug: Map<string, string> = new Map(),
 ): PublishedIntegratorData {
-  const integratorSlug = parseIntegratorSlugFromSchema(instance.schema) ?? instance.integrator_id
+  const integratorSlug = parseIntegratorSlugFromSchema(instance.schema) ?? instance.integratorId
   return {
     schema: instance.schema,
     integratorSlug,
     integratorName: integratorNameBySlug.get(integratorSlug),
-    publishedAt: instance.published_at,
+    publishedAt: instance.publishedAt,
     fields: instance.fields,
   }
 }
@@ -43,7 +44,7 @@ export function mergeIntegratorDataInstance(
 export async function listPublishedIntegratorData(
   identityId: string,
 ): Promise<PublishedIntegratorData[]> {
-  const instances = await api.getIdentityIntegratorData(identityId)
+  const instances = await getIdentityIntegratorData(getServerUrl(), identityId)
   if (!Array.isArray(instances) || instances.length === 0) {
     return []
   }
@@ -51,7 +52,9 @@ export async function listPublishedIntegratorData(
   const slugs = [
     ...new Set(instances.map((i) => parseIntegratorSlugFromSchema(i.schema)).filter((s) => s !== null)),
   ]
-  const integrators = await Promise.all(slugs.map((slug) => api.getIntegratorPublic(slug).catch(() => null)))
+  const integrators = await Promise.all(
+    slugs.map((slug) => getIntegrator(getServerUrl(), slug).catch(() => null)),
+  )
   const integratorNameBySlug = new Map<string, string>()
   integrators.forEach((integrator, index) => {
     if (integrator) integratorNameBySlug.set(slugs[index], integrator.name)

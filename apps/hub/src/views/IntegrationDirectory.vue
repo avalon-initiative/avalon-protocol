@@ -7,8 +7,8 @@ import { AvalonButton, AvalonCard, AvalonFilterBar, AvalonIntegratorCard } from 
 import type { AvalonFilterBarSortOption } from '@avalon/ui'
 import { useDiscoverIntegrations } from '../composables/useDiscoverIntegrations'
 import { useMyConnections } from '../composables/useMyConnections'
-import { useSessionStore } from '@avalon/api-client'
-import type { IntegratorCategory } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
+import type { IntegratorCategory } from '@avalon/sdk'
 import integratorDirectoryStyles from '../styles/IntegrationDirectory.module.scss'
 import styles from '../styles/page.module.scss'
 
@@ -94,9 +94,9 @@ function openIntegrator(slug: string) {
         <AvalonIntegratorCard
           :name="integrator.name"
           :slug="integrator.slug"
-          :owner-name="integrator.owner_name"
+          :owner-name="integrator.ownerName"
           :status="integrator.status"
-          :registered-at="formatRegisteredAt(integrator.registered_at)"
+          :registered-at="formatRegisteredAt(integrator.registeredAt)"
           @select="openIntegrator(integrator.slug)"
         />
         <AvalonButton
