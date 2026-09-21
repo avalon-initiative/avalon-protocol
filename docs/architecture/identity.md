@@ -561,6 +561,106 @@ ongoing dependency for anything except this initial login step.
 
 ## Today in the repo
 
+### Action-tier classification: ambient token vs. fresh signature (#697)
+
+#696 decided that `AccountSession` actions split into two tiers: most stay
+authorized by the ambient session bearer token alone; a smaller set of
+high-blast-radius, hard-to-reverse actions additionally require a fresh
+signature from the identity's own locally-held Ed25519 signing key at the
+moment of the action, extending the same
+`event_signing_public_key`/`event_signature` pattern `register_finish`
+already verifies for `identity.created`. This section is that
+classification, endpoint by endpoint, for every account-level (non-
+integrator-credential-gated) route in `crates/server`. **It is a design
+artifact, not yet enforced** — #698 is the ticket that makes the
+signature-required column actually load-bearing server-side; until it
+lands, every route below still only checks the ambient bearer token,
+including the ones marked "signature-required."
+
+Two endpoint families are out of scope and don't appear below:
+node-to-node/operator routes (`/ledger/*`, `/nodes/*`, `/mirror/*`,
+`/internal/*` — a different auth domain, see `docs/architecture/chain.md`),
+and integrator-credential-gated routes (`/integrations/*`'s own key/schema/
+achievement/milestone management, `/issuers/*` — authenticated by an
+integrator's root/operational key, never by an identity's session, per
+#26/#84's server-to-server model). `/integrations/{slug}/connect` and its
+sibling grant-management routes below *are* in scope: those are called by
+an identity's own account session to grant or revoke that identity's
+consent, not by the integrator itself.
+
+**Pre-session bootstrap — not applicable to either tier.** These routes run
+before an ambient session exists, so there's no bearer token to layer a
+signature requirement on top of; they're already gated by a real WebAuthn
+ceremony and, for the two that mint durable identity state, an Ed25519
+event signature at least as strong as the "fresh signature" tier below:
+`POST /identities/register/start`, `POST /identities/register/finish`
+(verifies the `identity.created` event signature before writing anything),
+`POST /sessions/start`, `POST /sessions/finish`, `POST /auth/device/start`,
+`POST /auth/device/poll`, `POST /auth/cross-node/start`, `POST
+/auth/cross-node/poll`, `POST /auth/cross-node/submit`, `POST
+/auth/cross-node/deny`, `GET /auth/cross-node/lookup`, `POST
+/recovery/requests/start`, `POST /recovery/requests/finish`, `GET
+/recovery/requests/{id}`, `GET /identities/{id}/recovery/status` (the last
+four are public by design — see the social-recovery section above).
+
+**Ambient-token tier** — reads, and writes that are low-blast-radius,
+reversible, or high-frequency enough that requiring a fresh signature on
+every call would make the product unusable:
+
+| Endpoint | Rationale |
+|---|---|
+| `GET`/`PATCH /me` | Profile fields are self-description, not security state (see "Self-described metadata" above); reversible. |
+| `GET /me/history`, `GET /me/achievements`, `GET /me/guild-announcements` | Reads. |
+| `GET /identities/profiles`, `GET /identities/{id}/profile`, `GET /identities/{id}/locations` | Reads. |
+| `PUT /me/presence`, `GET /presence`, `GET /ws/presence`, `GET /ws/messages` | High-frequency, low-stakes, self-correcting on the next update. |
+| `GET`/`POST /friends/requests`, `POST /friends/requests/{id}/accept`, `DELETE /friends/requests/{id}`, `GET /friends`, `DELETE /friends/{identity_id}`, `GET /friends/handle/{handle}` | Reversible social-graph edits; blast radius is "an unwanted friend," not account takeover. |
+| `GET /people/discover`, `GET /identities/search` | Reads. |
+| `GET`/`POST /blocks`, `DELETE /blocks/{identity_id}` | Reversible, and blocking needs to be immediate/low-friction for it to be useful as a safety tool — gating it behind a signature ceremony would work against its purpose. |
+| `GET`/`POST /conversations`, `GET`/`POST /conversations/{id}/messages` | Chat; existing moderation-delete precedent (see #697's own invariants) treats messages as high-frequency and reversible by deletion, not high-risk. |
+| `POST /auth/device/deny` | Declining a pairing request; no state granted, nothing to reverse. |
+| `GET /me/devices/grants`, `GET /me/devices/grants/{id}`, `GET /me/devices`, `PATCH /me/devices/{id}` (rename), `POST /me/devices/grants` (request) | Reads, a label rename, and *requesting* a grant (requesting confers no access by itself — see signature-required tier for the approval that does). |
+| `POST /me/devices/{id}/revoke` | Revocation only ever narrows trust, the same reasoning `devices.rs`'s own module doc already applies to `identity.signing_key_revoked` vs. `identity.signing_key_added`; unilateral by design so a compromised/lost device can be cut off immediately without needing the signing key that device might itself hold. |
+| `GET /me/passkeys`, `PATCH /me/passkeys/{id}` (rename) | Reads and a label rename. |
+| `POST /me/passkeys/{id}/revoke` (not the identity's last passkey) | Narrows trust; see the last-passkey exception below. |
+| `GET /me/recovery/guardians`, `GET /me/recovery/status`, `GET /me/recovery/guardian-requests`, `GET /me/recovery/guardian-of` | Reads (the *write* side, `PUT /me/recovery/guardians`, is conditionally tiered below — see the signature-required row). |
+| `DELETE /me/recovery/guardian-of/{identity_id}` | Self-removal only narrows a guardian assignment; #443's clamp-threshold-down behavior keeps it safe unilaterally. |
+| `POST /recovery/requests/{id}/approve`, `POST /recovery/requests/{id}/cancel` | Guardian actions on someone *else's* recovery; the M-of-N threshold and mandatory public delay are already the load-bearing safety property here, not per-call signing. |
+| `POST /recovery/requests/{id}/finalize` | Finalization only executes what the threshold + delay already approved; nothing new is being authorized at this step. |
+| `DELETE /integrations/{slug}/connect` (disconnect), `DELETE /integrations/{slug}/grants/{capability}` | Revocation only narrows what an integrator can do; reversible by reconnecting/re-granting. |
+| `GET /me/connections`, `GET /me/grants` | Reads. |
+| `POST /guilds`, `GET /guilds/discover`, `GET /guilds/{id}` | Creating a new guild or reading; no existing member's standing changes. |
+| `PATCH /guilds/{id}` (name/description/etc.), `GET /guilds/{id}/roles` | Ordinary `manage_guild`-gated edits, not ownership/permission-structure changes. |
+| `GET /guilds/{id}/permission-overrides`, `GET /guilds/{id}/integrator-breakdown`, `GET`/`PUT /guilds/{id}/favorite-integrators` | Reads and cosmetic/discovery settings (the *write* side of permission-overrides is in the signature-required tier below). |
+| `POST /guilds/{id}/integrations/{integrator_id}` (associate) | Reversible association, not a permission grant to the integrator itself. |
+| `GET /me/guild-invites`, `POST /guilds/{id}/invites`, `POST /guilds/{id}/invites/{invite_id}/accept`, `POST /guilds/{id}/invites/{invite_id}/decline`, `POST /guilds/{id}/join`, `GET`/`POST /guilds/{id}/join-requests`, `GET /guilds/{id}/join-requests/mine`, `POST /guilds/{id}/join-requests/{request_id}/approve`, `POST /guilds/{id}/join-requests/{request_id}/reject`, `DELETE /guilds/{id}/join-requests/{request_id}`, `POST /guilds/{id}/leave` | Ordinary membership churn, all reversible (leave and rejoin, reject and re-request). |
+| `GET /guilds/{id}/members`, `GET /me/guilds` | Reads. |
+| `DELETE /guilds/{id}/members/{identity_id}` (kick, not role change) | Reversible via re-invite; bounded by the kicker's own `manage_members` permission. |
+| `GET`/`POST /guilds/{id}/channels`, `PATCH /guilds/{id}/channels/{cid}`, `POST /guilds/{id}/channels/{cid}/archive` | Structural but reversible (unarchive, re-edit), gated on existing `manage_channels` permission. |
+| `GET`/`POST /guilds/{id}/channels/{cid}/messages`, `DELETE /guilds/{id}/channels/{cid}/messages/{mid}`, `GET /guilds/{id}/channels/{cid}/messages/archive` | Chat, same reasoning as `/conversations` above. |
+| `GET`/`POST /guilds/{id}/events`, `PATCH`/`DELETE /guilds/{id}/events/{eid}`, `PUT /guilds/{id}/events/{eid}/rsvp`, `GET /guilds/{id}/events/{eid}/rsvps` | Reversible scheduling state. |
+
+**Signature-required tier** — high-blast-radius and/or hard-to-reverse
+actions where a stolen bearer token alone should not be sufficient:
+
+| Endpoint | Rationale |
+|---|---|
+| `POST /auth/device/approve` | **Currently under-protected** — mints a brand-new full session bearer token for an entirely different device off nothing but the approver's own ambient session (see `device_pairing.rs`'s module doc). An attacker holding only a stolen bearer token could use this to plant a second, independently-usable session for themselves. This is the clearest concrete gap #698 needs to close. |
+| `POST /me/devices/grants/{id}/approve` | Already follows the target pattern today: approval is signed with the approving device's own Ed25519 key over `device_grant_approval_signing_bytes(...)`, not just ambient-token-gated (see `devices.rs`'s module doc) — the existing precedent #698 should point to, not a gap to close. |
+| `POST /me/passkeys/{id}/revoke` **when it is the identity's last remaining passkey** | Flagged specifically because of the lock-out angle: if a passkey ceremony can't be required (there's none left to prove), a stolen-bearer-token attacker could otherwise use this single call to strip the real owner's only way back in. Today this is gated by `?confirm=true` (`passkeys::guard_revoke_last_passkey`) — a client-side speed bump, not a credential check; #698 should upgrade this specific case from "confirm" to "sign." |
+| `PUT /me/recovery/guardians` when it *removes* a guardian or *raises* the threshold | Naming/adding guardians stays ambient (#443's existing unilateral-opt-out design); but an attacker with only a stolen bearer token silently removing real guardians or raising the threshold past what remaining guardians can satisfy would neuter the owner's actual recovery path without needing to touch recovery itself. Lowering the threshold or adding guardians is comparatively low-risk (makes recovery easier, not harder) and can stay ambient. |
+| `POST /integrations/{slug}/connect` | Explicitly named in #696's decision text ("granting an integrator broad capabilities"): this is the one call that hands a third party standing permission over the identity's data going forward. |
+| `PUT /guilds/{id}/permission-overrides`, `DELETE /guilds/{id}/permission-overrides/{override_id}` | Changes what an entire role/resource can do guild-wide, not just one member's standing. |
+| `POST /guilds/{id}/roles`, `PATCH`/`DELETE /guilds/{id}/roles/{idx}` | Same reasoning — role definitions are the guild's permission structure, not membership churn (`GET /guilds/{id}/roles` itself is a read, already listed above). |
+| `POST /guilds/{id}/transfer-ownership` | #696's own named example; today gated only by `actor == guild.owner` over the ambient session (see `guilds::transfer_ownership`) — no re-proof of the owner's identity beyond the bearer token, exactly the gap #698 targets. |
+| `PATCH /guilds/{id}/members/{identity_id}` (role change) | Can grant another member owner-adjacent permissions (`manage_roles`, `manage_members`) — same "silently escalate someone else's standing" shape as a permission-override change, just scoped to one member. |
+
+Deliberately **not** blanket-classified as signature-required despite
+mutating state: sending a chat message, leaving a guild, revoking a
+non-last passkey/device, or disconnecting from an integrator — each is
+either fully reversible or only ever narrows the caller's own exposure,
+matching #697's own invariant against a blanket
+"anything-that-mutates-state-is-high-risk" rule.
+
 - `crates/protocol/src/identity.rs` — `Identity { id, created_at }` and
   `Profile { identity_id, display_name, avatar_url, bio, favorite_genres,
   pronouns, banner_url, status, links, timezone, theme_color, location,
