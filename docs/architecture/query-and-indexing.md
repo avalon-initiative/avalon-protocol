@@ -67,6 +67,70 @@ A "current status" column (an attestation's revoked flag, a member's current
 role) is a cache of the latest relevant event. History remains in the log and,
 where useful, in a history projection alongside the current-state one.
 
+## Events with their own source of truth
+
+Not every real, current event kind gets an indexer projection, and that is by
+design, not a gap — #669. A protocol event's data has exactly one of two
+homes:
+
+- **Indexer-projected**: the handler that emits the event writes only to
+  `ledger_entries` (via the outbox); the event's data reaches Postgres only
+  when `PostgresIndexer::apply_in_tx` later dispatches it into one of the
+  tables under [`Self::KNOWN`'s `PROJECTION_TABLES`](../../crates/indexer/src/postgres.rs)
+  (`profiles`, `indexer_friendships`, `indexer_guild_members`,
+  `indexer_attestations`, and so on). This is the only kind of table
+  `rebuild_from_scratch` (#43) truncates and replays — the one #43's
+  "always rebuildable from durable events" guarantee actually promises.
+- **Server-owned, its own direct table**: the handler writes its own table
+  synchronously, in the same transaction as the `outbox::enqueue` call that
+  makes the event durable — the event is emitted for other consumers
+  (mirrors, future subscribers, audit), but this repo's own reads of that
+  data never go through the indexer at all. Rebuilding the indexer's
+  projection tables from scratch has nothing to do with this table's
+  correctness, because the indexer never wrote to it in the first place.
+
+`PostgresIndexer::apply_in_tx`'s dispatch `match` reflects this explicitly: a
+kind in the second category gets its own no-op arm with a comment pointing
+here, rather than falling into the generic "unrecognized kind" branch (which
+exists for a kind this build genuinely doesn't know about yet — an old
+indexer surviving a new event kind added elsewhere in the protocol). Before
+#669, kinds in the second category fell into that same generic branch, so
+every rebuild logged them as `skipping unrecognized event kind` even though
+nothing was actually broken — noise indistinguishable from a real gap.
+
+Server-owned kinds and their table, as of #669:
+
+| Event kind(s) | Table | Handler |
+| --- | --- | --- |
+| `game.registered` | `integrators` (+ `issuer_keys`, `integrator_requested_capabilities`) | `crates/server/src/integrators.rs::register_integrator` |
+| `issuer.key_added` / `issuer.key_revoked` | `issuer_keys` | `crates/server/src/integrators.rs::add_issuer_key`/`revoke_issuer_key` |
+| `guild.channel_created` | `guild_channels` | `crates/server/src/channels.rs::create_channel` |
+| `permission.granted` / `permission.revoked` | `permission_grants` | `crates/server/src/connections.rs` |
+| `achievement.defined` / `.definition_updated` / `.definition_retired` | `achievement_definitions` | `crates/server/src/achievements.rs::create_definition`/`update_definition` |
+| `milestone.defined` / `.definition_updated` / `.definition_retired` | `achievement_definitions` | same as above — milestones and achievements share one claim-vocabulary table (#324/#325) |
+| `milestone.issued` / `milestone.revoked` | `achievement_attestations` | `crates/server/src/achievements.rs` |
+
+`achievement.issued`/`achievement.revoked` are the one asymmetric case worth
+calling out: they get *both* a direct table write (`achievement_attestations`,
+server-owned) *and* an indexer projection (`indexer_attestations`, feeding the
+`achievements_issued`/`achievements_revoked`/`unique_achievement_holders`
+registry metrics — [`./registry.md`](./registry.md)). `milestone.issued`/
+`milestone.revoked` deliberately do not get the second half: those registry
+metrics are achievement-scoped by name and by design, not milestone-inclusive
+— see `crates/indexer/src/registry.rs`. Whether milestones should eventually
+feed their own or a combined metric is a real open question, not decided
+here; #669 only closes the rebuild-noise gap, it doesn't expand metrics
+scope.
+
+A handful of other real, current kinds (`identity.recovery_*`,
+`issuer.registered`, `guild.updated`/`.role_defined`/`.role_deleted`/
+`.owner_transferred`/`.game_associated`/`.favorite_games_updated`,
+`guild.channel_renamed`/`.channel_archived`) are still uninvestigated and
+still fall into the generic "unrecognized" branch as of #669 — each looks
+like the same server-owned pattern on a quick read, but wasn't verified
+kind-by-kind against this ticket's bar, so is deliberately left alone rather
+than guessed at. A follow-up ticket should give them the same treatment.
+
 ## Settlement vs querying
 
 Kept apart on purpose ([#69](https://github.com/LunarVagabond/avalon-protocol/issues/69)):
@@ -152,6 +216,15 @@ a first-class scaling dimension — see
   ever` metrics (#261); `integrator_schemas` (#255) backs schema-version discovery
   — see [`./registry.md`](./registry.md). No history projections
   yet.
+- **#669**: `PostgresIndexer::apply_in_tx`'s dispatch now has an explicit
+  no-op arm for every server-owned event kind investigated so far
+  (`game.registered`, `issuer.key_added`/`.key_revoked`,
+  `guild.channel_created`, `permission.granted`/`.revoked`,
+  `achievement.defined`/`.definition_updated`/`.definition_retired`,
+  `milestone.defined`/`.definition_updated`/`.definition_retired`/
+  `.issued`/`.revoked`), instead of these falling into the generic
+  "unrecognized kind" branch on every rebuild. See "Events with their own
+  source of truth" above for the full investigation and table mapping.
 - **A Gateway-only deployment can now run without a local `PostgresIndexer`
   (#662)**, building on #661's `RemoteIndexer`/`/internal/indexer/*`
   protocol (see `docs/architecture/nodes.md`'s "Today in the repo" section
