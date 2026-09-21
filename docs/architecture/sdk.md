@@ -758,6 +758,101 @@ protocol and the domain model in `crates/protocol`; they never pull in
     only, same category of gap the Rust SDK's own `webauthn.rs` doesn't
     have (it *can* drive a virtual authenticator) but C#'s
     `Register`/`AccountLogin` do (skipped outright there).
+  - **Epic #712 stage 1**: three `AccountSession` capabilities `apps/hub`
+    needs that #701 didn't build, added so the later Hub-migration stage
+    (#712's own later work, `apps/hub` untouched by this stage) has
+    something functionally complete to migrate onto:
+    - `bindings/ts/src/accountSession/realtime.ts` — `subscribePresence`
+      (`GET /ws/presence`, issue #136) and `subscribeChannelMessages`/
+      `subscribeConversationMessages` (`GET /ws/messages`, issue #438),
+      ported from `packages/api-client/src/client.ts`'s
+      `openPresenceSocket`/`openChannelMessageSocket`/
+      `openConversationMessageSocket`, same shapes (a plain browser
+      `WebSocket`, additive `subscribe(ids)` queued until `open` for
+      presence, the `node_info`-then-`subscribe_channel`/
+      `subscribe_conversation` handshake for chat). The chat handshake
+      includes issue #610's signed DHT interest claim, minted via the new
+      `bindings/ts/src/crypto/interestClaim.ts` (mirroring
+      `packages/api-client/src/crypto/interestClaim.ts` byte-for-byte)
+      whenever this session holds a local signing key and the server
+      offers a `base_url` — `AccountSession` already holds
+      identityId/signingKeyId/secretKey in memory, so no storage-adapter
+      lookup is needed the way the Hub reference needs one.
+      `subscribeChannelMessages` also takes an optional `onDeleted`
+      callback firing with a message id on a moderation delete, matching
+      the reference's `openChannelMessageSocket` shape exactly;
+      conversations have no equivalent (no moderation-delete endpoint).
+    - `bindings/ts/src/crypto/continuation.ts` — session-continuation
+      token minting (issue #525), mirroring
+      `packages/api-client/src/crypto/continuation.ts`'s wire format
+      exactly (`avalon:continuation:v1:<identity_id>:<signing_key_id>:
+      <nonce>:<issued_at_secs>:<expires_at_secs>`, wire-encoded as
+      `AVCT1.<base64url-no-pad-json>`). Wired into `bindings/ts/src/
+      http.ts`'s `request()` via a new optional `onUnauthorized` hook on
+      `RequestOptions` — `AccountSession`'s own internal `get`/`post`/
+      `patch`/`put`/`del`/etc. helpers pass a hook that mints a
+      continuation token from the session's own in-memory signing key on
+      a 401 and retries exactly once, never persisting the result back
+      into the session's own token (single-use by design). `Integrator
+      Session`'s call sites never pass this hook — an integrator
+      credential has no local signing key to reconnect from, so its 401s
+      propagate unchanged, same as before this stage.
+    - `bindings/ts/src/ledger.ts` — a free-standing `getLatestSth(server
+      Url)` (not a session method — `GET /ledger/sth/latest` is public,
+      unauthenticated) plus the `SignedTreeHeadResponse` wire type in
+      `bindings/ts/src/types.ts`, matching `crates/server/src/
+      settlement.rs::SignedTreeHeadResponse` field-for-field. Hub's own
+      `apps/hub/src/network/verifyNetwork.ts` (issue #232) keeps its STH-
+      based network-trust verification logic — this only supplies the
+      fetch and the wire shape.
+    - **Unit tests**: `crypto/continuation.test.ts` covers the wire format
+      byte-for-byte (mirroring `packages/api-client/src/crypto/
+      continuation.test.ts`'s own test style: prefix, field shapes, exact
+      60-second TTL, the exact signed-bytes format, tamper detection,
+      nonce freshness). `http.test.ts` covers the `onUnauthorized` retry
+      mechanics against a stubbed `fetch` (retries once, never persists,
+      propagates when the hook returns `null` or is absent, never fires
+      for a non-401). `accountSession/core.test.ts` adds the same round
+      trip through a real `AccountSession` (mints from its own in-memory
+      key, retries, `token()` unchanged afterward; propagates as-is with
+      no local key). `accountSession/realtime.test.ts` covers what's
+      testable without a real server against a stubbed `WebSocket`:
+      subscribe-before-open queuing, the `node_info` handshake firing
+      `subscribe_channel`/`subscribe_conversation` at most once, claim
+      minting/omission depending on local key and server-offered
+      `base_url`, and camelCase message mapping — a real server pushing a
+      live update is left to the live suite below, not faked here.
+    - **Live tests** (`account.live.test.ts`, run 2026-09-21 against this
+      sandbox's real `avalon-server`/Postgres via `npm run test:live`):
+      a presence-subscribe round trip (one identity subscribes, a second
+      identity's `PUT /me/presence` update arrives pushed over the
+      socket, confirmed against the same `indexer_friendships` projection
+      the server's own friend-visibility check reads, not just
+      `friendships`); a channel-message subscribe round trip (a sent
+      message arrives pushed over the socket, then a moderation delete
+      arrives via `onDeleted`); and a `getLatestSth()` round trip against
+      the real `GET /ledger/sth/latest`. All pass.
+      A live continuation-reconnect test (retrying against a *second*
+      node the original session token isn't valid on) was attempted
+      against `avalon-peer` — reachable and network-adjacent, genuinely
+      running its own separate Postgres, the actual topology this test
+      needs. The initial `PATH` gap (the Rust toolchain isn't on a
+      non-interactive `ssh host 'command'` session's `PATH` there) was
+      fixed and `avalon-peer` brought up to this same commit
+      successfully, but `crates/server/src/continuation.rs::verify`
+      resolves a continuation token's signing key by the exact
+      `indexer_identity_signing_keys.signing_key_id` — a UUID that has to
+      match byte-for-byte across two genuinely independent Postgres
+      instances for the test to mean anything (not just the same
+      `identity_id`/public key). Hand-seeding that consistently across
+      both databases for one test was judged not worth it relative to
+      what it would add: the minting logic already has full byte-format
+      unit coverage (`crypto/continuation.test.ts`), a mocked-fetch round
+      trip through a real `AccountSession` proves the retry wiring itself
+      works end-to-end (`core.test.ts`), and the wire format is an exact
+      port of Hub's own already-shipping, production-proven
+      `packages/api-client` implementation. What's specifically
+      unverified live is only the cross-node network hop itself.
 
 ## Decisions and tickets
 
@@ -796,3 +891,9 @@ protocol and the domain model in `crates/protocol`; they never pull in
   into #700/#701 from the start). See [identity.md](./identity.md)'s own
   "Decisions and tickets" for the companion tier-classification/
   enforcement tickets (#697/#698/#704).
+- [#712](https://github.com/LunarVagabond/avalon-protocol/issues/712) —
+  Epic: migrate `apps/hub` off `packages/api-client` onto `bindings/ts`.
+  Stage 1 (this stage): extend `AccountSession` with presence/chat
+  WebSocket subscriptions, issue #525's continuation-token reconnect, and
+  `getLatestSth()`, so the surface is functionally complete before Hub
+  itself is touched in a later stage.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AccountSession } from './core.js'
 import { canonicalMessage, generateSigningKey, verify } from '../crypto/signing.js'
+import { WIRE_PREFIX } from '../crypto/continuation.js'
 import './passkeys.js'
 
 function testIdentity() {
@@ -57,6 +58,85 @@ describe('AccountSession.sign', () => {
 
     const signatureBytes = Uint8Array.from(atob(signed.signature!), (c) => c.charCodeAt(0))
     expect(verify(publicKey, canonicalMessage('passkey.revoke_last', ['p1', 'i1']), signatureBytes)).toBe(true)
+  })
+})
+
+describe('AccountSession 401 continuation-reconnect (issue #525)', () => {
+  it('mints a continuation token from its own in-memory signing key and retries once', async () => {
+    const identity = testIdentity()
+    const { secretKey, publicKey } = generateSigningKey()
+    const signingKeyId = crypto.randomUUID()
+    const session = new AccountSession({
+      identity,
+      profile: testProfile(identity.id),
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'stale-token',
+      signing: { secretKey, publicKey, signingKeyId },
+    })
+
+    let calls = 0
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      calls += 1
+      const auth = (init?.headers as Record<string, string>)?.authorization
+      if (calls === 1) {
+        expect(auth).toBe('Bearer stale-token')
+        return new Response('', { status: 401 })
+      }
+      expect(auth?.startsWith(`Bearer ${WIRE_PREFIX}`)).toBe(true)
+      return new Response(
+        JSON.stringify({
+          identity_id: identity.id,
+          identity_created_at: identity.createdAt,
+          display_name: 'test',
+          avatar_url: null,
+          bio: null,
+          favorite_genres: [],
+          pronouns: null,
+          banner_url: null,
+          status: null,
+          links: [],
+          timezone: null,
+          theme_color: null,
+          location: null,
+          main_guild: null,
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    try {
+      await session.refreshProfile()
+      expect(calls).toBe(2)
+      // Never persisted back into the session's own token — single-use.
+      expect(session.token()).toBe('stale-token')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('propagates the 401 as-is when this session holds no local signing key', async () => {
+    const identity = testIdentity()
+    const session = new AccountSession({
+      identity,
+      profile: testProfile(identity.id),
+      serverUrl: 'http://127.0.0.1:1',
+      token: 'stale-token',
+    })
+
+    let calls = 0
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      calls += 1
+      return new Response('', { status: 401 })
+    }) as typeof fetch
+
+    try {
+      await expect(session.refreshProfile()).rejects.toThrow()
+      expect(calls).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 
