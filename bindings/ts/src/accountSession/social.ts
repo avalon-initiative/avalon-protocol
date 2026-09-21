@@ -113,6 +113,8 @@ export interface PublicIdentityProfile {
   timezone: string | null
   themeColor: string | null
   location: string | null
+  mainGuild: string | null
+  effectiveMainGuild: string | null
 }
 interface PublicIdentityProfileWire {
   identity_id: string
@@ -128,6 +130,8 @@ interface PublicIdentityProfileWire {
   timezone: string | null
   theme_color: string | null
   location: string | null
+  main_guild: string | null
+  effective_main_guild: string | null
 }
 
 export interface GuildAnnouncementAlert {
@@ -289,6 +293,8 @@ AccountSession.prototype.identityProfile = async function (
     timezone: w.timezone,
     themeColor: w.theme_color,
     location: w.location,
+    mainGuild: w.main_guild,
+    effectiveMainGuild: w.effective_main_guild,
   }
 }
 

@@ -7,8 +7,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
 import UserProfile from './UserProfile.vue'
-import { useSessionStore } from '@avalon/api-client'
-import { useSessionStore as useNewSessionStore } from '../api/session'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, MockErrorResponse, mockFetchByPath } from '../testing/fakes'
 
 const selfProfile = {
@@ -29,6 +28,12 @@ function testRouter() {
   })
 }
 
+// `mockFetchByPath` must already be stubbed before this runs.
+async function loginSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
@@ -47,8 +52,7 @@ describe('viewing another user from Friends', () => {
       ],
       '/people/discover': { candidates: [] },
     })
-    localStorage.setItem('avalon:session:token', 'a-token')
-    await useNewSessionStore().initialize()
+    await loginSession()
 
     const router = testRouter()
     router.push('/friends')
@@ -77,7 +81,6 @@ describe('UserProfile', () => {
   }
 
   it("shows the user's public profile fields and live presence", async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [],
@@ -102,6 +105,7 @@ describe('UserProfile', () => {
       },
       '/presence': [{ identity_id: 'id-friend', status: 'DoNotDisturb', playing: null, updated_at: 'now' }],
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-friend')
@@ -122,12 +126,12 @@ describe('UserProfile', () => {
   })
 
   it("shows a not-found message when the user doesn't resolve", async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/identities/id-missing/profile': new MockErrorResponse(404),
       '/presence': [],
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-missing')
@@ -159,7 +163,6 @@ describe('UserProfile', () => {
   }
 
   it('renders a banner and links the effective main guild', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [],
@@ -172,6 +175,7 @@ describe('UserProfile', () => {
       '/presence': [],
       '/guilds/g1': { id: 'g1', name: 'Dragon Hunters' },
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-friend')
@@ -184,7 +188,6 @@ describe('UserProfile', () => {
   })
 
   it('sends a friend request from the actions row', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [],
@@ -194,6 +197,7 @@ describe('UserProfile', () => {
       '/presence': [],
       '/friends/requests-created': { id: 'r1', from: 'id-self', to: 'id-friend', requested_at: 'now' },
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-friend')
@@ -215,7 +219,6 @@ describe('UserProfile', () => {
   })
 
   it('blocks and then unblocks the viewed identity', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [],
@@ -224,6 +227,7 @@ describe('UserProfile', () => {
       '/identities/id-friend/profile': otherProfile(),
       '/presence': [],
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-friend')
@@ -246,7 +250,6 @@ describe('UserProfile', () => {
 
   // Issue #465.
   it('renders published integrator data with its resolved integrator name', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [],
@@ -264,6 +267,7 @@ describe('UserProfile', () => {
       ],
       '/integrations/ashen-realms': { id: 'int-1', slug: 'ashen-realms', name: 'Ashen Realms' },
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-friend')
@@ -276,7 +280,6 @@ describe('UserProfile', () => {
   })
 
   it('shows an empty state when nothing is published', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [],
@@ -286,6 +289,7 @@ describe('UserProfile', () => {
       '/presence': [],
       '/identities/id-friend/integrator-data': [],
     })
+    await loginSession()
 
     const router = testRouterForCard()
     router.push('/users/id-friend')

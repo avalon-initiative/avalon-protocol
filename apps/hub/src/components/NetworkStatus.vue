@@ -6,7 +6,7 @@
 // tiny local ref for the details toggle.
 import { ref } from 'vue'
 import { useNetworkTrust } from '../composables/useNetworkTrust'
-import { getServerUrl, setServerUrl } from '@avalon/api-client'
+import { getServerUrl, setServerUrl } from '../api/serverUrl'
 import { AvalonModal } from '@avalon/ui'
 import styles from '../styles/NetworkStatus.module.scss'
 

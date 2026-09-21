@@ -49,6 +49,31 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('AccountSession.identityProfile', () => {
+  it('carries mainGuild/effectiveMainGuild through, same as the rest of the profile', async () => {
+    mockFetchOnce({
+      identity_id: 'id-1',
+      identity_created_at: 'now',
+      display_name: 'Nova',
+      avatar_url: null,
+      bio: null,
+      favorite_genres: [],
+      pronouns: null,
+      banner_url: null,
+      status: null,
+      links: [],
+      timezone: null,
+      theme_color: null,
+      location: null,
+      main_guild: null,
+      effective_main_guild: 'guild-1',
+    })
+    const result = await testSession().identityProfile('id-1')
+    expect(result.mainGuild).toBeNull()
+    expect(result.effectiveMainGuild).toBe('guild-1')
+  })
+})
+
 describe('AccountSession.presenceOf', () => {
   it('passes through the real crates/protocol PresenceStatus wire values unchanged', async () => {
     mockFetchOnce([

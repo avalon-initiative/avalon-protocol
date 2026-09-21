@@ -15,15 +15,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard, AvalonPresenceBadge } from '@avalon/ui'
-import { AvalonApiError } from '@avalon/api-client'
-import * as api from '@avalon/api-client'
+import { NotFoundError } from '@avalon/sdk'
 import { listPublishedIntegratorData, type PublishedIntegratorData } from '../api/integratorData'
-import type {
-  FriendRequestResponse,
-  PresenceStatus,
-  PublicIdentityProfileResponse,
-} from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import type { FriendRequest, PresenceStatus, PublicIdentityProfile } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
 import page from '../styles/page.module.scss'
 import styles from '../styles/UserProfile.module.scss'
 
@@ -32,15 +27,15 @@ const router = useRouter()
 const session = useSessionStore()
 
 const identityId = computed(() => route.params.id as string)
-const profile = ref<PublicIdentityProfileResponse | null>(null)
+const profile = ref<PublicIdentityProfile | null>(null)
 const status = ref<PresenceStatus>('Offline')
 const loading = ref(true)
 const error = ref('')
 
 const selfId = ref('')
 const isFriend = ref(false)
-const incomingRequest = ref<FriendRequestResponse | null>(null)
-const outgoingRequest = ref<FriendRequestResponse | null>(null)
+const incomingRequest = ref<FriendRequest | null>(null)
+const outgoingRequest = ref<FriendRequest | null>(null)
 const isBlocked = ref(false)
 const mainGuildName = ref('')
 const actionError = ref('')
@@ -57,36 +52,36 @@ const publishedDataError = ref('')
 const isSelf = computed(() => selfId.value !== '' && selfId.value === identityId.value)
 
 async function loadRelationship() {
-  if (!session.token || isSelf.value) return
-  const [friendships, requests, blocks] = await Promise.all([
-    api.listFriends(session.token),
-    api.listFriendRequests(session.token),
-    api.listBlocks(session.token),
-  ])
-  isFriend.value = friendships.some((f) => f.a === identityId.value || f.b === identityId.value)
+  const s = session.session
+  if (!s || isSelf.value) return
+  const [friendships, requests, blocks] = await Promise.all([s.friends(), s.friendRequests(), s.blocks()])
+  isFriend.value =
+    Array.isArray(friendships) &&
+    friendships.some((f) => f.a === identityId.value || f.b === identityId.value)
+  const requestList = Array.isArray(requests) ? requests : []
   incomingRequest.value =
-    requests.find((r) => r.from === identityId.value && r.to === selfId.value) ?? null
+    requestList.find((r) => r.from === identityId.value && r.to === selfId.value) ?? null
   outgoingRequest.value =
-    requests.find((r) => r.from === selfId.value && r.to === identityId.value) ?? null
-  isBlocked.value = blocks.some((b) => b.blocked === identityId.value)
+    requestList.find((r) => r.from === selfId.value && r.to === identityId.value) ?? null
+  isBlocked.value = Array.isArray(blocks) && blocks.some((b) => b.blocked === identityId.value)
 }
 
 async function load() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   loading.value = true
   error.value = ''
   try {
-    const [fetchedProfile, presences, me] = await Promise.all([
-      api.getIdentityProfile(session.token, identityId.value),
-      api.getPresence(session.token, [identityId.value]),
-      api.getMe(session.token),
+    const [fetchedProfile, presences] = await Promise.all([
+      s.identityProfile(identityId.value),
+      s.presenceOf([identityId.value]),
     ])
     profile.value = fetchedProfile
-    status.value = presences[0]?.status ?? 'Offline'
-    selfId.value = me.identity_id
-    if (fetchedProfile.effective_main_guild) {
+    status.value = (Array.isArray(presences) && presences[0]?.status) || 'Offline'
+    selfId.value = s.identity().id
+    if (fetchedProfile.effectiveMainGuild) {
       try {
-        const guild = await api.getGuild(session.token, fetchedProfile.effective_main_guild)
+        const guild = await s.getGuild(fetchedProfile.effectiveMainGuild)
         mainGuildName.value = guild.name
       } catch {
         // The linked guild may have been deleted, or no longer readable —
@@ -102,7 +97,7 @@ async function load() {
       publishedDataError.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
   } catch (e) {
-    if (e instanceof AvalonApiError && e.status === 404) {
+    if (e instanceof NotFoundError) {
       profile.value = null
     } else {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -115,11 +110,12 @@ async function load() {
 onMounted(load)
 
 async function onAddFriend() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   actionPending.value = true
   try {
-    await api.createFriendRequest(session.token, { to: identityId.value })
+    await s.createFriendRequest(identityId.value)
     await loadRelationship()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -129,11 +125,12 @@ async function onAddFriend() {
 }
 
 async function onRemoveFriend() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   actionPending.value = true
   try {
-    await api.removeFriend(session.token, identityId.value)
+    await s.removeFriend(identityId.value)
     await loadRelationship()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -143,11 +140,12 @@ async function onRemoveFriend() {
 }
 
 async function onAcceptRequest() {
-  if (!session.token || !incomingRequest.value) return
+  const s = session.session
+  if (!s || !incomingRequest.value) return
   actionError.value = ''
   actionPending.value = true
   try {
-    await api.acceptFriendRequest(session.token, incomingRequest.value.id)
+    await s.acceptFriendRequest(incomingRequest.value.id)
     await loadRelationship()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -157,11 +155,12 @@ async function onAcceptRequest() {
 }
 
 async function onWithdrawOrDeclineRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   actionPending.value = true
   try {
-    await api.declineOrWithdrawFriendRequest(session.token, requestId)
+    await s.declineOrWithdrawFriendRequest(requestId)
     await loadRelationship()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -177,11 +176,12 @@ async function onWithdrawOrDeclineRequest(requestId: string) {
 // (server-side, crates/server/src/blocks.rs::create_block) but does NOT
 // remove an existing friendship — that stays until removed separately.
 async function onBlock() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   actionPending.value = true
   try {
-    await api.createBlock(session.token, { identity_id: identityId.value })
+    await s.block(identityId.value)
     await loadRelationship()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -191,11 +191,12 @@ async function onBlock() {
 }
 
 async function onUnblock() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   actionPending.value = true
   try {
-    await api.removeBlock(session.token, identityId.value)
+    await s.unblock(identityId.value)
     await loadRelationship()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -213,11 +214,11 @@ async function onUnblock() {
     <p v-else-if="error" :class="page.error">{{ error }}</p>
 
     <AvalonCard v-else-if="profile">
-      <img v-if="profile.banner_url" :src="profile.banner_url" alt="" :class="styles.banner" />
+      <img v-if="profile.bannerUrl" :src="profile.bannerUrl" alt="" :class="styles.banner" />
       <div :class="styles.header">
-        <AvalonAvatar :src="profile.avatar_url" :name="profile.display_name" size="xl" />
+        <AvalonAvatar :src="profile.avatarUrl" :name="profile.displayName" size="xl" />
         <div :class="styles.identity">
-          <h1 :class="page.title">{{ profile.display_name }}</h1>
+          <h1 :class="page.title">{{ profile.displayName }}</h1>
           <p v-if="profile.pronouns" :class="styles.pronouns">{{ profile.pronouns }}</p>
         </div>
         <AvalonPresenceBadge :status="status" />
@@ -274,15 +275,15 @@ async function onUnblock() {
       <p v-if="profile.status" :class="styles.status">{{ profile.status }}</p>
       <p v-if="profile.bio" :class="styles.bio">{{ profile.bio }}</p>
 
-      <ul v-if="profile.location || profile.favorite_genres.length" :class="styles.meta">
+      <ul v-if="profile.location || profile.favoriteGenres.length" :class="styles.meta">
         <li v-if="profile.location">📍 {{ profile.location }}</li>
-        <li v-if="profile.favorite_genres.length">{{ profile.favorite_genres.join(', ') }}</li>
+        <li v-if="profile.favoriteGenres.length">{{ profile.favoriteGenres.join(', ') }}</li>
       </ul>
 
-      <p v-if="profile.effective_main_guild" :class="styles.mainGuild">
+      <p v-if="profile.effectiveMainGuild" :class="styles.mainGuild">
         Main guild:
-        <RouterLink :to="{ name: 'guild', params: { id: profile.effective_main_guild } }">
-          {{ mainGuildName || profile.effective_main_guild }}
+        <RouterLink :to="{ name: 'guild', params: { id: profile.effectiveMainGuild } }">
+          {{ mainGuildName || profile.effectiveMainGuild }}
         </RouterLink>
       </p>
 
