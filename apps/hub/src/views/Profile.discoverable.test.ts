@@ -7,7 +7,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 function testRouter() {
   return createRouter({
@@ -28,20 +28,22 @@ const baseProfile = {
 
 /**
  * Unlike `mockFetchByPath` (one static response per path, regardless of
- * method), this test needs `/me` to answer differently for the initial
- * `GET` versus the `PATCH` the toggle click sends — so it stubs `fetch`
- * directly rather than reusing that shared fixture.
+ * method), this test needs `/me` to answer differently for a `GET`
+ * (session initialize()'s own round trip, and Profile.vue's own onMounted
+ * refreshProfile() — both must still report the pre-toggle state) versus
+ * the `PATCH` the toggle click sends (the only call that should actually
+ * reflect the new state) — so it stubs `fetch` directly rather than
+ * reusing that shared fixture.
  */
-function mockMeSequence(discoverableSequence: boolean[]) {
-  let call = 0
+function mockMeSequence(discoverableSequence: [boolean] | [boolean, boolean]) {
+  const [beforeToggle, afterToggle] = discoverableSequence
   vi.stubGlobal(
     'fetch',
-    vi.fn().mockImplementation((url: string) => {
+    vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       const path = new URL(url, 'http://test').pathname
       let body: unknown
       if (path === '/me') {
-        const discoverable = discoverableSequence[Math.min(call, discoverableSequence.length - 1)]
-        call += 1
+        const discoverable = init?.method === 'PATCH' ? (afterToggle ?? beforeToggle) : beforeToggle
         body = { ...baseProfile, discoverable }
       } else if (path === '/me/passkeys') {
         body = []
@@ -63,10 +65,18 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Seeds a bearer token and drives the real session-store initialize() path
+// (a GET /me round trip, same as production) — `mockMeSequence` must
+// already be stubbed before this runs.
+async function loginTestSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Profile discoverability toggle (issue #205)', () => {
   it('shows "not publicly searchable" and a Turn on control by default', async () => {
     mockMeSequence([false])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -78,7 +88,7 @@ describe('Profile discoverability toggle (issue #205)', () => {
 
   it('turning the toggle on reflects the server response, not an optimistic guess', async () => {
     mockMeSequence([false, true])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -96,7 +106,7 @@ describe('Profile discoverability toggle (issue #205)', () => {
 
   it('turning the toggle back off removes the "searchable" indicator immediately', async () => {
     mockMeSequence([true, false])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')

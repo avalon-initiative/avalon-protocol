@@ -6,7 +6,12 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import * as api from '@avalon/api-client'
 import type { GuildResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+// #712: still on @avalon/api-client for the actual guild reads (that's
+// the guilds/chat/events migration batch, not this one) — only the token
+// source moved, since production login (Login.vue/CreateIdentity.vue/
+// RecoverIdentity.vue) only ever populates the new session store now, and
+// this composable's own bearer token needed to keep working against it.
+import { useSessionStore } from '../api/session'
 
 // Guild metadata (rename, member count) isn't push-updated anywhere in
 // this build, same as friends' membership poll — 5 minutes is plenty.
@@ -22,10 +27,10 @@ export function useMyGuilds() {
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
   async function refresh() {
-    if (!session.token) return
+    const token = session.token()
+    if (!token) return
     try {
-      const memberships = await api.listMyGuilds(session.token)
-      const token = session.token
+      const memberships = await api.listMyGuilds(token)
       guilds.value = await Promise.all(memberships.map((m) => api.getGuild(token, m.guild_id)))
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'

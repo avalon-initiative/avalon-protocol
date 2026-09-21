@@ -21,6 +21,9 @@ function testProfile(identityId: string) {
     themeColor: null,
     location: null,
     mainGuild: null,
+    effectiveMainGuild: null,
+    discoverable: false,
+    presenceVisibility: 'public',
   }
 }
 

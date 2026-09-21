@@ -8,6 +8,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Guilds from './Guilds.vue'
 import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore as useNewSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
@@ -47,6 +48,7 @@ describe('Guilds', () => {
   it('renders the icon badge for a guild with an icon set, none for one without', async () => {
     useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': { identity_id: 'id-1', identity_created_at: 'now', display_name: 'Nova', avatar_url: null },
       '/me/guilds': [
         { guild_id: 'g1', role_index: 0, joined_at: 'now' },
         { guild_id: 'g2', role_index: 0, joined_at: 'now' },
@@ -54,6 +56,12 @@ describe('Guilds', () => {
       '/guilds/g1': { ...guildBase, id: 'g1', icon: 'https://example.com/icon.png' },
       '/guilds/g2': { ...guildBase, id: 'g2', name: 'Silent Order', tag: 'SILO', icon: null },
     })
+    // useMyGuilds (Guilds.vue's "My guilds" list) reads its bearer token
+    // from the new @avalon/sdk session store (#712) — HubShell/Guilds.vue
+    // itself hasn't migrated yet, so this test still also logs into the
+    // old store above for whatever else in Guilds.vue still depends on it.
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useNewSessionStore().initialize()
 
     const router = testRouter()
     router.push('/guilds')

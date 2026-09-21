@@ -30,7 +30,15 @@ export function avalonClient(): AvalonClient {
   return new AvalonClient({ serverUrl: getServerUrl() })
 }
 
-export const useSessionStore = defineStore('session', () => {
+// Pinia id deliberately distinct from packages/api-client/src/session.ts's
+// own `defineStore('session', ...)` — Pinia's registry is keyed by this
+// string, and colliding ids would make whichever store's `useSessionStore()`
+// runs first in a given app "win," silently handing every later caller
+// (old or new) that same instance regardless of which module they imported
+// from. Not yet renamable back to `'session'`: apps/hub still has
+// not-yet-migrated modules (useMyGuilds.ts, friends.ts, etc., #712's later
+// batches) that import the OLD store under that id.
+export const useSessionStore = defineStore('accountSession', () => {
   const session = shallowRef<AccountSession | null>(null)
   // False until `initialize()` resolves — mirrors the old store's own
   // `ready` flag; every app's `main.ts` awaits `initialize()` once, before

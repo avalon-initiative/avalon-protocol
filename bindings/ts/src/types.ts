@@ -36,7 +36,19 @@ export interface Profile {
   timezone: string | null
   themeColor: string | null
   location: string | null
+  // `null` means "not explicitly set," not "no guild" — see
+  // `effectiveMainGuild` for the resolved value to build a single-guild UI
+  // around.
   mainGuild: string | null
+  // `mainGuild` if explicitly set, otherwise the guild this identity
+  // joined earliest, computed server-side at read time and never stored.
+  // `null` only when the identity has no guild memberships at all.
+  effectiveMainGuild: string | null
+  // Issue #205's opt-in global search toggle.
+  discoverable: boolean
+  // Issue #87 — who can see this identity's presence status: "public" |
+  // "authenticated_only" | "friends" | "guild_members" | "private".
+  presenceVisibility: string
 }
 
 /** `GET /me`'s wire response, field-for-field. */
@@ -55,6 +67,9 @@ export interface MeResponseWire {
   theme_color: string | null
   location: string | null
   main_guild: string | null
+  effective_main_guild: string | null
+  discoverable: boolean
+  presence_visibility: string
 }
 
 export function fromMeResponse(body: MeResponseWire): { identity: Identity; profile: Profile } {
@@ -74,6 +89,9 @@ export function fromMeResponse(body: MeResponseWire): { identity: Identity; prof
       themeColor: body.theme_color,
       location: body.location,
       mainGuild: body.main_guild,
+      effectiveMainGuild: body.effective_main_guild ?? null,
+      discoverable: body.discoverable ?? false,
+      presenceVisibility: body.presence_visibility ?? 'public',
     },
   }
 }

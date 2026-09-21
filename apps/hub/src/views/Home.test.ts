@@ -6,6 +6,7 @@ import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Home from './Home.vue'
 import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore as useNewSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -157,6 +158,12 @@ describe('Home', () => {
         { id: 'msg-1', channel_id: 'chan-1', author: 'id-2', body: "Let's run the dungeon tonight!", sent_at: new Date().toISOString() },
       ],
     })
+    // useMyGuilds (Home.vue's own guilds section) reads its bearer token
+    // from the new @avalon/sdk session store (#712) — Home.vue itself
+    // hasn't migrated yet, so this test still also logs into the old
+    // store above for the rest of the page.
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useNewSessionStore().initialize()
 
     const router = testRouter()
     router.push('/')

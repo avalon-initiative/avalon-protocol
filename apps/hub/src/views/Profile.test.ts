@@ -8,7 +8,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -30,9 +30,18 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Seeds a bearer token and drives the real session-store initialize() path
+// (a GET /me round trip, same as production) rather than constructing an
+// AccountSession by hand — `mockFetchByPath` must already be stubbed
+// before this runs.
+async function loginTestSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 async function mountProfile(passkeys: unknown[]) {
-  useSessionStore().login('a-token')
   mockFetchByPath({ '/me': profile, '/me/passkeys': passkeys })
+  await loginTestSession()
 
   const router = testRouter()
   router.push('/')
@@ -63,8 +72,8 @@ describe('Profile single-passkey warning', () => {
   // shape) must surface as an honest error rather than being quietly
   // treated as "0 passkeys, nothing to warn about."
   it('surfaces an error instead of silently treating a malformed passkey list as empty', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({ '/me': profile, '/me/passkeys': null })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')

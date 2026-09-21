@@ -151,6 +151,9 @@ export class AccountSession {
       timezone: update.timezone,
       theme_color: update.themeColor,
       location: update.location,
+      main_guild: update.mainGuild,
+      discoverable: update.discoverable,
+      presence_visibility: update.presenceVisibility,
     })
     const { identity, profile } = fromMeResponse(body)
     this._identity = identity
@@ -305,6 +308,14 @@ export interface ProfileUpdate {
   timezone?: string
   themeColor?: string
   location?: string
+  // Three states, same as `bio`: omitted (untouched), `''` (clear), or a
+  // guild id the caller must currently be a member of — rejected
+  // otherwise, not silently ignored.
+  mainGuild?: string
+  // Issue #205. Omitted leaves the existing preference untouched.
+  discoverable?: boolean
+  // Issue #87. Omitted leaves it untouched.
+  presenceVisibility?: string
 }
 
 export async function findOwnSigningKeyId(

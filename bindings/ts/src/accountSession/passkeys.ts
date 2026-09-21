@@ -41,7 +41,11 @@ declare module './core.js' {
 
 AccountSession.prototype.listPasskeys = async function (this: AccountSession): Promise<Passkey[]> {
   const wire = await this.get<PasskeyWire[]>('/me/passkeys')
-  return wire.map(fromWire)
+  // A 200 with an unexpected (non-array) body is passed through as-is
+  // rather than crashing on `.map` — callers that want to treat a
+  // malformed response as a real failure (rather than silently trusting
+  // it) check `Array.isArray` themselves, same as apps/hub's Profile.vue.
+  return Array.isArray(wire) ? wire.map(fromWire) : (wire as unknown as Passkey[])
 }
 
 AccountSession.prototype.addPasskey = async function (this: AccountSession, label?: string): Promise<Passkey> {

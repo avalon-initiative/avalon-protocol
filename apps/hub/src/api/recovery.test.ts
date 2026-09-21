@@ -1,8 +1,9 @@
-// Social recovery (issue #201) — exercises the orchestration in
-// api/recovery.ts, same mocking approach passkeys.test.ts already
-// established: `fetch` is stubbed for the server round trip, and
-// `runRegistrationCeremony` is mocked since there's no real authenticator
-// in a unit test.
+// Social recovery (issue #201) — exercises startRecovery, the only
+// function left in api/recovery.ts (its session-scoped guardian functions
+// moved onto AccountSession itself — see bindings/ts's own
+// accountSession/recovery.test.ts): `fetch` is stubbed for the server
+// round trip, and `runRegistrationCeremony` is mocked since there's no
+// real authenticator in a unit test.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegistrationResponseJSON } from '@simplewebauthn/browser'
 
@@ -20,28 +21,7 @@ vi.mock('@avalon/sdk/src/crypto/webauthn', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
 }))
 
-import {
-  approveRecoveryRequest,
-  cancelRecoveryRequest,
-  getGuardianRequests,
-  getGuardians,
-  getMyRecoveryStatus,
-  setGuardians,
-  startRecovery,
-} from './recovery'
-
-function mockFetchOnce(body: unknown) {
-  const text = body === undefined ? '' : JSON.stringify(body)
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve(body),
-      text: () => Promise.resolve(text),
-    }),
-  )
-}
+import { startRecovery } from './recovery'
 
 beforeEach(() => {
   runRegistrationCeremonyMock.mockReset()
@@ -49,106 +29,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-})
-
-describe('getGuardians / setGuardians', () => {
-  it('fetches the caller own guardian configuration', async () => {
-    mockFetchOnce({ guardian_ids: ['g1'], threshold: 1, updated_at: 'now' })
-    const result = await getGuardians('token')
-    expect(result.guardian_ids).toEqual(['g1'])
-
-    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toContain('/me/recovery/guardians')
-  })
-
-  it('sends the full guardian set and threshold on update', async () => {
-    mockFetchOnce({ guardian_ids: ['g1', 'g2'], threshold: 2, updated_at: 'now' })
-    // No local signing key for 'identity-1' in this test's storage, so no
-    // signing_key_id/signature is attached — same "no key, no signature"
-    // edge case docs/architecture/identity.md already treats as expected.
-    await setGuardians('token', 'identity-1', null, ['g1', 'g2'], 2)
-
-    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toContain('/me/recovery/guardians')
-    expect(options.method).toBe('PUT')
-    expect(JSON.parse(options.body)).toEqual({ guardian_ids: ['g1', 'g2'], threshold: 2 })
-  })
-})
-
-describe('getMyRecoveryStatus', () => {
-  it('returns null when nothing is in progress', async () => {
-    mockFetchOnce(null)
-    expect(await getMyRecoveryStatus('token')).toBeNull()
-  })
-
-  it('returns the active request when one exists', async () => {
-    const active = {
-      id: 'r1',
-      identity_id: 'me',
-      status: 'delay',
-      threshold: 2,
-      approvals_count: 2,
-      requested_at: 'now',
-      delay_ends_at: 'later',
-    }
-    mockFetchOnce(active)
-    expect(await getMyRecoveryStatus('token')).toEqual(active)
-  })
-})
-
-describe('getGuardianRequests', () => {
-  it('returns every pending request the caller can approve', async () => {
-    const summaries = [
-      {
-        request: {
-          id: 'r1',
-          identity_id: 'friend-1',
-          status: 'pending_approvals',
-          threshold: 2,
-          approvals_count: 1,
-          requested_at: 'now',
-          delay_ends_at: null,
-        },
-        already_approved: false,
-      },
-    ]
-    mockFetchOnce(summaries)
-    expect(await getGuardianRequests('token')).toEqual(summaries)
-  })
-})
-
-describe('approveRecoveryRequest / cancelRecoveryRequest', () => {
-  it('approves against the right request id', async () => {
-    mockFetchOnce({
-      id: 'r1',
-      identity_id: 'friend-1',
-      status: 'delay',
-      threshold: 2,
-      approvals_count: 2,
-      requested_at: 'now',
-      delay_ends_at: 'later',
-    })
-    await approveRecoveryRequest('token', 'r1')
-    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toContain('/recovery/requests/r1/approve')
-    expect(options.method).toBe('POST')
-  })
-
-  it('cancels with an optional reason', async () => {
-    mockFetchOnce({
-      id: 'r1',
-      identity_id: 'friend-1',
-      status: 'cancelled',
-      threshold: 2,
-      approvals_count: 1,
-      requested_at: 'now',
-      delay_ends_at: null,
-    })
-    await cancelRecoveryRequest('token', 'r1', 'not me')
-    const [url, options] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(url).toContain('/recovery/requests/r1/cancel')
-    expect(JSON.parse(options.body)).toEqual({ reason: 'not me' })
-  })
 })
 
 describe('startRecovery', () => {

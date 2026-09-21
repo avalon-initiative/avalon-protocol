@@ -128,3 +128,10 @@ export {
 export type { SigningKeyPair, SignatureFields } from './crypto/signing.js'
 
 export { runRegistrationCeremony, runAuthenticationCeremony } from './crypto/webauthn.js'
+
+export {
+  deriveSigningKeyFromMnemonic,
+  generateMnemonicSigningKey,
+  isValidMnemonic,
+} from './crypto/mnemonic.js'
+export type { GeneratedSigningKey } from './crypto/mnemonic.js'

@@ -9,7 +9,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 const baseProfile = {
@@ -65,9 +65,16 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Seeds a bearer token and drives the real session-store initialize() path
+// (a GET /me round trip, same as production) rather than constructing an
+// AccountSession by hand — `fetch` must already be stubbed before this runs.
+async function loginTestSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Profile main guild field', () => {
   it('only offers guilds the caller is actually a member of', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': baseProfile,
       '/me/passkeys': [],
@@ -78,6 +85,7 @@ describe('Profile main guild field', () => {
       '/guilds/g1': { ...guildBase, id: 'g1', name: 'Dragon Hunters' },
       '/guilds/g2': { ...guildBase, id: 'g2', name: 'Silent Order', tag: 'SILO' },
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -95,7 +103,6 @@ describe('Profile main guild field', () => {
   })
 
   it('shows the earliest-joined guild as the effective default when unset', async () => {
-    useSessionStore().login('a-token')
     // GET /me itself reports the server-computed effective default.
     mockFetchByPath({
       '/me': { ...baseProfile, effective_main_guild: 'g1' },
@@ -103,6 +110,7 @@ describe('Profile main guild field', () => {
       '/me/guilds': [{ guild_id: 'g1', role_index: 0, joined_at: '2026-01-01T00:00:00Z' }],
       '/guilds/g1': { ...guildBase, id: 'g1', name: 'Dragon Hunters' },
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -114,18 +122,20 @@ describe('Profile main guild field', () => {
 
   /**
    * Like Profile.selfDescription.test.ts's mockMeSequence, `/me` needs to
-   * answer differently for the initial GET versus the PATCH a save sends.
+   * answer differently for a GET (session initialize()'s own round trip,
+   * and Profile.vue's own onMounted refreshProfile() — both must still
+   * report the pre-save state) versus the PATCH a save sends (the only
+   * call that should actually reflect the updated state).
    */
-  function mockMeSequence(bodies: unknown[]) {
-    let call = 0
+  function mockMeSequence(bodies: [unknown, unknown]) {
+    const [beforeSave, afterSave] = bodies
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
         const path = new URL(url, 'http://test').pathname
         let body: unknown
         if (path === '/me') {
-          body = bodies[Math.min(call, bodies.length - 1)]
-          call += 1
+          body = init?.method === 'PATCH' ? afterSave : beforeSave
         } else if (path === '/me/passkeys') {
           body = []
         } else if (path === '/me/guilds') {
@@ -150,7 +160,7 @@ describe('Profile main guild field', () => {
       baseProfile,
       { ...baseProfile, main_guild: 'g1', effective_main_guild: 'g1' },
     ])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
@@ -169,7 +179,7 @@ describe('Profile main guild field', () => {
 
   it('saves a new presence visibility and reflects the server response', async () => {
     mockMeSequence([baseProfile, { ...baseProfile, presence_visibility: 'friends' }])
-    useSessionStore().login('a-token')
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/')
