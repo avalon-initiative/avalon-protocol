@@ -1,19 +1,12 @@
 // Orchestrates friends + presence + display names for issue #18: fetches
 // all three separately and merges them client-side, since GET /friends
 // embeds neither presence nor a display name server-side (see
-// crates/server/src/friends.rs — FriendshipResponse has no such fields).
-// Mirrors crates/sdk/src/social.rs's Session::friends()/merge_friend in
-// Rust — same shape, ported to TypeScript for the Hub, which doesn't
-// consume the Rust SDK directly. Display names are resolved via
-// GET /identities/profiles (issue #161).
-import * as api from '@avalon/api-client'
-import type {
-  FriendRequestResponse,
-  FriendshipResponse,
-  PresenceResponse,
-  PresenceStatus,
-  PublicProfileResponse,
-} from '@avalon/api-client'
+// crates/server/src/friends.rs — Friendship has no such fields). Mirrors
+// crates/sdk/src/social.rs's Session::friends()/merge_friend in Rust —
+// same shape, ported to TypeScript for the Hub, which doesn't consume the
+// Rust SDK directly. Display names are resolved via GET /identities/profiles
+// (issue #161).
+import type { AccountSession, Friendship, FriendRequest, PresenceStatus } from '@avalon/sdk'
 
 export interface Friend {
   identityId: string
@@ -26,7 +19,7 @@ export interface Friend {
 }
 
 // The other party in a friendship pair, given the caller's own id.
-function otherParty(friendship: FriendshipResponse, selfId: string): string {
+function otherParty(friendship: Friendship, selfId: string): string {
   return friendship.a === selfId ? friendship.b : friendship.a
 }
 
@@ -35,7 +28,7 @@ function otherParty(friendship: FriendshipResponse, selfId: string): string {
 // (not present in `presenceByStatus`) defaults to Offline rather than
 // guessing at "last seen" — see #78, presence honesty.
 export function mergeFriend(
-  friendship: FriendshipResponse,
+  friendship: Friendship,
   selfId: string,
   presenceByStatus: Map<string, PresenceStatus>,
   displayNameById: Map<string, string> = new Map(),
@@ -49,22 +42,20 @@ export function mergeFriend(
   }
 }
 
-export async function listFriendsWithPresence(token: string, selfId: string): Promise<Friend[]> {
-  const friendships = await api.listFriends(token)
-  if (friendships.length === 0) {
+export async function listFriendsWithPresence(session: AccountSession): Promise<Friend[]> {
+  const selfId = session.identity().id
+  const friendships = await session.friends()
+  if (!Array.isArray(friendships) || friendships.length === 0) {
     return []
   }
 
   const otherIds = friendships.map((f) => otherParty(f, selfId))
-  const [presences, profiles] = await Promise.all([
-    api.getPresence(token, otherIds),
-    api.getProfiles(token, otherIds),
-  ])
+  const [presences, profiles] = await Promise.all([session.presenceOf(otherIds), session.profiles(otherIds)])
   const presenceByStatus = new Map<string, PresenceStatus>(
-    presences.map((p: PresenceResponse) => [p.identity_id, p.status]),
+    (Array.isArray(presences) ? presences : []).map((p) => [p.identityId, p.status]),
   )
   const displayNameById = new Map<string, string>(
-    profiles.map((p: PublicProfileResponse) => [p.identity_id, p.display_name]),
+    (Array.isArray(profiles) ? profiles : []).map((p) => [p.identityId, p.displayName]),
   )
 
   return friendships.map((f) => mergeFriend(f, selfId, presenceByStatus, displayNameById))
@@ -77,14 +68,11 @@ export interface FriendRequestView {
   requestedAt: string
 }
 
-export function splitFriendRequests(
-  requests: FriendRequestResponse[],
-  selfId: string,
-): FriendRequestView[] {
+export function splitFriendRequests(requests: FriendRequest[], selfId: string): FriendRequestView[] {
   return requests.map((r) => ({
     id: r.id,
     direction: r.from === selfId ? 'outgoing' : 'incoming',
     otherIdentityId: r.from === selfId ? r.to : r.from,
-    requestedAt: r.requested_at,
+    requestedAt: r.requestedAt,
   }))
 }

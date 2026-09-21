@@ -4,12 +4,10 @@
 // setup>` of whichever page needs it; only one page is mounted at a time,
 // so only one presence socket is ever open.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import * as api from '@avalon/api-client'
-import type { PresenceSocket } from '@avalon/api-client'
+import type { PresenceSubscription, PresenceUpdate } from '@avalon/sdk'
 import { listFriendsWithPresence, splitFriendRequests } from '../api/friends'
 import type { Friend, FriendRequestView } from '../api/friends'
-import type { PresenceResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 // Presence itself is live via the websocket — this poll only catches
 // friend-*list* membership changes (a request accepted/declined/withdrawn,
@@ -31,36 +29,34 @@ export function useFriendsPresence() {
   const outgoingRequests = computed(() => requests.value.filter((r) => r.direction === 'outgoing'))
 
   let pollHandle: ReturnType<typeof setInterval> | undefined
-  let presenceSocket: PresenceSocket | undefined
+  let presenceSubscription: PresenceSubscription | undefined
 
   // A push for an id not currently in `friends` (e.g. arriving just after
   // that friend was removed) is a no-op — there's no row to update.
-  function onPresenceUpdate(presence: PresenceResponse) {
-    const friend = friends.value.find((f) => f.identityId === presence.identity_id)
+  function onPresenceUpdate(presence: PresenceUpdate) {
+    const friend = friends.value.find((f) => f.identityId === presence.identityId)
     if (friend) friend.status = presence.status
   }
 
   async function refresh() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      const [friendList, requestList] = await Promise.all([
-        listFriendsWithPresence(session.token, selfId.value),
-        api.listFriendRequests(session.token),
-      ])
+      const [friendList, requestList] = await Promise.all([listFriendsWithPresence(s), s.friendRequests()])
       friends.value = friendList
       requests.value = splitFriendRequests(requestList, selfId.value)
-      presenceSocket?.subscribe(friendList.map((f) => f.identityId))
+      presenceSubscription?.subscribe(friendList.map((f) => f.identityId))
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
   }
 
   onMounted(async () => {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      const profile = await api.getMe(session.token)
-      selfId.value = profile.identity_id
-      presenceSocket = api.openPresenceSocket(session.token, onPresenceUpdate)
+      selfId.value = s.identity().id
+      presenceSubscription = s.subscribePresence(onPresenceUpdate)
       await refresh()
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -72,7 +68,7 @@ export function useFriendsPresence() {
 
   onUnmounted(() => {
     if (pollHandle) clearInterval(pollHandle)
-    presenceSocket?.close()
+    presenceSubscription?.close()
   })
 
   return {

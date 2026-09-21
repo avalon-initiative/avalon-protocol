@@ -5,7 +5,6 @@
 // action — no open inputs sit on the page by default.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import * as api from '@avalon/api-client'
 import {
   deriveSigningKeyFromMnemonic,
   isValidMnemonic,
@@ -161,28 +160,23 @@ const blockByIdInput = ref('')
 const blockByIdError = ref('')
 const blockingById = ref(false)
 
-// Still on @avalon/api-client — api/blocks.ts's own migration is #712's
-// friends/blocks/discovery batch, not this one; a raw bearer token works
-// identically against either package, so this only needed `session.token`
-// (an old-store ref) to become `session.token()` (the new store's own
-// accessor function) to keep compiling against the new session store.
 async function refreshBlockedUsers() {
-  const token = session.token()
-  if (!token) return
+  const s = session.session
+  if (!s) return
   try {
-    blockedUsers.value = await listBlockedUsersWithNames(token)
+    blockedUsers.value = await listBlockedUsersWithNames(s)
   } catch (e) {
     blockedUsersError.value = e instanceof Error ? e.message : 'Something went wrong.'
   }
 }
 
 async function onUnblock(identityId: string) {
-  const token = session.token()
-  if (!token) return
+  const s = session.session
+  if (!s) return
   blockedUsersError.value = ''
   unblockingId.value = identityId
   try {
-    await api.removeBlock(token, identityId)
+    await s.unblock(identityId)
     await refreshBlockedUsers()
   } catch (e) {
     blockedUsersError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -195,14 +189,14 @@ async function onUnblock(identityId: string) {
 // same convention Friends.vue's onAddFriend already uses for the
 // analogous "add by id/handle" flow.
 async function onBlockById() {
-  const token = session.token()
-  if (!token) return
+  const s = session.session
+  if (!s) return
   blockByIdError.value = ''
   blockingById.value = true
   try {
     const input = blockByIdInput.value.trim()
-    const identityId = isIdentityId(input) ? input : (await api.resolveHandle(token, input)).identity_id
-    await api.createBlock(token, { identity_id: identityId })
+    const identityId = isIdentityId(input) ? input : await s.resolveHandle(input)
+    await s.block(identityId)
     blockByIdInput.value = ''
     await refreshBlockedUsers()
   } catch (e) {
@@ -731,10 +725,7 @@ async function refreshGuardianSettings() {
   const s = session.session
   if (!s || !identityId.value) return
   try {
-    const [friendList, settings] = await Promise.all([
-      listFriendsWithPresence(s.token(), identityId.value),
-      s.guardians(),
-    ])
+    const [friendList, settings] = await Promise.all([listFriendsWithPresence(s), s.guardians()])
     friends.value = friendList
     selectedGuardianIds.value = new Set(settings.guardianIds)
     threshold.value = settings.threshold > 0 ? settings.threshold : 1

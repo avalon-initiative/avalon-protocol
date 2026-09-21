@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
 import UserProfile from './UserProfile.vue'
 import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore as useNewSessionStore } from '../api/session'
 import { FakeWebSocket, MockErrorResponse, mockFetchByPath } from '../testing/fakes'
 
 const selfProfile = {
@@ -36,7 +37,6 @@ beforeEach(() => {
 
 describe('viewing another user from Friends', () => {
   it('navigates to the profile card when a friend row is clicked', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': selfProfile,
       '/friends': [{ a: 'id-self', b: 'id-friend', since: 'now' }],
@@ -47,6 +47,8 @@ describe('viewing another user from Friends', () => {
       ],
       '/people/discover': { candidates: [] },
     })
+    localStorage.setItem('avalon:session:token', 'a-token')
+    await useNewSessionStore().initialize()
 
     const router = testRouter()
     router.push('/friends')

@@ -5,8 +5,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Home from './Home.vue'
-import { useSessionStore } from '@avalon/api-client'
-import { useSessionStore as useNewSessionStore } from '../api/session'
+import { useSessionStore as useOldSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -45,9 +45,19 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
+// Home.vue itself (display name, history) hasn't migrated off
+// @avalon/api-client yet — only useFriendsPresence/useMyGuilds (#712's own
+// earlier work) have — so this still needs both stores populated until
+// Home.vue's own migration batch (#712 batch 4/7) lands. `mockFetchByPath`
+// must already be stubbed before this runs.
+async function loginBothSessions() {
+  useOldSessionStore().login('a-token')
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Home', () => {
   it('welcomes the user by display name', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [],
@@ -56,6 +66,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
+    await loginBothSessions()
 
     const router = testRouter()
     router.push('/')
@@ -65,7 +76,6 @@ describe('Home', () => {
   })
 
   it('renders sensible empty states with no friends and no history', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [],
@@ -74,6 +84,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
+    await loginBothSessions()
 
     const router = testRouter()
     router.push('/')
@@ -88,7 +99,6 @@ describe('Home', () => {
   })
 
   it('shows recent activity summaries and a View all link', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [
@@ -105,6 +115,7 @@ describe('Home', () => {
       '/presence': [],
       ...BASE_MOCKS,
     })
+    await loginBothSessions()
 
     const router = testRouter()
     router.push('/')
@@ -115,7 +126,6 @@ describe('Home', () => {
   })
 
   it('shows connected integrators, guilds, and their latest messages', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
       '/me': profile,
       '/me/history': [],
@@ -158,12 +168,7 @@ describe('Home', () => {
         { id: 'msg-1', channel_id: 'chan-1', author: 'id-2', body: "Let's run the dungeon tonight!", sent_at: new Date().toISOString() },
       ],
     })
-    // useMyGuilds (Home.vue's own guilds section) reads its bearer token
-    // from the new @avalon/sdk session store (#712) — Home.vue itself
-    // hasn't migrated yet, so this test still also logs into the old
-    // store above for the rest of the page.
-    localStorage.setItem('avalon:session:token', 'a-token')
-    await useNewSessionStore().initialize()
+    await loginBothSessions()
 
     const router = testRouter()
     router.push('/')

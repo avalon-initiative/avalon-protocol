@@ -14,12 +14,15 @@ import {
   AvalonSuggestionRow,
   AvalonTextField,
 } from '@avalon/ui'
+// Still on @avalon/api-client for createConversation — that's the
+// conversations migration batch, not this one; a raw bearer token works
+// identically against either package.
 import * as api from '@avalon/api-client'
 import { listSuggestions } from '../api/discovery'
 import type { Suggestion } from '../api/discovery'
-import type { SearchResultIdentity } from '@avalon/api-client'
+import type { SearchResultIdentity } from '@avalon/sdk'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { isIdentityId } from '../utils/identity'
 import styles from '../styles/page.module.scss'
 
@@ -44,9 +47,10 @@ const suggestions = ref<Suggestion[]>([])
 const requestedSuggestionIds = ref<Set<string>>(new Set())
 
 async function loadSuggestions() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    suggestions.value = await listSuggestions(session.token)
+    suggestions.value = await listSuggestions(s)
   } catch {
     // Suggestions are a secondary surface — a failure here shouldn't block
     // or clutter the primary friends/requests error state above.
@@ -55,9 +59,10 @@ async function loadSuggestions() {
 }
 
 async function onAddSuggestion(identityId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    await api.createFriendRequest(session.token, { to: identityId })
+    await s.createFriendRequest(identityId)
     requestedSuggestionIds.value = new Set(requestedSuggestionIds.value).add(identityId)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -95,13 +100,13 @@ const requestedSearchIds = ref<Set<string>>(new Set())
 const hasSearched = ref(false)
 
 async function onSearch() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   searchError.value = ''
   searching.value = true
   hasSearched.value = true
   try {
-    const response = await api.searchIdentities(session.token, searchQuery.value)
-    searchResults.value = response.results
+    searchResults.value = await s.searchIdentities(searchQuery.value)
   } catch (e) {
     searchError.value = e instanceof Error ? e.message : 'Something went wrong.'
     searchResults.value = []
@@ -111,9 +116,10 @@ async function onSearch() {
 }
 
 async function onAddFromSearch(identityId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    await api.createFriendRequest(session.token, { to: identityId })
+    await s.createFriendRequest(identityId)
     requestedSearchIds.value = new Set(requestedSearchIds.value).add(identityId)
   } catch (e) {
     searchError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -138,15 +144,14 @@ function cancelAddFriend() {
 // first, since createFriendRequest always targets an identity id on the
 // wire.
 async function onAddFriend() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   addFriendError.value = ''
   addingFriend.value = true
   try {
     const input = addFriendId.value.trim()
-    const to = isIdentityId(input)
-      ? input
-      : (await api.resolveHandle(session.token, input)).identity_id
-    await api.createFriendRequest(session.token, { to })
+    const to = isIdentityId(input) ? input : await s.resolveHandle(input)
+    await s.createFriendRequest(to)
     cancelAddFriend()
     await refresh()
   } catch (e) {
@@ -157,9 +162,10 @@ async function onAddFriend() {
 }
 
 async function onAcceptRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    await api.acceptFriendRequest(session.token, requestId)
+    await s.acceptFriendRequest(requestId)
     await refresh()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -167,9 +173,10 @@ async function onAcceptRequest(requestId: string) {
 }
 
 async function onRemoveRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    await api.declineOrWithdrawFriendRequest(session.token, requestId)
+    await s.declineOrWithdrawFriendRequest(requestId)
     await refresh()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -177,9 +184,10 @@ async function onRemoveRequest(requestId: string) {
 }
 
 async function onRemoveFriend(identityId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    await api.removeFriend(session.token, identityId)
+    await s.removeFriend(identityId)
     await refresh()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -195,9 +203,10 @@ function onViewProfile(identityId: string) {
 // straight to it — POST /conversations is idempotent on the participant
 // set, so this is never a duplicate even if one already exists.
 async function onMessageFriend(identityId: string) {
-  if (!session.token) return
+  const token = session.token()
+  if (!token) return
   try {
-    const conversation = await api.createConversation(session.token, {
+    const conversation = await api.createConversation(token, {
       participants: [identityId],
     })
     router.push({ name: 'conversation', params: { id: conversation.id } })
@@ -307,12 +316,12 @@ async function onMessageFriend(identityId: string) {
           </p>
           <AvalonSuggestionRow
             v-for="result in searchResults"
-            :key="result.identity_id"
-            :identity-id="result.identity_id"
-            :display-name="result.display_name"
-            :avatar-url="result.avatar_url"
-            :requested="requestedSearchIds.has(result.identity_id)"
-            @add="onAddFromSearch(result.identity_id)"
+            :key="result.identityId"
+            :identity-id="result.identityId"
+            :display-name="result.displayName"
+            :avatar-url="result.avatarUrl"
+            :requested="requestedSearchIds.has(result.identityId)"
+            @add="onAddFromSearch(result.identityId)"
           />
         </AvalonCard>
 

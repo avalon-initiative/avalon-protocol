@@ -6,7 +6,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Friends from './Friends.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
@@ -31,7 +31,6 @@ beforeEach(() => {
 })
 
 async function mountFriends(extraResponses: Record<string, unknown> = {}) {
-  useSessionStore().login('a-token')
   mockFetchByPath({
     '/me': profile,
     '/friends': [],
@@ -40,6 +39,8 @@ async function mountFriends(extraResponses: Record<string, unknown> = {}) {
     '/people/discover': { candidates: [] },
     ...extraResponses,
   })
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
 
   const router = testRouter()
   router.push('/')
