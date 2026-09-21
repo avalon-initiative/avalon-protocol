@@ -464,7 +464,19 @@ protocol and the domain model in `crates/protocol`; they never pull in
     session (the `_with_signing_key` variant also resolves this device's
     `identity_signing_keys.id` via `GET /me/devices`, matched by public
     key, so signature-required methods keep signing automatically after a
-    resume).
+    resume); `start_account_device_login()` (issue #707, filed after #699
+    shipped without it) is a fourth entry point — an `AccountSession`-
+    returning counterpart to `crate::device_login`'s existing
+    `AvalonClient::login()`/`Session` wrapper around #307's cross-device
+    pairing, for a client with no WebAuthn ceremony surface of its own (a
+    game engine, a console) that still needs to originate a first-party
+    login rather than resume a token minted elsewhere. Returns an
+    `AccountDeviceLogin` carrying `user_code`/`verification_uri`;
+    `.wait()` polls to completion and resolves to a real `AccountSession`
+    via `resume_account_session` once approved from another,
+    already-registered device — so, like any `resume_account_session`
+    result, it holds no local signing key until this device separately
+    requests and gets its own approved via `request_device_grant`.
   - Every action #697 flags as signature-required signs itself
     automatically with `AccountSession::sign` — the caller never
     hand-constructs `signing_key_id`/`signature`. For the conditionally-

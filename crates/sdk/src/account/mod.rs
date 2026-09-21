@@ -36,6 +36,7 @@
 mod webauthn;
 
 pub mod conversations;
+pub mod device_login;
 pub mod devices;
 pub mod guild_admin;
 pub mod integrations;

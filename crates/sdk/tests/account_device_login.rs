@@ -1,0 +1,179 @@
+//! Exercises `AvalonClient::start_account_device_login`/
+//! `AccountDeviceLogin::wait` (issue #707) against a real, running
+//! `avalon-server` (and therefore a real Postgres). Gated on `--ignored`
+//! since it needs live infra — see `make test-live` / `make start`.
+//!
+//! Mirrors `crates/sdk/tests/device_login.rs`'s own approach: the
+//! approving side (`POST /auth/device/approve`/`deny`) is exercised
+//! directly over HTTP against a seeded identity/session/signing key, since
+//! this test isn't about the approver's own login ceremony, only about
+//! whether `AccountDeviceLogin::wait` correctly turns an approval/denial
+//! into an `AccountSession`/`SdkError`.
+
+use avalon_sdk::{AvalonClient, AvalonConfig, SdkError};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+fn server_url() -> String {
+    std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
+}
+
+async fn test_pool() -> PgPool {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    PgPoolOptions::new()
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres — is it reachable?")
+}
+
+async fn seed_identity_session(pool: &PgPool, display_name: &str) -> (Uuid, String) {
+    let identity_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO identities (id) VALUES ($1)")
+        .bind(identity_id)
+        .execute(pool)
+        .await
+        .expect("failed to seed identity");
+    sqlx::query("INSERT INTO profiles (identity_id, display_name) VALUES ($1, $2)")
+        .bind(identity_id)
+        .bind(display_name)
+        .execute(pool)
+        .await
+        .expect("failed to seed profile");
+
+    let token = format!("test-token-{}", Uuid::new_v4());
+    let expires_at = OffsetDateTime::now_utc() + time::Duration::hours(1);
+    sqlx::query("INSERT INTO sessions (token, identity_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(&token)
+        .bind(identity_id)
+        .bind(expires_at)
+        .execute(pool)
+        .await
+        .expect("failed to seed session");
+
+    (identity_id, token)
+}
+
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
+}
+
+fn sign_device_pairing_approve(
+    signing_key: &SigningKey,
+    identity_id: Uuid,
+    user_code: &str,
+) -> String {
+    let message = format!("avalon:device_pairing.approve:v1:{identity_id}:{user_code}");
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
+fn client(base: &str) -> AvalonClient {
+    AvalonClient::new(AvalonConfig {
+        server_url: base.to_string(),
+        integrator_credential_key_id: "sdk-test".to_string(),
+        integrator_slug: None,
+        signing_key: None,
+        retry: Default::default(),
+    })
+}
+
+#[tokio::test]
+#[ignore]
+async fn wait_resolves_to_a_real_account_session_once_approved() {
+    let base = server_url();
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let display_name = format!("account-device-login-test-{}", Uuid::new_v4());
+    let (approver_id, approver_token) = seed_identity_session(&pool, &display_name).await;
+    let (approver_key_id, approver_signing_key) = seed_signing_key(&pool, approver_id).await;
+
+    let client = client(&base);
+    let pairing = client
+        .start_account_device_login()
+        .await
+        .expect("start_account_device_login should start a pairing");
+    assert!(!pairing.user_code.is_empty());
+    assert!(pairing.verification_uri.contains(&pairing.user_code));
+    assert!(pairing.expires_in > 0);
+
+    let user_code = pairing.user_code.clone();
+    let base_for_approval = base.clone();
+    let approval = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let signature = sign_device_pairing_approve(&approver_signing_key, approver_id, &user_code);
+        let response = http
+            .post(format!("{base_for_approval}/auth/device/approve"))
+            .bearer_auth(&approver_token)
+            .json(&serde_json::json!({
+                "user_code": user_code,
+                "signing_key_id": approver_key_id,
+                "signature": signature,
+            }))
+            .send()
+            .await
+            .expect("approve request failed");
+        assert!(response.status().is_success(), "{:?}", response.status());
+    });
+
+    let session = pairing.wait().await.expect("wait() should resolve");
+    approval.await.expect("approval task panicked");
+
+    assert_eq!(session.profile().display_name, display_name);
+    // The approving device is a *different* device with its own key — this
+    // session never had a WebAuthn ceremony of its own, so it holds no
+    // local signing key (same documented behavior `resume_account_session`
+    // has).
+    assert_eq!(session.signing_key_id(), None);
+}
+
+#[tokio::test]
+#[ignore]
+async fn wait_returns_a_typed_error_when_denied() {
+    let base = server_url();
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let (_approver_id, approver_token) = seed_identity_session(
+        &pool,
+        &format!("account-device-login-deny-test-{}", Uuid::new_v4()),
+    )
+    .await;
+
+    let client = client(&base);
+    let pairing = client
+        .start_account_device_login()
+        .await
+        .expect("start_account_device_login should start a pairing");
+
+    let user_code = pairing.user_code.clone();
+    let base_for_denial = base.clone();
+    let denial = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let response = http
+            .post(format!("{base_for_denial}/auth/device/deny"))
+            .bearer_auth(&approver_token)
+            .json(&serde_json::json!({ "user_code": user_code }))
+            .send()
+            .await
+            .expect("deny request failed");
+        assert!(response.status().is_success(), "{:?}", response.status());
+    });
+
+    let result = pairing.wait().await;
+    denial.await.expect("denial task panicked");
+
+    assert!(matches!(result, Err(SdkError::DeviceLoginDenied)));
+}
