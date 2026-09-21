@@ -15,6 +15,7 @@
 // parse the URI form.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -529,5 +530,147 @@ public class LiveTests
 
         Assert.Equal(displayName, session.Profile.DisplayName);
         Assert.Equal(identityId, session.Identity.Id);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_session.rs's
+    /// resume_account_session_signs_when_given_the_signing_key — the registration-equivalent
+    /// (SQL-seeded identity + signing key, since this SDK deliberately doesn't drive a
+    /// WebAuthn ceremony — see AccountSession.cs's own header comment for the scoping call) ->
+    /// resume -> signature-required-action round trip issue #700 itself asks for.</summary>
+    [Fact]
+    public async Task AccountSession_ResumeWithSigningKeyThenCreateRole_SignsAutomaticallyAndVerifiesServerSide()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"account-session-resume-csharp-{Guid.NewGuid():N}");
+        var (signingKeyId, signingKey) = await SeedSigningKeyAsync(conn, identityId);
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var session = await client.ResumeAccountSessionWithSigningKeyAsync(token, signingKey.GetEncoded());
+
+        Assert.Equal(identityId, session.Identity.Id);
+        Assert.Equal(signingKeyId, session.SigningKeyId);
+
+        var guild = await session.CreateGuildAsync($"Guild {Guid.NewGuid():N}".Substring(0, 20), FreshGuildTag(), "a test guild");
+        Assert.Equal(identityId, guild.Owner);
+
+        // guild.role.create is signature-required (#697/#698) — this only succeeds if
+        // AccountSession.CreateRoleAsync actually attached a valid signature the server
+        // verified against signature_gate::canonical_message("guild.role.create", ...).
+        var role = await session.CreateRoleAsync(guild.Id, "Quartermaster", new[] { "manage_members" }, "trusted role");
+        Assert.Equal("Quartermaster", role.Name);
+        Assert.Equal(new List<string> { "manage_members" }, role.Permissions);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_session.rs's
+    /// resume_account_session_without_a_signing_key_sends_unsigned_and_is_rejected — proves
+    /// a session resumed with only a bearer token (no local signing key) still works for
+    /// non-signature-required actions but gets rejected server-side on a signature-required
+    /// one, rather than this SDK silently fabricating a signature.</summary>
+    [Fact]
+    public async Task AccountSession_ResumeWithoutSigningKeyThenCreateRole_IsRejectedServerSide()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"account-session-nokey-csharp-{Guid.NewGuid():N}");
+        // The identity does have a registered signing key server-side — just not one this
+        // session holds locally — so the server's own rejection is FRESH_SIGNATURE_REQUIRED,
+        // not NO_REGISTERED_SIGNING_KEY.
+        await SeedSigningKeyAsync(conn, identityId);
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var session = await client.ResumeAccountSessionAsync(token);
+        Assert.Null(session.SigningKeyId);
+
+        var guild = await session.CreateGuildAsync($"Guild {Guid.NewGuid():N}".Substring(0, 20), FreshGuildTag(), "an unsigned-resume test guild");
+
+        await Assert.ThrowsAsync<AvalonRequestException>(() =>
+            session.CreateRoleAsync(guild.Id, "ShouldFail", Array.Empty<string>(), ""));
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_device_login.rs's own
+    /// wait_resolves_to_a_real_account_session_once_approved (issue #707) — the approving
+    /// side is exercised directly over HTTP against a seeded identity/session/signing key,
+    /// same approach the Rust test and this file's own cross-node-login test above use.</summary>
+    [Fact]
+    public async Task AccountSession_StartDeviceLogin_ResolvesOnceApproved()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var displayName = $"account-device-login-csharp-{Guid.NewGuid():N}";
+        var (approverId, approverToken) = await SeedIdentitySessionAsync(conn, displayName);
+        var (approverKeyId, approverSigningKey) = await SeedSigningKeyAsync(conn, approverId);
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var pairing = await client.StartAccountDeviceLoginAsync();
+        Assert.False(string.IsNullOrEmpty(pairing.UserCode));
+        Assert.Contains(pairing.UserCode, pairing.VerificationUri);
+        Assert.True(pairing.ExpiresIn > 0);
+
+        var http = new HttpClient();
+        var approvalTask = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            var message = Encoding.UTF8.GetBytes($"avalon:device_pairing.approve:v1:{approverId}:{pairing.UserCode}");
+            var signer = new Ed25519Signer();
+            signer.Init(true, approverSigningKey);
+            signer.BlockUpdate(message, 0, message.Length);
+            var signature = Convert.ToBase64String(signer.GenerateSignature());
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/device/approve");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", approverToken);
+            request.Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                user_code = pairing.UserCode,
+                signing_key_id = approverKeyId,
+                signature,
+            }), Encoding.UTF8, "application/json");
+            using var response = await http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+        });
+
+        var session = await pairing.WaitAsync();
+        await approvalTask;
+
+        Assert.Equal(displayName, session.Profile.DisplayName);
+        // The approving device is a *different* device with its own key — this session
+        // never had a WebAuthn ceremony of its own, so it holds no local signing key.
+        Assert.Null(session.SigningKeyId);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_device_login.rs's own
+    /// wait_returns_a_typed_error_when_denied.</summary>
+    [Fact]
+    public async Task AccountSession_StartDeviceLogin_ThrowsWhenDenied()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (_, approverToken) =
+            await SeedIdentitySessionAsync(conn, $"account-device-login-deny-csharp-{Guid.NewGuid():N}");
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var pairing = await client.StartAccountDeviceLoginAsync();
+
+        var http = new HttpClient();
+        var denialTask = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/device/deny");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", approverToken);
+            request.Content = new StringContent(JsonSerializer.Serialize(new { user_code = pairing.UserCode }), Encoding.UTF8, "application/json");
+            using var response = await http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+        });
+
+        await Assert.ThrowsAsync<AccountDeviceLoginDeniedException>(() => pairing.WaitAsync());
+        await denialTask;
     }
 }
