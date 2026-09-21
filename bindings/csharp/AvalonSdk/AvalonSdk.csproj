@@ -22,7 +22,7 @@
          without pulling in a full web framework. System.Text.Json (not a hand-rolled DTO
          parser) is netstandard2.0-compatible via this package, so it's the JSON layer here
          too, keeping one serializer for the whole SDK rather than two. -->
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Text.Json" Version="8.0.6" />
     <PackageReference Include="System.Threading.Channels" Version="10.0.12" />
     <!-- BouncyCastle.Cryptography: netstandard2.1 has no built-in Ed25519. This is a
          pure-managed implementation (no native binary), which matters for Unity/IL2CPP
