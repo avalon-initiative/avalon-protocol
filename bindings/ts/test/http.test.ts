@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { request } from './http.js'
-import { UnauthorizedError } from './errors.js'
+import { request } from '../src/http.js'
+import { UnauthorizedError } from '../src/errors.js'
 
 const originalFetch = globalThis.fetch
 

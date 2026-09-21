@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { generateSigningKey, verify } from './signing.js'
-import { mintContinuationToken, WIRE_PREFIX } from './continuation.js'
+import { generateSigningKey, verify } from '../../src/crypto/signing.js'
+import { mintContinuationToken, WIRE_PREFIX } from '../../src/crypto/continuation.js'
 
 interface DecodedToken {
   identity_id: string

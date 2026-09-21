@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { generateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english'
-import { deriveSigningKeyFromMnemonic, generateMnemonicSigningKey, isValidMnemonic } from './mnemonic.js'
+import { deriveSigningKeyFromMnemonic, generateMnemonicSigningKey, isValidMnemonic } from '../../src/crypto/mnemonic.js'
 
 describe('deriveSigningKeyFromMnemonic', () => {
   it('deriving the same phrase twice yields the same keypair', () => {

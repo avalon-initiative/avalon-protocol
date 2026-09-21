@@ -13,11 +13,11 @@
 // `make start` from the repo root.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import pg from 'pg'
-import { AvalonClient } from './client.js'
-import { generateSigningKey, canonicalMessage, sign, bytesToBase64 } from './crypto/signing.js'
-import { DeviceLoginDeniedError } from './errors.js'
-import { getLatestSth } from './ledger.js'
-import type { PresenceUpdate, ChannelMessageUpdate } from './accountSession/realtime.js'
+import { AvalonClient } from '../src/client.js'
+import { generateSigningKey, canonicalMessage, sign, bytesToBase64 } from '../src/crypto/signing.js'
+import { DeviceLoginDeniedError } from '../src/errors.js'
+import { getLatestSth } from '../src/ledger.js'
+import type { PresenceUpdate, ChannelMessageUpdate } from '../src/accountSession/realtime.js'
 
 const serverUrl = process.env.AVALON_SERVER_URL
 const databaseUrl = process.env.AVALON_LIVE_DATABASE_URL

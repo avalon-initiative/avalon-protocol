@@ -723,17 +723,19 @@ protocol and the domain model in `crates/protocol`; they never pull in
     `DeviceLoginDeniedError`/`DeviceLoginExpiredError`/
     `NoLocalSigningKeyError`), mapped from HTTP status + the server's own
     `{ error, code }` body, mirroring `SdkError`'s variants.
-  - **Unit tests** (`vitest`, colocated `*.test.ts` files): the
-    canonical-message shape byte-for-byte against the known format
-    (`crypto/signing.test.ts`), `AccountSession.sign`'s empty-vs-signed
+  - **Unit tests** (`vitest`, under `bindings/ts/test/`, mirroring
+    `src/`'s own directory structure rather than colocated next to the
+    code they cover — a dedicated tree, not scattered through `src/`):
+    the canonical-message shape byte-for-byte against the known format
+    (`test/crypto/signing.test.ts`), `AccountSession.sign`'s empty-vs-signed
     behavior, `IntegratorSession`'s capability-gating (throws without a
     network call when ungranted), and a signed-call round trip
-    (`accountSession/core.test.ts`) that stubs `fetch`, calls a
+    (`test/accountSession/core.test.ts`) that stubs `fetch`, calls a
     signature-required method, and verifies the captured request body's
     signature against the session's known public key using
     `@noble/curves`'s own `ed25519.verify` — the same "verify server-side-
     equivalently" pattern the C# unit tests use with BouncyCastle.
-  - **Live tests** (`bindings/ts/src/account.live.test.ts`, opt-in via
+  - **Live tests** (`bindings/ts/test/account.live.test.ts`, opt-in via
     `AVALON_SERVER_URL`/`AVALON_LIVE_DATABASE_URL`, run with `npm run
     test:live` from `bindings/ts`): SQL-seeded identity + signing key (via
     the `pg` npm client, reading the same `postgres://` URI `DATABASE_URL`
