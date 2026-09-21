@@ -347,6 +347,7 @@ dependencies = [
  "avalon-schema-derive",
  "avalon-sdk",
  "base64 0.23.1",
+ "coset",
  "ed25519-dalek",
  "futures-util",
  "hex",

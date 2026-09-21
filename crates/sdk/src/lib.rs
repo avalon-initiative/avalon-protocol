@@ -38,9 +38,22 @@
 //! `network::TargetNetwork` and refuses, client-side, to register against
 //! anything else — belt-and-suspenders alongside the server's own
 //! `declared_network_id` gate (#481).
+//!
+//! `account` (issue #699, on top of #696/#697/#698) is a second, entirely
+//! separate session type: `AccountSession`, a first-party client for an
+//! identity's own account (registration, login, recovery, passkeys,
+//! devices, full guild administration, and every other action
+//! `packages/api-client` exposes to Hub) — obtained via
+//! `AvalonClient::register`/`account_login`/`resume_account_session`, never
+//! via `authenticate()`. There is no conversion between `Session` and
+//! `AccountSession` in either direction, by design: an integrator
+//! credential must never yield account-level power. Every action #697
+//! flags as signature-required signs itself automatically with
+//! `AccountSession`'s own locally-held Ed25519 key.
 
 #![deny(missing_docs)]
 
+pub mod account;
 pub mod achievements;
 pub mod conversations;
 pub mod cross_node_login;
@@ -56,6 +69,7 @@ pub mod social;
 pub mod submission;
 pub mod sync_journal;
 
+pub use account::{AccountCredentials, AccountSession, ProfileUpdate};
 pub use http::RetryConfig;
 
 use avalon_protocol::identity::{Identity, Profile};

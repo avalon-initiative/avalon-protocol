@@ -1,0 +1,391 @@
+//! Friends, blocks, presence, and discovery (issues #15/#97/#136/#204/#205)
+//! on [`super::AccountSession`] — the first-party counterpart to
+//! `crate::social`'s capability-gated integrator methods. See
+//! `crates/server/src/friends.rs`/`blocks.rs`/`presence.rs`/`discovery.rs`.
+
+use avalon_protocol::social::PresenceStatus;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+use crate::SdkError;
+
+use super::AccountSession;
+
+/// A confirmed friendship — `a`/`b` are the two identities, in no
+/// particular order (the server never distinguishes "who sent the
+/// request" past acceptance).
+#[derive(Debug, Clone, Deserialize)]
+pub struct Friendship {
+    /// One side of the friendship.
+    pub a: Uuid,
+    /// The other side.
+    pub b: Uuid,
+    /// When the friendship was established.
+    #[serde(with = "time::serde::rfc3339")]
+    pub since: OffsetDateTime,
+}
+
+/// A pending friend request.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FriendRequest {
+    /// This request's own id.
+    pub id: Uuid,
+    /// The requester.
+    pub from: Uuid,
+    /// The recipient.
+    pub to: Uuid,
+    /// When the request was sent.
+    #[serde(with = "time::serde::rfc3339")]
+    pub requested_at: OffsetDateTime,
+}
+
+/// One outgoing block — see `crates/server/src/blocks.rs`'s own invariant:
+/// there is no endpoint anywhere that reveals who has blocked *you*.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Block {
+    /// The blocked identity.
+    pub blocked: Uuid,
+    /// When the block was created.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// A public-face profile — the least-sensitive batch-resolvable fields
+/// only (`GET /identities/profiles`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PublicProfile {
+    /// The identity these fields describe.
+    pub identity_id: Uuid,
+    /// Display name / globally-unique handle.
+    pub display_name: String,
+    /// Avatar image URL, if set.
+    pub avatar_url: Option<String>,
+}
+
+/// A "people you may know" candidate (`GET /people/discover`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiscoveryCandidate {
+    /// The candidate identity.
+    pub identity_id: Uuid,
+    /// Display name.
+    pub display_name: String,
+    /// Avatar image URL, if set.
+    pub avatar_url: Option<String>,
+    /// Mutual friend count, if any signal exists.
+    #[serde(default)]
+    pub mutual_friends: i64,
+    /// Mutual guild count, if any signal exists.
+    #[serde(default)]
+    pub mutual_guilds: i64,
+}
+
+/// A single global search result (`GET /identities/search`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchResultIdentity {
+    /// The matched identity.
+    pub identity_id: Uuid,
+    /// Display name.
+    pub display_name: String,
+    /// Avatar image URL, if set.
+    pub avatar_url: Option<String>,
+}
+
+/// This identity's own presence, as currently published.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Presence {
+    /// The identity this presence describes.
+    pub identity_id: Uuid,
+    /// Current status.
+    pub status: PresenceStatus,
+    /// Which guild the identity is currently active in, if visible.
+    pub active_in: Option<Uuid>,
+    /// When this status was last published.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+/// One entry of the caller's own recent protocol history (`GET /me/history`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistoryEntry {
+    /// The underlying durable event's id.
+    pub event_id: Uuid,
+    /// The event's kind (e.g. `"friend.requested"`).
+    pub kind: String,
+    /// The event's subject `GlobalId` string.
+    pub subject: String,
+    /// The event's own payload, or `None` if pruned locally.
+    pub payload: Option<serde_json::Value>,
+    /// When the event occurred.
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
+}
+
+/// Another identity's full self-description profile (`GET
+/// /identities/{id}/profile`, issue #403) — same fields `GET /me` exposes
+/// for the caller's own profile.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PublicIdentityProfile {
+    /// The identity these fields describe.
+    pub identity_id: Uuid,
+    /// When this identity was created.
+    #[serde(with = "time::serde::rfc3339")]
+    pub identity_created_at: OffsetDateTime,
+    /// Display name / globally-unique handle.
+    pub display_name: String,
+    /// Avatar image URL, if set.
+    pub avatar_url: Option<String>,
+    /// Free-text bio, if set.
+    pub bio: Option<String>,
+    /// Self-described favorite genres.
+    #[serde(default)]
+    pub favorite_genres: Vec<String>,
+    /// Free-text pronouns, if set.
+    pub pronouns: Option<String>,
+    /// Banner image URL, if set.
+    pub banner_url: Option<String>,
+    /// Free-text status line, if set.
+    pub status: Option<String>,
+    /// External links.
+    #[serde(default)]
+    pub links: Vec<String>,
+    /// Self-described timezone, if set.
+    pub timezone: Option<String>,
+    /// Self-described theme color, if set.
+    pub theme_color: Option<String>,
+    /// Self-described free-text location, if set.
+    pub location: Option<String>,
+}
+
+/// A recent announcement-only channel post (`GET /me/guild-announcements`,
+/// issue #280).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildAnnouncementAlert {
+    /// The underlying message's id.
+    pub message_id: Uuid,
+    /// The channel it was posted in.
+    pub channel_id: Uuid,
+    /// That channel's name.
+    pub channel_name: String,
+    /// The guild the channel belongs to.
+    pub guild_id: Uuid,
+    /// The message's author.
+    pub author: Uuid,
+    /// The message body.
+    pub body: String,
+    /// When it was sent.
+    #[serde(with = "time::serde::rfc3339")]
+    pub sent_at: OffsetDateTime,
+}
+
+#[derive(Serialize)]
+struct CreateFriendRequestRequest {
+    to: Uuid,
+}
+
+#[derive(Serialize)]
+struct CreateBlockRequest {
+    identity_id: Uuid,
+}
+
+#[derive(Serialize)]
+struct UpdatePresenceRequest {
+    status: PresenceStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hide_active_in: Option<bool>,
+}
+
+impl AccountSession {
+    /// `GET /friends`.
+    pub async fn friends(&self) -> Result<Vec<Friendship>, SdkError> {
+        self.get("/friends").await
+    }
+
+    /// `GET /friends/requests` — both incoming and outgoing.
+    pub async fn friend_requests(&self) -> Result<Vec<FriendRequest>, SdkError> {
+        self.get("/friends/requests").await
+    }
+
+    /// `POST /friends/requests`.
+    pub async fn create_friend_request(&self, to: Uuid) -> Result<FriendRequest, SdkError> {
+        self.post("/friends/requests", &CreateFriendRequestRequest { to })
+            .await
+    }
+
+    /// `POST /friends/requests/{id}/accept`.
+    pub async fn accept_friend_request(&self, request_id: Uuid) -> Result<Friendship, SdkError> {
+        self.post_empty(&format!("/friends/requests/{request_id}/accept"))
+            .await
+    }
+
+    /// `DELETE /friends/requests/{id}` — declines an incoming request or
+    /// withdraws an outgoing one (the server infers which).
+    pub async fn decline_or_withdraw_friend_request(
+        &self,
+        request_id: Uuid,
+    ) -> Result<(), SdkError> {
+        self.delete(&format!("/friends/requests/{request_id}"))
+            .await
+    }
+
+    /// `DELETE /friends/{identity_id}`.
+    pub async fn remove_friend(&self, identity_id: Uuid) -> Result<(), SdkError> {
+        self.delete(&format!("/friends/{identity_id}")).await
+    }
+
+    /// `GET /friends/handle/{handle}` — exact-match handle resolution for
+    /// the "add friend" flow.
+    pub async fn resolve_handle(&self, handle: &str) -> Result<Uuid, SdkError> {
+        #[derive(Deserialize)]
+        struct ResolveHandleResponse {
+            identity_id: Uuid,
+        }
+        let response: ResolveHandleResponse = self
+            .get(&format!("/friends/handle/{}", urlencoding_path(handle)))
+            .await?;
+        Ok(response.identity_id)
+    }
+
+    /// `GET /blocks` — the caller's own outgoing blocks only.
+    pub async fn blocks(&self) -> Result<Vec<Block>, SdkError> {
+        self.get("/blocks").await
+    }
+
+    /// `POST /blocks`.
+    pub async fn block(&self, identity_id: Uuid) -> Result<Block, SdkError> {
+        self.post("/blocks", &CreateBlockRequest { identity_id })
+            .await
+    }
+
+    /// `DELETE /blocks/{identity_id}`.
+    pub async fn unblock(&self, identity_id: Uuid) -> Result<(), SdkError> {
+        self.delete(&format!("/blocks/{identity_id}")).await
+    }
+
+    /// `GET /people/discover` — no query parameters; the caller's own
+    /// session is the only input.
+    pub async fn discover_people(&self) -> Result<Vec<DiscoveryCandidate>, SdkError> {
+        #[derive(Deserialize)]
+        struct DiscoverPeopleResponse {
+            candidates: Vec<DiscoveryCandidate>,
+        }
+        let response: DiscoverPeopleResponse = self.get("/people/discover").await?;
+        Ok(response.candidates)
+    }
+
+    /// `GET /identities/search?q=` — only matches identities that opted
+    /// into `discoverable`. An empty/blank `q` returns no results without
+    /// a round trip.
+    pub async fn search_identities(&self, q: &str) -> Result<Vec<SearchResultIdentity>, SdkError> {
+        if q.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        #[derive(Deserialize)]
+        struct SearchIdentitiesResponse {
+            results: Vec<SearchResultIdentity>,
+        }
+        let response: SearchIdentitiesResponse =
+            self.get_query("/identities/search", &[("q", q)]).await?;
+        Ok(response.results)
+    }
+
+    /// `GET /identities/profiles?ids=` — batched, public-fields-only.
+    pub async fn profiles(&self, ids: &[Uuid]) -> Result<Vec<PublicProfile>, SdkError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let joined = ids
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        self.get_query("/identities/profiles", &[("ids", &joined)])
+            .await
+    }
+
+    /// `GET /me/history`.
+    pub async fn history(&self) -> Result<Vec<HistoryEntry>, SdkError> {
+        self.get("/me/history").await
+    }
+
+    /// `GET /identities/{id}/profile` — another identity's full
+    /// self-description profile, same exposure level as `GET /me`.
+    pub async fn identity_profile(
+        &self,
+        identity_id: Uuid,
+    ) -> Result<PublicIdentityProfile, SdkError> {
+        self.get(&format!("/identities/{identity_id}/profile"))
+            .await
+    }
+
+    /// `GET /me/guild-announcements` (issue #280) — recent
+    /// announcement-only channel posts across every guild the caller
+    /// currently belongs to.
+    pub async fn guild_announcements(&self) -> Result<Vec<GuildAnnouncementAlert>, SdkError> {
+        self.get("/me/guild-announcements").await
+    }
+
+    /// `PUT /me/presence` — publishes the caller's own status. Not
+    /// signature-required (high-frequency, self-correcting).
+    pub async fn update_presence(
+        &self,
+        status: PresenceStatus,
+        hide_active_in: Option<bool>,
+    ) -> Result<Presence, SdkError> {
+        self.put(
+            "/me/presence",
+            &UpdatePresenceRequest {
+                status,
+                hide_active_in,
+            },
+        )
+        .await
+    }
+
+    /// `GET /presence?ids=` — no visibility filtering server-side (#87
+    /// tracks adding it); returns exactly what the server returns.
+    pub async fn presence_of(&self, ids: &[Uuid]) -> Result<Vec<Presence>, SdkError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let joined = ids
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        self.get_query("/presence", &[("ids", &joined)]).await
+    }
+}
+
+/// Minimal path-segment percent-encoding for a display-name handle, which
+/// can contain characters unsafe in a URL path segment (spaces, etc.) —
+/// mirrors `packages/api-client/src/client.ts::resolveHandle`'s
+/// `encodeURIComponent` call without pulling in a full URL-encoding
+/// dependency for this one call site.
+fn urlencoding_path(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urlencoding_path_leaves_safe_characters_alone() {
+        assert_eq!(urlencoding_path("abc-123_.~"), "abc-123_.~");
+    }
+
+    #[test]
+    fn urlencoding_path_percent_encodes_a_space() {
+        assert_eq!(urlencoding_path("dragon slayer"), "dragon%20slayer");
+    }
+}
