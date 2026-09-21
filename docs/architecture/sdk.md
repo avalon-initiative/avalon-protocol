@@ -832,6 +832,19 @@ protocol and the domain model in `crates/protocol`; they never pull in
       have (no WebAuthn-ceremony-driving authenticator available in
       Node/vitest) — `registerWithMnemonic` shares that ceremony step, so
       inherits the same limitation rather than introducing a new one.
+    - `AvalonClient.loginWithIdentityId(identityId)` — found migrating
+      `apps/hub`'s actual `Login.vue`/`CreateIdentity.vue` (epic #712's
+      later stage), not by the earlier function-by-function audit: `login()`
+      requires `AccountCredentials` (pre-existing local key material from
+      an earlier `register()`/`login()` on this same browser), but Hub's
+      real login flow supports any device with a registered passkey for an
+      identity logging in — including one with *no* local signing key at
+      all yet (awaiting a device-grant approval from another device).
+      `loginWithIdentityId` drives the same WebAuthn ceremony with no key
+      material, resolving to a session with `signingKeyId() === undefined`
+      — call `AccountSession.attachSigningKey` afterward if this browser
+      separately holds a key (mnemonic-derived or otherwise) to attach.
+      Same live-testing gap as `register()`/`login()`, for the same reason.
     - **Unit tests**: `crypto/continuation.test.ts` covers the wire format
       byte-for-byte (mirroring `packages/api-client/src/crypto/
       continuation.test.ts`'s own test style: prefix, field shapes, exact

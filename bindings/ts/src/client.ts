@@ -139,10 +139,23 @@ export class AvalonClient {
     return session
   }
 
+  /** Logs into `identityId` via a real WebAuthn ceremony with no local
+   * signing-key material at all — the general "any device with a
+   * registered passkey for this identity can log in" path, distinct from
+   * `login()`'s "this browser already holds credentials from an earlier
+   * `register()`/`login()`" one. The identity may hold a signing key on a
+   * *different* device (or none yet), and this browser may separately
+   * hold a mnemonic-derived key it wants to attach — use
+   * `AccountSession.attachSigningKey` afterward for that, same as
+   * `resumeAccountSession`'s own no-key posture. */
+  async loginWithIdentityId(identityId: string): Promise<AccountSession> {
+    return this.finishLogin(identityId, undefined)
+  }
+
   /** Shared `POST /sessions/start` -> ceremony -> `POST /sessions/finish`
-   * -> `GET /me` -> resolve own `signingKeyId` sequence used by both
-   * `register()` and `login()`. */
-  private async finishLogin(identityId: string, secretKey: Uint8Array): Promise<AccountSession> {
+   * -> `GET /me` -> resolve own `signingKeyId` (when a key was supplied)
+   * sequence used by `register()`, `login()`, and `loginWithIdentityId()`. */
+  private async finishLogin(identityId: string, secretKey: Uint8Array | undefined): Promise<AccountSession> {
     const start = await request<SessionStartResponseWire>(this.serverUrl, '/sessions/start', {
       method: 'POST',
       body: { identity_id: identityId },
@@ -155,7 +168,9 @@ export class AvalonClient {
       body: { ticket_id: start.ticket_id, credential: assertion },
     })
 
-    return this.resumeAccountSessionWithSigningKey(finish.token, secretKey)
+    return secretKey
+      ? this.resumeAccountSessionWithSigningKey(finish.token, secretKey)
+      : this.resumeAccountSession(finish.token)
   }
 
   /** Resumes an already-minted bearer token as an `AccountSession`. Holds
