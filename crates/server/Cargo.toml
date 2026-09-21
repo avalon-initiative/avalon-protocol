@@ -51,7 +51,7 @@ sysinfo.workspace = true
 # a dev-only dependency (where issue #539 first pulled it in for
 # `crates/server/tests/realtime_relay.rs`) to a real one, since proxying is
 # now part of `avalon-server`'s own runtime behavior, not just its tests.
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 futures-util.workspace = true
 
 [dev-dependencies]
