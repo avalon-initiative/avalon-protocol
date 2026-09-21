@@ -18,6 +18,16 @@ here as the equivalent hand-run commands.
 Every step uses only public interfaces — HTTP endpoints, the SDK, the CLI,
 and the Hub. No direct SQL.
 
+`crates/cli/tests/milestone_1_three_node.rs` (issue #670) is a real
+distributed variant of the same story: a player registers on exactly one
+node, then friends, forms a guild, and receives a verified achievement
+entirely on a second and third node that never saw her register — reached
+only through a real cross-node login (epic #623) each of those nodes can
+only complete by fetching her signing key cross-shard (#636) from her
+actual registration node over the real DHT locator (#635). Needs this
+sandbox's live 3-node topology (`.claude/CLAUDE.md`), not just
+`make start` — gated `--ignored`, not part of `make test-live`.
+
 ## Setup
 
 ```bash
