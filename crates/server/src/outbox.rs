@@ -615,7 +615,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn concurrent_drains_do_not_double_commit() {
-        dotenvy::dotenv().ok();
+        avalon_devenv::load();
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect(&database_url)
@@ -733,7 +733,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn a_tick_spanning_two_shards_commits_two_separate_batches() {
-        dotenvy::dotenv().ok();
+        avalon_devenv::load();
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect(&database_url)

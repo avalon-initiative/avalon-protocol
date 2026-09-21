@@ -8,6 +8,7 @@ members = [
     "crates/sdk",
     "crates/schema-derive",
     "crates/cli",
+    "crates/devenv",
 ]
 
 [workspace.package]
@@ -48,6 +49,7 @@ base64 = "0.23"
 anyhow = "1"
 hex = "0.4"
 dotenvy = "0.15"
+avalon-devenv = { path = "crates/devenv" }
 webauthn-rs = { version = "0.5", features = ["resident-key-support", "danger-allow-state-serialisation", "conditional-ui"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core", "serde"] }
 url = { version = "2", features = ["serde"] }

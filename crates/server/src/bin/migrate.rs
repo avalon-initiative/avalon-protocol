@@ -13,7 +13,7 @@ fn migrations_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
     let direction = std::env::args().nth(1).unwrap_or_else(|| "up".to_string());
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
