@@ -29,7 +29,7 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 axum = "0.8"
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 # issue #363: ConcurrencyLimitLayer (AVALON_MAX_CONCURRENT_REQUESTS) in the
@@ -86,7 +86,7 @@ protobuf-json-mapping = "3.7.2"
 # issue #386: `avalon-schema-derive`'s `#[derive(AvalonSchema)]`
 # proc-macro, generating `.proto` text from a Rust struct's own fields
 # (syn parses the struct, quote emits the generated `impl` block).
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 # `protobuf_parse::Parser`'s only public API reads `.proto` source from a
@@ -107,9 +107,9 @@ semver = "1"
 # `crate::redis_limits`'s own module doc comment. `connection-manager`
 # gives a cheap-to-clone, auto-reconnecting async connection; `tokio-comp`
 # is this server's only async runtime.
-redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+redis = { version = "1.7", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 # Issue #517: cross-platform host resource metrics (CPU/memory/disk) for
 # `GET /nodes/status`'s `resources` block — avoids hand-rolling `/proc`
 # parsing (Linux-only) when hosters may run on macOS/Windows too. Default
 # features cover CPU/memory/disk/process, which is all this needs.
-sysinfo = "0.38"
+sysinfo = "0.39"
