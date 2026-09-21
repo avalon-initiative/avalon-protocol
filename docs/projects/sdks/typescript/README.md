@@ -60,8 +60,8 @@ numbered guide series yet — noted honestly rather than left to look
 finished. Until one exists, the most accurate reference is
 [`../architecture/sdk.md`](../architecture/sdk.md)'s own "Today in the
 repo" section (search for `bindings/ts`), which is kept current alongside
-the code, plus the colocated `*.test.ts` files under `bindings/ts/src/`,
-which double as runnable usage examples for every domain.
+the code, plus the `*.test.ts` files under `bindings/ts/test/`, which
+double as runnable usage examples for every domain.
 
 ## Related
 
