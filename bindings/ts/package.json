@@ -1,0 +1,27 @@
+{
+  "name": "@avalon/sdk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TypeScript reference SDK for Avalon Protocol (issue #701): AccountSession (first-party account operations, auto-signed) and IntegratorSession (capability-gated integrator access), self-contained with no dependency on this repo's own apps/packages workspace — meant to move into a standalone avalon-sdks repo.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:live": "AVALON_SDK_LIVE=1 vitest run --config vitest.live.config.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
+    "@scure/bip39": "^1.5.0",
+    "@simplewebauthn/browser": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "pg": "^8.13.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

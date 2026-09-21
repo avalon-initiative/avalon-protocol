@@ -610,6 +610,124 @@ protocol and the domain model in `crates/protocol`; they never pull in
     the same signature-required call rejected server-side) — both
     live-verified against a real `avalon-server` and Postgres.
 
+- `bindings/ts` (issue #701, on top of #696/#697/#698/#699/#700) — a new,
+  self-contained TypeScript SDK implementing both `AccountSession` and
+  `IntegratorSession` from scratch, ES modules, `vitest` for tests
+  (matching `packages/api-client`'s existing conventions). Not a workspace
+  member: intentionally outside the root `package.json`'s `workspaces`
+  array and `npm install`ed separately from inside `bindings/ts` itself,
+  since the design is for this package to eventually move into its own
+  `avalon-sdks` org repo with no internal deps beyond the shared wire
+  schema — no dependency (npm workspace or otherwise) on
+  `packages/api-client`, `apps/hub`, or `apps/mobile-hub` anywhere in its
+  source. `apps/hub` itself is untouched by this ticket; migrating Hub off
+  `packages/api-client` onto this SDK is separate, later work.
+  - `AccountSession` mirrors #699/#700's surface field-for-field: profile,
+    passkeys, devices/grants/cross-device pairing approval, social
+    recovery, friends/blocks/presence/discovery, conversations, full guild
+    administration, and integrator connect/consent. Domain methods are
+    split one file per matching `crates/sdk/src/account/*.rs` submodule
+    under `bindings/ts/src/accountSession/` (`passkeys.ts`, `devices.ts`,
+    `recovery.ts`, `social.ts`, `conversations.ts`, `guildAdmin.ts`,
+    `integrations.ts`, `deviceLogin.ts`), matching the Rust/C# "one file
+    per domain" convention — since TS classes can't be split across files
+    the way a C# `partial class` can, each domain file instead attaches
+    its methods to `AccountSession`'s prototype and merges its own method
+    signatures into the `AccountSession` interface via TypeScript
+    declaration merging (`declare module './core.js' { interface
+    AccountSession { ... } }`), so the result still type-checks as one
+    class with the full surface while staying split by domain on disk.
+  - Unlike the C# port (which scoped WebAuthn ceremony-driving out
+    entirely) and the Rust port (which drives a virtual/software
+    authenticator, since it has no browser to run in), this SDK is
+    browser-facing and drives a **real** WebAuthn ceremony via
+    `@simplewebauthn/browser` — `AvalonClient.register(displayName)` and
+    `AvalonClient.login(credentials)` are both implemented for real, not
+    scoped out, reimplementing
+    `packages/api-client/src/crypto/webauthn.ts`'s ceremony-driving
+    pattern and `signingKey.ts`'s Ed25519/canonical-signing-bytes
+    approach (via `@noble/curves`/`@noble/hashes`) inside `bindings/ts`
+    itself rather than importing that package. `AvalonClient
+    .resumeAccountSession(token)` /
+    `.resumeAccountSessionWithSigningKey(token, seed)` cover the
+    already-minted-token path, and `.startAccountDeviceLogin()` ->
+    `AccountDeviceLogin.wait()` (issue #707's pattern) is included from
+    day one rather than bolted on later, unlike Rust/C#, which both
+    found this gap only after `AccountSession` had already shipped.
+  - Every action #697 flags as signature-required signs itself
+    automatically via `AccountSession.sign(actionTag, fields)`, using
+    `@noble/curves`'s ed25519 over the same `avalon:<action_tag>:v1:...`
+    canonical bytes `signature_gate::canonical_message` builds
+    server-side — callers never hand-construct
+    `signing_key_id`/`signature`. The conditionally-signed endpoints
+    (last-passkey revoke, guardian removal/threshold-raise, escalating
+    member-role change) sign unconditionally, same simplification every
+    other SDK in this repo already makes. A session with no local key
+    (`resumeAccountSession` without a seed, or one resolved via
+    `startAccountDeviceLogin`) sends those requests with explicit JSON
+    `null` `signing_key_id`/`signature` fields.
+  - `IntegratorSession` (`bindings/ts/src/integratorSession.ts`) mirrors
+    the Rust `Session`/C# `Session` capability-gated model: constructed
+    via `AvalonClient.authenticate(...)` (`GET /me` + `GET /me/grants`,
+    identified via an `integratorCredentialKeyId`), every method calling
+    a private `require(capability)` check before making a request — the
+    same fast-fail-client-side-first convention, never the actual
+    security boundary (the server enforces the same thing independently).
+    Covers friends/presence, guild membership/roster/chat, conversations,
+    and achievements read/issue (the latter driving the same
+    challenge-response-plus-embedded-signature exchange
+    `crates/sdk/src/achievements.rs` does, using the integrator's own
+    configured slug/signing key — `MissingIssuerCredentialsError` without
+    any HTTP call if neither is configured, matching
+    `SdkError::MissingIssuerCredentials`).
+  - **No implicit conversion between `AccountSession` and
+    `IntegratorSession`** anywhere in this package — no shared base
+    class, no cast, no constructor/factory on either that accepts the
+    other's credential shape — #696's hard invariant holds at the type
+    level here too, same as Rust/C#.
+  - Errors are typed subclasses of `AvalonSdkError`
+    (`UnauthorizedError`/`CapabilityNotGrantedError`/`NotFoundError`/
+    `ConflictError`/`RejectedError`/`UnavailableError`/`ProtocolError`/
+    `NotConversationParticipantError`/`MissingIssuerCredentialsError`/
+    `DeviceLoginDeniedError`/`DeviceLoginExpiredError`/
+    `NoLocalSigningKeyError`), mapped from HTTP status + the server's own
+    `{ error, code }` body, mirroring `SdkError`'s variants.
+  - **Unit tests** (`vitest`, colocated `*.test.ts` files): the
+    canonical-message shape byte-for-byte against the known format
+    (`crypto/signing.test.ts`), `AccountSession.sign`'s empty-vs-signed
+    behavior, `IntegratorSession`'s capability-gating (throws without a
+    network call when ungranted), and a signed-call round trip
+    (`accountSession/core.test.ts`) that stubs `fetch`, calls a
+    signature-required method, and verifies the captured request body's
+    signature against the session's known public key using
+    `@noble/curves`'s own `ed25519.verify` — the same "verify server-side-
+    equivalently" pattern the C# unit tests use with BouncyCastle.
+  - **Live tests** (`bindings/ts/src/account.live.test.ts`, opt-in via
+    `AVALON_SERVER_URL`/`AVALON_LIVE_DATABASE_URL`, run with `npm run
+    test:live` from `bindings/ts`): SQL-seeded identity + signing key (via
+    the `pg` npm client, reading the same `postgres://` URI `DATABASE_URL`
+    already uses — no Npgsql-style conversion needed, unlike the C# suite)
+    -> `resumeAccountSessionWithSigningKey` -> a signature-required guild
+    action (`createGuild` then `createRole`) succeeds and verifies
+    server-side; the companion case (no local key -> the same call
+    rejected server-side); and a `startAccountDeviceLogin` ->
+    `wait()` round trip approved (and, separately, denied) from a second
+    SQL-seeded identity/session/signing key, signing the
+    `device_pairing.approve` bytes directly over HTTP — same shapes
+    `crates/sdk/tests/account_session.rs`/`account_device_login.rs` and
+    their C# equivalents cover. All four passed against this sandbox's
+    real `avalon-server` and Postgres as of 2026-09-21.
+  - **Known scoping note**: `register()`/`login()`'s real WebAuthn
+    ceremony is implemented for real (unlike C#'s port, which skipped it
+    entirely) but is not live-tested end-to-end — there's no virtual/
+    software WebAuthn authenticator readily available to drive from a
+    Node/vitest process (the Rust SDK's own virtual-authenticator
+    approach is a native-process trick this browser-facing SDK doesn't
+    have an equivalent for), so that path has unit/type-level coverage
+    only, same category of gap the Rust SDK's own `webauthn.rs` doesn't
+    have (it *can* drive a virtual authenticator) but C#'s
+    `Register`/`AccountLogin` do (skipped outright there).
+
 ## Decisions and tickets
 
 - [#45](https://github.com/LunarVagabond/avalon-protocol/issues/45) — Epic: Rust
