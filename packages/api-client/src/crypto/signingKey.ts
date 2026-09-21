@@ -172,6 +172,40 @@ export function base64ToBytes(value: string): Uint8Array {
 }
 
 /**
+ * Builds the canonical `avalon:<action_tag>:v1:<field1>:<field2>:...`
+ * message for one of #698's signature-required account actions — must
+ * match `signature_gate::canonical_message` in
+ * crates/server/src/signature_gate.rs byte-for-byte.
+ */
+export function freshActionSigningBytes(actionTag: string, fields: string[]): Uint8Array {
+  const parts = [`avalon:${actionTag}:v1`, ...fields]
+  return new TextEncoder().encode(parts.join(':'))
+}
+
+/**
+ * Signs one of #698's signature-required actions with this device's own
+ * locally stored signing key, if it has one. Returns `null` when this
+ * identity has no local signing key on this device yet (or the session
+ * doesn't know its own server-side `signing_key_id`) — callers send the
+ * request without `signing_key_id`/`signature` in that case and let the
+ * server's existing `NO_REGISTERED_SIGNING_KEY`/`FRESH_SIGNATURE_REQUIRED`
+ * split surface the real problem, rather than inventing new client-side
+ * handling for an edge case docs/architecture/identity.md already treats
+ * as "losing every device means losing the identity."
+ */
+export function signFreshAction(
+  identityId: string,
+  signingKeyId: string | null,
+  actionTag: string,
+  fields: string[],
+): { signing_key_id: string; signature: string } | null {
+  const secretKey = loadSigningKey(identityId)
+  if (!secretKey || !signingKeyId) return null
+  const signature = signWithKey(secretKey, freshActionSigningBytes(actionTag, fields))
+  return { signing_key_id: signingKeyId, signature: bytesToBase64(signature) }
+}
+
+/**
  * The exact bytes an `identity.created` claim's Ed25519 signature covers —
  * must match `identity_created_signing_bytes` in
  * crates/server/src/handlers.rs byte-for-byte. Deliberately a small,

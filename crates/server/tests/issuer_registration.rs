@@ -55,6 +55,32 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
+/// #697/#698: `POST /integrations/{slug}/connect` is signature-required
+/// -- seeds a real signing key for `identity_id` so a connect call can
+/// produce a genuine fresh signature over HTTP.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 struct RegisteredIssuer {
     signing_key: SigningKey,
     slug: String,
@@ -139,6 +165,7 @@ fn attestation_signing_bytes(
 async fn issue_achievement_attestation(
     http: &reqwest::Client,
     base: &str,
+    pool: &PgPool,
     issuer: &RegisteredIssuer,
     identity_id: Uuid,
     token: &str,
@@ -161,10 +188,16 @@ async fn issue_achievement_attestation(
         .unwrap()
         .to_string();
 
+    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let connect_capabilities = ["achievements.issue"];
     let connect = http
         .post(format!("{base}/integrations/{}/connect", issuer.slug))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
+        .json(&serde_json::json!({
+            "capabilities": connect_capabilities,
+            "signing_key_id": signing_key_id,
+            "signature": sign_connect(&signing_key, &issuer.slug, &connect_capabilities),
+        }))
         .send()
         .await
         .unwrap();
@@ -206,7 +239,8 @@ async fn a_never_before_seen_key_auto_registers_on_the_dev_network() {
     // Never called POST /issuers/register for this key — the local dev
     // server's network_id (avalon-dev-local) auto-registers on the first
     // valid signed write instead of rejecting it (#481's dev/int policy).
-    let response = issue_achievement_attestation(&http, &base, &issuer, identity_id, &token).await;
+    let response =
+        issue_achievement_attestation(&http, &base, &pool, &issuer, identity_id, &token).await;
     assert!(response.status().is_success(), "{:?}", response.status());
 
     let pubkey_bytes = issuer.signing_key.verifying_key().to_bytes();
@@ -288,7 +322,8 @@ async fn explicit_registration_round_trips_and_write_path_no_longer_needs_to_aut
 
     // The write path now finds this key already registered — no
     // auto-registration needed, the same success path either way.
-    let response = issue_achievement_attestation(&http, &base, &issuer, identity_id, &token).await;
+    let response =
+        issue_achievement_attestation(&http, &base, &pool, &issuer, identity_id, &token).await;
     assert!(response.status().is_success(), "{:?}", response.status());
 }
 

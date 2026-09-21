@@ -13,6 +13,7 @@ import type {
   AddPasskeyFinishRequest,
   AddPasskeyStartResponse,
   ApproveDeviceGrantRequest,
+  ApprovePairingRequest,
   ArchivedMessageResponse,
   BlockListEntry,
   BlockResponse,
@@ -32,6 +33,8 @@ import type {
   CreateGuildRequest,
   CreateJoinRequestRequest,
   CreateRoleRequest,
+  DeletePermissionOverrideRequest,
+  DeleteRoleRequest,
   DeviceGrantResponse,
   DeviceResponse,
   DiscoverGuildsResponse,
@@ -79,6 +82,7 @@ import type {
   RenameDeviceRequest,
   RenamePasskeyRequest,
   RequestDeviceGrantRequest,
+  RevokePasskeyRequest,
   ResolveHandleResponse,
   ResolvePairingResponse,
   RoleResponse,
@@ -304,7 +308,7 @@ export function sessionFinish(body: SessionFinishRequest): Promise<SessionFinish
 
 export function approvePairing(
   token: string,
-  body: UserCodeRequest,
+  body: ApprovePairingRequest,
 ): Promise<ResolvePairingResponse> {
   return request('/auth/device/approve', { method: 'POST', body, token })
 }
@@ -623,19 +627,16 @@ export function renamePasskey(
   return request(`/me/passkeys/${passkeyId}`, { method: 'PATCH', body, token })
 }
 
-// `confirm` must be passed as `true` to revoke the identity's last
-// remaining passkey (crates/server/src/passkeys.rs's explicit-confirmation
-// invariant) — omitted otherwise, matching every other optional-query-param
-// convention in this file (see getPresence's `ids`).
+// #697/#698/#704: a fresh signature is required only when this would
+// revoke the identity's last remaining passkey (previously the
+// `?confirm=true` query param) — omit `body`'s fields otherwise, same as
+// every other conditionally-signed action in this file.
 export function revokePasskey(
   token: string,
   passkeyId: string,
-  confirm?: boolean,
+  body: RevokePasskeyRequest = {},
 ): Promise<void> {
-  const path = confirm
-    ? `/me/passkeys/${passkeyId}/revoke?confirm=true`
-    : `/me/passkeys/${passkeyId}/revoke`
-  return request(path, { method: 'POST', token })
+  return request(`/me/passkeys/${passkeyId}/revoke`, { method: 'POST', body, token })
 }
 
 // Social recovery (issue #201), matching crates/server/src/recovery.rs.
@@ -759,8 +760,13 @@ export function updateRole(
   return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'PATCH', body, token })
 }
 
-export function deleteRole(token: string, guildId: string, nameIndex: number): Promise<void> {
-  return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'DELETE', token })
+export function deleteRole(
+  token: string,
+  guildId: string,
+  nameIndex: number,
+  body: DeleteRoleRequest = {},
+): Promise<void> {
+  return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'DELETE', body, token })
 }
 
 // Per-resource permission overrides (issue #250), matching
@@ -788,9 +794,11 @@ export function deletePermissionOverride(
   token: string,
   guildId: string,
   overrideId: string,
+  body: DeletePermissionOverrideRequest = {},
 ): Promise<void> {
   return request(`/guilds/${guildId}/permission-overrides/${overrideId}`, {
     method: 'DELETE',
+    body,
     token,
   })
 }

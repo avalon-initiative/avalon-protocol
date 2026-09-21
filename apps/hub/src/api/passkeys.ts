@@ -6,7 +6,7 @@
 // this one manages identity_keys (WebAuthn login credentials) — see
 // crates/server/src/passkeys.rs's own module doc comment for why they're
 // not the same table.
-import { runRegistrationCeremony } from '@avalon/api-client'
+import { runRegistrationCeremony, signFreshAction } from '@avalon/api-client'
 import * as api from '@avalon/api-client'
 import type { PasskeyResponse } from '@avalon/api-client'
 
@@ -30,11 +30,20 @@ export function renamePasskey(token: string, passkeyId: string, label: string): 
   return api.renamePasskey(token, passkeyId, { label })
 }
 
-// `confirm: true` is required to revoke the identity's last remaining
-// passkey — the ticket's explicit "I understand this may lock me out"
-// invariant. A caller that gets a 409 back (crates/server/src/error.rs's
-// `LastPasskeyRequiresConfirmation`) should ask the user to confirm and
-// retry with `confirm: true`, not retry silently.
-export function revokePasskey(token: string, passkeyId: string, confirm = false): Promise<void> {
-  return api.revokePasskey(token, passkeyId, confirm)
+// #697/#698/#704: revoking the identity's *last* remaining passkey now
+// requires a fresh signature (replacing the old `?confirm=true` query
+// param) — signs whenever this device has a local key available; revoking
+// one of several passkeys stays ambient and the signature goes unused
+// server-side.
+export function revokePasskey(
+  token: string,
+  identityId: string,
+  signingKeyId: string | null,
+  passkeyId: string,
+): Promise<void> {
+  const signed = signFreshAction(identityId, signingKeyId, 'passkey.revoke_last', [
+    passkeyId,
+    identityId,
+  ])
+  return api.revokePasskey(token, passkeyId, signed ?? {})
 }

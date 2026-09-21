@@ -53,6 +53,32 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
     (identity_id, token)
 }
 
+/// #697/#698: `POST /integrations/{slug}/connect` is signature-required —
+/// seeds a real signing key for `identity_id` so a connect call can
+/// produce a genuine fresh signature over HTTP.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    (sqlx::Row::try_get(&row, "id").unwrap(), signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+    let message = format!(
+        "avalon:integration.connect:v1:{slug}:{}",
+        capabilities.join(",")
+    );
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
 struct RegisteredIntegrator {
     signing_key: SigningKey,
     slug: String,
@@ -132,13 +158,21 @@ async fn integrator_auth_headers(
 async fn connect(
     http: &reqwest::Client,
     base: &str,
+    pool: &PgPool,
     integrator: &RegisteredIntegrator,
+    identity_id: Uuid,
     token: &str,
 ) {
+    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let capabilities: [&str; 0] = [];
     let response = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(token)
-        .json(&serde_json::json!({ "capabilities": [] }))
+        .json(&serde_json::json!({
+            "capabilities": capabilities,
+            "signing_key_id": signing_key_id,
+            "signature": sign_connect(&signing_key, &integrator.slug, &capabilities),
+        }))
         .send()
         .await
         .unwrap();
@@ -282,7 +316,7 @@ async fn a_non_conforming_instance_is_rejected_and_never_stored() {
     let pool = test_pool().await;
     let integrator = register_integrator(&http, &base, "test-bad-instance").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &integrator, &token).await;
+    connect(&http, &base, &pool, &integrator, identity_id, &token).await;
 
     let published = publish_schema(
         &http,
@@ -392,8 +426,8 @@ async fn a_integrator_cannot_publish_instance_data_against_another_integrators_s
     let integrator_a = register_integrator(&http, &base, "test-owner").await;
     let integrator_b = register_integrator(&http, &base, "test-intruder").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &integrator_a, &token).await;
-    connect(&http, &base, &integrator_b, &token).await;
+    connect(&http, &base, &pool, &integrator_a, identity_id, &token).await;
+    connect(&http, &base, &pool, &integrator_b, identity_id, &token).await;
 
     let published = publish_schema(
         &http,
@@ -437,7 +471,7 @@ async fn a_private_schema_with_one_public_field_exposes_only_that_field() {
     let pool = test_pool().await;
     let integrator = register_integrator(&http, &base, "test-private-vis").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &integrator, &token).await;
+    connect(&http, &base, &pool, &integrator, identity_id, &token).await;
 
     let published = publish_schema(
         &http,
@@ -501,7 +535,7 @@ async fn a_public_schema_with_one_private_field_hides_only_that_field() {
     let pool = test_pool().await;
     let integrator = register_integrator(&http, &base, "test-public-vis").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &integrator, &token).await;
+    connect(&http, &base, &pool, &integrator, identity_id, &token).await;
 
     let published = publish_schema(
         &http,
@@ -568,7 +602,7 @@ async fn cross_integrator_write_isolation_is_total() {
     // Integrator 1: schema + instance + achievement, all real.
     let integrator_1 = register_integrator(&http, &base, "test-iso-owner").await;
     let (identity_id, token) = seed_identity_session(&pool).await;
-    connect(&http, &base, &integrator_1, &token).await;
+    connect(&http, &base, &pool, &integrator_1, identity_id, &token).await;
 
     let published = publish_schema(
         &http,
@@ -642,11 +676,16 @@ async fn cross_integrator_write_isolation_is_total() {
                 .to_string(),
         }
     };
-    connect(&http, &base, &issuer, &token).await;
+    let (issuer_signing_key_id, issuer_signing_key) = seed_signing_key(&pool, identity_id).await;
+    let issuer_connect_capabilities = ["achievements.issue"];
     let issuer_connect = http
         .post(format!("{base}/integrations/{}/connect", issuer.slug))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["achievements.issue"] }))
+        .json(&serde_json::json!({
+            "capabilities": issuer_connect_capabilities,
+            "signing_key_id": issuer_signing_key_id,
+            "signature": sign_connect(&issuer_signing_key, &issuer.slug, &issuer_connect_capabilities),
+        }))
         .send()
         .await
         .unwrap();
@@ -700,7 +739,7 @@ async fn cross_integrator_write_isolation_is_total() {
     // Integrator 2: a fully legitimate, separately-registered, properly
     // authenticated integrator with no relationship to integrator_1's stuff.
     let integrator_2 = register_integrator(&http, &base, "test-iso-intruder").await;
-    connect(&http, &base, &integrator_2, &token).await;
+    connect(&http, &base, &pool, &integrator_2, identity_id, &token).await;
 
     // (a) Attempt to publish a new schema version attributed to integrator_1's
     // slug — the classic cross-slug schema-publish forbidden case.

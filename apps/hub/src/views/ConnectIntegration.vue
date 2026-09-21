@@ -10,7 +10,7 @@ import { AvalonButton, AvalonCapabilityConsentRow, AvalonCard, AvalonForm } from
 import * as api from '@avalon/api-client'
 import { capabilityDescription } from '../api/connections'
 import { useIntegrationConsent } from '../composables/useIntegrationConsent'
-import { useSessionStore } from '@avalon/api-client'
+import { signFreshAction, useSessionStore } from '@avalon/api-client'
 import styles from '../styles/page.module.scss'
 
 const route = useRoute()
@@ -30,8 +30,18 @@ async function onConnect() {
   connectError.value = ''
   connecting.value = true
   try {
+    // #697/#698: hands a third party standing permission over the
+    // identity's data going forward — signature-required.
+    const capabilities = Array.from(checkedCapabilities.value)
+    const signed = session.identityId
+      ? signFreshAction(session.identityId, session.signingKeyId, 'integration.connect', [
+          integrator.value.slug,
+          capabilities.join(','),
+        ])
+      : null
     await api.connectIntegrator(session.token, integrator.value.slug, {
-      capabilities: Array.from(checkedCapabilities.value),
+      capabilities,
+      ...(signed ?? {}),
     })
     router.push({ name: 'connections' })
   } catch (e) {

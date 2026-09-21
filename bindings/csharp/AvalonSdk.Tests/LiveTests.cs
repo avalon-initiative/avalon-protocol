@@ -63,6 +63,22 @@ public class LiveTests
         return (identityId, token);
     }
 
+    /// <summary>#697/#698: POST /integrations/{slug}/connect is signature-required — seeds a
+    /// real identity_signing_keys row so ConnectIntegratorAsync below can produce a genuine
+    /// fresh signature, same pattern crates/cli/tests/issue_achievement.rs's Rust
+    /// equivalent uses.</summary>
+    private static async Task<(Guid KeyId, Ed25519PrivateKeyParameters PrivateKey)> SeedSigningKeyAsync(NpgsqlConnection conn, Guid identityId)
+    {
+        var privateKey = new Ed25519PrivateKeyParameters(new SecureRandom());
+        var publicKey = privateKey.GeneratePublicKey().GetEncoded();
+        await using var cmd = new NpgsqlCommand(
+            "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id", conn);
+        cmd.Parameters.AddWithValue(identityId);
+        cmd.Parameters.AddWithValue(publicKey);
+        var keyId = (Guid)(await cmd.ExecuteScalarAsync())!;
+        return (keyId, privateKey);
+    }
+
     /// <summary>Presence reads default to friends-only visibility, so any test checking one
     /// identity's view of another's real presence needs this first. Writes
     /// `indexer_friendships` directly, not the old `friendships` table — that table has been
@@ -279,12 +295,21 @@ public class LiveTests
         response.EnsureSuccessStatusCode();
     }
 
-    private static async Task ConnectIntegratorAsync(HttpClient http, string baseUrl, string integratorSlug, string token, params string[] capabilities)
+    private static async Task ConnectIntegratorAsync(HttpClient http, string baseUrl, string integratorSlug, string token, Guid identitySigningKeyId, Ed25519PrivateKeyParameters identitySigningKey, params string[] capabilities)
     {
+        // Must match crates/server/src/signature_gate.rs::canonical_message
+        // byte-for-byte: avalon:integration.connect:v1:<slug>:<capabilities joined by ",">.
+        var message = Encoding.UTF8.GetBytes($"avalon:integration.connect:v1:{integratorSlug}:{string.Join(",", capabilities)}");
+        var signer = new Ed25519Signer();
+        signer.Init(true, identitySigningKey);
+        signer.BlockUpdate(message, 0, message.Length);
+        var signature = Convert.ToBase64String(signer.GenerateSignature());
+
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/integrations/{integratorSlug}/connect");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(
-            JsonSerializer.Serialize(new { capabilities }), Encoding.UTF8, "application/json");
+            JsonSerializer.Serialize(new { capabilities, signing_key_id = identitySigningKeyId, signature }),
+            Encoding.UTF8, "application/json");
         using var response = await http.SendAsync(request);
         response.EnsureSuccessStatusCode();
     }
@@ -299,12 +324,13 @@ public class LiveTests
 
         await using var conn = new NpgsqlConnection(DatabaseUrl);
         await conn.OpenAsync();
-        var (_, token) = await SeedIdentitySessionAsync(conn, $"sdk-achv-csharp-{Guid.NewGuid():N}");
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"sdk-achv-csharp-{Guid.NewGuid():N}");
+        var (signingKeyId, signingKey) = await SeedSigningKeyAsync(conn, identityId);
 
         var http = new HttpClient();
         var integrator = await RegisterIntegratorAsync(http, ServerUrl!);
         await DefineAchievementAsync(http, ServerUrl!, integrator, "dragon_slayer");
-        await ConnectIntegratorAsync(http, ServerUrl!, integrator.Slug, token, "achievements.issue", "achievements.read");
+        await ConnectIntegratorAsync(http, ServerUrl!, integrator.Slug, token, signingKeyId, signingKey, "achievements.issue", "achievements.read");
 
         var client = new AvalonClient(new AvalonConfig(
             ServerUrl!, integrator.KeyId, integrator.Slug, integrator.SigningKeySeed));
@@ -331,12 +357,13 @@ public class LiveTests
 
         await using var conn = new NpgsqlConnection(DatabaseUrl);
         await conn.OpenAsync();
-        var (_, token) = await SeedIdentitySessionAsync(conn, $"sdk-achv-nokey-csharp-{Guid.NewGuid():N}");
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"sdk-achv-nokey-csharp-{Guid.NewGuid():N}");
+        var (signingKeyId, signingKey) = await SeedSigningKeyAsync(conn, identityId);
 
         var http = new HttpClient();
         var integrator = await RegisterIntegratorAsync(http, ServerUrl!);
         await DefineAchievementAsync(http, ServerUrl!, integrator, "dragon_slayer");
-        await ConnectIntegratorAsync(http, ServerUrl!, integrator.Slug, token, "achievements.issue");
+        await ConnectIntegratorAsync(http, ServerUrl!, integrator.Slug, token, signingKeyId, signingKey, "achievements.issue");
 
         // No IntegratorSlug/SigningKey configured.
         var client = new AvalonClient(new AvalonConfig(ServerUrl!, integrator.KeyId));

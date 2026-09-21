@@ -33,7 +33,21 @@ fn identity_created_signing_bytes(identity_id: Uuid, display_name: &str) -> Vec<
     format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes()
 }
 
-async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &str) -> String {
+/// #697/#698: `signing_key`/`signing_key_id` let a caller sign a later
+/// signature-required action (e.g. `POST /integrations/{slug}/connect`)
+/// with the same key `register_finish` just registered as this identity's
+/// first `identity_signing_keys` row.
+struct RegisteredIdentity {
+    token: String,
+    signing_key: SigningKey,
+    signing_key_id: String,
+}
+
+async fn register_and_login(
+    http: &reqwest::Client,
+    base: &str,
+    display_name: &str,
+) -> RegisteredIdentity {
     let identity_id = Uuid::new_v4();
     let origin_url = url::Url::parse(&webauthn_origin()).expect("bad webauthn origin");
 
@@ -110,7 +124,36 @@ async fn register_and_login(http: &reqwest::Client, base: &str, display_name: &s
         .unwrap();
     assert!(session_finish.status().is_success());
     let login_body: serde_json::Value = session_finish.json().await.unwrap();
-    login_body["token"].as_str().unwrap().to_string()
+    let token = login_body["token"].as_str().unwrap().to_string();
+
+    // register_finish's own event_signing_public_key becomes this
+    // identity's first identity_signing_keys row — find its server-
+    // assigned id the same way the Hub does (GET /me/devices, match on
+    // public key) so a later signature-required call can name it.
+    let devices: serde_json::Value = http
+        .get(format!("{base}/me/devices"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let signing_key_id = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["public_key"].as_str() == Some(event_signing_public_key.as_str()))
+        .expect("register_finish's signing key should be listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    RegisteredIdentity {
+        token,
+        signing_key,
+        signing_key_id,
+    }
 }
 
 struct RegisteredIntegrator {
@@ -199,14 +242,27 @@ async fn issue_achievement_via_the_real_binary_lands_on_the_ledger() {
     let base = server_url();
     let display_name = format!("cli-issue-{}", Uuid::new_v4());
 
-    let token = register_and_login(&http, &base, &display_name).await;
+    let identity = register_and_login(&http, &base, &display_name).await;
+    let token = identity.token.clone();
     let integrator = register_integrator(&http, &base).await;
     define_achievement(&http, &base, &integrator, "dragon_slayer").await;
 
+    // #697/#698: POST /integrations/{slug}/connect is signature-required.
+    let capabilities = vec!["achievements.issue".to_string()];
+    let connect_message = format!(
+        "avalon:integration.connect:v1:{}:{}",
+        integrator.slug,
+        capabilities.join(",")
+    );
+    let connect_signature = identity.signing_key.sign(connect_message.as_bytes());
     let connect = http
         .post(format!("{base}/integrations/{}/connect", integrator.slug))
         .bearer_auth(&token)
-        .json(&json!({ "capabilities": ["achievements.issue"] }))
+        .json(&json!({
+            "capabilities": capabilities,
+            "signing_key_id": identity.signing_key_id,
+            "signature": BASE64.encode(connect_signature.to_bytes()),
+        }))
         .send()
         .await
         .unwrap();

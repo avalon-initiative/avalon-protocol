@@ -23,6 +23,7 @@ use crate::error::AppError;
 use crate::handlers::authenticate;
 use crate::integrators::{fetch_integrator_id_by_slug, integrator_ref};
 use crate::outbox;
+use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
 
 fn identity_ref(identity_id: Uuid, verb: &str) -> avalon_protocol::ids::GlobalId {
@@ -71,6 +72,10 @@ async fn active_binding(
 pub struct ConnectRequest {
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// #697/#698: hands a third party standing permission over the
+    /// identity's data going forward — signature-required.
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -95,6 +100,19 @@ pub async fn connect(
 ) -> Result<Json<ConnectResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
     let integrator_id = fetch_integrator_id_by_slug(&state, &slug).await?;
+
+    let message = canonical_message(
+        "integration.connect",
+        &[&slug, &body.capabilities.join(",")],
+    );
+    require_fresh_signature(
+        &state,
+        identity_id,
+        &message,
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     let mut tx = state.pool.begin().await?;
 

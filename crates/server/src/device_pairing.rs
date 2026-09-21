@@ -30,6 +30,7 @@ use uuid::Uuid;
 use crate::auth::generate_session_token;
 use crate::error::AppError;
 use crate::handlers::authenticate;
+use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
 
 const PAIRING_TTL_MINUTES: i64 = 10;
@@ -245,6 +246,19 @@ pub struct UserCodeRequest {
     pub user_code: String,
 }
 
+/// Issue #704: `POST /auth/device/approve` mints a brand-new, independently-
+/// usable session for a different device off nothing but the approver's
+/// ambient session today — #697/#698's signature-required tier closes that
+/// gap. `signing_key_id`/`signature` are optional on the wire (so
+/// deserialization never fails outright) but enforced as required by
+/// [`require_fresh_signature`] below.
+#[derive(Deserialize)]
+pub struct ApprovePairingRequest {
+    pub user_code: String,
+    pub signing_key_id: Option<Uuid>,
+    pub signature: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct ResolvePairingResponse {
     pub status: String,
@@ -275,10 +289,31 @@ async fn fetch_pending_pairing_id(state: &AppState, user_code: &str) -> Result<U
 pub async fn approve_pairing(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<UserCodeRequest>,
+    Json(body): Json<ApprovePairingRequest>,
 ) -> Result<Json<ResolvePairingResponse>, AppError> {
     let identity_id = authenticate(&state, &headers).await?;
     let pairing_id = fetch_pending_pairing_id(&state, &body.user_code).await?;
+
+    // #704's gap #1: proof-of-possession of the identity's own signing key,
+    // on top of the ambient session, before minting a second independently-
+    // usable session for an entirely different device. Deliberately signs
+    // over `user_code`/`identity_id` rather than the server-internal
+    // `pairing_id` — the approving client (the Hub) never otherwise learns
+    // `pairing_id`, and `user_code` alone already uniquely and non-
+    // replayably identifies this one pending pairing (fresh per request,
+    // single-use, TTL'd).
+    let message = canonical_message(
+        "device_pairing.approve",
+        &[&identity_id.to_string(), &body.user_code],
+    );
+    require_fresh_signature(
+        &state,
+        identity_id,
+        &message,
+        body.signing_key_id,
+        body.signature.as_deref(),
+    )
+    .await?;
 
     let token = generate_session_token();
     let session_expires_at =

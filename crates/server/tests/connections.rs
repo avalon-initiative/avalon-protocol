@@ -6,10 +6,60 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
+
+/// Signs a `POST /integrations/{slug}/connect` request for `identity_id`
+/// requesting exactly `capabilities`, seeding a fresh signing key each
+/// call — every `connect` in this file needs one now (#697/#698).
+async fn connect_body(
+    pool: &PgPool,
+    identity_id: Uuid,
+    slug: &str,
+    capabilities: &[&str],
+) -> serde_json::Value {
+    let (signing_key_id, signing_key) = seed_signing_key(pool, identity_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "integration.connect",
+        &[slug, &capabilities.join(",")],
+    );
+    serde_json::json!({
+        "capabilities": capabilities,
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    })
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -87,14 +137,14 @@ async fn connecting_creates_a_binding_and_grants_approved_capabilities() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
 
     let response = http
         .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["presence.read"]).await)
         .send()
         .await
         .unwrap();
@@ -126,14 +176,14 @@ async fn connecting_with_an_undeclared_capability_is_rejected() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
 
     let response = http
         .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["wallet.write"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["wallet.write"]).await)
         .send()
         .await
         .unwrap();
@@ -146,14 +196,14 @@ async fn reconnecting_does_not_duplicate_the_binding() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
 
     let first = http
         .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["presence.read"]).await)
         .send()
         .await
         .unwrap()
@@ -164,7 +214,7 @@ async fn reconnecting_does_not_duplicate_the_binding() {
     let second = http
         .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["friends.read"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["friends.read"]).await)
         .send()
         .await
         .unwrap()
@@ -205,7 +255,7 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
     let key_id = integrator["credential"]["key_id"]
@@ -213,12 +263,14 @@ async fn revoking_a_grant_removes_sdk_access_to_the_gated_method() {
         .unwrap()
         .to_string();
 
-    http.post(format!("{base}/integrations/{slug}/connect"))
+    let connect = http
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["friends.read"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["friends.read"]).await)
         .send()
         .await
         .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
 
     let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
         server_url: base.clone(),
@@ -263,16 +315,18 @@ async fn disconnecting_revokes_every_active_grant() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_, token) = seed_identity_session(&pool).await;
+    let (identity_id, token) = seed_identity_session(&pool).await;
     let integrator = register_unique_integrator(&http, &base).await;
     let slug = integrator["slug"].as_str().unwrap();
 
-    http.post(format!("{base}/integrations/{slug}/connect"))
+    let connect = http
+        .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["presence.read", "friends.read"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["presence.read", "friends.read"]).await)
         .send()
         .await
         .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
 
     let disconnect = http
         .delete(format!("{base}/integrations/{slug}/connect"))
@@ -302,9 +356,45 @@ async fn disconnecting_revokes_every_active_grant() {
     let reconnect = http
         .post(format!("{base}/integrations/{slug}/connect"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
+        .json(&connect_body(&pool, identity_id, slug, &["presence.read"]).await)
         .send()
         .await
         .unwrap();
     assert!(reconnect.status().is_success());
+}
+
+/// #697/#698: `POST /integrations/{slug}/connect` is signature-required —
+/// an ambient-session-only connect (caller has no registered signing key)
+/// must be rejected, and no binding should be created.
+#[tokio::test]
+#[ignore]
+async fn connecting_without_a_signature_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_identity_id, token) = seed_identity_session(&pool).await;
+    let integrator = register_unique_integrator(&http, &base).await;
+    let slug = integrator["slug"].as_str().unwrap();
+
+    let response = http
+        .post(format!("{base}/integrations/{slug}/connect"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "capabilities": ["presence.read"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["code"], "NO_REGISTERED_SIGNING_KEY");
+
+    let connections: serde_json::Value = http
+        .get(format!("{base}/me/connections"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(connections.as_array().unwrap().len(), 0);
 }

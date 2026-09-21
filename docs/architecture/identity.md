@@ -644,9 +644,9 @@ actions where a stolen bearer token alone should not be sufficient:
 
 | Endpoint | Rationale |
 |---|---|
-| `POST /auth/device/approve` | **Currently under-protected** — mints a brand-new full session bearer token for an entirely different device off nothing but the approver's own ambient session (see `device_pairing.rs`'s module doc). An attacker holding only a stolen bearer token could use this to plant a second, independently-usable session for themselves. This is the clearest concrete gap #698 needs to close. |
-| `POST /me/devices/grants/{id}/approve` | Already follows the target pattern today: approval is signed with the approving device's own Ed25519 key over `device_grant_approval_signing_bytes(...)`, not just ambient-token-gated (see `devices.rs`'s module doc) — the existing precedent #698 should point to, not a gap to close. |
-| `POST /me/passkeys/{id}/revoke` **when it is the identity's last remaining passkey** | Flagged specifically because of the lock-out angle: if a passkey ceremony can't be required (there's none left to prove), a stolen-bearer-token attacker could otherwise use this single call to strip the real owner's only way back in. Today this is gated by `?confirm=true` (`passkeys::guard_revoke_last_passkey`) — a client-side speed bump, not a credential check; #698 should upgrade this specific case from "confirm" to "sign." |
+| `POST /auth/device/approve` | Mints a brand-new full session bearer token for an entirely different device off nothing but the approver's own ambient session (see `device_pairing.rs`'s module doc). An attacker holding only a stolen bearer token could otherwise use this to plant a second, independently-usable session for themselves — the clearest concrete gap #704 named. Enforced as of #698. |
+| `POST /me/devices/grants/{id}/approve` | Already followed the target pattern before #698: approval is signed with the approving device's own Ed25519 key over `device_grant_approval_signing_bytes(...)`, not just ambient-token-gated (see `devices.rs`'s module doc) — the existing precedent #698's shared helper generalizes. |
+| `POST /me/passkeys/{id}/revoke` **when it is the identity's last remaining passkey** | Flagged specifically because of the lock-out angle: if a passkey ceremony can't be required (there's none left to prove), a stolen-bearer-token attacker could otherwise use this single call to strip the real owner's only way back in. Previously gated by `?confirm=true` (`passkeys::guard_revoke_last_passkey`) — a client-side speed bump, not a credential check; #698 replaced that query param with the fresh-signature requirement below (`passkeys::needs_fresh_signature`). Revoking a non-last passkey stays unsigned/ambient. |
 | `PUT /me/recovery/guardians` when it *removes* a guardian or *raises* the threshold | Naming/adding guardians stays ambient (#443's existing unilateral-opt-out design); but an attacker with only a stolen bearer token silently removing real guardians or raising the threshold past what remaining guardians can satisfy would neuter the owner's actual recovery path without needing to touch recovery itself. Lowering the threshold or adding guardians is comparatively low-risk (makes recovery easier, not harder) and can stay ambient. |
 | `POST /integrations/{slug}/connect` | Explicitly named in #696's decision text ("granting an integrator broad capabilities"): this is the one call that hands a third party standing permission over the identity's data going forward. |
 | `PUT /guilds/{id}/permission-overrides`, `DELETE /guilds/{id}/permission-overrides/{override_id}` | Changes what an entire role/resource can do guild-wide, not just one member's standing. |
@@ -660,6 +660,64 @@ non-last passkey/device, or disconnecting from an integrator — each is
 either fully reversible or only ever narrows the caller's own exposure,
 matching #697's own invariant against a blanket
 "anything-that-mutates-state-is-high-risk" rule.
+
+**Enforcement and the canonical signing-message format (#698).** Every row
+in the signature-required tier above is load-bearing server-side as of
+#698 — `crates/server/src/signature_gate.rs`'s `require_fresh_signature`
+is the one shared enforcement point every flagged handler calls before its
+mutation, reusing `auth::verify_event_signature` rather than a new signing
+scheme (the same mechanism `register_finish` already uses for
+`identity.created` and `devices::approve_device_grant` for
+`device_grant_approval_signing_bytes`). A signature-required request
+carries `signing_key_id` (a `Uuid` naming one of the caller's own
+non-revoked `identity_signing_keys` rows) and `signature` (base64 Ed25519)
+alongside its ordinary fields; the server independently rebuilds the exact
+byte string that key must have signed and verifies against it — a client
+never gets to hand the server pre-computed "this is valid" bytes.
+
+The signed message is always
+
+```
+avalon:<action_tag>:v1:<field1>:<field2>:...
+```
+
+built by `signature_gate::canonical_message(action_tag, fields)` — a
+short, explicit, versioned tag identifying the action, followed by that
+action's own load-bearing fields in a fixed order (`Display`/`to_string()`
+form, colon-joined), so a signature minted for one action or target can
+never verify against a different one. Per-endpoint `action_tag`s and
+fields, matching each handler's own implementation:
+
+| Endpoint | `action_tag` | Fields |
+|---|---|---|
+| `POST /auth/device/approve` | `device_pairing.approve` | `identity_id`, `user_code` (not the server-internal `pairing_id` — the approving client never otherwise learns it, and `user_code` alone is already fresh, single-use, and TTL'd per pairing) |
+| `POST /guilds/{id}/transfer-ownership` | `guild.transfer_ownership` | `guild_id`, current `owner`, `to` |
+| `PUT /guilds/{id}/permission-overrides` | `guild.permission_override.set` | `guild_id`, `role_index`, `resource_kind`, `resource_id`, `permission`, `allow` |
+| `DELETE /guilds/{id}/permission-overrides/{override_id}` | `guild.permission_override.delete` | `guild_id`, `override_id` |
+| `POST /guilds/{id}/roles` | `guild.role.create` | `guild_id`, `name`, normalized `permissions` (comma-joined) |
+| `PATCH /guilds/{id}/roles/{idx}` | `guild.role.update` | `guild_id`, `name_index` |
+| `DELETE /guilds/{id}/roles/{idx}` | `guild.role.delete` | `guild_id`, `name_index` |
+| `PATCH /guilds/{id}/members/{identity_id}` (escalating only) | `guild.member_role.update` | `guild_id`, target `identity_id`, `role_index` |
+| `POST /me/passkeys/{id}/revoke` (last passkey only) | `passkey.revoke_last` | `passkey_id`, `identity_id` |
+| `PUT /me/recovery/guardians` (removal/raise only) | `recovery.guardians.set` | `identity_id`, new guardian ids (sorted, comma-joined), `threshold` |
+| `POST /integrations/{slug}/connect` | `integration.connect` | `slug`, `capabilities` (comma-joined, request order) |
+
+Three of these (`DELETE /guilds/{id}/permission-overrides/{override_id}`,
+`DELETE /guilds/{id}/roles/{idx}`, and `POST /me/passkeys/{id}/revoke`)
+previously took no request body at all; they now take a small JSON body
+carrying only `signing_key_id`/`signature` (an empty `{}` is a valid body
+when no signature is required for that call).
+
+A request in the signature-required tier that omits `signing_key_id`/
+`signature` entirely is rejected one of two ways, deliberately distinct so
+the client gets an actionable message rather than a generic auth failure
+(#698's own invariant): `NO_REGISTERED_SIGNING_KEY` if the caller's
+identity has no non-revoked `identity_signing_keys` row at all (nothing to
+sign with — see "losing every device" below), or
+`FRESH_SIGNATURE_REQUIRED` if it has one but didn't sign this specific
+request. A `signing_key_id` that doesn't resolve to a non-revoked key
+owned by the caller gets `SIGNING_KEY_NOT_FOUND`; a signature that fails
+to verify against the reconstructed message gets `INVALID_FRESH_SIGNATURE`.
 
 - `crates/protocol/src/identity.rs` — `Identity { id, created_at }` and
   `Profile { identity_id, display_name, avatar_url, bio, favorite_genres,

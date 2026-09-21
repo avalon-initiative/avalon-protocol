@@ -296,17 +296,31 @@ mod hub_side {
         );
     }
 
+    /// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+    fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+        let message = format!(
+            "avalon:integration.connect:v1:{slug}:{}",
+            capabilities.join(",")
+        );
+        BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+    }
+
     pub async fn consent_to_integrator(
         http: &reqwest::Client,
         base: &str,
         player: &Player,
+        player_key: &PlayerKey,
         integrator_slug: &str,
         capabilities: &[&str],
     ) {
         let response = http
             .post(format!("{base}/integrations/{integrator_slug}/connect"))
             .bearer_auth(&player.token)
-            .json(&json!({ "capabilities": capabilities }))
+            .json(&json!({
+                "capabilities": capabilities,
+                "signing_key_id": player_key.signing_key_id,
+                "signature": sign_connect(&player_key.signing_key, integrator_slug, capabilities),
+            }))
             .send()
             .await
             .expect("connect request failed");
@@ -854,6 +868,7 @@ async fn identity_has_no_operational_home_node_across_real_separate_infrastructu
         &http,
         &node2,
         &alice_on_node2,
+        &alice_key,
         &game.slug,
         &["achievements.issue", "achievements.read"],
     )

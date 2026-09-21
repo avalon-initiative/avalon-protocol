@@ -8,10 +8,41 @@
 //! atomically (`guilds::create_guild`) — seeding it again would collide on
 //! `indexer_guild_members`'s `(guild_id, identity_id)` primary key.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -539,7 +570,9 @@ async fn a_message_body_over_the_length_cap_is_rejected() {
 async fn set_override(
     http: &reqwest::Client,
     base: &str,
+    pool: &PgPool,
     token: &str,
+    actor_id: Uuid,
     guild_id: &str,
     role_index: i32,
     resource_kind: &str,
@@ -547,6 +580,19 @@ async fn set_override(
     permission: &str,
     allow: bool,
 ) {
+    let (signing_key_id, signing_key) = seed_signing_key(pool, actor_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "guild.permission_override.set",
+        &[
+            guild_id,
+            &role_index.to_string(),
+            resource_kind,
+            resource_id,
+            permission,
+            &allow.to_string(),
+        ],
+    );
     let resp = auth(
         http.put(format!("{base}/guilds/{guild_id}/permission-overrides")),
         token,
@@ -557,6 +603,8 @@ async fn set_override(
         "resource_id": resource_id,
         "permission": permission,
         "allow": allow,
+        "signing_key_id": signing_key_id,
+        "signature": signature,
     }))
     .send()
     .await
@@ -622,7 +670,7 @@ async fn announcement_only_channel_grant_override_allows_a_plain_member_to_post(
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
@@ -633,7 +681,9 @@ async fn announcement_only_channel_grant_override_allows_a_plain_member_to_post(
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         2, // member role
         "channel",
@@ -662,7 +712,7 @@ async fn deny_override_blocks_an_officer_from_managing_one_specific_channel() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (officer_id, officer_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
     // Officer (role index 1) holds `manage_channels` guild-wide by
@@ -685,7 +735,9 @@ async fn deny_override_blocks_an_officer_from_managing_one_specific_channel() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         1, // officer role
         "channel",
@@ -712,7 +764,7 @@ async fn owner_bypasses_a_deny_override_on_a_channel() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
 
     // A deny override against the owner's own role index (0) still can't
@@ -721,7 +773,9 @@ async fn owner_bypasses_a_deny_override_on_a_channel() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         0,
         "channel",
@@ -850,7 +904,7 @@ async fn view_details_denied_on_a_channel_blocks_message_reads_but_not_listing()
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
     let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
@@ -870,7 +924,9 @@ async fn view_details_denied_on_a_channel_blocks_message_reads_but_not_listing()
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         2, // member role
         "channel",
@@ -916,4 +972,51 @@ async fn view_details_denied_on_a_channel_blocks_message_reads_but_not_listing()
     .await
     .unwrap();
     assert!(owner_read.status().is_success());
+}
+
+/// #697/#698: `PUT /guilds/{id}/permission-overrides` is signature-required
+/// — an ambient-session-only set (owner has no registered signing key) must
+/// be rejected, and no override should be created (a member still can't
+/// post in an announcement-only channel afterward).
+#[tokio::test]
+#[ignore]
+async fn setting_a_permission_override_without_a_signature_is_rejected() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let pool = test_pool().await;
+    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (member_id, member_token) = seed_identity_session(&pool).await;
+    let (guild_id, channel_id) = seed_membership_and_guild(&http, &base, &owner_token).await;
+    seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
+    set_announcement_only(&http, &base, &owner_token, &guild_id, &channel_id, true).await;
+
+    let unsigned = auth(
+        http.put(format!("{base}/guilds/{guild_id}/permission-overrides")),
+        &owner_token,
+    )
+    .json(&serde_json::json!({
+        "role_index": 2,
+        "resource_kind": "channel",
+        "resource_id": channel_id,
+        "permission": "channel_post",
+        "allow": true,
+    }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(unsigned.status(), reqwest::StatusCode::CONFLICT);
+    let body: serde_json::Value = unsigned.json().await.unwrap();
+    assert_eq!(body["code"], "NO_REGISTERED_SIGNING_KEY");
+
+    let send = auth(
+        http.post(format!(
+            "{base}/guilds/{guild_id}/channels/{channel_id}/messages"
+        )),
+        &member_token,
+    )
+    .json(&serde_json::json!({ "body": "hi" }))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(send.status(), reqwest::StatusCode::FORBIDDEN);
 }

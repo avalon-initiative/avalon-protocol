@@ -5,10 +5,41 @@
 //! Seeds identities/sessions/membership directly via SQL, same pattern
 //! `crates/server/tests/guild_channels.rs` uses.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -437,7 +468,9 @@ async fn a_member_without_manage_channels_cannot_create_events() {
 async fn set_override(
     http: &reqwest::Client,
     base: &str,
+    pool: &PgPool,
     token: &str,
+    actor_id: Uuid,
     guild_id: &str,
     role_index: i32,
     resource_kind: &str,
@@ -445,6 +478,19 @@ async fn set_override(
     permission: &str,
     allow: bool,
 ) {
+    let (signing_key_id, signing_key) = seed_signing_key(pool, actor_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "guild.permission_override.set",
+        &[
+            guild_id,
+            &role_index.to_string(),
+            resource_kind,
+            resource_id,
+            permission,
+            &allow.to_string(),
+        ],
+    );
     let resp = auth(
         http.put(format!("{base}/guilds/{guild_id}/permission-overrides")),
         token,
@@ -455,6 +501,8 @@ async fn set_override(
         "resource_id": resource_id,
         "permission": permission,
         "allow": allow,
+        "signing_key_id": signing_key_id,
+        "signature": signature,
     }))
     .send()
     .await
@@ -485,7 +533,7 @@ async fn grant_override_lets_a_plain_member_manage_one_specific_event() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
     let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
@@ -509,7 +557,9 @@ async fn grant_override_lets_a_plain_member_manage_one_specific_event() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         2, // member role
         "event",
@@ -540,7 +590,7 @@ async fn deny_override_blocks_an_officer_from_deleting_one_specific_event() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (officer_id, officer_token) = seed_identity_session(&pool).await;
     let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
     // Officer (role index 1) holds `event_manage` guild-wide by default
@@ -554,7 +604,9 @@ async fn deny_override_blocks_an_officer_from_deleting_one_specific_event() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         1, // officer role
         "event",
@@ -580,7 +632,7 @@ async fn owner_bypasses_a_deny_override_on_an_event() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
 
     let event_id = create_event(&http, &base, &owner_token, &guild_id, "Owner Event").await;
@@ -588,7 +640,9 @@ async fn owner_bypasses_a_deny_override_on_an_event() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         0,
         "event",
@@ -614,7 +668,7 @@ async fn override_on_a_deleted_event_is_inert_not_an_error() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
     let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
@@ -623,7 +677,9 @@ async fn override_on_a_deleted_event_is_inert_not_an_error() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         2,
         "event",
@@ -979,7 +1035,7 @@ async fn denying_view_on_one_event_hides_it_from_that_member_only() {
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
     let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
@@ -1004,7 +1060,9 @@ async fn denying_view_on_one_event_hides_it_from_that_member_only() {
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         2, // member role
         "event",
@@ -1051,7 +1109,7 @@ async fn denying_view_details_leaves_the_event_visible_but_strips_its_content() 
     let http = reqwest::Client::new();
     let base = server_url();
     let pool = test_pool().await;
-    let (_owner_id, owner_token) = seed_identity_session(&pool).await;
+    let (owner_id, owner_token) = seed_identity_session(&pool).await;
     let (member_id, member_token) = seed_identity_session(&pool).await;
     let guild_id = create_guild_with_owner(&http, &base, &owner_token).await;
     seed_membership(&pool, Uuid::parse_str(&guild_id).unwrap(), member_id, 2).await;
@@ -1061,7 +1119,9 @@ async fn denying_view_details_leaves_the_event_visible_but_strips_its_content() 
     set_override(
         &http,
         &base,
+        &pool,
         &owner_token,
+        owner_id,
         &guild_id,
         2,
         "event",

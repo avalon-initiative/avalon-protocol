@@ -57,6 +57,21 @@ mod hub_side {
     pub struct Player {
         pub identity_id: Uuid,
         pub token: String,
+        /// #697/#698: the same key `register_finish` registered as this
+        /// identity's first `identity_signing_keys` row — lets a later
+        /// signature-required call (e.g. `POST /integrations/{slug}/connect`)
+        /// sign for real.
+        pub signing_key: SigningKey,
+        pub signing_key_id: String,
+    }
+
+    /// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+    pub fn sign_connect(signing_key: &SigningKey, slug: &str, capabilities: &[&str]) -> String {
+        let message = format!(
+            "avalon:integration.connect:v1:{slug}:{}",
+            capabilities.join(",")
+        );
+        BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
     }
 
     /// Steps 1/2: a real WebAuthn registration ceremony (software
@@ -166,7 +181,35 @@ mod hub_side {
             .expect("sessions/finish response missing token")
             .to_string();
 
-        Player { identity_id, token }
+        // register_finish's own event_signing_public_key becomes this
+        // identity's first identity_signing_keys row — find its server-
+        // assigned id (GET /me/devices, match on public key) so a later
+        // signature-required call can name it.
+        let devices: serde_json::Value = http
+            .get(format!("{base}/me/devices"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("GET /me/devices failed")
+            .json()
+            .await
+            .expect("GET /me/devices response was not JSON");
+        let signing_key_id = devices
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["public_key"].as_str() == Some(event_signing_public_key.as_str()))
+            .expect("register_finish's signing key should be listed")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        Player {
+            identity_id,
+            token,
+            signing_key,
+            signing_key_id,
+        }
     }
 
     /// Step 3: Alice and Bob become friends.
@@ -360,7 +403,11 @@ mod hub_side {
         let response = http
             .post(format!("{base}/integrations/{integrator_slug}/connect"))
             .bearer_auth(&player.token)
-            .json(&json!({ "capabilities": capabilities }))
+            .json(&json!({
+                "capabilities": capabilities,
+                "signing_key_id": player.signing_key_id,
+                "signature": sign_connect(&player.signing_key, integrator_slug, capabilities),
+            }))
             .send()
             .await
             .expect("step 9: connect request failed");

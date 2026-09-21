@@ -21,11 +21,15 @@
 // script stays glue over the api client plus local load/error state.
 import { computed, ref, watch } from 'vue'
 import * as api from '@avalon/api-client'
+import { signFreshAction } from '@avalon/api-client'
 import type { GuildResourceKind, PermissionOverrideResponse, RoleResponse } from '@avalon/api-client'
 import styles from '../styles/ResourcePermissionOverrides.module.scss'
 
 const props = defineProps<{
   token: string
+  // #697/#698: setting/clearing an override is signature-required.
+  identityId: string
+  signingKeyId: string | null
   guildId: string
   resourceKind: GuildResourceKind
   resourceId: string
@@ -92,14 +96,30 @@ async function onSetState(roleIndex: number, permission: string, state: Override
   try {
     const existing = overrideFor(roleIndex, permission)
     if (state === 'inherit') {
-      if (existing) await api.deletePermissionOverride(props.token, props.guildId, existing.id)
+      if (existing) {
+        const signed = signFreshAction(
+          props.identityId,
+          props.signingKeyId,
+          'guild.permission_override.delete',
+          [props.guildId, existing.id],
+        )
+        await api.deletePermissionOverride(props.token, props.guildId, existing.id, signed ?? {})
+      }
     } else {
+      const allow = state === 'allow'
+      const signed = signFreshAction(
+        props.identityId,
+        props.signingKeyId,
+        'guild.permission_override.set',
+        [props.guildId, String(roleIndex), props.resourceKind, props.resourceId, permission, String(allow)],
+      )
       await api.setPermissionOverride(props.token, props.guildId, {
         role_index: roleIndex,
         resource_kind: props.resourceKind,
         resource_id: props.resourceId,
         permission,
-        allow: state === 'allow',
+        allow,
+        ...(signed ?? {}),
       })
     }
     await loadOverrides()

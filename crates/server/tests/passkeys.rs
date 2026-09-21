@@ -14,6 +14,9 @@
 //! seeding), since account *creation* itself is already covered by #55's
 //! existing coverage — this file is scoped to what #200 actually adds.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};
 use passkey_client::{Client, DefaultClientData, Origin};
 use passkey_types::ctap2::Aaguid;
@@ -21,6 +24,34 @@ use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOption
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// produce a genuine fresh-signature over HTTP, same pattern
+/// `crates/server/tests/device_grants.rs` already established.
+async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
+    let signing_key = SigningKey::generate(&mut rand::rng());
+    let public_key = signing_key.verifying_key().to_bytes();
+    let row = sqlx::query(
+        "INSERT INTO identity_signing_keys (identity_id, public_key) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(identity_id)
+    .bind(public_key.as_slice())
+    .fetch_one(pool)
+    .await
+    .expect("failed to seed signing key");
+    let key_id: Uuid = sqlx::Row::try_get(&row, "id").unwrap();
+    (key_id, signing_key)
+}
+
+/// Mirrors `crate::signature_gate::canonical_message` byte-for-byte.
+fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> String {
+    let mut message = format!("avalon:{action_tag}:v1");
+    for field in fields {
+        message.push(':');
+        message.push_str(field);
+    }
+    BASE64.encode(signing_key.sign(message.as_bytes()).to_bytes())
+}
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
@@ -94,14 +125,10 @@ async fn create_identity_with_one_passkey(
         .await
         .expect("virtual authenticator registration should succeed");
 
-    use ed25519_dalek::{Signer, SigningKey};
     let signing_key = SigningKey::generate(&mut rand::rng());
     let signing_bytes =
         format!("avalon:identity.created:v1:{identity_id}:{display_name}").into_bytes();
     let signature = signing_key.sign(&signing_bytes);
-
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use base64::Engine;
 
     let finish_body = serde_json::json!({
         "ticket_id": ticket_id,
@@ -279,6 +306,7 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
         http.post(format!("{base}/me/passkeys/{first_passkey_id}/revoke")),
         &token,
     )
+    .json(&serde_json::json!({}))
     .send()
     .await
     .unwrap()
@@ -306,24 +334,37 @@ async fn register_second_passkey_authenticate_with_either_then_revoke_one() {
         .unwrap();
     assert_eq!(me_still["identity_id"], identity_id.to_string());
 
-    // Revoking the last remaining passkey without ?confirm=true is
-    // rejected — the ticket's explicit-confirmation invariant.
-    let unconfirmed_status = auth(
+    // Revoking the last remaining passkey without a fresh signature is
+    // rejected (#697/#698, upgraded from the old `?confirm=true` speed
+    // bump) — the identity already has a signing key from registration
+    // (`register_finish`'s own `event_signing_public_key`), so this is the
+    // "has a key, didn't sign" case, not "no key at all".
+    let unsigned = auth(
         http.post(format!("{base}/me/passkeys/{second_passkey_id}/revoke")),
         &token_via_b,
     )
+    .json(&serde_json::json!({}))
     .send()
     .await
-    .unwrap()
-    .status();
-    assert_eq!(unconfirmed_status.as_u16(), 409);
+    .unwrap();
+    assert_eq!(unsigned.status().as_u16(), 401);
+    let unsigned_body: serde_json::Value = unsigned.json().await.unwrap();
+    assert_eq!(unsigned_body["code"], "FRESH_SIGNATURE_REQUIRED");
 
+    let (signing_key_id, signing_key) = seed_signing_key(&pool, identity_id).await;
+    let signature = sign_action(
+        &signing_key,
+        "passkey.revoke_last",
+        &[&second_passkey_id, &identity_id.to_string()],
+    );
     let confirmed_status = auth(
-        http.post(format!(
-            "{base}/me/passkeys/{second_passkey_id}/revoke?confirm=true"
-        )),
+        http.post(format!("{base}/me/passkeys/{second_passkey_id}/revoke")),
         &token_via_b,
     )
+    .json(&serde_json::json!({
+        "signing_key_id": signing_key_id,
+        "signature": signature,
+    }))
     .send()
     .await
     .unwrap()

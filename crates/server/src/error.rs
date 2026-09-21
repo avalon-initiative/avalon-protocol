@@ -78,8 +78,6 @@ pub enum AppError {
     SigningKeyNotFound,
     #[error("passkey not found")]
     PasskeyNotFound,
-    #[error("revoking your last remaining passkey requires ?confirm=true — this may lock you out if you have no other way to sign in")]
-    LastPasskeyRequiresConfirmation,
     #[error("device grant not found or already resolved")]
     DeviceGrantNotFound,
     #[error("device grant has expired")]
@@ -88,6 +86,24 @@ pub enum AppError {
     ApproverKeyInvalid,
     #[error("grant approval signature verification failed")]
     InvalidGrantSignature,
+    /// Issue #698: this action is in #697's signature-required tier, and
+    /// the caller has no non-revoked `identity_signing_keys` row at all —
+    /// distinct from [`Self::FreshSignatureRequired`] (has a key, just
+    /// didn't sign this request) so the client gets an actionable message
+    /// rather than a generic auth failure.
+    #[error("this action requires a signature from a registered signing key, and this identity has none registered — see POST /me/devices/grants")]
+    NoRegisteredSigningKey,
+    /// Issue #698: the caller has at least one active signing key but
+    /// omitted `signing_key_id`/`signature` (or sent an empty signature) on
+    /// a request in #697's signature-required tier.
+    #[error("this action requires a fresh signature from one of your registered signing keys")]
+    FreshSignatureRequired,
+    /// Issue #698: the supplied signature doesn't verify against the named
+    /// signing key over this action's own canonical fields. `signing_key_id`
+    /// not resolving to a non-revoked, caller-owned key reuses the existing
+    /// [`Self::SigningKeyNotFound`] above rather than a new variant.
+    #[error("fresh signature verification failed")]
+    InvalidFreshSignature,
     #[error("guild not found")]
     GuildNotFound,
     #[error("guild name is already taken")]
@@ -471,11 +487,13 @@ impl AppError {
             AppError::BlockNotFound => "BLOCK_NOT_FOUND",
             AppError::SigningKeyNotFound => "SIGNING_KEY_NOT_FOUND",
             AppError::PasskeyNotFound => "PASSKEY_NOT_FOUND",
-            AppError::LastPasskeyRequiresConfirmation => "LAST_PASSKEY_REQUIRES_CONFIRMATION",
             AppError::DeviceGrantNotFound => "DEVICE_GRANT_NOT_FOUND",
             AppError::DeviceGrantExpired => "DEVICE_GRANT_EXPIRED",
             AppError::ApproverKeyInvalid => "APPROVER_KEY_INVALID",
             AppError::InvalidGrantSignature => "INVALID_GRANT_SIGNATURE",
+            AppError::NoRegisteredSigningKey => "NO_REGISTERED_SIGNING_KEY",
+            AppError::FreshSignatureRequired => "FRESH_SIGNATURE_REQUIRED",
+            AppError::InvalidFreshSignature => "INVALID_FRESH_SIGNATURE",
             AppError::GuildNotFound => "GUILD_NOT_FOUND",
             AppError::GuildNameTaken => "GUILD_NAME_TAKEN",
             AppError::GuildTagTaken => "GUILD_TAG_TAKEN",
@@ -661,9 +679,19 @@ impl IntoResponse for AppError {
             AppError::SigningKeyNotFound
             | AppError::DeviceGrantNotFound
             | AppError::PasskeyNotFound => StatusCode::NOT_FOUND,
-            AppError::LastPasskeyRequiresConfirmation => StatusCode::CONFLICT,
             AppError::DeviceGrantExpired => StatusCode::GONE,
             AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
+                StatusCode::UNAUTHORIZED
+            }
+            // Issue #698: "you have no key to sign with at all" is an
+            // actionable account-state problem (go register one) — 409,
+            // not 401/403.
+            AppError::NoRegisteredSigningKey => StatusCode::CONFLICT,
+            // The caller has a key but didn't sign this specific request,
+            // or the signature itself doesn't verify — both are auth
+            // failures on this one request, same status as
+            // `InvalidGrantSignature` above.
+            AppError::FreshSignatureRequired | AppError::InvalidFreshSignature => {
                 StatusCode::UNAUTHORIZED
             }
             AppError::GuildNotFound | AppError::GuildRoleNotFound => StatusCode::NOT_FOUND,

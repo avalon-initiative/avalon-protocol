@@ -6,7 +6,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@avalon/api-client'
-import { AvalonApiError } from '@avalon/api-client'
 import { recoverSigningKey } from '@avalon/api-client'
 import {
   approveDeviceGrant,
@@ -655,42 +654,26 @@ async function onRenamePasskey(passkey: PasskeyResponse, label: string) {
   }
 }
 
-// Revoking the identity's last remaining passkey requires explicit
-// confirmation (crates/server/src/passkeys.rs's own invariant, surfaced
-// here as a 409 with AppError::LastPasskeyRequiresConfirmation) — a plain
-// browser confirm() is enough for this milestone's UI, matching how little
-// other chrome (no modal component in @avalon/ui yet) the rest of this page
-// uses for destructive actions.
+// #697/#698/#704: revoking the identity's last remaining passkey now
+// requires a fresh signature server-side rather than `?confirm=true` — the
+// browser confirm() here is purely a UX speed bump before signing, not the
+// security boundary anymore.
 async function onRevokePasskey(passkey: PasskeyResponse) {
   if (!session.token) return
   revokePasskeyError.value = ''
+  const isLastPasskey = Array.isArray(passkeys.value) && passkeys.value.length <= 1
+  if (isLastPasskey) {
+    const confirmed = window.confirm(
+      "This is your last remaining passkey — revoking it may lock you out of this identity if you have no other way to sign in. Revoke it anyway?",
+    )
+    if (!confirmed) return
+  }
   revokingPasskeyId.value = passkey.id
   try {
-    await revokePasskey(session.token, passkey.id, false)
+    await revokePasskey(session.token, session.identityId ?? '', session.signingKeyId, passkey.id)
     await refreshPasskeys()
   } catch (e) {
-    if (e instanceof AvalonApiError && e.status === 409) {
-      // A 409 here always means the one thing it can mean for this
-      // endpoint (crates/server/src/passkeys.rs's
-      // LastPasskeyRequiresConfirmation) — messageForStatus's generic 409
-      // text is about a different case (identity id collisions at account
-      // creation) and isn't useful here, so this prompt is worded directly
-      // rather than built from `e.message`.
-      const confirmed = window.confirm(
-        "This is your last remaining passkey — revoking it may lock you out of this identity if you have no other way to sign in. Revoke it anyway?",
-      )
-      if (confirmed) {
-        try {
-          await revokePasskey(session.token, passkey.id, true)
-          await refreshPasskeys()
-        } catch (retryError) {
-          revokePasskeyError.value =
-            retryError instanceof Error ? retryError.message : 'Something went wrong.'
-        }
-      }
-    } else {
-      revokePasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
-    }
+    revokePasskeyError.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
     revokingPasskeyId.value = ''
   }
@@ -753,6 +736,8 @@ async function onSaveGuardians() {
   try {
     const settings = await setGuardians(
       session.token,
+      session.identityId ?? '',
+      session.signingKeyId,
       [...selectedGuardianIds.value],
       threshold.value,
     )
