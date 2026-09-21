@@ -1,10 +1,13 @@
 // Social recovery (issue #201) — orchestrates the two flows
 // crates/server/src/recovery.rs exposes: guardian configuration
-// (session-authenticated, mirrors api/passkeys.ts's shape) and recovery
-// initiation (deliberately unauthenticated — the caller has no session for
-// the identity being recovered, so `startRecovery` below never takes a
-// token, unlike every other function in this module).
-import { runRegistrationCeremony, signFreshAction } from '@avalon/api-client'
+// (session-authenticated, mirrors api/passkeys.ts's shape — still on
+// @avalon/api-client until Profile.vue's own #712 migration batch) and
+// recovery initiation (deliberately unauthenticated — the caller has no
+// session for the identity being recovered, so `startRecovery` below never
+// takes a token, unlike every other function in this module. Migrated onto
+// @avalon/sdk's free-standing recovery.ts as part of RecoverIdentity.vue's
+// #712 migration, since it's the only consumer.
+import { signFreshAction } from '@avalon/api-client'
 import * as api from '@avalon/api-client'
 import type {
   GuardianOfSummary,
@@ -12,6 +15,15 @@ import type {
   GuardianSettingsResponse,
   RecoveryRequestResponse,
 } from '@avalon/api-client'
+import {
+  startRecoveryRequest as sdkStartRecoveryRequest,
+  finishRecoveryRequest as sdkFinishRecoveryRequest,
+  finalizeRecoveryRequest as sdkFinalizeRecoveryRequest,
+  getIdentityRecoveryStatus as sdkGetIdentityRecoveryStatus,
+  runRegistrationCeremony as sdkRunRegistrationCeremony,
+  type RecoveryRequest,
+} from '@avalon/sdk'
+import { getServerUrl } from './serverUrl'
 
 export function getGuardians(token: string): Promise<GuardianSettingsResponse> {
   return api.getGuardians(token)
@@ -70,14 +82,12 @@ export function cancelRecoveryRequest(
   return api.cancelRecoveryRequest(token, requestId, { reason })
 }
 
-export function finalizeRecoveryRequest(requestId: string): Promise<RecoveryRequestResponse> {
-  return api.finalizeRecoveryRequest(requestId)
+export function finalizeRecoveryRequest(requestId: string): Promise<RecoveryRequest> {
+  return sdkFinalizeRecoveryRequest(getServerUrl(), requestId)
 }
 
-export function getIdentityRecoveryStatus(
-  identityId: string,
-): Promise<RecoveryRequestResponse | null> {
-  return api.getIdentityRecoveryStatus(identityId)
+export function getIdentityRecoveryStatus(identityId: string): Promise<RecoveryRequest | null> {
+  return sdkGetIdentityRecoveryStatus(getServerUrl(), identityId)
 }
 
 // Drives the new device's WebAuthn registration ceremony end-to-end — same
@@ -86,17 +96,18 @@ export function getIdentityRecoveryStatus(
 // against this identity, that's the entire point of recovery.
 export async function startRecovery(
   identityId: string,
-  deviceLabel: string | null,
-): Promise<RecoveryRequestResponse> {
-  const { ticket_id, challenge } = await api.startRecoveryRequest({
-    identity_id: identityId,
-    device_label: deviceLabel,
+  deviceLabel?: string,
+): Promise<RecoveryRequest> {
+  const serverUrl = getServerUrl()
+  const { ticketId, challenge } = await sdkStartRecoveryRequest(serverUrl, {
+    identityId,
+    deviceLabel,
   })
 
-  const webauthnCredential = await runRegistrationCeremony(challenge.publicKey)
+  const webauthnCredential = await sdkRunRegistrationCeremony(challenge.publicKey)
 
-  return api.finishRecoveryRequest({
-    ticket_id,
-    webauthn_credential: webauthnCredential,
+  return sdkFinishRecoveryRequest(serverUrl, {
+    ticketId,
+    webauthnCredential,
   })
 }

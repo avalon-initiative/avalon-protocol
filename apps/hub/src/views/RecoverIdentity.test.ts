@@ -11,18 +11,18 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simp
 const runRegistrationCeremonyMock = vi.fn<(options: unknown) => Promise<RegistrationResponseJSON>>()
 const runAuthenticationCeremonyMock = vi.fn<(options: unknown) => Promise<AuthenticationResponseJSON>>()
 
-// This view's `login`/`startRecovery` calls reach the WebAuthn ceremony
-// through @avalon/api-client's *internal* ./crypto/webauthn import (identity.ts
-// calls it directly, not via the package's own barrel) — mocking that
-// resolved submodule, rather than the @avalon/api-client entrypoint, is what
-// actually intercepts it.
-vi.mock('@avalon/api-client/src/crypto/webauthn', () => ({
+// This view's `startRecovery`/`loginWithIdentityId` calls reach the
+// WebAuthn ceremony through @avalon/sdk's *internal* ./crypto/webauthn
+// import (recovery.ts/client.ts call it directly, not via the package's
+// own barrel) — mocking that resolved submodule, rather than the
+// @avalon/sdk entrypoint, is what actually intercepts it.
+vi.mock('@avalon/sdk/src/crypto/webauthn', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
   runAuthenticationCeremony: (options: unknown) => runAuthenticationCeremonyMock(options),
 }))
 
 import RecoverIdentity from './RecoverIdentity.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 const requestBase = {
   id: 'req1',
@@ -30,6 +30,23 @@ const requestBase = {
   threshold: 2,
   approvals_count: 2,
   requested_at: '2026-01-01T00:00:00Z',
+}
+
+const meResponse = {
+  identity_id: 'id-1',
+  identity_created_at: '2026-01-01T00:00:00Z',
+  display_name: 'Recovered User',
+  avatar_url: null,
+  bio: null,
+  favorite_genres: [],
+  pronouns: null,
+  banner_url: null,
+  status: null,
+  links: [],
+  timezone: null,
+  theme_color: null,
+  location: null,
+  main_guild: null,
 }
 
 function testRouter() {
@@ -103,6 +120,7 @@ describe('RecoverIdentity', () => {
       '/recovery/requests/req1/finalize': { ...requestBase, status: 'completed', delay_ends_at: pastDelay },
       '/sessions/start': { ticket_id: 't2', challenge: { publicKey: {} } },
       '/sessions/finish': { token: 'new-session-token', expires_at: '2027-01-01T00:00:00Z' },
+      '/me': meResponse,
     })
 
     const router = testRouter()
@@ -116,7 +134,7 @@ describe('RecoverIdentity', () => {
     await finishButton!.trigger('click')
     await flushPromises()
 
-    expect(useSessionStore().token).toBe('new-session-token')
+    expect(useSessionStore().token()).toBe('new-session-token')
     expect(router.currentRoute.value.name).toBe('home')
   })
 

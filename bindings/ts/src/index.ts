@@ -126,3 +126,5 @@ export {
   base64ToBytes,
 } from './crypto/signing.js'
 export type { SigningKeyPair, SignatureFields } from './crypto/signing.js'
+
+export { runRegistrationCeremony, runAuthenticationCeremony } from './crypto/webauthn.js'

@@ -16,9 +16,9 @@
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
-import * as api from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
-import { loadSigningKey, mintCrossNodeLoginGrant } from '@avalon/api-client'
+import { lookupCrossNodeLogin, denyCrossNodeLogin, submitCrossNodeLoginGrant } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
+import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import styles from '../styles/page.module.scss'
 import local from '../styles/CrossNodeLogin.module.scss'
 
@@ -47,11 +47,11 @@ async function onLookUp() {
   looking.value = true
   lookupStatus.value = null
   try {
-    const result = await api.lookupCrossNodeLogin(node, code)
+    const result = await lookupCrossNodeLogin(node, code)
     lookupStatus.value = result.status
-    requestingContext.value = result.requesting_context
-    integratorVerified.value = result.integrator_verified
-    displayName.value = result.display_name ?? ''
+    requestingContext.value = result.requestingContext
+    integratorVerified.value = result.integratorVerified
+    displayName.value = result.displayName ?? ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -62,9 +62,11 @@ async function onLookUp() {
 async function onApprove() {
   const node = nodeBaseUrl.value.trim().replace(/\/$/, '')
   const code = userCode.value.trim()
-  if (!node || !code || !session.identityId || !session.signingKeyId) return
+  if (!node || !code || !session.identityId() || !session.signingKeyId()) return
 
-  const secretKey = loadSigningKey(session.identityId)
+  const identityId = session.identityId()!
+  const signingKeyId = session.signingKeyId()!
+  const secretKey = loadSigningKeySeed(identityId)
   if (!secretKey) {
     error.value =
       "This device doesn't have your signing key — recover it from your recovery phrase on Profile first, then try again."
@@ -74,14 +76,7 @@ async function onApprove() {
   error.value = ''
   submitting.value = true
   try {
-    const grant = mintCrossNodeLoginGrant(
-      session.identityId,
-      session.signingKeyId,
-      secretKey,
-      node,
-      requestingContext.value,
-    )
-    await api.submitCrossNodeLoginGrant(node, { user_code: code, grant })
+    await submitCrossNodeLoginGrant(node, identityId, signingKeyId, secretKey, node, requestingContext.value, code)
     resolvedStatus.value = 'approved'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -97,7 +92,7 @@ async function onDeny() {
   error.value = ''
   submitting.value = true
   try {
-    await api.denyCrossNodeLogin(node, { user_code: code })
+    await denyCrossNodeLogin(node, code)
     resolvedStatus.value = 'denied'
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

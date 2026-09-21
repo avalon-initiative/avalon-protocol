@@ -9,12 +9,10 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
-import { login } from '@avalon/api-client'
-import { findMySigningKeyId } from '../api/deviceGrants'
+import type { RecoveryRequest } from '@avalon/sdk'
+import { avalonClient, useSessionStore } from '../api/session'
+import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import { finalizeRecoveryRequest, getIdentityRecoveryStatus, startRecovery } from '../api/recovery'
-import type { RecoveryRequestResponse } from '@avalon/api-client'
-import { loadSigningKey } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -24,22 +22,22 @@ const session = useSessionStore()
 const identityId = ref('')
 const submitting = ref(false)
 const error = ref('')
-const request = ref<RecoveryRequestResponse | null>(null)
+const request = ref<RecoveryRequest | null>(null)
 
 // Mirrors the server's own `guard_can_finalize` (crates/server/src/recovery.rs):
 // only a `delay`-status request whose delay has actually elapsed may finalize.
 // This is purely a UI gate — the server re-checks the same condition and
 // `onFinalize` surfaces whatever it says either way.
 const canFinalize = computed(() => {
-  if (!request.value || request.value.status !== 'delay' || !request.value.delay_ends_at) return false
-  return new Date(request.value.delay_ends_at).getTime() <= Date.now()
+  if (!request.value || request.value.status !== 'delay' || !request.value.delayEndsAt) return false
+  return new Date(request.value.delayEndsAt).getTime() <= Date.now()
 })
 
 async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    request.value = await startRecovery(identityId.value.trim(), null)
+    request.value = await startRecovery(identityId.value.trim())
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -58,7 +56,7 @@ async function onRefreshStatus() {
   if (!request.value) return
   refreshing.value = true
   try {
-    request.value = await getIdentityRecoveryStatus(request.value.identity_id)
+    request.value = await getIdentityRecoveryStatus(request.value.identityId)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -77,19 +75,18 @@ async function onFinalize() {
   error.value = ''
   finalizing.value = true
   try {
-    const identityId = request.value.identity_id
+    const identityId = request.value.identityId
     request.value = await finalizeRecoveryRequest(request.value.id)
-    const { token } = await login(identityId)
+    const accountSession = await avalonClient().loginWithIdentityId(identityId)
     // Issue #525: guardian-based recovery (#201) only ever registers a new
     // WebAuthn passkey, never a new Ed25519 signing key (startRecovery
-    // above), so loadSigningKey correctly returns null here until this
+    // above), so loadSigningKeySeed correctly returns null here until this
     // device separately goes through #135's device-grant flow — no
     // reconnect-across-nodes support for this session until then, same as
-    // any other signing-key-less device (see session.login's own doc
-    // comment).
-    const secretKey = loadSigningKey(identityId)
-    const signingKeyId = secretKey ? await findMySigningKeyId(token, secretKey) : null
-    await session.login(token, identityId, signingKeyId)
+    // any other signing-key-less device.
+    const secretKey = loadSigningKeySeed(identityId)
+    if (secretKey) await accountSession.attachSigningKey(secretKey)
+    session.setSession(accountSession)
     await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -122,8 +119,8 @@ async function onFinalize() {
           usable, so the real owner has time to cancel it if this wasn't them.
         </p>
         <p><strong>Status:</strong> {{ request.status }}</p>
-        <p><strong>Approvals:</strong> {{ request.approvals_count }} of {{ request.threshold }}</p>
-        <p v-if="request.delay_ends_at"><strong>Delay ends:</strong> {{ request.delay_ends_at }}</p>
+        <p><strong>Approvals:</strong> {{ request.approvalsCount }} of {{ request.threshold }}</p>
+        <p v-if="request.delayEndsAt"><strong>Delay ends:</strong> {{ request.delayEndsAt }}</p>
         <p v-if="error" :class="styles.hint">{{ error }}</p>
         <div :class="styles.actions">
           <AvalonButton
