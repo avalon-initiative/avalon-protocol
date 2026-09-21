@@ -124,12 +124,43 @@ with no `client_entry_id`, `AvalonClient::login`,
 rather than being retried unsafely; extending real key coverage to those
 is a documented follow-up, not silently assumed done.
 
+## Two session types: capability-gated integrator vs. first-party account (#696)
+
+Everything above (`Session`, capability checks, `Capability`) describes
+the capability-gated *integrator* model — a game/app/service authenticating
+with its own credential, scoped to whatever an identity explicitly
+granted it. #696 added a second, entirely separate session type every
+language SDK now implements: `AccountSession`, a first-party client for
+an identity's own account — registration, login, recovery, passkeys,
+devices, full guild administration, and every other action the identity
+itself is allowed to take, not gated by any capability grant at all.
+
+The two types share no conversion in either direction, in any SDK — an
+integrator credential can never yield account-level power, by
+construction, not just by convention. Within `AccountSession`, most
+actions stay authorized by the session's ambient bearer token; a smaller,
+named set additionally requires a fresh Ed25519 signature from the
+identity's own locally-held signing key, minted automatically by the SDK
+— see [identity.md](./identity.md)'s "Two authorization tiers" section
+for the full model and rationale, and "Today in the repo" below for the
+per-language `AccountSession` surface and the complete signature-required
+endpoint list.
+
 ## Languages
 
-- **Rust** (`crates/sdk`) — the reference implementation.
+- **Rust** (`crates/sdk`) — the reference implementation. Both `Session`
+  (integrator) and `AccountSession` (first-party).
 - **C#** (`bindings/csharp`) — the flagship developer-facing SDK, targeting
-  netstandard2.1 for Unity. Mirrors the Rust surface.
-- **TypeScript** — next, when a web or Node integration needs it.
+  netstandard2.1 for Unity. Mirrors the Rust surface, including
+  `AccountSession`, with one deliberate gap: no WebAuthn-ceremony-driving
+  registration/login (no ceremony library available for this SDK's actual
+  Unity/native audience) — see "Today in the repo".
+- **TypeScript** (`bindings/ts`) — real and shipped (#701), not
+  speculative: a new, self-contained package (not a workspace member, no
+  dependency on `packages/api-client`/`apps/hub`) implementing both
+  `Session`-equivalent (`IntegratorSession`) and `AccountSession` from
+  scratch, including a real browser WebAuthn ceremony (unlike C#, since
+  this SDK is browser-facing).
 - **C++** and others — only as actual integrations demand. Don't build every
   SDK up front.
 
@@ -753,3 +784,15 @@ protocol and the domain model in `crates/protocol`; they never pull in
   conversation domain model + server endpoints;
   [#104](https://github.com/LunarVagabond/avalon-protocol/issues/104) — this
   SDK surface.
+- [#696](https://github.com/LunarVagabond/avalon-protocol/issues/696) — Epic:
+  unify the SDK schema across languages with tiered action signing (decided
+  on [#695](https://github.com/LunarVagabond/avalon-protocol/issues/695)):
+  [#699](https://github.com/LunarVagabond/avalon-protocol/issues/699) Rust
+  `AccountSession`, [#700](https://github.com/LunarVagabond/avalon-protocol/issues/700)
+  C# `AccountSession`, [#701](https://github.com/LunarVagabond/avalon-protocol/issues/701)
+  new TypeScript SDK,
+  [#707](https://github.com/LunarVagabond/avalon-protocol/issues/707)
+  `AccountSession` device-pairing login (found after #699 shipped, folded
+  into #700/#701 from the start). See [identity.md](./identity.md)'s own
+  "Decisions and tickets" for the companion tier-classification/
+  enforcement tickets (#697/#698/#704).
