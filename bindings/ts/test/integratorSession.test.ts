@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { IntegratorSession, type Capability } from './integratorSession.js'
-import { CapabilityNotGrantedError, MissingIssuerCredentialsError } from './errors.js'
+import { IntegratorSession, type Capability } from '../src/integratorSession.js'
+import { CapabilityNotGrantedError, MissingIssuerCredentialsError } from '../src/errors.js'
 
 function testSession(granted: Capability[] = []): IntegratorSession {
   const id = crypto.randomUUID()

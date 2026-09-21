@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalMessage, generateSigningKey, sign, verify } from './signing.js'
+import { canonicalMessage, generateSigningKey, sign, verify } from '../../src/crypto/signing.js'
 
 describe('canonicalMessage', () => {
   it('matches the server shape byte-for-byte', () => {

@@ -4,7 +4,7 @@ Documentation for people standing up an `avalon-server` node to actually run
 it — for their own community, a game, or just to see it work — not for
 people contributing code to this repository itself (see
 [maintainers docs](../../../maintainers/)) or integrating Avalon into their own
-game/app/service as a developer (see [developer docs](../../../developers/)).
+game/app/service as a developer (see [developer docs](../../sdks/rust/for-developers/)).
 
 No Rust or Node toolchain is required for anything on this page — only
 [Docker](https://docs.docker.com/get-docker/).

@@ -148,21 +148,12 @@ endpoint list.
 
 ## Languages
 
-- **Rust** (`crates/sdk`) — the reference implementation. Both `Session`
-  (integrator) and `AccountSession` (first-party).
-- **C#** (`bindings/csharp`) — the flagship developer-facing SDK, targeting
-  netstandard2.1 for Unity. Mirrors the Rust surface, including
-  `AccountSession`, with one deliberate gap: no WebAuthn-ceremony-driving
-  registration/login (no ceremony library available for this SDK's actual
-  Unity/native audience) — see "Today in the repo".
-- **TypeScript** (`bindings/ts`) — real and shipped (#701), not
-  speculative: a new, self-contained package (not a workspace member, no
-  dependency on `packages/api-client`/`apps/hub`) implementing both
-  `Session`-equivalent (`IntegratorSession`) and `AccountSession` from
-  scratch, including a real browser WebAuthn ceremony (unlike C#, since
-  this SDK is browser-facing).
-- **C++** and others — only as actual integrations demand. Don't build every
-  SDK up front.
+Rust is the reference implementation (both `Session` — integrator — and
+`AccountSession` — first-party). C# and TypeScript are also implemented and
+fully supported. See [`../language-support.md`](../language-support.md)
+for the full, canonical table — every implemented language with its
+detailed status, and every language without an SDK yet, kept in one place
+rather than duplicated across this doc and the project README.
 
 Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
@@ -723,17 +714,19 @@ protocol and the domain model in `crates/protocol`; they never pull in
     `DeviceLoginDeniedError`/`DeviceLoginExpiredError`/
     `NoLocalSigningKeyError`), mapped from HTTP status + the server's own
     `{ error, code }` body, mirroring `SdkError`'s variants.
-  - **Unit tests** (`vitest`, colocated `*.test.ts` files): the
-    canonical-message shape byte-for-byte against the known format
-    (`crypto/signing.test.ts`), `AccountSession.sign`'s empty-vs-signed
+  - **Unit tests** (`vitest`, under `bindings/ts/test/`, mirroring
+    `src/`'s own directory structure rather than colocated next to the
+    code they cover — a dedicated tree, not scattered through `src/`):
+    the canonical-message shape byte-for-byte against the known format
+    (`test/crypto/signing.test.ts`), `AccountSession.sign`'s empty-vs-signed
     behavior, `IntegratorSession`'s capability-gating (throws without a
     network call when ungranted), and a signed-call round trip
-    (`accountSession/core.test.ts`) that stubs `fetch`, calls a
+    (`test/accountSession/core.test.ts`) that stubs `fetch`, calls a
     signature-required method, and verifies the captured request body's
     signature against the session's known public key using
     `@noble/curves`'s own `ed25519.verify` — the same "verify server-side-
     equivalently" pattern the C# unit tests use with BouncyCastle.
-  - **Live tests** (`bindings/ts/src/account.live.test.ts`, opt-in via
+  - **Live tests** (`bindings/ts/test/account.live.test.ts`, opt-in via
     `AVALON_SERVER_URL`/`AVALON_LIVE_DATABASE_URL`, run with `npm run
     test:live` from `bindings/ts`): SQL-seeded identity + signing key (via
     the `pg` npm client, reading the same `postgres://` URI `DATABASE_URL`

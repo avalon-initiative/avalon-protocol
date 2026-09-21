@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { AccountSession } from './core.js'
-import './achievements.js'
+import { AccountSession } from '../../src/accountSession/core.js'
+import '../../src/accountSession/achievements.js'
 
 function testIdentity() {
   return { id: crypto.randomUUID(), createdAt: new Date().toISOString() }

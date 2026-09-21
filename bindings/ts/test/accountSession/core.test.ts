@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { AccountSession } from './core.js'
-import { canonicalMessage, generateSigningKey, verify } from '../crypto/signing.js'
-import { WIRE_PREFIX } from '../crypto/continuation.js'
-import './passkeys.js'
+import { AccountSession } from '../../src/accountSession/core.js'
+import { canonicalMessage, generateSigningKey, verify } from '../../src/crypto/signing.js'
+import { WIRE_PREFIX } from '../../src/crypto/continuation.js'
+import '../../src/accountSession/passkeys.js'
 
 function testIdentity() {
   return { id: crypto.randomUUID(), createdAt: new Date().toISOString() }

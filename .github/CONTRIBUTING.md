@@ -279,7 +279,7 @@ two.
   full narrative design and phased roadmap
 - [`docs/projects/sdks/rust/for-developers/`](../docs/projects/sdks/rust/for-developers/) — the game-developer-facing SDK
   story
-- [`docs/hosters/`](../docs/hosters/) — standing up and deploying a node,
+- [`docs/projects/backend-server/for-hosters/`](../docs/projects/backend-server/for-hosters/) — standing up and deploying a node,
   distinct from contributing code
 - Root `README.md` — current build status and what actually works today
 
