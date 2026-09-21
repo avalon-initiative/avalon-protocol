@@ -9,8 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
 import Friends from './Friends.vue'
-import { useSessionStore } from '@avalon/api-client'
-import { useSessionStore as useNewSessionStore } from '../api/session'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 const profile = {
@@ -60,19 +59,14 @@ beforeEach(() => {
   })
 })
 
-// Profile.vue (mounted as a nested route here) has already migrated onto
-// the new @avalon/sdk-backed session store (#712), while HubShell/Friends
-// haven't yet — so a test that navigates to /profile needs both stores
-// populated until that later batch lands.
-async function loginBothSessions() {
-  useSessionStore().login('a-token')
+async function loginSession() {
   localStorage.setItem('avalon:session:token', 'a-token')
-  await useNewSessionStore().initialize()
+  await useSessionStore().initialize()
 }
 
 describe('HubShell', () => {
   it('shows the sidebar, user chip, and coming-soon entries on the profile page', async () => {
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/profile')
@@ -87,7 +81,7 @@ describe('HubShell', () => {
   })
 
   it('keeps the shell when navigating to the friends page', async () => {
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/friends')
@@ -99,7 +93,7 @@ describe('HubShell', () => {
   })
 
   it('publishes an Online heartbeat so the user reads as online to friends', async () => {
-    await loginBothSessions()
+    await loginSession()
 
     const router = testRouter()
     router.push('/profile')
@@ -121,7 +115,7 @@ describe('HubShell', () => {
   // as sticky overrides — the client has to honor that, not keep insisting
   // on Online).
   it('lets the user manually set their status and does not overwrite it on the next heartbeat', async () => {
-    await loginBothSessions()
+    await loginSession()
     vi.useFakeTimers()
 
     const router = testRouter()
