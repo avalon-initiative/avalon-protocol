@@ -1527,7 +1527,7 @@ mod tests {
     }
 
     async fn live_test_pool() -> PgPool {
-        dotenvy::dotenv().ok();
+        avalon_devenv::load();
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         sqlx::postgres::PgPoolOptions::new()
             .connect(&database_url)

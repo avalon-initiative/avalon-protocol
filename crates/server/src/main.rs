@@ -65,7 +65,7 @@ fn init_tracing() -> avalon_server::admin::LogReloadHandle {
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
     let log_reload_handle = init_tracing();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let addr = std::env::var("AVALON_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());

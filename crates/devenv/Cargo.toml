@@ -1,0 +1,10 @@
+[package]
+name = "avalon-devenv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Loads the workspace root's .env from a fixed, compile-time-known path (via CARGO_MANIFEST_DIR) instead of dotenvy's ancestor-directory search — see issue #671. Not a domain crate."
+
+[dependencies]
+dotenvy.workspace = true

@@ -187,6 +187,33 @@ impl PostgresIndexer {
                     integrator_recognitions::apply(tx, &write).await?;
                 }
             }
+
+            // #669: known, current event kinds whose data already lives in
+            // its own direct source-of-truth table, written synchronously
+            // by the handler that emits the event (in the same transaction
+            // as its `outbox::enqueue` call) — never through the indexer.
+            // Nothing to project here, so these are a deliberate no-op
+            // rather than falling into the `other` branch below, which
+            // would log them as unrecognized on every rebuild even though
+            // nothing is actually missing. See
+            // `docs/architecture/query-and-indexing.md`'s "Events with
+            // their own source of truth" section for the full table-by-kind
+            // mapping and why each one is scoped this way.
+            "game.registered"
+            | "issuer.key_added"
+            | "issuer.key_revoked"
+            | "guild.channel_created"
+            | "permission.granted"
+            | "permission.revoked"
+            | "achievement.defined"
+            | "achievement.definition_updated"
+            | "achievement.definition_retired"
+            | "milestone.defined"
+            | "milestone.definition_updated"
+            | "milestone.definition_retired"
+            | "milestone.issued"
+            | "milestone.revoked" => {}
+
             other => {
                 // Never an error — an old indexer must survive a new event
                 // kind being introduced elsewhere in the protocol. See

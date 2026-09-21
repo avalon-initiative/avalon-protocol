@@ -8,6 +8,7 @@ members = [
     "crates/sdk",
     "crates/schema-derive",
     "crates/cli",
+    "crates/devenv",
 ]
 
 [workspace.package]
@@ -59,6 +60,7 @@ strip-ansi-escapes = "0.2"
 # already present transitively (several dependencies pull it in), promoted
 # to a direct dependency rather than adding a new one.
 regex = "1"
+avalon-devenv = { path = "crates/devenv" }
 webauthn-rs = { version = "0.5", features = ["resident-key-support", "danger-allow-state-serialisation", "conditional-ui"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core", "serde"] }
 url = { version = "2", features = ["serde"] }

@@ -79,9 +79,10 @@ impl ExportArgs {
                     let value = raw_args
                         .get(i + 1)
                         .ok_or_else(|| "--since requires an RFC 3339 timestamp".to_string())?;
-                    since = Some(OffsetDateTime::parse(value, &Rfc3339).map_err(|_| {
-                        format!("--since: not an RFC 3339 timestamp: {value}")
-                    })?);
+                    since = Some(
+                        OffsetDateTime::parse(value, &Rfc3339)
+                            .map_err(|_| format!("--since: not an RFC 3339 timestamp: {value}"))?,
+                    );
                     i += 2;
                 }
                 other if !other.starts_with("--") && file.is_none() => {
@@ -110,10 +111,7 @@ fn default_log_file() -> PathBuf {
 
 pub fn run(args: ExportArgs) {
     let contents = std::fs::read_to_string(&args.file).unwrap_or_else(|err| {
-        eprintln!(
-            "failed to read log file {}: {err}",
-            args.file.display()
-        );
+        eprintln!("failed to read log file {}: {err}", args.file.display());
         std::process::exit(1);
     });
 
@@ -214,9 +212,8 @@ fn collect_present_secrets() -> Vec<(String, String)> {
         .collect()
 }
 
-static POSTGRES_CREDENTIALS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(postgres(?:ql)?)://[^:/@\s]+:[^@/\s]+@").expect("valid regex")
-});
+static POSTGRES_CREDENTIALS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(postgres(?:ql)?)://[^:/@\s]+:[^@/\s]+@").expect("valid regex"));
 
 static BEARER_TOKEN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\bBearer\s+([A-Za-z0-9\-._~+/]+=*)").expect("valid regex"));
@@ -293,10 +290,7 @@ mod tests {
     #[test]
     fn redacts_exact_secret_value_from_env() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var(
-            "AVALON_SETTLEMENT_SIGNING_KEY",
-            "sekrit-signing-key-abc123",
-        );
+        std::env::set_var("AVALON_SETTLEMENT_SIGNING_KEY", "sekrit-signing-key-abc123");
         let secrets = collect_present_secrets();
         std::env::remove_var("AVALON_SETTLEMENT_SIGNING_KEY");
 
@@ -310,7 +304,10 @@ mod tests {
     #[test]
     fn redacts_exact_value_end_to_end_through_export_line() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("DATABASE_URL", "postgres://realuser:realpass@127.0.0.1/avalon");
+        std::env::set_var(
+            "DATABASE_URL",
+            "postgres://realuser:realpass@127.0.0.1/avalon",
+        );
         let secrets = collect_present_secrets();
         std::env::remove_var("DATABASE_URL");
 
@@ -397,6 +394,9 @@ mod tests {
     #[test]
     fn args_default_file_matches_makefile_convention() {
         let parsed = ExportArgs::parse(&[]).unwrap();
-        assert_eq!(parsed.file, PathBuf::from("_running/logs/avalon-server.log"));
+        assert_eq!(
+            parsed.file,
+            PathBuf::from("_running/logs/avalon-server.log")
+        );
     }
 }

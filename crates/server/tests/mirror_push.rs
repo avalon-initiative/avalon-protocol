@@ -76,7 +76,7 @@ fn require_no_dht_mirror_url() -> String {
 }
 
 async fn test_pool() -> PgPool {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     PgPoolOptions::new()
         .connect(&database_url)

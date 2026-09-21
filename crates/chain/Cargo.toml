@@ -22,5 +22,5 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-dotenvy.workspace = true
+avalon-devenv.workspace = true
 rand.workspace = true

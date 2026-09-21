@@ -7,7 +7,8 @@
 //!
 //! Since issue #210, `commit` also needs `AVALON_SETTLEMENT_SIGNING_KEY` set
 //! (see `.env.example`) — every test here goes through `test_pool()`, which
-//! loads `.env` via `dotenvy` the same way `make test-live` expects.
+//! loads the workspace root's `.env` via `avalon_devenv::load()` (issue
+//! #671) the same way `make test-live` expects.
 //!
 //! These tests exercise `avalon-chain` directly rather than through
 //! `avalon-server`'s outbox/HTTP surface: `SettlementProvider` is `chain`'s
@@ -26,7 +27,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 async fn test_pool() -> PgPool {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     PgPoolOptions::new()
         .connect(&database_url)

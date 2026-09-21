@@ -45,7 +45,7 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok();
+    avalon_devenv::load();
 
     let mut args = std::env::args();
     let command = args.nth(1);
