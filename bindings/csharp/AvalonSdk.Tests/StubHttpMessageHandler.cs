@@ -15,7 +15,10 @@ namespace Avalon.Sdk.Tests;
 /// </summary>
 internal sealed class StubHttpMessageHandler : HttpMessageHandler
 {
-    public sealed record RecordedRequest(HttpMethod Method, string Url, string? AuthorizationToken);
+    // Body is captured synchronously here (read before SendAsync returns) so AccountSession's
+    // signed-request tests (issue #700) can assert on the exact signing_key_id/signature the
+    // request body carried, not just its method/URL/auth header.
+    public sealed record RecordedRequest(HttpMethod Method, string Url, string? AuthorizationToken, string? Body);
 
     private readonly Queue<(HttpStatusCode Status, string Body)> _responses = new();
     public List<RecordedRequest> Requests { get; } = new();
@@ -30,10 +33,12 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        var requestBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
         Requests.Add(new RecordedRequest(
             request.Method,
             request.RequestUri!.ToString(),
-            request.Headers.Authorization?.Parameter));
+            request.Headers.Authorization?.Parameter,
+            requestBody));
 
         if (_responses.Count == 0)
         {

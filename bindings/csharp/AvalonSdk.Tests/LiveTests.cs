@@ -15,6 +15,7 @@
 // parse the URI form.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -529,5 +530,65 @@ public class LiveTests
 
         Assert.Equal(displayName, session.Profile.DisplayName);
         Assert.Equal(identityId, session.Identity.Id);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_session.rs's
+    /// resume_account_session_signs_when_given_the_signing_key — the registration-equivalent
+    /// (SQL-seeded identity + signing key, since this SDK deliberately doesn't drive a
+    /// WebAuthn ceremony — see AccountSession.cs's own header comment for the scoping call) ->
+    /// resume -> signature-required-action round trip issue #700 itself asks for.</summary>
+    [Fact]
+    public async Task AccountSession_ResumeWithSigningKeyThenCreateRole_SignsAutomaticallyAndVerifiesServerSide()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"account-session-resume-csharp-{Guid.NewGuid():N}");
+        var (signingKeyId, signingKey) = await SeedSigningKeyAsync(conn, identityId);
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var session = await client.ResumeAccountSessionWithSigningKeyAsync(token, signingKey.GetEncoded());
+
+        Assert.Equal(identityId, session.Identity.Id);
+        Assert.Equal(signingKeyId, session.SigningKeyId);
+
+        var guild = await session.CreateGuildAsync($"Guild {Guid.NewGuid():N}".Substring(0, 20), FreshGuildTag(), "a test guild");
+        Assert.Equal(identityId, guild.Owner);
+
+        // guild.role.create is signature-required (#697/#698) — this only succeeds if
+        // AccountSession.CreateRoleAsync actually attached a valid signature the server
+        // verified against signature_gate::canonical_message("guild.role.create", ...).
+        var role = await session.CreateRoleAsync(guild.Id, "Quartermaster", new[] { "manage_members" }, "trusted role");
+        Assert.Equal("Quartermaster", role.Name);
+        Assert.Equal(new List<string> { "manage_members" }, role.Permissions);
+    }
+
+    /// <summary>Mirrors crates/sdk/tests/account_session.rs's
+    /// resume_account_session_without_a_signing_key_sends_unsigned_and_is_rejected — proves
+    /// a session resumed with only a bearer token (no local signing key) still works for
+    /// non-signature-required actions but gets rejected server-side on a signature-required
+    /// one, rather than this SDK silently fabricating a signature.</summary>
+    [Fact]
+    public async Task AccountSession_ResumeWithoutSigningKeyThenCreateRole_IsRejectedServerSide()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"account-session-nokey-csharp-{Guid.NewGuid():N}");
+        // The identity does have a registered signing key server-side — just not one this
+        // session holds locally — so the server's own rejection is FRESH_SIGNATURE_REQUIRED,
+        // not NO_REGISTERED_SIGNING_KEY.
+        await SeedSigningKeyAsync(conn, identityId);
+
+        var client = new AvalonClient(new AvalonConfig(ServerUrl!, "sdk-test"));
+        var session = await client.ResumeAccountSessionAsync(token);
+        Assert.Null(session.SigningKeyId);
+
+        var guild = await session.CreateGuildAsync($"Guild {Guid.NewGuid():N}".Substring(0, 20), FreshGuildTag(), "an unsigned-resume test guild");
+
+        await Assert.ThrowsAsync<AvalonRequestException>(() =>
+            session.CreateRoleAsync(guild.Id, "ShouldFail", Array.Empty<string>(), ""));
     }
 }

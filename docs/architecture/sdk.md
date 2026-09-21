@@ -509,6 +509,81 @@ protocol and the domain model in `crates/protocol`; they never pull in
     this ticket's focus; `AccountSession` has no `subscribe_presence`/chat
     websocket methods the way `Session` does (issue #136/#438's live-push
     surface), read-only point-in-time polling only.
+- `bindings/csharp/AvalonSdk/AccountSession.cs` (+
+  `AccountSession.Passkeys.cs`/`.Devices.cs`/`.Recovery.cs`/`.Social.cs`/
+  `.Conversations.cs`/`.GuildAdmin.cs`/`.Integrations.cs`, issue #700, on
+  top of #699 settling the Rust shape) — a real, building C# port of
+  `AccountSession` alongside the existing integrator `Session`: profile,
+  passkeys, devices/grants/cross-device pairing, social recovery,
+  friends/blocks/presence/discovery, conversations, full guild
+  administration, and integrator connect/consent, mirroring
+  `crates/sdk/src/account/`'s surface field-for-field and
+  method-for-method with C#-idiomatic naming (PascalCase methods, `Async`
+  suffix). No cast operator, shared base class, or `AccountSession`
+  constructor/factory that accepts an integrator credential anywhere in
+  its signature exists between `AccountSession` and `Session` — #696's
+  invariant holds at the type level, same as the Rust side.
+  - **Deliberate scoping call**: `crates/sdk/src/account/webauthn.rs`
+    drives a real WebAuthn ceremony against a virtual/software
+    authenticator (`passkey-authenticator`/`passkey-client`'s `testable`
+    feature) for `Register`/`AccountLogin`, and `passkeys.rs::add_passkey`
+    does the same for registering an *additional* passkey. Nothing in this
+    SDK's .NET dependency set does WebAuthn ceremony work at all (no
+    equivalent package is wired in, and `LiveTests.cs` itself seeds
+    identities/sessions/signing keys directly via SQL rather than driving
+    one), and this SDK's real audience — a Unity game binding a bearer
+    token/signing key another surface (Hub, a platform's own auth) already
+    produced, not something driving its own WebAuthn ceremony inside a
+    game client — makes a ceremony-driving entry point low-value relative
+    to its dependency cost. So the C# port implements only
+    `AvalonClient.ResumeAccountSessionAsync(token)` /
+    `ResumeAccountSessionWithSigningKeyAsync(token, signingKeySeed)` as the
+    ways to construct an `AccountSession`, and does not port
+    `Register`/`AccountLogin`/`AddPasskeyAsync`; `AccountCredentials` (the
+    Rust type those calls hand back to log into the same identity again on
+    the same device) has no C# equivalent for the same reason. This is a
+    scoping decision, not an oversight — `docs/architecture/sdk.md` (this
+    section) and `AccountSession.cs`'s own header comment both call it out
+    explicitly.
+  - Every action #697 flags as signature-required signs itself
+    automatically with a private `Sign(actionTag, fields)` helper — the
+    caller never hand-constructs `signing_key_id`/`signature`. The
+    conditionally-signed endpoints (last-passkey revoke, guardian
+    removal/threshold-raise, escalating member-role change) sign
+    unconditionally, same "unused-but-valid signature is harmless"
+    simplification the Rust SDK and Hub frontend already make. A session
+    built via `ResumeAccountSessionAsync` (token only, no local key) sends
+    those requests with explicit JSON `null` `signing_key_id`/`signature`
+    fields rather than omitting them, matching what
+    `crates/server/src/signature_gate.rs::require_fresh_signature` expects
+    to see either way. `AccountSession.CanonicalMessage` builds the exact
+    `avalon:<action_tag>:v1:<field>:<field>:...` byte string
+    `signature_gate::canonical_message` reconstructs server-side, unit-
+    tested directly against that shape; signing itself uses the same
+    pure-managed `BouncyCastle.Cryptography` Ed25519 (`Ed25519Signer`) the
+    rest of this SDK already depends on.
+  - Types are split one file per matching `crates/sdk/src/account/*.rs`
+    submodule via C# `partial class AccountSession`, same convention
+    `CrossNodeLogin.cs` already established for `partial class
+    AvalonClient`. Domain types that would otherwise collide with the
+    integrator `Session`'s own same-named types (`Guild`, `GuildMember`,
+    `GuildChannel`, `GuildMessage`, `GuildEvent`, `Conversation`,
+    `ConversationMessage`) are prefixed `Account` (`AccountGuild`,
+    `AccountGuildMember`, `AccountConversation`, etc.); `Presence`/
+    `PresenceStatus` are reused directly from `Social.cs` since both
+    surfaces share the exact same wire shape.
+  - `AvalonSdk.Tests/AccountSessionTests.cs` covers the canonical-message
+    shape byte-for-byte plus signed-call round trips through
+    `StubHttpMessageHandler` (extended with request-body capture for this
+    ticket) proving the signature actually verifies against the session's
+    known public key, and that an unsigned session sends explicit JSON
+    nulls rather than omitting the fields. `AvalonSdk.Tests/LiveTests.cs`
+    adds the registration-equivalent (SQL-seeded identity + signing key) ->
+    `ResumeAccountSessionWithSigningKeyAsync` -> `guild.role.create`
+    round trip `crates/sdk/tests/account_session.rs` proves in Rust, plus
+    the companion case (`ResumeAccountSessionAsync` with no local key ->
+    the same signature-required call rejected server-side) — both
+    live-verified against a real `avalon-server` and Postgres.
 
 ## Decisions and tickets
 
