@@ -38,18 +38,11 @@ Implemented first, in shipping order:
 | C# (`bindings/csharp/AvalonSdk`, netstandard2.1, Unity-targeted) | [`csharp/`](csharp/README.md) | Real, building, tested — 52+ passing tests including opt-in live ones. The priority developer-facing surface, since it's what most integrating game studios will actually use. |
 | TypeScript (`bindings/ts`) | [`typescript/`](typescript/README.md) | Real and shipped (#701), browser-facing — drives a real WebAuthn ceremony. Also what `apps/hub` is actively migrating onto (epic #712), so it's exercised by a real production frontend, not only its own test suite. |
 
-Not yet started — listed so "is there an SDK for X?" has a real answer
-instead of silence. None of these are planned on any timeline; each gets
-built only once an actual integration needs it, same posture the SDK
-design doc takes toward every language below this line:
-
-| Language | Status |
-|---|---|
-| Go | Not yet |
-| Python | Not yet |
-| C++ | Not yet |
-| Java / Kotlin | Not yet |
-| Swift | Not yet |
+**See [`language-support.md`](language-support.md) for the full, canonical
+table** — every language above with its detailed status, plus every
+language that doesn't have an SDK yet (Go, Python, C++, Java/Kotlin,
+Swift, GDScript, Lua, and more), so "is there an SDK for X?" has a real
+answer instead of silence.
 
 More languages get a subfolder here as they're added, not a new top-level
 project.
@@ -76,6 +69,8 @@ project.
 - [`csharp/`](csharp/README.md) — the C# SDK for Unity/game developers.
 - [`typescript/`](typescript/README.md) — the TypeScript SDK for
   browser-facing integrations, and what `apps/hub` is migrating onto.
+- [`language-support.md`](language-support.md) — the full language support
+  table: every implemented language plus every language without an SDK yet.
 
 ## Related projects
 

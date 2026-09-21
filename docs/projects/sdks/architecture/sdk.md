@@ -148,21 +148,12 @@ endpoint list.
 
 ## Languages
 
-Implemented languages first, in the order they shipped; everything below
-the divider is a language this project could support but hasn't built —
-listed so "is there a Go SDK?" has a real answer (no, not yet, not
-planned until an actual integration needs it) instead of silence.
-
-| Language | Status | Notes |
-|---|---|---|
-| **Rust** (`crates/sdk`) | Implemented | The reference implementation. Both `Session` (integrator) and `AccountSession` (first-party). |
-| **C#** (`bindings/csharp`) | Implemented | The flagship developer-facing SDK, targeting netstandard2.1 for Unity. Mirrors the Rust surface, including `AccountSession`, with one deliberate gap: no WebAuthn-ceremony-driving registration/login (no ceremony library available for this SDK's actual Unity/native audience) — see "Today in the repo". |
-| **TypeScript** (`bindings/ts`) | Implemented | Real and shipped (#701), not speculative: a new, self-contained package (not a workspace member, no dependency on `packages/api-client`/`apps/hub`) implementing both `Session`-equivalent (`IntegratorSession`) and `AccountSession` from scratch, including a real browser WebAuthn ceremony (unlike C#, since this SDK is browser-facing). |
-| Go | Not yet | No SDK started. Would suit a server-side game backend the same way the C# SDK suits a client. |
-| Python | Not yet | No SDK started. |
-| C++ | Not yet | No SDK started — only as actual integrations demand, same posture as every language below this line. Don't build every SDK up front. |
-| Java / Kotlin | Not yet | No SDK started. Would matter for a native Android game client; today that audience has no better option than the TypeScript SDK inside a WebView or a direct wire-protocol integration. |
-| Swift | Not yet | No SDK started. Same gap as Java/Kotlin, for native iOS. |
+Rust is the reference implementation (both `Session` — integrator — and
+`AccountSession` — first-party). C# and TypeScript are also implemented and
+fully supported. See [`../language-support.md`](../language-support.md)
+for the full, canonical table — every implemented language with its
+detailed status, and every language without an SDK yet, kept in one place
+rather than duplicated across this doc and the project README.
 
 Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
