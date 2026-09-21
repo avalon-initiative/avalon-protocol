@@ -14,6 +14,7 @@ import './conversations.js'
 import './guildAdmin.js'
 import './integrations.js'
 import './realtime.js'
+import './achievements.js'
 
 export type { Passkey } from './passkeys.js'
 export type { Device, DeviceGrant } from './devices.js'
@@ -65,4 +66,14 @@ export type {
   GuildUpdate,
   ChannelUpdate,
   EventFields,
+  GameBreakdown,
+  GameBreakdownEntry,
+  ArchivedMessage,
 } from './guildAdmin.js'
+export type {
+  AttestationProof,
+  AttestationAuthenticity,
+  AttestationValidity,
+  AttestationHistoryEntry,
+  Attestation,
+} from './achievements.js'

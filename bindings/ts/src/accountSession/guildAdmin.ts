@@ -371,6 +371,67 @@ interface RsvpRosterEntryWire {
   responded_at: string
 }
 
+// Issue #206: aggregated count of guild members holding an active
+// IntegratorBinding, per integrator, computed on read.
+export interface GameBreakdownEntry {
+  integratorId: string
+  integratorSlug: string
+  integratorName: string
+  memberCount: number
+}
+interface GameBreakdownEntryWire {
+  integrator_id: string
+  integrator_slug: string
+  integrator_name: string
+  member_count: number
+}
+
+export interface GameBreakdown {
+  guildId: string
+  totalMembers: number
+  breakdown: GameBreakdownEntry[]
+}
+interface GameBreakdownWire {
+  guild_id: string
+  total_members: number
+  breakdown: GameBreakdownEntryWire[]
+}
+function gameBreakdownFromWire(w: GameBreakdownWire): GameBreakdown {
+  return {
+    guildId: w.guild_id,
+    totalMembers: w.total_members,
+    breakdown: w.breakdown.map((e) => ({
+      integratorId: e.integrator_id,
+      integratorSlug: e.integrator_slug,
+      integratorName: e.integrator_name,
+      memberCount: e.member_count,
+    })),
+  }
+}
+
+// Issue #253/#464 — same shape as GuildMessage plus archivedAt, over the
+// long-window archive tier the live table's retention cap prunes into
+// instead of hard-deleting.
+export interface ArchivedMessage {
+  id: string
+  channelId: string
+  author: string
+  body: string
+  sentAt: string
+  archivedAt: string
+}
+interface ArchivedMessageWire {
+  id: string
+  channel_id: string
+  author: string
+  body: string
+  sent_at: string
+  archived_at: string
+}
+function archivedMessageFromWire(w: ArchivedMessageWire): ArchivedMessage {
+  return { id: w.id, channelId: w.channel_id, author: w.author, body: w.body, sentAt: w.sent_at, archivedAt: w.archived_at }
+}
+
 /** A partial update to a guild's own metadata — `undefined` leaves that
  * field untouched, matching `PATCH /guilds/{id}`'s own convention. */
 export interface GuildUpdate {
@@ -491,6 +552,19 @@ declare module './core.js' {
     deleteEvent(guildId: string, eventId: string): Promise<void>
     rsvpToEvent(guildId: string, eventId: string, status: 'going' | 'maybe' | 'not_going'): Promise<Rsvp>
     eventRsvps(guildId: string, eventId: string): Promise<RsvpRosterEntry[]>
+    /** `GET /guilds/{id}/integrator-breakdown` — gated server-side to a
+     * `manage_guild` holder (always) or anyone when the guild has set
+     * `gameBreakdownPublic`. A 403 here is expected, not a bug. */
+    getGameBreakdown(guildId: string): Promise<GameBreakdown>
+    /** `GET /guilds/{id}/channels/{channelId}/messages/archive` — same
+     * before/limit cursor shape as `channelMessages`, over the long-window
+     * retention-pruned tier. Requires current guild membership. */
+    getMessageArchive(
+      guildId: string,
+      channelId: string,
+      before?: string,
+      limit?: number,
+    ): Promise<ArchivedMessage[]>
   }
 }
 
@@ -961,4 +1035,28 @@ AccountSession.prototype.eventRsvps = async function (
 ): Promise<RsvpRosterEntry[]> {
   const w = await this.get<RsvpRosterEntryWire[]>(`/guilds/${guildId}/events/${eventId}/rsvps`)
   return w.map((r) => ({ identityId: r.identity_id, status: r.status, respondedAt: r.responded_at }))
+}
+
+AccountSession.prototype.getGameBreakdown = async function (
+  this: AccountSession,
+  guildId: string,
+): Promise<GameBreakdown> {
+  return gameBreakdownFromWire(await this.get<GameBreakdownWire>(`/guilds/${guildId}/integrator-breakdown`))
+}
+
+AccountSession.prototype.getMessageArchive = async function (
+  this: AccountSession,
+  guildId: string,
+  channelId: string,
+  before?: string,
+  limit?: number,
+): Promise<ArchivedMessage[]> {
+  const query: Record<string, string> = {}
+  if (before) query.before = before
+  if (limit !== undefined) query.limit = String(limit)
+  const w = await this.getQuery<ArchivedMessageWire[]>(
+    `/guilds/${guildId}/channels/${channelId}/messages/archive`,
+    query,
+  )
+  return w.map(archivedMessageFromWire)
 }

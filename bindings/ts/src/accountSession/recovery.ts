@@ -25,7 +25,9 @@ export interface RecoveryRequest {
   delayEndsAt: string | null
 }
 
-interface RecoveryRequestWire {
+// Exported for reuse by ../recovery.ts's free-standing recovery-initiation
+// functions, which return this same shape but need no AccountSession.
+export interface RecoveryRequestWire {
   id: string
   identity_id: string
   status: string
@@ -35,7 +37,7 @@ interface RecoveryRequestWire {
   delay_ends_at: string | null
 }
 
-function requestFromWire(w: RecoveryRequestWire): RecoveryRequest {
+export function requestFromWire(w: RecoveryRequestWire): RecoveryRequest {
   return {
     id: w.id,
     identityId: w.identity_id,

@@ -61,6 +61,14 @@ export type {
   ChannelMessageUpdate,
   ConversationMessageUpdate,
   RealtimeSubscription,
+  GameBreakdown,
+  GameBreakdownEntry,
+  ArchivedMessage,
+  AttestationProof,
+  AttestationAuthenticity,
+  AttestationValidity,
+  AttestationHistoryEntry,
+  Attestation,
 } from './accountSession/index.js'
 
 export { IntegratorSession } from './integratorSession.js'
@@ -69,6 +77,42 @@ export type { Capability, Friend, GuildMembership, ConversationSummary, Verified
 export type { Identity, Profile, Genre, SignedTreeHeadResponse } from './types.js'
 
 export { getLatestSth } from './ledger.js'
+
+export {
+  listAchievementDefinitions,
+  listMilestoneDefinitions,
+  getIntegrator,
+  listIntegrators,
+  getIntegratorRegistry,
+  listIssuerKeys,
+} from './integratorDirectory.js'
+export type {
+  IntegratorCategory,
+  AchievementDefinition,
+  Integrator,
+  IntegratorSummary,
+  IntegratorsPage,
+  RegistryMetric,
+  IntegratorRegistry,
+  IssuerKey,
+} from './integratorDirectory.js'
+
+export { getIdentityIntegratorData } from './identityData.js'
+export type { VisibleIntegratorDataInstance } from './identityData.js'
+
+export {
+  startRecoveryRequest,
+  finishRecoveryRequest,
+  getRecoveryRequest,
+  finalizeRecoveryRequest,
+  getIdentityRecoveryStatus,
+} from './recovery.js'
+export type { StartRecoveryRequest, RecoveryStartResult, FinishRecoveryRequest } from './recovery.js'
+
+export { lookupCrossNodeLogin, denyCrossNodeLogin, submitCrossNodeLoginGrant } from './crossNodeLogin.js'
+export type { CrossNodeLoginLookup } from './crossNodeLogin.js'
+export { mintCrossNodeLoginGrant } from './crypto/crossNodeLogin.js'
+export type { CrossNodeLoginGrant } from './crypto/crossNodeLogin.js'
 
 export * from './errors.js'
 
