@@ -1,14 +1,12 @@
-// Issue #246: the "My guilds" list threads GuildResponse.icon into
-// AvalonGuildCard's iconUrl prop, rendered as a small badge image — falls
-// back to the card's existing text-only rendering when a guild has no icon
-// set.
+// Issue #246: the "My guilds" list threads Guild.icon into AvalonGuildCard's
+// iconUrl prop, rendered as a small badge image — falls back to the card's
+// existing text-only rendering when a guild has no icon set.
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Guilds from './Guilds.vue'
-import { useSessionStore } from '@avalon/api-client'
-import { useSessionStore as useNewSessionStore } from '../api/session'
+import { useSessionStore } from '../api/session'
 import { mockFetchByPath } from '../testing/fakes'
 
 function testRouter() {
@@ -20,6 +18,8 @@ function testRouter() {
     ],
   })
 }
+
+const profile = { identity_id: 'id-1', identity_created_at: 'now', display_name: 'Nova', avatar_url: null }
 
 const guildBase = {
   id: 'g1',
@@ -44,11 +44,18 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Seeds a bearer token and drives the real session-store initialize() path
+// (a GET /me round trip, same as production) — `mockFetchByPath` (or an
+// equivalent fetch stub) must already be in place before this runs.
+async function loginTestSession() {
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
+}
+
 describe('Guilds', () => {
   it('renders the icon badge for a guild with an icon set, none for one without', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
-      '/me': { identity_id: 'id-1', identity_created_at: 'now', display_name: 'Nova', avatar_url: null },
+      '/me': profile,
       '/me/guilds': [
         { guild_id: 'g1', role_index: 0, joined_at: 'now' },
         { guild_id: 'g2', role_index: 0, joined_at: 'now' },
@@ -56,12 +63,7 @@ describe('Guilds', () => {
       '/guilds/g1': { ...guildBase, id: 'g1', icon: 'https://example.com/icon.png' },
       '/guilds/g2': { ...guildBase, id: 'g2', name: 'Silent Order', tag: 'SILO', icon: null },
     })
-    // useMyGuilds (Guilds.vue's "My guilds" list) reads its bearer token
-    // from the new @avalon/sdk session store (#712) — HubShell/Guilds.vue
-    // itself hasn't migrated yet, so this test still also logs into the
-    // old store above for whatever else in Guilds.vue still depends on it.
-    localStorage.setItem('avalon:session:token', 'a-token')
-    await useNewSessionStore().initialize()
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/guilds')
@@ -77,8 +79,8 @@ describe('Guilds', () => {
   })
 
   it('surfaces a pending guild invite and accepts it (issue #442)', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': profile,
       '/me/guilds': [],
       '/me/guild-invites': [
         { id: 'inv1', guild_id: 'g1', guild_name: 'Dragon Hunters', from: 'id-owner', created_at: 'now' },
@@ -88,6 +90,7 @@ describe('Guilds', () => {
       ],
       '/guilds/g1/invites/inv1/accept': { guild_id: 'g1', identity_id: 'id-1', role_index: 1, joined_at: 'now' },
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/guilds')
@@ -111,14 +114,15 @@ describe('Guilds', () => {
   // Issue #467: a deep link from IntegrationProfile.vue's "Guilds playing
   // this" opens straight into Discover, pre-filtered to that integrator.
   it('opens the Discover tab pre-filtered when landing with ?integrator=', async () => {
-    useSessionStore().login('a-token')
     mockFetchByPath({
+      '/me': profile,
       '/me/guilds': [],
       '/guilds/discover': {
         guilds: [{ ...guildBase, id: 'g1', name: 'Dragon Hunters' }],
         next_cursor: null,
       },
     })
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/guilds?integrator=ashen-realms')
@@ -146,7 +150,6 @@ describe('Guilds', () => {
   // created public guild without a manual reload, but only once the
   // Discover tab is actually opened (it's lazy-loaded).
   it('polls the Discover board for newly created guilds once opened', async () => {
-    useSessionStore().login('a-token')
     vi.useFakeTimers()
     let call = 0
     vi.stubGlobal(
@@ -154,7 +157,9 @@ describe('Guilds', () => {
       vi.fn().mockImplementation((url: string) => {
         const path = new URL(url, 'http://test').pathname
         let body: unknown
-        if (path === '/me/guilds') {
+        if (path === '/me') {
+          body = profile
+        } else if (path === '/me/guilds') {
           body = []
         } else if (path === '/guilds/discover') {
           call += 1
@@ -173,6 +178,7 @@ describe('Guilds', () => {
         })
       }),
     )
+    await loginTestSession()
 
     const router = testRouter()
     router.push('/guilds')

@@ -10,10 +10,9 @@
 // pattern useGuildChat's resolveAuthorNames and api/guilds.ts's
 // listMembersWithPresence already use.
 import { ref, type Ref } from 'vue'
-import * as api from '@avalon/api-client'
 import { groupRsvpRoster } from '../api/guildEvents'
 import type { AvalonRsvpRosterGroup } from '@avalon/ui'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 export function useRsvpRoster(guildId: Ref<string>) {
   const session = useSessionStore()
@@ -36,16 +35,17 @@ export function useRsvpRoster(guildId: Ref<string>) {
     eventTitle.value = title
     error.value = ''
     groups.value = []
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     loading.value = true
     try {
-      const entries = await api.listEventRsvps(session.token, guildId.value, eventId)
-      const unresolvedIds = [...new Set(entries.map((e) => e.identity_id))]
+      const entries = await s.eventRsvps(guildId.value, eventId)
+      const unresolvedIds = [...new Set(entries.map((e) => e.identityId))]
       const namesById: Record<string, string> = {}
       if (unresolvedIds.length > 0) {
-        const profiles = await api.getProfiles(session.token, unresolvedIds)
-        for (const profile of profiles) {
-          namesById[profile.identity_id] = profile.display_name
+        const profiles = await s.profiles(unresolvedIds)
+        for (const profile of Array.isArray(profiles) ? profiles : []) {
+          namesById[profile.identityId] = profile.displayName
         }
       }
       if (thisRequest !== requestId) return

@@ -213,7 +213,7 @@ const quickActions = [
                 <span :class="styles.guildText">
                   <span :class="styles.guildName">{{ guild.name }}</span>
                   <span :class="styles.guildMeta"
-                    >{{ guild.tag }} · {{ guild.member_count }} members</span
+                    >{{ guild.tag }} · {{ guild.memberCount }} members</span
                   >
                 </span>
               </RouterLink>
@@ -239,8 +239,8 @@ const quickActions = [
                   <span :class="styles.messageGuild">{{ entry.guildName }}</span>
                   <span :class="styles.messageBody">{{ entry.message.body }}</span>
                 </span>
-                <time :class="styles.messageTime" :datetime="entry.message.sent_at">
-                  {{ formatActivityTimestamp(entry.message.sent_at) }}
+                <time :class="styles.messageTime" :datetime="entry.message.sentAt">
+                  {{ formatActivityTimestamp(entry.message.sentAt) }}
                 </time>
               </RouterLink>
             </li>

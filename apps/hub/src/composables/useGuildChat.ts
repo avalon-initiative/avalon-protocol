@@ -13,29 +13,28 @@
 // not an error: every loader below short-circuits on it rather than hitting
 // the API with a malformed URL.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import * as api from '@avalon/api-client'
+import type { ArchivedMessage, ChannelMessageUpdate, Guild, GuildChannel, GuildMessage, RealtimeSubscription } from '@avalon/sdk'
 import { hasGuildPermission, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
 import { toOldestFirst } from '../api/guildChat'
-import type { ArchivedMessageResponse, ChannelResponse, GuildResponse, MessageResponse } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 const MESSAGE_PAGE_SIZE = 50
 
 // Issue #464. A live message and an archived one render identically except
 // for this flag — archived history is read-only (no live-update, no
 // delete), never merged with the live table server-side.
-export interface ChatMessage extends MessageResponse {
+export interface ChatMessage extends GuildMessage {
   archived?: boolean
 }
 
-function fromArchive(messages: ArchivedMessageResponse[]): ChatMessage[] {
+function fromArchive(messages: ArchivedMessage[]): ChatMessage[] {
   return messages.map((m) => ({
     id: m.id,
-    channel_id: m.channel_id,
+    channelId: m.channelId,
     author: m.author,
     body: m.body,
-    sent_at: m.sent_at,
+    sentAt: m.sentAt,
     archived: true,
   }))
 }
@@ -43,8 +42,8 @@ function fromArchive(messages: ArchivedMessageResponse[]): ChatMessage[] {
 export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   const session = useSessionStore()
 
-  const guild = ref<GuildResponse | null>(null)
-  const channel = ref<ChannelResponse | null>(null)
+  const guild = ref<Guild | null>(null)
+  const channel = ref<GuildChannel | null>(null)
   const messages = ref<ChatMessage[]>([]) // oldest-first, for newest-at-bottom rendering
   // Issue #464. Once the live table's before-cursor pagination is
   // exhausted for this channel, further "load older" calls read the
@@ -65,7 +64,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   const sendError = ref('')
   const sending = ref(false)
 
-  let chatSocket: api.ChatSocket | undefined
+  let chatSocket: RealtimeSubscription | undefined
 
   function closeChatSocket() {
     chatSocket?.close()
@@ -90,42 +89,42 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   )
 
   async function loadChannelMeta(targetChannelId: string) {
-    if (!session.token || !targetChannelId) return
-    const token = session.token
-    const [guildResp, channels, roles, membersResp, profile] = await Promise.all([
-      api.getGuild(token, guildId.value),
-      api.listChannels(token, guildId.value),
-      api.listRoles(token, guildId.value),
-      api.listMembers(token, guildId.value),
-      api.getMe(token),
+    const s = session.session
+    if (!s || !targetChannelId) return
+    const [guildResp, channels, roles, membersResp] = await Promise.all([
+      s.getGuild(guildId.value),
+      s.listChannels(guildId.value),
+      s.listRoles(guildId.value),
+      s.listMembers(guildId.value),
     ])
     if (isStaleFor(targetChannelId)) return
     guild.value = guildResp
-    channel.value = channels.find((c) => c.id === targetChannelId) ?? null
-    selfId.value = profile.identity_id
+    channel.value = (Array.isArray(channels) ? channels : []).find((c) => c.id === targetChannelId) ?? null
+    selfId.value = s.identity().id
     // Presence isn't needed just to resolve the caller's own permissions,
     // so this fills a placeholder status rather than paying for a
-    // getPresence round trip nobody reads here.
-    const plainMembers: GuildMember[] = membersResp.map((m) => ({
-      identityId: m.identity_id,
-      roleIndex: m.role_index,
+    // presenceOf round trip nobody reads here.
+    const plainMembers: GuildMember[] = (Array.isArray(membersResp) ? membersResp : []).map((m) => ({
+      identityId: m.identityId,
+      roleIndex: m.roleIndex,
       status: 'Offline',
-      joinedAt: m.joined_at,
+      joinedAt: m.joinedAt,
     }))
-    selfPermissions.value = permissionsForMember(selfId.value, plainMembers, roles)
+    selfPermissions.value = permissionsForMember(selfId.value, plainMembers, Array.isArray(roles) ? roles : [])
   }
 
-  async function resolveAuthorNames(newMessages: MessageResponse[]) {
-    if (!session.token) return
+  async function resolveAuthorNames(newMessages: GuildMessage[]) {
+    const s = session.session
+    if (!s) return
     const unknown = [...new Set(newMessages.map((m) => m.author))].filter(
       (id) => !(id in authorNames.value),
     )
     if (unknown.length === 0) return
     try {
-      const profiles = await api.getProfiles(session.token, unknown)
+      const profiles = await s.profiles(unknown)
       const resolved: Record<string, string> = {}
-      for (const profile of profiles) {
-        resolved[profile.identity_id] = profile.display_name
+      for (const profile of Array.isArray(profiles) ? profiles : []) {
+        resolved[profile.identityId] = profile.displayName
       }
       authorNames.value = { ...authorNames.value, ...resolved }
     } catch {
@@ -134,13 +133,12 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   }
 
   async function loadLatestMessages(targetChannelId: string) {
-    if (!session.token || !targetChannelId) return
-    const page = await api.listMessages(session.token, guildId.value, targetChannelId, {
-      limit: MESSAGE_PAGE_SIZE,
-    })
+    const s = session.session
+    if (!s || !targetChannelId) return
+    const page = await s.channelMessages(guildId.value, targetChannelId, undefined, MESSAGE_PAGE_SIZE)
     if (isStaleFor(targetChannelId)) return
     readingArchive.value = false
-    messages.value = toOldestFirst(page)
+    messages.value = toOldestFirst(Array.isArray(page) ? page : [])
     // A full page definitely means more live history remains. A shorter
     // page (including empty) means the live table is exhausted for this
     // channel, but the archive tier (#253/#464) might still hold older
@@ -156,18 +154,18 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   // stale connection pushing updates for a channel the reader left.
   function subscribeToChannel(targetChannelId: string) {
     closeChatSocket()
-    if (!session.token || !targetChannelId) return
-    chatSocket = api.openChannelMessageSocket(
-      session.token,
+    const s = session.session
+    if (!s || !targetChannelId) return
+    chatSocket = s.subscribeChannelMessages(
       guildId.value,
       targetChannelId,
-      (message) => {
+      (message: ChannelMessageUpdate) => {
         if (isStaleFor(targetChannelId)) return
         if (messages.value.some((m) => m.id === message.id)) return
         messages.value = [...messages.value, message]
         resolveAuthorNames([message])
       },
-      (messageId) => {
+      (messageId: string) => {
         if (isStaleFor(targetChannelId)) return
         messages.value = messages.value.filter((m) => m.id !== messageId)
       },
@@ -176,7 +174,8 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
 
   async function loadOlder() {
     const targetChannelId = channelId.value
-    if (!session.token || !targetChannelId || loadingOlder.value || !hasMoreOlder.value) {
+    const s = session.session
+    if (!s || !targetChannelId || loadingOlder.value || !hasMoreOlder.value) {
       return
     }
     loadingOlder.value = true
@@ -194,36 +193,32 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
         // oldestId is guaranteed to be an archived message's own id here
         // (list_archive's before-cursor subquery looks it up in
         // guild_messages_archive itself, not the live table).
-        const archivePage = await api.getMessageArchive(session.token, guildId.value, targetChannelId, {
-          before: oldestId,
-          limit: MESSAGE_PAGE_SIZE,
-        })
+        const archivePage = await s.getMessageArchive(guildId.value, targetChannelId, oldestId, MESSAGE_PAGE_SIZE)
         if (isStaleFor(targetChannelId)) return
-        hasMoreOlder.value = archivePage.length === MESSAGE_PAGE_SIZE
-        const older = toOldestFirst(fromArchive(archivePage))
+        const archiveRows = Array.isArray(archivePage) ? archivePage : []
+        hasMoreOlder.value = archiveRows.length === MESSAGE_PAGE_SIZE
+        const older = toOldestFirst(fromArchive(archiveRows))
         messages.value = [...older, ...messages.value]
         await resolveAuthorNames(older)
         return
       }
 
       if (oldestId) {
-        const page = await api.listMessages(session.token, guildId.value, targetChannelId, {
-          before: oldestId,
-          limit: MESSAGE_PAGE_SIZE,
-        })
+        const page = await s.channelMessages(guildId.value, targetChannelId, oldestId, MESSAGE_PAGE_SIZE)
         if (isStaleFor(targetChannelId)) return
+        const rows = Array.isArray(page) ? page : []
 
-        if (page.length === MESSAGE_PAGE_SIZE) {
+        if (rows.length === MESSAGE_PAGE_SIZE) {
           // A full page means more live history may remain — no need to
           // touch the archive tier yet.
           hasMoreOlder.value = true
-          const older = toOldestFirst(page)
+          const older = toOldestFirst(rows)
           messages.value = [...older, ...messages.value]
           await resolveAuthorNames(older)
           return
         }
 
-        const liveOlder = toOldestFirst(page)
+        const liveOlder = toOldestFirst(rows)
         messages.value = [...liveOlder, ...messages.value]
         await resolveAuthorNames(liveOlder)
       }
@@ -238,12 +233,11 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
       // `before`: oldestId, if set, is a live-table id and can't be
       // reused as the archive's own cursor.
       readingArchive.value = true
-      const archivePage = await api.getMessageArchive(session.token, guildId.value, targetChannelId, {
-        limit: MESSAGE_PAGE_SIZE,
-      })
+      const archivePage = await s.getMessageArchive(guildId.value, targetChannelId, undefined, MESSAGE_PAGE_SIZE)
       if (isStaleFor(targetChannelId)) return
-      hasMoreOlder.value = archivePage.length === MESSAGE_PAGE_SIZE
-      const archiveOlder = toOldestFirst(fromArchive(archivePage))
+      const archiveRows = Array.isArray(archivePage) ? archivePage : []
+      hasMoreOlder.value = archiveRows.length === MESSAGE_PAGE_SIZE
+      const archiveOlder = toOldestFirst(fromArchive(archiveRows))
       messages.value = [...archiveOlder, ...messages.value]
       await resolveAuthorNames(archiveOlder)
     } catch (e) {
@@ -257,11 +251,12 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
 
   async function sendMessage(body: string) {
     const targetChannelId = channelId.value
-    if (!session.token || !targetChannelId) return
+    const s = session.session
+    if (!s || !targetChannelId) return
     sendError.value = ''
     sending.value = true
     try {
-      const message = await api.sendMessage(session.token, guildId.value, targetChannelId, { body })
+      const message = await s.sendMessage(guildId.value, targetChannelId, body)
       // The websocket push for this same message can arrive before this
       // response does (the server broadcasts right after the DB insert,
       // before this HTTP round trip completes) — dedup against it, same
@@ -281,10 +276,11 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
 
   async function deleteMessage(messageId: string) {
     const targetChannelId = channelId.value
-    if (!session.token || !targetChannelId) return
+    const s = session.session
+    if (!s || !targetChannelId) return
     error.value = ''
     try {
-      await api.deleteMessage(session.token, guildId.value, targetChannelId, messageId)
+      await s.deleteMessage(guildId.value, targetChannelId, messageId)
       if (!isStaleFor(targetChannelId)) {
         messages.value = messages.value.filter((m) => m.id !== messageId)
       }
@@ -297,7 +293,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
 
   async function load() {
     const targetChannelId = channelId.value
-    if (!session.token) return
+    if (!session.session) return
     if (!targetChannelId) {
       // Nothing selected yet (e.g. the Channels tab hasn't picked a
       // channel, or the guild has none) — a quiet empty state, not a load

@@ -3,7 +3,7 @@
 // sorting/formatting/RSVP-state, not roster/role merging or message
 // composition — following the same split guildChat.ts already documents.
 import type { AvalonRsvpRosterGroup } from '@avalon/ui'
-import type { EventResponse, RsvpRosterEntry, RsvpStatusValue } from '@avalon/api-client'
+import type { GuildEvent, RsvpRosterEntry, RsvpStatus } from '@avalon/sdk'
 
 // Matches crates/server/src/guild_events.rs::EVENT_TITLE_MAX_CHARS exactly
 // — surfaced here so a create/edit form can validate client-side before
@@ -57,8 +57,8 @@ export function validateEventForm(input: {
 // ordered by starts_at (GET .../events), but this is kept as an explicit,
 // pure, independently-testable sort rather than trusting response order —
 // mirrors toOldestFirst's role in guildChat.ts.
-export function sortByStartsAt(events: EventResponse[]): EventResponse[] {
-  return [...events].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))
+export function sortByStartsAt(events: GuildEvent[]): GuildEvent[] {
+  return [...events].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
 }
 
 // "YYYY-MM-DD" in the *viewer's local* timezone — starts_at is stored/
@@ -94,14 +94,14 @@ export function toLocalDateTimeInput(isoUtc: string): string {
 // the current time — used to fade or section past events in the calendar
 // view without a second server round-trip.
 export function splitUpcoming(
-  events: EventResponse[],
+  events: GuildEvent[],
   now: Date = new Date(),
-): { upcoming: EventResponse[]; past: EventResponse[] } {
+): { upcoming: GuildEvent[]; past: GuildEvent[] } {
   const cutoff = now.getTime()
-  const upcoming: EventResponse[] = []
-  const past: EventResponse[] = []
+  const upcoming: GuildEvent[] = []
+  const past: GuildEvent[] = []
   for (const event of events) {
-    const end = event.ends_at ? Date.parse(event.ends_at) : Date.parse(event.starts_at)
+    const end = event.endsAt ? Date.parse(event.endsAt) : Date.parse(event.startsAt)
     if (end >= cutoff) {
       upcoming.push(event)
     } else {
@@ -111,15 +111,15 @@ export function splitUpcoming(
   return { upcoming, past }
 }
 
-export function totalRsvps(event: EventResponse): number {
-  return event.rsvp_counts.going + event.rsvp_counts.maybe + event.rsvp_counts.not_going
+export function totalRsvps(event: GuildEvent): number {
+  return event.rsvpCounts.going + event.rsvpCounts.maybe + event.rsvpCounts.notGoing
 }
 
 // The three status values in a fixed, presentation-friendly order — same
 // "going, maybe, not_going" order the server's RsvpCounts struct uses.
-export const RSVP_STATUS_ORDER: RsvpStatusValue[] = ['going', 'maybe', 'not_going']
+export const RSVP_STATUS_ORDER: RsvpStatus[] = ['going', 'maybe', 'not_going']
 
-export function rsvpStatusLabel(status: RsvpStatusValue): string {
+export function rsvpStatusLabel(status: RsvpStatus): string {
   switch (status) {
     case 'going':
       return 'Going'
@@ -141,9 +141,9 @@ export function groupRsvpRoster(
   entries: RsvpRosterEntry[],
   namesById: Record<string, string>,
 ): AvalonRsvpRosterGroup[] {
-  const buckets: Record<RsvpStatusValue, string[]> = { going: [], maybe: [], not_going: [] }
+  const buckets: Record<RsvpStatus, string[]> = { going: [], maybe: [], not_going: [] }
   for (const entry of entries) {
-    buckets[entry.status].push(namesById[entry.identity_id] ?? entry.identity_id)
+    buckets[entry.status].push(namesById[entry.identityId] ?? entry.identityId)
   }
   return RSVP_STATUS_ORDER.map((status) => ({
     status,

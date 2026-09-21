@@ -5,29 +5,21 @@
 // apps/hub/src/api/guilds.ts::listMembersWithPresence, the same pattern
 // apps/hub/src/api/friends.ts's listFriendsWithPresence already uses.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import * as api from '@avalon/api-client'
+import type { Guild, GuildChannel, GuildEvent, GuildJoinRequest, GameBreakdown, Role } from '@avalon/sdk'
 import { listMembersWithPresence, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
-import type {
-  ChannelResponse,
-  EventResponse,
-  GameBreakdownResponse,
-  GuildJoinRequestResponse,
-  GuildResponse,
-  RoleResponse,
-} from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 
 export function useGuildDetail(guildId: Ref<string>) {
   const session = useSessionStore()
 
-  const guild = ref<GuildResponse | null>(null)
-  const roles = ref<RoleResponse[]>([])
+  const guild = ref<Guild | null>(null)
+  const roles = ref<Role[]>([])
   const members = ref<GuildMember[]>([])
-  const channels = ref<ChannelResponse[]>([])
-  const events = ref<EventResponse[]>([])
+  const channels = ref<GuildChannel[]>([])
+  const events = ref<GuildEvent[]>([])
   const selfId = ref('')
   const loading = ref(true)
   const error = ref('')
@@ -37,33 +29,33 @@ export function useGuildDetail(guildId: Ref<string>) {
   // expected, common outcome — not a page-level error like the others
   // above. `null` means "nothing to show" (either state), distinguished
   // from an actual empty breakdown (`breakdown: []`) by `integratorBreakdownError`.
-  const integratorBreakdown = ref<GameBreakdownResponse | null>(null)
+  const integratorBreakdown = ref<GameBreakdown | null>(null)
   const integratorBreakdownError = ref('')
 
   // Issue #242: pending join requests, `manage_members`-gated server-side.
   // Same "fetched separately, a 403 just means nothing to show" posture as
   // integratorBreakdown above — most callers aren't managers, so this is an
   // expected, common outcome, not a page-level error.
-  const joinRequests = ref<GuildJoinRequestResponse[]>([])
+  const joinRequests = ref<GuildJoinRequest[]>([])
 
   // Resolved display names for join-request applicants — `joinRequests`
-  // only carries a raw identity id (`GuildJoinRequestResponse.applicant`),
-  // same "resolve via GET /identities/profiles" pattern
-  // useGuildChat.ts's authorNames and useConversations.ts's
-  // participantNames already use.
+  // only carries a raw identity id (`GuildJoinRequest.applicant`), same
+  // "resolve via GET /identities/profiles" pattern useGuildChat.ts's
+  // authorNames and useConversations.ts's participantNames already use.
   const applicantNames = ref<Record<string, string>>({})
 
-  async function resolveApplicantNames(requests: GuildJoinRequestResponse[]) {
-    if (!session.token) return
+  async function resolveApplicantNames(requests: GuildJoinRequest[]) {
+    const s = session.session
+    if (!s) return
     const unknown = [...new Set(requests.map((r) => r.applicant))].filter(
       (id) => !(id in applicantNames.value),
     )
     if (unknown.length === 0) return
     try {
-      const profiles = await api.getProfiles(session.token, unknown)
+      const profiles = await s.profiles(unknown)
       const resolved: Record<string, string> = {}
-      for (const profile of profiles) {
-        resolved[profile.identity_id] = profile.display_name
+      for (const profile of Array.isArray(profiles) ? profiles : []) {
+        resolved[profile.identityId] = profile.displayName
       }
       applicantNames.value = { ...applicantNames.value, ...resolved }
     } catch {
@@ -74,7 +66,7 @@ export function useGuildDetail(guildId: Ref<string>) {
   // Issue #256: the caller's own pending join request for this guild, if
   // any — self-scoped, not manage_members-gated, so (unlike joinRequests
   // above) this is fetched for every caller, not just managers.
-  const myJoinRequest = ref<GuildJoinRequestResponse | null>(null)
+  const myJoinRequest = ref<GuildJoinRequest | null>(null)
 
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
@@ -90,36 +82,42 @@ export function useGuildDetail(guildId: Ref<string>) {
   // fetched separately here for the same reason channels/events already
   // are.
   async function refreshMembers() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      members.value = await listMembersWithPresence(session.token, guildId.value)
+      members.value = await listMembersWithPresence(s, guildId.value)
     } catch {
       members.value = []
     }
   }
 
   async function refreshChannels() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      channels.value = await api.listChannels(session.token, guildId.value)
+      const result = await s.listChannels(guildId.value)
+      channels.value = Array.isArray(result) ? result : []
     } catch {
       channels.value = []
     }
   }
 
   async function refreshEvents() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      events.value = await api.listEvents(session.token, guildId.value)
+      const result = await s.listEvents(guildId.value)
+      events.value = Array.isArray(result) ? result : []
     } catch {
       events.value = []
     }
   }
 
   async function refreshGameBreakdown() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      integratorBreakdown.value = await api.getGameBreakdown(session.token, guildId.value)
+      integratorBreakdown.value = await s.getGameBreakdown(guildId.value)
       integratorBreakdownError.value = ''
     } catch (e) {
       integratorBreakdown.value = null
@@ -128,9 +126,11 @@ export function useGuildDetail(guildId: Ref<string>) {
   }
 
   async function refreshJoinRequests() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      joinRequests.value = await api.listJoinRequests(session.token, guildId.value)
+      const result = await s.listJoinRequests(guildId.value)
+      joinRequests.value = Array.isArray(result) ? result : []
       await resolveApplicantNames(joinRequests.value)
     } catch {
       joinRequests.value = []
@@ -138,23 +138,22 @@ export function useGuildDetail(guildId: Ref<string>) {
   }
 
   async function refreshMyJoinRequest() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      myJoinRequest.value = await api.getMyJoinRequest(session.token, guildId.value)
+      myJoinRequest.value = await s.myJoinRequest(guildId.value)
     } catch {
       myJoinRequest.value = null
     }
   }
 
   async function refresh() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     try {
-      const [guildResp, rolesResp] = await Promise.all([
-        api.getGuild(session.token, guildId.value),
-        api.listRoles(session.token, guildId.value),
-      ])
+      const [guildResp, rolesResp] = await Promise.all([s.getGuild(guildId.value), s.listRoles(guildId.value)])
       guild.value = guildResp
-      roles.value = rolesResp
+      roles.value = Array.isArray(rolesResp) ? rolesResp : []
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     }
@@ -170,13 +169,16 @@ export function useGuildDetail(guildId: Ref<string>) {
   }
 
   async function load() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     loading.value = true
     error.value = ''
     try {
+      // resumeAccountSession(WithSigningKey) already validated this
+      // session's own identity — no separate GET /me round trip needed
+      // just to learn the caller's own id, unlike the old api-client flow.
       if (!selfId.value) {
-        const profile = await api.getMe(session.token)
-        selfId.value = profile.identity_id
+        selfId.value = s.identity().id
       }
       await refresh()
     } finally {

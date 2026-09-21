@@ -20,20 +20,18 @@
 // Convention: no <style> block, styling in the sibling styles/.module.scss;
 // script stays glue over the api client plus local load/error state.
 import { computed, ref, watch } from 'vue'
-import * as api from '@avalon/api-client'
-import { signFreshAction } from '@avalon/api-client'
-import type { GuildResourceKind, PermissionOverrideResponse, RoleResponse } from '@avalon/api-client'
+import type { AccountSession, PermissionOverride, Role } from '@avalon/sdk'
 import styles from '../styles/ResourcePermissionOverrides.module.scss'
 
 const props = defineProps<{
-  token: string
-  // #697/#698: setting/clearing an override is signature-required.
-  identityId: string
-  signingKeyId: string | null
+  // #697/#698: setting/clearing an override is signature-required —
+  // AccountSession.setPermissionOverride/deletePermissionOverride sign
+  // automatically, so this is the only credential this component needs.
+  session: AccountSession
   guildId: string
-  resourceKind: GuildResourceKind
+  resourceKind: 'channel' | 'event'
   resourceId: string
-  roles: RoleResponse[]
+  roles: Role[]
   // Required to read/write overrides — the parent only renders this panel
   // once this is true, but it's still threaded through as a prop since
   // loadOverrides below re-checks it.
@@ -52,24 +50,20 @@ const OVERRIDE_PERMISSIONS = computed(() =>
     : (['event_manage', 'view', 'view_details'] as const),
 )
 
-const overrides = ref<PermissionOverrideResponse[]>([])
+const overrides = ref<PermissionOverride[]>([])
 const loading = ref(false)
 const error = ref('')
 const pendingKey = ref('')
 
-const nonOwnerRoles = computed(() => props.roles.filter((r) => r.name_index !== 0))
+const nonOwnerRoles = computed(() => props.roles.filter((r) => r.nameIndex !== 0))
 
 async function loadOverrides() {
   if (!props.canManageRoles) return
   loading.value = true
   error.value = ''
   try {
-    overrides.value = await api.listPermissionOverrides(
-      props.token,
-      props.guildId,
-      props.resourceKind,
-      props.resourceId,
-    )
+    const result = await props.session.listPermissionOverrides(props.guildId, props.resourceKind, props.resourceId)
+    overrides.value = Array.isArray(result) ? result : []
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -79,8 +73,8 @@ async function loadOverrides() {
 
 watch(() => props.resourceId, loadOverrides, { immediate: true })
 
-function overrideFor(roleIndex: number, permission: string): PermissionOverrideResponse | undefined {
-  return overrides.value.find((o) => o.role_index === roleIndex && o.permission === permission)
+function overrideFor(roleIndex: number, permission: string): PermissionOverride | undefined {
+  return overrides.value.find((o) => o.roleIndex === roleIndex && o.permission === permission)
 }
 
 function stateFor(roleIndex: number, permission: string): OverrideState {
@@ -97,30 +91,18 @@ async function onSetState(roleIndex: number, permission: string, state: Override
     const existing = overrideFor(roleIndex, permission)
     if (state === 'inherit') {
       if (existing) {
-        const signed = signFreshAction(
-          props.identityId,
-          props.signingKeyId,
-          'guild.permission_override.delete',
-          [props.guildId, existing.id],
-        )
-        await api.deletePermissionOverride(props.token, props.guildId, existing.id, signed ?? {})
+        await props.session.deletePermissionOverride(props.guildId, existing.id)
       }
     } else {
       const allow = state === 'allow'
-      const signed = signFreshAction(
-        props.identityId,
-        props.signingKeyId,
-        'guild.permission_override.set',
-        [props.guildId, String(roleIndex), props.resourceKind, props.resourceId, permission, String(allow)],
-      )
-      await api.setPermissionOverride(props.token, props.guildId, {
-        role_index: roleIndex,
-        resource_kind: props.resourceKind,
-        resource_id: props.resourceId,
+      await props.session.setPermissionOverride(
+        props.guildId,
+        roleIndex,
+        props.resourceKind,
+        props.resourceId,
         permission,
         allow,
-        ...(signed ?? {}),
-      })
+      )
     }
     await loadOverrides()
   } catch (e) {
@@ -152,13 +134,13 @@ function onSelectChange(roleIndex: number, permission: string, event: Event) {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="role in nonOwnerRoles" :key="role.name_index">
+        <tr v-for="role in nonOwnerRoles" :key="role.nameIndex">
           <td>{{ role.name }}</td>
           <td v-for="permission in OVERRIDE_PERMISSIONS" :key="permission">
             <select
-              :value="stateFor(role.name_index, permission)"
-              :disabled="pendingKey === `${role.name_index}:${permission}`"
-              @change="onSelectChange(role.name_index, permission, $event)"
+              :value="stateFor(role.nameIndex, permission)"
+              :disabled="pendingKey === `${role.nameIndex}:${permission}`"
+              @change="onSelectChange(role.nameIndex, permission, $event)"
             >
               <option value="inherit">Inherit</option>
               <option value="allow">Allow</option>

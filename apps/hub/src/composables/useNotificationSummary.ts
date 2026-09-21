@@ -6,6 +6,9 @@
 // genuinely-actionable-pending-state (cleared by resolving the item) vs.
 // "have I seen this yet" (cleared by visiting, client-local state).
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+// Still on @avalon/api-client for conversations — that's #712's own later
+// migration batch, not this one; a raw bearer token works identically
+// against either package.
 import * as api from '@avalon/api-client'
 import {
   countNewGuardianOf,
@@ -13,7 +16,7 @@ import {
   loadConversationsLastSeen,
   loadGuardianOfSeen,
 } from '../api/notifications'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 
 // Deliberately not as tight as Profile.vue's own in-page 5s poll (issue
 // #201/#307's approval flows) — this is an ambient, always-mounted
@@ -51,23 +54,22 @@ export function useNotificationSummary() {
   let pollHandle: ReturnType<typeof setInterval> | undefined
 
   async function refresh() {
-    const token = session.token
-    if (!token) return
+    const s = session.session
+    if (!s) return
     try {
       if (!selfId.value) {
-        const me = await api.getMe(token)
-        selfId.value = me.identity_id
+        selfId.value = s.identity().id
       }
 
       const [friendRequests, memberships, invites, grants, guardianRequests, guardianOfList, conversations] =
         await Promise.all([
-          api.listFriendRequests(token).catch(() => []),
-          api.listMyGuilds(token).catch(() => []),
-          api.getMyGuildInvites(token).catch(() => []),
-          api.listDeviceGrants(token, 'pending').catch(() => []),
-          api.getGuardianRequests(token).catch(() => []),
-          api.getGuardianOf(token).catch(() => []),
-          api.listConversations(token).catch(() => []),
+          s.friendRequests().catch(() => []),
+          s.myGuilds().catch(() => []),
+          s.myGuildInvites().catch(() => []),
+          s.listDeviceGrants('pending').catch(() => []),
+          s.guardianRequests().catch(() => []),
+          s.guardianOf().catch(() => []),
+          api.listConversations(s.token()).catch(() => []),
         ])
 
       incomingFriendRequestCount.value = Array.isArray(friendRequests)
@@ -76,11 +78,11 @@ export function useNotificationSummary() {
 
       // manage_members-gated per guild — a plain member 403s, which just
       // means this guild contributes 0, not an error worth surfacing.
-      const guildIds = Array.isArray(memberships) ? memberships.map((m) => m.guild_id) : []
+      const guildIds = Array.isArray(memberships) ? memberships.map((m) => m.guildId) : []
       const joinRequestCounts = await Promise.all(
         guildIds.map((guildId) =>
-          api
-            .listJoinRequests(token, guildId)
+          s
+            .listJoinRequests(guildId)
             .then((rows) => (Array.isArray(rows) ? rows.length : 0))
             .catch(() => 0),
         ),
@@ -91,10 +93,11 @@ export function useNotificationSummary() {
       deviceGrantCount.value = Array.isArray(grants) ? grants.length : 0
       guardianRequestCount.value = Array.isArray(guardianRequests) ? guardianRequests.length : 0
 
-      const guardianOfIds = Array.isArray(guardianOfList) ? guardianOfList.map((g) => g.identity_id) : []
+      const guardianOfIds = Array.isArray(guardianOfList) ? guardianOfList.map((g) => g.identityId) : []
       newGuardianOfCount.value = countNewGuardianOf(guardianOfIds, loadGuardianOfSeen())
 
       const conversationList = Array.isArray(conversations) ? conversations : []
+      const token = s.token()
       const lastMessages = await Promise.all(
         conversationList.map((c) =>
           api

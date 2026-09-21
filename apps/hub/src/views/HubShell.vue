@@ -10,7 +10,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'
 import type { AvalonNavItem, PresenceStatus } from '@avalon/ui'
-import { getMe, getMyGuildAnnouncements, updateMyPresence } from '@avalon/api-client'
 import {
   countUnread,
   isUnread,
@@ -18,10 +17,10 @@ import {
   markChannelSeen,
   previewBody,
 } from '../api/guildAnnouncements'
-import type { GuildAnnouncementAlert } from '@avalon/api-client'
+import type { GuildAnnouncementAlert } from '@avalon/sdk'
 import NetworkStatus from '../components/NetworkStatus.vue'
 import { useNotificationSummary } from '../composables/useNotificationSummary'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import styles from '../styles/HubShell.module.scss'
 
 // Re-publish well inside the server's 120s presence TTL so the user
@@ -53,9 +52,11 @@ const unreadAnnouncementCount = computed(() =>
 )
 
 async function refreshAnnouncements() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    announcementAlerts.value = (await getMyGuildAnnouncements(session.token)) ?? []
+    const result = await s.guildAnnouncements()
+    announcementAlerts.value = Array.isArray(result) ? result : []
   } catch {
     // Best-effort, same posture as presence — the next poll retries.
   }
@@ -115,10 +116,10 @@ function onSelectPendingAction(to: string) {
 // staying open doesn't mark anything seen, only actually following an
 // alert to its channel does.
 function onSelectAnnouncement(alert: GuildAnnouncementAlert) {
-  markChannelSeen(alert.channel_id, alert.sent_at)
+  markChannelSeen(alert.channelId, alert.sentAt)
   lastSeenByChannel.value = loadLastSeen()
   showAnnouncementsPanel.value = false
-  router.push({ name: 'guild-channel', params: { id: alert.guild_id, cid: alert.channel_id } })
+  router.push({ name: 'guild-channel', params: { id: alert.guildId, cid: alert.channelId } })
 }
 
 const GITHUB_PROFILE_URL = 'https://github.com/avalon-initiative'
@@ -147,10 +148,11 @@ const revisionUrl =
 // chose (`myStatus`), not a hardcoded 'Online', or it would silently
 // overwrite a manual Away/DND/Offline choice on the next tick.
 async function publishPresence(status: PresenceStatus = myStatus.value) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const presence = await updateMyPresence(session.token, { status })
-    myStatus.value = presence?.status ?? status
+    const presence = await s.updatePresence(status)
+    myStatus.value = (presence?.status as PresenceStatus | undefined) ?? status
   } catch {
     // Presence is best-effort; the next heartbeat retries.
   }
@@ -164,11 +166,13 @@ async function onSelectStatus(event: Event) {
 }
 
 onMounted(async () => {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   try {
-    const profile = await getMe(session.token)
-    displayName.value = profile.display_name
-    avatarUrl.value = profile.avatar_url
+    await s.refreshProfile()
+    const profile = s.profile()
+    displayName.value = profile.displayName
+    avatarUrl.value = profile.avatarUrl
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
   } finally {
@@ -281,7 +285,7 @@ watch(
               </p>
               <button
                 v-for="alertItem in announcementAlerts"
-                :key="alertItem.message_id"
+                :key="alertItem.messageId"
                 type="button"
                 :class="[
                   styles.announcementItem,
@@ -289,7 +293,7 @@ watch(
                 ]"
                 @click="onSelectAnnouncement(alertItem)"
               >
-                <span :class="styles.announcementChannel">#{{ alertItem.channel_name }}</span>
+                <span :class="styles.announcementChannel">#{{ alertItem.channelName }}</span>
                 <span :class="styles.announcementBody">{{ previewBody(alertItem.body) }}</span>
               </button>
             </div>

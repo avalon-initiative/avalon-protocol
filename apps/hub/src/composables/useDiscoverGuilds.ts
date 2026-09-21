@@ -14,10 +14,10 @@
 // starts the first time `refresh()` actually runs, not unconditionally —
 // no point polling a board nobody has opened yet.
 import { onUnmounted, ref, watch } from 'vue'
-import * as api from '@avalon/api-client'
 import { buildDiscoverQueryString } from '../api/guilds'
-import type { DiscoverGuildSummary, DiscoverGuildsParams } from '@avalon/api-client'
-import { useSessionStore } from '@avalon/api-client'
+import type { DiscoverGuildsParams } from '../api/guilds'
+import type { DiscoverGuildSummary } from '@avalon/sdk'
+import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000
 
@@ -50,13 +50,14 @@ export function useDiscoverGuilds() {
   }
 
   async function refresh() {
-    if (!session.token) return
+    const s = session.session
+    if (!s) return
     loading.value = true
     error.value = ''
     try {
-      const response = await api.discoverGuilds(session.token, buildDiscoverQueryString(currentParams()))
-      guilds.value = response.guilds
-      nextCursor.value = response.next_cursor
+      const response = await s.discoverGuilds(buildDiscoverQueryString(currentParams()))
+      guilds.value = Array.isArray(response.guilds) ? response.guilds : []
+      nextCursor.value = response.nextCursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {
@@ -68,16 +69,14 @@ export function useDiscoverGuilds() {
   }
 
   async function loadMore() {
-    if (!session.token || !nextCursor.value || loading.value) return
+    const s = session.session
+    if (!s || !nextCursor.value || loading.value) return
     loading.value = true
     error.value = ''
     try {
-      const response = await api.discoverGuilds(
-        session.token,
-        buildDiscoverQueryString(currentParams(nextCursor.value)),
-      )
-      guilds.value = [...guilds.value, ...response.guilds]
-      nextCursor.value = response.next_cursor
+      const response = await s.discoverGuilds(buildDiscoverQueryString(currentParams(nextCursor.value)))
+      guilds.value = [...guilds.value, ...(Array.isArray(response.guilds) ? response.guilds : [])]
+      nextCursor.value = response.nextCursor
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Something went wrong.'
     } finally {

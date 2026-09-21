@@ -30,10 +30,10 @@ import type { GuildMember } from './guilds'
 import type {
   FavoriteGameEntry,
   GameBreakdownEntry,
-  GuildMemberResponse,
-  GuildResponse,
-  RoleResponse,
-} from '@avalon/api-client'
+  Guild,
+  GuildMember as SdkGuildMember,
+  Role,
+} from '@avalon/sdk'
 
 const OWNER = 'owner-id'
 const OFFICER = 'officer-id'
@@ -41,64 +41,64 @@ const MEMBER = 'member-id'
 
 describe('mergeGuildMember', () => {
   it('defaults to Offline when the presence map has no entry', () => {
-    const member: GuildMemberResponse = {
-      guild_id: 'g1',
-      identity_id: MEMBER,
-      role_index: 2,
-      joined_at: 't',
+    const member: SdkGuildMember = {
+      guildId: 'g1',
+      identityId: MEMBER,
+      roleIndex: 2,
+      joinedAt: 't',
     }
     const merged = mergeGuildMember(member, new Map())
     expect(merged.status).toBe('Offline')
   })
 
   it('uses the presence map entry when present', () => {
-    const member: GuildMemberResponse = {
-      guild_id: 'g1',
-      identity_id: MEMBER,
-      role_index: 2,
-      joined_at: 't',
+    const member: SdkGuildMember = {
+      guildId: 'g1',
+      identityId: MEMBER,
+      roleIndex: 2,
+      joinedAt: 't',
     }
     const merged = mergeGuildMember(member, new Map([[MEMBER, 'Online']]))
     expect(merged.status).toBe('Online')
   })
 
   it('leaves display name undefined when the profile map has no entry (#161)', () => {
-    const member: GuildMemberResponse = {
-      guild_id: 'g1',
-      identity_id: MEMBER,
-      role_index: 2,
-      joined_at: 't',
+    const member: SdkGuildMember = {
+      guildId: 'g1',
+      identityId: MEMBER,
+      roleIndex: 2,
+      joinedAt: 't',
     }
     expect(mergeGuildMember(member, new Map()).displayName).toBeUndefined()
   })
 
   it('resolves display name from the profile map when present (#161)', () => {
-    const member: GuildMemberResponse = {
-      guild_id: 'g1',
-      identity_id: MEMBER,
-      role_index: 2,
-      joined_at: 't',
+    const member: SdkGuildMember = {
+      guildId: 'g1',
+      identityId: MEMBER,
+      roleIndex: 2,
+      joinedAt: 't',
     }
     const merged = mergeGuildMember(member, new Map(), new Map([[MEMBER, 'raid-leader-99']]))
     expect(merged.displayName).toBe('raid-leader-99')
   })
 
   it('defaults to not-playing (null) when the presence map has no playing entry', () => {
-    const member: GuildMemberResponse = {
-      guild_id: 'g1',
-      identity_id: MEMBER,
-      role_index: 2,
-      joined_at: 't',
+    const member: SdkGuildMember = {
+      guildId: 'g1',
+      identityId: MEMBER,
+      roleIndex: 2,
+      joinedAt: 't',
     }
     expect(mergeGuildMember(member, new Map()).playing).toBeNull()
   })
 
   it('carries the playing integrator id through when present (#57)', () => {
-    const member: GuildMemberResponse = {
-      guild_id: 'g1',
-      identity_id: MEMBER,
-      role_index: 2,
-      joined_at: 't',
+    const member: SdkGuildMember = {
+      guildId: 'g1',
+      identityId: MEMBER,
+      roleIndex: 2,
+      joinedAt: 't',
     }
     const merged = mergeGuildMember(member, new Map(), new Map(), new Map([[MEMBER, 'ashen-realms']]))
     expect(merged.playing).toBe('ashen-realms')
@@ -106,10 +106,10 @@ describe('mergeGuildMember', () => {
 })
 
 describe('groupMembersByRole', () => {
-  const roles: RoleResponse[] = [
-    { name_index: 0, name: 'owner', permissions: ['manage_guild'], description: '', badge: { icon: 'shield', color: 'gray' } },
-    { name_index: 1, name: 'officer', permissions: ['manage_members', 'manage_channels'], description: '', badge: { icon: 'shield', color: 'gray' } },
-    { name_index: 2, name: 'member', permissions: [], description: '', badge: { icon: 'shield', color: 'gray' } },
+  const roles: Role[] = [
+    { nameIndex: 0, name: 'owner', permissions: ['manage_guild'], description: '', badge: { icon: 'shield', color: 'gray' } },
+    { nameIndex: 1, name: 'officer', permissions: ['manage_members', 'manage_channels'], description: '', badge: { icon: 'shield', color: 'gray' } },
+    { nameIndex: 2, name: 'member', permissions: [], description: '', badge: { icon: 'shield', color: 'gray' } },
   ]
 
   const members: GuildMember[] = [
@@ -160,9 +160,9 @@ describe('hasGuildPermission', () => {
 })
 
 describe('permissionsForMember', () => {
-  const roles: RoleResponse[] = [
-    { name_index: 0, name: 'owner', permissions: ['manage_guild'], description: '', badge: { icon: 'shield', color: 'gray' } },
-    { name_index: 1, name: 'officer', permissions: ['manage_members'], description: '', badge: { icon: 'shield', color: 'gray' } },
+  const roles: Role[] = [
+    { nameIndex: 0, name: 'owner', permissions: ['manage_guild'], description: '', badge: { icon: 'shield', color: 'gray' } },
+    { nameIndex: 1, name: 'officer', permissions: ['manage_members'], description: '', badge: { icon: 'shield', color: 'gray' } },
   ]
   const members: GuildMember[] = [
     { identityId: OFFICER, roleIndex: 1, status: 'Online', joinedAt: 't' },
@@ -360,7 +360,7 @@ describe('formatPlayingSummary', () => {
 })
 
 describe('filterGuildsByNameOrTag', () => {
-  const guilds: Pick<GuildResponse, 'name' | 'tag'>[] = [
+  const guilds: Pick<Guild, 'name' | 'tag'>[] = [
     { name: 'Ashen Vanguard', tag: 'ASHV' },
     { name: 'Twilight Order', tag: 'TWIL' },
   ]
@@ -430,24 +430,24 @@ describe('buildDiscoverQueryString', () => {
 describe('formatGameBreakdownEntry', () => {
   it('renders "N of M members play <integrator>" verbatim', () => {
     const entry: GameBreakdownEntry = {
-      integrator_id: 'integrator-1',
-      integrator_slug: 'ashen-realms',
-      integrator_name: 'Ashen Realms',
-      member_count: 14,
+      integratorId: 'integrator-1',
+      integratorSlug: 'ashen-realms',
+      integratorName: 'Ashen Realms',
+      memberCount: 14,
     }
     expect(formatGameBreakdownEntry(entry, 22)).toBe('14 of 22 members play Ashen Realms')
   })
 
   it('total_members is the denominator, not a sum of member_count entries', () => {
     // A member can be bound to zero, one, or several integrators, so
-    // total_members (guild membership) and a single entry's member_count
+    // totalMembers (guild membership) and a single entry's memberCount
     // are independent numbers — this just pins that the function uses the
     // total passed in, not anything derived from the entry itself.
     const entry: GameBreakdownEntry = {
-      integrator_id: 'integrator-2',
-      integrator_slug: 'ocean-world',
-      integrator_name: 'Ocean World',
-      member_count: 3,
+      integratorId: 'integrator-2',
+      integratorSlug: 'ocean-world',
+      integratorName: 'Ocean World',
+      memberCount: 3,
     }
     expect(formatGameBreakdownEntry(entry, 3)).toBe('3 of 3 members play Ocean World')
   })
@@ -460,10 +460,10 @@ describe('hasNoGameBreakdownData', () => {
 
   it('is false once at least one integrator has a bound member', () => {
     const entry: GameBreakdownEntry = {
-      integrator_id: 'integrator-1',
-      integrator_slug: 'ashen-realms',
-      integrator_name: 'Ashen Realms',
-      member_count: 1,
+      integratorId: 'integrator-1',
+      integratorSlug: 'ashen-realms',
+      integratorName: 'Ashen Realms',
+      memberCount: 1,
     }
     expect(hasNoGameBreakdownData([entry])).toBe(false)
   })
@@ -472,11 +472,11 @@ describe('hasNoGameBreakdownData', () => {
 // --- Issue #207: favorite integrators pin list -----------------------------------
 
 function favorite(integratorId: string, name: string, position: number, stale = false): FavoriteGameEntry {
-  return { integrator_id: integratorId, integrator_slug: integratorId, integrator_name: name, position, stale }
+  return { integratorId, integratorSlug: integratorId, integratorName: name, position, stale }
 }
 
 function breakdownEntry(integratorId: string, name: string): GameBreakdownEntry {
-  return { integrator_id: integratorId, integrator_slug: integratorId, integrator_name: name, member_count: 1 }
+  return { integratorId, integratorSlug: integratorId, integratorName: name, memberCount: 1 }
 }
 
 describe('pinnableBreakdownEntries', () => {

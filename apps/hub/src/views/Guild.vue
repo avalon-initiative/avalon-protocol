@@ -28,8 +28,8 @@ import {
   AvalonRsvpRosterPanel,
   AvalonTextField,
 } from '@avalon/ui'
-import * as api from '@avalon/api-client'
-import type { RoleResponse, RoleBadgeIconId, RoleBadgeColorId, EventResponse } from '@avalon/api-client'
+import type { AvalonIconName } from '@avalon/ui'
+import type { Role, GuildEvent } from '@avalon/sdk'
 import ResourcePermissionOverrides from '../components/ResourcePermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, toLocalDateTimeInput, validateEventForm } from '../api/guildEvents'
@@ -54,11 +54,13 @@ import {
   sortMembers,
   sortMembersByPresence,
   type MemberSortOrder,
+  type RoleBadgeColorId,
+  type RoleBadgeIconId,
 } from '../api/guilds'
 import { useGuildChat } from '../composables/useGuildChat'
 import { useGuildDetail } from '../composables/useGuildDetail'
 import { useRsvpRoster } from '../composables/useRsvpRoster'
-import { signFreshAction, useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { isIdentityId } from '../utils/identity'
 import local from '../styles/Guild.module.scss'
 import styles from '../styles/page.module.scss'
@@ -85,16 +87,6 @@ const PERMISSION_OPTIONS = [
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
-
-// #697/#698: shared helper for the guild actions on this page that require
-// a fresh signature — `null` (spread to `{}`) when this device has no
-// local signing key, same "let the server's own error surface it" posture
-// every other signed action in this app takes.
-function signGuildAction(actionTag: string, fields: string[]) {
-  return session.identityId
-    ? signFreshAction(session.identityId, session.signingKeyId, actionTag, fields)
-    : null
-}
 
 const guildId = computed(() => route.params.id as string)
 const {
@@ -366,11 +358,12 @@ const savingChannelTopic = ref(false)
 const channelTopicError = ref('')
 
 async function onSaveChannelTopic(value: string) {
-  if (!session.token || !activeChannel.value) return
+  const s = session.session
+  if (!s || !activeChannel.value) return
   channelTopicError.value = ''
   savingChannelTopic.value = true
   try {
-    const updated = await api.updateChannel(session.token, guildId.value, activeChannel.value.id, {
+    const updated = await s.updateChannel(guildId.value, activeChannel.value.id, {
       name: activeChannel.value.name,
       topic: value,
     })
@@ -387,13 +380,14 @@ const togglingAnnouncementOnly = ref(false)
 const announcementOnlyError = ref('')
 
 async function onToggleAnnouncementOnly() {
-  if (!session.token || !activeChannel.value) return
+  const s = session.session
+  if (!s || !activeChannel.value) return
   announcementOnlyError.value = ''
   togglingAnnouncementOnly.value = true
   try {
-    const updated = await api.updateChannel(session.token, guildId.value, activeChannel.value.id, {
+    const updated = await s.updateChannel(guildId.value, activeChannel.value.id, {
       name: activeChannel.value.name,
-      announcement_only: !activeChannel.value.announcement_only,
+      announcementOnly: !activeChannel.value.announcementOnly,
     })
     activeChannel.value = updated
     await refresh()
@@ -411,11 +405,12 @@ const togglingChannelPublic = ref(false)
 const channelPublicError = ref('')
 
 async function onToggleChannelPublic() {
-  if (!session.token || !activeChannel.value) return
+  const s = session.session
+  if (!s || !activeChannel.value) return
   channelPublicError.value = ''
   togglingChannelPublic.value = true
   try {
-    const updated = await api.updateChannel(session.token, guildId.value, activeChannel.value.id, {
+    const updated = await s.updateChannel(guildId.value, activeChannel.value.id, {
       name: activeChannel.value.name,
       public: !activeChannel.value.public,
     })
@@ -435,7 +430,7 @@ async function onToggleChannelPublic() {
 // once the guild opts into public exposure via the toggle just below.
 const integratorBreakdownLines = computed(() => {
   if (!integratorBreakdown.value) return []
-  return integratorBreakdown.value.breakdown.map((entry) => formatGameBreakdownEntry(entry, integratorBreakdown.value!.total_members))
+  return integratorBreakdown.value.breakdown.map((entry) => formatGameBreakdownEntry(entry, integratorBreakdown.value!.totalMembers))
 })
 const integratorBreakdownEmpty = computed(
   () => integratorBreakdown.value !== null && hasNoGameBreakdownData(integratorBreakdown.value.breakdown),
@@ -445,11 +440,12 @@ const savingGameBreakdownPublic = ref(false)
 const integratorBreakdownPublicError = ref('')
 
 async function onToggleGameBreakdownPublic(next: boolean) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   integratorBreakdownPublicError.value = ''
   savingGameBreakdownPublic.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, { game_breakdown_public: next })
+    await s.updateGuild(guildId.value, { gameBreakdownPublic: next })
     await refresh()
   } catch (e) {
     integratorBreakdownPublicError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -465,7 +461,7 @@ async function onToggleGameBreakdownPublic(next: boolean) {
 // Pinning is only ever offered from `integratorBreakdown.value.breakdown` — the
 // same real-affinity data #206 already gates behind manage_guild — so a
 // manager can never even attempt to pin an integrator without real affinity.
-const favorites = computed(() => guild.value?.favorite_games ?? [])
+const favorites = computed(() => guild.value?.favoriteGames ?? [])
 const pinnableIntegrators = computed(() =>
   integratorBreakdown.value ? pinnableBreakdownEntries(integratorBreakdown.value.breakdown, favorites.value) : [],
 )
@@ -475,11 +471,12 @@ const savingFavorites = ref(false)
 const favoritesError = ref('')
 
 async function applyFavoriteGameIds(integratorIds: string[]) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   favoritesError.value = ''
   savingFavorites.value = true
   try {
-    await api.setFavoriteGames(session.token, guildId.value, integratorIds)
+    await s.setFavoriteGames(guildId.value, integratorIds)
     await refresh()
   } catch (e) {
     favoritesError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -541,11 +538,12 @@ async function saveGuildField(
   field: 'name' | 'tag' | 'description' | 'motd' | 'banner' | 'icon',
   value: string,
 ) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   fieldErrors.value[field] = ''
   savingField.value = field
   try {
-    await api.updateGuild(session.token, guildId.value, { [field]: value })
+    await s.updateGuild(guildId.value, { [field]: value })
     await refresh()
   } catch (e) {
     fieldErrors.value[field] = e instanceof Error ? e.message : 'Something went wrong.'
@@ -574,11 +572,12 @@ function openEditGuildInfo() {
 }
 
 async function onSaveGuildInfo() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   editGuildInfoError.value = ''
   savingGuildInfo.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, {
+    await s.updateGuild(guildId.value, {
       name: editGuildName.value.trim(),
       tag: editGuildTag.value.trim(),
       description: editGuildDescription.value.trim(),
@@ -599,11 +598,12 @@ const savingRecruiting = ref(false)
 const recruitingError = ref('')
 
 async function onToggleRecruiting(next: boolean) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   recruitingError.value = ''
   savingRecruiting.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, { recruiting: next })
+    await s.updateGuild(guildId.value, { recruiting: next })
     await refresh()
   } catch (e) {
     recruitingError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -618,11 +618,12 @@ const savingPublic = ref(false)
 const publicError = ref('')
 
 async function onTogglePublic(next: boolean) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   publicError.value = ''
   savingPublic.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, { public: next })
+    await s.updateGuild(guildId.value, { public: next })
     await refresh()
   } catch (e) {
     publicError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -646,7 +647,7 @@ const savingRosterVisibility = ref(false)
 const rosterVisibilityError = ref('')
 
 watch(
-  () => guild.value?.roster_visibility,
+  () => guild.value?.rosterVisibility,
   (value) => {
     if (value) rosterVisibility.value = value
   },
@@ -654,12 +655,13 @@ watch(
 )
 
 async function onSaveRosterVisibility() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   rosterVisibilityError.value = ''
   savingRosterVisibility.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, {
-      roster_visibility: rosterVisibility.value,
+    await s.updateGuild(guildId.value, {
+      rosterVisibility: rosterVisibility.value,
     })
     await refresh()
   } catch (e) {
@@ -673,11 +675,12 @@ const savingJoinPolicy = ref(false)
 const joinPolicyError = ref('')
 
 async function onToggleJoinPolicy(next: 'invite_only' | 'open') {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   joinPolicyError.value = ''
   savingJoinPolicy.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, { join_policy: next })
+    await s.updateGuild(guildId.value, { joinPolicy: next })
     await refresh()
   } catch (e) {
     joinPolicyError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -692,11 +695,12 @@ const savingLinks = ref(false)
 const linksError = ref('')
 
 async function saveLinks(links: { label: string; url: string }[]) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   linksError.value = ''
   savingLinks.value = true
   try {
-    await api.updateGuild(session.token, guildId.value, { links })
+    await s.updateGuild(guildId.value, { links })
     await refresh()
   } catch (e) {
     linksError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -774,22 +778,18 @@ function cancelAddRole() {
 }
 
 async function onAddRole() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   addRoleError.value = ''
   addingRole.value = true
   try {
-    const signed = signGuildAction('guild.role.create', [
+    await s.createRole(
       guildId.value,
       newRoleName.value.trim(),
-      newRolePermissions.value.join(','),
-    ])
-    await api.createRole(session.token, guildId.value, {
-      name: newRoleName.value.trim(),
-      permissions: newRolePermissions.value,
-      description: newRoleDescription.value.trim(),
-      badge: { icon: newRoleBadgeIcon.value, color: newRoleBadgeColor.value },
-      ...(signed ?? {}),
-    })
+      newRolePermissions.value,
+      newRoleDescription.value.trim(),
+      { icon: newRoleBadgeIcon.value, color: newRoleBadgeColor.value },
+    )
     cancelAddRole()
     await refresh()
   } catch (e) {
@@ -804,7 +804,7 @@ async function onAddRole() {
 const togglingPermissionFor = ref<string | null>(null)
 const permissionMatrixError = ref('')
 
-async function onTogglePermission(role: RoleResponse, permission: string, event: Event) {
+async function onTogglePermission(role: Role, permission: string, event: Event) {
   const checkbox = event.target as HTMLInputElement
   const wasChecked = role.permissions.includes(permission)
 
@@ -813,25 +813,22 @@ async function onTogglePermission(role: RoleResponse, permission: string, event:
   // owner's authority comes from guilds.owner, not this row, so it always
   // holds every permission). Reject client-side too, with a clear reason,
   // rather than round-tripping to the server just to find out.
-  if (role.name_index === 0) {
+  if (role.nameIndex === 0) {
     checkbox.checked = wasChecked
     permissionMatrixError.value = "The owner role always has every permission and can't be changed."
     return
   }
 
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   permissionMatrixError.value = ''
-  const key = `${role.name_index}:${permission}`
+  const key = `${role.nameIndex}:${permission}`
   togglingPermissionFor.value = key
   const next = wasChecked
     ? role.permissions.filter((p) => p !== permission)
     : [...role.permissions, permission]
   try {
-    const signed = signGuildAction('guild.role.update', [guildId.value, String(role.name_index)])
-    await api.updateRole(session.token, guildId.value, role.name_index, {
-      permissions: next,
-      ...(signed ?? {}),
-    })
+    await s.updateRole(guildId.value, role.nameIndex, undefined, next)
     await refresh()
   } catch (e) {
     // Clicking a checkbox flips its DOM state immediately (native browser
@@ -856,12 +853,12 @@ const roleBadgeIconDraft = ref<RoleBadgeIconId>('shield')
 const roleBadgeColorDraft = ref<RoleBadgeColorId>('gray')
 const renamingRoleFor = ref<number | null>(null)
 
-function unlockRole(role: RoleResponse) {
-  unlockedRoleIndex.value = role.name_index
+function unlockRole(role: Role) {
+  unlockedRoleIndex.value = role.nameIndex
   roleNameDraft.value = role.name
   roleDescriptionDraft.value = role.description
-  roleBadgeIconDraft.value = role.badge.icon
-  roleBadgeColorDraft.value = role.badge.color
+  roleBadgeIconDraft.value = (role.badge.icon as RoleBadgeIconId | null) ?? 'shield'
+  roleBadgeColorDraft.value = (role.badge.color as RoleBadgeColorId | null) ?? 'gray'
 }
 
 function lockRole() {
@@ -880,19 +877,17 @@ function cancelRoleEdit() {
 // Saves name, description, and badge together — all three live in the
 // same unlocked-row draft state, so one save covers whichever of them
 // changed rather than a separate round trip per field.
-async function onSaveRoleEdits(role: RoleResponse) {
-  if (!session.token) return
+async function onSaveRoleEdits(role: Role) {
+  const s = session.session
+  if (!s) return
   const name = roleNameDraft.value.trim()
   if (!name) return
   permissionMatrixError.value = ''
-  renamingRoleFor.value = role.name_index
+  renamingRoleFor.value = role.nameIndex
   try {
-    const signed = signGuildAction('guild.role.update', [guildId.value, String(role.name_index)])
-    await api.updateRole(session.token, guildId.value, role.name_index, {
-      name,
-      description: roleDescriptionDraft.value.trim(),
-      badge: { icon: roleBadgeIconDraft.value, color: roleBadgeColorDraft.value },
-      ...(signed ?? {}),
+    await s.updateRole(guildId.value, role.nameIndex, name, undefined, roleDescriptionDraft.value.trim(), {
+      icon: roleBadgeIconDraft.value,
+      color: roleBadgeColorDraft.value,
     })
     await refresh()
   } catch (e) {
@@ -905,20 +900,20 @@ async function onSaveRoleEdits(role: RoleResponse) {
 // Owner (0) and member (2) are structural — the server always rejects
 // deleting either — so the delete action isn't even offered for them.
 const BASE_ROLE_INDEXES = [0, 2]
-function isBaseRole(role: RoleResponse): boolean {
-  return BASE_ROLE_INDEXES.includes(role.name_index)
+function isBaseRole(role: Role): boolean {
+  return BASE_ROLE_INDEXES.includes(role.nameIndex)
 }
 
 const deletingRoleFor = ref<number | null>(null)
 
-async function onDeleteRole(role: RoleResponse) {
-  if (!session.token) return
+async function onDeleteRole(role: Role) {
+  const s = session.session
+  if (!s) return
   permissionMatrixError.value = ''
-  deletingRoleFor.value = role.name_index
+  deletingRoleFor.value = role.nameIndex
   try {
-    const signed = signGuildAction('guild.role.delete', [guildId.value, String(role.name_index)])
-    await api.deleteRole(session.token, guildId.value, role.name_index, signed ?? {})
-    if (unlockedRoleIndex.value === role.name_index) unlockedRoleIndex.value = null
+    await s.deleteRole(guildId.value, role.nameIndex)
+    if (unlockedRoleIndex.value === role.nameIndex) unlockedRoleIndex.value = null
     await refresh()
   } catch (e) {
     permissionMatrixError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -946,23 +941,16 @@ function cancelChangeRole() {
 }
 
 async function onSaveRoleChange() {
-  if (!session.token || !changingRoleFor.value) return
+  const s = session.session
+  if (!s || !changingRoleFor.value) return
   changeRoleError.value = ''
   changingRole.value = true
   try {
-    // #697/#698: only actually enforced server-side when the new role
-    // grants manage_roles/manage_members (an escalation) — signs
-    // unconditionally when a local key is available rather than
-    // replicating that check client-side; unused otherwise.
-    const signed = signGuildAction('guild.member_role.update', [
-      guildId.value,
-      changingRoleFor.value,
-      String(roleChangeValue.value),
-    ])
-    await api.updateMemberRole(session.token, guildId.value, changingRoleFor.value, {
-      role_index: roleChangeValue.value,
-      ...(signed ?? {}),
-    })
+    // #697/#698: signature-required when the new role grants
+    // manage_roles/manage_members (an escalation) — AccountSession.
+    // updateMemberRole signs unconditionally whenever this device holds a
+    // local key, same posture the old manual signing here had.
+    await s.updateMemberRole(guildId.value, changingRoleFor.value, roleChangeValue.value)
     changingRoleFor.value = null
     await refresh()
   } catch (e) {
@@ -978,10 +966,11 @@ function onViewProfile(identityId: string) {
 }
 
 async function onKick(identityId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.removeMember(session.token, guildId.value, identityId)
+    await s.removeMember(guildId.value, identityId)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -997,11 +986,12 @@ const decidingRequestId = ref<string | null>(null)
 const joinRequestsError = ref('')
 
 async function onApproveJoinRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   joinRequestsError.value = ''
   decidingRequestId.value = requestId
   try {
-    await api.approveJoinRequest(session.token, guildId.value, requestId)
+    await s.approveJoinRequest(guildId.value, requestId)
     await refresh()
   } catch (e) {
     joinRequestsError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1011,11 +1001,12 @@ async function onApproveJoinRequest(requestId: string) {
 }
 
 async function onRejectJoinRequest(requestId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   joinRequestsError.value = ''
   decidingRequestId.value = requestId
   try {
-    await api.rejectJoinRequest(session.token, guildId.value, requestId)
+    await s.rejectJoinRequest(guildId.value, requestId)
     await refresh()
   } catch (e) {
     joinRequestsError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1036,11 +1027,12 @@ const applyingToJoin = ref(false)
 const withdrawingJoinRequest = ref(false)
 
 async function onApplyToJoin() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   myJoinRequestError.value = ''
   applyingToJoin.value = true
   try {
-    await api.createJoinRequest(session.token, guildId.value, {})
+    await s.createJoinRequest(guildId.value)
     await refresh()
   } catch (e) {
     myJoinRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1050,11 +1042,12 @@ async function onApplyToJoin() {
 }
 
 async function onWithdrawJoinRequest() {
-  if (!session.token || !myJoinRequest.value) return
+  const s = session.session
+  if (!s || !myJoinRequest.value) return
   myJoinRequestError.value = ''
   withdrawingJoinRequest.value = true
   try {
-    await api.withdrawJoinRequest(session.token, guildId.value, myJoinRequest.value.id)
+    await s.withdrawJoinRequest(guildId.value, myJoinRequest.value.id)
     await refresh()
   } catch (e) {
     myJoinRequestError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1083,16 +1076,15 @@ function cancelInvite() {
 // identity id first, since createGuildInvite always targets an identity
 // id on the wire.
 async function onInvite() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   inviteError.value = ''
   inviteSuccessId.value = ''
   inviting.value = true
   try {
     const input = inviteIdentityId.value.trim()
-    const to = isIdentityId(input)
-      ? input
-      : (await api.resolveHandle(session.token, input)).identity_id
-    const invite = await api.createGuildInvite(session.token, guildId.value, { to })
+    const to = isIdentityId(input) ? input : await s.resolveHandle(input)
+    const invite = await s.createGuildInvite(guildId.value, to)
     // No endpoint lists a user's own pending guild invites yet (a real
     // gap — see docs/architecture/guilds.md's correction note), so the
     // invite id has to be shared with the invitee out of band for them to
@@ -1107,10 +1099,11 @@ async function onInvite() {
 }
 
 async function onJoin() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.joinGuild(session.token, guildId.value)
+    await s.joinGuild(guildId.value)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1118,10 +1111,11 @@ async function onJoin() {
 }
 
 async function onLeave() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.leaveGuild(session.token, guildId.value)
+    await s.leaveGuild(guildId.value)
     router.push({ name: 'guilds' })
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1140,17 +1134,13 @@ function cancelTransfer() {
 }
 
 async function onTransferOwnership() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   transferError.value = ''
   transferring.value = true
   try {
     const to = transferTo.value.trim()
-    const signed = signGuildAction('guild.transfer_ownership', [
-      guildId.value,
-      guild.value?.owner ?? session.identityId ?? '',
-      to,
-    ])
-    await api.transferOwnership(session.token, guildId.value, { to, ...(signed ?? {}) })
+    await s.transferOwnership(guildId.value, to)
     cancelTransfer()
     await refresh()
   } catch (e) {
@@ -1177,11 +1167,12 @@ function cancelAssociateIntegrator() {
 }
 
 async function onAssociateIntegrator() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   associateIntegratorError.value = ''
   associatingIntegrator.value = true
   try {
-    await api.associateIntegrator(session.token, guildId.value, associateIntegratorId.value.trim())
+    await s.associateIntegrator(guildId.value, associateIntegratorId.value.trim())
     cancelAssociateIntegrator()
     await refresh()
   } catch (e) {
@@ -1205,11 +1196,12 @@ function cancelCreateChannel() {
 }
 
 async function onCreateChannel() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   createChannelError.value = ''
   creatingChannel.value = true
   try {
-    await api.createChannel(session.token, guildId.value, { name: newChannelName.value.trim() })
+    await s.createChannel(guildId.value, newChannelName.value.trim())
     cancelCreateChannel()
     await refresh()
   } catch (e) {
@@ -1220,10 +1212,11 @@ async function onCreateChannel() {
 }
 
 async function onArchiveChannel(channelId: string) {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.archiveChannel(session.token, guildId.value, channelId)
+    await s.archiveChannel(guildId.value, channelId)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1234,6 +1227,12 @@ async function onArchiveChannel(channelId: string) {
 
 const sortedEvents = computed(() => sortByStartsAt(events.value))
 
+// AvalonEventCard's own prop type (packages/ui) still uses the wire's
+// snake_case not_going — independent of bindings/ts's own RsvpCounts.
+function toRsvpCountsProp(counts: GuildEvent['rsvpCounts']) {
+  return { going: counts.going, maybe: counts.maybe, not_going: counts.notGoing }
+}
+
 // --- Calendar tab: a navigable month view of the same events list above,
 // grouped by local calendar day (localDateKey — see its own doc comment
 // on why "local," not the raw UTC starts_at). No separate fetch: the
@@ -1243,11 +1242,11 @@ const calendarYear = ref(today.getFullYear())
 const calendarMonth = ref(today.getMonth() + 1)
 const calendarSelectedDate = ref<string | null>(null)
 
-const calendarEventDates = computed(() => events.value.map((e) => localDateKey(e.starts_at)))
+const calendarEventDates = computed(() => events.value.map((e) => localDateKey(e.startsAt)))
 
 const calendarSelectedEvents = computed(() => {
   if (!calendarSelectedDate.value) return []
-  return sortedEvents.value.filter((e) => localDateKey(e.starts_at) === calendarSelectedDate.value)
+  return sortedEvents.value.filter((e) => localDateKey(e.startsAt) === calendarSelectedDate.value)
 })
 
 function onSelectCalendarDate(date: string) {
@@ -1281,19 +1280,20 @@ function cancelCreateEvent() {
   createEventError.value = ''
 }
 
-function onEditEvent(event: EventResponse) {
+function onEditEvent(event: GuildEvent) {
   editingEventId.value = event.id
   newEventTitle.value = event.title
   newEventDescription.value = event.description ?? ''
-  newEventStartsAt.value = toLocalDateTimeInput(event.starts_at)
-  newEventEndsAt.value = event.ends_at ? toLocalDateTimeInput(event.ends_at) : ''
+  newEventStartsAt.value = toLocalDateTimeInput(event.startsAt)
+  newEventEndsAt.value = event.endsAt ? toLocalDateTimeInput(event.endsAt) : ''
   newEventPublic.value = event.public
   createEventError.value = ''
   showCreateEvent.value = true
 }
 
 async function onCreateEvent() {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   createEventError.value = ''
   const startsAtIso = newEventStartsAt.value ? new Date(newEventStartsAt.value).toISOString() : ''
   const endsAtIso = newEventEndsAt.value ? new Date(newEventEndsAt.value).toISOString() : ''
@@ -1309,22 +1309,17 @@ async function onCreateEvent() {
   }
   creatingEvent.value = true
   try {
+    const fields = {
+      title: newEventTitle.value.trim(),
+      description: newEventDescription.value.trim() || undefined,
+      startsAt: startsAtIso,
+      endsAt: endsAtIso || undefined,
+      public: newEventPublic.value,
+    }
     if (editingEventId.value) {
-      await api.updateEvent(session.token, guildId.value, editingEventId.value, {
-        title: newEventTitle.value.trim(),
-        description: newEventDescription.value.trim() || undefined,
-        starts_at: startsAtIso,
-        ends_at: endsAtIso || undefined,
-        public: newEventPublic.value,
-      })
+      await s.updateEvent(guildId.value, editingEventId.value, fields)
     } else {
-      await api.createEvent(session.token, guildId.value, {
-        title: newEventTitle.value.trim(),
-        description: newEventDescription.value.trim() || undefined,
-        starts_at: startsAtIso,
-        ends_at: endsAtIso || undefined,
-        public: newEventPublic.value,
-      })
+      await s.createEvent(guildId.value, fields)
     }
     cancelCreateEvent()
     await refresh()
@@ -1337,13 +1332,14 @@ async function onCreateEvent() {
 
 const deletingEventId = ref<string | null>(null)
 
-async function onDeleteEvent(event: EventResponse) {
-  if (!session.token) return
+async function onDeleteEvent(event: GuildEvent) {
+  const s = session.session
+  if (!s) return
   if (!window.confirm(`Delete "${event.title}"? This can't be undone.`)) return
   actionError.value = ''
   deletingEventId.value = event.id
   try {
-    await api.deleteEvent(session.token, guildId.value, event.id)
+    await s.deleteEvent(guildId.value, event.id)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1355,10 +1351,11 @@ async function onDeleteEvent(event: EventResponse) {
 // Self-service only, always the caller's own RSVP — see
 // AvalonRsvpControl.types.ts and guild_events.rs::upsert_rsvp.
 async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') {
-  if (!session.token) return
+  const s = session.session
+  if (!s) return
   actionError.value = ''
   try {
-    await api.rsvpToEvent(session.token, guildId.value, eventId, { status })
+    await s.rsvpToEvent(guildId.value, eventId, status)
     await refresh()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -1394,8 +1391,8 @@ const {
         </div>
         <p v-if="guild.description" :class="styles.subtitle">{{ guild.description }}</p>
         <p :class="styles.subtitle">
-          {{ guild.member_count }} member{{ guild.member_count === 1 ? '' : 's' }} ·
-          {{ guild.join_policy === 'open' ? 'Open to join' : 'Invite only' }}
+          {{ guild.memberCount }} member{{ guild.memberCount === 1 ? '' : 's' }} ·
+          {{ guild.joinPolicy === 'open' ? 'Open to join' : 'Invite only' }}
         </p>
       </div>
     </header>
@@ -1463,19 +1460,19 @@ const {
         >
           <p v-if="canManageGuild" :class="styles.empty">
             Shown on this guild's public profile and discovery card:
-            {{ guild.game_breakdown_public ? 'yes' : 'no' }}
+            {{ guild.gameBreakdownPublic ? 'yes' : 'no' }}
           </p>
           <AvalonButton
             v-if="canManageGuild"
             :label="
               savingGameBreakdownPublic
                 ? 'Saving…'
-                : guild.game_breakdown_public
+                : guild.gameBreakdownPublic
                   ? 'Hide from public profile'
                   : 'Show on public profile'
             "
             variant="secondary"
-            @click="onToggleGameBreakdownPublic(!guild.game_breakdown_public)"
+            @click="onToggleGameBreakdownPublic(!guild.gameBreakdownPublic)"
           />
           <p v-if="integratorBreakdownPublicError" :class="styles.error">{{ integratorBreakdownPublicError }}</p>
 
@@ -1492,7 +1489,7 @@ const {
 
         <AvalonCard v-if="canManageGuild || favorites.length > 0" title="Favorite integrators">
           <p v-if="favorites.length === 0" :class="styles.empty">No favorite integrators pinned yet.</p>
-          <div v-for="(entry, index) in favorites" :key="entry.integrator_id" :class="styles.empty">
+          <div v-for="(entry, index) in favorites" :key="entry.integratorId" :class="styles.empty">
             {{ formatFavoriteGameEntry(entry) }}
             <template v-if="canManageGuild">
               <AvalonButton
@@ -1500,20 +1497,20 @@ const {
                 label="Move up"
                 variant="secondary"
                 :disabled="savingFavorites"
-                @click="onReorderFavorite(entry.integrator_id, 'up')"
+                @click="onReorderFavorite(entry.integratorId, 'up')"
               />
               <AvalonButton
                 v-if="index < favorites.length - 1"
                 label="Move down"
                 variant="secondary"
                 :disabled="savingFavorites"
-                @click="onReorderFavorite(entry.integrator_id, 'down')"
+                @click="onReorderFavorite(entry.integratorId, 'down')"
               />
               <AvalonButton
                 label="Unpin"
                 variant="danger"
                 :disabled="savingFavorites"
-                @click="onUnpinFavorite(entry.integrator_id)"
+                @click="onUnpinFavorite(entry.integratorId)"
               />
             </template>
           </div>
@@ -1523,13 +1520,13 @@ const {
             <p v-else-if="pinnableIntegrators.length === 0" :class="styles.empty">
               No unpinned integrator currently has affinity to pin.
             </p>
-            <div v-for="entry in pinnableIntegrators" :key="entry.integrator_id" :class="styles.empty">
-              {{ entry.integrator_name }}
+            <div v-for="entry in pinnableIntegrators" :key="entry.integratorId" :class="styles.empty">
+              {{ entry.integratorName }}
               <AvalonButton
                 label="Pin"
                 variant="secondary"
                 :disabled="savingFavorites"
-                @click="onPinFavorite(entry.integrator_id)"
+                @click="onPinFavorite(entry.integratorId)"
               />
             </div>
             <p v-if="favoritesError" :class="styles.error">{{ favoritesError }}</p>
@@ -1591,7 +1588,7 @@ const {
         <AvalonCard title="Membership">
           <p :class="styles.empty">{{ membershipStatus }}</p>
           <AvalonButton
-            v-if="guild.join_policy === 'open' && !isMember"
+            v-if="guild.joinPolicy === 'open' && !isMember"
             label="Join guild"
             variant="primary"
             @click="onJoin"
@@ -1605,7 +1602,7 @@ const {
             return the same pending row (create_join_request is idempotent,
             but this reads better).
           -->
-          <template v-if="guild.join_policy !== 'open' && !isMember">
+          <template v-if="guild.joinPolicy !== 'open' && !isMember">
             <template v-if="myJoinRequest">
               <p :class="styles.empty">
                 Application pending<template v-if="myJoinRequest.message">
@@ -1678,7 +1675,7 @@ const {
               <label :class="styles.subtitle">
                 New role
                 <select v-model.number="roleChangeValue">
-                  <option v-for="role in roles" :key="role.name_index" :value="role.name_index">
+                  <option v-for="role in roles" :key="role.nameIndex" :value="role.nameIndex">
                     {{ role.name }}
                   </option>
                 </select>
@@ -1844,7 +1841,7 @@ const {
             <label v-if="activeChannel && canManageChannels" :class="local.announcementRow">
               <input
                 type="checkbox"
-                :checked="activeChannel.announcement_only"
+                :checked="activeChannel.announcementOnly"
                 :disabled="togglingAnnouncementOnly"
                 @change="onToggleAnnouncementOnly"
               />
@@ -1884,7 +1881,7 @@ const {
                 :author-id="message.author"
                 :author-display-name="authorNames[message.author]"
                 :body="message.body"
-                :sent-at-label="new Date(message.sent_at).toLocaleString()"
+                :sent-at-label="new Date(message.sentAt).toLocaleString()"
                 :can-delete="canDeleteMessage"
                 :is-own="message.author === selfId"
                 :presence-status="memberPresence[message.author]"
@@ -1910,10 +1907,8 @@ const {
                can manage roles — server re-checks each action
                independently. -->
           <ResourcePermissionOverrides
-            v-if="activeChannel && canManageRoles"
-            :token="session.token ?? ''"
-            :identity-id="session.identityId ?? ''"
-            :signing-key-id="session.signingKeyId"
+            v-if="activeChannel && canManageRoles && session.session"
+            :session="session.session"
             :guild-id="guildId"
             resource-kind="channel"
             :resource-id="activeChannel.id"
@@ -1941,20 +1936,20 @@ const {
           <div
             v-for="event in sortedEvents"
             :key="event.id"
-            :class="isMember && event.details_visible ? local.eventCardClickable : undefined"
-            @click="isMember && event.details_visible && openRsvpRoster(event.id, event.title)"
+            :class="isMember && event.detailsVisible ? local.eventCardClickable : undefined"
+            @click="isMember && event.detailsVisible && openRsvpRoster(event.id, event.title)"
           >
             <AvalonEventCard
               :title="event.title"
               :description="event.description ?? undefined"
-              :starts-at="event.starts_at"
-              :ends-at="event.ends_at ?? undefined"
-              :rsvp-counts="event.rsvp_counts"
-              :details-visible="event.details_visible"
+              :starts-at="event.startsAt"
+              :ends-at="event.endsAt ?? undefined"
+              :rsvp-counts="toRsvpCountsProp(event.rsvpCounts)"
+              :details-visible="event.detailsVisible"
             >
               <template #actions>
-                <div v-if="isMember && event.details_visible" @click.stop>
-                  <AvalonRsvpControl :current-status="event.my_rsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
+                <div v-if="isMember && event.detailsVisible" @click.stop>
+                  <AvalonRsvpControl :current-status="event.myRsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
                 </div>
                 <div v-if="canManageEvents" @click.stop :class="local.eventManageActions">
                   <AvalonButton label="Edit" variant="secondary" @click="onEditEvent(event)" />
@@ -2003,10 +1998,8 @@ const {
                  yet while creating one). Same role x permission grid the
                  Channels tab uses. -->
             <ResourcePermissionOverrides
-              v-if="editingEventId && canManageRoles"
-              :token="session.token ?? ''"
-              :identity-id="session.identityId ?? ''"
-              :signing-key-id="session.signingKeyId"
+              v-if="editingEventId && canManageRoles && session.session"
+              :session="session.session"
               :guild-id="guildId"
               resource-kind="event"
               :resource-id="editingEventId"
@@ -2042,20 +2035,20 @@ const {
             <div
               v-for="event in calendarSelectedEvents"
               :key="event.id"
-              :class="isMember && event.details_visible ? local.eventCardClickable : undefined"
-              @click="isMember && event.details_visible && openRsvpRoster(event.id, event.title)"
+              :class="isMember && event.detailsVisible ? local.eventCardClickable : undefined"
+              @click="isMember && event.detailsVisible && openRsvpRoster(event.id, event.title)"
             >
               <AvalonEventCard
                 :title="event.title"
                 :description="event.description ?? undefined"
-                :starts-at="event.starts_at"
-                :ends-at="event.ends_at ?? undefined"
-                :rsvp-counts="event.rsvp_counts"
-                :details-visible="event.details_visible"
+                :starts-at="event.startsAt"
+                :ends-at="event.endsAt ?? undefined"
+                :rsvp-counts="toRsvpCountsProp(event.rsvpCounts)"
+                :details-visible="event.detailsVisible"
               >
-                <template v-if="isMember && event.details_visible" #actions>
+                <template v-if="isMember && event.detailsVisible" #actions>
                   <div @click.stop>
-                    <AvalonRsvpControl :current-status="event.my_rsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
+                    <AvalonRsvpControl :current-status="event.myRsvp ?? undefined" @rsvp="(status) => onRsvp(event.id, status)" />
                   </div>
                 </template>
               </AvalonEventCard>
@@ -2083,23 +2076,23 @@ const {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="role in roles" :key="role.name_index">
+                <tr v-for="role in roles" :key="role.nameIndex">
                   <td>
                     <div :class="local.roleNameCell">
                       <button
                         type="button"
                         :class="local.roleLockButton"
-                        :aria-label="unlockedRoleIndex === role.name_index ? 'Lock role' : 'Unlock role to edit'"
+                        :aria-label="unlockedRoleIndex === role.nameIndex ? 'Lock role' : 'Unlock role to edit'"
                         @click="
-                          unlockedRoleIndex === role.name_index
+                          unlockedRoleIndex === role.nameIndex
                             ? lockRole()
                             : unlockRole(role)
                         "
                       >
-                        <AvalonIcon :name="unlockedRoleIndex === role.name_index ? 'check' : 'pencil'" :size="14" />
+                        <AvalonIcon :name="unlockedRoleIndex === role.nameIndex ? 'check' : 'pencil'" :size="14" />
                       </button>
                       <button
-                        v-if="unlockedRoleIndex === role.name_index"
+                        v-if="unlockedRoleIndex === role.nameIndex"
                         type="button"
                         :class="local.roleLockButton"
                         aria-label="Cancel editing"
@@ -2107,25 +2100,25 @@ const {
                       >
                         <AvalonIcon name="close" :size="14" />
                       </button>
-                      <span :style="{ color: ROLE_BADGE_COLOR_HEX[role.badge.color] }">
-                        <AvalonIcon :name="role.badge.icon" :size="14" />
+                      <span :style="{ color: ROLE_BADGE_COLOR_HEX[(role.badge.color as RoleBadgeColorId | null) ?? 'gray'] }">
+                        <AvalonIcon :name="(role.badge.icon ?? 'shield') as AvalonIconName" :size="14" />
                       </span>
                       <input
-                        v-if="unlockedRoleIndex === role.name_index"
+                        v-if="unlockedRoleIndex === role.nameIndex"
                         v-model="roleNameDraft"
                         :class="local.roleNameInput"
                         type="text"
-                        :disabled="renamingRoleFor === role.name_index"
+                        :disabled="renamingRoleFor === role.nameIndex"
                       />
                       <span v-else>{{ role.name }}</span>
                     </div>
-                    <div v-if="unlockedRoleIndex === role.name_index" :class="local.roleNameCell">
+                    <div v-if="unlockedRoleIndex === role.nameIndex" :class="local.roleNameCell">
                       <input
                         v-model="roleDescriptionDraft"
                         :class="local.roleNameInput"
                         type="text"
                         placeholder="Description"
-                        :disabled="renamingRoleFor === role.name_index"
+                        :disabled="renamingRoleFor === role.nameIndex"
                       />
                       <select v-model="roleBadgeIconDraft" aria-label="Badge icon">
                         <option v-for="icon in ROLE_BADGE_ICON_OPTIONS" :key="icon" :value="icon">
@@ -2138,9 +2131,9 @@ const {
                         </option>
                       </select>
                       <AvalonButton
-                        :label="renamingRoleFor === role.name_index ? 'Saving…' : 'Save'"
+                        :label="renamingRoleFor === role.nameIndex ? 'Saving…' : 'Save'"
                         variant="secondary"
-                        :disabled="renamingRoleFor === role.name_index"
+                        :disabled="renamingRoleFor === role.nameIndex"
                         @click="onSaveRoleEdits(role)"
                       />
                     </div>
@@ -2151,18 +2144,18 @@ const {
                       type="checkbox"
                       :checked="role.permissions.includes(permission)"
                       :disabled="
-                        unlockedRoleIndex !== role.name_index ||
-                        togglingPermissionFor === `${role.name_index}:${permission}`
+                        unlockedRoleIndex !== role.nameIndex ||
+                        togglingPermissionFor === `${role.nameIndex}:${permission}`
                       "
                       @change="onTogglePermission(role, permission, $event)"
                     />
                   </td>
                   <td>
                     <AvalonButton
-                      v-if="unlockedRoleIndex === role.name_index && !isBaseRole(role)"
-                      :label="deletingRoleFor === role.name_index ? 'Deleting…' : 'Delete'"
+                      v-if="unlockedRoleIndex === role.nameIndex && !isBaseRole(role)"
+                      :label="deletingRoleFor === role.nameIndex ? 'Deleting…' : 'Delete'"
                       variant="danger"
-                      :disabled="deletingRoleFor === role.name_index"
+                      :disabled="deletingRoleFor === role.nameIndex"
                       @click="onDeleteRole(role)"
                     />
                   </td>
@@ -2227,10 +2220,10 @@ const {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="role in roles" :key="role.name_index">
+                <tr v-for="role in roles" :key="role.nameIndex">
                   <td>
-                    <span :style="{ color: ROLE_BADGE_COLOR_HEX[role.badge.color] }">
-                      <AvalonIcon :name="role.badge.icon" :size="14" />
+                    <span :style="{ color: ROLE_BADGE_COLOR_HEX[(role.badge.color as RoleBadgeColorId | null) ?? 'gray'] }">
+                      <AvalonIcon :name="(role.badge.icon ?? 'shield') as AvalonIconName" :size="14" />
                     </span>
                     {{ role.name }}
                     <p v-if="role.description" :class="styles.empty">{{ role.description }}</p>
@@ -2313,7 +2306,7 @@ const {
           >
             <p :class="styles.empty">
               {{
-                guild.join_policy === 'open'
+                guild.joinPolicy === 'open'
                   ? 'Open — anyone can join instantly, no invite or approval needed.'
                   : 'Invite only — joining requires an invite, or an application a manager approves.'
               }}
@@ -2322,12 +2315,12 @@ const {
               :label="
                 savingJoinPolicy
                   ? 'Saving…'
-                  : guild.join_policy === 'open'
+                  : guild.joinPolicy === 'open'
                     ? 'Switch to invite only'
                     : 'Switch to open'
               "
               variant="secondary"
-              @click="onToggleJoinPolicy(guild.join_policy === 'open' ? 'invite_only' : 'open')"
+              @click="onToggleJoinPolicy(guild.joinPolicy === 'open' ? 'invite_only' : 'open')"
             />
             <p v-if="joinPolicyError" :class="styles.error">{{ joinPolicyError }}</p>
           </AvalonCard>

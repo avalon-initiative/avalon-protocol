@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { h } from 'vue'
 import HubShell from './HubShell.vue'
 import Profile from './Profile.vue'
-import { useSessionStore } from '@avalon/api-client'
+import { useSessionStore } from '../api/session'
 import { FakeWebSocket, mockFetchByPath } from '../testing/fakes'
 
 // A trivial stand-in for the real `Guild.vue` at the target route — this
@@ -85,7 +85,8 @@ async function mountAtProfile(announcements: unknown[]) {
     },
   })
 
-  useSessionStore().login('a-token')
+  localStorage.setItem('avalon:session:token', 'a-token')
+  await useSessionStore().initialize()
   const router = testRouter()
   router.push('/profile')
   await router.isReady()
