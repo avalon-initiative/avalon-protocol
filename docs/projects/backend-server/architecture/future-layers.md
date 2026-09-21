@@ -74,7 +74,7 @@ store.purchase(user, "premium_mount").await?;
 
 with no smart contracts, chain transactions, signing, or settlement visible to
 the integrator. That is the same principle as the rest of the SDK
-([`./sdk.md`](../../rust-sdk/architecture/sdk.md)). Economic infrastructure is introduced only after the
+([`./sdk.md`](../../sdks/architecture/sdk.md)). Economic infrastructure is introduced only after the
 network demonstrates real utility, and only if it serves the ecosystem rather
 than defining it.
 

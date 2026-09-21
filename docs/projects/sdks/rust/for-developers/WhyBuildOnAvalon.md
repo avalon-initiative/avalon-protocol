@@ -1,13 +1,13 @@
 # Why Build Your Game on Avalon
 
 This is the pitch for game developers specifically — what Avalon does for you if
-you connect your game to it, as distinct from [`../../../WhyAvalon.md`](../../../WhyAvalon.md)
+you connect your game to it, as distinct from [`../../../WhyAvalon.md`](../../../../WhyAvalon.md)
 (why the protocol needs to exist at all) and
-[`../../../stakeholders/Proposal.md`](../../../stakeholders/Proposal.md) (the full design).
+[`../../../stakeholders/Proposal.md`](../../../../stakeholders/Proposal.md) (the full design).
 
 **This describes the target, not today's build.** Avalon is early — identity/auth
 is real and working end-to-end (see the root `README.md` and
-[`../../backend-server/architecture/overview.md`](../../backend-server/architecture/overview.md) for current status);
+[`../../../backend-server/architecture/overview.md`](../../../backend-server/architecture/overview.md) for current status);
 guilds, achievements, presence, communication, and discovery are still
 protocol design and scaffolding. Treat everything below as the destination the
 architecture is being built toward, not a feature list you can integrate against
@@ -43,7 +43,7 @@ infrastructure the rest of the industry has already solved a dozen times over.
 
 ## 2. Users stay connected outside the game
 
-A guild is a network-level entity ([`../../backend-server/architecture/guilds.md`](../../backend-server/architecture/guilds.md)),
+A guild is a network-level entity ([`../../../backend-server/architecture/guilds.md`](../../../backend-server/architecture/guilds.md)),
 not a row in one game's database — it exists independently of whether any
 particular game is running. A user can be playing Game A, browsing the Hub,
 on mobile, or playing nothing at all, and still be part of the same community:
@@ -106,9 +106,9 @@ with are already here.
 Avalon gives developers primitives for things that are hard when every game
 is an island — cross-game achievements (a boss kill in Game A unlocking a
 title in Game B, if Game B chooses to recognize it — see
-[`../../backend-server/architecture/trust-model.md`](../../backend-server/architecture/trust-model.md)), durable
+[`../../../backend-server/architecture/trust-model.md`](../../../backend-server/architecture/trust-model.md)), durable
 tournament and game-event results
-([`../../backend-server/architecture/cross-integrator-events.md`](../../backend-server/architecture/cross-integrator-events.md)), and
+([`../../../backend-server/architecture/cross-integrator-events.md`](../../../backend-server/architecture/cross-integrator-events.md)), and
 guild challenges that span multiple games at once. None of it requires Game B
 to trust Game A blindly — recognition is always the receiving game's choice.
 
@@ -116,7 +116,7 @@ to trust Game A blindly — recognition is always the receiving game's choice.
 
 Avalon does not require every game to share a character model. A user's
 identity stays consistent; their characters stay entirely game-specific
-([`../../backend-server/architecture/bindings.md`](../../backend-server/architecture/bindings.md)):
+([`../../../backend-server/architecture/bindings.md`](../../../backend-server/architecture/bindings.md)):
 
 ```
 Avalon Identity
@@ -135,7 +135,7 @@ the characters themselves.
 Users accumulate years of history across the games they play. Avalon lets
 games attest to that history — defeated a boss, won a tournament, founded a
 guild, reached a milestone — as signed, verifiable claims
-([`../../backend-server/architecture/achievements-and-attestations.md`](../../backend-server/architecture/achievements-and-attestations.md)).
+([`../../../backend-server/architecture/achievements-and-attestations.md`](../../../backend-server/architecture/achievements-and-attestations.md)).
 
 The important distinction: **Avalon records provenance; games decide what
 that provenance means to them.** Game B doesn't have to accept anything Game A
@@ -158,7 +158,7 @@ authentication, friends, guilds, chat, presence, notifications, social
 permissions, moderation, and realtime synchronization from scratch just
 because users expect them. The intent is for the SDK to expose these as
 protocol capabilities you consume, not infrastructure you stand up and
-operate yourself — see [`../../backend-server/architecture/sdk.md`](../architecture/sdk.md).
+operate yourself — see [`../../../backend-server/architecture/sdk.md`](../../architecture/sdk.md).
 Conceptually, something like:
 
 ```rust
@@ -178,9 +178,9 @@ its existence doesn't depend on that game's server still running. The
 relationship inverts: a game *participates in* a community, rather than a
 community *existing only because* a particular server is up. That's a
 healthier long-term relationship between a studio and the people who played
-its game, and it's part of what [`../../backend-server/architecture/disaster-recovery.md`](../../backend-server/architecture/disaster-recovery.md)
+its game, and it's part of what [`../../../backend-server/architecture/disaster-recovery.md`](../../../backend-server/architecture/disaster-recovery.md)
 and the "what survives a game's death" table in
-[`../../backend-server/architecture/README.md`](../../backend-server/architecture/README.md) are designed around.
+[`../../../backend-server/architecture/README.md`](../../../backend-server/architecture/README.md) are designed around.
 
 ## 13. Community as a retention mechanism
 
@@ -297,7 +297,7 @@ game to participate in.
 
 That doesn't require Avalon to become a centralized platform. The network
 stays open: one Avalon network, many games, many communities, many
-independent developers, and — per [`../../backend-server/architecture/nodes.md`](../../backend-server/architecture/nodes.md)
+independent developers, and — per [`../../../backend-server/architecture/nodes.md`](../../../backend-server/architecture/nodes.md)
 — many independent infrastructure providers, none of them an authority over
 anyone else's claims. The value comes from being connected, not from Avalon
 owning the destinations.
@@ -306,7 +306,7 @@ owning the destinations.
 
 `bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works in Unity)
 has a real, building surface for friends/presence, guilds, and
-conversations — see [`../../backend-server/architecture/sdk.md`](../architecture/sdk.md) for
+conversations — see [`../../../backend-server/architecture/sdk.md`](../../architecture/sdk.md) for
 the full method list and what's still a gap (e.g. `roster()`/`channels()`/
 `messages()` apply no visibility scoping yet — issue #87).
 
@@ -341,14 +341,14 @@ same as the Rust reference SDK.
 ## Where this stands today
 
 See the root `README.md` for current build status and
-[`../../backend-server/architecture/README.md`](../../backend-server/architecture/README.md) for the invariants
+[`../../../backend-server/architecture/README.md`](../../../backend-server/architecture/README.md) for the invariants
 this is held to. For the actual integration surface once it exists, see
-[`../../backend-server/architecture/sdk.md`](../architecture/sdk.md) and this directory's
+[`../../../backend-server/architecture/sdk.md`](../../architecture/sdk.md) and this directory's
 `README.md`.
 
 If your studio wants to run this internally instead — your own games, your
 own network, not connected to the public one — that's supported, and
-[`../../backend-server/architecture/self-hosting.md`](../../backend-server/architecture/self-hosting.md) covers
+[`../../../backend-server/architecture/self-hosting.md`](../../../backend-server/architecture/self-hosting.md) covers
 what that actually means. Short version: it's a fork, not a way to join, and
 none of the network effects above apply to it. We'd rather have your games on
 the real network. But if a private instance is genuinely what you need, the

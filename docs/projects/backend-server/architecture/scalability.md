@@ -29,7 +29,7 @@ week to rebuild an index is not scalable.
 | Historical volume | how large is the log after 5 / 10 / 20 years? | #40 |
 | Rebuild time | how long to reconstruct every projection from genesis? | [`./disaster-recovery.md`](./disaster-recovery.md), #43 |
 | Node specialization | can settlement, indexing, realtime, and gateway scale separately? | [`./nodes.md`](./nodes.md) |
-| SDK routing | does discovery and failover stay cheap as node count grows? | [`./sdk.md`](../../rust-sdk/architecture/sdk.md), #91 |
+| SDK routing | does discovery and failover stay cheap as node count grows? | [`./sdk.md`](../../sdks/architecture/sdk.md), #91 |
 
 ## Back-of-envelope (assumptions, not measurements)
 

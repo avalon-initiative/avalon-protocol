@@ -349,6 +349,6 @@ isn't where this defaults.
 - [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
   catalogue; a new provenance field may be needed depending on #112's
   outcome.
-- [communication.md](./communication.md), [sdk.md](../../rust-sdk/architecture/sdk.md) — the first
+- [communication.md](./communication.md), [sdk.md](../../sdks/architecture/sdk.md) — the first
   consumer, and the "capabilities, not infrastructure" principle this
   epic serves.

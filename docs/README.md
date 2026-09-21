@@ -22,7 +22,7 @@ themselves.
 | New to the project, or the terminology is the blocker | [`GLOSSARY.md`](GLOSSARY.md) |
 | Evaluating Avalon from the outside (backing it, partnering, deciding whether to build on it) | [`stakeholders/`](stakeholders/README.md) |
 | A user of a game, app, or service that integrates Avalon | [`users/`](users/README.md) |
-| Integrating the SDK into my own game, app, or service | [`projects/rust-sdk/for-developers/`](projects/rust-sdk/for-developers/README.md) |
+| Integrating an SDK into my own game, app, or service | [`projects/sdks/`](projects/sdks/README.md) |
 | Contributing code or docs to this repository | [`maintainers/`](maintainers/README.md) |
 | Standing up an `avalon-server` node | [`projects/backend-server/for-hosters/`](projects/backend-server/for-hosters/README.md) |
 | Reading or reviewing the normative design (invariants, authority boundaries, what exists today) | [`projects/backend-server/architecture/`](projects/backend-server/architecture/README.md) |
@@ -32,12 +32,11 @@ themselves.
 | Project | What it is |
 |---|---|
 | [`projects/backend-server/`](projects/backend-server/README.md) | The network itself — identity, social graph, guilds, achievements, settlement. What everything else talks to. |
-| [`projects/rust-sdk/`](projects/rust-sdk/README.md) | The Rust reference SDK. |
+| [`projects/sdks/`](projects/sdks/README.md) | Every official SDK (Rust, C#), one per language, one language-agnostic design reference. |
 | [`projects/cli/`](projects/cli/README.md) | `avalon`, the local dev/ops CLI. |
 | [`projects/hub/`](projects/hub/README.md) | The web client — a user's first doorway into Avalon. |
 | [`projects/mobile-hub/`](projects/mobile-hub/README.md) | The Tauri desktop/mobile shell around the Hub UI. |
 | [`projects/ui/`](projects/ui/README.md) | The shared Vue3 component library both Hub apps use. |
-| [`projects/csharp-sdk/`](projects/csharp-sdk/README.md) | The external SDK for game developers (Unity-targeted). |
 
 See [`projects/README.md`](projects/README.md) for why the split is drawn
 where it is, and what stays cross-cutting instead of moving into one project
@@ -68,7 +67,7 @@ folder.
   deployable, it lives under that project's own `for-<audience>/` folder
   instead — e.g.
   [`projects/backend-server/for-hosters/`](projects/backend-server/for-hosters/README.md),
-  [`projects/rust-sdk/for-developers/`](projects/rust-sdk/for-developers/README.md) —
+  [`projects/sdks/rust/for-developers/`](projects/sdks/rust/for-developers/README.md) —
   see [`projects/README.md`](projects/README.md).
 - [`projects/backend-server/architecture/`](projects/backend-server/architecture/README.md)
   is the one normative reference for the protocol itself, audience-agnostic:

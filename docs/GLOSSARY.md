@@ -65,7 +65,7 @@ a reference while you read the architecture docs.
 | **Ed25519 signing key** | The separate key (not the login passkey) that signs the protocol events an identity authors. | The login credential. | [identity.md](projects/backend-server/architecture/identity.md) |
 | **Social recovery (M-of-N guardians)** | Recovering an identity when passkeys are lost via approval from M of N designated guardians, rather than a password reset. | A centrally-held recovery backdoor. | `docs/projects/backend-server/architecture/identity.md`, issue #201 |
 | **Cross-device pairing** | Registering an additional device/passkey to an existing identity without starting over. | Creating a second identity. | `docs/projects/backend-server/architecture/identity.md`, issue #307 |
-| **Capability (grant)** | An explicit, scoped permission an identity grants an integrator (e.g. "read my friends list") — the mechanism behind least-privilege access. Every SDK method checks its own required grant. | Blanket access to an identity's whole history. | [sdk.md](projects/rust-sdk/architecture/sdk.md), [security-model.md](projects/backend-server/architecture/security-model.md) |
+| **Capability (grant)** | An explicit, scoped permission an identity grants an integrator (e.g. "read my friends list") — the mechanism behind least-privilege access. Every SDK method checks its own required grant. | Blanket access to an identity's whole history. | [sdk.md](projects/sdks/architecture/sdk.md), [security-model.md](projects/backend-server/architecture/security-model.md) |
 
 ## Workspace and code map
 
@@ -75,7 +75,7 @@ a reference while you read the architecture docs.
 | **`chain` crate** | The `SettlementProvider` trait plus the Postgres-backed hash-chained ledger implementation. | [settlement.md](projects/backend-server/architecture/settlement.md) |
 | **`indexer` crate** | The fast-read query layer, rebuildable from durable protocol events. | [query-and-indexing.md](projects/backend-server/architecture/query-and-indexing.md) |
 | **`server` crate** | The one network-facing API/auth/realtime service every client (Hub, mobile-hub, integrators) talks to. | [overview.md](projects/backend-server/architecture/overview.md) |
-| **`sdk` crate** | The Rust reference SDK. | [sdk.md](projects/rust-sdk/architecture/sdk.md) |
+| **`sdk` crate** | The Rust reference SDK. | [sdk.md](projects/sdks/architecture/sdk.md) |
 | **`cli` crate** | Local dev/ops tooling — the `avalon` binary (`create-identity`, `inspect-ledger`, ...). | root `README.md` |
 | **Hub** (`apps/hub`) | The Vue3 web client — a user's first doorway into Avalon with no integrator open. A client of the network like any other, not the network itself, and has no backend of its own. | [hub.md](projects/hub/architecture/hub.md) |
 | **`apps/mobile-hub`** | A Tauri desktop/mobile shell around the same Hub UI, for guild/friend presence without a game client open. | root `README.md` |

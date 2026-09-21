@@ -54,9 +54,10 @@ Each document below links the ones that govern it.
 These are the protocol-domain docs that live with `backend-server` (the crates
 that ship as one `avalon-server` process: `protocol`, `chain`, `indexer`,
 `server`). Two related topics live with the projects that consume this one
-instead, since each is a separate deployable: the Rust SDK
-([`../../rust-sdk/architecture/sdk.md`](../../rust-sdk/architecture/sdk.md) —
-exposes protocol capabilities, not infrastructure topology) and the Hub
+instead, since each is a separate deployable: the SDKs
+([`../../sdks/architecture/sdk.md`](../../sdks/architecture/sdk.md) —
+language-agnostic; exposes protocol capabilities, not infrastructure
+topology) and the Hub
 ([`../../hub/architecture/hub.md`](../../hub/architecture/hub.md) — a client
 of the network, not the network).
 
@@ -161,7 +162,7 @@ answers it.
 | H | A guild exists outside any integrator, with members in three integrators at once | [guilds.md](guilds.md) |
 | I | Integrator A shuts down; what survives | the table above |
 | J | Every PostgreSQL database disappears; projections are rebuilt | [disaster-recovery.md](disaster-recovery.md) |
-| K | A node disappears; SDKs route elsewhere | [nodes.md](nodes.md), [rust-sdk architecture](../../rust-sdk/architecture/sdk.md) |
+| K | A node disappears; SDKs route elsewhere | [nodes.md](nodes.md), [sdk architecture](../../sdks/architecture/sdk.md) |
 | L | 1,000 integrators and 100M identities; Avalon is not a gameplay bottleneck | [scalability.md](scalability.md) |
 
 ## Implementation priority

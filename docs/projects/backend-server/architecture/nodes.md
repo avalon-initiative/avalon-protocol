@@ -418,7 +418,7 @@ Selection criteria over time: latency, geographic proximity, availability,
 protocol version, advertised capabilities, health, settlement support, operator
 preference, and, later, operator reputation. Version and capability negotiation
 happen on connect; failover and retry live inside the SDK
-([`./sdk.md`](../../rust-sdk/architecture/sdk.md)). Self-hosting stays possible without any central
+([`./sdk.md`](../../sdks/architecture/sdk.md)). Self-hosting stays possible without any central
 registry — `connect_to(url)` remains for local development and private
 deployments. A node mirroring the public network and a private, disconnected
 instance both "self-host" the same code — they are not the same thing; see
@@ -698,7 +698,7 @@ genuinely-incompatible-crypto-change case none of the above can cover.
 - **Rust SDK support has landed (#637)**: `AvalonClient::cross_node_login`/
   `CrossNodeLogin::wait` (`crates/sdk/src/cross_node_login.rs`) mirror
   `device_login`'s own start/poll shape — see
-  [`sdk.md`](../../rust-sdk/architecture/sdk.md)'s own "Today in the repo" entry for the full
+  [`sdk.md`](../../sdks/architecture/sdk.md)'s own "Today in the repo" entry for the full
   detail, including the same-device fast path
   (`submit_cross_node_login_grant`) and why this SDK's usual
   integrator-backend callers rarely use it (they never hold a *player's*
@@ -720,7 +720,7 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   `CrossNodeLogin.WaitAsync` and the same-device fast path
   `SubmitCrossNodeLoginGrantAsync`, the first place this SDK signs with a
   *player's* own Ed25519 identity key rather than an integrator's issuer
-  key — see [`sdk.md`](../../rust-sdk/architecture/sdk.md)'s own "Today in the repo" entry for the
+  key — see [`sdk.md`](../../sdks/architecture/sdk.md)'s own "Today in the repo" entry for the
   full detail.
 - **Hub approval screen has landed (#639)**: `apps/hub/src/views/CrossNodeLogin.vue`
   (route `cross-node-login`, a `?node=...&user_code=...` deep link) — real,

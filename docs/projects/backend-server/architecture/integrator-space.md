@@ -341,7 +341,7 @@ guarantee is actually needed, following the same discipline
   `.proto` message text plus its `default_visibility`/`field_visibility`
   maps, so an integrator using the Rust SDK never hand-writes `.proto`
   source or the raw publish request — see
-  [sdk.md](../../rust-sdk/architecture/sdk.md)'s own "Today in the repo" entry for the macro's
+  [sdk.md](../../sdks/architecture/sdk.md)'s own "Today in the repo" entry for the macro's
   supported-type scope and `Session::publish_schema_version`/
   `publish_instance`.
 - **In-process parse cache.** `proto_schema` caches each schema's parsed

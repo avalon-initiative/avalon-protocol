@@ -144,12 +144,11 @@ docs/
   projects/      one folder per deployable, each self-contained enough to
                  move to its own repo later — see projects/README.md
     backend-server/  the network itself: architecture/, for-hosters/, for-maintainers/
-    rust-sdk/        the Rust reference SDK: architecture/, for-developers/
+    sdks/            every official SDK (rust/, csharp/) + one shared architecture/
     cli/             the `avalon` dev/ops CLI
     hub/             the web client
     mobile-hub/      the Tauri desktop/mobile shell
     ui/              the shared Vue3 component library
-    csharp-sdk/      the external SDK for game developers
 ```
 
 Architecture decisions are tracked as closed GitHub issues labeled

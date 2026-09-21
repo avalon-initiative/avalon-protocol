@@ -26,15 +26,15 @@ its own parallel guide yet — it'll get one once #51 catches it up.
    vertical slice locally through `avalon-cli`, no game client needed.
 
 These pages are about *doing* — they link into
-[`../../backend-server/architecture/`](../../backend-server/architecture/) for the concepts behind what you're
+[`../../../backend-server/architecture/`](../../../backend-server/architecture/) for the concepts behind what you're
 doing (the trust model, capability grants, revocation, visibility) rather
 than restating it. Runnable, `make check`-compiled examples for each guide's
 core flow live in `crates/sdk/examples/` (`authenticate.rs`,
 `issue_achievement.rs`, `list_friends.rs`).
 
-See also [`../architecture/sdk.md`](../architecture/sdk.md) for the SDK
+See also [`../../architecture/sdk.md`](../../architecture/sdk.md) for the SDK
 design principle (protocol capabilities, not infrastructure),
-[`../../backend-server/architecture/trust-model.md`](../../backend-server/architecture/trust-model.md) for what an
-integrator is and isn't told about an attestation, [`../../../stakeholders/Proposal.md`](../../../stakeholders/Proposal.md)
+[`../../../backend-server/architecture/trust-model.md`](../../../backend-server/architecture/trust-model.md) for what an
+integrator is and isn't told about an attestation, [`../../../stakeholders/Proposal.md`](../../../../stakeholders/Proposal.md)
 §17–19 and §24 for the intended developer experience, and the repository root
 `README.md` for the current build status.

@@ -2,7 +2,7 @@
 
 Documentation for people maintaining or contributing to this repository
 itself — distinct from people building *on* Avalon (see
-[developer docs](../projects/rust-sdk/for-developers/)) and distinct from people hosting a
+[developer docs](../projects/sdks/README.md)) and distinct from people hosting a
 node without contributing code (see
 [`../projects/backend-server/for-hosters/`](../projects/backend-server/for-hosters/README.md)).
 

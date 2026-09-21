@@ -65,7 +65,7 @@ stay.
 |---|---|
 | Curious what this whole project is for, no jargon | You just read it — see also [`../../WhyAvalon.md`](../../WhyAvalon.md) and [`../../GLOSSARY.md`](../../GLOSSARY.md) if a term trips you up |
 | Standing up my own `avalon-server` node | [`for-hosters/README.md`](for-hosters/README.md) |
-| Building a game/app/service that talks to this backend | Start with the SDK that does the talking for you — [`../rust-sdk/README.md`](../rust-sdk/README.md) or [`../csharp-sdk/README.md`](../csharp-sdk/README.md) — this project's own [`architecture/`](architecture/README.md) is the reference for what the SDKs are wrapping |
+| Building a game/app/service that talks to this backend | Start with the SDK for your language — [`../sdks/README.md`](../sdks/README.md) — this project's own [`architecture/`](architecture/README.md) is the reference for what the SDKs are wrapping |
 | Contributing code to `protocol`/`chain`/`indexer`/`server` | [`for-maintainers/`](for-maintainers) (backend-specific ops docs) plus the repo-wide [`../../maintainers/README.md`](../../maintainers/README.md) |
 | Deciding whether to back, partner with, or build on Avalon | [`../../stakeholders/README.md`](../../stakeholders/README.md) and [`../../stakeholders/Proposal.md`](../../stakeholders/Proposal.md) |
 | Reading the normative design — invariants, authority boundaries, what's actually built | [`architecture/README.md`](architecture/README.md) |
@@ -87,9 +87,9 @@ stay.
 
 ## Related projects
 
-- [`../rust-sdk/`](../rust-sdk/README.md) and
-  [`../csharp-sdk/`](../csharp-sdk/README.md) are how a game or app actually
-  talks to this backend — neither ships as part of `avalon-server` itself.
+- [`../sdks/`](../sdks/README.md) — every official SDK, and how a game or
+  app actually talks to this backend; none of them ship as part of
+  `avalon-server` itself.
 - [`../cli/`](../cli/README.md) (`avalon`) is a standalone dev/ops tool that
   talks to this backend over the same API surface a client would.
 - [`../hub/`](../hub/README.md) is a *client* of this backend, same as any

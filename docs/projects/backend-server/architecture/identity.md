@@ -1054,5 +1054,5 @@ to verify against the reconstructed message gets `INVALID_FRESH_SIGNATURE`.
   the repo" section), [#698](https://github.com/LunarVagabond/avalon-protocol/issues/698)
   server enforcement, [#704](https://github.com/LunarVagabond/avalon-protocol/issues/704)
   two concrete gaps #697 found and #698 closed. See
-  [sdk.md](../../rust-sdk/architecture/sdk.md)'s own "Decisions and tickets" for the companion
+  [sdk.md](../../sdks/architecture/sdk.md)'s own "Decisions and tickets" for the companion
   per-language `AccountSession` tickets (#699/#700/#701/#707).
