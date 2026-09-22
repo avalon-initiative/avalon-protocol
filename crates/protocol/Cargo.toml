@@ -17,3 +17,11 @@ base64.workspace = true
 # schema's response/request bodies (e.g. `identity::Genre`) need
 # `ToSchema` too — this is still a pure derive, no I/O added.
 utoipa.workspace = true
+# STH (Signed Tree Head) signing/verification (issue #773, moved from
+# `avalon-chain` so the SDK doesn't need chain's full Postgres stack just
+# for this pure Ed25519 signing scheme).
+ed25519-dalek.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

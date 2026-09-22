@@ -54,11 +54,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use avalon_chain::mirror::{self, ObservedSth, SELF_SIGNED_SOURCE};
-use avalon_chain::sth::{self, SignedTreeHead};
 use avalon_chain::{merkle, PostgresSettlementProvider};
 use avalon_indexer::postgres::PostgresIndexer;
 use avalon_protocol::events::ProtocolEvent;
 use avalon_protocol::ids::GlobalId;
+use avalon_protocol::sth::{self, SignedTreeHead};
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use sqlx::Acquire;

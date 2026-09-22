@@ -100,7 +100,7 @@ and where each is wired.
 - Nothing is load-tested. Milestone 1 is one `avalon-server` process, one
   Postgres database. Batching (#38), a Merkle root, and Signed Tree Heads
   are real (`crates/chain/src/postgres.rs`'s `ledger_batches`,
-  `crates/chain/src/merkle.rs`, `sth.rs`) — one ledger row per event, closed
+  `crates/chain/src/merkle.rs`, `crates/protocol/src/sth.rs`) — one ledger row per event, closed
   over into batches rather than committed one at a time. Commit and
   proof-serving cost is O(log n) in total ledger size, not O(n)
   (`crate::incremental_merkle`, #349) — see `settlement.md`'s "Today in the

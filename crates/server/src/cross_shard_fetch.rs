@@ -42,8 +42,8 @@
 
 use std::collections::HashMap;
 
-use avalon_chain::sth::SignedTreeHead;
 use avalon_chain::{hash_entry, merkle, EntryContent};
+use avalon_protocol::sth::SignedTreeHead;
 use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -177,7 +177,7 @@ async fn fetch_verified_sth(
     let verified = db_keys
         .iter()
         .chain(static_key)
-        .any(|key| avalon_chain::sth::verify_tree_head(key, &sth));
+        .any(|key| avalon_protocol::sth::verify_tree_head(key, &sth));
     if !verified {
         return Err(CrossShardFetchError::SthVerificationFailed(
             shard_id.to_string(),

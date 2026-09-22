@@ -2,8 +2,11 @@
 //! a signed, append-only ledger, not a blockchain (#68/#70/#40/#39). See
 //! `docs/architecture/settlement.md` for the decided design. [`merkle`] is
 //! the RFC 6962 Merkle tree/proof machinery (#210/#211), [`sth`] the
-//! STH-signing scheme (#39), [`mirror`] the mirror-watcher storage (#299),
-//! and [`retention`] node-tiered payload retention (#208/#180) — see each
+//! STH-signing scheme (#39, moved into `avalon_protocol::sth` by #773 so
+//! the SDK can depend on it without pulling in chain's Postgres stack —
+//! re-exported here so existing callers of `avalon_chain::sth` keep
+//! working), [`mirror`] the mirror-watcher storage (#299), and
+//! [`retention`] node-tiered payload retention (#208/#180) — see each
 //! module's own doc comment. Nothing outside this crate should depend on
 //! *how* commitments are produced, only on this trait.
 
@@ -15,7 +18,7 @@ pub mod migration;
 pub mod mirror;
 mod postgres;
 pub mod retention;
-pub mod sth;
+pub use avalon_protocol::sth;
 
 pub use postgres::{
     hash_entry, EntryContent, GenesisError, IssuerHistoryEntry, LedgerBatchView, LedgerEntryView,

@@ -350,7 +350,7 @@ async fn observed_sth_round_trips_the_signed_created_at_not_the_observed_at() {
         "this test is only meaningful if the two timestamps actually differ"
     );
 
-    let sth: avalon_chain::sth::SignedTreeHead = fetched.into();
+    let sth: avalon_protocol::sth::SignedTreeHead = fetched.into();
     assert_eq!(
         sth.created_at, signed_created_at,
         "the served SignedTreeHead must carry the originally-signed created_at"

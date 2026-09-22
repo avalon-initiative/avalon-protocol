@@ -25,3 +25,4 @@ pub mod interest_claim;
 pub mod permissions;
 pub mod revocation;
 pub mod social;
+pub mod sth;

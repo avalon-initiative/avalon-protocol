@@ -106,7 +106,7 @@ struct SignedTreeHeadWire {
     created_at: time::OffsetDateTime,
 }
 
-impl From<SignedTreeHeadWire> for avalon_chain::sth::SignedTreeHead {
+impl From<SignedTreeHeadWire> for avalon_protocol::sth::SignedTreeHead {
     fn from(wire: SignedTreeHeadWire) -> Self {
         Self {
             tree_size: wire.tree_size,
@@ -162,7 +162,7 @@ pub enum NetworkTrustStatus {
 /// signature — `false` for any malformed input (bad hex, wrong-length key)
 /// as well as an outright-invalid signature, never panics. The exact
 /// Rust-side counterpart to `apps/hub/src/network/verifyNetwork.ts::verifyTreeHead`.
-fn verify_tree_head_hex(verify_key_hex: &str, sth: &avalon_chain::sth::SignedTreeHead) -> bool {
+fn verify_tree_head_hex(verify_key_hex: &str, sth: &avalon_protocol::sth::SignedTreeHead) -> bool {
     let Ok(key_bytes) = hex::decode(verify_key_hex) else {
         return false;
     };
@@ -172,7 +172,7 @@ fn verify_tree_head_hex(verify_key_hex: &str, sth: &avalon_chain::sth::SignedTre
     let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
         return false;
     };
-    avalon_chain::sth::verify_tree_head(&verifying_key, sth)
+    avalon_protocol::sth::verify_tree_head(&verifying_key, sth)
 }
 
 /// Decides which of [`NetworkTrustStatus`]'s first three states applies to
@@ -181,7 +181,7 @@ fn verify_tree_head_hex(verify_key_hex: &str, sth: &avalon_chain::sth::SignedTre
 /// directly unit-testable.
 fn evaluate_network_trust(
     anchors: &[TrustAnchorEntry],
-    sth: avalon_chain::sth::SignedTreeHead,
+    sth: avalon_protocol::sth::SignedTreeHead,
 ) -> NetworkTrustStatus {
     let Some(entry) = anchors
         .iter()
@@ -401,8 +401,11 @@ mod tests {
         }
     }
 
-    fn signed_sth(signing_key: &SigningKey, network_id: &str) -> avalon_chain::sth::SignedTreeHead {
-        avalon_chain::sth::sign_tree_head(
+    fn signed_sth(
+        signing_key: &SigningKey,
+        network_id: &str,
+    ) -> avalon_protocol::sth::SignedTreeHead {
+        avalon_protocol::sth::sign_tree_head(
             signing_key,
             "test-key",
             42,

@@ -137,7 +137,7 @@ the integrator's own history, matching this document's shard-operator
 invariants above.
 
 **Implemented (#531).** `POST /ledger/prepare-batch` returns a read-only
-preview (`avalon_chain::sth::PreparedTreeHead`) that never touches
+preview (`avalon_protocol::sth::PreparedTreeHead`) that never touches
 `ledger_entries`/`ledger_batches`/the shared Merkle cache — a preview
 that mutated shared state or burned real `seq` values on every call,
 whether or not the caller ever finalizes, would be a real cost with no
@@ -326,7 +326,7 @@ on the public network" — that's a real gap, not a hidden feature; see
   `crates/chain/tests/settlement.rs`.
 - `network_id` is hashed into every ledger entry
   (`hash_entry`/`hash_event`) and into every Signed Tree Head's signing
-  message (`crates/chain/src/sth.rs`), so it's load-bearing for integrity,
+  message (`crates/protocol/src/sth.rs`), so it's load-bearing for integrity,
   not just a boot-time label.
 - `avalon inspect-ledger`/`-full` (`crates/cli`) print whichever
   `network_id` the connected database is actually rooted in, so an operator

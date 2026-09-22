@@ -159,6 +159,14 @@ Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
 `avalon-chain` or `avalon-server`.
 
+The Rust SDK (`crates/sdk`) itself no longer depends on `avalon-chain`
+either (#773, part of epic #771's move of the Rust SDK into a standalone
+`avalon-sdks` repo): `network.rs`'s STH-based network trust verification
+(`verify_network`), `managed_hosting.rs`, and `issuer_registration.rs` all
+use `avalon_protocol::sth::*` directly — `sth.rs`'s Ed25519 signing/
+verification code was pure enough to move from `crates/chain` into
+`crates/protocol` with no `sqlx`/Postgres dependency along for the ride.
+
 ## Today in the repo
 
 - `crates/sdk/src/lib.rs` — `AvalonClient::new(AvalonConfig { server_url,

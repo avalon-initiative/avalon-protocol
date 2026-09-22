@@ -8,9 +8,6 @@ description = "Rust reference SDK for integrating a game with Avalon. Thin over 
 
 [dependencies]
 avalon-protocol = { path = "../protocol" }
-# Issue #482: STH-based network trust verification reuses `chain`'s signing-
-# message logic directly rather than reimplementing it.
-avalon-chain = { path = "../chain" }
 # Issue #386: #[derive(AvalonSchema)] — re-exported through schema.rs.
 # Nested workspace member (#772) — this crate has no dependency on the core
 # protocol crates, only on this SDK, so it lives under crates/sdk/ rather

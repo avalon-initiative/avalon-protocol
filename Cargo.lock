@@ -321,6 +321,9 @@ name = "avalon-protocol"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -343,7 +346,6 @@ name = "avalon-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "avalon-chain",
  "avalon-protocol",
  "avalon-schema-derive",
  "avalon-sdk",

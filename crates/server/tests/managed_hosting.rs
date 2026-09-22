@@ -117,7 +117,7 @@ async fn prepare_then_finalize_over_http_commits_the_batch() {
     // Sign locally, exactly as a real integrator using a managed host
     // would — this key never appears in any request to the server.
     let message =
-        avalon_chain::sth::signing_message(tree_size, &root_hash, &network_id, created_at);
+        avalon_protocol::sth::signing_message(tree_size, &root_hash, &network_id, created_at);
     let signature = integrator_key.sign(&message);
 
     let finalize_response = http
@@ -181,7 +181,7 @@ async fn finalize_over_http_with_the_wrong_key_is_rejected() {
     // A random key, never registered as AVALON_MANAGED_HOSTING_VERIFY_KEY.
     let wrong_key = SigningKey::generate(&mut rand::rng());
     let message =
-        avalon_chain::sth::signing_message(tree_size, &root_hash, &network_id, created_at);
+        avalon_protocol::sth::signing_message(tree_size, &root_hash, &network_id, created_at);
     let signature = wrong_key.sign(&message);
 
     let finalize_response = http

@@ -55,7 +55,7 @@ async fn test_pool() -> PgPool {
 /// supply as `static_verify_keys["core"]`, same as a genuine consumer of a
 /// shared Layer-1 shard would need to already know out-of-band.
 fn core_verify_keys() -> HashMap<String, ed25519_dalek::VerifyingKey> {
-    let key = avalon_chain::sth::load_verify_key_from_env()
+    let key = avalon_protocol::sth::load_verify_key_from_env()
         .expect("AVALON_SETTLEMENT_VERIFY_KEY must be set to run this test");
     HashMap::from([("core".to_string(), key)])
 }
