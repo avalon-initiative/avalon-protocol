@@ -72,23 +72,18 @@ namespace Avalon.Sdk
     }
 
     /// <summary>A "people you may know" candidate (<c>GET /people/discover</c>). Mirrors the
-    /// Rust SDK's <c>account::social::DiscoveryCandidate</c>.</summary>
+    /// Rust SDK's <c>account::social::DiscoveryCandidate</c>.
+    ///
+    /// Issue #725: this previously also declared <c>display_name</c>/<c>avatar_url</c>/
+    /// <c>mutual_friends</c>/<c>mutual_guilds</c> fields the server has never actually sent —
+    /// <c>crates/server/src/discovery.rs</c>'s own <c>DiscoveryCandidate</c> has only ever had
+    /// <c>identity_id</c>. Found migrating onto <c>Avalon.Sdk.Generated.DiscoveryCandidate</c>,
+    /// which is exactly the real server response shape (the Rust SDK found and fixed the same
+    /// bug the same way).</summary>
     public sealed class DiscoveryCandidate
     {
         [JsonPropertyName("identity_id")]
         public Guid IdentityId { get; set; }
-
-        [JsonPropertyName("display_name")]
-        public string DisplayName { get; set; } = "";
-
-        [JsonPropertyName("avatar_url")]
-        public string? AvatarUrl { get; set; }
-
-        [JsonPropertyName("mutual_friends")]
-        public long MutualFriends { get; set; }
-
-        [JsonPropertyName("mutual_guilds")]
-        public long MutualGuilds { get; set; }
     }
 
     /// <summary>A single global search result (<c>GET /identities/search</c>). Mirrors the
@@ -198,48 +193,39 @@ namespace Avalon.Sdk
         public DateTimeOffset SentAt { get; set; }
     }
 
-    internal sealed class CreateFriendRequestRequest
-    {
-        [JsonPropertyName("to")]
-        public Guid To { get; set; }
-    }
-
-    internal sealed class CreateBlockRequest
-    {
-        [JsonPropertyName("identity_id")]
-        public Guid IdentityId { get; set; }
-    }
-
-    internal sealed class ResolveHandleResponse
-    {
-        [JsonPropertyName("identity_id")]
-        public Guid IdentityId { get; set; }
-    }
-
-    internal sealed class DiscoverPeopleResponse
-    {
-        [JsonPropertyName("candidates")]
-        public List<DiscoveryCandidate> Candidates { get; set; } = new List<DiscoveryCandidate>();
-    }
-
-    internal sealed class SearchIdentitiesResponse
-    {
-        [JsonPropertyName("results")]
-        public List<SearchResultIdentity> Results { get; set; } = new List<SearchResultIdentity>();
-    }
-
-    internal sealed class AccountUpdatePresenceRequest
-    {
-        [JsonPropertyName("status")]
-        public PresenceStatus Status { get; set; }
-
-        [JsonPropertyName("hide_active_in")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public bool? HideActiveIn { get; set; }
-    }
-
     public sealed partial class AccountSession
     {
+        /// <summary>Generated.cs's own <see cref="Avalon.Sdk.Generated.PresenceStatus"/> and
+        /// this SDK's public <see cref="PresenceStatus"/> are deliberately two separate enum
+        /// types with identical member names, mirroring the <c>ToDomainGenre</c> pattern in
+        /// this file's own <c>AccountSession.cs</c> — a name round-trip via
+        /// <see cref="Enum.Parse"/> rather than a fragile numeric cast.</summary>
+        private static PresenceStatus ToDomainPresenceStatus(Avalon.Sdk.Generated.PresenceStatus generated) =>
+            (PresenceStatus)Enum.Parse(typeof(PresenceStatus), generated.ToString());
+
+        private static Avalon.Sdk.Generated.PresenceStatus ToGeneratedPresenceStatus(PresenceStatus status) =>
+            (Avalon.Sdk.Generated.PresenceStatus)Enum.Parse(typeof(Avalon.Sdk.Generated.PresenceStatus), status.ToString());
+
+        private static Presence ToDomainPresence(Avalon.Sdk.Generated.PresenceResponse p) => new Presence
+        {
+            IdentityId = p.IdentityId,
+            Status = ToDomainPresenceStatus(p.Status),
+            ActiveIn = p.ActiveIn,
+            UpdatedAt = p.UpdatedAt,
+        };
+
+        private static DiscoveryCandidate ToDomainDiscoveryCandidate(Avalon.Sdk.Generated.DiscoveryCandidate c) => new DiscoveryCandidate
+        {
+            IdentityId = c.IdentityId,
+        };
+
+        private static SearchResultIdentity ToDomainSearchResultIdentity(Avalon.Sdk.Generated.SearchResultIdentity r) => new SearchResultIdentity
+        {
+            IdentityId = r.IdentityId,
+            DisplayName = r.DisplayName,
+            AvatarUrl = r.AvatarUrl,
+        };
+
         /// <summary><c>GET /friends</c>.</summary>
         public async Task<IReadOnlyList<AccountFriendship>> FriendsAsync(CancellationToken ct = default) =>
             await GetAsync<List<AccountFriendship>>("/friends", ct).ConfigureAwait(false);
@@ -250,8 +236,8 @@ namespace Avalon.Sdk
 
         /// <summary><c>POST /friends/requests</c>.</summary>
         public async Task<AccountFriendRequest> CreateFriendRequestAsync(Guid to, CancellationToken ct = default) =>
-            await PostAsync<CreateFriendRequestRequest, AccountFriendRequest>(
-                "/friends/requests", new CreateFriendRequestRequest { To = to }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateFriendRequestRequest, AccountFriendRequest>(
+                "/friends/requests", new Avalon.Sdk.Generated.CreateFriendRequestRequest { To = to }, ct).ConfigureAwait(false);
 
         /// <summary><c>POST /friends/requests/{id}/accept</c>.</summary>
         public async Task<AccountFriendship> AcceptFriendRequestAsync(Guid requestId, CancellationToken ct = default) =>
@@ -270,7 +256,7 @@ namespace Avalon.Sdk
         /// the "add friend" flow.</summary>
         public async Task<Guid> ResolveHandleAsync(string handle, CancellationToken ct = default)
         {
-            var response = await GetAsync<ResolveHandleResponse>($"/friends/handle/{Uri.EscapeDataString(handle)}", ct).ConfigureAwait(false);
+            var response = await GetAsync<Avalon.Sdk.Generated.ResolveHandleResponse>($"/friends/handle/{Uri.EscapeDataString(handle)}", ct).ConfigureAwait(false);
             return response.IdentityId;
         }
 
@@ -280,7 +266,8 @@ namespace Avalon.Sdk
 
         /// <summary><c>POST /blocks</c>.</summary>
         public async Task<AccountBlock> BlockAsync(Guid identityId, CancellationToken ct = default) =>
-            await PostAsync<CreateBlockRequest, AccountBlock>("/blocks", new CreateBlockRequest { IdentityId = identityId }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateBlockRequest, AccountBlock>(
+                "/blocks", new Avalon.Sdk.Generated.CreateBlockRequest { IdentityId = identityId }, ct).ConfigureAwait(false);
 
         /// <summary><c>DELETE /blocks/{identity_id}</c>.</summary>
         public async Task UnblockAsync(Guid identityId, CancellationToken ct = default) =>
@@ -290,8 +277,8 @@ namespace Avalon.Sdk
         /// session is the only input.</summary>
         public async Task<IReadOnlyList<DiscoveryCandidate>> DiscoverPeopleAsync(CancellationToken ct = default)
         {
-            var response = await GetAsync<DiscoverPeopleResponse>("/people/discover", ct).ConfigureAwait(false);
-            return response.Candidates;
+            var response = await GetAsync<Avalon.Sdk.Generated.DiscoverPeopleResponse>("/people/discover", ct).ConfigureAwait(false);
+            return response.Candidates.Select(ToDomainDiscoveryCandidate).ToList();
         }
 
         /// <summary><c>GET /identities/search?q=</c> — only matches identities that opted
@@ -303,8 +290,8 @@ namespace Avalon.Sdk
             {
                 return Array.Empty<SearchResultIdentity>();
             }
-            var response = await GetQueryAsync<SearchIdentitiesResponse>("/identities/search", new[] { ("q", q) }, ct).ConfigureAwait(false);
-            return response.Results;
+            var response = await GetQueryAsync<Avalon.Sdk.Generated.SearchIdentitiesResponse>("/identities/search", new[] { ("q", q) }, ct).ConfigureAwait(false);
+            return response.Results.Select(ToDomainSearchResultIdentity).ToList();
         }
 
         /// <summary><c>GET /identities/profiles?ids=</c> — batched, public-fields-only.</summary>
@@ -335,9 +322,12 @@ namespace Avalon.Sdk
 
         /// <summary><c>PUT /me/presence</c> — publishes the caller's own status. Not
         /// signature-required (high-frequency, self-correcting).</summary>
-        public async Task<Presence> UpdatePresenceAsync(PresenceStatus status, bool? hideActiveIn = null, CancellationToken ct = default) =>
-            await PutAsync<AccountUpdatePresenceRequest, Presence>(
-                "/me/presence", new AccountUpdatePresenceRequest { Status = status, HideActiveIn = hideActiveIn }, ct).ConfigureAwait(false);
+        public async Task<Presence> UpdatePresenceAsync(PresenceStatus status, bool? hideActiveIn = null, CancellationToken ct = default)
+        {
+            var response = await PutAsync<Avalon.Sdk.Generated.UpdatePresenceRequest, Avalon.Sdk.Generated.PresenceResponse>(
+                "/me/presence", new Avalon.Sdk.Generated.UpdatePresenceRequest { Status = ToGeneratedPresenceStatus(status), HideActiveIn = hideActiveIn }, ct).ConfigureAwait(false);
+            return ToDomainPresence(response);
+        }
 
         /// <summary><c>GET /presence?ids=</c> — no visibility filtering server-side (#87
         /// tracks adding it); returns exactly what the server returns.</summary>
@@ -348,7 +338,8 @@ namespace Avalon.Sdk
                 return Array.Empty<Presence>();
             }
             var joined = string.Join(",", ids);
-            return await GetQueryAsync<List<Presence>>("/presence", new[] { ("ids", joined) }, ct).ConfigureAwait(false);
+            var response = await GetQueryAsync<List<Avalon.Sdk.Generated.PresenceResponse>>("/presence", new[] { ("ids", joined) }, ct).ConfigureAwait(false);
+            return response.Select(ToDomainPresence).ToList();
         }
     }
 }

@@ -47,78 +47,6 @@ namespace Avalon.Sdk
         }
     }
 
-    internal sealed class StartCrossNodeLoginResponse
-    {
-        [JsonPropertyName("request_code")]
-        public string RequestCode { get; set; } = "";
-
-        [JsonPropertyName("user_code")]
-        public string UserCode { get; set; } = "";
-
-        [JsonPropertyName("requesting_context")]
-        public string RequestingContext { get; set; } = "";
-
-        [JsonPropertyName("expires_in")]
-        public long ExpiresIn { get; set; }
-
-        [JsonPropertyName("poll_interval")]
-        public long PollInterval { get; set; }
-    }
-
-    internal sealed class PollCrossNodeLoginResponse
-    {
-        [JsonPropertyName("status")]
-        public string Status { get; set; } = "";
-
-        [JsonPropertyName("token")]
-        public string? Token { get; set; }
-    }
-
-    /// <summary>Wire-identical to <c>avalon_protocol::cross_node_login::CrossNodeLoginGrant</c>
-    /// — field names and shapes must match exactly, since a server deserializes this directly
-    /// into that Rust type.</summary>
-    internal sealed class CrossNodeLoginGrant
-    {
-        [JsonPropertyName("identity_id")]
-        public Guid IdentityId { get; set; }
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid SigningKeyId { get; set; }
-
-        [JsonPropertyName("destination_base_url")]
-        public string DestinationBaseUrl { get; set; } = "";
-
-        [JsonPropertyName("requesting_context")]
-        public string RequestingContext { get; set; } = "";
-
-        [JsonPropertyName("nonce")]
-        public Guid Nonce { get; set; }
-
-        [JsonPropertyName("issued_at")]
-        public DateTimeOffset IssuedAt { get; set; }
-
-        [JsonPropertyName("expires_at")]
-        public DateTimeOffset ExpiresAt { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string Signature { get; set; } = "";
-    }
-
-    internal sealed class SubmitGrantRequest
-    {
-        [JsonPropertyName("user_code")]
-        public string? UserCode { get; set; }
-
-        [JsonPropertyName("grant")]
-        public CrossNodeLoginGrant Grant { get; set; } = null!;
-    }
-
-    internal sealed class SubmitGrantResponse
-    {
-        [JsonPropertyName("token")]
-        public string? Token { get; set; }
-    }
-
     /// <summary>
     /// A pending cross-node login (epic #623), returned by
     /// <see cref="AvalonClient.CrossNodeLoginAsync"/>. Mirrors the Rust SDK's
@@ -189,7 +117,7 @@ namespace Avalon.Sdk
                 {
                     throw Session.ServerError(response.StatusCode);
                 }
-                var body = await Session.ReadJsonAsync<PollCrossNodeLoginResponse>(response, ct).ConfigureAwait(false);
+                var body = await Session.ReadJsonAsync<Avalon.Sdk.Generated.PollCrossNodeLoginResponse>(response, ct).ConfigureAwait(false);
 
                 switch (body.Status)
                 {
@@ -234,7 +162,7 @@ namespace Avalon.Sdk
             {
                 throw Session.ServerError(response.StatusCode);
             }
-            var body = await Session.ReadJsonAsync<StartCrossNodeLoginResponse>(response, ct).ConfigureAwait(false);
+            var body = await Session.ReadJsonAsync<Avalon.Sdk.Generated.StartCrossNodeLoginResponse>(response, ct).ConfigureAwait(false);
 
             return new CrossNodeLogin(
                 this,
@@ -318,7 +246,7 @@ namespace Avalon.Sdk
                 identityId, signingKeyId, destinationBaseUrl, requestingContext, nonce, issuedAt, expiresAt);
             var signature = SignWithIdentityKey(signingKeySeed, signingBytes);
 
-            var grant = new CrossNodeLoginGrant
+            var grant = new Avalon.Sdk.Generated.CrossNodeLoginGrant
             {
                 IdentityId = identityId,
                 SigningKeyId = signingKeyId,
@@ -332,14 +260,14 @@ namespace Avalon.Sdk
 
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/cross-node/submit");
             request.Content = new StringContent(
-                JsonSerializer.Serialize(new SubmitGrantRequest { UserCode = null, Grant = grant }),
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.SubmitGrantRequest { UserCode = null, Grant = grant }),
                 Encoding.UTF8, "application/json");
             using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 throw Session.ServerError(response.StatusCode);
             }
-            var body = await Session.ReadJsonAsync<SubmitGrantResponse>(response, ct).ConfigureAwait(false);
+            var body = await Session.ReadJsonAsync<Avalon.Sdk.Generated.SubmitGrantResponse>(response, ct).ConfigureAwait(false);
             if (body.Token is null)
             {
                 throw Session.ServerError(System.Net.HttpStatusCode.InternalServerError);

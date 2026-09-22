@@ -146,155 +146,65 @@ namespace Avalon.Sdk
         public Presence? Presence { get; }
     }
 
-    internal sealed class GuildResponse
-    {
-        public Guid Id { get; set; }
-        public string Name { get; set; } = "";
-        public string Tag { get; set; } = "";
-        public string Description { get; set; } = "";
-        public Guid Owner { get; set; }
-        [JsonPropertyName("created_at")]
-        public DateTimeOffset CreatedAt { get; set; }
-        [JsonPropertyName("join_policy")]
-        public string JoinPolicy { get; set; } = "invite_only";
-        public string? Motd { get; set; }
-        public string? Banner { get; set; }
-        public string? Icon { get; set; }
-        public List<GuildLink> Links { get; set; } = new List<GuildLink>();
-        public bool Recruiting { get; set; }
-
-        public Guild ToGuild() => new Guild()
-        {
-            Id = Id,
-            Name = Name,
-            Tag = Tag,
-            Description = Description,
-            Owner = Owner,
-            CreatedAt = CreatedAt,
-            // Falls back to InviteOnly on an unparseable string, same posture the server's
-            // own read path takes — never a hard failure on a read.
-            JoinPolicy = JoinPolicy == "open" ? global::Avalon.Sdk.JoinPolicy.Open : global::Avalon.Sdk.JoinPolicy.InviteOnly,
-            Motd = Motd,
-            Banner = Banner,
-            Icon = Icon,
-            Links = Links,
-            Recruiting = Recruiting,
-        };
-    }
-
-    internal sealed class MyGuildMembershipResponse
-    {
-        [JsonPropertyName("guild_id")]
-        public Guid GuildId { get; set; }
-        [JsonPropertyName("role_index")]
-        public int RoleIndex { get; set; }
-        [JsonPropertyName("joined_at")]
-        public DateTimeOffset JoinedAt { get; set; }
-    }
-
-    internal sealed class GuildMemberResponse
-    {
-        [JsonPropertyName("guild_id")]
-        public Guid GuildId { get; set; }
-        [JsonPropertyName("identity_id")]
-        public Guid IdentityId { get; set; }
-        [JsonPropertyName("role_index")]
-        public int RoleIndex { get; set; }
-        [JsonPropertyName("joined_at")]
-        public DateTimeOffset JoinedAt { get; set; }
-
-        public GuildMember ToGuildMember() => new GuildMember(
-            GuildId,
-            IdentityId,
-            // Clamped rather than throwing on a negative wire value — a server-side bug
-            // should not crash an integrator's read.
-            new GuildRole(GuildId, (uint)Math.Max(RoleIndex, 0)),
-            JoinedAt);
-    }
-
-    internal sealed class ChannelResponse
-    {
-        public Guid Id { get; set; }
-        [JsonPropertyName("guild_id")]
-        public Guid GuildId { get; set; }
-        public string Name { get; set; } = "";
-        public bool Archived { get; set; }
-        [JsonPropertyName("created_at")]
-        public DateTimeOffset CreatedAt { get; set; }
-        [JsonPropertyName("announcement_only")]
-        public bool AnnouncementOnly { get; set; }
-        public string? Topic { get; set; }
-
-        public GuildChannel ToGuildChannel() => new GuildChannel()
-        {
-            Id = Id,
-            GuildId = GuildId,
-            Name = Name,
-            AnnouncementOnly = AnnouncementOnly,
-            Topic = Topic,
-        };
-    }
-
-    internal sealed class GuildMessageResponse
-    {
-        public Guid Id { get; set; }
-        [JsonPropertyName("channel_id")]
-        public Guid ChannelId { get; set; }
-        public Guid Author { get; set; }
-        public string Body { get; set; } = "";
-        [JsonPropertyName("sent_at")]
-        public DateTimeOffset SentAt { get; set; }
-
-        public GuildMessage ToGuildMessage() => new GuildMessage()
-        {
-            Id = Id,
-            ChannelId = ChannelId,
-            Author = Author,
-            Body = Body,
-            SentAt = SentAt,
-        };
-    }
-
-    internal sealed class SendMessageRequest
-    {
-        [JsonPropertyName("body")]
-        public string Body { get; set; } = "";
-    }
-
-    internal sealed class EventResponse
-    {
-        public Guid Id { get; set; }
-        [JsonPropertyName("guild_id")]
-        public Guid GuildId { get; set; }
-        [JsonPropertyName("channel_id")]
-        public Guid? ChannelId { get; set; }
-        public string Title { get; set; } = "";
-        public string? Description { get; set; }
-        [JsonPropertyName("starts_at")]
-        public DateTimeOffset StartsAt { get; set; }
-        [JsonPropertyName("ends_at")]
-        public DateTimeOffset? EndsAt { get; set; }
-        [JsonPropertyName("created_by")]
-        public Guid CreatedBy { get; set; }
-        [JsonPropertyName("created_at")]
-        public DateTimeOffset CreatedAt { get; set; }
-
-        public GuildEvent ToGuildEvent() => new GuildEvent()
-        {
-            Id = Id,
-            GuildId = GuildId,
-            ChannelId = ChannelId,
-            Title = Title,
-            Description = Description,
-            StartsAt = StartsAt,
-            EndsAt = EndsAt,
-            CreatedBy = CreatedBy,
-            CreatedAt = CreatedAt,
-        };
-    }
-
     public sealed partial class Session
     {
+        internal static Guild GuildResponseToGuild(Avalon.Sdk.Generated.GuildResponse response) => new Guild()
+        {
+            Id = response.Id,
+            Name = response.Name,
+            Tag = response.Tag,
+            Description = response.Description,
+            Owner = response.Owner,
+            CreatedAt = response.CreatedAt,
+            // Falls back to InviteOnly on an unparseable string, same posture the server's
+            // own read path takes — never a hard failure on a read.
+            JoinPolicy = response.JoinPolicy == "open" ? global::Avalon.Sdk.JoinPolicy.Open : global::Avalon.Sdk.JoinPolicy.InviteOnly,
+            Motd = response.Motd,
+            Banner = response.Banner,
+            Icon = response.Icon,
+            Links = response.Links.Select(l => new GuildLink { Label = l.Label, Url = l.Url }).ToList(),
+            Recruiting = response.Recruiting,
+        };
+
+        internal static GuildMember GuildMemberResponseToGuildMember(Avalon.Sdk.Generated.GuildMemberResponse response) => new GuildMember(
+            response.GuildId,
+            response.IdentityId,
+            // Clamped rather than throwing on a negative wire value — a server-side bug
+            // should not crash an integrator's read.
+            new GuildRole(response.GuildId, (uint)Math.Max(response.RoleIndex, 0)),
+            response.JoinedAt);
+
+        internal static GuildChannel ChannelResponseToGuildChannel(Avalon.Sdk.Generated.ChannelResponse response) => new GuildChannel()
+        {
+            Id = response.Id,
+            GuildId = response.GuildId,
+            Name = response.Name,
+            AnnouncementOnly = response.AnnouncementOnly,
+            Topic = response.Topic,
+        };
+
+        internal static GuildMessage MessageResponseToGuildMessage(Avalon.Sdk.Generated.MessageResponse response) => new GuildMessage()
+        {
+            Id = response.Id,
+            ChannelId = response.ChannelId,
+            Author = response.Author,
+            Body = response.Body,
+            SentAt = response.SentAt,
+        };
+
+        internal static GuildEvent EventResponseToGuildEvent(Avalon.Sdk.Generated.EventResponse response) => new GuildEvent()
+        {
+            Id = response.Id,
+            GuildId = response.GuildId,
+            ChannelId = response.ChannelId,
+            Title = response.Title,
+            Description = response.Description,
+            StartsAt = response.StartsAt,
+            EndsAt = response.EndsAt,
+            CreatedBy = response.CreatedBy,
+            CreatedAt = response.CreatedAt,
+        };
+
         internal static GuildRosterMember MergeRosterMember(GuildMember member, IReadOnlyDictionary<Guid, Presence> presenceById)
         {
             presenceById.TryGetValue(member.IdentityId, out var presence);
@@ -307,8 +217,8 @@ namespace Avalon.Sdk
         {
             Require("guilds.read");
 
-            var memberships = await GetJsonAsync<List<MyGuildMembershipResponse>>($"{ServerUrl}/me/guilds", ct).ConfigureAwait(false)
-                ?? new List<MyGuildMembershipResponse>();
+            var memberships = await GetJsonAsync<List<Avalon.Sdk.Generated.MyGuildMembershipResponse>>($"{ServerUrl}/me/guilds", ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.MyGuildMembershipResponse>();
 
             var result = new List<GuildMembership>(memberships.Count);
             foreach (var membership in memberships)
@@ -326,8 +236,8 @@ namespace Avalon.Sdk
         /// internally by callers that already checked their own capability.</summary>
         private async Task<Guild> FetchGuildAsync(Guid id, CancellationToken ct)
         {
-            var response = await GetJsonAsync<GuildResponse>($"{ServerUrl}/guilds/{id}", ct).ConfigureAwait(false);
-            return response.ToGuild();
+            var response = await GetJsonAsync<Avalon.Sdk.Generated.GuildResponse>($"{ServerUrl}/guilds/{id}", ct).ConfigureAwait(false);
+            return GuildResponseToGuild(response);
         }
 
         /// <summary>A handle scoped to one guild. Not capability-gated itself — the methods
@@ -366,10 +276,10 @@ namespace Avalon.Sdk
         {
             _session.Require("guilds.read");
 
-            var members = (await _session.GetJsonAsync<List<GuildMemberResponse>>(
+            var members = (await _session.GetJsonAsync<List<Avalon.Sdk.Generated.GuildMemberResponse>>(
                 $"{_session.ServerUrl}/guilds/{_guildId}/members", ct).ConfigureAwait(false)
-                ?? new List<GuildMemberResponse>())
-                .Select(m => m.ToGuildMember())
+                ?? new List<Avalon.Sdk.Generated.GuildMemberResponse>())
+                .Select(Session.GuildMemberResponseToGuildMember)
                 .ToList();
 
             var presenceById = new Dictionary<Guid, Presence>();
@@ -390,10 +300,10 @@ namespace Avalon.Sdk
         public async Task<IReadOnlyList<GuildChannel>> ChannelsAsync(CancellationToken ct = default)
         {
             _session.Require("guilds.chat");
-            var channels = await _session.GetJsonAsync<List<ChannelResponse>>(
+            var channels = await _session.GetJsonAsync<List<Avalon.Sdk.Generated.ChannelResponse>>(
                 $"{_session.ServerUrl}/guilds/{_guildId}/channels", ct).ConfigureAwait(false)
-                ?? new List<ChannelResponse>();
-            return channels.Select(c => c.ToGuildChannel()).ToList();
+                ?? new List<Avalon.Sdk.Generated.ChannelResponse>();
+            return channels.Select(Session.ChannelResponseToGuildChannel).ToList();
         }
 
         /// <summary>GET /guilds/{id}/events — requires guilds.read. Lists all scheduled
@@ -402,10 +312,10 @@ namespace Avalon.Sdk
         public async Task<IReadOnlyList<GuildEvent>> EventsAsync(CancellationToken ct = default)
         {
             _session.Require("guilds.read");
-            var events = await _session.GetJsonAsync<List<EventResponse>>(
+            var events = await _session.GetJsonAsync<List<Avalon.Sdk.Generated.EventResponse>>(
                 $"{_session.ServerUrl}/guilds/{_guildId}/events", ct).ConfigureAwait(false)
-                ?? new List<EventResponse>();
-            return events.Select(e => e.ToGuildEvent()).ToList();
+                ?? new List<Avalon.Sdk.Generated.EventResponse>();
+            return events.Select(Session.EventResponseToGuildEvent).ToList();
         }
 
         /// <summary>A handle scoped to one channel within this guild.</summary>
@@ -434,9 +344,9 @@ namespace Avalon.Sdk
 
             var url = $"{_session.ServerUrl}/guilds/{_guildId}/channels/{_channelId}/messages"
                 + BuildQuery(before, limit);
-            var messages = await _session.GetJsonAsync<List<GuildMessageResponse>>(url, ct).ConfigureAwait(false)
-                ?? new List<GuildMessageResponse>();
-            return messages.Select(m => m.ToGuildMessage()).ToList();
+            var messages = await _session.GetJsonAsync<List<Avalon.Sdk.Generated.MessageResponse>>(url, ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.MessageResponse>();
+            return messages.Select(Session.MessageResponseToGuildMessage).ToList();
         }
 
         /// <summary>POST /guilds/{id}/channels/{cid}/messages — requires guilds.chat. Posts
@@ -450,14 +360,14 @@ namespace Avalon.Sdk
                 $"{_session.ServerUrl}/guilds/{_guildId}/channels/{_channelId}/messages");
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _session.Token);
             request.Content = new StringContent(
-                JsonSerializer.Serialize(new SendMessageRequest { Body = body }), Encoding.UTF8, "application/json");
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.SendMessageRequest { Body = body }), Encoding.UTF8, "application/json");
             using var response = await _session.Http.SendAsync(request, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 throw Session.ServerError(response.StatusCode);
             }
-            var message = await Session.ReadJsonAsync<GuildMessageResponse>(response, ct).ConfigureAwait(false);
-            return message!.ToGuildMessage();
+            var message = await Session.ReadJsonAsync<Avalon.Sdk.Generated.MessageResponse>(response, ct).ConfigureAwait(false);
+            return Session.MessageResponseToGuildMessage(message!);
         }
 
         private static string BuildQuery(Guid? before, int? limit)

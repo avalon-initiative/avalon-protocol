@@ -40,40 +40,39 @@ namespace Avalon.Sdk
         public DateTimeOffset SentAt { get; set; }
     }
 
-    internal sealed class ConversationResponse
+    /// <summary>Maps the generated <see cref="Avalon.Sdk.Generated.ConversationResponse"/>
+    /// wire shape onto the public <see cref="Conversation"/> domain type.</summary>
+    internal static class ConversationResponseExtensions
     {
-        public Guid Id { get; set; }
-        public List<Guid> Participants { get; set; } = new List<Guid>();
+        public static Conversation ToConversation(this Avalon.Sdk.Generated.ConversationResponse response) =>
+            new Conversation(response.Id, new List<Guid>(response.Participants));
 
-        public Conversation ToConversation() => new Conversation(Id, Participants);
+        public static ConversationMessage ToConversationMessage(this Avalon.Sdk.Generated.ConversationMessageResponse response) =>
+            new ConversationMessage
+            {
+                Id = response.Id,
+                ConversationId = response.ConversationId,
+                Author = response.Author,
+                Body = response.Body,
+                SentAt = response.SentAt,
+            };
     }
 
-    internal sealed class CreateConversationRequest
-    {
-        [JsonPropertyName("participants")]
-        public List<Guid> Participants { get; set; } = new List<Guid>();
-    }
-
-    internal sealed class ConversationMessageResponse
-    {
-        public Guid Id { get; set; }
-        [JsonPropertyName("conversation_id")]
-        public Guid ConversationId { get; set; }
-        public Guid Author { get; set; }
-        public string Body { get; set; } = "";
-        [JsonPropertyName("sent_at")]
-        public DateTimeOffset SentAt { get; set; }
-
-        public ConversationMessage ToConversationMessage() => new ConversationMessage()
-        {
-            Id = Id,
-            ConversationId = ConversationId,
-            Author = Author,
-            Body = Body,
-            SentAt = SentAt,
-        };
-    }
-
+    /// <summary>Issue #725: <c>docs/generated/openapi.json</c>'s <c>SendMessageRequest</c>
+    /// schema is missing <c>client_entry_id</c> — <c>crates/server/src/conversations.rs</c>'s
+    /// own <c>SendMessageRequest</c> struct has it (used for the deferred-submission
+    /// idempotency key), but that struct's bare type name collides with
+    /// <c>crates/server/src/guild_messages.rs::SendMessageRequest</c> in utoipa's
+    /// <c>openapi.rs</c> component registration (unlike
+    /// <c>conversations::MessageResponse</c>, which already works around an identical
+    /// collision via <c>#[schema(as = ConversationMessageResponse)]</c>) — one of the two
+    /// components silently wins and the other's shape, including <c>client_entry_id</c>, is
+    /// lost from the published schema. <c>Avalon.Sdk.Generated.SendMessageRequest</c> is
+    /// therefore not a safe replacement for this type: switching to it would silently drop
+    /// the ability to set <c>client_entry_id</c>, breaking
+    /// <see cref="ConversationHandle.SendWithClientEntryIdAsync"/>'s whole purpose. This one
+    /// request DTO stays hand-written until the server/codegen side fixes the collision (e.g.
+    /// a matching <c>#[schema(as = ...)]</c> on <c>conversations::SendMessageRequest</c>).</summary>
     internal sealed class ConversationSendMessageRequest
     {
         [JsonPropertyName("body")]
@@ -111,8 +110,8 @@ namespace Avalon.Sdk
             {
                 throw ConversationError(response.StatusCode);
             }
-            var conversations = await ReadJsonAsync<List<ConversationResponse>>(response, ct).ConfigureAwait(false)
-                ?? new List<ConversationResponse>();
+            var conversations = await ReadJsonAsync<List<Avalon.Sdk.Generated.ConversationResponse>>(response, ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.ConversationResponse>();
             return conversations.Select(c => c.ToConversation()).ToList();
         }
 
@@ -131,14 +130,14 @@ namespace Avalon.Sdk
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/conversations");
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token);
             request.Content = new StringContent(
-                JsonSerializer.Serialize(new CreateConversationRequest { Participants = new List<Guid> { otherIdentityId } }),
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.CreateConversationRequest { Participants = new List<Guid> { otherIdentityId } }),
                 Encoding.UTF8, "application/json");
             using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 throw ConversationError(response.StatusCode);
             }
-            var body = await ReadJsonAsync<ConversationResponse>(response, ct).ConfigureAwait(false);
+            var body = await ReadJsonAsync<Avalon.Sdk.Generated.ConversationResponse>(response, ct).ConfigureAwait(false);
             return Conversation(body!.Id);
         }
     }
@@ -177,8 +176,8 @@ namespace Avalon.Sdk
             {
                 throw Session.ConversationError(response.StatusCode);
             }
-            var messages = await Session.ReadJsonAsync<List<ConversationMessageResponse>>(response, ct).ConfigureAwait(false)
-                ?? new List<ConversationMessageResponse>();
+            var messages = await Session.ReadJsonAsync<List<Avalon.Sdk.Generated.ConversationMessageResponse>>(response, ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.ConversationMessageResponse>();
             return messages.Select(m => m.ToConversationMessage()).ToList();
         }
 
@@ -205,7 +204,7 @@ namespace Avalon.Sdk
             {
                 throw Session.ConversationError(response.StatusCode);
             }
-            var message = await Session.ReadJsonAsync<ConversationMessageResponse>(response, ct).ConfigureAwait(false);
+            var message = await Session.ReadJsonAsync<Avalon.Sdk.Generated.ConversationMessageResponse>(response, ct).ConfigureAwait(false);
             return message!.ToConversationMessage();
         }
     }

@@ -475,197 +475,13 @@ namespace Avalon.Sdk
         public bool Public { get; set; }
     }
 
-    internal sealed class CreateGuildRequest
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
-
-        [JsonPropertyName("tag")]
-        public string Tag { get; set; } = "";
-
-        [JsonPropertyName("description")]
-        public string Description { get; set; } = "";
-    }
-
-    internal sealed class UpdateGuildRequest
-    {
-        [JsonPropertyName("name")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Name { get; set; }
-        [JsonPropertyName("tag")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Tag { get; set; }
-        [JsonPropertyName("description")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Description { get; set; }
-        [JsonPropertyName("motd")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Motd { get; set; }
-        [JsonPropertyName("banner")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Banner { get; set; }
-        [JsonPropertyName("icon")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Icon { get; set; }
-        [JsonPropertyName("recruiting")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Recruiting { get; set; }
-        [JsonPropertyName("public")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Public { get; set; }
-    }
-
-    internal sealed class CreateRoleRequest
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
-
-        [JsonPropertyName("permissions")]
-        public List<string> Permissions { get; set; } = new List<string>();
-
-        [JsonPropertyName("description")]
-        public string Description { get; set; } = "";
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class UpdateRoleRequest
-    {
-        [JsonPropertyName("name")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Name { get; set; }
-        [JsonPropertyName("permissions")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? Permissions { get; set; }
-        [JsonPropertyName("description")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Description { get; set; }
-        [JsonPropertyName("signing_key_id")] public Guid? SigningKeyId { get; set; }
-        [JsonPropertyName("signature")] public string? Signature { get; set; }
-    }
-
-    internal sealed class SignatureOnlyRequest
-    {
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class SetPermissionOverrideRequest
-    {
-        [JsonPropertyName("role_index")]
-        public int RoleIndex { get; set; }
-
-        [JsonPropertyName("resource_kind")]
-        public string ResourceKind { get; set; } = "";
-
-        [JsonPropertyName("resource_id")]
-        public Guid ResourceId { get; set; }
-
-        [JsonPropertyName("permission")]
-        public string Permission { get; set; } = "";
-
-        [JsonPropertyName("allow")]
-        public bool Allow { get; set; }
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class TransferOwnershipRequest
-    {
-        [JsonPropertyName("to")]
-        public Guid To { get; set; }
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class UpdateGuildMemberRequest
-    {
-        [JsonPropertyName("role_index")]
-        public int RoleIndex { get; set; }
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class CreateGuildInviteRequest
-    {
-        [JsonPropertyName("to")]
-        public Guid To { get; set; }
-    }
-
-    internal sealed class CreateJoinRequestRequest
-    {
-        [JsonPropertyName("message")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Message { get; set; }
-    }
-
-    internal sealed class CreateChannelRequest
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
-    }
-
-    internal sealed class UpdateChannelRequest
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
-
-        [JsonPropertyName("announcement_only")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public bool? AnnouncementOnly { get; set; }
-
-        [JsonPropertyName("topic")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Topic { get; set; }
-
-        [JsonPropertyName("public")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public bool? Public { get; set; }
-    }
-
-    internal sealed class SetFavoriteGamesRequest
-    {
-        [JsonPropertyName("integrator_ids")]
-        public List<Guid> IntegratorIds { get; set; } = new List<Guid>();
-    }
-
-    internal sealed class SendGuildMessageRequest
-    {
-        [JsonPropertyName("body")]
-        public string Body { get; set; } = "";
-    }
-
-    internal sealed class EventRequestBody
-    {
-        [JsonPropertyName("channel_id")]
-        public Guid? ChannelId { get; set; }
-
-        [JsonPropertyName("title")]
-        public string Title { get; set; } = "";
-
-        [JsonPropertyName("description")]
-        public string? Description { get; set; }
-
-        [JsonPropertyName("starts_at")]
-        public DateTimeOffset StartsAt { get; set; }
-
-        [JsonPropertyName("ends_at")]
-        public DateTimeOffset? EndsAt { get; set; }
-
-        [JsonPropertyName("public")]
-        public bool Public { get; set; }
-    }
-
-    internal sealed class AccountRsvpRequest
-    {
-        [JsonPropertyName("status")]
-        public string Status { get; set; } = "";
-    }
-
     public sealed partial class AccountSession
     {
         /// <summary><c>POST /guilds</c> — creates a new guild, the caller as owner. Not
         /// signature-required.</summary>
         public async Task<AccountGuild> CreateGuildAsync(string name, string tag, string description, CancellationToken ct = default) =>
-            await PostAsync<CreateGuildRequest, AccountGuild>(
-                "/guilds", new CreateGuildRequest { Name = name, Tag = tag, Description = description }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateGuildRequest, AccountGuild>(
+                "/guilds", new Avalon.Sdk.Generated.CreateGuildRequest { Name = name, Tag = tag, Description = description }, ct).ConfigureAwait(false);
 
         /// <summary><c>GET /guilds/{id}</c>.</summary>
         public async Task<AccountGuild> GetGuildAsync(Guid guildId, CancellationToken ct = default) =>
@@ -680,9 +496,9 @@ namespace Avalon.Sdk
         /// <summary><c>PATCH /guilds/{id}</c> — ordinary <c>manage_guild</c>-gated metadata
         /// edits. Not signature-required.</summary>
         public async Task<AccountGuild> UpdateGuildAsync(Guid guildId, AccountGuildUpdate update, CancellationToken ct = default) =>
-            await PatchAsync<UpdateGuildRequest, AccountGuild>(
+            await PatchAsync<Avalon.Sdk.Generated.UpdateGuildRequest, AccountGuild>(
                 $"/guilds/{guildId}",
-                new UpdateGuildRequest
+                new Avalon.Sdk.Generated.UpdateGuildRequest
                 {
                     Name = update.Name,
                     Tag = update.Tag,
@@ -705,9 +521,9 @@ namespace Avalon.Sdk
         {
             var joined = string.Join(",", permissions);
             var (signingKeyId, signature) = Sign("guild.role.create", guildId.ToString(), name, joined);
-            return await PostAsync<CreateRoleRequest, AccountGuildRole>(
+            return await PostAsync<Avalon.Sdk.Generated.CreateRoleRequest, AccountGuildRole>(
                 $"/guilds/{guildId}/roles",
-                new CreateRoleRequest { Name = name, Permissions = new List<string>(permissions), Description = description, SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.CreateRoleRequest { Name = name, Permissions = new List<string>(permissions), Description = description, SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 
@@ -717,9 +533,9 @@ namespace Avalon.Sdk
             Guid guildId, int nameIndex, string? name = null, IReadOnlyList<string>? permissions = null, string? description = null, CancellationToken ct = default)
         {
             var (signingKeyId, signature) = Sign("guild.role.update", guildId.ToString(), nameIndex.ToString());
-            return await PatchAsync<UpdateRoleRequest, AccountGuildRole>(
+            return await PatchAsync<Avalon.Sdk.Generated.UpdateRoleRequest, AccountGuildRole>(
                 $"/guilds/{guildId}/roles/{nameIndex}",
-                new UpdateRoleRequest
+                new Avalon.Sdk.Generated.UpdateRoleRequest
                 {
                     Name = name,
                     Permissions = permissions is null ? null : new List<string>(permissions),
@@ -737,7 +553,7 @@ namespace Avalon.Sdk
             var (signingKeyId, signature) = Sign("guild.role.delete", guildId.ToString(), nameIndex.ToString());
             await DeleteWithBodyAsync(
                 $"/guilds/{guildId}/roles/{nameIndex}",
-                new SignatureOnlyRequest { SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.DeleteRoleRequest { SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 
@@ -757,9 +573,9 @@ namespace Avalon.Sdk
             var (signingKeyId, signature) = Sign(
                 "guild.permission_override.set",
                 guildId.ToString(), roleIndex.ToString(), resourceKind, resourceId.ToString(), permission, allow.ToString().ToLowerInvariant());
-            return await PutAsync<SetPermissionOverrideRequest, PermissionOverride>(
+            return await PutAsync<Avalon.Sdk.Generated.SetPermissionOverrideRequest, PermissionOverride>(
                 $"/guilds/{guildId}/permission-overrides",
-                new SetPermissionOverrideRequest
+                new Avalon.Sdk.Generated.SetPermissionOverrideRequest
                 {
                     RoleIndex = roleIndex,
                     ResourceKind = resourceKind,
@@ -779,7 +595,7 @@ namespace Avalon.Sdk
             var (signingKeyId, signature) = Sign("guild.permission_override.delete", guildId.ToString(), overrideId.ToString());
             await DeleteWithBodyAsync(
                 $"/guilds/{guildId}/permission-overrides/{overrideId}",
-                new SignatureOnlyRequest { SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.DeletePermissionOverrideRequest { SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 
@@ -788,9 +604,9 @@ namespace Avalon.Sdk
         public async Task<AccountGuild> TransferOwnershipAsync(Guid guildId, Guid to, CancellationToken ct = default)
         {
             var (signingKeyId, signature) = Sign("guild.transfer_ownership", guildId.ToString(), IdentityGuid.ToString(), to.ToString());
-            return await PostAsync<TransferOwnershipRequest, AccountGuild>(
+            return await PostAsync<Avalon.Sdk.Generated.TransferOwnershipRequest, AccountGuild>(
                 $"/guilds/{guildId}/transfer-ownership",
-                new TransferOwnershipRequest { To = to, SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.TransferOwnershipRequest { To = to, SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 
@@ -811,9 +627,9 @@ namespace Avalon.Sdk
         public async Task<AccountGuildMember> UpdateMemberRoleAsync(Guid guildId, Guid identityId, int roleIndex, CancellationToken ct = default)
         {
             var (signingKeyId, signature) = Sign("guild.member_role.update", guildId.ToString(), identityId.ToString(), roleIndex.ToString());
-            return await PatchAsync<UpdateGuildMemberRequest, AccountGuildMember>(
+            return await PatchAsync<Avalon.Sdk.Generated.UpdateGuildMemberRequest, AccountGuildMember>(
                 $"/guilds/{guildId}/members/{identityId}",
-                new UpdateGuildMemberRequest { RoleIndex = roleIndex, SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.UpdateGuildMemberRequest { RoleIndex = roleIndex, SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 
@@ -832,8 +648,8 @@ namespace Avalon.Sdk
 
         /// <summary><c>POST /guilds/{id}/invites</c>.</summary>
         public async Task<GuildInvite> CreateGuildInviteAsync(Guid guildId, Guid to, CancellationToken ct = default) =>
-            await PostAsync<CreateGuildInviteRequest, GuildInvite>(
-                $"/guilds/{guildId}/invites", new CreateGuildInviteRequest { To = to }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateGuildInviteRequest, GuildInvite>(
+                $"/guilds/{guildId}/invites", new Avalon.Sdk.Generated.CreateGuildInviteRequest { To = to }, ct).ConfigureAwait(false);
 
         /// <summary><c>POST /guilds/{id}/invites/{invite_id}/accept</c>.</summary>
         public async Task<AccountGuildMember> AcceptGuildInviteAsync(Guid guildId, Guid inviteId, CancellationToken ct = default) =>
@@ -854,8 +670,8 @@ namespace Avalon.Sdk
 
         /// <summary><c>POST /guilds/{id}/join-requests</c> (issue #242).</summary>
         public async Task<GuildJoinRequest> CreateJoinRequestAsync(Guid guildId, string? message = null, CancellationToken ct = default) =>
-            await PostAsync<CreateJoinRequestRequest, GuildJoinRequest>(
-                $"/guilds/{guildId}/join-requests", new CreateJoinRequestRequest { Message = message }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateJoinRequestRequest, GuildJoinRequest>(
+                $"/guilds/{guildId}/join-requests", new Avalon.Sdk.Generated.CreateJoinRequestRequest { Message = message }, ct).ConfigureAwait(false);
 
         /// <summary><c>GET /guilds/{id}/join-requests</c> — <c>manage_members</c>-gated.</summary>
         public async Task<IReadOnlyList<GuildJoinRequest>> ListJoinRequestsAsync(Guid guildId, CancellationToken ct = default) =>
@@ -886,8 +702,8 @@ namespace Avalon.Sdk
         /// <summary><c>PUT /guilds/{id}/favorite-integrators</c> — <c>manage_guild</c>-gated,
         /// full ordered replacement. Not signature-required.</summary>
         public async Task<FavoriteGames> SetFavoriteGamesAsync(Guid guildId, IReadOnlyList<Guid> integratorIds, CancellationToken ct = default) =>
-            await PutAsync<SetFavoriteGamesRequest, FavoriteGames>(
-                $"/guilds/{guildId}/favorite-integrators", new SetFavoriteGamesRequest { IntegratorIds = new List<Guid>(integratorIds) }, ct).ConfigureAwait(false);
+            await PutAsync<Avalon.Sdk.Generated.SetFavoriteGamesRequest, FavoriteGames>(
+                $"/guilds/{guildId}/favorite-integrators", new Avalon.Sdk.Generated.SetFavoriteGamesRequest { IntegratorIds = new List<Guid>(integratorIds) }, ct).ConfigureAwait(false);
 
         /// <summary><c>GET /guilds/{id}/channels</c>.</summary>
         public async Task<IReadOnlyList<AccountGuildChannel>> ListChannelsAsync(Guid guildId, CancellationToken ct = default) =>
@@ -896,14 +712,14 @@ namespace Avalon.Sdk
         /// <summary><c>POST /guilds/{id}/channels</c> — <c>manage_channels</c>-gated. Not
         /// signature-required (structural but reversible).</summary>
         public async Task<AccountGuildChannel> CreateChannelAsync(Guid guildId, string name, CancellationToken ct = default) =>
-            await PostAsync<CreateChannelRequest, AccountGuildChannel>(
-                $"/guilds/{guildId}/channels", new CreateChannelRequest { Name = name }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateChannelRequest, AccountGuildChannel>(
+                $"/guilds/{guildId}/channels", new Avalon.Sdk.Generated.CreateChannelRequest { Name = name }, ct).ConfigureAwait(false);
 
         /// <summary><c>PATCH /guilds/{id}/channels/{channel_id}</c>. Not signature-required.</summary>
         public async Task<AccountGuildChannel> UpdateChannelAsync(Guid guildId, Guid channelId, AccountGuildChannelUpdate update, CancellationToken ct = default) =>
-            await PatchAsync<UpdateChannelRequest, AccountGuildChannel>(
+            await PatchAsync<Avalon.Sdk.Generated.UpdateChannelRequest, AccountGuildChannel>(
                 $"/guilds/{guildId}/channels/{channelId}",
-                new UpdateChannelRequest { Name = update.Name, AnnouncementOnly = update.AnnouncementOnly, Topic = update.Topic, Public = update.Public },
+                new Avalon.Sdk.Generated.UpdateChannelRequest { Name = update.Name, AnnouncementOnly = update.AnnouncementOnly, Topic = update.Topic, Public = update.Public },
                 ct).ConfigureAwait(false);
 
         /// <summary><c>POST /guilds/{id}/channels/{channel_id}/archive</c>.</summary>
@@ -929,8 +745,8 @@ namespace Avalon.Sdk
         /// <summary><c>POST /guilds/{id}/channels/{channel_id}/messages</c>. Not
         /// signature-required (chat, per #697's own invariants).</summary>
         public async Task<AccountGuildMessage> SendMessageAsync(Guid guildId, Guid channelId, string body, CancellationToken ct = default) =>
-            await PostAsync<SendGuildMessageRequest, AccountGuildMessage>(
-                $"/guilds/{guildId}/channels/{channelId}/messages", new SendGuildMessageRequest { Body = body }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.SendMessageRequest, AccountGuildMessage>(
+                $"/guilds/{guildId}/channels/{channelId}/messages", new Avalon.Sdk.Generated.SendMessageRequest { Body = body }, ct).ConfigureAwait(false);
 
         /// <summary><c>DELETE /guilds/{id}/channels/{channel_id}/messages/{message_id}</c> —
         /// moderation delete, <c>manage_channels</c>-gated. Not signature-required.</summary>
@@ -953,7 +769,17 @@ namespace Avalon.Sdk
             return await GetQueryAsync<List<AccountGuildEvent>>($"/guilds/{guildId}/events", query, ct).ConfigureAwait(false);
         }
 
-        private static EventRequestBody ToEventRequestBody(AccountGuildEventFields fields) => new EventRequestBody
+        private static Avalon.Sdk.Generated.CreateEventRequest ToCreateEventRequest(AccountGuildEventFields fields) => new Avalon.Sdk.Generated.CreateEventRequest
+        {
+            ChannelId = fields.ChannelId,
+            Title = fields.Title,
+            Description = fields.Description,
+            StartsAt = fields.StartsAt,
+            EndsAt = fields.EndsAt,
+            Public = fields.Public,
+        };
+
+        private static Avalon.Sdk.Generated.UpdateEventRequest ToUpdateEventRequest(AccountGuildEventFields fields) => new Avalon.Sdk.Generated.UpdateEventRequest
         {
             ChannelId = fields.ChannelId,
             Title = fields.Title,
@@ -966,12 +792,12 @@ namespace Avalon.Sdk
         /// <summary><c>POST /guilds/{id}/events</c>. Not signature-required (reversible
         /// scheduling state).</summary>
         public async Task<AccountGuildEvent> CreateEventAsync(Guid guildId, AccountGuildEventFields fields, CancellationToken ct = default) =>
-            await PostAsync<EventRequestBody, AccountGuildEvent>($"/guilds/{guildId}/events", ToEventRequestBody(fields), ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateEventRequest, AccountGuildEvent>($"/guilds/{guildId}/events", ToCreateEventRequest(fields), ct).ConfigureAwait(false);
 
         /// <summary><c>PATCH /guilds/{id}/events/{event_id}</c> — full replacement, not
         /// partial (matches the server's own <c>UpdateEventRequest</c>).</summary>
         public async Task<AccountGuildEvent> UpdateEventAsync(Guid guildId, Guid eventId, AccountGuildEventFields fields, CancellationToken ct = default) =>
-            await PatchAsync<EventRequestBody, AccountGuildEvent>($"/guilds/{guildId}/events/{eventId}", ToEventRequestBody(fields), ct).ConfigureAwait(false);
+            await PatchAsync<Avalon.Sdk.Generated.UpdateEventRequest, AccountGuildEvent>($"/guilds/{guildId}/events/{eventId}", ToUpdateEventRequest(fields), ct).ConfigureAwait(false);
 
         /// <summary><c>DELETE /guilds/{id}/events/{event_id}</c>.</summary>
         public async Task DeleteEventAsync(Guid guildId, Guid eventId, CancellationToken ct = default) =>
@@ -981,7 +807,7 @@ namespace Avalon.Sdk
         /// caller's own RSVP; <paramref name="status"/> is "going", "maybe", or
         /// "not_going".</summary>
         public async Task<Rsvp> RsvpToEventAsync(Guid guildId, Guid eventId, string status, CancellationToken ct = default) =>
-            await PutAsync<AccountRsvpRequest, Rsvp>($"/guilds/{guildId}/events/{eventId}/rsvp", new AccountRsvpRequest { Status = status }, ct).ConfigureAwait(false);
+            await PutAsync<Avalon.Sdk.Generated.RsvpRequest, Rsvp>($"/guilds/{guildId}/events/{eventId}/rsvp", new Avalon.Sdk.Generated.RsvpRequest { Status = status }, ct).ConfigureAwait(false);
 
         /// <summary><c>GET /guilds/{id}/events/{event_id}/rsvps</c> — the per-member roster.</summary>
         public async Task<IReadOnlyList<RsvpRosterEntry>> EventRsvpsAsync(Guid guildId, Guid eventId, CancellationToken ct = default) =>

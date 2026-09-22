@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
@@ -50,51 +51,6 @@ namespace Avalon.Sdk
         /// <c>AvalonConfig::signing_key</c>.
         /// </summary>
         public byte[]? SigningKey { get; }
-    }
-
-    internal sealed class MeResponse
-    {
-        [JsonPropertyName("identity_id")]
-        public Guid IdentityId { get; set; }
-
-        [JsonPropertyName("identity_created_at")]
-        public DateTimeOffset IdentityCreatedAt { get; set; }
-
-        [JsonPropertyName("display_name")]
-        public string DisplayName { get; set; } = "";
-
-        [JsonPropertyName("avatar_url")]
-        public string? AvatarUrl { get; set; }
-
-        [JsonPropertyName("bio")]
-        public string? Bio { get; set; }
-
-        [JsonPropertyName("favorite_genres")]
-        public List<Genre> FavoriteGenres { get; set; } = new List<Genre>();
-
-        [JsonPropertyName("pronouns")]
-        public string? Pronouns { get; set; }
-
-        [JsonPropertyName("banner_url")]
-        public string? BannerUrl { get; set; }
-
-        [JsonPropertyName("status")]
-        public string? Status { get; set; }
-
-        [JsonPropertyName("links")]
-        public List<string> Links { get; set; } = new List<string>();
-
-        [JsonPropertyName("timezone")]
-        public string? Timezone { get; set; }
-
-        [JsonPropertyName("theme_color")]
-        public string? ThemeColor { get; set; }
-
-        [JsonPropertyName("location")]
-        public string? Location { get; set; }
-
-        [JsonPropertyName("main_guild")]
-        public Guid? MainGuild { get; set; }
     }
 
     internal sealed class MyGrantsResponse
@@ -153,7 +109,7 @@ namespace Avalon.Sdk
             {
                 throw new AuthenticationFailedException();
             }
-            var me = await Session.ReadJsonAsync<MeResponse>(response, ct).ConfigureAwait(false);
+            var me = await Session.ReadJsonAsync<Avalon.Sdk.Generated.ProfileResponse>(response, ct).ConfigureAwait(false);
 
             var granted = await FetchGrantedAsync(identityToken, ct).ConfigureAwait(false);
 
@@ -163,11 +119,11 @@ namespace Avalon.Sdk
                 DisplayName = me.DisplayName,
                 AvatarUrl = me.AvatarUrl,
                 Bio = me.Bio,
-                FavoriteGenres = me.FavoriteGenres,
+                FavoriteGenres = me.FavoriteGenres.Select(g => (Genre)Enum.Parse(typeof(Genre), g.ToString())).ToList(),
                 Pronouns = me.Pronouns,
                 BannerUrl = me.BannerUrl,
                 Status = me.Status,
-                Links = me.Links,
+                Links = new List<string>(me.Links),
                 Timezone = me.Timezone,
                 ThemeColor = me.ThemeColor,
                 Location = me.Location,

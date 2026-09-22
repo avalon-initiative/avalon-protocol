@@ -80,27 +80,6 @@ namespace Avalon.Sdk
         public DateTimeOffset AddedAt { get; set; }
     }
 
-    internal sealed class SetGuardiansRequest
-    {
-        [JsonPropertyName("guardian_ids")]
-        public List<Guid> GuardianIds { get; set; } = new List<Guid>();
-
-        [JsonPropertyName("threshold")]
-        public int Threshold { get; set; }
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class CancelRecoveryRequest
-    {
-        [JsonPropertyName("reason")]
-        public string? Reason { get; set; }
-    }
-
     public sealed partial class AccountSession
     {
         /// <summary><c>GET /me/recovery/guardians</c>.</summary>
@@ -123,9 +102,9 @@ namespace Avalon.Sdk
             sorted.Sort(StringComparer.Ordinal);
             var (signingKeyId, signature) = Sign(
                 "recovery.guardians.set", IdentityGuid.ToString(), string.Join(",", sorted), threshold.ToString());
-            return await PutAsync<SetGuardiansRequest, AccountGuardianSettings>(
+            return await PutAsync<Avalon.Sdk.Generated.SetGuardiansRequest, AccountGuardianSettings>(
                 "/me/recovery/guardians",
-                new SetGuardiansRequest
+                new Avalon.Sdk.Generated.SetGuardiansRequest
                 {
                     GuardianIds = new List<Guid>(guardianIds),
                     Threshold = threshold,
@@ -164,7 +143,7 @@ namespace Avalon.Sdk
         /// <summary><c>POST /recovery/requests/{id}/cancel</c> — the veto path: either the
         /// identity's own owner or any current guardian.</summary>
         public async Task<AccountRecoveryRequest> CancelRecoveryRequestAsync(Guid requestId, string? reason = null, CancellationToken ct = default) =>
-            await PostAsync<CancelRecoveryRequest, AccountRecoveryRequest>(
-                $"/recovery/requests/{requestId}/cancel", new CancelRecoveryRequest { Reason = reason }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CancelRecoveryRequest, AccountRecoveryRequest>(
+                $"/recovery/requests/{requestId}/cancel", new Avalon.Sdk.Generated.CancelRecoveryRequest { Reason = reason }, ct).ConfigureAwait(false);
     }
 }
