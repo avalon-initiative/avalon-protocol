@@ -1193,6 +1193,57 @@ protocol and the domain model in `crates/protocol`; they never pull in
     #735's own design section calls this out as a separate, bigger
     compatibility-policy question than this ticket's plumbing, not
     silently decided here.
+- Cross-SDK conformance suite (issue #727, epic #722) — #714's own decision
+  found that wire-shape codegen (#723-#726) alone would never have caught
+  any of the three real SDK/server parity gaps behind it (#707's missing
+  cross-device-pairing login path, #712's WebSocket presence/chat
+  subscribe+reconnect gap, #134's BIP39 recovery-phrase derivation): all
+  three are client-side "smart" behavior — a real signing algorithm, a
+  real derivation, a real handshake — not a shape a schema can express.
+  This suite is the piece that targets that failure mode directly.
+  - Shared, canonical test vectors live at `conformance/vectors/` (repo
+    root, not nested under any one SDK) — one JSON file per behavior, each
+    naming which SDKs actually implement it today (`supportedIn`) and, for
+    the rest, why not (`notSupported.<language>`). See
+    `conformance/vectors/SCHEMA.md` for the full format.
+  - Each SDK has a thin runner consuming the same vectors, wired into its
+    existing default test job (no separate CI pipeline, no live server):
+    `crates/sdk/tests/conformance.rs` (`cargo test -p avalon-sdk`),
+    `bindings/csharp/AvalonSdk.Tests/ConformanceTests.cs` (`dotnet test`),
+    `bindings/ts/test/conformance.test.ts` (`npm test`, vitest).
+  - What's actually covered today: `cross-node-login.json`
+    (`CrossNodeLoginGrant` signing, #623/#707) is implemented and verified
+    identical across all three SDKs — `avalon_protocol::cross_node_login::
+    signing_bytes` (Rust), `AvalonClient`'s private `CrossNodeLoginSigningBytes`
+    (C#, reached via reflection from the test so the suite never has to
+    edit `bindings/csharp/AvalonSdk/*.cs` itself), and
+    `crypto/crossNodeLogin.ts`'s `signingBytes` (TypeScript) all produce
+    byte-for-byte identical signing bytes and Ed25519 signatures for the
+    same input.
+  - Three real gaps this suite found and now documents in vector form
+    rather than papering over: **session-continuation tokens** (#525,
+    `ContinuationToken`/`AVCT1.` wire prefix — the primitive #712's
+    automatic reconnect-on-401 needs) and the **WebSocket interest-claim
+    subscribe handshake** (#610, minted after a chat socket's `node_info`
+    hello, #712) exist client-side in `bindings/ts` only
+    (`crypto/continuation.ts`, `accountSession/realtime.ts` +
+    `crypto/interestClaim.ts`) — `crates/sdk`'s own websocket subscribe
+    methods (`social.rs`/`guilds.rs`/`conversations.rs`) send only a bare
+    `subscribe` message with no `node_info`/claim step at all, and
+    `bindings/csharp` has no `AccountSession`-level websocket support or
+    continuation-token type whatsoever. **BIP39 mnemonic-derived signing
+    keys** (#134/#712, `crypto/mnemonic.ts`) are likewise TypeScript-only —
+    neither `crates/sdk` nor `bindings/csharp` depend on a BIP39 library or
+    derive a signing key from a recovery phrase at all; `AccountSession`
+    registration in both generates a purely random key with no recovery
+    phrase. The Rust and C# runners assert this gap explicitly (a named,
+    passing skip test citing the vector file's own `notSupported` entry)
+    rather than inventing a fake implementation to pass their own suite.
+  - Standing requirement (enforced by convention, not by a check): add a
+    vector under `conformance/vectors/` whenever a new smart-client
+    behavior lands in *any* SDK, in the same change — list the
+    implementing SDK(s) in `supportedIn` immediately, even if the other
+    two don't implement it yet.
 
 ## Decisions and tickets
 

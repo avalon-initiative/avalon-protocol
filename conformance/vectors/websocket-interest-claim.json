@@ -1,0 +1,32 @@
+{
+  "$schema": "./SCHEMA.md#websocket-interest-claim",
+  "description": "Signed DHT interest claim (issue #610, avalon_protocol::interest_claim) minted as the subscribe-handshake payload once a chat websocket's node_info hello tells the client which base_url to bind to (crates/server/src/chat.rs's NodeInfo message, #712). Each supporting SDK must derive byte-for-byte identical signing bytes, an identical Ed25519 signature, and the identical wire JSON shape sent in a subscribe_channel/subscribe_conversation message's `claim` field.",
+  "supportedIn": ["typescript"],
+  "notSupported": {
+    "rust": "crates/sdk's websocket subscribe methods (Session::subscribe_presence in social.rs, GuildChannel's subscribe in guilds.rs, Conversation's subscribe in conversations.rs) send only a bare {type: subscribe, ...} message with no node_info handshake and no signed interest claim at all — avalon_protocol::interest_claim exists and is used server-side, but crates/sdk never calls it. Real gap, not just untested.",
+    "csharp": "bindings/csharp/AvalonSdk has no websocket subscribe support on AccountSession at all (Session.cs/Social.cs's websocket code is the older, integrator-facing Session type, which itself has no interest-claim handshake either). Real gap, not just untested."
+  },
+  "signingKeySeedHex": "1f2e3d4c5b6a79887766554433221100aabbccddeeff00112233445566778899",
+  "signingPublicKeyHex": "55efacfd3ecf9d98c762fbeae43fb7377b613b7c7dc3a1bf389e5e59c32b57dd",
+  "vectors": [
+    {
+      "name": "channel scope claim",
+      "input": {
+        "identityId": "77777777-7777-4777-8777-777777777777",
+        "signingKeyId": "88888888-8888-4888-8888-888888888888",
+        "scope": { "kind": "channel", "channelId": "99999999-9999-4999-8999-999999999999" },
+        "baseUrl": "https://node-a.avalon.example",
+        "nonce": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "issuedAtUnixSeconds": 1780000000,
+        "expiresAtUnixSeconds": 1780086400,
+        "issuedAtRfc3339": "2026-05-28T20:26:40.000Z",
+        "expiresAtRfc3339": "2026-05-29T20:26:40.000Z"
+      },
+      "expected": {
+        "signingBytesUtf8": "avalon:interest-claim:v1:77777777-7777-4777-8777-777777777777:88888888-8888-4888-8888-888888888888:channel:99999999-9999-4999-8999-999999999999:https://node-a.avalon.example:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:1780000000:1780086400",
+        "signatureHex": "9cbbc1c99d40bcc63f65b892aae4a8c9e7184d8348b6fef2835b8a3c489a924bc85aac1e4e67b909cf503973a30e74e1c99b49e4245952c14b61e896ce0fbd09",
+        "wireClaimJson": "{\"identity_id\":\"77777777-7777-4777-8777-777777777777\",\"signing_key_id\":\"88888888-8888-4888-8888-888888888888\",\"scope\":{\"kind\":\"channel\",\"channel_id\":\"99999999-9999-4999-8999-999999999999\"},\"base_url\":\"https://node-a.avalon.example\",\"nonce\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"issued_at\":\"2026-05-28T20:26:40.000Z\",\"expires_at\":\"2026-05-29T20:26:40.000Z\",\"signature\":\"9cbbc1c99d40bcc63f65b892aae4a8c9e7184d8348b6fef2835b8a3c489a924bc85aac1e4e67b909cf503973a30e74e1c99b49e4245952c14b61e896ce0fbd09\"}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "./SCHEMA.md#session-continuation",
+  "description": "Session-continuation token minting (issue #525, avalon_protocol::continuation). A ContinuationToken is a short-lived, self-signed assertion an already-logged-in identity mints locally so it can keep working against a *different* node than the one that issued its opaque session token, wire-encoded as 'AVCT1.<base64url(json)>' straight into an Authorization: Bearer header. This is the primitive #712's automatic reconnect-on-401 behavior (issue #525) is built on.",
+  "supportedIn": ["typescript"],
+  "notSupported": {
+    "rust": "crates/sdk has no client-side ContinuationToken minting at all — avalon_protocol::continuation::signing_bytes exists (server-side verification only, crates/server/src/continuation.rs), but nothing in crates/sdk calls it. A caller of crates/sdk that needs cross-node reconnect today has no way to get one. Real gap, not just untested.",
+    "csharp": "bindings/csharp/AvalonSdk has no ContinuationToken type or minting code at all, and no automatic reconnect-on-401 behavior anywhere in the project. Real gap, not just untested."
+  },
+  "signingKeySeedHex": "1f2e3d4c5b6a79887766554433221100aabbccddeeff00112233445566778899",
+  "signingPublicKeyHex": "55efacfd3ecf9d98c762fbeae43fb7377b613b7c7dc3a1bf389e5e59c32b57dd",
+  "vectors": [
+    {
+      "name": "basic continuation token",
+      "input": {
+        "identityId": "44444444-4444-4444-8444-444444444444",
+        "signingKeyId": "55555555-5555-4555-8555-555555555555",
+        "nonce": "66666666-6666-4666-8666-666666666666",
+        "issuedAtUnixSeconds": 1780000000,
+        "expiresAtUnixSeconds": 1780000060,
+        "issuedAtRfc3339": "2026-05-28T20:26:40.000Z",
+        "expiresAtRfc3339": "2026-05-28T20:27:40.000Z"
+      },
+      "expected": {
+        "signingBytesUtf8": "avalon:continuation:v1:44444444-4444-4444-8444-444444444444:55555555-5555-4555-8555-555555555555:66666666-6666-4666-8666-666666666666:1780000000:1780000060",
+        "signatureHex": "d5bc2298057f2cd63d413fc7fefe5c45d15c61f7df379d01d7e18004b884365e8cd6cee0c4e2d0e61c0d731bc2f3366c21985056d345151b553985c015929d08",
+        "wireTokenPrefix": "AVCT1.",
+        "wireToken": "AVCT1.eyJpZGVudGl0eV9pZCI6IjQ0NDQ0NDQ0LTQ0NDQtNDQ0NC04NDQ0LTQ0NDQ0NDQ0NDQ0NCIsInNpZ25pbmdfa2V5X2lkIjoiNTU1NTU1NTUtNTU1NS00NTU1LTg1NTUtNTU1NTU1NTU1NTU1Iiwibm9uY2UiOiI2NjY2NjY2Ni02NjY2LTQ2NjYtODY2Ni02NjY2NjY2NjY2NjYiLCJpc3N1ZWRfYXQiOiIyMDI2LTA1LTI4VDIwOjI2OjQwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0wNS0yOFQyMDoyNzo0MC4wMDBaIiwic2lnbmF0dXJlIjoiZDViYzIyOTgwNTdmMmNkNjNkNDEzZmM3ZmVmZTVjNDVkMTVjNjFmN2RmMzc5ZDAxZDdlMTgwMDRiODg0MzY1ZThjZDZjZWUwYzRlMmQwZTYxYzBkNzMxYmMyZjMzNjZjMjE5ODUwNTZkMzQ1MTUxYjU1Mzk4NWMwMTU5MjlkMDgifQ"
+      }
+    }
+  ]
+}
