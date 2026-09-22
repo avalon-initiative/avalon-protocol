@@ -335,6 +335,7 @@ dependencies = [
 [[package]]
 name = "avalon-schema-derive"
 version = "0.1.0"
+source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=775-add-rust-sdk#b64597e0e0f88b13db72377ef858ef9e58c5fc62"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -344,10 +345,10 @@ dependencies = [
 [[package]]
 name = "avalon-sdk"
 version = "0.1.0"
+source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=775-add-rust-sdk#b64597e0e0f88b13db72377ef858ef9e58c5fc62"
 dependencies = [
  "async-trait",
  "avalon-schema-derive",
- "avalon-sdk",
  "base64 0.23.1",
  "coset",
  "ed25519-dalek",
@@ -361,7 +362,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "sqlx",
  "thiserror 2.0.20",
  "time",
  "tokio",
@@ -369,7 +369,6 @@ dependencies = [
  "typify",
  "url",
  "uuid",
- "wiremock",
 ]
 
 [[package]]

@@ -159,13 +159,20 @@ Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
 `avalon-chain` or `avalon-server`.
 
-The Rust SDK (`crates/sdk`) depends on **no other crate in this
-workspace** — not `avalon-protocol`, not `avalon-chain`, not
-`avalon-server` (#772/#773/#774, epic #771's move of the Rust SDK into a
-standalone `avalon-sdks` repo). It is now structurally the same kind of
-thing the C# and TypeScript SDKs already were: schema-generated wire types
-plus a hand-written client layer, with its own copies of the domain types
-(`crates/sdk/src/types/`) and its own implementations of every
+The Rust SDK physically lives in the `avalon-sdks` repo (`rust/`) as of
+issue #775 — no longer `crates/sdk` in this repo. Every file path below
+that starts with `crates/sdk/` is a leftover from when it lived here;
+mentally read it as `rust/` in `avalon-sdks` (e.g. `crates/sdk/src/achievements.rs`
+is now `rust/src/achievements.rs` there). `crates/cli` in this repo reaches
+it via a real git dependency, not a workspace path.
+
+Before the move, #772/#773/#774 stripped it down to **no dependency on
+any other crate in this workspace** — not `avalon-protocol`, not
+`avalon-chain`, not `avalon-server` — which is exactly what made #775's
+physical move possible. It is now structurally the same kind of thing the
+C# and TypeScript SDKs already were: schema-generated wire types plus a
+hand-written client layer, with its own copies of the domain types
+(`rust/src/types/` in `avalon-sdks`) and its own implementations of every
 signing-byte construction it needs (`achievements.rs`, `sth.rs`,
 `cross_node_login.rs`).
 

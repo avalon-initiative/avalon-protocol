@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Issue #728: diffs `server`'s real, SDK-facing route table (`docs/generated/
-openapi.json`, #723) against each SDK's (Rust `crates/sdk`, `bindings/csharp`,
-`bindings/ts`) actual HTTP call sites, and fails when the server has an
-endpoint no SDK declares.
+openapi.json`, #723) against each SDK's (`bindings/csharp`, `bindings/ts`,
+and Rust when checked out locally) actual HTTP call sites, and fails when the
+server has an endpoint no SDK declares.
+
+Issue #775 (epic #771) moved the Rust SDK's source to the `avalon-sdks`
+repo — this script skips Rust coverage checking when `crates/sdk` isn't
+present locally rather than reporting a false wall of missing routes; a
+real cross-repo version of this check is future work, not part of #775.
 
 This deliberately does NOT try to understand each SDK's method-naming
 conventions (a Rust `friends()` vs. a C# `FriendsAsync()` vs. a TS
@@ -347,11 +352,22 @@ def build_gap_lookup() -> dict[tuple[str, str], set[str]]:
 def main() -> int:
     routes = load_openapi_routes()
 
-    sdk_coverage = {
-        "rust (crates/sdk)": extract_rust_calls(routes),
+    sdk_coverage: dict[str, set[tuple[str, str]]] = {
         "typescript (bindings/ts)": extract_ts_calls(),
         "csharp (bindings/csharp)": extract_csharp_calls(),
     }
+    # Issue #775 (epic #771): the Rust SDK physically moved to the avalon-sdks
+    # repo, so its source isn't checked out here to scan. Skip it rather than
+    # silently reporting every route as missing (an empty `rglob` on a
+    # nonexistent directory yields nothing, not an error) — real Rust
+    # coverage checking would need a cross-repo tool, not this script.
+    if (REPO_ROOT / "crates" / "sdk").exists():
+        sdk_coverage["rust (crates/sdk)"] = extract_rust_calls(routes)
+    else:
+        print(
+            "skipping rust SDK coverage — crates/sdk moved to avalon-sdks (#775), "
+            "not checked out in this repo"
+        )
     gap_lookup = build_gap_lookup()
 
     missing: dict[str, list[dict]] = {name: [] for name in sdk_coverage}

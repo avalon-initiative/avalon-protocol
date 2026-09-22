@@ -8,7 +8,15 @@ description = "Local dev/ops tooling: register a game, issue a test achievement,
 
 [dependencies]
 avalon-protocol = { path = "../protocol" }
-avalon-sdk = { path = "../sdk" }
+# Issue #775 (epic #771): crates/sdk physically moved to avalon-sdks (a
+# sibling repo under avalon-initiative) once it had zero remaining
+# dependency on anything else in this workspace — this is a real external
+# dependency now, not a workspace path. Tracking `avalon-sdks`' own PR #1
+# branch (`775-add-rust-sdk`) rather than `main` because that PR hasn't
+# merged yet — switch this to `branch = "main"` (or a pinned rev/tag, once
+# real release discipline exists) as the very next step once it does, then
+# re-run `cargo update -p avalon-sdk`.
+avalon-sdk = { git = "ssh://git@github.com/avalon-initiative/avalon-sdks", branch = "775-add-rust-sdk" }
 avalon-chain = { path = "../chain" }
 avalon-server = { path = "../server" }
 tokio.workspace = true
