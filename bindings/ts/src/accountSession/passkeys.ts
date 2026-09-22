@@ -4,6 +4,7 @@
 import { AccountSession } from './core.js'
 import { runRegistrationCeremony } from '../crypto/webauthn.js'
 import type { PublicKeyCredentialCreationOptionsJSON, RegistrationResponseJSON } from '@simplewebauthn/browser'
+import type { components } from '../generated.js'
 
 export interface Passkey {
   id: string
@@ -11,14 +12,10 @@ export interface Passkey {
   addedAt: string
 }
 
-interface PasskeyWire {
-  id: string
-  label: string | null
-  added_at: string
-}
+type PasskeyWire = components['schemas']['PasskeyResponse']
 
 function fromWire(w: PasskeyWire): Passkey {
-  return { id: w.id, label: w.label, addedAt: w.added_at }
+  return { id: w.id, label: w.label ?? null, addedAt: w.added_at }
 }
 
 declare module './core.js' {

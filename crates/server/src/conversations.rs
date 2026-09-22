@@ -266,7 +266,17 @@ pub async fn list_my_conversations(
     Ok(Json(conversations))
 }
 
+// Renamed in the published schema (issue #726 found this): a bare
+// `ToSchema` name collides with `guild_messages::MessageResponse` — both
+// register as `MessageResponse` in `openapi.rs`'s `components(schemas(...))`
+// list, and utoipa's aggregation silently lets the second-registered one
+// win, so `docs/generated/openapi.json`'s `MessageResponse` component
+// actually described `guild_messages::MessageResponse`'s shape
+// (`channel_id`) even for this endpoint's real `conversation_id` field —
+// every SDK generated from that schema for `/conversations/{id}/messages`
+// deserialized the wrong field name.
 #[derive(Serialize, Deserialize, Clone, ToSchema)]
+#[schema(as = ConversationMessageResponse)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,

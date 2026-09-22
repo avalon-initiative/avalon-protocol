@@ -41,13 +41,20 @@ pub struct ConversationMessage {
     pub sent_at: OffsetDateTime,
 }
 
-impl TryFrom<crate::generated::MessageResponse> for ConversationMessage {
+// `ConversationMessageResponse`, not `MessageResponse` — the two used to
+// collide in the published schema (both registered as bare
+// `MessageResponse`; see `crates/server/src/conversations.rs`'s own doc
+// comment on the `#[schema(as = ...)]` fix, #726) and this crate originally
+// migrated onto the wrong (silently-overwritten) one, reading a
+// `channel_id` field the real `/conversations/{id}/messages` response never
+// actually sends.
+impl TryFrom<crate::generated::ConversationMessageResponse> for ConversationMessage {
     type Error = SdkError;
 
-    fn try_from(body: crate::generated::MessageResponse) -> Result<Self, SdkError> {
+    fn try_from(body: crate::generated::ConversationMessageResponse) -> Result<Self, SdkError> {
         Ok(ConversationMessage {
             id: body.id,
-            conversation_id: body.channel_id,
+            conversation_id: body.conversation_id,
             author: body.author,
             body: body.body,
             sent_at: super::parse_rfc3339(&body.sent_at)?,
@@ -97,7 +104,7 @@ impl AccountSession {
             query.push(("limit", limit.to_string()));
         }
         let query_refs: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let raw: Vec<crate::generated::MessageResponse> = self
+        let raw: Vec<crate::generated::ConversationMessageResponse> = self
             .get_query(
                 &super::path(
                     crate::generated::paths::chat::LIST_MESSAGES,
@@ -118,7 +125,7 @@ impl AccountSession {
         conversation_id: Uuid,
         body: &str,
     ) -> Result<ConversationMessage, SdkError> {
-        let raw: crate::generated::MessageResponse = self
+        let raw: crate::generated::ConversationMessageResponse = self
             .post(
                 &super::path(
                     crate::generated::paths::chat::SEND_MESSAGE,

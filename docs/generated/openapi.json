@@ -505,7 +505,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/MessageResponse"
+                    "$ref": "#/components/schemas/ConversationMessageResponse"
                   }
                 }
               }
@@ -547,7 +547,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageResponse"
+                  "$ref": "#/components/schemas/ConversationMessageResponse"
                 }
               }
             }
@@ -6208,6 +6208,37 @@
             "type": "string"
           },
           "granted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConversationMessageResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "conversation_id",
+          "author",
+          "body",
+          "sent_at"
+        ],
+        "properties": {
+          "author": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sent_at": {
             "type": "string",
             "format": "date-time"
           }

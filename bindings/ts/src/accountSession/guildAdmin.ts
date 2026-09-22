@@ -5,11 +5,9 @@
 // See crates/server/src/guilds.rs/channels.rs/guild_messages.rs/
 // guild_events.rs.
 import { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
-export interface GuildLink {
-  label: string
-  url: string
-}
+export type GuildLink = components['schemas']['GuildLink']
 
 export interface Guild {
   id: string
@@ -37,26 +35,7 @@ export interface Guild {
   // Issue #87 — "public" | "guild_members" | "private".
   rosterVisibility: string
 }
-interface GuildWire {
-  id: string
-  name: string
-  tag: string
-  description: string
-  owner: string
-  created_at: string
-  member_count: number
-  integrators: string[]
-  join_policy: string
-  motd: string | null
-  banner: string | null
-  icon: string | null
-  links?: GuildLink[]
-  recruiting?: boolean
-  public?: boolean
-  game_breakdown_public?: boolean
-  favorite_games?: FavoriteGameEntryWire[]
-  roster_visibility?: string
-}
+type GuildWire = components['schemas']['GuildResponse']
 function guildFromWire(w: GuildWire): Guild {
   return {
     id: w.id,
@@ -68,9 +47,9 @@ function guildFromWire(w: GuildWire): Guild {
     memberCount: w.member_count,
     integrators: w.integrators ?? [],
     joinPolicy: w.join_policy,
-    motd: w.motd,
-    banner: w.banner,
-    icon: w.icon,
+    motd: w.motd ?? null,
+    banner: w.banner ?? null,
+    icon: w.icon ?? null,
     links: w.links ?? [],
     recruiting: w.recruiting ?? false,
     public: w.public ?? false,
@@ -91,26 +70,12 @@ export interface DiscoverGuildSummary {
   banner: string | null
   icon: string | null
 }
-interface DiscoverGuildSummaryWire {
-  id: string
-  name: string
-  tag: string
-  description: string
-  recruiting: boolean
-  member_count: number
-  created_at: string
-  banner: string | null
-  icon: string | null
-}
 
 export interface DiscoverGuildsPage {
   guilds: DiscoverGuildSummary[]
   nextCursor: string | null
 }
-interface DiscoverGuildsPageWire {
-  guilds: DiscoverGuildSummaryWire[]
-  next_cursor: string | null
-}
+type DiscoverGuildsPageWire = components['schemas']['DiscoverGuildsResponse']
 
 export interface FavoriteGameEntry {
   integratorId: string
@@ -119,13 +84,7 @@ export interface FavoriteGameEntry {
   position: number
   stale: boolean
 }
-interface FavoriteGameEntryWire {
-  integrator_id: string
-  integrator_slug: string
-  integrator_name: string
-  position: number
-  stale: boolean
-}
+type FavoriteGameEntryWire = components['schemas']['FavoriteGameEntry']
 function favoriteGameEntryFromWire(f: FavoriteGameEntryWire): FavoriteGameEntry {
   return {
     integratorId: f.integrator_id,
@@ -140,10 +99,7 @@ export interface FavoriteGames {
   guildId: string
   favorites: FavoriteGameEntry[]
 }
-interface FavoriteGamesWire {
-  guild_id: string
-  favorites: FavoriteGameEntryWire[]
-}
+type FavoriteGamesWire = components['schemas']['FavoriteGamesResponse']
 
 export interface RoleBadge {
   icon: string | null
@@ -166,15 +122,15 @@ export interface Role {
   description: string
   badge: RoleBadge
 }
-interface RoleWire {
-  name_index: number
-  name: string
-  permissions: string[]
-  description: string
-  badge: RoleBadge
-}
+type RoleWire = components['schemas']['RoleResponse']
 function roleFromWire(w: RoleWire): Role {
-  return { nameIndex: w.name_index, name: w.name, permissions: w.permissions, description: w.description, badge: w.badge }
+  return {
+    nameIndex: w.name_index,
+    name: w.name,
+    permissions: w.permissions,
+    description: w.description,
+    badge: { icon: w.badge.icon, color: w.badge.color },
+  }
 }
 
 export interface PermissionOverride {
@@ -185,14 +141,7 @@ export interface PermissionOverride {
   permission: string
   allow: boolean
 }
-interface PermissionOverrideWire {
-  id: string
-  role_index: number
-  resource_kind: string
-  resource_id: string
-  permission: string
-  allow: boolean
-}
+type PermissionOverrideWire = components['schemas']['PermissionOverrideResponse']
 function overrideFromWire(w: PermissionOverrideWire): PermissionOverride {
   return { id: w.id, roleIndex: w.role_index, resourceKind: w.resource_kind, resourceId: w.resource_id, permission: w.permission, allow: w.allow }
 }
@@ -203,12 +152,7 @@ export interface GuildMember {
   roleIndex: number
   joinedAt: string
 }
-interface GuildMemberWire {
-  guild_id: string
-  identity_id: string
-  role_index: number
-  joined_at: string
-}
+type GuildMemberWire = components['schemas']['GuildMemberResponse']
 function memberFromWire(w: GuildMemberWire): GuildMember {
   return { guildId: w.guild_id, identityId: w.identity_id, roleIndex: w.role_index, joinedAt: w.joined_at }
 }
@@ -226,13 +170,7 @@ export interface GuildInvite {
   from: string
   createdAt: string
 }
-interface GuildInviteWire {
-  id: string
-  guild_id: string
-  to: string
-  from: string
-  created_at: string
-}
+type GuildInviteWire = components['schemas']['GuildInviteResponse']
 
 export interface MyGuildInvite {
   id: string
@@ -241,13 +179,7 @@ export interface MyGuildInvite {
   from: string
   createdAt: string
 }
-interface MyGuildInviteWire {
-  id: string
-  guild_id: string
-  guild_name: string
-  from: string
-  created_at: string
-}
+type MyGuildInviteWire = components['schemas']['MyGuildInviteResponse']
 
 export interface GuildJoinRequest {
   id: string
@@ -259,26 +191,17 @@ export interface GuildJoinRequest {
   decidedAt: string | null
   decidedBy: string | null
 }
-interface GuildJoinRequestWire {
-  id: string
-  guild_id: string
-  applicant: string
-  message: string | null
-  status: string
-  created_at: string
-  decided_at: string | null
-  decided_by: string | null
-}
+type GuildJoinRequestWire = components['schemas']['GuildJoinRequestResponse']
 function joinRequestFromWire(w: GuildJoinRequestWire): GuildJoinRequest {
   return {
     id: w.id,
     guildId: w.guild_id,
     applicant: w.applicant,
-    message: w.message,
+    message: w.message ?? null,
     status: w.status,
     createdAt: w.created_at,
-    decidedAt: w.decided_at,
-    decidedBy: w.decided_by,
+    decidedAt: w.decided_at ?? null,
+    decidedBy: w.decided_by ?? null,
   }
 }
 
@@ -292,16 +215,7 @@ export interface GuildChannel {
   topic: string | null
   public: boolean
 }
-interface GuildChannelWire {
-  id: string
-  guild_id: string
-  name: string
-  archived: boolean
-  created_at: string
-  announcement_only: boolean
-  topic: string | null
-  public?: boolean
-}
+type GuildChannelWire = components['schemas']['ChannelResponse']
 function channelFromWire(w: GuildChannelWire): GuildChannel {
   return {
     id: w.id,
@@ -310,7 +224,7 @@ function channelFromWire(w: GuildChannelWire): GuildChannel {
     archived: w.archived,
     createdAt: w.created_at,
     announcementOnly: w.announcement_only,
-    topic: w.topic,
+    topic: w.topic ?? null,
     public: w.public ?? false,
   }
 }
@@ -322,13 +236,7 @@ export interface GuildMessage {
   body: string
   sentAt: string
 }
-interface GuildMessageWire {
-  id: string
-  channel_id: string
-  author: string
-  body: string
-  sent_at: string
-}
+type GuildMessageWire = components['schemas']['MessageResponse']
 function guildMessageFromWire(w: GuildMessageWire): GuildMessage {
   return { id: w.id, channelId: w.channel_id, author: w.author, body: w.body, sentAt: w.sent_at }
 }
@@ -337,11 +245,6 @@ export interface RsvpCounts {
   going: number
   maybe: number
   notGoing: number
-}
-interface RsvpCountsWire {
-  going: number
-  maybe: number
-  not_going: number
 }
 
 export type RsvpStatus = 'going' | 'maybe' | 'not_going'
@@ -369,35 +272,21 @@ export interface GuildEvent {
   // responses.
   detailsVisible: boolean
 }
-interface GuildEventWire {
-  id: string
-  guild_id: string
-  channel_id: string | null
-  title: string
-  description: string | null
-  starts_at: string
-  ends_at: string | null
-  created_by: string
-  created_at: string
-  rsvp_counts: RsvpCountsWire
-  public?: boolean
-  my_rsvp?: RsvpStatus | null
-  details_visible?: boolean
-}
+type GuildEventWire = components['schemas']['EventResponse']
 function eventFromWire(w: GuildEventWire): GuildEvent {
   return {
     id: w.id,
     guildId: w.guild_id,
-    channelId: w.channel_id,
+    channelId: w.channel_id ?? null,
     title: w.title,
-    description: w.description,
+    description: w.description ?? null,
     startsAt: w.starts_at,
-    endsAt: w.ends_at,
+    endsAt: w.ends_at ?? null,
     createdBy: w.created_by,
     createdAt: w.created_at,
     rsvpCounts: { going: w.rsvp_counts.going, maybe: w.rsvp_counts.maybe, notGoing: w.rsvp_counts.not_going },
     public: w.public ?? false,
-    myRsvp: w.my_rsvp ?? null,
+    myRsvp: (w.my_rsvp as RsvpStatus | null | undefined) ?? null,
     detailsVisible: w.details_visible ?? true,
   }
 }
@@ -408,23 +297,14 @@ export interface Rsvp {
   status: RsvpStatus
   respondedAt: string
 }
-interface RsvpWire {
-  event_id: string
-  identity_id: string
-  status: RsvpStatus
-  responded_at: string
-}
+type RsvpWire = components['schemas']['RsvpResponse']
 
 export interface RsvpRosterEntry {
   identityId: string
   status: RsvpStatus
   respondedAt: string
 }
-interface RsvpRosterEntryWire {
-  identity_id: string
-  status: RsvpStatus
-  responded_at: string
-}
+type RsvpRosterEntryWire = components['schemas']['RsvpRosterEntry']
 
 // Issue #206: aggregated count of guild members holding an active
 // IntegratorBinding, per integrator, computed on read.
@@ -434,23 +314,13 @@ export interface GameBreakdownEntry {
   integratorName: string
   memberCount: number
 }
-interface GameBreakdownEntryWire {
-  integrator_id: string
-  integrator_slug: string
-  integrator_name: string
-  member_count: number
-}
 
 export interface GameBreakdown {
   guildId: string
   totalMembers: number
   breakdown: GameBreakdownEntry[]
 }
-interface GameBreakdownWire {
-  guild_id: string
-  total_members: number
-  breakdown: GameBreakdownEntryWire[]
-}
+type GameBreakdownWire = components['schemas']['GameBreakdownResponse']
 function gameBreakdownFromWire(w: GameBreakdownWire): GameBreakdown {
   return {
     guildId: w.guild_id,
@@ -475,14 +345,7 @@ export interface ArchivedMessage {
   sentAt: string
   archivedAt: string
 }
-interface ArchivedMessageWire {
-  id: string
-  channel_id: string
-  author: string
-  body: string
-  sent_at: string
-  archived_at: string
-}
+type ArchivedMessageWire = components['schemas']['ArchivedMessageResponse']
 function archivedMessageFromWire(w: ArchivedMessageWire): ArchivedMessage {
   return { id: w.id, channelId: w.channel_id, author: w.author, body: w.body, sentAt: w.sent_at, archivedAt: w.archived_at }
 }
@@ -670,10 +533,10 @@ AccountSession.prototype.discoverGuilds = async function (
       recruiting: g.recruiting,
       memberCount: g.member_count,
       createdAt: g.created_at,
-      banner: g.banner,
-      icon: g.icon,
+      banner: g.banner ?? null,
+      icon: g.icon ?? null,
     })),
-    nextCursor: w.next_cursor,
+    nextCursor: w.next_cursor ?? null,
   }
 }
 
@@ -854,7 +717,7 @@ AccountSession.prototype.removeMember = async function (
 }
 
 AccountSession.prototype.myGuilds = async function (this: AccountSession): Promise<MyGuildMembership[]> {
-  const w = await this.get<{ guild_id: string; role_index: number; joined_at: string }[]>('/me/guilds')
+  const w = await this.get<components['schemas']['MyGuildMembershipResponse'][]>('/me/guilds')
   if (!Array.isArray(w)) return w as unknown as MyGuildMembership[]
   return w.map((m) => ({ guildId: m.guild_id, roleIndex: m.role_index, joinedAt: m.joined_at }))
 }
@@ -1103,7 +966,7 @@ AccountSession.prototype.rsvpToEvent = async function (
   status: RsvpStatus,
 ): Promise<Rsvp> {
   const w = await this.put<RsvpWire>(`/guilds/${guildId}/events/${eventId}/rsvp`, { status })
-  return { eventId: w.event_id, identityId: w.identity_id, status: w.status, respondedAt: w.responded_at }
+  return { eventId: w.event_id, identityId: w.identity_id, status: w.status as RsvpStatus, respondedAt: w.responded_at }
 }
 
 AccountSession.prototype.eventRsvps = async function (
@@ -1113,7 +976,7 @@ AccountSession.prototype.eventRsvps = async function (
 ): Promise<RsvpRosterEntry[]> {
   const w = await this.get<RsvpRosterEntryWire[]>(`/guilds/${guildId}/events/${eventId}/rsvps`)
   if (!Array.isArray(w)) return w as unknown as RsvpRosterEntry[]
-  return w.map((r) => ({ identityId: r.identity_id, status: r.status, respondedAt: r.responded_at }))
+  return w.map((r) => ({ identityId: r.identity_id, status: r.status as RsvpStatus, respondedAt: r.responded_at }))
 }
 
 AccountSession.prototype.getGameBreakdown = async function (

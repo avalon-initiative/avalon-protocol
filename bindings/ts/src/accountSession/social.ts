@@ -3,19 +3,16 @@
 // Session's own social methods. See
 // crates/server/src/friends.rs/blocks.rs/presence.rs/discovery.rs.
 import { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
 // Must match crates/protocol/src/social.rs::PresenceStatus's serde
 // serialization exactly (the bare Rust enum variant names, no rename) —
 // same values realtime.ts's own PresenceStatusWire (push updates) uses,
 // duplicated here rather than imported to keep this file's point-in-time
 // reads independent of realtime.ts's push-specific module.
-export type PresenceStatus = 'Online' | 'Away' | 'DoNotDisturb' | 'Offline'
+export type PresenceStatus = components['schemas']['PresenceStatus']
 
-export interface Friendship {
-  a: string
-  b: string
-  since: string
-}
+export type Friendship = components['schemas']['FriendshipResponse']
 
 export interface FriendRequest {
   id: string
@@ -23,47 +20,33 @@ export interface FriendRequest {
   to: string
   requestedAt: string
 }
-interface FriendRequestWire {
-  id: string
-  from: string
-  to: string
-  requested_at: string
-}
+type FriendRequestWire = components['schemas']['FriendRequestResponse']
 
 export interface Block {
   blocked: string
   createdAt: string
 }
-interface BlockWire {
-  blocked: string
-  created_at: string
-}
+type BlockWire = components['schemas']['BlockResponse'] | components['schemas']['BlockListEntry']
 
 export interface PublicProfile {
   identityId: string
   displayName: string
   avatarUrl: string | null
 }
-interface PublicProfileWire {
-  identity_id: string
-  display_name: string
-  avatar_url: string | null
-}
+type PublicProfileWire = components['schemas']['PublicProfileResponse']
 
+// The real server response only ever carries `identity_id` — a prior
+// version of this type declared `displayName`/`avatarUrl`/`mutualFriends`/
+// `mutualGuilds` fields the server has never actually sent, so every real
+// `discoverPeople()` call returned `undefined` for all four. Found and
+// fixed migrating onto the generated type (issue #726), matching
+// `crates/server/src/discovery.rs::DiscoveryCandidate`'s real (narrower)
+// shape — the Rust SDK's own migration (#724) found and fixed the same
+// bug independently.
 export interface DiscoveryCandidate {
   identityId: string
-  displayName: string
-  avatarUrl: string | null
-  mutualFriends: number
-  mutualGuilds: number
 }
-interface DiscoveryCandidateWire {
-  identity_id: string
-  display_name: string
-  avatar_url: string | null
-  mutual_friends?: number
-  mutual_guilds?: number
-}
+type DiscoveryCandidateWire = components['schemas']['DiscoveryCandidate']
 
 export interface SearchResultIdentity {
   identityId: string
@@ -77,12 +60,7 @@ export interface Presence {
   activeIn: string | null
   updatedAt: string
 }
-interface PresenceWire {
-  identity_id: string
-  status: PresenceStatus
-  active_in: string | null
-  updated_at: string
-}
+type PresenceWire = components['schemas']['PresenceResponse']
 
 export interface HistoryEntry {
   eventId: string
@@ -91,13 +69,7 @@ export interface HistoryEntry {
   payload: unknown
   timestamp: string
 }
-interface HistoryEntryWire {
-  event_id: string
-  kind: string
-  subject: string
-  payload: unknown
-  timestamp: string
-}
+type HistoryEntryWire = components['schemas']['HistoryEntryResponse']
 
 export interface PublicIdentityProfile {
   identityId: string
@@ -116,23 +88,7 @@ export interface PublicIdentityProfile {
   mainGuild: string | null
   effectiveMainGuild: string | null
 }
-interface PublicIdentityProfileWire {
-  identity_id: string
-  identity_created_at: string
-  display_name: string
-  avatar_url: string | null
-  bio: string | null
-  favorite_genres?: string[]
-  pronouns: string | null
-  banner_url: string | null
-  status: string | null
-  links?: string[]
-  timezone: string | null
-  theme_color: string | null
-  location: string | null
-  main_guild: string | null
-  effective_main_guild: string | null
-}
+type PublicIdentityProfileWire = components['schemas']['PublicIdentityProfileResponse']
 
 export interface GuildAnnouncementAlert {
   messageId: string
@@ -143,15 +99,7 @@ export interface GuildAnnouncementAlert {
   body: string
   sentAt: string
 }
-interface GuildAnnouncementAlertWire {
-  message_id: string
-  channel_id: string
-  channel_name: string
-  guild_id: string
-  author: string
-  body: string
-  sent_at: string
-}
+type GuildAnnouncementAlertWire = components['schemas']['GuildAnnouncementAlert']
 
 declare module './core.js' {
   interface AccountSession {
@@ -220,7 +168,9 @@ AccountSession.prototype.removeFriend = async function (this: AccountSession, id
 }
 
 AccountSession.prototype.resolveHandle = async function (this: AccountSession, handle: string): Promise<string> {
-  const r = await this.get<{ identity_id: string }>(`/friends/handle/${encodeURIComponent(handle)}`)
+  const r = await this.get<components['schemas']['ResolveHandleResponse']>(
+    `/friends/handle/${encodeURIComponent(handle)}`,
+  )
   return r.identity_id
 }
 
@@ -240,15 +190,9 @@ AccountSession.prototype.unblock = async function (this: AccountSession, identit
 }
 
 AccountSession.prototype.discoverPeople = async function (this: AccountSession): Promise<DiscoveryCandidate[]> {
-  const r = await this.get<{ candidates: DiscoveryCandidateWire[] } | null>('/people/discover')
+  const r = await this.get<components['schemas']['DiscoverPeopleResponse'] | null>('/people/discover')
   if (!Array.isArray(r?.candidates)) return r as unknown as DiscoveryCandidate[]
-  return r.candidates.map((c) => ({
-    identityId: c.identity_id,
-    displayName: c.display_name,
-    avatarUrl: c.avatar_url,
-    mutualFriends: c.mutual_friends ?? 0,
-    mutualGuilds: c.mutual_guilds ?? 0,
-  }))
+  return r.candidates.map((c: DiscoveryCandidateWire) => ({ identityId: c.identity_id }))
 }
 
 AccountSession.prototype.searchIdentities = async function (
@@ -256,16 +200,18 @@ AccountSession.prototype.searchIdentities = async function (
   q: string,
 ): Promise<SearchResultIdentity[]> {
   if (q.trim().length === 0) return []
-  const r = await this.getQuery<{ results: PublicProfileWire[] } | null>('/identities/search', { q })
+  const r = await this.getQuery<components['schemas']['SearchIdentitiesResponse'] | null>('/identities/search', {
+    q,
+  })
   if (!Array.isArray(r?.results)) return r as unknown as SearchResultIdentity[]
-  return r.results.map((p) => ({ identityId: p.identity_id, displayName: p.display_name, avatarUrl: p.avatar_url }))
+  return r.results.map((p) => ({ identityId: p.identity_id, displayName: p.display_name, avatarUrl: p.avatar_url ?? null }))
 }
 
 AccountSession.prototype.profiles = async function (this: AccountSession, ids: string[]): Promise<PublicProfile[]> {
   if (ids.length === 0) return []
   const w = await this.getQuery<PublicProfileWire[]>('/identities/profiles', { ids: ids.join(',') })
   if (!Array.isArray(w)) return w as unknown as PublicProfile[]
-  return w.map((p) => ({ identityId: p.identity_id, displayName: p.display_name, avatarUrl: p.avatar_url }))
+  return w.map((p) => ({ identityId: p.identity_id, displayName: p.display_name, avatarUrl: p.avatar_url ?? null }))
 }
 
 AccountSession.prototype.history = async function (this: AccountSession): Promise<HistoryEntry[]> {
@@ -283,18 +229,18 @@ AccountSession.prototype.identityProfile = async function (
     identityId: w.identity_id,
     identityCreatedAt: w.identity_created_at,
     displayName: w.display_name,
-    avatarUrl: w.avatar_url,
-    bio: w.bio,
+    avatarUrl: w.avatar_url ?? null,
+    bio: w.bio ?? null,
     favoriteGenres: w.favorite_genres ?? [],
-    pronouns: w.pronouns,
-    bannerUrl: w.banner_url,
-    status: w.status,
+    pronouns: w.pronouns ?? null,
+    bannerUrl: w.banner_url ?? null,
+    status: w.status ?? null,
     links: w.links ?? [],
-    timezone: w.timezone,
-    themeColor: w.theme_color,
-    location: w.location,
-    mainGuild: w.main_guild,
-    effectiveMainGuild: w.effective_main_guild,
+    timezone: w.timezone ?? null,
+    themeColor: w.theme_color ?? null,
+    location: w.location ?? null,
+    mainGuild: w.main_guild ?? null,
+    effectiveMainGuild: w.effective_main_guild ?? null,
   }
 }
 
@@ -320,12 +266,12 @@ AccountSession.prototype.updatePresence = async function (
   hideActiveIn?: boolean,
 ): Promise<Presence> {
   const w = await this.put<PresenceWire>('/me/presence', { status, hide_active_in: hideActiveIn ?? null })
-  return { identityId: w.identity_id, status: w.status, activeIn: w.active_in, updatedAt: w.updated_at }
+  return { identityId: w.identity_id, status: w.status, activeIn: w.active_in ?? null, updatedAt: w.updated_at }
 }
 
 AccountSession.prototype.presenceOf = async function (this: AccountSession, ids: string[]): Promise<Presence[]> {
   if (ids.length === 0) return []
   const w = await this.getQuery<PresenceWire[]>('/presence', { ids: ids.join(',') })
   if (!Array.isArray(w)) return w as unknown as Presence[]
-  return w.map((p) => ({ identityId: p.identity_id, status: p.status, activeIn: p.active_in, updatedAt: p.updated_at }))
+  return w.map((p) => ({ identityId: p.identity_id, status: p.status, activeIn: p.active_in ?? null, updatedAt: p.updated_at }))
 }

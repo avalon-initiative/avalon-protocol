@@ -11,6 +11,7 @@ import type {
 } from '@simplewebauthn/browser'
 import { request } from './http.js'
 import { fromMeResponse, type MeResponseWire } from './types.js'
+import type { components } from './generated.js'
 import {
   AccountSession,
   findOwnSigningKeyId,
@@ -35,6 +36,10 @@ export interface AvalonClientConfig {
   serverUrl: string
 }
 
+// Hand-written, not generated — `challenge` is an opaque blob in the
+// schema (`webauthn-rs`'s own types have no `ToSchema` impl), same reason
+// the Rust SDK's own `RegisterStartResponse`/`SessionStartResponse` stay
+// hand-written (issue #724/#726).
 interface RegisterStartResponseWire {
   ticket_id: string
   challenge: { publicKey: PublicKeyCredentialCreationOptionsJSON }
@@ -45,10 +50,7 @@ interface SessionStartResponseWire {
   challenge: { publicKey: PublicKeyCredentialRequestOptionsJSON; mediation?: string }
 }
 
-interface SessionFinishResponseWire {
-  token: string
-  expires_at: string
-}
+type SessionFinishResponseWire = components['schemas']['SessionFinishResponse']
 
 export class AvalonClient {
   private readonly serverUrl: string
