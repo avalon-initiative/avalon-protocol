@@ -57,3 +57,12 @@ tokio.workspace = true
 sqlx.workspace = true
 rand.workspace = true
 wiremock.workspace = true
+
+[build-dependencies]
+# Must match the schemars major version typify 0.8 itself depends on
+# (0.8.x) — typify's TypeSpace API takes schemars 0.8's Schema type, and a
+# newer schemars major here would silently be a different, incompatible
+# type.
+schemars = "0.8"
+serde_json.workspace = true
+typify = "0.8.0"

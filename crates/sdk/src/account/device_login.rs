@@ -20,29 +20,12 @@
 
 use std::time::Duration;
 
-use serde::Deserialize;
-
 use crate::{AvalonClient, SdkError};
 
 use super::AccountSession;
 
 const DEFAULT_POLL_INTERVAL_SECONDS: i64 = 5;
 const MAX_POLL_INTERVAL_SECONDS: i64 = 60;
-
-#[derive(Deserialize)]
-struct StartPairingResponse {
-    device_code: String,
-    user_code: String,
-    verification_uri: String,
-    expires_in: i64,
-    poll_interval: i64,
-}
-
-#[derive(Deserialize)]
-struct PollPairingResponse {
-    status: String,
-    token: Option<String>,
-}
 
 /// A pending cross-device pairing for an [`AccountSession`] login,
 /// returned by [`AvalonClient::start_account_device_login`] — see this
@@ -72,13 +55,17 @@ impl AvalonClient {
     /// when this process has no WebAuthn ceremony surface of its own.
     pub async fn start_account_device_login(&self) -> Result<AccountDeviceLogin<'_>, SdkError> {
         let response = crate::http::send(&self.http, &self.config.retry, false, |c| {
-            c.post(format!("{}/auth/device/start", self.config.server_url))
+            c.post(format!(
+                "{}{}",
+                self.config.server_url,
+                crate::generated::paths::devices::START_PAIRING
+            ))
         })
         .await?;
         if !response.status().is_success() {
             return Err(crate::http::map_error_response(response).await);
         }
-        let body: StartPairingResponse = response
+        let body: crate::generated::StartPairingResponse = response
             .json()
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
@@ -115,8 +102,9 @@ impl AccountDeviceLogin<'_> {
             let response =
                 crate::http::send(&self.client.http, &self.client.config.retry, true, |c| {
                     c.post(format!(
-                        "{}/auth/device/poll",
-                        self.client.config.server_url
+                        "{}{}",
+                        self.client.config.server_url,
+                        crate::generated::paths::devices::POLL_PAIRING
                     ))
                     .bearer_auth(&self.device_code)
                 })
@@ -124,7 +112,7 @@ impl AccountDeviceLogin<'_> {
             if !response.status().is_success() {
                 return Err(crate::http::map_error_response(response).await);
             }
-            let body: PollPairingResponse = response
+            let body: crate::generated::PollPairingResponse = response
                 .json()
                 .await
                 .map_err(|e| SdkError::Protocol(e.to_string()))?;

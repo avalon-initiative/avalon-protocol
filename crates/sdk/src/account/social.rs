@@ -4,7 +4,6 @@
 //! `crates/server/src/friends.rs`/`blocks.rs`/`presence.rs`/`discovery.rs`.
 
 use avalon_protocol::social::PresenceStatus;
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -15,19 +14,30 @@ use super::AccountSession;
 /// A confirmed friendship — `a`/`b` are the two identities, in no
 /// particular order (the server never distinguishes "who sent the
 /// request" past acceptance).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Friendship {
     /// One side of the friendship.
     pub a: Uuid,
     /// The other side.
     pub b: Uuid,
     /// When the friendship was established.
-    #[serde(with = "time::serde::rfc3339")]
     pub since: OffsetDateTime,
 }
 
+impl TryFrom<crate::generated::FriendshipResponse> for Friendship {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::FriendshipResponse) -> Result<Self, SdkError> {
+        Ok(Friendship {
+            a: body.a,
+            b: body.b,
+            since: super::parse_rfc3339(&body.since)?,
+        })
+    }
+}
+
 /// A pending friend request.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FriendRequest {
     /// This request's own id.
     pub id: Uuid,
@@ -36,24 +46,57 @@ pub struct FriendRequest {
     /// The recipient.
     pub to: Uuid,
     /// When the request was sent.
-    #[serde(with = "time::serde::rfc3339")]
     pub requested_at: OffsetDateTime,
+}
+
+impl TryFrom<crate::generated::FriendRequestResponse> for FriendRequest {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::FriendRequestResponse) -> Result<Self, SdkError> {
+        Ok(FriendRequest {
+            id: body.id,
+            from: body.from,
+            to: body.to,
+            requested_at: super::parse_rfc3339(&body.requested_at)?,
+        })
+    }
 }
 
 /// One outgoing block — see `crates/server/src/blocks.rs`'s own invariant:
 /// there is no endpoint anywhere that reveals who has blocked *you*.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Block {
     /// The blocked identity.
     pub blocked: Uuid,
     /// When the block was created.
-    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+}
+
+impl TryFrom<crate::generated::BlockListEntry> for Block {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::BlockListEntry) -> Result<Self, SdkError> {
+        Ok(Block {
+            blocked: body.blocked,
+            created_at: super::parse_rfc3339(&body.created_at)?,
+        })
+    }
+}
+
+impl TryFrom<crate::generated::BlockResponse> for Block {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::BlockResponse) -> Result<Self, SdkError> {
+        Ok(Block {
+            blocked: body.blocked,
+            created_at: super::parse_rfc3339(&body.created_at)?,
+        })
+    }
 }
 
 /// A public-face profile — the least-sensitive batch-resolvable fields
 /// only (`GET /identities/profiles`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PublicProfile {
     /// The identity these fields describe.
     pub identity_id: Uuid,
@@ -63,25 +106,42 @@ pub struct PublicProfile {
     pub avatar_url: Option<String>,
 }
 
+impl From<crate::generated::PublicProfileResponse> for PublicProfile {
+    fn from(body: crate::generated::PublicProfileResponse) -> Self {
+        PublicProfile {
+            identity_id: body.identity_id,
+            display_name: body.display_name,
+            avatar_url: body.avatar_url,
+        }
+    }
+}
+
 /// A "people you may know" candidate (`GET /people/discover`).
-#[derive(Debug, Clone, Deserialize)]
+///
+/// Only ever carries `identity_id` — matching
+/// `crates/server/src/discovery.rs::DiscoveryCandidate`'s real (narrower)
+/// shape. A prior version of this struct declared `display_name`/
+/// `avatar_url`/`mutual_friends`/`mutual_guilds` fields the server has
+/// never actually sent (`display_name` wasn't even optional, so every real
+/// `discover_people()` call would have failed to deserialize) — found and
+/// fixed migrating onto the generated type, which is exactly the real
+/// server response shape.
+#[derive(Debug, Clone)]
 pub struct DiscoveryCandidate {
     /// The candidate identity.
     pub identity_id: Uuid,
-    /// Display name.
-    pub display_name: String,
-    /// Avatar image URL, if set.
-    pub avatar_url: Option<String>,
-    /// Mutual friend count, if any signal exists.
-    #[serde(default)]
-    pub mutual_friends: i64,
-    /// Mutual guild count, if any signal exists.
-    #[serde(default)]
-    pub mutual_guilds: i64,
+}
+
+impl From<crate::generated::DiscoveryCandidate> for DiscoveryCandidate {
+    fn from(body: crate::generated::DiscoveryCandidate) -> Self {
+        DiscoveryCandidate {
+            identity_id: body.identity_id,
+        }
+    }
 }
 
 /// A single global search result (`GET /identities/search`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SearchResultIdentity {
     /// The matched identity.
     pub identity_id: Uuid,
@@ -91,8 +151,18 @@ pub struct SearchResultIdentity {
     pub avatar_url: Option<String>,
 }
 
+impl From<crate::generated::SearchResultIdentity> for SearchResultIdentity {
+    fn from(body: crate::generated::SearchResultIdentity) -> Self {
+        SearchResultIdentity {
+            identity_id: body.identity_id,
+            display_name: body.display_name,
+            avatar_url: body.avatar_url,
+        }
+    }
+}
+
 /// This identity's own presence, as currently published.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Presence {
     /// The identity this presence describes.
     pub identity_id: Uuid,
@@ -101,12 +171,24 @@ pub struct Presence {
     /// Which guild the identity is currently active in, if visible.
     pub active_in: Option<Uuid>,
     /// When this status was last published.
-    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
+impl TryFrom<crate::generated::PresenceResponse> for Presence {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::PresenceResponse) -> Result<Self, SdkError> {
+        Ok(Presence {
+            identity_id: body.identity_id,
+            status: body.status,
+            active_in: body.active_in,
+            updated_at: super::parse_rfc3339(&body.updated_at)?,
+        })
+    }
+}
+
 /// One entry of the caller's own recent protocol history (`GET /me/history`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct HistoryEntry {
     /// The underlying durable event's id.
     pub event_id: Uuid,
@@ -117,19 +199,31 @@ pub struct HistoryEntry {
     /// The event's own payload, or `None` if pruned locally.
     pub payload: Option<serde_json::Value>,
     /// When the event occurred.
-    #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
+}
+
+impl TryFrom<crate::generated::HistoryEntryResponse> for HistoryEntry {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::HistoryEntryResponse) -> Result<Self, SdkError> {
+        Ok(HistoryEntry {
+            event_id: body.event_id,
+            kind: body.kind,
+            subject: body.subject,
+            payload: body.payload.map(serde_json::Value::Object),
+            timestamp: super::parse_rfc3339(&body.timestamp)?,
+        })
+    }
 }
 
 /// Another identity's full self-description profile (`GET
 /// /identities/{id}/profile`, issue #403) — same fields `GET /me` exposes
 /// for the caller's own profile.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PublicIdentityProfile {
     /// The identity these fields describe.
     pub identity_id: Uuid,
     /// When this identity was created.
-    #[serde(with = "time::serde::rfc3339")]
     pub identity_created_at: OffsetDateTime,
     /// Display name / globally-unique handle.
     pub display_name: String,
@@ -138,8 +232,7 @@ pub struct PublicIdentityProfile {
     /// Free-text bio, if set.
     pub bio: Option<String>,
     /// Self-described favorite genres.
-    #[serde(default)]
-    pub favorite_genres: Vec<String>,
+    pub favorite_genres: Vec<avalon_protocol::identity::Genre>,
     /// Free-text pronouns, if set.
     pub pronouns: Option<String>,
     /// Banner image URL, if set.
@@ -147,7 +240,6 @@ pub struct PublicIdentityProfile {
     /// Free-text status line, if set.
     pub status: Option<String>,
     /// External links.
-    #[serde(default)]
     pub links: Vec<String>,
     /// Self-described timezone, if set.
     pub timezone: Option<String>,
@@ -157,9 +249,31 @@ pub struct PublicIdentityProfile {
     pub location: Option<String>,
 }
 
+impl TryFrom<crate::generated::PublicIdentityProfileResponse> for PublicIdentityProfile {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::PublicIdentityProfileResponse) -> Result<Self, SdkError> {
+        Ok(PublicIdentityProfile {
+            identity_id: body.identity_id,
+            identity_created_at: super::parse_rfc3339(&body.identity_created_at)?,
+            display_name: body.display_name,
+            avatar_url: body.avatar_url,
+            bio: body.bio,
+            favorite_genres: body.favorite_genres,
+            pronouns: body.pronouns,
+            banner_url: body.banner_url,
+            status: body.status,
+            links: body.links,
+            timezone: body.timezone,
+            theme_color: body.theme_color,
+            location: body.location,
+        })
+    }
+}
+
 /// A recent announcement-only channel post (`GET /me/guild-announcements`,
 /// issue #280).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GuildAnnouncementAlert {
     /// The underlying message's id.
     pub message_id: Uuid,
@@ -174,48 +288,62 @@ pub struct GuildAnnouncementAlert {
     /// The message body.
     pub body: String,
     /// When it was sent.
-    #[serde(with = "time::serde::rfc3339")]
     pub sent_at: OffsetDateTime,
 }
 
-#[derive(Serialize)]
-struct CreateFriendRequestRequest {
-    to: Uuid,
-}
+impl TryFrom<crate::generated::GuildAnnouncementAlert> for GuildAnnouncementAlert {
+    type Error = SdkError;
 
-#[derive(Serialize)]
-struct CreateBlockRequest {
-    identity_id: Uuid,
-}
-
-#[derive(Serialize)]
-struct UpdatePresenceRequest {
-    status: PresenceStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hide_active_in: Option<bool>,
+    fn try_from(body: crate::generated::GuildAnnouncementAlert) -> Result<Self, SdkError> {
+        Ok(GuildAnnouncementAlert {
+            message_id: body.message_id,
+            channel_id: body.channel_id,
+            channel_name: body.channel_name,
+            guild_id: body.guild_id,
+            author: body.author,
+            body: body.body,
+            sent_at: super::parse_rfc3339(&body.sent_at)?,
+        })
+    }
 }
 
 impl AccountSession {
     /// `GET /friends`.
     pub async fn friends(&self) -> Result<Vec<Friendship>, SdkError> {
-        self.get("/friends").await
+        let raw: Vec<crate::generated::FriendshipResponse> = self
+            .get(crate::generated::paths::friends::LIST_FRIENDS)
+            .await?;
+        raw.into_iter().map(Friendship::try_from).collect()
     }
 
     /// `GET /friends/requests` — both incoming and outgoing.
     pub async fn friend_requests(&self) -> Result<Vec<FriendRequest>, SdkError> {
-        self.get("/friends/requests").await
+        let raw: Vec<crate::generated::FriendRequestResponse> = self
+            .get(crate::generated::paths::friends::LIST_FRIEND_REQUESTS)
+            .await?;
+        raw.into_iter().map(FriendRequest::try_from).collect()
     }
 
     /// `POST /friends/requests`.
     pub async fn create_friend_request(&self, to: Uuid) -> Result<FriendRequest, SdkError> {
-        self.post("/friends/requests", &CreateFriendRequestRequest { to })
-            .await
+        let raw: crate::generated::FriendRequestResponse = self
+            .post(
+                crate::generated::paths::friends::CREATE_FRIEND_REQUEST,
+                &crate::generated::CreateFriendRequestRequest { to },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `POST /friends/requests/{id}/accept`.
     pub async fn accept_friend_request(&self, request_id: Uuid) -> Result<Friendship, SdkError> {
-        self.post_empty(&format!("/friends/requests/{request_id}/accept"))
-            .await
+        let raw: crate::generated::FriendshipResponse = self
+            .post_empty(&super::path(
+                crate::generated::paths::friends::ACCEPT_FRIEND_REQUEST,
+                &[("id", &request_id.to_string())],
+            ))
+            .await?;
+        raw.try_into()
     }
 
     /// `DELETE /friends/requests/{id}` — declines an incoming request or
@@ -224,53 +352,69 @@ impl AccountSession {
         &self,
         request_id: Uuid,
     ) -> Result<(), SdkError> {
-        self.delete(&format!("/friends/requests/{request_id}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::friends::DECLINE_OR_WITHDRAW_FRIEND_REQUEST,
+            &[("id", &request_id.to_string())],
+        ))
+        .await
     }
 
     /// `DELETE /friends/{identity_id}`.
     pub async fn remove_friend(&self, identity_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/friends/{identity_id}")).await
+        self.delete(&super::path(
+            crate::generated::paths::friends::REMOVE_FRIEND,
+            &[("identity_id", &identity_id.to_string())],
+        ))
+        .await
     }
 
     /// `GET /friends/handle/{handle}` — exact-match handle resolution for
     /// the "add friend" flow.
     pub async fn resolve_handle(&self, handle: &str) -> Result<Uuid, SdkError> {
-        #[derive(Deserialize)]
-        struct ResolveHandleResponse {
-            identity_id: Uuid,
-        }
-        let response: ResolveHandleResponse = self
-            .get(&format!("/friends/handle/{}", urlencoding_path(handle)))
+        let response: crate::generated::ResolveHandleResponse = self
+            .get(&super::path(
+                crate::generated::paths::friends::RESOLVE_HANDLE,
+                &[("handle", &urlencoding_path(handle))],
+            ))
             .await?;
         Ok(response.identity_id)
     }
 
     /// `GET /blocks` — the caller's own outgoing blocks only.
     pub async fn blocks(&self) -> Result<Vec<Block>, SdkError> {
-        self.get("/blocks").await
+        let raw: Vec<crate::generated::BlockListEntry> = self
+            .get(crate::generated::paths::blocks::LIST_BLOCKS)
+            .await?;
+        raw.into_iter().map(Block::try_from).collect()
     }
 
     /// `POST /blocks`.
     pub async fn block(&self, identity_id: Uuid) -> Result<Block, SdkError> {
-        self.post("/blocks", &CreateBlockRequest { identity_id })
-            .await
+        let raw: crate::generated::BlockResponse = self
+            .post(
+                crate::generated::paths::blocks::CREATE_BLOCK,
+                &crate::generated::CreateBlockRequest { identity_id },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `DELETE /blocks/{identity_id}`.
     pub async fn unblock(&self, identity_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/blocks/{identity_id}")).await
+        self.delete(&super::path(
+            crate::generated::paths::blocks::REMOVE_BLOCK,
+            &[("identity_id", &identity_id.to_string())],
+        ))
+        .await
     }
 
     /// `GET /people/discover` — no query parameters; the caller's own
     /// session is the only input.
     pub async fn discover_people(&self) -> Result<Vec<DiscoveryCandidate>, SdkError> {
-        #[derive(Deserialize)]
-        struct DiscoverPeopleResponse {
-            candidates: Vec<DiscoveryCandidate>,
-        }
-        let response: DiscoverPeopleResponse = self.get("/people/discover").await?;
-        Ok(response.candidates)
+        let response: crate::generated::DiscoverPeopleResponse = self
+            .get(crate::generated::paths::discovery::DISCOVER_PEOPLE)
+            .await?;
+        Ok(response.candidates.into_iter().map(Into::into).collect())
     }
 
     /// `GET /identities/search?q=` — only matches identities that opted
@@ -280,13 +424,13 @@ impl AccountSession {
         if q.trim().is_empty() {
             return Ok(Vec::new());
         }
-        #[derive(Deserialize)]
-        struct SearchIdentitiesResponse {
-            results: Vec<SearchResultIdentity>,
-        }
-        let response: SearchIdentitiesResponse =
-            self.get_query("/identities/search", &[("q", q)]).await?;
-        Ok(response.results)
+        let response: crate::generated::SearchIdentitiesResponse = self
+            .get_query(
+                crate::generated::paths::discovery::SEARCH_IDENTITIES,
+                &[("q", q)],
+            )
+            .await?;
+        Ok(response.results.into_iter().map(Into::into).collect())
     }
 
     /// `GET /identities/profiles?ids=` — batched, public-fields-only.
@@ -299,13 +443,21 @@ impl AccountSession {
             .map(Uuid::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        self.get_query("/identities/profiles", &[("ids", &joined)])
-            .await
+        let raw: Vec<crate::generated::PublicProfileResponse> = self
+            .get_query(
+                crate::generated::paths::identity::LIST_PROFILES,
+                &[("ids", &joined)],
+            )
+            .await?;
+        Ok(raw.into_iter().map(Into::into).collect())
     }
 
     /// `GET /me/history`.
     pub async fn history(&self) -> Result<Vec<HistoryEntry>, SdkError> {
-        self.get("/me/history").await
+        let raw: Vec<crate::generated::HistoryEntryResponse> = self
+            .get(crate::generated::paths::identity::MY_HISTORY)
+            .await?;
+        raw.into_iter().map(HistoryEntry::try_from).collect()
     }
 
     /// `GET /identities/{id}/profile` — another identity's full
@@ -314,15 +466,25 @@ impl AccountSession {
         &self,
         identity_id: Uuid,
     ) -> Result<PublicIdentityProfile, SdkError> {
-        self.get(&format!("/identities/{identity_id}/profile"))
-            .await
+        let raw: crate::generated::PublicIdentityProfileResponse = self
+            .get(&super::path(
+                crate::generated::paths::identity::GET_IDENTITY_PROFILE,
+                &[("id", &identity_id.to_string())],
+            ))
+            .await?;
+        raw.try_into()
     }
 
     /// `GET /me/guild-announcements` (issue #280) — recent
     /// announcement-only channel posts across every guild the caller
     /// currently belongs to.
     pub async fn guild_announcements(&self) -> Result<Vec<GuildAnnouncementAlert>, SdkError> {
-        self.get("/me/guild-announcements").await
+        let raw: Vec<crate::generated::GuildAnnouncementAlert> = self
+            .get(crate::generated::paths::guilds::LIST_MY_GUILD_ANNOUNCEMENTS)
+            .await?;
+        raw.into_iter()
+            .map(GuildAnnouncementAlert::try_from)
+            .collect()
     }
 
     /// `PUT /me/presence` — publishes the caller's own status. Not
@@ -332,14 +494,16 @@ impl AccountSession {
         status: PresenceStatus,
         hide_active_in: Option<bool>,
     ) -> Result<Presence, SdkError> {
-        self.put(
-            "/me/presence",
-            &UpdatePresenceRequest {
-                status,
-                hide_active_in,
-            },
-        )
-        .await
+        let raw: crate::generated::PresenceResponse = self
+            .put(
+                crate::generated::paths::presence::UPDATE_MY_PRESENCE,
+                &crate::generated::UpdatePresenceRequest {
+                    status,
+                    hide_active_in,
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `GET /presence?ids=` — no visibility filtering server-side (#87
@@ -353,7 +517,13 @@ impl AccountSession {
             .map(Uuid::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        self.get_query("/presence", &[("ids", &joined)]).await
+        let raw: Vec<crate::generated::PresenceResponse> = self
+            .get_query(
+                crate::generated::paths::presence::GET_PRESENCE,
+                &[("ids", &joined)],
+            )
+            .await?;
+        raw.into_iter().map(Presence::try_from).collect()
     }
 }
 

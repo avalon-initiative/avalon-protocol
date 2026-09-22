@@ -4,7 +4,6 @@
 //! keys), distinct from `passkeys` (WebAuthn login credentials). See
 //! `crates/server/src/devices.rs`/`device_pairing.rs`.
 
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -13,7 +12,7 @@ use crate::SdkError;
 use super::{canonical_message, AccountSession};
 
 /// One of this identity's registered signing-key devices.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Device {
     /// The `identity_signing_keys.id` this device is stored under — the
     /// value a signature-required action's `signing_key_id` field names.
@@ -23,17 +22,32 @@ pub struct Device {
     /// Base64-encoded raw Ed25519 public key.
     pub public_key: String,
     /// When this device's key was registered.
-    #[serde(with = "time::serde::rfc3339")]
     pub added_at: OffsetDateTime,
     /// `None` while active; set once revoked.
-    #[serde(default)]
-    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<crate::generated::DeviceResponse> for Device {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::DeviceResponse) -> Result<Self, SdkError> {
+        Ok(Device {
+            id: body.id,
+            label: body.label,
+            public_key: body.public_key,
+            added_at: super::parse_rfc3339(&body.added_at)?,
+            revoked_at: body
+                .revoked_at
+                .as_deref()
+                .map(super::parse_rfc3339)
+                .transpose()?,
+        })
+    }
 }
 
 /// A pending or resolved request to add a new device's signing key —
 /// `POST /me/devices/grants`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DeviceGrant {
     /// This grant's own id.
     pub id: Uuid,
@@ -48,17 +62,24 @@ pub struct DeviceGrant {
     /// in what it signs (see [`AccountSession::approve_device_grant`]).
     pub requested_signing_public_key: String,
     /// When this grant was requested.
-    #[serde(with = "time::serde::rfc3339")]
     pub requested_at: OffsetDateTime,
     /// When this grant expires if never approved/denied.
-    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
 }
 
-#[derive(Serialize)]
-struct RequestDeviceGrantRequest<'a> {
-    requested_signing_public_key: &'a str,
-    device_label: Option<&'a str>,
+impl TryFrom<crate::generated::DeviceGrantResponse> for DeviceGrant {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::DeviceGrantResponse) -> Result<Self, SdkError> {
+        Ok(DeviceGrant {
+            id: body.id,
+            status: body.status,
+            device_label: body.device_label,
+            requested_signing_public_key: body.requested_signing_public_key,
+            requested_at: super::parse_rfc3339(&body.requested_at)?,
+            expires_at: super::parse_rfc3339(&body.expires_at)?,
+        })
+    }
 }
 
 /// Exact bytes `devices::device_grant_approval_signing_bytes` on the
@@ -83,34 +104,14 @@ fn device_grant_approval_signing_bytes(
     )
 }
 
-#[derive(Serialize)]
-struct ApproveDeviceGrantRequest {
-    approver_signing_key_id: Uuid,
-    signature: String,
-}
-
-#[derive(Serialize)]
-struct RenameDeviceRequest<'a> {
-    label: &'a str,
-}
-
-#[derive(Serialize)]
-struct ApprovePairingRequest<'a> {
-    user_code: &'a str,
-    #[serde(flatten)]
-    signature: super::SignatureFields,
-}
-
-#[derive(Serialize)]
-struct UserCodeRequest<'a> {
-    user_code: &'a str,
-}
-
 impl AccountSession {
     /// `GET /me/devices` — every signing-key device registered to this
     /// identity, active and revoked alike.
     pub async fn list_devices(&self) -> Result<Vec<Device>, SdkError> {
-        self.get("/me/devices").await
+        let raw: Vec<crate::generated::DeviceResponse> = self
+            .get(crate::generated::paths::devices::LIST_DEVICES)
+            .await?;
+        raw.into_iter().map(Device::try_from).collect()
     }
 
     /// `PATCH /me/devices/{signing_key_id}` — relabels a device. Not
@@ -120,18 +121,28 @@ impl AccountSession {
         signing_key_id: Uuid,
         label: &str,
     ) -> Result<Device, SdkError> {
-        self.patch(
-            &format!("/me/devices/{signing_key_id}"),
-            &RenameDeviceRequest { label },
-        )
-        .await
+        let raw: crate::generated::DeviceResponse = self
+            .patch(
+                &super::path(
+                    crate::generated::paths::devices::RENAME_DEVICE,
+                    &[("id", &signing_key_id.to_string())],
+                ),
+                &crate::generated::RenameDeviceRequest {
+                    label: label.to_string(),
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `POST /me/devices/{signing_key_id}/revoke` — unilateral, ambient-token
     /// (revocation only ever narrows trust, per #697).
     pub async fn revoke_device(&self, signing_key_id: Uuid) -> Result<(), SdkError> {
-        self.post_empty_no_response(&format!("/me/devices/{signing_key_id}/revoke"))
-            .await
+        self.post_empty_no_response(&super::path(
+            crate::generated::paths::devices::REVOKE_DEVICE,
+            &[("id", &signing_key_id.to_string())],
+        ))
+        .await
     }
 
     /// `POST /me/devices/grants` — requests a new device's signing key be
@@ -144,14 +155,16 @@ impl AccountSession {
         requested_signing_public_key_b64: &str,
         device_label: Option<&str>,
     ) -> Result<DeviceGrant, SdkError> {
-        self.post(
-            "/me/devices/grants",
-            &RequestDeviceGrantRequest {
-                requested_signing_public_key: requested_signing_public_key_b64,
-                device_label,
-            },
-        )
-        .await
+        let raw: crate::generated::DeviceGrantResponse = self
+            .post(
+                crate::generated::paths::devices::REQUEST_DEVICE_GRANT,
+                &crate::generated::RequestDeviceGrantRequest {
+                    requested_signing_public_key: requested_signing_public_key_b64.to_string(),
+                    device_label: device_label.map(str::to_string),
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `GET /me/devices/grants[?status=]`.
@@ -159,18 +172,31 @@ impl AccountSession {
         &self,
         status: Option<&str>,
     ) -> Result<Vec<DeviceGrant>, SdkError> {
-        match status {
+        let raw: Vec<crate::generated::DeviceGrantResponse> = match status {
             Some(status) => {
-                self.get_query("/me/devices/grants", &[("status", status)])
-                    .await
+                self.get_query(
+                    crate::generated::paths::devices::LIST_DEVICE_GRANTS,
+                    &[("status", status)],
+                )
+                .await?
             }
-            None => self.get("/me/devices/grants").await,
-        }
+            None => {
+                self.get(crate::generated::paths::devices::LIST_DEVICE_GRANTS)
+                    .await?
+            }
+        };
+        raw.into_iter().map(DeviceGrant::try_from).collect()
     }
 
     /// `GET /me/devices/grants/{id}`.
     pub async fn get_device_grant(&self, grant_id: Uuid) -> Result<DeviceGrant, SdkError> {
-        self.get(&format!("/me/devices/grants/{grant_id}")).await
+        let raw: crate::generated::DeviceGrantResponse = self
+            .get(&super::path(
+                crate::generated::paths::devices::GET_DEVICE_GRANT,
+                &[("id", &grant_id.to_string())],
+            ))
+            .await?;
+        raw.try_into()
     }
 
     /// `POST /me/devices/grants/{id}/approve` — approves someone else's (or
@@ -204,14 +230,19 @@ impl AccountSession {
         // calls the signer directly instead of going through `sign` a
         // second time with a slightly different call shape.
         let signature = self.sign_raw(&message);
-        self.post(
-            &format!("/me/devices/grants/{grant_id}/approve"),
-            &ApproveDeviceGrantRequest {
-                approver_signing_key_id: signing,
-                signature,
-            },
-        )
-        .await
+        let raw: crate::generated::DeviceResponse = self
+            .post(
+                &super::path(
+                    crate::generated::paths::devices::APPROVE_DEVICE_GRANT,
+                    &[("id", &grant_id.to_string())],
+                ),
+                &crate::generated::ApproveDeviceGrantRequest {
+                    approver_signing_key_id: signing,
+                    signature,
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `POST /auth/device/approve` (issue #307/#704) — approves a
@@ -222,16 +253,13 @@ impl AccountSession {
             "device_pairing.approve",
             &[&self.identity().id.0.to_string(), user_code],
         );
-        #[derive(Deserialize)]
-        struct ResolvePairingResponse {
-            status: String,
-        }
-        let response: ResolvePairingResponse = self
+        let response: crate::generated::ResolvePairingResponse = self
             .post(
-                "/auth/device/approve",
-                &ApprovePairingRequest {
-                    user_code,
-                    signature,
+                crate::generated::paths::devices::APPROVE_PAIRING,
+                &crate::generated::ApprovePairingRequest {
+                    user_code: user_code.to_string(),
+                    signature: signature.signature,
+                    signing_key_id: signature.signing_key_id,
                 },
             )
             .await?;
@@ -241,12 +269,13 @@ impl AccountSession {
     /// `POST /auth/device/deny` — declines a pairing request. Not
     /// signature-required (no state is granted).
     pub async fn deny_device_pairing(&self, user_code: &str) -> Result<String, SdkError> {
-        #[derive(Deserialize)]
-        struct ResolvePairingResponse {
-            status: String,
-        }
-        let response: ResolvePairingResponse = self
-            .post("/auth/device/deny", &UserCodeRequest { user_code })
+        let response: crate::generated::ResolvePairingResponse = self
+            .post(
+                crate::generated::paths::devices::DENY_PAIRING,
+                &crate::generated::UserCodeRequest {
+                    user_code: user_code.to_string(),
+                },
+            )
             .await?;
         Ok(response.status)
     }

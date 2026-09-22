@@ -58,6 +58,7 @@ pub mod achievements;
 pub mod conversations;
 pub mod cross_node_login;
 pub mod device_login;
+pub(crate) mod generated;
 pub mod guilds;
 mod http;
 pub mod issuer_registration;
