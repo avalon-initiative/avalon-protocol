@@ -2,21 +2,9 @@
 // IntegratorSession — mirrors avalon_protocol::identity::{Identity, Profile}
 // and both Rust/C# SDKs' own `MeResponse` mapping.
 
-export type Genre =
-  | 'action'
-  | 'adventure'
-  | 'rpg'
-  | 'strategy'
-  | 'simulation'
-  | 'puzzle'
-  | 'racing'
-  | 'sports'
-  | 'horror'
-  | 'sandbox'
-  | 'mmo'
-  | 'shooter'
-  | 'platformer'
-  | 'party'
+import type { components } from './generated'
+
+export type Genre = components['schemas']['Genre']
 
 export interface Identity {
   id: string
@@ -51,26 +39,9 @@ export interface Profile {
   presenceVisibility: string
 }
 
-/** `GET /me`'s wire response, field-for-field. */
-export interface MeResponseWire {
-  identity_id: string
-  identity_created_at: string
-  display_name: string
-  avatar_url: string | null
-  bio: string | null
-  favorite_genres: Genre[]
-  pronouns: string | null
-  banner_url: string | null
-  status: string | null
-  links: string[]
-  timezone: string | null
-  theme_color: string | null
-  location: string | null
-  main_guild: string | null
-  effective_main_guild: string | null
-  discoverable: boolean
-  presence_visibility: string
-}
+/** `GET /me`'s wire response, field-for-field — generated from
+ * `docs/generated/openapi.json` (issue #726) rather than hand-written. */
+export type MeResponseWire = components['schemas']['ProfileResponse']
 
 export function fromMeResponse(body: MeResponseWire): { identity: Identity; profile: Profile } {
   return {
@@ -78,17 +49,17 @@ export function fromMeResponse(body: MeResponseWire): { identity: Identity; prof
     profile: {
       identityId: body.identity_id,
       displayName: body.display_name,
-      avatarUrl: body.avatar_url,
-      bio: body.bio,
+      avatarUrl: body.avatar_url ?? null,
+      bio: body.bio ?? null,
       favoriteGenres: body.favorite_genres,
-      pronouns: body.pronouns,
-      bannerUrl: body.banner_url,
-      status: body.status,
+      pronouns: body.pronouns ?? null,
+      bannerUrl: body.banner_url ?? null,
+      status: body.status ?? null,
       links: body.links,
-      timezone: body.timezone,
-      themeColor: body.theme_color,
-      location: body.location,
-      mainGuild: body.main_guild,
+      timezone: body.timezone ?? null,
+      themeColor: body.theme_color ?? null,
+      location: body.location ?? null,
+      mainGuild: body.main_guild ?? null,
       effectiveMainGuild: body.effective_main_guild ?? null,
       discoverable: body.discoverable ?? false,
       presenceVisibility: body.presence_visibility ?? 'public',

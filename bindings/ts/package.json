@@ -9,7 +9,9 @@
   "scripts": {
     "lint": "eslint .",
     "test": "vitest run",
-    "test:live": "AVALON_SDK_LIVE=1 vitest run --config vitest.live.config.ts"
+    "test:live": "AVALON_SDK_LIVE=1 vitest run --config vitest.live.config.ts",
+    "generate": "node scripts/generate-types.mjs",
+    "generate:check": "node scripts/generate-types.mjs && git diff --exit-code src/generated.ts"
   },
   "dependencies": {
     "@noble/curves": "^1.6.0",
@@ -20,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.0",
+    "openapi-typescript": "^7.13.0",
     "pg": "^8.13.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

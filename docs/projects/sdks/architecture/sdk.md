@@ -1069,6 +1069,63 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `mainGuild`/`effectiveMainGuild`, which the real server always
   returns). `apps/mobile-hub` stays on `packages/api-client`, untouched
   — explicitly out of this epic's scope.
+- `bindings/ts/scripts/generate-types.mjs` (issue #726, epic #722 — first
+  slice, mirroring #724's Rust migration) — `bindings/ts` starts consuming
+  generated wire-shape types from `docs/generated/openapi.json` (#723) via
+  `openapi-typescript`, a devDependency-only tool (zero runtime footprint —
+  the generated file itself has no imports). Unlike the Rust SDK,
+  `bindings/ts` has **no build step at all** (`package.json`'s `main`/
+  `types` point straight at `./src/index.ts`; `apps/hub` depends on it via
+  `"@avalon/sdk": "file:../../bindings/ts"`, consuming raw source), so
+  there's no compile-time hook the way `crates/sdk/build.rs` gets — the
+  generated `bindings/ts/src/generated.ts` (~8,300 lines, whole-spec, not a
+  curated allowlist like Rust's `SCHEMA_NAMES`, since unused TS interfaces
+  cost nothing at runtime) is instead a **checked-in artifact**, same
+  convention `docs/generated/openapi.json` itself already uses: `make
+  ts-sdk-types` regenerates it, `make ts-sdk-types-check` (wired into `make
+  check`) fails CI if it's stale.
+  - The real spec has real `operationId` collisions across tags
+    (`list_messages`/`send_message` for chat vs. guild channels,
+    `register_start`/`register_finish` for identity vs. passkeys — the
+    same four collisions #724's own `build.rs` found and resolved via
+    per-tag module namespacing) — `openapi-typescript`'s `operations`
+    namespace is flat with no such namespacing, so generating from the
+    unmodified spec produces a `generated.ts` that doesn't even
+    type-check. `generate-types.mjs` calls `openapi-typescript`'s
+    programmatic API (not its CLI, which only takes a file path) and
+    prefixes every colliding `operationId` with its own first tag before
+    generation — this only touches the (not yet used) `operations`/`paths`
+    naming, never `components.schemas`, which has no collisions since
+    every schema name is already globally unique.
+  - This slice covers `types.ts`'s `MeResponseWire` (now `components
+    ['schemas']['ProfileResponse']`) and `Genre` (now `components
+    ['schemas']['Genre']` — structurally identical to the hand-written
+    union it replaced), plus `client.ts`'s `SessionFinishResponseWire`
+    (`components['schemas']['SessionFinishResponse']`). `RegisterStartResponseWire`/
+    `SessionStartResponseWire` stay hand-written — their `challenge` field
+    is an opaque blob in the schema (`webauthn-rs`'s own types have no
+    `ToSchema` impl), the same reason the Rust SDK keeps its own
+    `RegisterStartResponse`/`SessionStartResponse` hand-written.
+  - Several generated fields are optional (`T | null | undefined`) where
+    the hand-written `MeResponseWire` declared them non-optional
+    (`T | null`) — `fromMeResponse` now coalesces each with `?? null`
+    (`effectiveMainGuild`/`discoverable`/`presenceVisibility` already did
+    this defensively; the newly-optional fields — `avatarUrl`/`bio`/
+    `pronouns`/`bannerUrl`/`status`/`timezone`/`themeColor`/`location`/
+    `mainGuild` — needed the same treatment added). No behavior change:
+    the real server has always sent these fields on every real response.
+  - The remaining ~90 hand-written wire-shape types across
+    `accountSession/{guildAdmin,social,achievements,devices,passkeys,
+    recovery,conversations,integrations,realtime}.ts` (48 alone in
+    `guildAdmin.ts`) and the endpoint-path-stub half of this migration
+    (mirroring #724's `crate::generated::paths::<tag>::<NAME>` — TS's
+    template literals have no `format!()`-style compile-time-literal
+    restriction, so this would look different in shape, not yet designed)
+    are explicitly out of scope for this slice — proving the pipeline
+    first, same precedent #724 itself set. `apps/hub`'s full test suite
+    (455 tests) and production build were verified unaffected; the
+    zero-Vue/Pinia-dependency invariant holds (`openapi-typescript` is a
+    devDependency only).
 
 ## Decisions and tickets
 
