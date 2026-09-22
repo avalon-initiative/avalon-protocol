@@ -131,32 +131,25 @@ pub struct AccountSession {
     retry: RetryConfig,
 }
 
-#[derive(Deserialize)]
-struct MeResponse {
-    identity_id: Uuid,
-    #[serde(with = "time::serde::rfc3339")]
-    identity_created_at: time::OffsetDateTime,
-    display_name: String,
-    avatar_url: Option<String>,
-    bio: Option<String>,
-    favorite_genres: Vec<avalon_protocol::identity::Genre>,
-    pronouns: Option<String>,
-    banner_url: Option<String>,
-    status: Option<String>,
-    links: Vec<String>,
-    timezone: Option<String>,
-    theme_color: Option<String>,
-    location: Option<String>,
-    main_guild: Option<Uuid>,
+/// `identity_created_at`/`added_at`/`expires_at` come through the
+/// generated types as plain `String`s (build.rs strips `format:
+/// date-time` before handing schemas to typify, since typify hardcodes
+/// that format to `chrono`, not the `time` crate this workspace uses
+/// everywhere else) — parsed here with `time`'s own RFC3339 support.
+fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, SdkError> {
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        .map_err(|e| SdkError::Protocol(format!("invalid RFC3339 timestamp {s:?}: {e}")))
 }
 
-impl From<MeResponse> for (Identity, Profile) {
-    fn from(body: MeResponse) -> Self {
+impl TryFrom<crate::generated::ProfileResponse> for (Identity, Profile) {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::ProfileResponse) -> Result<Self, SdkError> {
         let id = IdentityId(body.identity_id);
-        (
+        Ok((
             Identity {
                 id,
-                created_at: body.identity_created_at,
+                created_at: parse_rfc3339(&body.identity_created_at)?,
             },
             Profile {
                 identity_id: id,
@@ -173,7 +166,7 @@ impl From<MeResponse> for (Identity, Profile) {
                 location: body.location,
                 main_guild: body.main_guild.map(GuildId),
             },
-        )
+        ))
     }
 }
 
@@ -190,17 +183,11 @@ async fn fetch_me(
     if !response.status().is_success() {
         return Err(crate::http::map_error_response(response).await);
     }
-    let body: MeResponse = response
+    let body: crate::generated::ProfileResponse = response
         .json()
         .await
         .map_err(|e| SdkError::Protocol(e.to_string()))?;
-    Ok(body.into())
-}
-
-#[derive(Deserialize)]
-struct DeviceRow {
-    id: Uuid,
-    public_key: String,
+    body.try_into()
 }
 
 /// `GET /me/devices`, matched by base64 public key — the only way a
@@ -224,7 +211,7 @@ async fn find_own_signing_key_id(
     if !response.status().is_success() {
         return Err(crate::http::map_error_response(response).await);
     }
-    let devices: Vec<DeviceRow> = response
+    let devices: Vec<crate::generated::DeviceResponse> = response
         .json()
         .await
         .map_err(|e| SdkError::Protocol(e.to_string()))?;
@@ -365,8 +352,8 @@ impl AccountSession {
             theme_color: update.theme_color,
             location: update.location,
         };
-        let me: MeResponse = self.patch("/me", &body).await?;
-        let (identity, profile) = me.into();
+        let me: crate::generated::ProfileResponse = self.patch("/me", &body).await?;
+        let (identity, profile) = me.try_into()?;
         self.identity = identity;
         self.profile = profile;
         Ok(())
@@ -605,11 +592,10 @@ impl AvalonClient {
         let signing_key = SigningKey::generate(&mut csprng);
         let event_signing_public_key = BASE64.encode(signing_key.verifying_key().to_bytes());
 
-        #[derive(Serialize)]
-        struct RegisterStartRequest<'a> {
-            identity_id: Uuid,
-            display_name: &'a str,
-        }
+        // `RegisterStartResponse` stays hand-written: its `challenge` field
+        // is an opaque `"type": "object"` blob in the OpenAPI schema
+        // (`webauthn-rs`'s own types have no `ToSchema` impl), but this SDK
+        // needs it strongly typed to drive the WebAuthn ceremony below.
         #[derive(Deserialize)]
         struct RegisterStartResponse {
             ticket_id: Uuid,
@@ -617,9 +603,9 @@ impl AvalonClient {
         }
         let start: RegisterStartResponse = http
             .post(format!("{base}/identities/register/start"))
-            .json(&RegisterStartRequest {
+            .json(&crate::generated::RegisterStartRequest {
                 identity_id,
-                display_name,
+                display_name: display_name.to_string(),
             })
             .send()
             .await
@@ -634,6 +620,8 @@ impl AvalonClient {
         let signing_bytes = webauthn::identity_created_signing_bytes(identity_id, display_name);
         let event_signature = BASE64.encode(signing_key.sign(&signing_bytes).to_bytes());
 
+        // Hand-written for the same reason as `RegisterStartResponse` above
+        // — `webauthn_credential` is an opaque blob in the schema.
         #[derive(Serialize)]
         struct RegisterFinishRequest {
             ticket_id: Uuid,
@@ -657,6 +645,10 @@ impl AvalonClient {
         if !finish_response.status().is_success() {
             return Err(crate::http::map_error_response(finish_response).await);
         }
+        let _finish: crate::generated::RegisterFinishResponse = finish_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
 
         let credentials = AccountCredentials {
             identity_id,
@@ -718,10 +710,8 @@ impl AvalonClient {
         let base = &self.config.server_url;
         let http = &self.http;
 
-        #[derive(Serialize)]
-        struct SessionStartRequest {
-            identity_id: Uuid,
-        }
+        // `SessionStartResponse` stays hand-written for the same reason as
+        // `RegisterStartResponse` above (opaque WebAuthn blob field).
         #[derive(Deserialize)]
         struct SessionStartResponse {
             ticket_id: Uuid,
@@ -729,7 +719,7 @@ impl AvalonClient {
         }
         let start: SessionStartResponse = http
             .post(format!("{base}/sessions/start"))
-            .json(&SessionStartRequest { identity_id })
+            .json(&crate::generated::SessionStartRequest { identity_id })
             .send()
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?
@@ -739,14 +729,12 @@ impl AvalonClient {
 
         let assertion = webauthn::login_ceremony(start.challenge, stored_passkey).await?;
 
+        // Hand-written for the same reason as `SessionStartResponse` above
+        // — `credential` is an opaque blob in the schema.
         #[derive(Serialize)]
         struct SessionFinishRequest {
             ticket_id: Uuid,
             credential: passkey_types::webauthn::AuthenticatedPublicKeyCredential,
-        }
-        #[derive(Deserialize)]
-        struct SessionFinishResponse {
-            token: String,
         }
         let finish_response = http
             .post(format!("{base}/sessions/finish"))
@@ -760,7 +748,7 @@ impl AvalonClient {
         if !finish_response.status().is_success() {
             return Err(crate::http::map_error_response(finish_response).await);
         }
-        let finish: SessionFinishResponse = finish_response
+        let finish: crate::generated::SessionFinishResponse = finish_response
             .json()
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
