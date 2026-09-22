@@ -1371,6 +1371,72 @@ protocol and the domain model in `crates/protocol`; they never pull in
     behavior lands in *any* SDK, in the same change — list the
     implementing SDK(s) in `supportedIn` immediately, even if the other
     two don't implement it yet.
+- SDK coverage check (issue #728, epic #722, per #714's decision) —
+  `scripts/check-sdk-coverage.py` (`make sdk-coverage-check`, part of
+  `make check-all`, not the plain `check` target, since it needs all
+  three SDKs' source present) diffs `docs/generated/openapi.json`'s
+  SDK-facing route table against each SDK's real HTTP call sites and
+  fails, naming the exact route(s), when one or more SDKs never call a
+  route the server exposes. Deliberately doesn't try to understand each
+  SDK's method-naming conventions — it matches on HTTP method + a
+  normalized path template (`{id}`/`{}`/`${guildId}`/`{guildId}` all
+  collapse to the same wildcard), the one thing common to all three
+  regardless of what each SDK happens to call the wrapping method.
+  - Per-SDK enumeration, in order of preference (see the script's own
+    module doc comment for the full reasoning): Rust resolves
+    `crate::generated::paths::<tag>::<OPERATION_ID>` call sites (#724's
+    domain) back to a real route via the same (tag, operationId) join
+    `crates/sdk/build.rs` itself guarantees is unique, and falls back to
+    parsing literal `.get(format!(...))`/`.post(format!(...))`/etc. path
+    templates for every domain #724 didn't migrate (guilds, achievements,
+    registry, schema/integrator-space, issuer registration, device/
+    cross-node login). TypeScript parses `this.<verb>(path)` call sites
+    (`accountSession/*.ts`) and free-standing `request(serverUrl, path,
+    { method })` call sites (crossNodeLogin.ts, recovery.ts,
+    integratorDirectory.ts, identityData.ts, client.ts,
+    integratorSession.ts), defaulting to GET when `method` is omitted.
+    C# parses both the `AccountSession.*.cs` typed-helper call sites
+    (`GetAsync`/`PostAsync`/`PutAsync`/`PatchAsync`/`DeleteAsync`/
+    `DeleteWithBodyAsync`/etc.) and the raw `new HttpRequestMessage(
+    HttpMethod.X, ...)` construction the rest of the SDK (`Guilds.cs`,
+    `Achievements.cs`, `Social.cs`, `Conversations.cs`,
+    `CrossNodeLogin.cs`, `AccountSession.DeviceLogin.cs`,
+    `AvalonClient.cs`) uses directly, including the couple of call sites
+    that build the URL in a `var url = $"...";` one or two lines above
+    the `HttpRequestMessage` call rather than inline.
+  - `crates/sdk/src/http.rs` is excluded from Rust extraction (its only
+    `.get(format!(...))` call sites are transport-layer unit tests
+    hitting a mock server at a nonsense path, not real endpoint
+    declarations); `network.rs`/`managed_hosting.rs`/`sync_journal.rs`/
+    `submission.rs` call ledger/node-internal routes already outside
+    `openapi.json`'s SDK-facing scope entirely, so there's nothing there
+    to extract in the first place.
+  - A small, explicitly-cited `INTENTIONAL_GAPS` allowlist in the script
+    covers exactly six routes, all C#-only: `POST /identities/register/
+    start`/`finish`, `POST /sessions/start`/`finish`, and `POST /me/
+    passkeys/register/start`/`finish` — all WebAuthn ceremony endpoints
+    `bindings/csharp/AvalonSdk/AccountSession.cs` and
+    `AccountSession.Passkeys.cs`'s own header comments document as
+    deliberately not ported (no .NET WebAuthn ceremony library in this
+    SDK's dependency set, and its real audience — a Unity game binding a
+    bearer token another surface already produced — never needs to drive
+    one itself).
+  - Verified live on this branch: the script correctly reports 36 (Rust),
+    32 (TypeScript), and 45 (C#, after the allowlist above) routes with
+    no call site found as of this writing — a real, substantial,
+    pre-existing coverage gap across all three SDKs (mostly achievement/
+    milestone-definition CRUD, the integrator-space schema/mapping
+    surface, integrator registration/key management, issuer registration,
+    the social-recovery request flow, and the public registry/
+    recognitions reads), not an artifact of the check's own enumeration
+    logic — spot-checked directly against each SDK's source rather than
+    assumed. `make sdk-coverage-check` therefore currently fails, as
+    intended: it's a backstop against *future* silent gaps, not a claim
+    that today's coverage is already complete. Also verified: deliberately
+    commenting out one TS call site for an existing, singly-covered route
+    (`GET /guilds/discover`) makes the check newly fail naming exactly
+    that route, confirming the detection path itself works, not just the
+    baseline count.
 
 ## Decisions and tickets
 
