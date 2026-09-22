@@ -11,8 +11,6 @@
 using System;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -72,13 +70,6 @@ namespace Avalon.Sdk
             _pollIntervalSeconds = pollIntervalSeconds > 0 ? pollIntervalSeconds : DefaultPollIntervalSeconds;
         }
 
-        private sealed class PollPairingResponse
-        {
-            public string Status { get; set; } = "";
-
-            public string? Token { get; set; }
-        }
-
         /// <summary>
         /// Drives <c>POST /auth/device/poll</c> to completion — doubling the poll interval
         /// (capped at <see cref="MaxPollIntervalSeconds"/>) whenever the server answers
@@ -105,7 +96,7 @@ namespace Avalon.Sdk
                 {
                     throw Session.ServerError(response.StatusCode);
                 }
-                var body = await Session.ReadJsonAsync<PollPairingResponse>(response, ct).ConfigureAwait(false);
+                var body = await Session.ReadJsonAsync<Avalon.Sdk.Generated.PollPairingResponse>(response, ct).ConfigureAwait(false);
 
                 switch (body.Status)
                 {
@@ -131,24 +122,6 @@ namespace Avalon.Sdk
 
     public sealed partial class AvalonClient
     {
-        private sealed class StartPairingResponse
-        {
-            [JsonPropertyName("device_code")]
-            public string DeviceCode { get; set; } = "";
-
-            [JsonPropertyName("user_code")]
-            public string UserCode { get; set; } = "";
-
-            [JsonPropertyName("verification_uri")]
-            public string VerificationUri { get; set; } = "";
-
-            [JsonPropertyName("expires_in")]
-            public long ExpiresIn { get; set; }
-
-            [JsonPropertyName("poll_interval")]
-            public int PollInterval { get; set; }
-        }
-
         /// <summary>
         /// Starts a cross-device pairing (#307) via <c>POST /auth/device/start</c>, resolving
         /// to an <see cref="AccountSession"/> rather than the integrator <see cref="Session"/>.
@@ -163,9 +136,9 @@ namespace Avalon.Sdk
             {
                 throw Session.ServerError(response.StatusCode);
             }
-            var body = await Session.ReadJsonAsync<StartPairingResponse>(response, ct).ConfigureAwait(false);
+            var body = await Session.ReadJsonAsync<Avalon.Sdk.Generated.StartPairingResponse>(response, ct).ConfigureAwait(false);
 
-            return new AccountDeviceLogin(this, body.DeviceCode, body.UserCode, body.VerificationUri, body.ExpiresIn, body.PollInterval);
+            return new AccountDeviceLogin(this, body.DeviceCode, body.UserCode, body.VerificationUri, body.ExpiresIn, (int)body.PollInterval);
         }
     }
 }

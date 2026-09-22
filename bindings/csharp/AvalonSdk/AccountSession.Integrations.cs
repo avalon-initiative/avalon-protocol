@@ -64,18 +64,6 @@ namespace Avalon.Sdk
         public List<ConnectionGrant> Grants { get; set; } = new List<ConnectionGrant>();
     }
 
-    internal sealed class ConnectRequest
-    {
-        [JsonPropertyName("capabilities")]
-        public List<string> Capabilities { get; set; } = new List<string>();
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
     public sealed partial class AccountSession
     {
         /// <summary><c>POST /integrations/{slug}/connect</c> — the one call that hands a
@@ -88,9 +76,9 @@ namespace Avalon.Sdk
         {
             var joined = string.Join(",", capabilities);
             var (signingKeyId, signature) = Sign("integration.connect", slug, joined);
-            return await PostAsync<ConnectRequest, IntegratorConnection>(
+            return await PostAsync<Avalon.Sdk.Generated.ConnectRequest, IntegratorConnection>(
                 $"/integrations/{slug}/connect",
-                new ConnectRequest { Capabilities = new List<string>(capabilities), SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.ConnectRequest { Capabilities = new List<string>(capabilities), SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 

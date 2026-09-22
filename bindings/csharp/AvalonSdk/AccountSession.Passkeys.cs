@@ -30,21 +30,6 @@ namespace Avalon.Sdk
         public DateTimeOffset AddedAt { get; set; }
     }
 
-    internal sealed class RenamePasskeyRequest
-    {
-        [JsonPropertyName("label")]
-        public string Label { get; set; } = "";
-    }
-
-    internal sealed class RevokePasskeyRequest
-    {
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
     public sealed partial class AccountSession
     {
         /// <summary><c>GET /me/passkeys</c> — every passkey registered to this identity.</summary>
@@ -54,8 +39,8 @@ namespace Avalon.Sdk
         /// <summary><c>PATCH /me/passkeys/{id}</c> — relabels a passkey. Not
         /// signature-required.</summary>
         public async Task<AccountPasskey> RenamePasskeyAsync(Guid passkeyId, string label, CancellationToken ct = default) =>
-            await PatchAsync<RenamePasskeyRequest, AccountPasskey>(
-                $"/me/passkeys/{passkeyId}", new RenamePasskeyRequest { Label = label }, ct).ConfigureAwait(false);
+            await PatchAsync<Avalon.Sdk.Generated.RenamePasskeyRequest, AccountPasskey>(
+                $"/me/passkeys/{passkeyId}", new Avalon.Sdk.Generated.RenamePasskeyRequest { Label = label }, ct).ConfigureAwait(false);
 
         /// <summary><c>POST /me/passkeys/{id}/revoke</c> — always signs
         /// (<c>passkey.revoke_last</c>, <c>[passkey_id, identity_id]</c>), whether or not
@@ -68,7 +53,7 @@ namespace Avalon.Sdk
             var (signingKeyId, signature) = Sign("passkey.revoke_last", passkeyId.ToString(), IdentityGuid.ToString());
             await PostNoResponseAsync(
                 $"/me/passkeys/{passkeyId}/revoke",
-                new RevokePasskeyRequest { SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.RevokePasskeyRequest { SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
     }

@@ -43,18 +43,6 @@ namespace Avalon.Sdk
         public DateTimeOffset SentAt { get; set; }
     }
 
-    internal sealed class CreateAccountConversationRequest
-    {
-        [JsonPropertyName("participants")]
-        public List<Guid> Participants { get; set; } = new List<Guid>();
-    }
-
-    internal sealed class SendAccountConversationMessageRequest
-    {
-        [JsonPropertyName("body")]
-        public string Body { get; set; } = "";
-    }
-
     public sealed partial class AccountSession
     {
         /// <summary><c>GET /conversations</c>.</summary>
@@ -65,8 +53,8 @@ namespace Avalon.Sdk
         /// (the caller is always added, then deduplicated); returns the existing
         /// conversation rather than creating a duplicate.</summary>
         public async Task<AccountConversation> CreateConversationAsync(IReadOnlyList<Guid> participants, CancellationToken ct = default) =>
-            await PostAsync<CreateAccountConversationRequest, AccountConversation>(
-                "/conversations", new CreateAccountConversationRequest { Participants = new List<Guid>(participants) }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.CreateConversationRequest, AccountConversation>(
+                "/conversations", new Avalon.Sdk.Generated.CreateConversationRequest { Participants = new List<Guid>(participants) }, ct).ConfigureAwait(false);
 
         /// <summary><c>GET /conversations/{id}/messages</c>, cursor-paginated with
         /// <paramref name="before"/>.</summary>
@@ -90,7 +78,7 @@ namespace Avalon.Sdk
         /// conversations have no moderation-delete endpoint themselves, unlike guild channel
         /// messages.</summary>
         public async Task<AccountConversationMessage> SendConversationMessageAsync(Guid conversationId, string body, CancellationToken ct = default) =>
-            await PostAsync<SendAccountConversationMessageRequest, AccountConversationMessage>(
-                $"/conversations/{conversationId}/messages", new SendAccountConversationMessageRequest { Body = body }, ct).ConfigureAwait(false);
+            await PostAsync<Avalon.Sdk.Generated.SendMessageRequest, AccountConversationMessage>(
+                $"/conversations/{conversationId}/messages", new Avalon.Sdk.Generated.SendMessageRequest { Body = body }, ct).ConfigureAwait(false);
     }
 }

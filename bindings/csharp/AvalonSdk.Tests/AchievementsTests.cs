@@ -116,7 +116,7 @@ public class AchievementsTests
         var attestationId = Guid.NewGuid();
         var nonce = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
         var handler = new StubHttpMessageHandler()
-            .Enqueue($$"""{ "challenge_id": "chal-1", "nonce": "{{nonce}}" }""")
+            .Enqueue($$"""{ "challenge_id": "11111111-1111-1111-1111-111111111111", "nonce": "{{nonce}}" }""")
             .Enqueue($$"""{ "id": "{{attestationId}}" }""");
         var session = Session.ForTesting(
             new[] { "achievements.issue" },
@@ -138,7 +138,7 @@ public class AchievementsTests
     {
         var nonce = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
         var handler = new StubHttpMessageHandler()
-            .Enqueue($$"""{ "challenge_id": "chal-1", "nonce": "{{nonce}}" }""")
+            .Enqueue($$"""{ "challenge_id": "11111111-1111-1111-1111-111111111111", "nonce": "{{nonce}}" }""")
             .Enqueue(HttpStatusCode.Forbidden, """{ "error": "forbidden", "code": "FORBIDDEN" }""");
         var session = Session.ForTesting(
             new[] { "achievements.issue" },

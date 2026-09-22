@@ -120,6 +120,12 @@ namespace Avalon.Sdk
         public List<AttestationHistoryEntry> History { get; set; } = new List<AttestationHistoryEntry>();
     }
 
+    // ListMyAchievementsResponse stays hand-written, keeping List<VerifiedAttestation>: the
+    // generated Avalon.Sdk.Generated.ListMyAchievementsResponse's Achievements field is typed
+    // as ICollection<AttestationReadResponse>, and AttestationReadResponse is one of the
+    // deliberately-excluded oneOf schemas (its nested AuthenticityResponse/ValidityResponse
+    // generate as empty stub classes) — migrating this DTO would silently drop every
+    // authenticity/validity field this file exists to carry.
     internal sealed class ListMyAchievementsResponse
     {
         [JsonPropertyName("achievements")]
@@ -127,30 +133,6 @@ namespace Avalon.Sdk
 
         [JsonPropertyName("next_cursor")]
         public Guid? NextCursor { get; set; }
-    }
-
-    internal sealed class ChallengeResponse
-    {
-        [JsonPropertyName("challenge_id")]
-        public string ChallengeId { get; set; } = "";
-
-        [JsonPropertyName("nonce")]
-        public string Nonce { get; set; } = "";
-    }
-
-    internal sealed class IssueAchievementRequest
-    {
-        [JsonPropertyName("key_id")]
-        public Guid KeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string Signature { get; set; } = "";
-    }
-
-    internal sealed class IssueAchievementResponse
-    {
-        [JsonPropertyName("id")]
-        public Guid Id { get; set; }
     }
 
     public sealed partial class Session
@@ -176,7 +158,7 @@ namespace Avalon.Sdk
 
         /// <summary>POST /integrations/{slug}/challenge — an ephemeral, single-use
         /// challenge proving this integrator's key is making this HTTP call right now.</summary>
-        private async Task<ChallengeResponse> RequestChallengeAsync(string slug, CancellationToken ct)
+        private async Task<Avalon.Sdk.Generated.IntegratorChallengeResponse> RequestChallengeAsync(string slug, CancellationToken ct)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/integrations/{slug}/challenge");
             using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
@@ -184,7 +166,7 @@ namespace Avalon.Sdk
             {
                 throw ServerError(response.StatusCode);
             }
-            return await ReadJsonAsync<ChallengeResponse>(response, ct).ConfigureAwait(false);
+            return await ReadJsonAsync<Avalon.Sdk.Generated.IntegratorChallengeResponse>(response, ct).ConfigureAwait(false);
         }
 
         /// <summary>GET /me/achievements — requires achievements.read. This identity's own
@@ -238,7 +220,7 @@ namespace Avalon.Sdk
             using var request = new HttpRequestMessage(
                 HttpMethod.Post, $"{ServerUrl}/integrations/{IntegratorSlug}/achievements/{key}/issue");
             request.Headers.Add("x-avalon-integrator-key-id", IntegratorKeyId);
-            request.Headers.Add("x-avalon-integrator-challenge-id", challenge.ChallengeId);
+            request.Headers.Add("x-avalon-integrator-challenge-id", challenge.ChallengeId.ToString());
             request.Headers.Add("x-avalon-integrator-signature", Convert.ToBase64String(challengeSignature));
             request.Headers.Add("x-avalon-identity-id", IdentityGuid.ToString());
             // A fresh Idempotency-Key per call (issue #47): a caller that retries this whole
@@ -246,7 +228,7 @@ namespace Avalon.Sdk
             // `submit_achievement_issuance` — this method doesn't itself retry.
             request.Headers.Add("idempotency-key", Guid.NewGuid().ToString());
             request.Content = new StringContent(
-                JsonSerializer.Serialize(new IssueAchievementRequest
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.IssueAttestationRequest
                 {
                     KeyId = keyId,
                     Signature = Convert.ToBase64String(signature),
@@ -258,7 +240,7 @@ namespace Avalon.Sdk
             {
                 throw ServerError(response.StatusCode);
             }
-            var body = await ReadJsonAsync<IssueAchievementResponse>(response, ct).ConfigureAwait(false);
+            var body = await ReadJsonAsync<Avalon.Sdk.Generated.AttestationResponse>(response, ct).ConfigureAwait(false);
             return body.Id;
         }
     }

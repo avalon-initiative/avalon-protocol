@@ -21,6 +21,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -171,12 +172,12 @@ namespace Avalon.Sdk
         /// <c>AccountSession::update_profile</c>.</summary>
         public async Task UpdateProfileAsync(AccountProfileUpdate update, CancellationToken ct = default)
         {
-            var body = new UpdateProfileRequest
+            var body = new Avalon.Sdk.Generated.UpdateProfileRequest
             {
                 DisplayName = update.DisplayName,
                 AvatarUrl = update.AvatarUrl,
                 Bio = update.Bio,
-                FavoriteGenres = update.FavoriteGenres?.ConvertAll(g => g.ToString()),
+                FavoriteGenres = update.FavoriteGenres?.ConvertAll(g => g.ToString().ToLowerInvariant()),
                 Pronouns = update.Pronouns,
                 BannerUrl = update.BannerUrl,
                 Status = update.Status,
@@ -185,21 +186,29 @@ namespace Avalon.Sdk
                 ThemeColor = update.ThemeColor,
                 Location = update.Location,
             };
-            var me = await PatchAsync<UpdateProfileRequest, MeResponse>("/me", body, ct).ConfigureAwait(false);
+            var me = await PatchAsync<Avalon.Sdk.Generated.UpdateProfileRequest, Avalon.Sdk.Generated.ProfileResponse>("/me", body, ct).ConfigureAwait(false);
             Identity = new Identity(me.IdentityId, me.IdentityCreatedAt);
             Profile = MeResponseToProfile(me);
         }
 
-        private static Profile MeResponseToProfile(MeResponse me) => new Profile(me.IdentityId)
+        /// <summary>Generated.cs's own <see cref="Avalon.Sdk.Generated.Genre"/> and this
+        /// SDK's public <see cref="Genre"/> are deliberately two separate enum types —
+        /// same member names by construction (both come from the one
+        /// `avalon_protocol::identity::Genre` vocabulary), so a name round-trip is exact,
+        /// with no risk of drifting silently the way reusing the same numeric ordinal
+        /// across two independently-generated/hand-written enums could.</summary>
+        private static Genre ToDomainGenre(Avalon.Sdk.Generated.Genre generated) => (Genre)Enum.Parse(typeof(Genre), generated.ToString());
+
+        private static Profile MeResponseToProfile(Avalon.Sdk.Generated.ProfileResponse me) => new Profile(me.IdentityId)
         {
             DisplayName = me.DisplayName,
             AvatarUrl = me.AvatarUrl,
             Bio = me.Bio,
-            FavoriteGenres = me.FavoriteGenres,
+            FavoriteGenres = me.FavoriteGenres.Select(ToDomainGenre).ToList(),
             Pronouns = me.Pronouns,
             BannerUrl = me.BannerUrl,
             Status = me.Status,
-            Links = me.Links,
+            Links = new List<string>(me.Links),
             Timezone = me.Timezone,
             ThemeColor = me.ThemeColor,
             Location = me.Location,
@@ -215,7 +224,7 @@ namespace Avalon.Sdk
             {
                 throw Session.ServerError(response.StatusCode);
             }
-            var me = await Session.ReadJsonAsync<MeResponse>(response, ct).ConfigureAwait(false);
+            var me = await Session.ReadJsonAsync<Avalon.Sdk.Generated.ProfileResponse>(response, ct).ConfigureAwait(false);
             return (new Identity(me.IdentityId, me.IdentityCreatedAt), MeResponseToProfile(me));
         }
 
@@ -233,7 +242,7 @@ namespace Avalon.Sdk
             {
                 throw Session.ServerError(response.StatusCode);
             }
-            var devices = await Session.ReadJsonAsync<List<DeviceIdAndKeyResponse>>(response, ct).ConfigureAwait(false);
+            var devices = await Session.ReadJsonAsync<List<Avalon.Sdk.Generated.DeviceResponse>>(response, ct).ConfigureAwait(false);
             foreach (var device in devices)
             {
                 if (device.PublicKey == publicKeyB64)
@@ -252,17 +261,11 @@ namespace Avalon.Sdk
             return signingKeyId is null ? (SigningKeyMaterial?)null : new SigningKeyMaterial(privateKey, signingKeyId.Value);
         }
 
-        private sealed class DeviceIdAndKeyResponse
-        {
-            public Guid Id { get; set; }
-
-            [JsonPropertyName("public_key")]
-            public string PublicKey { get; set; } = "";
-        }
 
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
+            Converters = { new EnumMemberJsonConverterFactory() },
         };
 
         private string Url(string path) => _serverUrl + path;
@@ -413,9 +416,37 @@ namespace Avalon.Sdk
             }
         }
 
+        /// <summary>Plain request serialization — a null field is sent as a literal JSON
+        /// <c>null</c>, matching the pre-migration hand-written request DTOs' own default
+        /// (no attribute at all). Load-bearing for every signature-carrying request: the
+        /// server's own <c>NO_REGISTERED_SIGNING_KEY</c>/<c>FRESH_SIGNATURE_REQUIRED</c>
+        /// split needs to see an explicit null <c>signing_key_id</c>/<c>signature</c>, not
+        /// a missing field (see <c>AccountSessionTests.cs</c>'s own header comment).</summary>
+        private static readonly JsonSerializerOptions RequestJsonOptions = new JsonSerializerOptions
+        {
+            Converters = { new EnumMemberJsonConverterFactory() },
+        };
+
+        /// <summary>Issue #725: reproduces what every migrated three-state-update request
+        /// DTO's own hand-written <c>[JsonIgnore(Condition = WhenWritingNull)]</c>
+        /// attributes used to do per-property before those DTOs moved onto
+        /// <c>Generated.cs</c> types (which carry no such attribute) — a null field means
+        /// "leave untouched" for these specific endpoints, and the server only ever reads
+        /// that as "omitted from the request," never as a literal JSON <c>null</c>. Scoped
+        /// to <see cref="Avalon.Sdk.Generated.IOmitNullsOnWrite"/>-marked types only — see
+        /// its own doc comment for why this can't be a blanket default across every request
+        /// type (a real regression this migration found and fixed: it broke every
+        /// signature-required call made without a local signing key).</summary>
+        private static readonly JsonSerializerOptions OmitNullsRequestJsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Converters = { new EnumMemberJsonConverterFactory() },
+        };
+
         private static HttpContent JsonContent<T>(T value)
         {
-            var json = JsonSerializer.Serialize(value);
+            var options = value is Avalon.Sdk.Generated.IOmitNullsOnWrite ? OmitNullsRequestJsonOptions : RequestJsonOptions;
+            var json = JsonSerializer.Serialize(value, options);
             return new StringContent(json, Encoding.UTF8, "application/json");
         }
 
@@ -482,53 +513,6 @@ namespace Avalon.Sdk
         public string? ThemeColor { get; set; }
 
         /// <summary><c>null</c> leaves it untouched; <c>""</c> clears it.</summary>
-        public string? Location { get; set; }
-    }
-
-    internal sealed class UpdateProfileRequest
-    {
-        [JsonPropertyName("display_name")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? DisplayName { get; set; }
-
-        [JsonPropertyName("avatar_url")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? AvatarUrl { get; set; }
-
-        [JsonPropertyName("bio")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Bio { get; set; }
-
-        [JsonPropertyName("favorite_genres")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public List<string>? FavoriteGenres { get; set; }
-
-        [JsonPropertyName("pronouns")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Pronouns { get; set; }
-
-        [JsonPropertyName("banner_url")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? BannerUrl { get; set; }
-
-        [JsonPropertyName("status")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Status { get; set; }
-
-        [JsonPropertyName("links")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public List<string>? Links { get; set; }
-
-        [JsonPropertyName("timezone")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? Timezone { get; set; }
-
-        [JsonPropertyName("theme_color")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? ThemeColor { get; set; }
-
-        [JsonPropertyName("location")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? Location { get; set; }
     }
 

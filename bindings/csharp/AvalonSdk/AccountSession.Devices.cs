@@ -65,54 +65,6 @@ namespace Avalon.Sdk
         public DateTimeOffset ExpiresAt { get; set; }
     }
 
-    internal sealed class RequestDeviceGrantRequest
-    {
-        [JsonPropertyName("requested_signing_public_key")]
-        public string RequestedSigningPublicKey { get; set; } = "";
-
-        [JsonPropertyName("device_label")]
-        public string? DeviceLabel { get; set; }
-    }
-
-    internal sealed class ApproveDeviceGrantRequest
-    {
-        [JsonPropertyName("approver_signing_key_id")]
-        public Guid ApproverSigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string Signature { get; set; } = "";
-    }
-
-    internal sealed class RenameDeviceRequest
-    {
-        [JsonPropertyName("label")]
-        public string Label { get; set; } = "";
-    }
-
-    internal sealed class ApprovePairingRequest
-    {
-        [JsonPropertyName("user_code")]
-        public string UserCode { get; set; } = "";
-
-        [JsonPropertyName("signing_key_id")]
-        public Guid? SigningKeyId { get; set; }
-
-        [JsonPropertyName("signature")]
-        public string? Signature { get; set; }
-    }
-
-    internal sealed class UserCodeRequest
-    {
-        [JsonPropertyName("user_code")]
-        public string UserCode { get; set; } = "";
-    }
-
-    internal sealed class ResolvePairingResponse
-    {
-        [JsonPropertyName("status")]
-        public string Status { get; set; } = "";
-    }
-
     public sealed partial class AccountSession
     {
         /// <summary><c>GET /me/devices</c> — every signing-key device registered to this
@@ -123,8 +75,8 @@ namespace Avalon.Sdk
         /// <summary><c>PATCH /me/devices/{signing_key_id}</c> — relabels a device. Not
         /// signature-required.</summary>
         public async Task<AccountDevice> RenameDeviceAsync(Guid signingKeyId, string label, CancellationToken ct = default) =>
-            await PatchAsync<RenameDeviceRequest, AccountDevice>(
-                $"/me/devices/{signingKeyId}", new RenameDeviceRequest { Label = label }, ct).ConfigureAwait(false);
+            await PatchAsync<Avalon.Sdk.Generated.RenameDeviceRequest, AccountDevice>(
+                $"/me/devices/{signingKeyId}", new Avalon.Sdk.Generated.RenameDeviceRequest { Label = label }, ct).ConfigureAwait(false);
 
         /// <summary><c>POST /me/devices/{signing_key_id}/revoke</c> — unilateral,
         /// ambient-token (revocation only ever narrows trust, per #697).</summary>
@@ -136,9 +88,9 @@ namespace Avalon.Sdk
         /// its own yet — that's the whole point). Requesting confers no access by itself;
         /// see <see cref="ApproveDeviceGrantAsync"/>.</summary>
         public async Task<AccountDeviceGrant> RequestDeviceGrantAsync(string requestedSigningPublicKeyB64, string? deviceLabel = null, CancellationToken ct = default) =>
-            await PostAsync<RequestDeviceGrantRequest, AccountDeviceGrant>(
+            await PostAsync<Avalon.Sdk.Generated.RequestDeviceGrantRequest, AccountDeviceGrant>(
                 "/me/devices/grants",
-                new RequestDeviceGrantRequest { RequestedSigningPublicKey = requestedSigningPublicKeyB64, DeviceLabel = deviceLabel },
+                new Avalon.Sdk.Generated.RequestDeviceGrantRequest { RequestedSigningPublicKey = requestedSigningPublicKeyB64, DeviceLabel = deviceLabel },
                 ct).ConfigureAwait(false);
 
         /// <summary><c>GET /me/devices/grants[?status=]</c>.</summary>
@@ -175,9 +127,9 @@ namespace Avalon.Sdk
             var signingKeyId = SigningKeyId.Value;
             var message = DeviceGrantApprovalSigningBytes(grantId, IdentityGuid, requestedSigningPublicKeyB64);
             var signature = SignRaw(message);
-            return await PostAsync<ApproveDeviceGrantRequest, AccountDevice>(
+            return await PostAsync<Avalon.Sdk.Generated.ApproveDeviceGrantRequest, AccountDevice>(
                 $"/me/devices/grants/{grantId}/approve",
-                new ApproveDeviceGrantRequest { ApproverSigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.ApproveDeviceGrantRequest { ApproverSigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
         }
 
@@ -187,9 +139,9 @@ namespace Avalon.Sdk
         public async Task<string> ApproveDevicePairingAsync(string userCode, CancellationToken ct = default)
         {
             var (signingKeyId, signature) = Sign("device_pairing.approve", IdentityGuid.ToString(), userCode);
-            var response = await PostAsync<ApprovePairingRequest, ResolvePairingResponse>(
+            var response = await PostAsync<Avalon.Sdk.Generated.ApprovePairingRequest, Avalon.Sdk.Generated.ResolvePairingResponse>(
                 "/auth/device/approve",
-                new ApprovePairingRequest { UserCode = userCode, SigningKeyId = signingKeyId, Signature = signature },
+                new Avalon.Sdk.Generated.ApprovePairingRequest { UserCode = userCode, SigningKeyId = signingKeyId, Signature = signature },
                 ct).ConfigureAwait(false);
             return response.Status;
         }
@@ -198,8 +150,8 @@ namespace Avalon.Sdk
         /// signature-required (no state is granted).</summary>
         public async Task<string> DenyDevicePairingAsync(string userCode, CancellationToken ct = default)
         {
-            var response = await PostAsync<UserCodeRequest, ResolvePairingResponse>(
-                "/auth/device/deny", new UserCodeRequest { UserCode = userCode }, ct).ConfigureAwait(false);
+            var response = await PostAsync<Avalon.Sdk.Generated.UserCodeRequest, Avalon.Sdk.Generated.ResolvePairingResponse>(
+                "/auth/device/deny", new Avalon.Sdk.Generated.UserCodeRequest { UserCode = userCode }, ct).ConfigureAwait(false);
             return response.Status;
         }
     }

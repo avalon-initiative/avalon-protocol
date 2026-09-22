@@ -71,24 +71,6 @@ namespace Avalon.Sdk
         public Presence? Presence { get; }
     }
 
-    internal sealed class FriendshipResponse
-    {
-        [JsonPropertyName("a")]
-        public Guid A { get; set; }
-
-        [JsonPropertyName("b")]
-        public Guid B { get; set; }
-
-        [JsonPropertyName("since")]
-        public DateTimeOffset Since { get; set; }
-    }
-
-    internal sealed class UpdatePresenceRequest
-    {
-        [JsonPropertyName("status")]
-        public PresenceStatus Status { get; set; }
-    }
-
     [JsonConverter(typeof(JsonStringEnumConverter))]
     internal enum PresenceSubscribeMessageType
     {
@@ -109,16 +91,43 @@ namespace Avalon.Sdk
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions()
         {
             PropertyNameCaseInsensitive = true,
+            // Issue #725: Generated.cs's enums need this — see
+            // EnumMemberJsonConverter.cs's own header comment for why.
+            Converters = { new EnumMemberJsonConverterFactory() },
         };
 
         /// <summary>Builds a Friend view from a raw friendship plus whatever presence data is
         /// available for the other party — testable without any HTTP call.</summary>
-        private static Friend MergeFriend(FriendshipResponse friendship, Guid selfId, IReadOnlyDictionary<Guid, Presence> presenceById)
+        private static Friend MergeFriend(Avalon.Sdk.Generated.FriendshipResponse friendship, Guid selfId, IReadOnlyDictionary<Guid, Presence> presenceById)
         {
             var other = friendship.A == selfId ? friendship.B : friendship.A;
             presenceById.TryGetValue(other, out var presence);
             return new Friend(other, null, presence);
         }
+
+        /// <summary>Generated.cs's own <see cref="Avalon.Sdk.Generated.PresenceStatus"/> and
+        /// this SDK's public <see cref="PresenceStatus"/> are deliberately two separate enum
+        /// types with identical member names, mirroring the <c>ToDomainGenre</c> pattern in
+        /// <c>AccountSession.cs</c> — a name round-trip via <see cref="Enum.Parse"/> rather
+        /// than a fragile numeric cast.</summary>
+        private static PresenceStatus ToDomainPresenceStatus(Avalon.Sdk.Generated.PresenceStatus generated) =>
+            (PresenceStatus)Enum.Parse(typeof(PresenceStatus), generated.ToString());
+
+        private static Avalon.Sdk.Generated.PresenceStatus ToGeneratedPresenceStatus(PresenceStatus status) =>
+            (Avalon.Sdk.Generated.PresenceStatus)Enum.Parse(typeof(Avalon.Sdk.Generated.PresenceStatus), status.ToString());
+
+        /// <summary>Maps a wire-shape <see cref="Avalon.Sdk.Generated.PresenceResponse"/>
+        /// (used for the two HTTP presence endpoints) onto this SDK's public
+        /// <see cref="Presence"/> — the raw websocket push path in
+        /// <see cref="SubscribePresenceAsync"/> deserializes directly into
+        /// <see cref="Presence"/> instead, since it has no OpenAPI coverage at all.</summary>
+        private static Presence ToDomainPresence(Avalon.Sdk.Generated.PresenceResponse p) => new Presence
+        {
+            IdentityId = p.IdentityId,
+            Status = ToDomainPresenceStatus(p.Status),
+            ActiveIn = p.ActiveIn,
+            UpdatedAt = p.UpdatedAt,
+        };
 
         /// <summary>server_url is http(s)://…; the websocket endpoint needs ws(s)://….</summary>
         private static string WebSocketUrl(string serverUrl, string path)
@@ -147,8 +156,8 @@ namespace Avalon.Sdk
             {
                 throw ServerError(response.StatusCode);
             }
-            var friendships = await ReadJsonAsync<List<FriendshipResponse>>(response, ct).ConfigureAwait(false)
-                ?? new List<FriendshipResponse>();
+            var friendships = await ReadJsonAsync<List<Avalon.Sdk.Generated.FriendshipResponse>>(response, ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.FriendshipResponse>();
 
             var presenceById = new Dictionary<Guid, Presence>();
             if (HasCapability("presence.read") && friendships.Count > 0)
@@ -191,7 +200,9 @@ namespace Avalon.Sdk
             {
                 throw ServerError(response.StatusCode);
             }
-            return await ReadJsonAsync<List<Presence>>(response, ct).ConfigureAwait(false) ?? new List<Presence>();
+            var presences = await ReadJsonAsync<List<Avalon.Sdk.Generated.PresenceResponse>>(response, ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.PresenceResponse>();
+            return presences.Select(ToDomainPresence).ToList();
         }
 
         /// <summary>PUT /me/presence — an identity publishing their own status. Not
@@ -200,7 +211,7 @@ namespace Avalon.Sdk
         {
             using var request = new HttpRequestMessage(HttpMethod.Put, $"{ServerUrl}/me/presence");
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token);
-            request.Content = JsonContent(new UpdatePresenceRequest { Status = status });
+            request.Content = JsonContent(new Avalon.Sdk.Generated.UpdatePresenceRequest { Status = ToGeneratedPresenceStatus(status) });
             using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
