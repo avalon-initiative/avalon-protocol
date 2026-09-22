@@ -149,6 +149,23 @@ pub(crate) fn format_rfc3339(t: time::OffsetDateTime) -> Result<String, SdkError
         .map_err(|e| SdkError::Protocol(format!("formatting {t:?} as RFC3339: {e}")))
 }
 
+/// Substitutes `{name}` placeholders in one of `crate::generated::paths`'
+/// endpoint-path templates with real values — `format!()` needs a string
+/// *literal*, so a `build.rs`-generated `&str` constant can't be fed into
+/// it directly regardless of whether placeholder names happen to match
+/// local variable names.
+pub(crate) fn path(template: &str, params: &[(&str, &str)]) -> String {
+    let mut out = template.to_string();
+    for (name, value) in params {
+        out = out.replace(&format!("{{{name}}}"), value);
+    }
+    debug_assert!(
+        !out.contains('{'),
+        "unsubstituted path parameter left in {out:?} (template {template:?})"
+    );
+    out
+}
+
 impl TryFrom<crate::generated::ProfileResponse> for (Identity, Profile) {
     type Error = SdkError;
 
@@ -185,7 +202,11 @@ async fn fetch_me(
     token: &str,
 ) -> Result<(Identity, Profile), SdkError> {
     let response = crate::http::send(http, retry, true, |c| {
-        c.get(format!("{server_url}/me")).bearer_auth(token)
+        c.get(format!(
+            "{server_url}{}",
+            crate::generated::paths::identity::ME
+        ))
+        .bearer_auth(token)
     })
     .await?;
     if !response.status().is_success() {
@@ -213,7 +234,11 @@ async fn find_own_signing_key_id(
     public_key_b64: &str,
 ) -> Result<Option<Uuid>, SdkError> {
     let response = crate::http::send(http, retry, true, |c| {
-        c.get(format!("{server_url}/me/devices")).bearer_auth(token)
+        c.get(format!(
+            "{server_url}{}",
+            crate::generated::paths::devices::LIST_DEVICES
+        ))
+        .bearer_auth(token)
     })
     .await?;
     if !response.status().is_success() {
@@ -341,7 +366,9 @@ impl AccountSession {
             main_guild: None,
             presence_visibility: None,
         };
-        let me: crate::generated::ProfileResponse = self.patch("/me", &body).await?;
+        let me: crate::generated::ProfileResponse = self
+            .patch(crate::generated::paths::identity::UPDATE_PROFILE, &body)
+            .await?;
         let (identity, profile) = me.try_into()?;
         self.identity = identity;
         self.profile = profile;
@@ -591,7 +618,10 @@ impl AvalonClient {
             challenge: passkey_types::webauthn::CredentialCreationOptions,
         }
         let start: RegisterStartResponse = http
-            .post(format!("{base}/identities/register/start"))
+            .post(format!(
+                "{base}{}",
+                crate::generated::paths::identity::REGISTER_START
+            ))
             .json(&crate::generated::RegisterStartRequest {
                 identity_id,
                 display_name: display_name.to_string(),
@@ -620,7 +650,10 @@ impl AvalonClient {
             device_label: Option<String>,
         }
         let finish_response = http
-            .post(format!("{base}/identities/register/finish"))
+            .post(format!(
+                "{base}{}",
+                crate::generated::paths::identity::REGISTER_FINISH
+            ))
             .json(&RegisterFinishRequest {
                 ticket_id: start.ticket_id,
                 webauthn_credential,
@@ -707,7 +740,10 @@ impl AvalonClient {
             challenge: passkey_types::webauthn::CredentialRequestOptions,
         }
         let start: SessionStartResponse = http
-            .post(format!("{base}/sessions/start"))
+            .post(format!(
+                "{base}{}",
+                crate::generated::paths::identity::SESSION_START
+            ))
             .json(&crate::generated::SessionStartRequest { identity_id })
             .send()
             .await
@@ -726,7 +762,10 @@ impl AvalonClient {
             credential: passkey_types::webauthn::AuthenticatedPublicKeyCredential,
         }
         let finish_response = http
-            .post(format!("{base}/sessions/finish"))
+            .post(format!(
+                "{base}{}",
+                crate::generated::paths::identity::SESSION_FINISH
+            ))
             .json(&SessionFinishRequest {
                 ticket_id: start.ticket_id,
                 credential: assertion,

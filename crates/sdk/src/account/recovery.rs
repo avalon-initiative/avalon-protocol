@@ -123,8 +123,9 @@ impl TryFrom<crate::generated::GuardianOfSummary> for GuardianOf {
 impl AccountSession {
     /// `GET /me/recovery/guardians`.
     pub async fn guardians(&self) -> Result<GuardianSettings, SdkError> {
-        let raw: crate::generated::GuardianSettingsResponse =
-            self.get("/me/recovery/guardians").await?;
+        let raw: crate::generated::GuardianSettingsResponse = self
+            .get(crate::generated::paths::recovery::GET_GUARDIANS)
+            .await?;
         raw.try_into()
     }
 
@@ -152,7 +153,7 @@ impl AccountSession {
         );
         let raw: crate::generated::GuardianSettingsResponse = self
             .put(
-                "/me/recovery/guardians",
+                crate::generated::paths::recovery::SET_GUARDIANS,
                 &crate::generated::SetGuardiansRequest {
                     guardian_ids: guardian_ids.to_vec(),
                     threshold,
@@ -167,24 +168,27 @@ impl AccountSession {
     /// `GET /me/recovery/status` — the caller's own in-flight recovery
     /// request, if any.
     pub async fn my_recovery_status(&self) -> Result<Option<RecoveryRequest>, SdkError> {
-        let raw: Option<crate::generated::RecoveryRequestResponse> =
-            self.get("/me/recovery/status").await?;
+        let raw: Option<crate::generated::RecoveryRequestResponse> = self
+            .get(crate::generated::paths::recovery::MY_RECOVERY_STATUS)
+            .await?;
         raw.map(RecoveryRequest::try_from).transpose()
     }
 
     /// `GET /me/recovery/guardian-requests` — every active request where
     /// the caller is currently a guardian.
     pub async fn guardian_requests(&self) -> Result<Vec<GuardianRequest>, SdkError> {
-        let raw: Vec<crate::generated::GuardianRequestSummary> =
-            self.get("/me/recovery/guardian-requests").await?;
+        let raw: Vec<crate::generated::GuardianRequestSummary> = self
+            .get(crate::generated::paths::recovery::GUARDIAN_REQUESTS)
+            .await?;
         raw.into_iter().map(GuardianRequest::try_from).collect()
     }
 
     /// `GET /me/recovery/guardian-of` — every identity currently relying on
     /// the caller as a guardian.
     pub async fn guardian_of(&self) -> Result<Vec<GuardianOf>, SdkError> {
-        let raw: Vec<crate::generated::GuardianOfSummary> =
-            self.get("/me/recovery/guardian-of").await?;
+        let raw: Vec<crate::generated::GuardianOfSummary> = self
+            .get(crate::generated::paths::recovery::GUARDIAN_OF)
+            .await?;
         raw.into_iter().map(GuardianOf::try_from).collect()
     }
 
@@ -192,8 +196,11 @@ impl AccountSession {
     /// self-removing as someone else's guardian. Not signature-required
     /// (self-removal only narrows a guardian assignment).
     pub async fn resign_as_guardian(&self, identity_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/me/recovery/guardian-of/{identity_id}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::recovery::RESIGN_GUARDIAN,
+            &[("identity_id", &identity_id.to_string())],
+        ))
+        .await
     }
 
     /// `POST /recovery/requests/{id}/approve` — a guardian approving
@@ -203,7 +210,10 @@ impl AccountSession {
         request_id: Uuid,
     ) -> Result<RecoveryRequest, SdkError> {
         let raw: crate::generated::RecoveryRequestResponse = self
-            .post_empty(&format!("/recovery/requests/{request_id}/approve"))
+            .post_empty(&super::path(
+                crate::generated::paths::recovery::APPROVE_REQUEST,
+                &[("id", &request_id.to_string())],
+            ))
             .await?;
         raw.try_into()
     }
@@ -217,7 +227,10 @@ impl AccountSession {
     ) -> Result<RecoveryRequest, SdkError> {
         let raw: crate::generated::RecoveryRequestResponse = self
             .post(
-                &format!("/recovery/requests/{request_id}/cancel"),
+                &super::path(
+                    crate::generated::paths::recovery::CANCEL_REQUEST,
+                    &[("id", &request_id.to_string())],
+                ),
                 &crate::generated::CancelRecoveryRequest {
                     reason: reason.map(str::to_string),
                 },

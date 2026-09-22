@@ -58,7 +58,9 @@ impl TryFrom<crate::generated::MessageResponse> for ConversationMessage {
 impl AccountSession {
     /// `GET /conversations`.
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, SdkError> {
-        let raw: Vec<crate::generated::ConversationResponse> = self.get("/conversations").await?;
+        let raw: Vec<crate::generated::ConversationResponse> = self
+            .get(crate::generated::paths::chat::LIST_MY_CONVERSATIONS)
+            .await?;
         Ok(raw.into_iter().map(Conversation::from).collect())
     }
 
@@ -71,7 +73,7 @@ impl AccountSession {
     ) -> Result<Conversation, SdkError> {
         let raw: crate::generated::ConversationResponse = self
             .post(
-                "/conversations",
+                crate::generated::paths::chat::CREATE_CONVERSATION,
                 &crate::generated::CreateConversationRequest {
                     participants: participants.to_vec(),
                 },
@@ -97,7 +99,10 @@ impl AccountSession {
         let query_refs: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let raw: Vec<crate::generated::MessageResponse> = self
             .get_query(
-                &format!("/conversations/{conversation_id}/messages"),
+                &super::path(
+                    crate::generated::paths::chat::LIST_MESSAGES,
+                    &[("id", &conversation_id.to_string())],
+                ),
                 &query_refs,
             )
             .await?;
@@ -115,7 +120,10 @@ impl AccountSession {
     ) -> Result<ConversationMessage, SdkError> {
         let raw: crate::generated::MessageResponse = self
             .post(
-                &format!("/conversations/{conversation_id}/messages"),
+                &super::path(
+                    crate::generated::paths::chat::SEND_MESSAGE,
+                    &[("id", &conversation_id.to_string())],
+                ),
                 &crate::generated::SendMessageRequest {
                     body: body.to_string(),
                 },

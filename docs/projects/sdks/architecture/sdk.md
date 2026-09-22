@@ -602,12 +602,27 @@ protocol and the domain model in `crates/protocol`; they never pull in
     `game_breakdown_public` on the update path) — left as documented gaps,
     not silently expanded, since adding new public surface wasn't this
     migration's scope.
-  - Doesn't generate endpoint-path/method stub constants (the other half of
-    #724's original design) — every call site still builds its path with a
-    hand-written `format!()` string, matching this crate's existing
-    convention throughout. Worth a follow-up ticket if per-path duplication
-    across `sdk`/`bindings/csharp`/`bindings/ts` becomes a real maintenance
-    problem, not done here.
+  - `build.rs` also generates endpoint-path stub constants (the other half
+    of #724's original design, not done in the first pass) — one `&str`
+    template per `(tag, operationId)` pair, covering the *whole* published
+    API (not just the `SCHEMA_NAMES` allowlist — unlike type generation, a
+    path template carries no format-mapping risk, so there's no reason to
+    hand-curate a second allowlist in lockstep with the first), under
+    `crate::generated::paths::<tag>::<OPERATION_ID>`. Bare `operationId`
+    collides across tags (`list_messages`/`send_message`/`register_start`/
+    `register_finish` each name two different real endpoints under two
+    different tags), so each tag gets its own module; confirmed
+    `(tag, operationId)` is unique across the whole spec. Every
+    hand-written `format!("/guilds/{guild_id}/roles")`-style path across
+    `crates/sdk/src/account/*.rs` (~70 call sites) now references one of
+    these constants instead. Path templates keep the server's own
+    `{param}` placeholder names, which don't always match this SDK's local
+    variable names (`/guilds/{id}/channels/{cid}` vs.
+    `guild_id`/`channel_id`) — `format!()` requires a string *literal*, so
+    a runtime `&str` constant can't be fed into it regardless of naming,
+    hence `account::path(template, &[(name, value), ...])`
+    (`crates/sdk/src/account/mod.rs`), a small runtime `{name}`
+    substitution helper every call site uses instead.
   - #725 (`bindings/csharp`) and #726 (`bindings/ts`) — same migration for
     the other two SDKs, following this pattern — are follow-on work, not yet
     started.

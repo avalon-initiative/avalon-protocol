@@ -663,7 +663,7 @@ impl AccountSession {
     ) -> Result<Guild, SdkError> {
         let raw: crate::generated::GuildResponse = self
             .post(
-                "/guilds",
+                crate::generated::paths::guilds::CREATE_GUILD,
                 &crate::generated::CreateGuildRequest {
                     name: name.to_string(),
                     tag: tag.to_string(),
@@ -680,7 +680,12 @@ impl AccountSession {
 
     /// `GET /guilds/{id}`.
     pub async fn get_guild(&self, guild_id: Uuid) -> Result<Guild, SdkError> {
-        let raw: crate::generated::GuildResponse = self.get(&format!("/guilds/{guild_id}")).await?;
+        let raw: crate::generated::GuildResponse = self
+            .get(&super::path(
+                crate::generated::paths::guilds::GET_GUILD,
+                &[("id", &guild_id.to_string())],
+            ))
+            .await?;
         raw.try_into()
     }
 
@@ -691,8 +696,12 @@ impl AccountSession {
         &self,
         query_string: &str,
     ) -> Result<DiscoverGuildsPage, SdkError> {
-        let raw: crate::generated::DiscoverGuildsResponse =
-            self.get(&format!("/guilds/discover{query_string}")).await?;
+        let raw: crate::generated::DiscoverGuildsResponse = self
+            .get(&format!(
+                "{}{query_string}",
+                crate::generated::paths::guilds::DISCOVER_GUILDS
+            ))
+            .await?;
         raw.try_into()
     }
 
@@ -710,7 +719,10 @@ impl AccountSession {
     ) -> Result<Guild, SdkError> {
         let raw: crate::generated::GuildResponse = self
             .patch(
-                &format!("/guilds/{guild_id}"),
+                &super::path(
+                    crate::generated::paths::guilds::UPDATE_GUILD,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::UpdateGuildRequest {
                     name: update.name.map(str::to_string),
                     tag: update.tag.map(str::to_string),
@@ -732,8 +744,12 @@ impl AccountSession {
 
     /// `GET /guilds/{id}/roles`.
     pub async fn list_roles(&self, guild_id: Uuid) -> Result<Vec<Role>, SdkError> {
-        let raw: Vec<crate::generated::RoleResponse> =
-            self.get(&format!("/guilds/{guild_id}/roles")).await?;
+        let raw: Vec<crate::generated::RoleResponse> = self
+            .get(&super::path(
+                crate::generated::paths::guilds::LIST_ROLES,
+                &[("id", &guild_id.to_string())],
+            ))
+            .await?;
         Ok(raw.into_iter().map(Into::into).collect())
     }
 
@@ -750,7 +766,10 @@ impl AccountSession {
         let signature = self.sign("guild.role.create", &[&guild_id.to_string(), name, &joined]);
         let raw: crate::generated::RoleResponse = self
             .post(
-                &format!("/guilds/{guild_id}/roles"),
+                &super::path(
+                    crate::generated::paths::guilds::CREATE_ROLE,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::CreateRoleRequest {
                     name: name.to_string(),
                     permissions: permissions.iter().map(|s| s.to_string()).collect(),
@@ -780,7 +799,13 @@ impl AccountSession {
         );
         let raw: crate::generated::RoleResponse = self
             .patch(
-                &format!("/guilds/{guild_id}/roles/{name_index}"),
+                &super::path(
+                    crate::generated::paths::guilds::UPDATE_ROLE,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("idx", &name_index.to_string()),
+                    ],
+                ),
                 &crate::generated::UpdateRoleRequest {
                     name: name.map(str::to_string),
                     permissions: permissions.map(|p| p.iter().map(|s| s.to_string()).collect()),
@@ -802,7 +827,13 @@ impl AccountSession {
             &[&guild_id.to_string(), &name_index.to_string()],
         );
         self.delete_with_body(
-            &format!("/guilds/{guild_id}/roles/{name_index}"),
+            &super::path(
+                crate::generated::paths::guilds::DELETE_ROLE,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("idx", &name_index.to_string()),
+                ],
+            ),
             &crate::generated::DeleteRoleRequest {
                 signature: signature.signature,
                 signing_key_id: signature.signing_key_id,
@@ -821,7 +852,10 @@ impl AccountSession {
         let resource_id_str = resource_id.to_string();
         let raw: Vec<crate::generated::PermissionOverrideResponse> = self
             .get_query(
-                &format!("/guilds/{guild_id}/permission-overrides"),
+                &super::path(
+                    crate::generated::paths::guilds::LIST_PERMISSION_OVERRIDES,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &[
                     ("resource_kind", resource_kind),
                     ("resource_id", &resource_id_str),
@@ -857,7 +891,10 @@ impl AccountSession {
         );
         let raw: crate::generated::PermissionOverrideResponse = self
             .put(
-                &format!("/guilds/{guild_id}/permission-overrides"),
+                &super::path(
+                    crate::generated::paths::guilds::SET_PERMISSION_OVERRIDE,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::SetPermissionOverrideRequest {
                     role_index,
                     resource_kind: resource_kind.to_string(),
@@ -885,7 +922,13 @@ impl AccountSession {
             &[&guild_id.to_string(), &override_id.to_string()],
         );
         self.delete_with_body(
-            &format!("/guilds/{guild_id}/permission-overrides/{override_id}"),
+            &super::path(
+                crate::generated::paths::guilds::DELETE_PERMISSION_OVERRIDE,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("override_id", &override_id.to_string()),
+                ],
+            ),
             &crate::generated::DeletePermissionOverrideRequest {
                 signature: signature.signature,
                 signing_key_id: signature.signing_key_id,
@@ -907,7 +950,10 @@ impl AccountSession {
         );
         let raw: crate::generated::GuildResponse = self
             .post(
-                &format!("/guilds/{guild_id}/transfer-ownership"),
+                &super::path(
+                    crate::generated::paths::guilds::TRANSFER_OWNERSHIP,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::TransferOwnershipRequest {
                     to,
                     signature: signature.signature,
@@ -926,15 +972,25 @@ impl AccountSession {
         integrator_id: Uuid,
     ) -> Result<Guild, SdkError> {
         let raw: crate::generated::GuildResponse = self
-            .post_empty(&format!("/guilds/{guild_id}/integrations/{integrator_id}"))
+            .post_empty(&super::path(
+                crate::generated::paths::guilds::ASSOCIATE_INTEGRATOR,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("integrator_id", &integrator_id.to_string()),
+                ],
+            ))
             .await?;
         raw.try_into()
     }
 
     /// `GET /guilds/{id}/members`.
     pub async fn list_members(&self, guild_id: Uuid) -> Result<Vec<GuildMember>, SdkError> {
-        let raw: Vec<crate::generated::GuildMemberResponse> =
-            self.get(&format!("/guilds/{guild_id}/members")).await?;
+        let raw: Vec<crate::generated::GuildMemberResponse> = self
+            .get(&super::path(
+                crate::generated::paths::guilds::LIST_MEMBERS,
+                &[("id", &guild_id.to_string())],
+            ))
+            .await?;
         raw.into_iter().map(GuildMember::try_from).collect()
     }
 
@@ -960,7 +1016,13 @@ impl AccountSession {
         );
         let raw: crate::generated::GuildMemberResponse = self
             .patch(
-                &format!("/guilds/{guild_id}/members/{identity_id}"),
+                &super::path(
+                    crate::generated::paths::guilds::UPDATE_MEMBER_ROLE,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("identity_id", &identity_id.to_string()),
+                    ],
+                ),
                 &crate::generated::UpdateGuildMemberRequest {
                     role_index,
                     signature: signature.signature,
@@ -974,20 +1036,29 @@ impl AccountSession {
     /// `DELETE /guilds/{id}/members/{identity_id}` — kick, not a role
     /// change; reversible via re-invite. Not signature-required.
     pub async fn remove_member(&self, guild_id: Uuid, identity_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/guilds/{guild_id}/members/{identity_id}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::guilds::REMOVE_MEMBER,
+            &[
+                ("id", &guild_id.to_string()),
+                ("identity_id", &identity_id.to_string()),
+            ],
+        ))
+        .await
     }
 
     /// `GET /me/guilds`.
     pub async fn my_guilds(&self) -> Result<Vec<MyGuildMembership>, SdkError> {
-        let raw: Vec<crate::generated::MyGuildMembershipResponse> = self.get("/me/guilds").await?;
+        let raw: Vec<crate::generated::MyGuildMembershipResponse> = self
+            .get(crate::generated::paths::guilds::LIST_MY_GUILDS)
+            .await?;
         raw.into_iter().map(MyGuildMembership::try_from).collect()
     }
 
     /// `GET /me/guild-invites` (issue #442).
     pub async fn my_guild_invites(&self) -> Result<Vec<MyGuildInvite>, SdkError> {
-        let raw: Vec<crate::generated::MyGuildInviteResponse> =
-            self.get("/me/guild-invites").await?;
+        let raw: Vec<crate::generated::MyGuildInviteResponse> = self
+            .get(crate::generated::paths::guilds::MY_GUILD_INVITES)
+            .await?;
         raw.into_iter().map(MyGuildInvite::try_from).collect()
     }
 
@@ -999,7 +1070,10 @@ impl AccountSession {
     ) -> Result<GuildInvite, SdkError> {
         let raw: crate::generated::GuildInviteResponse = self
             .post(
-                &format!("/guilds/{guild_id}/invites"),
+                &super::path(
+                    crate::generated::paths::guilds::CREATE_INVITE,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::CreateGuildInviteRequest { to },
             )
             .await?;
@@ -1013,7 +1087,13 @@ impl AccountSession {
         invite_id: Uuid,
     ) -> Result<GuildMember, SdkError> {
         let raw: crate::generated::GuildMemberResponse = self
-            .post_empty(&format!("/guilds/{guild_id}/invites/{invite_id}/accept"))
+            .post_empty(&super::path(
+                crate::generated::paths::guilds::ACCEPT_INVITE,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("invite_id", &invite_id.to_string()),
+                ],
+            ))
             .await?;
         raw.try_into()
     }
@@ -1024,22 +1104,35 @@ impl AccountSession {
         guild_id: Uuid,
         invite_id: Uuid,
     ) -> Result<(), SdkError> {
-        self.post_empty_no_response(&format!("/guilds/{guild_id}/invites/{invite_id}/decline"))
-            .await
+        self.post_empty_no_response(&super::path(
+            crate::generated::paths::guilds::DECLINE_INVITE,
+            &[
+                ("id", &guild_id.to_string()),
+                ("invite_id", &invite_id.to_string()),
+            ],
+        ))
+        .await
     }
 
     /// `POST /guilds/{id}/join` — only meaningful when the guild's join
     /// policy allows it (see `avalon_protocol::guilds::JoinPolicy`).
     pub async fn join_guild(&self, guild_id: Uuid) -> Result<GuildMember, SdkError> {
-        let raw: crate::generated::GuildMemberResponse =
-            self.post_empty(&format!("/guilds/{guild_id}/join")).await?;
+        let raw: crate::generated::GuildMemberResponse = self
+            .post_empty(&super::path(
+                crate::generated::paths::guilds::JOIN_GUILD,
+                &[("id", &guild_id.to_string())],
+            ))
+            .await?;
         raw.try_into()
     }
 
     /// `POST /guilds/{id}/leave`.
     pub async fn leave_guild(&self, guild_id: Uuid) -> Result<(), SdkError> {
-        self.post_empty_no_response(&format!("/guilds/{guild_id}/leave"))
-            .await
+        self.post_empty_no_response(&super::path(
+            crate::generated::paths::guilds::LEAVE_GUILD,
+            &[("id", &guild_id.to_string())],
+        ))
+        .await
     }
 
     /// `POST /guilds/{id}/join-requests` (issue #242).
@@ -1050,7 +1143,10 @@ impl AccountSession {
     ) -> Result<GuildJoinRequest, SdkError> {
         let raw: crate::generated::GuildJoinRequestResponse = self
             .post(
-                &format!("/guilds/{guild_id}/join-requests"),
+                &super::path(
+                    crate::generated::paths::guilds::CREATE_JOIN_REQUEST,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::CreateJoinRequestRequest {
                     message: message.map(str::to_string),
                 },
@@ -1065,7 +1161,10 @@ impl AccountSession {
         guild_id: Uuid,
     ) -> Result<Vec<GuildJoinRequest>, SdkError> {
         let raw: Vec<crate::generated::GuildJoinRequestResponse> = self
-            .get(&format!("/guilds/{guild_id}/join-requests"))
+            .get(&super::path(
+                crate::generated::paths::guilds::LIST_JOIN_REQUESTS,
+                &[("id", &guild_id.to_string())],
+            ))
             .await?;
         raw.into_iter().map(GuildJoinRequest::try_from).collect()
     }
@@ -1077,7 +1176,10 @@ impl AccountSession {
         guild_id: Uuid,
     ) -> Result<Option<GuildJoinRequest>, SdkError> {
         let raw: Option<crate::generated::GuildJoinRequestResponse> = self
-            .get(&format!("/guilds/{guild_id}/join-requests/mine"))
+            .get(&super::path(
+                crate::generated::paths::guilds::MY_JOIN_REQUEST,
+                &[("id", &guild_id.to_string())],
+            ))
             .await?;
         raw.map(GuildJoinRequest::try_from).transpose()
     }
@@ -1089,8 +1191,12 @@ impl AccountSession {
         request_id: Uuid,
     ) -> Result<GuildMember, SdkError> {
         let raw: crate::generated::GuildMemberResponse = self
-            .post_empty(&format!(
-                "/guilds/{guild_id}/join-requests/{request_id}/approve"
+            .post_empty(&super::path(
+                crate::generated::paths::guilds::APPROVE_JOIN_REQUEST,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("request_id", &request_id.to_string()),
+                ],
             ))
             .await?;
         raw.try_into()
@@ -1102,8 +1208,12 @@ impl AccountSession {
         guild_id: Uuid,
         request_id: Uuid,
     ) -> Result<(), SdkError> {
-        self.post_empty_no_response(&format!(
-            "/guilds/{guild_id}/join-requests/{request_id}/reject"
+        self.post_empty_no_response(&super::path(
+            crate::generated::paths::guilds::REJECT_JOIN_REQUEST,
+            &[
+                ("id", &guild_id.to_string()),
+                ("request_id", &request_id.to_string()),
+            ],
         ))
         .await
     }
@@ -1115,14 +1225,23 @@ impl AccountSession {
         guild_id: Uuid,
         request_id: Uuid,
     ) -> Result<(), SdkError> {
-        self.delete(&format!("/guilds/{guild_id}/join-requests/{request_id}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::guilds::WITHDRAW_JOIN_REQUEST,
+            &[
+                ("id", &guild_id.to_string()),
+                ("request_id", &request_id.to_string()),
+            ],
+        ))
+        .await
     }
 
     /// `GET /guilds/{id}/favorite-integrators` (issue #207).
     pub async fn favorite_games(&self, guild_id: Uuid) -> Result<FavoriteGames, SdkError> {
         let raw: crate::generated::FavoriteGamesResponse = self
-            .get(&format!("/guilds/{guild_id}/favorite-integrators"))
+            .get(&super::path(
+                crate::generated::paths::guilds::LIST_FAVORITE_GAMES,
+                &[("id", &guild_id.to_string())],
+            ))
             .await?;
         Ok(raw.into())
     }
@@ -1136,7 +1255,10 @@ impl AccountSession {
     ) -> Result<FavoriteGames, SdkError> {
         let raw: crate::generated::FavoriteGamesResponse = self
             .put(
-                &format!("/guilds/{guild_id}/favorite-integrators"),
+                &super::path(
+                    crate::generated::paths::guilds::SET_FAVORITE_GAMES,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::SetFavoriteGamesRequest {
                     integrator_ids: integrator_ids.to_vec(),
                 },
@@ -1147,8 +1269,12 @@ impl AccountSession {
 
     /// `GET /guilds/{id}/channels`.
     pub async fn list_channels(&self, guild_id: Uuid) -> Result<Vec<GuildChannel>, SdkError> {
-        let raw: Vec<crate::generated::ChannelResponse> =
-            self.get(&format!("/guilds/{guild_id}/channels")).await?;
+        let raw: Vec<crate::generated::ChannelResponse> = self
+            .get(&super::path(
+                crate::generated::paths::guilds::LIST_CHANNELS,
+                &[("id", &guild_id.to_string())],
+            ))
+            .await?;
         raw.into_iter().map(GuildChannel::try_from).collect()
     }
 
@@ -1161,7 +1287,10 @@ impl AccountSession {
     ) -> Result<GuildChannel, SdkError> {
         let raw: crate::generated::ChannelResponse = self
             .post(
-                &format!("/guilds/{guild_id}/channels"),
+                &super::path(
+                    crate::generated::paths::guilds::CREATE_CHANNEL,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::CreateChannelRequest {
                     name: name.to_string(),
                 },
@@ -1179,7 +1308,13 @@ impl AccountSession {
     ) -> Result<GuildChannel, SdkError> {
         let raw: crate::generated::ChannelResponse = self
             .patch(
-                &format!("/guilds/{guild_id}/channels/{channel_id}"),
+                &super::path(
+                    crate::generated::paths::guilds::UPDATE_CHANNEL,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("cid", &channel_id.to_string()),
+                    ],
+                ),
                 &crate::generated::UpdateChannelRequest {
                     name: update.name.to_string(),
                     announcement_only: update.announcement_only,
@@ -1198,7 +1333,13 @@ impl AccountSession {
         channel_id: Uuid,
     ) -> Result<GuildChannel, SdkError> {
         let raw: crate::generated::ChannelResponse = self
-            .post_empty(&format!("/guilds/{guild_id}/channels/{channel_id}/archive"))
+            .post_empty(&super::path(
+                crate::generated::paths::guilds::ARCHIVE_CHANNEL,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("cid", &channel_id.to_string()),
+                ],
+            ))
             .await?;
         raw.try_into()
     }
@@ -1221,7 +1362,13 @@ impl AccountSession {
         let query_refs: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let raw: Vec<crate::generated::MessageResponse> = self
             .get_query(
-                &format!("/guilds/{guild_id}/channels/{channel_id}/messages"),
+                &super::path(
+                    crate::generated::paths::guilds::LIST_MESSAGES,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("cid", &channel_id.to_string()),
+                    ],
+                ),
                 &query_refs,
             )
             .await?;
@@ -1238,7 +1385,13 @@ impl AccountSession {
     ) -> Result<GuildMessage, SdkError> {
         let raw: crate::generated::MessageResponse = self
             .post(
-                &format!("/guilds/{guild_id}/channels/{channel_id}/messages"),
+                &super::path(
+                    crate::generated::paths::guilds::SEND_MESSAGE,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("cid", &channel_id.to_string()),
+                    ],
+                ),
                 &crate::generated::SendMessageRequest {
                     body: body.to_string(),
                 },
@@ -1255,8 +1408,13 @@ impl AccountSession {
         channel_id: Uuid,
         message_id: Uuid,
     ) -> Result<(), SdkError> {
-        self.delete(&format!(
-            "/guilds/{guild_id}/channels/{channel_id}/messages/{message_id}"
+        self.delete(&super::path(
+            crate::generated::paths::guilds::DELETE_MESSAGE,
+            &[
+                ("id", &guild_id.to_string()),
+                ("cid", &channel_id.to_string()),
+                ("mid", &message_id.to_string()),
+            ],
         ))
         .await
     }
@@ -1277,7 +1435,13 @@ impl AccountSession {
             query.push(("to", to));
         }
         let raw: Vec<crate::generated::EventResponse> = self
-            .get_query(&format!("/guilds/{guild_id}/events"), &query)
+            .get_query(
+                &super::path(
+                    crate::generated::paths::guilds::LIST_EVENTS,
+                    &[("id", &guild_id.to_string())],
+                ),
+                &query,
+            )
             .await?;
         raw.into_iter().map(GuildEvent::try_from).collect()
     }
@@ -1291,7 +1455,10 @@ impl AccountSession {
     ) -> Result<GuildEvent, SdkError> {
         let raw: crate::generated::EventResponse = self
             .post(
-                &format!("/guilds/{guild_id}/events"),
+                &super::path(
+                    crate::generated::paths::guilds::CREATE_EVENT,
+                    &[("id", &guild_id.to_string())],
+                ),
                 &crate::generated::CreateEventRequest {
                     channel_id: fields.channel_id,
                     title: fields.title.to_string(),
@@ -1315,7 +1482,13 @@ impl AccountSession {
     ) -> Result<GuildEvent, SdkError> {
         let raw: crate::generated::EventResponse = self
             .patch(
-                &format!("/guilds/{guild_id}/events/{event_id}"),
+                &super::path(
+                    crate::generated::paths::guilds::UPDATE_EVENT,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("eid", &event_id.to_string()),
+                    ],
+                ),
                 &crate::generated::UpdateEventRequest {
                     channel_id: fields.channel_id,
                     title: fields.title.to_string(),
@@ -1331,8 +1504,14 @@ impl AccountSession {
 
     /// `DELETE /guilds/{id}/events/{event_id}`.
     pub async fn delete_event(&self, guild_id: Uuid, event_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/guilds/{guild_id}/events/{event_id}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::guilds::DELETE_EVENT,
+            &[
+                ("id", &guild_id.to_string()),
+                ("eid", &event_id.to_string()),
+            ],
+        ))
+        .await
     }
 
     /// `PUT /guilds/{id}/events/{event_id}/rsvp` — always sets the
@@ -1346,7 +1525,13 @@ impl AccountSession {
     ) -> Result<Rsvp, SdkError> {
         let raw: crate::generated::RsvpResponse = self
             .put(
-                &format!("/guilds/{guild_id}/events/{event_id}/rsvp"),
+                &super::path(
+                    crate::generated::paths::guilds::UPSERT_RSVP,
+                    &[
+                        ("id", &guild_id.to_string()),
+                        ("eid", &event_id.to_string()),
+                    ],
+                ),
                 &crate::generated::RsvpRequest {
                     status: status.to_string(),
                 },
@@ -1362,7 +1547,13 @@ impl AccountSession {
         event_id: Uuid,
     ) -> Result<Vec<RsvpRosterEntry>, SdkError> {
         let raw: Vec<crate::generated::RsvpRosterEntry> = self
-            .get(&format!("/guilds/{guild_id}/events/{event_id}/rsvps"))
+            .get(&super::path(
+                crate::generated::paths::guilds::LIST_RSVPS,
+                &[
+                    ("id", &guild_id.to_string()),
+                    ("eid", &event_id.to_string()),
+                ],
+            ))
             .await?;
         raw.into_iter().map(RsvpRosterEntry::try_from).collect()
     }

@@ -55,7 +55,11 @@ impl AvalonClient {
     /// when this process has no WebAuthn ceremony surface of its own.
     pub async fn start_account_device_login(&self) -> Result<AccountDeviceLogin<'_>, SdkError> {
         let response = crate::http::send(&self.http, &self.config.retry, false, |c| {
-            c.post(format!("{}/auth/device/start", self.config.server_url))
+            c.post(format!(
+                "{}{}",
+                self.config.server_url,
+                crate::generated::paths::devices::START_PAIRING
+            ))
         })
         .await?;
         if !response.status().is_success() {
@@ -98,8 +102,9 @@ impl AccountDeviceLogin<'_> {
             let response =
                 crate::http::send(&self.client.http, &self.client.config.retry, true, |c| {
                     c.post(format!(
-                        "{}/auth/device/poll",
-                        self.client.config.server_url
+                        "{}{}",
+                        self.client.config.server_url,
+                        crate::generated::paths::devices::POLL_PAIRING
                     ))
                     .bearer_auth(&self.device_code)
                 })

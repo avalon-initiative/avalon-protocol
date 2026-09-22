@@ -55,7 +55,9 @@ struct RevokePasskeyRequest {
 impl AccountSession {
     /// `GET /me/passkeys` — every passkey registered to this identity.
     pub async fn list_passkeys(&self) -> Result<Vec<Passkey>, SdkError> {
-        let raw: Vec<crate::generated::PasskeyResponse> = self.get("/me/passkeys").await?;
+        let raw: Vec<crate::generated::PasskeyResponse> = self
+            .get(crate::generated::paths::devices::LIST_PASSKEYS)
+            .await?;
         raw.into_iter().map(Passkey::try_from).collect()
     }
 
@@ -66,12 +68,14 @@ impl AccountSession {
     /// passkey is not the one [`AccountSession::credentials`] carries; this
     /// session keeps using whichever passkey it originally logged in with.
     pub async fn add_passkey(&self, label: Option<&str>) -> Result<Passkey, SdkError> {
-        let start: AddPasskeyStartResponse = self.post_empty("/me/passkeys/register/start").await?;
+        let start: AddPasskeyStartResponse = self
+            .post_empty(crate::generated::paths::devices::REGISTER_START)
+            .await?;
         let (webauthn_credential, _stored) =
             webauthn::registration_ceremony(start.challenge).await?;
         let raw: crate::generated::PasskeyResponse = self
             .post(
-                "/me/passkeys/register/finish",
+                crate::generated::paths::devices::REGISTER_FINISH,
                 &AddPasskeyFinishRequest {
                     ticket_id: start.ticket_id,
                     webauthn_credential,
@@ -87,7 +91,10 @@ impl AccountSession {
     pub async fn rename_passkey(&self, passkey_id: Uuid, label: &str) -> Result<Passkey, SdkError> {
         let raw: crate::generated::PasskeyResponse = self
             .patch(
-                &format!("/me/passkeys/{passkey_id}"),
+                &super::path(
+                    crate::generated::paths::devices::RENAME_PASSKEY,
+                    &[("id", &passkey_id.to_string())],
+                ),
                 &crate::generated::RenamePasskeyRequest {
                     label: label.to_string(),
                 },
@@ -109,7 +116,10 @@ impl AccountSession {
             &[&passkey_id.to_string(), &self.identity().id.0.to_string()],
         );
         self.post_no_response(
-            &format!("/me/passkeys/{passkey_id}/revoke"),
+            &super::path(
+                crate::generated::paths::devices::REVOKE_PASSKEY,
+                &[("id", &passkey_id.to_string())],
+            ),
             &RevokePasskeyRequest { signature },
         )
         .await

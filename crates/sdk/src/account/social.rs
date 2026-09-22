@@ -310,14 +310,17 @@ impl TryFrom<crate::generated::GuildAnnouncementAlert> for GuildAnnouncementAler
 impl AccountSession {
     /// `GET /friends`.
     pub async fn friends(&self) -> Result<Vec<Friendship>, SdkError> {
-        let raw: Vec<crate::generated::FriendshipResponse> = self.get("/friends").await?;
+        let raw: Vec<crate::generated::FriendshipResponse> = self
+            .get(crate::generated::paths::friends::LIST_FRIENDS)
+            .await?;
         raw.into_iter().map(Friendship::try_from).collect()
     }
 
     /// `GET /friends/requests` — both incoming and outgoing.
     pub async fn friend_requests(&self) -> Result<Vec<FriendRequest>, SdkError> {
-        let raw: Vec<crate::generated::FriendRequestResponse> =
-            self.get("/friends/requests").await?;
+        let raw: Vec<crate::generated::FriendRequestResponse> = self
+            .get(crate::generated::paths::friends::LIST_FRIEND_REQUESTS)
+            .await?;
         raw.into_iter().map(FriendRequest::try_from).collect()
     }
 
@@ -325,7 +328,7 @@ impl AccountSession {
     pub async fn create_friend_request(&self, to: Uuid) -> Result<FriendRequest, SdkError> {
         let raw: crate::generated::FriendRequestResponse = self
             .post(
-                "/friends/requests",
+                crate::generated::paths::friends::CREATE_FRIEND_REQUEST,
                 &crate::generated::CreateFriendRequestRequest { to },
             )
             .await?;
@@ -335,7 +338,10 @@ impl AccountSession {
     /// `POST /friends/requests/{id}/accept`.
     pub async fn accept_friend_request(&self, request_id: Uuid) -> Result<Friendship, SdkError> {
         let raw: crate::generated::FriendshipResponse = self
-            .post_empty(&format!("/friends/requests/{request_id}/accept"))
+            .post_empty(&super::path(
+                crate::generated::paths::friends::ACCEPT_FRIEND_REQUEST,
+                &[("id", &request_id.to_string())],
+            ))
             .await?;
         raw.try_into()
     }
@@ -346,27 +352,39 @@ impl AccountSession {
         &self,
         request_id: Uuid,
     ) -> Result<(), SdkError> {
-        self.delete(&format!("/friends/requests/{request_id}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::friends::DECLINE_OR_WITHDRAW_FRIEND_REQUEST,
+            &[("id", &request_id.to_string())],
+        ))
+        .await
     }
 
     /// `DELETE /friends/{identity_id}`.
     pub async fn remove_friend(&self, identity_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/friends/{identity_id}")).await
+        self.delete(&super::path(
+            crate::generated::paths::friends::REMOVE_FRIEND,
+            &[("identity_id", &identity_id.to_string())],
+        ))
+        .await
     }
 
     /// `GET /friends/handle/{handle}` — exact-match handle resolution for
     /// the "add friend" flow.
     pub async fn resolve_handle(&self, handle: &str) -> Result<Uuid, SdkError> {
         let response: crate::generated::ResolveHandleResponse = self
-            .get(&format!("/friends/handle/{}", urlencoding_path(handle)))
+            .get(&super::path(
+                crate::generated::paths::friends::RESOLVE_HANDLE,
+                &[("handle", &urlencoding_path(handle))],
+            ))
             .await?;
         Ok(response.identity_id)
     }
 
     /// `GET /blocks` — the caller's own outgoing blocks only.
     pub async fn blocks(&self) -> Result<Vec<Block>, SdkError> {
-        let raw: Vec<crate::generated::BlockListEntry> = self.get("/blocks").await?;
+        let raw: Vec<crate::generated::BlockListEntry> = self
+            .get(crate::generated::paths::blocks::LIST_BLOCKS)
+            .await?;
         raw.into_iter().map(Block::try_from).collect()
     }
 
@@ -374,7 +392,7 @@ impl AccountSession {
     pub async fn block(&self, identity_id: Uuid) -> Result<Block, SdkError> {
         let raw: crate::generated::BlockResponse = self
             .post(
-                "/blocks",
+                crate::generated::paths::blocks::CREATE_BLOCK,
                 &crate::generated::CreateBlockRequest { identity_id },
             )
             .await?;
@@ -383,14 +401,19 @@ impl AccountSession {
 
     /// `DELETE /blocks/{identity_id}`.
     pub async fn unblock(&self, identity_id: Uuid) -> Result<(), SdkError> {
-        self.delete(&format!("/blocks/{identity_id}")).await
+        self.delete(&super::path(
+            crate::generated::paths::blocks::REMOVE_BLOCK,
+            &[("identity_id", &identity_id.to_string())],
+        ))
+        .await
     }
 
     /// `GET /people/discover` — no query parameters; the caller's own
     /// session is the only input.
     pub async fn discover_people(&self) -> Result<Vec<DiscoveryCandidate>, SdkError> {
-        let response: crate::generated::DiscoverPeopleResponse =
-            self.get("/people/discover").await?;
+        let response: crate::generated::DiscoverPeopleResponse = self
+            .get(crate::generated::paths::discovery::DISCOVER_PEOPLE)
+            .await?;
         Ok(response.candidates.into_iter().map(Into::into).collect())
     }
 
@@ -401,8 +424,12 @@ impl AccountSession {
         if q.trim().is_empty() {
             return Ok(Vec::new());
         }
-        let response: crate::generated::SearchIdentitiesResponse =
-            self.get_query("/identities/search", &[("q", q)]).await?;
+        let response: crate::generated::SearchIdentitiesResponse = self
+            .get_query(
+                crate::generated::paths::discovery::SEARCH_IDENTITIES,
+                &[("q", q)],
+            )
+            .await?;
         Ok(response.results.into_iter().map(Into::into).collect())
     }
 
@@ -417,14 +444,19 @@ impl AccountSession {
             .collect::<Vec<_>>()
             .join(",");
         let raw: Vec<crate::generated::PublicProfileResponse> = self
-            .get_query("/identities/profiles", &[("ids", &joined)])
+            .get_query(
+                crate::generated::paths::identity::LIST_PROFILES,
+                &[("ids", &joined)],
+            )
             .await?;
         Ok(raw.into_iter().map(Into::into).collect())
     }
 
     /// `GET /me/history`.
     pub async fn history(&self) -> Result<Vec<HistoryEntry>, SdkError> {
-        let raw: Vec<crate::generated::HistoryEntryResponse> = self.get("/me/history").await?;
+        let raw: Vec<crate::generated::HistoryEntryResponse> = self
+            .get(crate::generated::paths::identity::MY_HISTORY)
+            .await?;
         raw.into_iter().map(HistoryEntry::try_from).collect()
     }
 
@@ -435,7 +467,10 @@ impl AccountSession {
         identity_id: Uuid,
     ) -> Result<PublicIdentityProfile, SdkError> {
         let raw: crate::generated::PublicIdentityProfileResponse = self
-            .get(&format!("/identities/{identity_id}/profile"))
+            .get(&super::path(
+                crate::generated::paths::identity::GET_IDENTITY_PROFILE,
+                &[("id", &identity_id.to_string())],
+            ))
             .await?;
         raw.try_into()
     }
@@ -444,8 +479,9 @@ impl AccountSession {
     /// announcement-only channel posts across every guild the caller
     /// currently belongs to.
     pub async fn guild_announcements(&self) -> Result<Vec<GuildAnnouncementAlert>, SdkError> {
-        let raw: Vec<crate::generated::GuildAnnouncementAlert> =
-            self.get("/me/guild-announcements").await?;
+        let raw: Vec<crate::generated::GuildAnnouncementAlert> = self
+            .get(crate::generated::paths::guilds::LIST_MY_GUILD_ANNOUNCEMENTS)
+            .await?;
         raw.into_iter()
             .map(GuildAnnouncementAlert::try_from)
             .collect()
@@ -460,7 +496,7 @@ impl AccountSession {
     ) -> Result<Presence, SdkError> {
         let raw: crate::generated::PresenceResponse = self
             .put(
-                "/me/presence",
+                crate::generated::paths::presence::UPDATE_MY_PRESENCE,
                 &crate::generated::UpdatePresenceRequest {
                     status,
                     hide_active_in,
@@ -481,8 +517,12 @@ impl AccountSession {
             .map(Uuid::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        let raw: Vec<crate::generated::PresenceResponse> =
-            self.get_query("/presence", &[("ids", &joined)]).await?;
+        let raw: Vec<crate::generated::PresenceResponse> = self
+            .get_query(
+                crate::generated::paths::presence::GET_PRESENCE,
+                &[("ids", &joined)],
+            )
+            .await?;
         raw.into_iter().map(Presence::try_from).collect()
     }
 }

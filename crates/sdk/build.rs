@@ -237,7 +237,77 @@ fn main() {
         .add_ref_types(defs)
         .expect("typify failed to convert the account/auth schema allowlist");
 
+    let mut contents = type_space.to_stream().to_string();
+    contents.push('\n');
+    contents.push_str(&generate_path_stubs(&doc));
+
     let out_path = Path::new(&env::var("OUT_DIR").unwrap()).join("generated.rs");
-    fs::write(&out_path, type_space.to_stream().to_string())
+    fs::write(&out_path, contents)
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
+}
+
+/// Endpoint-path stub constants — the other half of #724's original
+/// design that the first migration pass left undone. One `&str` constant
+/// per (tag, operationId) pair across the *whole* published API (not just
+/// the account/auth `SCHEMA_NAMES` allowlist above — unlike type
+/// generation, a path template carries no format-mapping risk, so there's
+/// no reason to hand-curate a second allowlist in lockstep with the
+/// first). `operationId` alone collides across tags (`list_messages`,
+/// `send_message`, `register_start`, `register_finish` each appear under
+/// two different tags for two different real endpoints) — confirmed via
+/// `(tag, operationId)` being unique across the whole spec, so each tag
+/// gets its own module and the constant name is bare `operationId`
+/// (SCREAMING_SNAKE_CASE).
+///
+/// Path templates keep the server's own `{param}` placeholder names
+/// (which don't always match this SDK's local variable names, e.g.
+/// `/guilds/{id}/channels/{cid}` vs. `guild_id`/`channel_id`) — `format!()`
+/// requires a string *literal*, so a runtime `&str` constant can't be fed
+/// into it regardless of naming; call sites instead use
+/// `account::path(TEMPLATE, &[("id", &guild_id.to_string()), ...])`, a
+/// small runtime substitution helper (`crates/sdk/src/account/mod.rs`).
+fn generate_path_stubs(doc: &serde_json::Value) -> String {
+    let paths = doc["paths"]
+        .as_object()
+        .expect("docs/generated/openapi.json has paths");
+
+    let mut by_tag: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
+        std::collections::BTreeMap::new();
+
+    for (path, methods) in paths {
+        let methods = methods.as_object().expect("path item is an object");
+        for (method, op) in methods {
+            if !matches!(method.as_str(), "get" | "post" | "put" | "patch" | "delete") {
+                continue;
+            }
+            let tag = op["tags"][0]
+                .as_str()
+                .unwrap_or("untagged")
+                .replace('-', "_");
+            let operation_id = op["operationId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{method} {path} has no operationId"))
+                .to_string();
+            by_tag.entry(tag).or_default().push((
+                operation_id,
+                method.to_uppercase(),
+                path.clone(),
+            ));
+        }
+    }
+
+    let mut out = String::from("pub mod paths {\n");
+    for (tag, mut ops) in by_tag {
+        ops.sort();
+        out.push_str(&format!("    pub mod {tag} {{\n"));
+        for (operation_id, method, path) in ops {
+            let const_name = operation_id.to_uppercase();
+            out.push_str(&format!(
+                "        /// `{method} {path}`\n        pub const {const_name}: &str = {path:?};\n"
+            ));
+        }
+        out.push_str("    }\n");
+    }
+    out.push_str("}\n");
+    out
 }

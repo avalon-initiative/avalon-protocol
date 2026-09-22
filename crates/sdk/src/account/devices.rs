@@ -108,7 +108,9 @@ impl AccountSession {
     /// `GET /me/devices` — every signing-key device registered to this
     /// identity, active and revoked alike.
     pub async fn list_devices(&self) -> Result<Vec<Device>, SdkError> {
-        let raw: Vec<crate::generated::DeviceResponse> = self.get("/me/devices").await?;
+        let raw: Vec<crate::generated::DeviceResponse> = self
+            .get(crate::generated::paths::devices::LIST_DEVICES)
+            .await?;
         raw.into_iter().map(Device::try_from).collect()
     }
 
@@ -121,7 +123,10 @@ impl AccountSession {
     ) -> Result<Device, SdkError> {
         let raw: crate::generated::DeviceResponse = self
             .patch(
-                &format!("/me/devices/{signing_key_id}"),
+                &super::path(
+                    crate::generated::paths::devices::RENAME_DEVICE,
+                    &[("id", &signing_key_id.to_string())],
+                ),
                 &crate::generated::RenameDeviceRequest {
                     label: label.to_string(),
                 },
@@ -133,8 +138,11 @@ impl AccountSession {
     /// `POST /me/devices/{signing_key_id}/revoke` — unilateral, ambient-token
     /// (revocation only ever narrows trust, per #697).
     pub async fn revoke_device(&self, signing_key_id: Uuid) -> Result<(), SdkError> {
-        self.post_empty_no_response(&format!("/me/devices/{signing_key_id}/revoke"))
-            .await
+        self.post_empty_no_response(&super::path(
+            crate::generated::paths::devices::REVOKE_DEVICE,
+            &[("id", &signing_key_id.to_string())],
+        ))
+        .await
     }
 
     /// `POST /me/devices/grants` — requests a new device's signing key be
@@ -149,7 +157,7 @@ impl AccountSession {
     ) -> Result<DeviceGrant, SdkError> {
         let raw: crate::generated::DeviceGrantResponse = self
             .post(
-                "/me/devices/grants",
+                crate::generated::paths::devices::REQUEST_DEVICE_GRANT,
                 &crate::generated::RequestDeviceGrantRequest {
                     requested_signing_public_key: requested_signing_public_key_b64.to_string(),
                     device_label: device_label.map(str::to_string),
@@ -166,18 +174,28 @@ impl AccountSession {
     ) -> Result<Vec<DeviceGrant>, SdkError> {
         let raw: Vec<crate::generated::DeviceGrantResponse> = match status {
             Some(status) => {
-                self.get_query("/me/devices/grants", &[("status", status)])
+                self.get_query(
+                    crate::generated::paths::devices::LIST_DEVICE_GRANTS,
+                    &[("status", status)],
+                )
+                .await?
+            }
+            None => {
+                self.get(crate::generated::paths::devices::LIST_DEVICE_GRANTS)
                     .await?
             }
-            None => self.get("/me/devices/grants").await?,
         };
         raw.into_iter().map(DeviceGrant::try_from).collect()
     }
 
     /// `GET /me/devices/grants/{id}`.
     pub async fn get_device_grant(&self, grant_id: Uuid) -> Result<DeviceGrant, SdkError> {
-        let raw: crate::generated::DeviceGrantResponse =
-            self.get(&format!("/me/devices/grants/{grant_id}")).await?;
+        let raw: crate::generated::DeviceGrantResponse = self
+            .get(&super::path(
+                crate::generated::paths::devices::GET_DEVICE_GRANT,
+                &[("id", &grant_id.to_string())],
+            ))
+            .await?;
         raw.try_into()
     }
 
@@ -214,7 +232,10 @@ impl AccountSession {
         let signature = self.sign_raw(&message);
         let raw: crate::generated::DeviceResponse = self
             .post(
-                &format!("/me/devices/grants/{grant_id}/approve"),
+                &super::path(
+                    crate::generated::paths::devices::APPROVE_DEVICE_GRANT,
+                    &[("id", &grant_id.to_string())],
+                ),
                 &crate::generated::ApproveDeviceGrantRequest {
                     approver_signing_key_id: signing,
                     signature,
@@ -234,7 +255,7 @@ impl AccountSession {
         );
         let response: crate::generated::ResolvePairingResponse = self
             .post(
-                "/auth/device/approve",
+                crate::generated::paths::devices::APPROVE_PAIRING,
                 &crate::generated::ApprovePairingRequest {
                     user_code: user_code.to_string(),
                     signature: signature.signature,
@@ -250,7 +271,7 @@ impl AccountSession {
     pub async fn deny_device_pairing(&self, user_code: &str) -> Result<String, SdkError> {
         let response: crate::generated::ResolvePairingResponse = self
             .post(
-                "/auth/device/deny",
+                crate::generated::paths::devices::DENY_PAIRING,
                 &crate::generated::UserCodeRequest {
                     user_code: user_code.to_string(),
                 },

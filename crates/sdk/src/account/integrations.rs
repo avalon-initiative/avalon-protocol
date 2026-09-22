@@ -117,7 +117,10 @@ impl AccountSession {
         let signature = self.sign("integration.connect", &[slug, &joined]);
         let raw: crate::generated::ConnectResponse = self
             .post(
-                &format!("/integrations/{slug}/connect"),
+                &super::path(
+                    crate::generated::paths::integrators::CONNECT,
+                    &[("slug", slug)],
+                ),
                 &ConnectRequest {
                     capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
                     signature,
@@ -130,20 +133,29 @@ impl AccountSession {
     /// `DELETE /integrations/{slug}/connect`. Not signature-required
     /// (revocation only narrows what an integrator can do).
     pub async fn disconnect_integrator(&self, slug: &str) -> Result<(), SdkError> {
-        self.delete(&format!("/integrations/{slug}/connect")).await
+        self.delete(&super::path(
+            crate::generated::paths::integrators::DISCONNECT,
+            &[("slug", slug)],
+        ))
+        .await
     }
 
     /// `DELETE /integrations/{slug}/grants/{capability}`. Not
     /// signature-required, same reasoning as `disconnect_integrator`.
     pub async fn revoke_grant(&self, slug: &str, capability: &str) -> Result<(), SdkError> {
-        self.delete(&format!("/integrations/{slug}/grants/{capability}"))
-            .await
+        self.delete(&super::path(
+            crate::generated::paths::integrators::REVOKE_GRANT,
+            &[("slug", slug), ("capability", capability)],
+        ))
+        .await
     }
 
     /// `GET /me/connections` — every integrator this identity has
     /// currently consented to, and what it granted each one.
     pub async fn my_connections(&self) -> Result<Vec<MyConnection>, SdkError> {
-        let raw: Vec<crate::generated::Connection> = self.get("/me/connections").await?;
+        let raw: Vec<crate::generated::Connection> = self
+            .get(crate::generated::paths::integrators::LIST_MY_CONNECTIONS)
+            .await?;
         raw.into_iter().map(MyConnection::try_from).collect()
     }
 }
