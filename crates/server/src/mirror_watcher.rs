@@ -356,7 +356,7 @@ pub async fn run_worker(
         for (shard_id, peer) in &config.peers {
             match fetch_and_verify_sth(
                 &client,
-                avalon_sdk::network::bundled_trust_anchors(),
+                avalon_protocol::network_trust::bundled_trust_anchors(),
                 peer,
                 shard_id,
             )
@@ -584,7 +584,7 @@ fn check_peer_version(peer: &str, peer_protocol_version: &str) -> Result<(), Mir
 /// config entry means.
 async fn fetch_and_verify_sth(
     client: &reqwest::Client,
-    anchors: &[avalon_sdk::network::TrustAnchorEntry],
+    anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
     peer: &str,
     shard_id: &str,
 ) -> Result<SignedTreeHead, MirrorWatcherError> {
@@ -617,7 +617,7 @@ async fn fetch_and_verify_sth(
 
 /// Resolves the verify key for whatever `network_id` a peer's STH actually
 /// claims, rather than one process-wide key (issue #515) — the same
-/// per-network trust-anchor lookup `avalon_sdk::network::evaluate_network_trust`
+/// per-network trust-anchor lookup `avalon_protocol::network_trust::evaluate_network_trust`
 /// uses client-side (#482), applied here so a node mirroring peers across
 /// more than one legitimate, pinned network verifies each against its own
 /// correct key. `None` for a `network_id` with no entry in
@@ -626,7 +626,7 @@ async fn fetch_and_verify_sth(
 /// direct unit testing (same split-out pattern `nodes::resolve_bootstrap_peers`
 /// already uses in this repo).
 fn verify_key_for_network(
-    anchors: &[avalon_sdk::network::TrustAnchorEntry],
+    anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
     network_id: &str,
 ) -> Option<VerifyingKey> {
     let entry = anchors.iter().find(|a| a.network_id == network_id)?;
@@ -1319,14 +1319,17 @@ mod tests {
         }
     }
 
-    fn anchor(network_id: &str, verify_key_hex: String) -> avalon_sdk::network::TrustAnchorEntry {
-        avalon_sdk::network::TrustAnchorEntry {
+    fn anchor(
+        network_id: &str,
+        verify_key_hex: String,
+    ) -> avalon_protocol::network_trust::TrustAnchorEntry {
+        avalon_protocol::network_trust::TrustAnchorEntry {
             label: network_id.to_string(),
             network_id: network_id.to_string(),
             verify_key: verify_key_hex,
             signing_key_id: "test-key".to_string(),
             server_url: None,
-            environment: avalon_sdk::network::NetworkEnvironment::LocalDev,
+            environment: avalon_protocol::network_trust::NetworkEnvironment::LocalDev,
             seed_nodes: Vec::new(),
             notes: None,
         }

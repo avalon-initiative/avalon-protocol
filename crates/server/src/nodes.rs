@@ -669,7 +669,7 @@ const DEFAULT_MAX_PEERS: usize = 50;
 pub fn resolve_bootstrap_peers(
     bootstrap_env: Option<&str>,
     network_id: &str,
-    anchors: &[avalon_sdk::network::TrustAnchorEntry],
+    anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
 ) -> Vec<String> {
     match bootstrap_env {
         Some(raw) if !raw.trim().is_empty() => raw
@@ -692,7 +692,7 @@ impl AnnounceConfig {
         let peers = resolve_bootstrap_peers(
             std::env::var("AVALON_BOOTSTRAP_PEERS").ok().as_deref(),
             network_id,
-            avalon_sdk::network::bundled_trust_anchors(),
+            avalon_protocol::network_trust::bundled_trust_anchors(),
         );
 
         let interval = std::env::var("AVALON_ANNOUNCE_INTERVAL_SECS")
@@ -1169,14 +1169,17 @@ mod tests {
         assert_eq!(remaining[0].base_url, "http://upgrading-peer");
     }
 
-    fn anchor(network_id: &str, seed_nodes: Vec<String>) -> avalon_sdk::network::TrustAnchorEntry {
-        avalon_sdk::network::TrustAnchorEntry {
+    fn anchor(
+        network_id: &str,
+        seed_nodes: Vec<String>,
+    ) -> avalon_protocol::network_trust::TrustAnchorEntry {
+        avalon_protocol::network_trust::TrustAnchorEntry {
             label: network_id.to_string(),
             network_id: network_id.to_string(),
             verify_key: "ab".repeat(32),
             signing_key_id: "test-key".to_string(),
             server_url: None,
-            environment: avalon_sdk::network::NetworkEnvironment::LocalDev,
+            environment: avalon_protocol::network_trust::NetworkEnvironment::LocalDev,
             seed_nodes,
             notes: None,
         }
