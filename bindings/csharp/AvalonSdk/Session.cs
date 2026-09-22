@@ -269,5 +269,55 @@ namespace Avalon.Sdk
 
         /// <summary>Translates a non-success HTTP response into the matching exception.</summary>
         internal static Exception ServerError(System.Net.HttpStatusCode status) => new AvalonRequestException(status);
+
+        /// <summary>GET /identities/{id}/locations (epic #623, issue #635/#749) — every shard
+        /// base URL this identity has any durable history on, resolved over the DHT identity
+        /// locator. Public: the response carries no personal data, only server base
+        /// URLs.</summary>
+        public async Task<IReadOnlyList<string>> GetLocationsAsync(Guid identityId, CancellationToken ct = default)
+        {
+            var body = await GetJsonAsync<Avalon.Sdk.Generated.LocationsResponse>(
+                $"{ServerUrl}/identities/{identityId}/locations", ct).ConfigureAwait(false);
+            return new List<string>(body.Locations);
+        }
+
+        // --- Shared integrator-challenge-authed HTTP (issue #741/#744-#749) ---
+        //
+        // A whole family of slug-owner writes (achievement/milestone definition
+        // CRUD, attestation revocation, issuer-key management, schema/mapping/
+        // instance-data publication, recognition publication) authenticate the
+        // same way Achievements.cs's own IssueAchievementAsync already does:
+        // POST /integrations/{slug}/challenge for an ephemeral nonce, sign it
+        // with this integrator's own key, then attach it as three headers — no
+        // bearer token, no per-user capability grant, since these are the
+        // integrator asserting something about its own registered identity, not
+        // acting on a specific player's behalf. Factored out here so every new
+        // surface reuses one implementation instead of re-deriving the same
+        // three-header dance.
+
+        /// <summary>Attaches a fresh challenge-response proof (three headers) to an
+        /// already-constructed <paramref name="request"/> in place. Every write that needs it
+        /// builds its own <c>new HttpRequestMessage(HttpMethod.X, $"...")</c> with a literal
+        /// route (matching this SDK's, and `scripts/check-sdk-coverage.py`'s, existing
+        /// convention of a literal path at each call site) and passes it here, rather than
+        /// through a level of indirection that would hide the literal route from that static
+        /// check. Throws <see cref="MissingIssuerCredentialsException"/>, without any HTTP
+        /// call, if this session's own <see cref="IntegratorSlug"/>/<see cref="SigningKey"/>
+        /// weren't configured.</summary>
+        internal async Task AttachIntegratorAuthAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (IntegratorSlug is null || SigningKey is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+
+            var challenge = await RequestChallengeAsync(IntegratorSlug, ct).ConfigureAwait(false);
+            var nonce = Convert.FromBase64String(challenge.Nonce);
+            var challengeSignature = SignWithIssuerKey(nonce);
+
+            request.Headers.Add("x-avalon-integrator-key-id", IntegratorKeyId);
+            request.Headers.Add("x-avalon-integrator-challenge-id", challenge.ChallengeId.ToString());
+            request.Headers.Add("x-avalon-integrator-signature", Convert.ToBase64String(challengeSignature));
+        }
     }
 }

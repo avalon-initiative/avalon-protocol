@@ -97,4 +97,49 @@ public class GuildsTests
         var received = Assert.Single(messages);
         Assert.Equal(sent.Id, received.Id);
     }
+
+    [Fact]
+    public async Task ArchiveAsync_RequiresGuildsChat_AndReturnsArchivedMessages()
+    {
+        var guildId = Guid.NewGuid();
+        var channelId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
+        var authorId = Guid.NewGuid();
+        var handler = new StubHttpMessageHandler()
+            .Enqueue($@"[{{""id"":""{messageId}"",""channel_id"":""{channelId}"",""author"":""{authorId}"",""body"":""old"",""sent_at"":""2026-01-01T00:00:00Z"",""archived_at"":""2026-02-01T00:00:00Z""}}]");
+        var session = Session.ForTesting(new[] { "guilds.chat" }, handler.ToHttpClient());
+
+        var archived = await session.Guild(guildId).Channel(channelId).ArchiveAsync();
+
+        var entry = Assert.Single(archived);
+        Assert.Equal(messageId, entry.Id);
+        Assert.Contains("/messages/archive", handler.Requests[0].Url);
+    }
+
+    [Fact]
+    public async Task GameBreakdownAsync_RequiresGuildsRead_AndReturnsBreakdown()
+    {
+        var guildId = Guid.NewGuid();
+        var integratorId = Guid.NewGuid();
+        var handler = new StubHttpMessageHandler().Enqueue($@"
+        {{ ""guild_id"": ""{guildId}"", ""total_members"": 10,
+           ""breakdown"": [ {{ ""integrator_id"": ""{integratorId}"", ""integrator_slug"": ""dragons-inc"", ""integrator_name"": ""Dragons Inc"", ""member_count"": 6 }} ] }}");
+        var session = Session.ForTesting(new[] { "guilds.read" }, handler.ToHttpClient());
+
+        var breakdown = await session.Guild(guildId).GameBreakdownAsync();
+
+        Assert.Equal(10, breakdown.TotalMembers);
+        var entry = Assert.Single(breakdown.Breakdown);
+        Assert.Equal("dragons-inc", entry.IntegratorSlug);
+    }
+
+    [Fact]
+    public async Task GameBreakdownAsync_WithoutGrant_IsRejectedBeforeAnyRequest()
+    {
+        var handler = new StubHttpMessageHandler();
+        var session = Session.ForTesting(Array.Empty<string>(), handler.ToHttpClient());
+
+        await Assert.ThrowsAsync<CapabilityNotGrantedException>(() => session.Guild(Guid.NewGuid()).GameBreakdownAsync());
+        Assert.Empty(handler.Requests);
+    }
 }

@@ -316,6 +316,43 @@ namespace Avalon.Sdk
             return channel.Reader;
         }
 
+        /// <summary>PUT /presence/{identity_id} (issue #749) — an <i>integrator</i> setting
+        /// presence on behalf of an identity within a capability grant (distinct from
+        /// <see cref="UpdatePresenceAsync"/>, which is the identity publishing its own status
+        /// directly). Requires presence.publish and this session's own configured
+        /// <see cref="IntegratorSlug"/>/<see cref="SigningKey"/> — authenticated the same
+        /// challenge-response way <see cref="IssueAchievementAsync"/> is, plus the
+        /// <c>x-avalon-identity-id</c> header identifying whose presence is being set; the
+        /// server rejects a mismatch between that header and <paramref name="identityId"/>
+        /// itself, not just a missing grant.</summary>
+        public async Task<Presence> UpdateIntegratorPresenceAsync(
+            Guid identityId, PresenceStatus status, Guid? activeIn = null, CancellationToken ct = default)
+        {
+            Require("presence.publish");
+
+            if (IntegratorSlug is null || SigningKey is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Put, $"{ServerUrl}/presence/{identityId}");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Headers.Add("x-avalon-identity-id", identityId.ToString());
+            request.Content = JsonContent(new Avalon.Sdk.Generated.UpdateIntegratorPresenceRequest
+            {
+                Status = ToGeneratedPresenceStatus(status),
+                ActiveIn = activeIn,
+            });
+
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            var body = await ReadJsonAsync<Avalon.Sdk.Generated.PresenceResponse>(response, ct).ConfigureAwait(false);
+            return ToDomainPresence(body);
+        }
+
         internal static async Task<T> ReadJsonAsync<T>(HttpResponseMessage response, CancellationToken ct) where T : class
         {
 #if NET5_0_OR_GREATER

@@ -702,4 +702,150 @@ public class LiveTests
         await Assert.ThrowsAsync<AccountDeviceLoginDeniedException>(() => pairing.WaitAsync());
         await denialTask;
     }
+
+    // --- Issue #741/#744-#749: register-integrator -> add-issuer-key -> whoami,
+    // achievement-definition create -> issue -> read, and publish-recognition ->
+    // list-recognitions -> revoke round trips, entirely through the SDK's own
+    // new call sites (no raw HTTP needed for any of these three, unlike the
+    // older achievement live tests above which predate this SDK having its own
+    // RegisterIntegratorAsync/CreateAchievementDefinitionAsync).
+
+    [Fact]
+    public async Task RegisterIntegratorThenAddIssuerKeyThenWhoami_RoundTripsThroughTheSdk()
+    {
+        if (ServerUrl is null) return;
+
+        var suffix = Guid.NewGuid().ToString("N").Substring(0, 10);
+        var client = Client();
+
+        var random = new SecureRandom();
+        var keyGen = new Ed25519KeyPairGenerator();
+        keyGen.Init(new Ed25519KeyGenerationParameters(random));
+        var rootKeyPair = keyGen.GenerateKeyPair();
+        var rootPrivateKey = (Ed25519PrivateKeyParameters)rootKeyPair.Private;
+        var rootPublicKey = (Ed25519PublicKeyParameters)rootKeyPair.Public;
+
+        var integrator = await client.RegisterIntegratorAsync(
+            $"sdk-reg-{suffix}",
+            $"SDK Registration Test {suffix}",
+            "Test Studio",
+            "ed25519",
+            Convert.ToBase64String(rootPublicKey.GetEncoded()));
+
+        var rootSession = new AvalonClient(new AvalonConfig(
+            ServerUrl!, integrator.Credential.KeyId, integrator.Slug, rootPrivateKey.GetEncoded()));
+        // No identity token is actually needed for challenge-authenticated integrator calls
+        // (see Session.AttachIntegratorAuthAsync) — but Session still requires a real
+        // AuthenticateAsync to exist, so authenticate against a throwaway identity via a
+        // direct DB seed would be needed for full Session construction. Instead, exercise
+        // AddIssuerKeyAsync/IntegratorWhoamiAsync directly against the registered root key
+        // through Session.ForTesting, which needs no identity token at all for these two
+        // challenge-only calls.
+        var session = Session.ForTesting(
+            Array.Empty<string>(),
+            new HttpClient(),
+            serverUrl: ServerUrl!,
+            integratorKeyId: integrator.Credential.KeyId,
+            integratorSlug: integrator.Slug,
+            signingKey: rootPrivateKey.GetEncoded());
+
+        keyGen.Init(new Ed25519KeyGenerationParameters(random));
+        var operationalKeyPair = keyGen.GenerateKeyPair();
+        var operationalPublicKey = (Ed25519PublicKeyParameters)operationalKeyPair.Public;
+        var addedKey = await session.AddIssuerKeyAsync(
+            "ed25519", Convert.ToBase64String(operationalPublicKey.GetEncoded()), "operational");
+        Assert.Equal("operational", addedKey.Role);
+
+        var whoami = await session.IntegratorWhoamiAsync();
+        Assert.Equal(integrator.Id, whoami);
+
+        var keys = await session.ListIssuerKeysAsync(integrator.Slug);
+        Assert.Contains(keys, k => k.KeyId == addedKey.KeyId);
+    }
+
+    [Fact]
+    public async Task CreateAchievementDefinitionThenIssueThenReadItBack_RoundTripsThroughTheSdk()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"sdk-def-csharp-{Guid.NewGuid():N}");
+        var (signingKeyId, signingKey) = await SeedSigningKeyAsync(conn, identityId);
+
+        var http = new HttpClient();
+        var integrator = await RegisterIntegratorAsync(http, ServerUrl!);
+        await ConnectIntegratorAsync(http, ServerUrl!, integrator.Slug, token, signingKeyId, signingKey, "achievements.issue", "achievements.read");
+
+        var client = new AvalonClient(new AvalonConfig(
+            ServerUrl!, integrator.KeyId, integrator.Slug, integrator.SigningKeySeed));
+        var session = await client.AuthenticateAsync(token);
+
+        var key = $"sdk_def_{Guid.NewGuid():N}".Substring(0, 20);
+        var definition = await session.CreateAchievementDefinitionAsync(key, "SDK Defined", "Defined via the SDK itself");
+        Assert.Equal(key, definition.Key);
+
+        var attestationId = await session.IssueAchievementAsync(key);
+        var attestation = await session.GetAttestationAsync(attestationId);
+
+        Assert.Equal(attestationId, attestation.Id);
+        Assert.True(attestation.Authenticity.IsAuthentic);
+        Assert.True(attestation.Validity.IsValid);
+
+        var updated = await session.UpdateAchievementDefinitionAsync(key, description: "Updated via the SDK");
+        Assert.Equal("Updated via the SDK", updated.Description);
+
+        var definitions = await session.ListAchievementDefinitionsAsync(integrator.Slug);
+        Assert.Contains(definitions, d => d.Key == key);
+    }
+
+    [Fact]
+    public async Task PublishRecognitionThenListThenRevoke_RoundTripsThroughTheSdk()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, token) = await SeedIdentitySessionAsync(conn, $"sdk-recognition-csharp-{Guid.NewGuid():N}");
+        var (signingKeyId, signingKey) = await SeedSigningKeyAsync(conn, identityId);
+
+        var http = new HttpClient();
+        var recognizer = await RegisterIntegratorAsync(http, ServerUrl!);
+        var recognized = await RegisterIntegratorAsync(http, ServerUrl!);
+        await ConnectIntegratorAsync(http, ServerUrl!, recognizer.Slug, token, signingKeyId, signingKey);
+
+        var client = new AvalonClient(new AvalonConfig(
+            ServerUrl!, recognizer.KeyId, recognizer.Slug, recognizer.SigningKeySeed));
+        var session = await client.AuthenticateAsync(token);
+
+        var published = await session.PublishRecognitionAsync(recognized.Slug, new[] { "achievements" });
+        Assert.Equal(recognized.Slug, published.RecognizedSlug);
+
+        var recognitions = await session.ListRecognitionsAsync(recognizer.Slug);
+        Assert.Contains(recognitions, r => r.RecognizedSlug == recognized.Slug);
+
+        var recognizedBy = await session.ListRecognizedByAsync(recognized.Slug);
+        Assert.Contains(recognizedBy, r => r.RecognizerSlug == recognizer.Slug);
+
+        var revoked = await session.RevokeRecognitionAsync(recognized.Slug);
+        Assert.True(revoked);
+
+        var afterRevoke = await session.ListRecognitionsAsync(recognizer.Slug);
+        Assert.DoesNotContain(afterRevoke, r => r.RecognizedSlug == recognized.Slug);
+    }
+
+    [Fact]
+    public async Task GetIdentityRecoveryStatusAsync_NoActiveRecovery_ReturnsNullAgainstARealServer()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (identityId, _) = await SeedIdentitySessionAsync(conn, $"sdk-recovery-status-csharp-{Guid.NewGuid():N}");
+
+        var client = Client();
+        var status = await client.GetIdentityRecoveryStatusAsync(identityId);
+
+        Assert.Null(status);
+    }
 }

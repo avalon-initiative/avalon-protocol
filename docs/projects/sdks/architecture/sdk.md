@@ -418,8 +418,12 @@ protocol and the domain model in `crates/protocol`; they never pull in
   implementation rather than a native library — the smallest change that
   keeps this Unity/IL2CPP-safe — and the same `Authenticity`/`Validity`/
   `history` split, never a combined "trusted" boolean, per ADR #76). Bulk
-  issuance (#495) and revocation (#498) are Rust-side-only so far, no C#
-  equivalent yet. Typed exceptions
+  issuance (#495) and revocation (#498) — plus the full achievement/
+  milestone definition CRUD surface, integrator registration/key
+  management, integrator-space schema/mapping/instance-data, social
+  recovery's request-initiation flow, and the recognitions/registry
+  reads — were C#-side gaps as of this writing; closed by issue #741's
+  #744-#749 (see this file's own bullet on that closure, below). Typed exceptions
   (`AuthenticationFailedException`/`CapabilityNotGrantedException`/
   `AvalonRequestException`/`MissingIssuerCredentialsException`/
   `AvalonWebSocketException`/`NotConversationParticipantException`) mirror
@@ -714,6 +718,80 @@ protocol and the domain model in `crates/protocol`; they never pull in
     the companion case (`ResumeAccountSessionAsync` with no local key ->
     the same signature-required call rejected server-side) — both
     live-verified against a real `avalon-server` and Postgres.
+
+- Issue #741's C# coverage gap (#744-#749) — closed: all 45 routes
+  `scripts/check-sdk-coverage.py` reported with no C# call site now have
+  one, on the integrator `Session` (not `AccountSession`, which was
+  already complete). Extended `Achievements.cs` with attestation reads/
+  revocation and the full achievement/milestone definition CRUD +
+  bulk-issuance surface (milestone issuance mirrors
+  `IssueAchievementAsync`'s challenge-response-plus-embedded-signature
+  ceremony, parameterized by `claimKind`/issuer namespace since an
+  App/Service integrator's category isn't otherwise knowable client-side);
+  new `IntegratorSpace.cs` (schema/mapping publish+read, instance-data
+  publish/delete/read — issue #745); new `IntegratorRegistration.cs`
+  (`AvalonClient.RegisterIntegratorAsync`/`RegisterIssuerAsync`/
+  `CreateRegistrationChallengeAsync` — no session exists yet at
+  registration time, so these live on `AvalonClient` like
+  `CrossNodeLoginAsync`, plus `Session.ListIntegratorsAsync`/
+  `GetIntegratorAsync`/`ListIssuerKeysAsync`/`IntegratorWhoamiAsync`/
+  `AddIssuerKeyAsync`/`RevokeIssuerKeyAsync` — issue #746); new
+  `Recovery.cs` (`AvalonClient.StartRecoveryAsync`/`FinishRecoveryAsync`/
+  `GetRecoveryRequestAsync`/`FinalizeRecoveryRequestAsync`/
+  `GetIdentityRecoveryStatusAsync` — free-standing `AvalonClient` methods,
+  not `Session`/`AccountSession`, since the whole premise of recovery is
+  the caller has no session yet for the identity being recovered; mirrors
+  `bindings/ts/src/recovery.ts`, this SDK's only cross-language reference
+  since Rust had no coverage here either — issue #747); new `Registry.cs`
+  (`PublishRecognitionAsync`/`RevokeRecognitionAsync`/
+  `ListRecognitionsAsync`/`ListRecognizedByAsync`/
+  `GetIntegratorRegistryAsync` — issue #748); and a handful of additions
+  to existing files for issue #749's misc grab-bag (`ChannelHandle
+  .ArchiveAsync`/`GuildHandle.GameBreakdownAsync` in `Guilds.cs`,
+  `AvalonClient.LookupCrossNodeLoginAsync`/`DenyCrossNodeLoginAsync` — the
+  approving device's own half of cross-node login, symmetric with the
+  requester's half `CrossNodeLoginAsync`/`WaitAsync` already covered — in
+  `CrossNodeLogin.cs`, `Session.GetLocationsAsync` directly on `Session.cs`,
+  and `Session.UpdateIntegratorPresenceAsync` in `Social.cs`, distinct from
+  `UpdatePresenceAsync` — an integrator setting presence on an identity's
+  behalf within a capability grant, not the identity publishing its own
+  status).
+  - Every slug-owner write (definition CRUD, revocation, schema/mapping/
+    instance-data publish, issuer-key add/revoke, recognition
+    publish/revoke) authenticates via the same challenge-response scheme
+    `IssueAchievementAsync` already established — no user capability grant,
+    since these are the integrator asserting something about its own
+    registered identity, never acting on a specific player's behalf.
+    `Session.AttachIntegratorAuthAsync` factors out the three-header dance
+    so every new write attaches it to its own literal-route
+    `HttpRequestMessage` (kept literal per call site, deliberately not
+    hidden behind a second level of indirection, so
+    `scripts/check-sdk-coverage.py`'s static route extraction can still see
+    each route).
+  - Found and fixed along the way, live: three of the generated request
+    types' optional-looking fields are plain `String`/`BTreeMap<String,
+    String>` server-side with a `#[serde(default = ...)]`, not `Option` —
+    `AddIssuerKeyRequest.purpose`, `PublishIntegratorSchemaVersionRequest
+    .default_visibility`/`.field_visibility`, `PublishIntegratorSchemaMappingRequest
+    .description`/`.field_correspondence`, and `DeleteInstanceRequest
+    .reason_code`. A literal JSON `null` (this SDK's un-set-optional-param
+    default) 422s against the real server for those specifically, unlike
+    every genuinely-`Option<T>` field elsewhere in the same request types —
+    each now defaults to the server's own default value
+    (`"attestation"`/`"public"`/`""`/an empty map/`"deleted"`) instead of
+    `null` when the caller doesn't supply one, caught by this ticket's own
+    live verification, not by `dotnet build`/unit tests against a stub.
+  - `AvalonSdk.Tests/{AchievementsTests,IntegratorSpaceTests,IntegratorRegistrationTests,
+    RecoveryTests,RegistryTests}.cs` plus additions to
+    `{GuildsTests,CrossNodeLoginTests,SocialTests}.cs` cover the new
+    surface with `StubHttpMessageHandler` unit tests; `LiveTests.cs` adds
+    register-integrator -> add-issuer-key -> whoami,
+    achievement-definition-create -> issue -> read-back ->
+    update-definition, and publish-recognition -> list -> revoke round
+    trips, plus a public `GetIdentityRecoveryStatusAsync` read — all
+    live-verified against a real `avalon-server`/Postgres in this
+    sandbox. `make csharp-sdk-types-check` stayed clean throughout — no
+    schema was actually missing from `Generated.cs`, only call sites.
 
 - `bindings/ts` (issue #701, on top of #696/#697/#698/#699/#700) — a new,
   self-contained TypeScript SDK implementing both `AccountSession` and

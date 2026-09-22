@@ -274,5 +274,49 @@ namespace Avalon.Sdk
             }
             return await AuthenticateAsync(body.Token, ct).ConfigureAwait(false);
         }
+
+        // --- The approving device's own half (issue #741/#749) ---
+        //
+        // CrossNodeLoginAsync/WaitAsync/SubmitCrossNodeLoginGrantAsync above are
+        // the *requester's* side (the node being logged into). LookupCrossNodeLoginAsync/
+        // DenyCrossNodeLoginAsync are the *approver's* side — whatever surface shows a human
+        // the pairing code (no Hub route for this yet, #639) looks the request up by its
+        // short user code and can explicitly deny it. Neither call carries a bearer token:
+        // the user code itself is the only credential, same shape device pairing's own
+        // deny/resolve endpoints already use.
+
+        /// <summary>GET /auth/cross-node/lookup?user_code=… — resolves a short pairing code
+        /// into the full pending request (status, requesting context, whether the requesting
+        /// node is a verified integrator) for an approval screen to render. Public — the user
+        /// code itself is the only proof needed to look up its own request.</summary>
+        public async Task<Avalon.Sdk.Generated.LookupCrossNodeLoginResponse> LookupCrossNodeLoginAsync(
+            string userCode, CancellationToken ct = default)
+        {
+            var url = $"{ServerUrl}/auth/cross-node/lookup?user_code={Uri.EscapeDataString(userCode)}";
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw Session.ServerError(response.StatusCode);
+            }
+            return await Session.ReadJsonAsync<Avalon.Sdk.Generated.LookupCrossNodeLoginResponse>(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>POST /auth/cross-node/deny — explicitly denies the pending request named
+        /// by <paramref name="userCode"/>; <see cref="CrossNodeLogin.WaitAsync"/> on the
+        /// requesting side then surfaces this as <see cref="CrossNodeLoginDeniedException"/>.
+        /// Only a currently-<c>pending</c>, unexpired request can be denied.</summary>
+        public async Task DenyCrossNodeLoginAsync(string userCode, CancellationToken ct = default)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/auth/cross-node/deny");
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.UserCodeRequest { UserCode = userCode }),
+                Encoding.UTF8, "application/json");
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw Session.ServerError(response.StatusCode);
+            }
+        }
     }
 }
