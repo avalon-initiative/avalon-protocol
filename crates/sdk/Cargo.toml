@@ -12,7 +12,10 @@ avalon-protocol = { path = "../protocol" }
 # message logic directly rather than reimplementing it.
 avalon-chain = { path = "../chain" }
 # Issue #386: #[derive(AvalonSchema)] — re-exported through schema.rs.
-avalon-schema-derive = { path = "../schema-derive" }
+# Nested workspace member (#772) — this crate has no dependency on the core
+# protocol crates, only on this SDK, so it lives under crates/sdk/ rather
+# than alongside protocol/chain/indexer/server.
+avalon-schema-derive = { path = "schema-derive" }
 async-trait.workspace = true
 thiserror.workspace = true
 reqwest.workspace = true

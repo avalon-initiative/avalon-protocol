@@ -337,7 +337,7 @@ guarantee is actually needed, following the same discipline
   identically (an empty state), matching this endpoint's own
   by-design "can't tell those two apart" posture.
 - **Rust SDK codegen** (#386): `#[derive(AvalonSchema)]`
-  (`crates/schema-derive`, `avalon-schema-derive`) generates a struct's
+  (`crates/sdk/schema-derive`, `avalon-schema-derive`) generates a struct's
   `.proto` message text plus its `default_visibility`/`field_visibility`
   maps, so an integrator using the Rust SDK never hand-writes `.proto`
   source or the raw publish request — see

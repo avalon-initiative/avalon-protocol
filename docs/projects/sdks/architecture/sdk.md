@@ -329,7 +329,9 @@ protocol and the domain model in `crates/protocol`; they never pull in
   capability grant being rejected before any request, and a non-participant
   reading or sending into someone else's conversation being rejected with
   `NotConversationParticipant`.
-- `crates/schema-derive` (`avalon-schema-derive`, #386) —
+- `crates/sdk/schema-derive` (`avalon-schema-derive`, #386, relocated here
+  from top-level `crates/schema-derive` by #772 — a nested workspace member
+  since nothing outside `crates/sdk` ever consumed it) —
   `#[derive(AvalonSchema)]`, a proc-macro generating the `.proto` message
   text and `default_visibility`/`field_visibility` maps an Integrator
   Space schema publication (#255/#381/#384) needs, from an ordinary Rust
