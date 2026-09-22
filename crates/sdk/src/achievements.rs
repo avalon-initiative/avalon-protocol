@@ -26,10 +26,35 @@
 //! (`avalon_chain::attestations::verify_authenticity`), not inferred from
 //! the HTTP-level proof alone.
 //!
-//! Milestones (the App/Service equivalent, #324/#325) aren't wired up
-//! here — this ticket's own scope is `achievements()`/`issue_achievement()`
-//! specifically; a `milestones()`/`issue_milestone()` pair would follow the
-//! same shape against `/integrations/{slug}/milestones/{key}/issue`.
+//! Milestones (the App/Service equivalent, #324/#325, closed out by #741/
+//! #744): [`Session::issue_milestone`]/[`Session::bulk_issue_milestones`]
+//! follow [`Session::submit_achievement_issuance`]/
+//! [`Session::submit_bulk_achievement_issuance`]'s exact shape against
+//! `/integrations/{slug}/milestones/{key}/issue` /
+//! `/integrations/{slug}/milestones/bulk-issue` — the one difference is the
+//! issuer prefix, since a milestone issuer is always an App or Service
+//! (never a Game, #324's category split), so callers pass their own
+//! registered [`avalon_protocol::integrators::IntegratorCategory`] rather
+//! than this module hardcoding `"game:"`.
+//!
+//! #744 also closes the achievement/milestone *definition* CRUD gap: create/
+//! update ([`Session::create_achievement_definition`]/
+//! [`Session::update_achievement_definition`]/[`Session::create_milestone_definition`]/
+//! [`Session::update_milestone_definition`]) need only this integrator's own
+//! challenge-response proof (no second, content-specific signature — a
+//! definition isn't a claim about a player, matching
+//! `schema::Session::publish_schema_version`'s auth posture, not
+//! [`Session::issue_achievement`]'s), so they live here on [`Session`]
+//! reusing that same two-header-fetch dance. Listing definitions
+//! (`AvalonClient::list_achievement_definitions`/
+//! `AvalonClient::list_milestone_definitions`) and reading a single
+//! attestation by id (`AvalonClient::get_attestation`, mirroring `GET
+//! /attestations/{id}`'s own "facts, not a verdict" posture — reuses
+//! [`VerifiedAttestation`] rather than a second, parallel response type)
+//! are public and unauthenticated, so they live on
+//! [`crate::AvalonClient`] instead, same split `registry.rs`/`schema.rs`
+//! already establish between public reads and integrator-credentialed
+//! writes.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -38,7 +63,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::{SdkError, Session};
+use avalon_protocol::integrators::IntegratorCategory;
+
+use crate::{AvalonClient, SdkError, Session};
 
 /// Mirrors `avalon_chain::attestations::Authenticity` at the wire level.
 /// This crate defines its own copy rather than depending on `avalon-chain`
@@ -573,5 +600,635 @@ impl Session {
             return Err(crate::http::map_error_response(response).await);
         }
         Ok(())
+    }
+
+    /// Requests a fresh challenge and proves this integrator's key is
+    /// making the current call — the one proof [`Session::create_achievement_definition`]/
+    /// [`Session::update_achievement_definition`]/[`Session::create_milestone_definition`]/
+    /// [`Session::update_milestone_definition`] need, with no second,
+    /// content-specific signature (a definition isn't a claim about a
+    /// player). Same shape as `schema::Session::integrator_auth_headers`,
+    /// duplicated rather than shared across modules — see this crate's own
+    /// convention of small, module-local auth helpers rather than a shared
+    /// one.
+    async fn definition_auth_headers(
+        &self,
+        slug: &str,
+    ) -> Result<[(&'static str, String); 3], SdkError> {
+        let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!("{}/integrations/{slug}/challenge", self.server_url))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let nonce = BASE64
+            .decode(&challenge.nonce)
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+        let signature = signing_key.sign(&nonce);
+
+        Ok([
+            ("x-avalon-integrator-key-id", self.integrator_key_id.clone()),
+            (
+                "x-avalon-integrator-challenge-id",
+                challenge.challenge_id.to_string(),
+            ),
+            (
+                "x-avalon-integrator-signature",
+                BASE64.encode(signature.to_bytes()),
+            ),
+        ])
+    }
+
+    /// `POST /integrations/{slug}/achievements` (#324/#325, closed out by
+    /// #744) — defines a new achievement this Game integrator can later
+    /// issue. Idempotent in the sense that a duplicate `key` for this
+    /// issuer is rejected ([`SdkError::Conflict`]), never silently
+    /// creating a second definition.
+    pub async fn create_achievement_definition(
+        &self,
+        slug: &str,
+        definition: NewClaimDefinition,
+    ) -> Result<AchievementDefinition, SdkError> {
+        let headers = self.definition_auth_headers(slug).await?;
+        let body = CreateClaimDefinitionRequest {
+            key: &definition.key,
+            name: &definition.name,
+            description: &definition.description,
+            schema: definition.schema.as_deref(),
+            icon: definition.icon.as_deref(),
+            icon_url: definition.icon_url.as_deref(),
+        };
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .post(format!(
+                    "{}/integrations/{slug}/achievements",
+                    self.server_url
+                ))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `PATCH /integrations/{slug}/achievements/{key}` (#324/#325, closed
+    /// out by #744) — updates name/description/schema/icon (bumping
+    /// `version` when the definition itself changed) and/or retires the
+    /// achievement (one-way — `update.retired = Some(false)` never
+    /// un-retires). Every field in `update` left `None` is left untouched.
+    pub async fn update_achievement_definition(
+        &self,
+        slug: &str,
+        key: &str,
+        update: ClaimDefinitionUpdate,
+    ) -> Result<AchievementDefinition, SdkError> {
+        let headers = self.definition_auth_headers(slug).await?;
+        let body = UpdateClaimDefinitionRequest {
+            name: update.name.as_deref(),
+            description: update.description.as_deref(),
+            schema: update.schema.as_deref(),
+            icon: update.icon.as_deref(),
+            icon_url: update.icon_url.as_deref(),
+            retired: update.retired,
+        };
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .patch(format!(
+                    "{}/integrations/{slug}/achievements/{key}",
+                    self.server_url
+                ))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `POST /integrations/{slug}/milestones` (#324/#325, closed out by
+    /// #744) — the App/Service equivalent of
+    /// [`Session::create_achievement_definition`]; same shape, different
+    /// route.
+    pub async fn create_milestone_definition(
+        &self,
+        slug: &str,
+        definition: NewClaimDefinition,
+    ) -> Result<AchievementDefinition, SdkError> {
+        let headers = self.definition_auth_headers(slug).await?;
+        let body = CreateClaimDefinitionRequest {
+            key: &definition.key,
+            name: &definition.name,
+            description: &definition.description,
+            schema: definition.schema.as_deref(),
+            icon: definition.icon.as_deref(),
+            icon_url: definition.icon_url.as_deref(),
+        };
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .post(format!(
+                    "{}/integrations/{slug}/milestones",
+                    self.server_url
+                ))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `PATCH /integrations/{slug}/milestones/{key}` (#324/#325, closed
+    /// out by #744) — the App/Service equivalent of
+    /// [`Session::update_achievement_definition`]; same shape, different
+    /// route.
+    pub async fn update_milestone_definition(
+        &self,
+        slug: &str,
+        key: &str,
+        update: ClaimDefinitionUpdate,
+    ) -> Result<AchievementDefinition, SdkError> {
+        let headers = self.definition_auth_headers(slug).await?;
+        let body = UpdateClaimDefinitionRequest {
+            name: update.name.as_deref(),
+            description: update.description.as_deref(),
+            schema: update.schema.as_deref(),
+            icon: update.icon.as_deref(),
+            icon_url: update.icon_url.as_deref(),
+            retired: update.retired,
+        };
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .patch(format!(
+                    "{}/integrations/{slug}/milestones/{key}",
+                    self.server_url
+                ))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// The milestone counterpart of [`Session::submit_achievement_issuance`]
+    /// — identical two-proof shape, against
+    /// `/integrations/{slug}/milestones/{key}/issue` instead. `category`
+    /// must be this integrator's own actually-registered
+    /// [`IntegratorCategory`] (`App` or `Service` — never `Game`, #324's
+    /// category split, enforced server-side by
+    /// `achievements::authenticate_owning_issuer`/`ClaimRoute::allows`):
+    /// it's what builds the `<category>:<slug>` issuer prefix and
+    /// `<category>:<slug>:milestone:<key>` achievement ref this key's
+    /// signature covers, since (unlike achievement issuance) a milestone
+    /// issuer is never assumed to be a `"game:"`.
+    pub(crate) async fn submit_milestone_issuance(
+        &self,
+        key: &str,
+        category: IntegratorCategory,
+    ) -> Result<Uuid, SdkError> {
+        let idempotency_key = Uuid::new_v4().to_string();
+        crate::http::retry_write(&self.retry, || {
+            self.attempt_milestone_issuance(key, category, &idempotency_key)
+        })
+        .await
+    }
+
+    async fn attempt_milestone_issuance(
+        &self,
+        key: &str,
+        category: IntegratorCategory,
+        idempotency_key: &str,
+    ) -> Result<Uuid, SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+        let key_id: Uuid = self
+            .integrator_key_id
+            .parse()
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/challenge",
+                self.server_url, slug
+            ))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let nonce = BASE64
+            .decode(&challenge.nonce)
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+        let challenge_signature = signing_key.sign(&nonce);
+
+        let subject = self.identity.id.0;
+        let issuer_ref = format!("{}:{slug}", category.as_str());
+        let achievement = format!("{}:{slug}:milestone:{key}", category.as_str());
+        let signing_bytes = attestation_signing_bytes(&issuer_ref, subject, &achievement);
+        let signature = signing_key.sign(&signing_bytes);
+
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/milestones/{}/issue",
+                self.server_url, slug, key
+            ))
+            .header("x-avalon-integrator-key-id", &self.integrator_key_id)
+            .header(
+                "x-avalon-integrator-challenge-id",
+                challenge.challenge_id.to_string(),
+            )
+            .header(
+                "x-avalon-integrator-signature",
+                BASE64.encode(challenge_signature.to_bytes()),
+            )
+            .header("x-avalon-identity-id", subject.to_string())
+            .header("idempotency-key", idempotency_key)
+            .json(&IssueRequest {
+                key_id,
+                signature: BASE64.encode(signature.to_bytes()),
+            })
+        })
+        .await?;
+
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+
+        let body: IssueResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        Ok(body.id)
+    }
+
+    /// The milestone counterpart of
+    /// [`Session::submit_bulk_achievement_issuance`] — see
+    /// [`Session::submit_milestone_issuance`] for why `category` is
+    /// required here but not for achievement issuance.
+    pub(crate) async fn submit_bulk_milestone_issuance(
+        &self,
+        keys: &[&str],
+        category: IntegratorCategory,
+    ) -> Result<Vec<BulkClaimOutcome>, SdkError> {
+        let idempotency_key = Uuid::new_v4().to_string();
+        crate::http::retry_write(&self.retry, || {
+            self.attempt_bulk_milestone_issuance(keys, category, &idempotency_key)
+        })
+        .await
+    }
+
+    async fn attempt_bulk_milestone_issuance(
+        &self,
+        keys: &[&str],
+        category: IntegratorCategory,
+        idempotency_key: &str,
+    ) -> Result<Vec<BulkClaimOutcome>, SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+        let key_id: Uuid = self
+            .integrator_key_id
+            .parse()
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/challenge",
+                self.server_url, slug
+            ))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let nonce = BASE64
+            .decode(&challenge.nonce)
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+        let challenge_signature = signing_key.sign(&nonce);
+
+        let subject = self.identity.id.0;
+        let issuer_ref = format!("{}:{slug}", category.as_str());
+        let achievements: Vec<String> = keys
+            .iter()
+            .map(|key| format!("{}:{slug}:milestone:{key}", category.as_str()))
+            .collect();
+        let signing_bytes = bulk_attestation_signing_bytes(&issuer_ref, subject, &achievements);
+        let signature = signing_key.sign(&signing_bytes);
+
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!(
+                "{}/integrations/{}/milestones/bulk-issue",
+                self.server_url, slug
+            ))
+            .header("x-avalon-integrator-key-id", &self.integrator_key_id)
+            .header(
+                "x-avalon-integrator-challenge-id",
+                challenge.challenge_id.to_string(),
+            )
+            .header(
+                "x-avalon-integrator-signature",
+                BASE64.encode(challenge_signature.to_bytes()),
+            )
+            .header("x-avalon-identity-id", subject.to_string())
+            .header("idempotency-key", idempotency_key)
+            .json(&BulkIssueRequest {
+                key_id,
+                signature: BASE64.encode(signature.to_bytes()),
+                claims: keys
+                    .iter()
+                    .map(|key| BulkClaimRequestWire {
+                        key: key.to_string(),
+                    })
+                    .collect(),
+            })
+        })
+        .await?;
+
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+
+        let body: BulkIssueResponseWire = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        Ok(body.results)
+    }
+}
+
+/// One achievement/milestone definition this integrator has published —
+/// mirrors `crates/server/src/achievements.rs::AchievementDefinitionResponse`
+/// at the wire level, shared by both achievement and milestone reads since
+/// the server response shape is identical either way.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AchievementDefinition {
+    /// This definition's own namespaced id, e.g.
+    /// `"game:<slug>:achievement:<key>"` / `"app:<slug>:milestone:<key>"`.
+    pub id: String,
+    /// The publishing integrator's id.
+    pub integrator_id: Uuid,
+    /// The short key this definition is issued/looked up by.
+    pub key: String,
+    /// Display name.
+    pub name: String,
+    /// Display description.
+    pub description: String,
+    /// A `GlobalId` string pointing at a published Integrator Space schema,
+    /// if this definition declares one.
+    pub schema: Option<String>,
+    /// Always populated — falls back to the server's own default icon when
+    /// neither `icon` nor `icon_url` was set (issue #332).
+    pub icon: String,
+    /// Takes precedence over `icon` when present.
+    pub icon_url: Option<String>,
+    /// Bumps whenever the definition's own content changes.
+    pub version: i32,
+    /// When this definition was first created.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    /// When this definition was last changed (content or retirement).
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    /// One-way — never flips back to `false` once `true`.
+    pub retired: bool,
+    /// When this definition was retired, if it has been.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub retired_at: Option<OffsetDateTime>,
+}
+
+/// The fields [`Session::create_achievement_definition`]/
+/// [`Session::create_milestone_definition`] need — see
+/// `crates/server/src/achievements.rs::CreateAchievementDefinitionRequest`
+/// for the exact server-side contract each field maps to.
+#[derive(Debug, Clone, Default)]
+pub struct NewClaimDefinition {
+    /// Lowercase `[a-z0-9_]`, 2-128 characters.
+    pub key: String,
+    /// Display name.
+    pub name: String,
+    /// Display description.
+    pub description: String,
+    /// A `GlobalId` string pointing at a published Integrator Space
+    /// schema, if any.
+    pub schema: Option<String>,
+    /// One of the server's built-in icon names; `None` falls back to the
+    /// default icon at read time.
+    pub icon: Option<String>,
+    /// An integrator-hosted `http`/`https` image URL, taking precedence
+    /// over `icon` when present.
+    pub icon_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateClaimDefinitionRequest<'a> {
+    key: &'a str,
+    name: &'a str,
+    description: &'a str,
+    schema: Option<&'a str>,
+    icon: Option<&'a str>,
+    icon_url: Option<&'a str>,
+}
+
+/// The fields [`Session::update_achievement_definition`]/
+/// [`Session::update_milestone_definition`] accept — every field left
+/// `None` leaves that part of the definition untouched, same "absent means
+/// untouched" convention the server side documents. `retired = Some(true)`
+/// retires the definition; there is no un-retire.
+#[derive(Debug, Clone, Default)]
+pub struct ClaimDefinitionUpdate {
+    /// New display name, if changing.
+    pub name: Option<String>,
+    /// New display description, if changing.
+    pub description: Option<String>,
+    /// New schema `GlobalId` string, if changing.
+    pub schema: Option<String>,
+    /// New built-in icon name, if changing.
+    pub icon: Option<String>,
+    /// New integrator-hosted icon URL, if changing.
+    pub icon_url: Option<String>,
+    /// `Some(true)` retires the definition. There is no un-retire.
+    pub retired: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct UpdateClaimDefinitionRequest<'a> {
+    name: Option<&'a str>,
+    description: Option<&'a str>,
+    schema: Option<&'a str>,
+    icon: Option<&'a str>,
+    icon_url: Option<&'a str>,
+    retired: Option<bool>,
+}
+
+impl AvalonClient {
+    /// `GET /attestations/{id}` (#33, closed out by #744) — public,
+    /// unauthenticated single-attestation read, reusing
+    /// [`VerifiedAttestation`] since the server's response shape is
+    /// identical to `GET /me/achievements`'s per-item shape. Same "facts,
+    /// not a per-consumer verdict" posture: no `recognition` field, see
+    /// this module's doc comment.
+    pub async fn get_attestation(&self, id: Uuid) -> Result<VerifiedAttestation, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!("{}/attestations/{id}", self.config.server_url))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /integrations/{slug}/achievements` (#324/#325, closed out by
+    /// #744) — every achievement `slug` has defined, including retired
+    /// ones (`retired: true`, never hidden — a retired definition's past
+    /// attestations still need somewhere to point). Public, unauthenticated.
+    pub async fn list_achievement_definitions(
+        &self,
+        slug: &str,
+    ) -> Result<Vec<AchievementDefinition>, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/integrations/{slug}/achievements",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /integrations/{slug}/milestones` (#324/#325, closed out by
+    /// #744) — the App/Service equivalent of
+    /// [`AvalonClient::list_achievement_definitions`].
+    pub async fn list_milestone_definitions(
+        &self,
+        slug: &str,
+    ) -> Result<Vec<AchievementDefinition>, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/integrations/{slug}/milestones",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod definition_tests {
+    use super::*;
+
+    #[test]
+    fn achievement_definition_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({
+            "id": "game:ashen-realms:achievement:first_blood",
+            "integrator_id": Uuid::nil(),
+            "key": "first_blood",
+            "name": "First Blood",
+            "description": "Win your first match",
+            "schema": null,
+            "icon": "trophy",
+            "icon_url": null,
+            "version": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "retired": false,
+            "retired_at": null,
+        });
+        let definition: AchievementDefinition = serde_json::from_value(raw).unwrap();
+        assert_eq!(definition.key, "first_blood");
+        assert_eq!(definition.version, 1);
+        assert!(!definition.retired);
+    }
+
+    #[test]
+    fn verified_attestation_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({
+            "id": Uuid::nil(),
+            "issuer": "game:ashen-realms",
+            "subject": Uuid::nil(),
+            "achievement": "game:ashen-realms:achievement:first_blood",
+            "issued_at": "2026-01-01T00:00:00Z",
+            "authenticity": { "status": "authentic", "key_id": Uuid::nil() },
+            "validity": { "status": "valid" },
+            "history": [],
+        });
+        let attestation: VerifiedAttestation = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            attestation.authenticity,
+            Authenticity::Authentic { .. }
+        ));
+        assert!(matches!(attestation.validity, Validity::Valid));
     }
 }

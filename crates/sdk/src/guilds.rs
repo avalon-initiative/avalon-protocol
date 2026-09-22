@@ -184,6 +184,56 @@ impl From<ChannelResponse> for GuildChannel {
     }
 }
 
+/// One integrator's share of a guild's membership — mirrors
+/// `crates/server/src/guilds.rs::GameBreakdownEntry` at the wire level.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GameBreakdownEntry {
+    /// The integrator's own id.
+    pub integrator_id: Uuid,
+    /// The integrator's own slug.
+    pub integrator_slug: String,
+    /// The integrator's own display name.
+    pub integrator_name: String,
+    /// Distinct guild members with an active binding to this integrator.
+    pub member_count: i64,
+}
+
+/// [`GuildHandle::game_breakdown`]'s response — mirrors
+/// `crates/server/src/guilds.rs::GameBreakdownResponse` at the wire level.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GameBreakdown {
+    /// The guild this breakdown is for.
+    pub guild_id: Uuid,
+    /// Total current guild membership — not the same as summing
+    /// `breakdown[].member_count`, since a member can be bound to zero,
+    /// one, or several integrators.
+    pub total_members: i64,
+    /// Every integrator with at least one bound member, ordered by member
+    /// count descending.
+    pub breakdown: Vec<GameBreakdownEntry>,
+}
+
+/// One archived guild chat message — mirrors
+/// `crates/server/src/guild_messages.rs::ArchivedMessageResponse` at the
+/// wire level.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArchivedMessage {
+    /// This message's own id.
+    pub id: Uuid,
+    /// The channel it was posted in.
+    pub channel_id: Uuid,
+    /// The identity that posted it.
+    pub author: Uuid,
+    /// Message body.
+    pub body: String,
+    /// When it was originally sent.
+    #[serde(with = "time::serde::rfc3339")]
+    pub sent_at: OffsetDateTime,
+    /// When it was archived.
+    #[serde(with = "time::serde::rfc3339")]
+    pub archived_at: OffsetDateTime,
+}
+
 #[derive(Deserialize)]
 struct MessageResponse {
     id: Uuid,
@@ -461,6 +511,32 @@ impl<'a> GuildHandle<'a> {
         Ok(events.into_iter().map(GuildEvent::from).collect())
     }
 
+    /// `GET /guilds/{id}/integrator-breakdown` (closed out by #741/#749)
+    /// — how many current members are bound to each integrator this
+    /// guild's membership plays. No dedicated capability gate client-side
+    /// (unlike [`Self::roster`]/[`Self::channels`]/[`Self::events`]):
+    /// server-side, this is visible to anyone holding `manage_guild` (or
+    /// the guild's owner) regardless of grants, or to anyone at all if the
+    /// guild opted into showing it publicly — see
+    /// `crates/server/src/guilds.rs::can_view_game_breakdown`.
+    pub async fn game_breakdown(&self) -> Result<GameBreakdown, SdkError> {
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
+                "{}/guilds/{}/integrator-breakdown",
+                self.session.server_url, self.guild_id.0
+            ))
+            .bearer_auth(&self.session.token)
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
     /// A handle scoped to one channel within this guild, for
     /// `guild(id).channel(cid).messages(...)` / `.send(...)`.
     pub fn channel(&self, id: Uuid) -> ChannelHandle<'a> {
@@ -517,6 +593,46 @@ impl ChannelHandle<'_> {
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))?;
         Ok(messages.into_iter().map(GuildMessage::from).collect())
+    }
+
+    /// `GET /guilds/{id}/channels/{cid}/messages/archive?before=&limit=`
+    /// (closed out by #741/#749) — same newest-first, cursor-paginated
+    /// shape as [`Self::messages`], over archived messages instead of the
+    /// live table. Requires *current* `guilds.chat` (issue #458's own
+    /// `view_details` gate, mirrored here the same way [`Self::messages`]
+    /// already requires it), not membership as of when each message was
+    /// originally sent.
+    pub async fn list_archive(
+        &self,
+        before: Option<Uuid>,
+        limit: Option<i64>,
+    ) -> Result<Vec<ArchivedMessage>, SdkError> {
+        self.session.require(Capability::GuildsChat)?;
+
+        let mut query: Vec<(&str, String)> = Vec::new();
+        if let Some(before) = before {
+            query.push(("before", before.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit", limit.to_string()));
+        }
+
+        let response = crate::http::send(&self.session.http, &self.session.retry, true, |c| {
+            c.get(format!(
+                "{}/guilds/{}/channels/{}/messages/archive",
+                self.session.server_url, self.guild_id.0, self.channel_id
+            ))
+            .query(&query)
+            .bearer_auth(&self.session.token)
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
     }
 
     /// `POST /guilds/{id}/channels/{cid}/messages` — requires `guilds.chat`.
@@ -719,6 +835,48 @@ mod tests {
         let session = test_session(vec!["guilds.read"]);
         let result = session.guild(GuildId(Uuid::new_v4())).channels().await;
         assert!(matches!(result, Err(SdkError::CapabilityNotGranted(_))));
+    }
+
+    #[tokio::test]
+    async fn list_archive_without_grant_is_rejected_before_any_request() {
+        let session = test_session(vec![]);
+        let result = session
+            .guild(GuildId(Uuid::new_v4()))
+            .channel(Uuid::new_v4())
+            .list_archive(None, None)
+            .await;
+        assert!(matches!(result, Err(SdkError::CapabilityNotGranted(_))));
+    }
+
+    #[test]
+    fn game_breakdown_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({
+            "guild_id": Uuid::nil(),
+            "total_members": 10,
+            "breakdown": [{
+                "integrator_id": Uuid::nil(),
+                "integrator_slug": "ashen-realms",
+                "integrator_name": "Ashen Realms",
+                "member_count": 4,
+            }],
+        });
+        let breakdown: GameBreakdown = serde_json::from_value(raw).unwrap();
+        assert_eq!(breakdown.total_members, 10);
+        assert_eq!(breakdown.breakdown[0].member_count, 4);
+    }
+
+    #[test]
+    fn archived_message_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({
+            "id": Uuid::nil(),
+            "channel_id": Uuid::nil(),
+            "author": Uuid::nil(),
+            "body": "hello",
+            "sent_at": "2026-01-01T00:00:00Z",
+            "archived_at": "2026-01-02T00:00:00Z",
+        });
+        let message: ArchivedMessage = serde_json::from_value(raw).unwrap();
+        assert_eq!(message.body, "hello");
     }
 
     #[test]
