@@ -37,6 +37,7 @@ pub mod migrate;
 pub mod mirror_push;
 pub mod mirror_watcher;
 pub mod nodes;
+pub mod openapi;
 pub mod outbox;
 pub mod passkeys;
 pub mod presence;

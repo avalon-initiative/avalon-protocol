@@ -121,7 +121,7 @@ pub const MAX_LOCATION_LEN: usize = 100;
 /// value here is more likely a real client bug than a schema drift, so it is
 /// rejected server-side, not silently dropped (same reasoning
 /// `GuildPermission` already established in `crates/protocol/src/guilds.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Genre {
     Action,

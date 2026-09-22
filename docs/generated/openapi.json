@@ -1,0 +1,811 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Avalon Protocol API",
+    "description": "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/identities/profiles": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "`GET /identities/profiles?ids=…` — issue #161. Closes the gap every\nroster-shaped surface built so far (`friends::list_friends`,\n`guilds::list_members`, and their SDK/Hub consumers) has had to leave as\na raw identity id: there was never an endpoint that resolved *another*\nidentity's display name. Session-authenticated only, no further\nvisibility gating — display name and avatar are already the\nleast-sensitive public-face fields, same exposure level\n`friends::resolve_handle` already has. Unknown ids are silently omitted\nrather than erroring, so one bad id in a roster doesn't 500 the whole\nbatch.",
+        "operationId": "list_profiles",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "path",
+            "description": "Comma-separated identity ids, e.g. `?ids=<uuid>,<uuid>` — same shape\n`presence::PresenceQuery` already established for a batched read.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicProfileResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/identities/register/finish": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "register_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterFinishResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/identities/register/start": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "register_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterStartResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/identities/{id}/profile": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "`GET /identities/{id}/profile` — issue #403. Session-authenticated, no\nfurther visibility gating (same posture as `list_profiles`): every field\nhere is already unauthenticated-readable on the viewed identity's own\n`GET /me`, so a single-identity read of the same fields adds no new\nexposure, only a more convenient shape than \"batch-resolve one id.\"",
+        "operationId": "get_identity_profile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicIdentityProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "update_profile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/history": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Only the caller's own events, never another identity's — enforced by\nconstruction, not by a filter a caller could omit: the issuer prefix is\nalways built from the authenticated identity id here, never accepted as\na request parameter. Reads the ledger directly (issuer-filtered, see\n`avalon_chain::PostgresSettlementProvider::list_entries_for_issuer_prefix`)\n— a deliberate, permanent exception to issue #44's \"no request handler\nqueries the ledger\" invariant, not a stopgap: this endpoint's whole job\nis exposing the raw append-only history itself, which is fundamentally\na settlement-native read (a full historical log), not a current-state\none — projecting the entire per-issuer event history into the indexer\njust to re-serve it here would duplicate the ledger, not replace it.\n`crates/server/tests/read_model_boundary.rs`'s guard test names this\nfunction as the one allowed exception; any other `PostgresSettlementProvider`\ncall added to this file should not be.",
+        "operationId": "my_history",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HistoryEntryResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/finish": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "session_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFinishResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/start": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "operationId": "session_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStartResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Genre": {
+        "type": "string",
+        "description": "The fixed, small controlled vocabulary `Profile::favorite_genres` draws\nfrom (issue #155). Deliberately closed rather than free text — a bad\nvalue here is more likely a real client bug than a schema drift, so it is\nrejected server-side, not silently dropped (same reasoning\n`GuildPermission` already established in `crates/protocol/src/guilds.rs`).",
+        "enum": [
+          "action",
+          "adventure",
+          "rpg",
+          "strategy",
+          "simulation",
+          "puzzle",
+          "racing",
+          "sports",
+          "horror",
+          "sandbox",
+          "mmo",
+          "shooter",
+          "platformer",
+          "party"
+        ]
+      },
+      "HistoryEntryResponse": {
+        "type": "object",
+        "description": "One event from the caller's own protocol history (issue #121) — \"what\ndoes the network know about me.\" `subject` is included since not every\nevent an identity issues is *about* itself the same way (e.g.\n`friend.requested` is issued by the requester but its subject is the\nrecipient); `payload` is passed through as-is rather than reduced to a\ncanned summary string, matching this repo's general preference for\nexposing real data over a lossy client-unfriendly-format-agnostic gloss.",
+        "required": [
+          "event_id",
+          "kind",
+          "subject",
+          "payload",
+          "timestamp"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "`null` if this event's payload has been pruned locally (issue\n#208, a hot-tier node) — the event's existence and `kind` are still\nreported, just not its content."
+          },
+          "subject": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "required": [
+          "identity_id",
+          "identity_created_at",
+          "display_name",
+          "favorite_genres",
+          "links",
+          "discoverable",
+          "presence_visibility"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "banner_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Expanded self-described fields (issue #372) — same promised-durable\ntier and same public exposure level as `bio`/`favorite_genres`/\n`pronouns` above."
+          },
+          "bio": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Small, user-optional self-description fields (issue #155) — same\npromised-durable tier and same public exposure level as\n`display_name`/`avatar_url` above (no capability gate, no integrator ever\nsees more of it than `GET /me`/`GET /identities/profiles` already\nexpose)."
+          },
+          "discoverable": {
+            "type": "boolean",
+            "description": "Issue #205's opt-in global search toggle — `true` means this\nidentity currently matches `GET /identities/search`. Surfaced here\n(rather than requiring a separate read) so the Hub's \"you are\ncurrently publicly searchable\" indicator never drifts out of sync\nwith the actual `discovery_preferences` row — same reasoning\n`handle` is derived rather than separately fetched."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Issue #510: this identity's globally-unique, case-insensitive\nhandle in its own right — no separate `handle`/discriminator field\nexists any more (issue #128's old scheme). Add-friend-by-handle\nresolves this field directly."
+          },
+          "effective_main_guild": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`main_guild` if explicitly set, otherwise the guild this identity\njoined earliest (by `guild_members.joined_at`), computed at read\ntime and never stored — `None` only when the identity has no guild\nmemberships at all. This, not `main_guild`, is what an integrator\nbuilding a single-guild UI should read."
+          },
+          "favorite_genres": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Genre"
+            }
+          },
+          "identity_created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Self-described only — never IP-derived or geocoded. See\n`avalon_protocol::identity::Profile::location`'s doc comment."
+          },
+          "main_guild": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A self-chosen pointer to one of this identity's own current guild\nmemberships (no ticket — see\n`avalon_protocol::identity::Profile::main_guild`'s doc comment).\n`None` means \"not explicitly set,\" not \"no guild\" — see\n`effective_main_guild` below for the resolved value a UI should\nactually build around."
+          },
+          "presence_visibility": {
+            "type": "string",
+            "description": "Issue #87 — this identity's own presence-visibility setting\n(`\"public\"`/`\"authenticated_only\"`/`\"friends\"`/`\"guild_members\"`/`\"private\"`).\nSelf-only, same posture `discoverable` takes — see this endpoint's\nown doc comment on why `PublicIdentityProfileResponse` omits both."
+          },
+          "pronouns": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PublicIdentityProfileResponse": {
+        "type": "object",
+        "description": "Another identity's full self-description profile — issue #403's decided\nwidening of #393's read-only profile card. Deliberately a **separate,\nsingle-identity endpoint** rather than a widened `list_profiles`: the\nbatch endpoint above stays exactly as narrow as it already is (any\nsession can resolve arbitrarily many ids at once, so it only ever\nreturns the least-sensitive public-face fields), while this endpoint\nexposes the same fields `GET /me` already does — `bio`/`favorite_genres`/\n`pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/\n`theme_color`/`location` (#372) — but only for one identity per request,\nmatching a real profile-card view rather than a roster resolve. Omits\n`discoverable` and `presence_visibility`: both describe the *viewed*\nidentity's own settings preferences, not something the viewer needs\nonce they've already found the profile.",
+        "required": [
+          "identity_id",
+          "identity_created_at",
+          "display_name",
+          "favorite_genres",
+          "links"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "banner_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bio": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "effective_main_guild": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "favorite_genres": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Genre"
+            }
+          },
+          "identity_created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "main_guild": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "pronouns": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "theme_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PublicProfileResponse": {
+        "type": "object",
+        "description": "Another identity's *public* profile fields only — never anything a\nstranger couldn't already learn via `friends::resolve_handle`'s\nname-to-id lookup run in reverse. No bio, no email, nothing beyond what\n`display_name`/`avatar_url` already are: the least-sensitive public-face\nfields. This endpoint has no further visibility gating (any session can\nbatch-resolve arbitrary identity ids), so `bio`/`favorite_genres`/\n`pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/\n`theme_color`/`location` (#372) are deliberately withheld here even\nthough they're unauthenticated-readable on one's own `GET /me` — batch\nstranger lookup is a materially wider exposure than a single\nself-disclosed profile view, and widening it is a scoping decision for\nits own ticket, not a side effect of adding the columns.",
+        "required": [
+          "identity_id",
+          "display_name"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "identity_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "RegisterFinishRequest": {
+        "type": "object",
+        "required": [
+          "ticket_id",
+          "webauthn_credential",
+          "event_signing_public_key",
+          "event_signature"
+        ],
+        "properties": {
+          "device_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A user-chosen label for the device completing this ceremony (e.g.\n\"Work laptop\") — purely descriptive, never part of what's signed.\nIssue #145: previously the first device's `identity_signing_keys`\nrow was always unlabeled, unlike every device added later through\n#135's grant flow (which does carry a label)."
+          },
+          "event_signature": {
+            "type": "string",
+            "description": "Base64-encoded Ed25519 signature over\n`identity_created_signing_bytes(identity_id, display_name)`."
+          },
+          "event_signing_public_key": {
+            "type": "string",
+            "description": "Base64-encoded raw Ed25519 public key — the identity's event-signing\nkey, distinct from the WebAuthn passkey above. See module docs."
+          },
+          "ticket_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "webauthn_credential": {
+            "type": "object"
+          }
+        }
+      },
+      "RegisterFinishResponse": {
+        "type": "object",
+        "required": [
+          "identity_id"
+        ],
+        "properties": {
+          "identity_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "RegisterStartRequest": {
+        "type": "object",
+        "required": [
+          "identity_id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "identity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-chosen, not server-assigned — identity is a wallet its holder\ncreates themselves. Must also become the WebAuthn user handle, which\nis why it has to be decided here rather than at `finish`."
+          }
+        }
+      },
+      "RegisterStartResponse": {
+        "type": "object",
+        "required": [
+          "ticket_id",
+          "challenge"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "object",
+            "description": "`webauthn-rs`'s own WebAuthn creation-challenge type — opaque here\nsince it's an external crate's type with no `ToSchema` impl of its\nown; the real, authoritative shape is `webauthn-rs`'s\n`CreationChallengeResponse`, not this placeholder."
+          },
+          "ticket_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SessionFinishRequest": {
+        "type": "object",
+        "required": [
+          "ticket_id",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "object"
+          },
+          "ticket_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SessionFinishResponse": {
+        "type": "object",
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionStartRequest": {
+        "type": "object",
+        "required": [
+          "identity_id"
+        ],
+        "properties": {
+          "identity_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SessionStartResponse": {
+        "type": "object",
+        "required": [
+          "ticket_id",
+          "challenge"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "object"
+          },
+          "ticket_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "UpdateProfileRequest": {
+        "type": "object",
+        "properties": {
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "banner_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `avatar_url` — a second image slot, separate\nfrom the avatar, for the Hub profile page header (issue #372)."
+          },
+          "bio": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `avatar_url`: omitted (untouched), `Some(\"\")`\n(clear to `NULL`), `Some(nonempty)` (validate against\n[`MAX_BIO_LEN`], then set)."
+          },
+          "discoverable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Issue #205's opt-in global search toggle. Two states, not three\n(there's no \"clear\" state for a plain boolean): `None` leaves the\nexisting preference untouched, `Some(bool)` sets it. Off by\ndefault for every identity (no row in `discovery_preferences` at\nall reads as `false`) — this field is the only way it ever\nbecomes `true`. Not part of `profile.updated`/durable history, and\nnot written through the same transaction as the rest of this\nrequest's changes — see `discovery::set_discoverable`'s doc\ncomment for why, matching `presence_preferences.hide_active_in`'s\nidentical precedent."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "favorite_genres": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Two states, not three: omitted (untouched) or `Some(list)`, which\nalways fully replaces the stored list — including `Some(vec![])` to\nclear it. Each entry must parse as a [`Genre`]; an unknown value is\nrejected outright rather than silently dropped (issue #155)."
+          },
+          "links": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Two states, not three: omitted (untouched) or `Some(list)`, which\nalways fully replaces the stored list — including `Some(vec![])` to\nclear it. Same shape as `favorite_genres`, but each entry is a\nfree-form URL rather than a fixed vocabulary value (issue #372)."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `bio`. Self-described free text only — never\nIP-derived or geocoded."
+          },
+          "main_guild": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `bio`: omitted (untouched), `\"\"` (clear to\n`NULL`), or a guild id string. Unlike every other three-state field\nhere, a non-empty value also needs a database check — it must name\na guild `identity_id` is currently a member of (`AppError::NotGuildMember`\notherwise) — so its validation lives in `validate_main_guild` rather\nthan one of the pure `validate_*` functions above."
+          },
+          "presence_visibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Issue #87. `\"public\"`/`\"authenticated_only\"`/`\"friends\"` (the\ndefault)/`\"private\"` — who may read this identity's presence via\n`GET /presence`. `\"guild_members\"` is accepted (presence has no\nguild context, so it behaves like `\"private\"` — nobody but the\nsubject — see `crate::presence::presence_visible`). Same\nnot-durable-history treatment as `discoverable`: applied outside\nthis request's transaction, no `profile.updated` payload entry."
+          },
+          "pronouns": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `bio`."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `bio`, capped at\n[`avalon_protocol::identity::MAX_STATUS_LEN`]."
+          },
+          "theme_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `bio`. Must match `^#[0-9a-fA-F]{6}$` when\nnon-empty."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Three states, same as `bio`. Length-checked only, not validated\nagainst the real IANA time zone database — see\n`avalon_protocol::identity::Profile::timezone`'s doc comment."
+          }
+        }
+      }
+    }
+  }
+}

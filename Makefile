@@ -9,6 +9,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
 	build run start stop restart status test test-live fmt fmt-check lint sdk-examples sdk-doc check clean \
+	openapi openapi-check \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
@@ -32,6 +33,8 @@ help:
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --all -- --check"
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
+	@echo "  make openapi       regenerate docs/generated/openapi.json from server's annotated routes (issue #723)"
+	@echo "  make openapi-check fail if docs/generated/openapi.json is stale relative to the real routes"
 	@echo "  make migrate       apply pending db/migrations/ (up)"
 	@echo "  make migrate-down  revert the most recently applied migration"
 	@echo "  make db-reset      wipe the database (drop+recreate public schema) and reapply all migrations"
@@ -137,7 +140,20 @@ sdk-examples:
 sdk-doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc -p avalon-sdk --no-deps
 
-check: fmt-check lint test sdk-examples sdk-doc
+# Issue #723: `docs/generated/openapi.json` is a generated artifact, not
+# hand-maintained — regenerate it whenever an in-scope route/type changes.
+openapi:
+	cargo run -p avalon-server --bin dump-openapi > docs/generated/openapi.json
+
+# CI check: regenerate into a scratch file and diff against the checked-in
+# one, so a route/type change that forgot to re-run `make openapi` fails
+# the build instead of silently drifting.
+openapi-check:
+	cargo run -p avalon-server --bin dump-openapi > /tmp/openapi.generated.json
+	diff docs/generated/openapi.json /tmp/openapi.generated.json || \
+		(echo "docs/generated/openapi.json is stale — run 'make openapi' and commit the result" && exit 1)
+
+check: fmt-check lint test sdk-examples sdk-doc openapi-check
 
 clean:
 	cargo clean

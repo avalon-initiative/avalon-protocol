@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
 use url::Url;
+use utoipa::ToSchema;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
@@ -115,7 +116,7 @@ struct RegistrationCeremonyState {
     webauthn_state: PasskeyRegistration,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RegisterStartRequest {
     /// Client-chosen, not server-assigned — identity is a wallet its holder
     /// creates themselves. Must also become the WebAuthn user handle, which
@@ -124,12 +125,24 @@ pub struct RegisterStartRequest {
     pub display_name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RegisterStartResponse {
     pub ticket_id: Uuid,
+    /// `webauthn-rs`'s own WebAuthn creation-challenge type — opaque here
+    /// since it's an external crate's type with no `ToSchema` impl of its
+    /// own; the real, authoritative shape is `webauthn-rs`'s
+    /// `CreationChallengeResponse`, not this placeholder.
+    #[schema(value_type = Object)]
     pub challenge: CreationChallengeResponse,
 }
 
+#[utoipa::path(
+    post,
+    path = "/identities/register/start",
+    tag = "identity",
+    request_body = RegisterStartRequest,
+    responses((status = 200, body = RegisterStartResponse)),
+)]
 pub async fn register_start(
     State(state): State<AppState>,
     Json(body): Json<RegisterStartRequest>,
@@ -218,9 +231,10 @@ pub async fn register_start(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RegisterFinishRequest {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
     /// Base64-encoded raw Ed25519 public key — the identity's event-signing
     /// key, distinct from the WebAuthn passkey above. See module docs.
@@ -236,11 +250,18 @@ pub struct RegisterFinishRequest {
     pub device_label: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RegisterFinishResponse {
     pub identity_id: Uuid,
 }
 
+#[utoipa::path(
+    post,
+    path = "/identities/register/finish",
+    tag = "identity",
+    request_body = RegisterFinishRequest,
+    responses((status = 200, body = RegisterFinishResponse)),
+)]
 pub async fn register_finish(
     State(state): State<AppState>,
     Json(body): Json<RegisterFinishRequest>,
@@ -481,14 +502,15 @@ struct AuthenticationCeremonyState {
     webauthn_state: PasskeyAuthentication,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SessionStartRequest {
     pub identity_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SessionStartResponse {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub challenge: RequestChallengeResponse,
 }
 
@@ -510,6 +532,13 @@ async fn fetch_passkeys(state: &AppState, identity_id: Uuid) -> Result<Vec<Passk
     Ok(passkeys)
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions/start",
+    tag = "identity",
+    request_body = SessionStartRequest,
+    responses((status = 200, body = SessionStartResponse)),
+)]
 pub async fn session_start(
     State(state): State<AppState>,
     Json(body): Json<SessionStartRequest>,
@@ -543,19 +572,28 @@ pub async fn session_start(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SessionFinishRequest {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub credential: PublicKeyCredential,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SessionFinishResponse {
     pub token: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub expires_at: OffsetDateTime,
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions/finish",
+    tag = "identity",
+    request_body = SessionFinishRequest,
+    responses((status = 200, body = SessionFinishResponse)),
+)]
 pub async fn session_finish(
     State(state): State<AppState>,
     Json(body): Json<SessionFinishRequest>,
@@ -615,10 +653,11 @@ pub async fn session_finish(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ProfileResponse {
     pub identity_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub identity_created_at: OffsetDateTime,
     /// Issue #510: this identity's globally-unique, case-insensitive
     /// handle in its own right — no separate `handle`/discriminator field
@@ -727,6 +766,12 @@ where
     Ok(memberships.first().map(|m| m.guild_id))
 }
 
+#[utoipa::path(
+    get,
+    path = "/me",
+    tag = "identity",
+    responses((status = 200, body = ProfileResponse)),
+)]
 pub async fn me(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -754,7 +799,7 @@ pub async fn me(
 
 const PROFILE_LOOKUP_MAX_IDS: usize = 100;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ProfilesQuery {
     /// Comma-separated identity ids, e.g. `?ids=<uuid>,<uuid>` — same shape
     /// `presence::PresenceQuery` already established for a batched read.
@@ -773,7 +818,7 @@ pub struct ProfilesQuery {
 /// stranger lookup is a materially wider exposure than a single
 /// self-disclosed profile view, and widening it is a scoping decision for
 /// its own ticket, not a side effect of adding the columns.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PublicProfileResponse {
     pub identity_id: Uuid,
     pub display_name: String,
@@ -793,10 +838,11 @@ pub struct PublicProfileResponse {
 /// `discoverable` and `presence_visibility`: both describe the *viewed*
 /// identity's own settings preferences, not something the viewer needs
 /// once they've already found the profile.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PublicIdentityProfileResponse {
     pub identity_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub identity_created_at: OffsetDateTime,
     pub display_name: String,
     pub avatar_url: Option<String>,
@@ -818,6 +864,13 @@ pub struct PublicIdentityProfileResponse {
 /// here is already unauthenticated-readable on the viewed identity's own
 /// `GET /me`, so a single-identity read of the same fields adds no new
 /// exposure, only a more convenient shape than "batch-resolve one id."
+#[utoipa::path(
+    get,
+    path = "/identities/{id}/profile",
+    tag = "identity",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = PublicIdentityProfileResponse)),
+)]
 pub async fn get_identity_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -867,6 +920,13 @@ pub async fn get_identity_profile(
 /// `friends::resolve_handle` already has. Unknown ids are silently omitted
 /// rather than erroring, so one bad id in a roster doesn't 500 the whole
 /// batch.
+#[utoipa::path(
+    get,
+    path = "/identities/profiles",
+    tag = "identity",
+    params(ProfilesQuery),
+    responses((status = 200, body = Vec<PublicProfileResponse>)),
+)]
 pub async fn list_profiles(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -908,7 +968,7 @@ pub async fn list_profiles(
 /// recipient); `payload` is passed through as-is rather than reduced to a
 /// canned summary string, matching this repo's general preference for
 /// exposing real data over a lossy client-unfriendly-format-agnostic gloss.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct HistoryEntryResponse {
     pub event_id: Uuid,
     pub kind: String,
@@ -916,8 +976,10 @@ pub struct HistoryEntryResponse {
     /// `null` if this event's payload has been pruned locally (issue
     /// #208, a hot-tier node) — the event's existence and `kind` are still
     /// reported, just not its content.
+    #[schema(value_type = Object, nullable)]
     pub payload: Option<serde_json::Value>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub timestamp: OffsetDateTime,
 }
 
@@ -935,6 +997,12 @@ pub struct HistoryEntryResponse {
 /// `crates/server/tests/read_model_boundary.rs`'s guard test names this
 /// function as the one allowed exception; any other `PostgresSettlementProvider`
 /// call added to this file should not be.
+#[utoipa::path(
+    get,
+    path = "/me/history",
+    tag = "identity",
+    responses((status = 200, body = Vec<HistoryEntryResponse>)),
+)]
 pub async fn my_history(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -961,7 +1029,7 @@ pub async fn my_history(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
@@ -1263,6 +1331,13 @@ pub(crate) fn profile_updated_payload(
     serde_json::to_value(payload).expect("ProfileUpdatedPayload should serialize")
 }
 
+#[utoipa::path(
+    patch,
+    path = "/me",
+    tag = "identity",
+    request_body = UpdateProfileRequest,
+    responses((status = 200, body = ProfileResponse)),
+)]
 pub async fn update_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
