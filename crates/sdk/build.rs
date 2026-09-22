@@ -63,6 +63,7 @@ const SCHEMA_NAMES: &[&str] = &[
     "ConversationResponse",
     "CreateConversationRequest",
     "MessageResponse",
+    "ConversationMessageResponse",
     "SendMessageRequest",
     "ConnectResponse",
     "Connection",

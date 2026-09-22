@@ -144,8 +144,17 @@ sdk-doc:
 
 # Issue #723: `docs/generated/openapi.json` is a generated artifact, not
 # hand-maintained — regenerate it whenever an in-scope route/type changes.
+# Issue #726 found a real bootstrapping bug here: `avalon-server` depends on
+# `avalon-sdk`, whose own build.rs (issue #724) reads this exact file during
+# its build — a plain `cargo run ... > docs/generated/openapi.json` redirect
+# truncates the file the instant the shell opens it, before cargo even
+# starts, so `avalon-sdk`'s build.rs then fails to parse the (now-empty)
+# file mid-build, breaking the whole regeneration. Writing to a scratch
+# file first and moving it into place only after a successful run avoids
+# ever truncating the file `avalon-sdk`'s build depends on.
 openapi:
-	cargo run -p avalon-server --bin dump-openapi > docs/generated/openapi.json
+	cargo run -p avalon-server --bin dump-openapi > /tmp/openapi.generated.json
+	mv /tmp/openapi.generated.json docs/generated/openapi.json
 
 # CI check: regenerate into a scratch file and diff against the checked-in
 # one, so a route/type change that forgot to re-run `make openapi` fails

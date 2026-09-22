@@ -206,3 +206,59 @@ async fn resume_account_session_without_a_signing_key_sends_unsigned_and_is_reje
         "creating a role with no local signing key should be rejected server-side"
     );
 }
+
+/// Regression test for a real bug #726 found: `crates/server/src/
+/// conversations.rs::MessageResponse` and `guild_messages::MessageResponse`
+/// both registered as the OpenAPI schema name `MessageResponse` — utoipa's
+/// aggregation let the second-registered one silently win, so
+/// `docs/generated/openapi.json`'s `MessageResponse` component described
+/// `guild_messages::MessageResponse`'s shape (`channel_id`) even for
+/// `/conversations/{id}/messages`, which actually sends `conversation_id`.
+/// `AccountSession::send_conversation_message`/`conversation_messages`
+/// (added by #724, generated-type-based from day one) deserialized the
+/// wrong field and failed on every real call — this had no live coverage
+/// until this test, since `crates/sdk/tests/conversations.rs` only
+/// exercises the separate, hand-written, pre-#724 integrator `Session`
+/// path. Fixed by giving `conversations::MessageResponse` its own
+/// `#[schema(as = ConversationMessageResponse)]` name.
+#[tokio::test]
+#[ignore]
+async fn account_session_conversation_message_round_trip() {
+    let client = client();
+    let alice = client
+        .register(&unique_name("conv-alice"))
+        .await
+        .expect("register alice");
+    let bob = client
+        .register(&unique_name("conv-bob"))
+        .await
+        .expect("register bob");
+
+    let req = alice
+        .create_friend_request(bob.identity().id.0)
+        .await
+        .expect("create_friend_request");
+    bob.accept_friend_request(req.id)
+        .await
+        .expect("accept_friend_request");
+
+    let conversation = alice
+        .create_conversation(&[bob.identity().id.0])
+        .await
+        .expect("create_conversation should succeed");
+
+    let sent = alice
+        .send_conversation_message(conversation.id, "hello")
+        .await
+        .expect("send_conversation_message should succeed");
+    assert_eq!(sent.conversation_id, conversation.id);
+    assert_eq!(sent.body, "hello");
+
+    let messages = alice
+        .conversation_messages(conversation.id, None, None)
+        .await
+        .expect("conversation_messages should succeed");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, sent.id);
+    assert_eq!(messages[0].conversation_id, conversation.id);
+}
