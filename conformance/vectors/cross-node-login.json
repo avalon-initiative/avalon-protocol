@@ -1,0 +1,25 @@
+{
+  "$schema": "./SCHEMA.md#cross-node-login",
+  "description": "Cross-node login grant signing (epic #623/#707, avalon_protocol::cross_node_login::signing_bytes). A CrossNodeLoginGrant is a short, self-signed assertion an already-registered identity mints with its own Ed25519 event-signing key to log into a node it has never registered a passkey on. Each SDK must derive byte-for-byte identical signing bytes and an identical Ed25519 signature from the same inputs and signing key.",
+  "supportedIn": ["rust", "csharp", "typescript"],
+  "signingKeySeedHex": "1f2e3d4c5b6a79887766554433221100aabbccddeeff00112233445566778899",
+  "signingPublicKeyHex": "55efacfd3ecf9d98c762fbeae43fb7377b613b7c7dc3a1bf389e5e59c32b57dd",
+  "vectors": [
+    {
+      "name": "basic grant",
+      "input": {
+        "identityId": "11111111-1111-4111-8111-111111111111",
+        "signingKeyId": "22222222-2222-4222-8222-222222222222",
+        "destinationBaseUrl": "https://node-b.avalon.example",
+        "requestingContext": "https://node-b.avalon.example",
+        "nonce": "33333333-3333-4333-8333-333333333333",
+        "issuedAtUnixSeconds": 1780000000,
+        "expiresAtUnixSeconds": 1780000060
+      },
+      "expected": {
+        "signingBytesUtf8": "avalon:cross-node-login:v1:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222:https://node-b.avalon.example:https://node-b.avalon.example:33333333-3333-4333-8333-333333333333:1780000000:1780000060",
+        "signatureHex": "7fdc79ab70bd2e4562cfbdd432d6c6a188e4f620b64c2dea1d79eb32960845dda386410907f6d23ccde8b05b8f4dfb59aeb8a1ec478c6c99d251a0b99132b401"
+      }
+    }
+  ]
+}

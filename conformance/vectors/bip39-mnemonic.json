@@ -1,0 +1,41 @@
+{
+  "$schema": "./SCHEMA.md#bip39-mnemonic",
+  "description": "BIP39 recovery-phrase-derived signing keys (issue #134/#712). A 12-word BIP39 mnemonic must deterministically derive the same Ed25519 event-signing keypair every time: SHA-256(bip39_seed(mnemonic) || 'avalon:signing-key-seed:v1') is used directly as the 32-byte Ed25519 secret key seed. Byte-for-byte identical across every SDK is required, or a phrase recovered through one SDK derives a different key than the one issued by another.",
+  "supportedIn": ["typescript"],
+  "notSupported": {
+    "rust": "crates/sdk has no BIP39/mnemonic dependency or derivation code anywhere (`grep -ri bip39/mnemonic crates/sdk` finds nothing) — AccountSession registration (AvalonClient::register) generates a genuinely random signing key with no recovery phrase at all. Real gap, not just untested.",
+    "csharp": "bindings/csharp/AvalonSdk has no BIP39/mnemonic dependency or derivation code anywhere, and its BouncyCastle-only crypto stack (see AvalonSdk.csproj's own comment on avoiding native deps) currently pulls in no BIP39 wordlist/entropy library at all. Real gap, not just untested."
+  },
+  "derivationLabelUtf8": "avalon:signing-key-seed:v1",
+  "vectors": [
+    {
+      "name": "all-zero entropy (well-known BIP39 test vector mnemonic)",
+      "input": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+      },
+      "expected": {
+        "derivedSecretKeyHex": "8bbf5b6f60fba8d0956394af68a4e8178e5f198d184bd65c9d97e8ff42ac0440",
+        "derivedPublicKeyHex": "150e939484a6474f22cbb9acd65ff4419154549407cc39d2ec4554439a9467eb"
+      }
+    },
+    {
+      "name": "0x7f-repeated entropy",
+      "input": {
+        "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow"
+      },
+      "expected": {
+        "derivedSecretKeyHex": "983afb0cf03393e9db3320649622199040777f1c1117fa14393eb5f223fc8cdf",
+        "derivedPublicKeyHex": "356e205bef5cdd9fbb9b780f1659412a798c7e1ad5010ccfa32c4935e2a25913"
+      }
+    },
+    {
+      "name": "invalid mnemonic is rejected",
+      "input": {
+        "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
+      },
+      "expected": {
+        "isValid": false
+      }
+    }
+  ]
+}

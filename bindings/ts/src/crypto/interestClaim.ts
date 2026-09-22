@@ -22,8 +22,11 @@ function toHex(bytes: Uint8Array): string {
     .join('')
 }
 
-/** Must match `avalon_protocol::interest_claim::signing_bytes` byte-for-byte. */
-function signingBytes(
+/** Must match `avalon_protocol::interest_claim::signing_bytes` byte-for-byte.
+ * Exported (issue #727) so the conformance suite can assert this format
+ * directly against the shared vectors, same as `continuation.ts`'s and
+ * `crossNodeLogin.ts`'s own exported `signingBytes`. */
+export function signingBytes(
   identityId: string,
   signingKeyId: string,
   scope: ClaimedScope,
