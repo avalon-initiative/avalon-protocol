@@ -238,9 +238,18 @@ fn main() {
         .add_ref_types(defs)
         .expect("typify failed to convert the account/auth schema allowlist");
 
+    let schema_version = doc["info"]["version"]
+        .as_str()
+        .expect("docs/generated/openapi.json has info.version")
+        .to_string();
+
     let mut contents = type_space.to_stream().to_string();
     contents.push('\n');
     contents.push_str(&generate_path_stubs(&doc));
+    contents.push_str(&format!(
+        "\n/// The `info.version` of `docs/generated/openapi.json` this crate's \
+         generated types were built from (issue #735).\npub const OPENAPI_SCHEMA_VERSION: &str = {schema_version:?};\n"
+    ));
 
     let out_path = Path::new(&env::var("OUT_DIR").unwrap()).join("generated.rs");
     fs::write(&out_path, contents)

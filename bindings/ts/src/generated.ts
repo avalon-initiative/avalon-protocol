@@ -8336,3 +8336,6 @@ export interface operations {
         };
     };
 }
+
+// Issue #735: the info.version this file's types were generated from.
+export const OPENAPI_SCHEMA_VERSION = "0.1.0" as const

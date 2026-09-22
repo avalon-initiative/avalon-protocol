@@ -18,6 +18,13 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
+    // Issue #735: bump this (semver) whenever a change to this file's
+    // `paths(...)`/schema surface actually changes the published schema's
+    // shape — not on every regeneration. `make openapi-version-check`
+    // (part of `make check`) fails CI if the shape changed relative to
+    // `main` without a matching bump, so this can't silently drift; each
+    // SDK's codegen embeds this same version in a `OPENAPI_SCHEMA_VERSION`
+    // constant so a build can report which schema it targets.
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
