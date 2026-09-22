@@ -12,10 +12,6 @@ avalon-protocol = { path = "../protocol" }
 avalon-chain = { path = "../chain" }
 avalon-indexer = { path = "../indexer" }
 async-trait.workspace = true
-# Issue #362: reuses `avalon_sdk::network::bundled_trust_anchors()` — the
-# one canonical parse of `docs/trusted-networks.json` — for this node's
-# default announce/bootstrap seed list, rather than a second parser.
-avalon-sdk = { path = "../sdk" }
 tokio.workspace = true
 axum = { workspace = true, features = ["ws"] }
 tower-http.workspace = true
@@ -64,6 +60,11 @@ public-suffix.workspace = true
 # Issue #636: a mocked remote node for the cross-shard-fetch tamper-
 # detection test — already used the same way by `crates/sdk`.
 wiremock.workspace = true
+# Issue #780: `tests/connections.rs` drives a real SDK client against this
+# server to exercise capability enforcement end to end — test-only, not a
+# production dependency (the production `bundled_trust_anchors()` use this
+# crate had moved to `avalon_protocol::network_trust` by #780).
+avalon-sdk = { path = "../sdk" }
 
 [[bin]]
 name = "avalon-server"

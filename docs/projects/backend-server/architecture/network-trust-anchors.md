@@ -302,6 +302,15 @@ and re-run without any risk to the network being migrated from.
   `AvalonClient::verify_network`, unit-tested against a real generated
   Ed25519 keypair (valid, forged/wrong-key, and unpinned cases) plus a
   `wiremock`-backed end-to-end fetch test.
+- `crates/protocol/src/network_trust.rs` — a second, independent copy of
+  just the parsing (`TrustAnchorEntry`/`NetworkEnvironment`/
+  `bundled_trust_anchors()`, no verification logic), added by #780 (epic
+  #771) so `crates/server`'s own bootstrap-peer/anchor-node checks
+  (`nodes.rs`, `cross_node_login.rs`, `mirror_watcher.rs`) don't need a
+  path dependency on the client SDK. Both copies parse the same
+  `docs/trusted-networks.json`; kept as two hand-synced copies rather than
+  shared code on purpose, matching epic #771's decision (#774) to make the
+  Rust SDK depend on nothing else in this workspace.
 - Not built: a "manually add a custom trust anchor" UI in the Hub (the
   Hub's own invariant is satisfied by clearly flagging an unpinned network
   as unverified rather than requiring a manual-add flow — see Invariants

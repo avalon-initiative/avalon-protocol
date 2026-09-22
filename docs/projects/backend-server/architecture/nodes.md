@@ -805,7 +805,9 @@ genuinely-incompatible-crypto-change case none of the above can cover.
   already trusts for STH verification); the default, unowned `"core"` shard
   has no integrator to check, so it's verified iff `own_base_url` is one of
   the network's real seed nodes
-  (`docs/trusted-networks.json`/`avalon_sdk::network::bundled_trust_anchors`).
+  (`docs/trusted-networks.json`/`avalon_protocol::network_trust::bundled_trust_anchors`,
+  moved from `avalon_sdk::network` by #780 so `crates/server` doesn't
+  depend on the client SDK).
   The anchor-matching logic (`is_verified_seed_node`) is pulled out as a
   pure function and directly unit-tested with a controlled anchor list —
   this sandbox's own trusted-networks.json entry has an empty `seed_nodes`,

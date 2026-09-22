@@ -202,7 +202,7 @@ pub struct LookupCrossNodeLoginResponse {
 /// - **The default, unowned shard** (`"core"`, or anything else with no
 ///   `owner`): there's no integrator to check — verified iff this node's
 ///   own `own_base_url` is one of this network's real seed nodes
-///   (`docs/trusted-networks.json`, via `avalon_sdk::network::bundled_trust_anchors`)
+///   (`docs/trusted-networks.json`, via `avalon_protocol::network_trust::bundled_trust_anchors`)
 ///   — a shared network shard has no integrator, but a canonical anchor
 ///   node is still a real, checkable fact.
 async fn resolve_requester_verification(state: &AppState) -> (bool, Option<String>) {
@@ -236,7 +236,7 @@ async fn resolve_requester_verification(state: &AppState) -> (bool, Option<Strin
     let is_anchor = is_verified_seed_node(
         base_url,
         state.chain.network_id(),
-        avalon_sdk::network::bundled_trust_anchors(),
+        avalon_protocol::network_trust::bundled_trust_anchors(),
     );
     (is_anchor, is_anchor.then(|| "Avalon network".to_string()))
 }
@@ -254,7 +254,7 @@ async fn resolve_requester_verification(state: &AppState) -> (bool, Option<Strin
 fn is_verified_seed_node(
     own_base_url: &str,
     network_id: &str,
-    anchors: &[avalon_sdk::network::TrustAnchorEntry],
+    anchors: &[avalon_protocol::network_trust::TrustAnchorEntry],
 ) -> bool {
     anchors
         .iter()
@@ -468,7 +468,7 @@ pub struct SubmitGrantResponse {
 /// `"core"`-shard data. #543's own per-integrator `issuer_keys` mechanism
 /// never resolves anything for `"core"`, so the trust anchor here is this
 /// network's own pinned key from `docs/trusted-networks.json`
-/// (`avalon_sdk::network::bundled_trust_anchors`) — the exact same source
+/// (`avalon_protocol::network_trust::bundled_trust_anchors`) — the exact same source
 /// issue #649's `resolve_requester_verification` already reuses for its
 /// own `"core"`-shard trust path. Empty (not an error) when this network
 /// has no bundled entry, or its `verify_key` doesn't parse — #636's own
@@ -476,7 +476,7 @@ pub struct SubmitGrantResponse {
 /// case, same as a genuinely unresolvable shard.
 fn core_shard_verify_keys(network_id: &str) -> HashMap<String, VerifyingKey> {
     let mut keys = HashMap::new();
-    if let Some(anchor) = avalon_sdk::network::bundled_trust_anchors()
+    if let Some(anchor) = avalon_protocol::network_trust::bundled_trust_anchors()
         .iter()
         .find(|entry| entry.network_id == network_id)
     {
@@ -850,14 +850,17 @@ mod tests {
         }
     }
 
-    fn anchor(network_id: &str, seed_nodes: Vec<String>) -> avalon_sdk::network::TrustAnchorEntry {
-        avalon_sdk::network::TrustAnchorEntry {
+    fn anchor(
+        network_id: &str,
+        seed_nodes: Vec<String>,
+    ) -> avalon_protocol::network_trust::TrustAnchorEntry {
+        avalon_protocol::network_trust::TrustAnchorEntry {
             label: network_id.to_string(),
             network_id: network_id.to_string(),
             verify_key: "deadbeef".to_string(),
             signing_key_id: "k1".to_string(),
             server_url: None,
-            environment: avalon_sdk::network::NetworkEnvironment::Dev,
+            environment: avalon_protocol::network_trust::NetworkEnvironment::Dev,
             seed_nodes,
             notes: None,
         }

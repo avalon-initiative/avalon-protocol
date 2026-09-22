@@ -581,7 +581,7 @@ async fn discover_mirror_peers() {
     let bootstrap_peers = avalon_server::nodes::resolve_bootstrap_peers(
         std::env::var("AVALON_BOOTSTRAP_PEERS").ok().as_deref(),
         &network_id,
-        avalon_sdk::network::bundled_trust_anchors(),
+        avalon_protocol::network_trust::bundled_trust_anchors(),
     );
     let Some(bootstrap_peer) = bootstrap_peers.into_iter().next() else {
         return;
