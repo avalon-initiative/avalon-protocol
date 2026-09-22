@@ -6,7 +6,7 @@ members = [
     "crates/server",
     "crates/indexer",
     "crates/sdk",
-    "crates/schema-derive",
+    "crates/sdk/schema-derive",
     "crates/cli",
     "crates/devenv",
 ]

@@ -136,6 +136,10 @@ Six domain crates, confirmed by
 [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69), plus one
 proc-macro support crate (`schema-derive`, added for #386/#423) that generates
 code rather than owning a domain — it doesn't reopen #69's invariant below.
+Since #772, `schema-derive` lives at `crates/sdk/schema-derive` (a nested
+workspace member) rather than top-level under `crates/`, reflecting that
+only `sdk` ever consumed it — it has no relationship to the domain crates
+below and doesn't become one by being counted alongside them.
 Each domain crate has a concrete boundary; none exists merely because a
 concept has a name.
 
