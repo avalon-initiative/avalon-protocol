@@ -1069,8 +1069,8 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `mainGuild`/`effectiveMainGuild`, which the real server always
   returns). `apps/mobile-hub` stays on `packages/api-client`, untouched
   — explicitly out of this epic's scope.
-- `bindings/ts/scripts/generate-types.mjs` (issue #726, epic #722 — first
-  slice, mirroring #724's Rust migration) — `bindings/ts` starts consuming
+- `bindings/ts/scripts/generate-types.mjs` (issue #726, epic #722 — full
+  migration, mirroring #724's Rust migration) — `bindings/ts` consumes
   generated wire-shape types from `docs/generated/openapi.json` (#723) via
   `openapi-typescript`, a devDependency-only tool (zero runtime footprint —
   the generated file itself has no imports). Unlike the Rust SDK,
@@ -1078,9 +1078,9 @@ protocol and the domain model in `crates/protocol`; they never pull in
   `types` point straight at `./src/index.ts`; `apps/hub` depends on it via
   `"@avalon/sdk": "file:../../bindings/ts"`, consuming raw source), so
   there's no compile-time hook the way `crates/sdk/build.rs` gets — the
-  generated `bindings/ts/src/generated.ts` (~8,300 lines, whole-spec, not a
-  curated allowlist like Rust's `SCHEMA_NAMES`, since unused TS interfaces
-  cost nothing at runtime) is instead a **checked-in artifact**, same
+  generated `bindings/ts/src/generated.ts` (whole-spec, not a curated
+  allowlist like Rust's `SCHEMA_NAMES`, since unused TS interfaces cost
+  nothing at runtime) is instead a **checked-in artifact**, same
   convention `docs/generated/openapi.json` itself already uses: `make
   ts-sdk-types` regenerates it, `make ts-sdk-types-check` (wired into `make
   check`) fails CI if it's stale.
@@ -1097,35 +1097,66 @@ protocol and the domain model in `crates/protocol`; they never pull in
     generation — this only touches the (not yet used) `operations`/`paths`
     naming, never `components.schemas`, which has no collisions since
     every schema name is already globally unique.
-  - This slice covers `types.ts`'s `MeResponseWire` (now `components
-    ['schemas']['ProfileResponse']`) and `Genre` (now `components
-    ['schemas']['Genre']` — structurally identical to the hand-written
-    union it replaced), plus `client.ts`'s `SessionFinishResponseWire`
-    (`components['schemas']['SessionFinishResponse']`). `RegisterStartResponseWire`/
-    `SessionStartResponseWire` stay hand-written — their `challenge` field
-    is an opaque blob in the schema (`webauthn-rs`'s own types have no
-    `ToSchema` impl), the same reason the Rust SDK keeps its own
-    `RegisterStartResponse`/`SessionStartResponse` hand-written.
+  - Every hand-written wire-shape type across `types.ts`, `client.ts`, and
+    all of `accountSession/{core,passkeys,devices,deviceLogin,integrations,
+    recovery,conversations,social,achievements,guildAdmin}.ts` (48 alone in
+    `guildAdmin.ts`) now aliases a generated `components['schemas'][...]`
+    type in place of its old hand-written interface; the wire/domain split
+    and each `fromWire`-style mapping function's own shape are otherwise
+    untouched, same discipline #724 used. `accountSession/realtime.ts`
+    stays entirely hand-written and correctly so — WebSocket push payloads
+    have no OpenAPI coverage at all (utoipa doesn't model raw socket
+    upgrades). Opaque WebAuthn-ceremony blob fields (`RegisterStartResponse`/
+    `SessionStartResponse`/`RecoveryStartResult`'s `challenge`) also stay
+    hand-written, the same reason the Rust SDK keeps its own equivalents
+    hand-written.
+  - This migration found the same `DiscoveryCandidate` bug independently
+    rediscovered from #724's own Rust migration: the real server only ever
+    sends `identity_id` on discovery results; the old hand-written type
+    additionally declared `displayName`/`avatarUrl`/`mutualFriends`/
+    `mutualGuilds`, fields that were always `undefined` in practice (`apps/
+    hub`'s own `src/api/discovery.ts` already worked around this
+    defensively, re-fetching display names separately via `profiles()`).
+    `DiscoveryCandidate` is now just `{ identityId: string }`.
+  - This migration also found — and fixed at the source — a real
+    already-merged schema bug: `crates/server/src/conversations.rs`'s
+    `MessageResponse` (`conversation_id`) and `crates/server/src/
+    guild_messages.rs`'s `MessageResponse` (`channel_id`) both registered
+    as the bare name `MessageResponse` in `crates/server/src/openapi.rs`'s
+    schema aggregator; utoipa silently let the second-registered one win,
+    so the published schema for `/conversations/{id}/messages` actually
+    described the *guild channel* shape. This was already live on `main`
+    via #724's own (also-affected) Rust migration. Fixed by giving the
+    conversations struct its own registered name —
+    `#[schema(as = ConversationMessageResponse)]` — regenerating
+    `docs/generated/openapi.json`, and propagating the rename through both
+    SDKs (`crates/sdk/src/account/conversations.rs`,
+    `bindings/ts/src/accountSession/conversations.ts`), each with a new
+    permanent live regression test
+    (`account_session_conversation_message_round_trip` in Rust,
+    the parallel `AccountSession conversation message live round trip
+    (issue #726)` suite in TS) rather than a one-off probe.
   - Several generated fields are optional (`T | null | undefined`) where
-    the hand-written `MeResponseWire` declared them non-optional
-    (`T | null`) — `fromMeResponse` now coalesces each with `?? null`
-    (`effectiveMainGuild`/`discoverable`/`presenceVisibility` already did
-    this defensively; the newly-optional fields — `avatarUrl`/`bio`/
-    `pronouns`/`bannerUrl`/`status`/`timezone`/`themeColor`/`location`/
-    `mainGuild` — needed the same treatment added). No behavior change:
-    the real server has always sent these fields on every real response.
-  - The remaining ~90 hand-written wire-shape types across
-    `accountSession/{guildAdmin,social,achievements,devices,passkeys,
-    recovery,conversations,integrations,realtime}.ts` (48 alone in
-    `guildAdmin.ts`) and the endpoint-path-stub half of this migration
-    (mirroring #724's `crate::generated::paths::<tag>::<NAME>` — TS's
-    template literals have no `format!()`-style compile-time-literal
-    restriction, so this would look different in shape, not yet designed)
-    are explicitly out of scope for this slice — proving the pipeline
-    first, same precedent #724 itself set. `apps/hub`'s full test suite
-    (455 tests) and production build were verified unaffected; the
-    zero-Vue/Pinia-dependency invariant holds (`openapi-typescript` is a
-    devDependency only).
+    the hand-written wire types declared them non-optional (`T | null`) —
+    every affected `fromWire`-style mapping function now coalesces with
+    `?? null` (or `?? []`/`?? false` where appropriate); a few generated
+    fields are typed as plain `string` where the domain type expects a
+    narrower string-literal union (`RsvpStatus`), handled with an explicit
+    cast at the mapping boundary. No behavior change in either case: the
+    real server has always sent these fields/values on every real
+    response.
+  - Endpoint-path stubs (mirroring #724's
+    `crate::generated::paths::<tag>::<NAME>`) are a deliberate scope
+    exclusion, not a gap: TS has no `format!()`-style compile-time-literal
+    restriction forcing string paths through a constant, template-literal
+    call sites already interpolate variables correctly today, and
+    generating a parallel constants module would add indirection without
+    fixing a real problem the way it did for Rust.
+  - `apps/hub`'s full test suite (455 tests) and production build were
+    verified unaffected; the zero-Vue/Pinia-dependency invariant holds
+    (`openapi-typescript` is a devDependency only). Full Rust workspace
+    test suite (`cargo test --workspace`) and `make openapi-check` both
+    verified clean after the schema fix.
 
 ## Decisions and tickets
 

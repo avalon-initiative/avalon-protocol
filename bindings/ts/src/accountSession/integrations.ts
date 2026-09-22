@@ -2,6 +2,7 @@
 // identity granting or revoking its own consent to an integrator. See
 // crates/server/src/connections.rs.
 import { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
 export interface IntegratorConnection {
   bindingId: string
@@ -9,20 +10,11 @@ export interface IntegratorConnection {
   establishedAt: string
   grantedCapabilities: string[]
 }
-interface IntegratorConnectionWire {
-  binding_id: string
-  integrator_id: string
-  established_at: string
-  granted_capabilities: string[]
-}
+type IntegratorConnectionWire = components['schemas']['ConnectResponse']
 
 export interface ConnectionGrant {
   capability: string
   grantedAt: string
-}
-interface ConnectionGrantWire {
-  capability: string
-  granted_at: string
 }
 
 export interface MyConnection {
@@ -33,14 +25,7 @@ export interface MyConnection {
   establishedAt: string
   grants: ConnectionGrant[]
 }
-interface MyConnectionWire {
-  binding_id: string
-  integrator_id: string
-  slug: string
-  name: string
-  established_at: string
-  grants: ConnectionGrantWire[]
-}
+type MyConnectionWire = components['schemas']['Connection']
 
 declare module './core.js' {
   interface AccountSession {

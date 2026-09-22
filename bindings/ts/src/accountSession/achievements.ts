@@ -3,13 +3,10 @@
 // from IntegratorSession's achievements(), which is capability-gated and
 // issuance-focused. See crates/server/src/attestations.rs.
 import { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
 export interface AttestationProof {
   keyId: string
-  algorithm: string
-}
-interface AttestationProofWire {
-  key_id: string
   algorithm: string
 }
 
@@ -18,17 +15,8 @@ export interface AttestationAuthenticity {
   keyId?: string
   reason?: string
 }
-interface AttestationAuthenticityWire {
-  status: 'authentic' | 'not_authentic'
-  key_id?: string
-  reason?: string
-}
 
 export interface AttestationValidity {
-  status: 'valid' | 'invalid'
-  reason?: string
-}
-interface AttestationValidityWire {
   status: 'valid' | 'invalid'
   reason?: string
 }
@@ -37,12 +25,6 @@ export interface AttestationHistoryEntry {
   event: string
   at: string
   reasonCode?: string
-  reason?: string
-}
-interface AttestationHistoryEntryWire {
-  event: string
-  at: string
-  reason_code?: string
   reason?: string
 }
 
@@ -60,17 +42,7 @@ export interface Attestation {
   validity: AttestationValidity
   history: AttestationHistoryEntry[]
 }
-interface AttestationWire {
-  id: string
-  issuer: string
-  subject: string
-  achievement: string
-  issued_at: string
-  proof: AttestationProofWire
-  authenticity: AttestationAuthenticityWire
-  validity: AttestationValidityWire
-  history: AttestationHistoryEntryWire[]
-}
+type AttestationWire = components['schemas']['AttestationReadResponse']
 function attestationFromWire(w: AttestationWire): Attestation {
   return {
     id: w.id,
@@ -79,16 +51,25 @@ function attestationFromWire(w: AttestationWire): Attestation {
     achievement: w.achievement,
     issuedAt: w.issued_at,
     proof: { keyId: w.proof.key_id, algorithm: w.proof.algorithm },
-    authenticity: { status: w.authenticity.status, keyId: w.authenticity.key_id, reason: w.authenticity.reason },
-    validity: { status: w.validity.status, reason: w.validity.reason },
-    history: w.history.map((h) => ({ event: h.event, at: h.at, reasonCode: h.reason_code, reason: h.reason })),
+    // `authenticity`/`validity` are real discriminated unions on the wire
+    // (status: "authentic" carries key_id, status: "not_authentic" carries
+    // reason, etc.) — flattened here to the same optional-both-fields
+    // domain shape this SDK already exposed.
+    authenticity:
+      w.authenticity.status === 'authentic'
+        ? { status: 'authentic', keyId: w.authenticity.key_id }
+        : { status: 'not_authentic', reason: w.authenticity.reason },
+    validity: w.validity.status === 'valid' ? { status: 'valid' } : { status: 'invalid', reason: w.validity.reason },
+    history: w.history.map((h) => ({
+      event: h.event,
+      at: h.at,
+      reasonCode: h.reason_code ?? undefined,
+      reason: h.reason ?? undefined,
+    })),
   }
 }
 
-interface ListMyAchievementsResponseWire {
-  achievements: AttestationWire[]
-  next_cursor: string | null
-}
+type ListMyAchievementsResponseWire = components['schemas']['ListMyAchievementsResponse']
 
 declare module './core.js' {
   interface AccountSession {

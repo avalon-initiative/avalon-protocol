@@ -1,11 +1,9 @@
 // Direct/small-group conversations (issue #102/#105) on AccountSession —
 // see crates/server/src/conversations.rs.
 import { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
-export interface Conversation {
-  id: string
-  participants: string[]
-}
+export type Conversation = components['schemas']['ConversationResponse']
 
 export interface ConversationMessage {
   id: string
@@ -14,13 +12,16 @@ export interface ConversationMessage {
   body: string
   sentAt: string
 }
-interface ConversationMessageWire {
-  id: string
-  conversation_id: string
-  author: string
-  body: string
-  sent_at: string
-}
+// `ConversationMessageResponse`, not `MessageResponse` — the two used to
+// collide in the published schema (both registered as bare
+// `MessageResponse` in `crates/server/src/openapi.rs`'s aggregator; utoipa
+// silently let the second-registered `guild_messages::MessageResponse`
+// win, so `docs/generated/openapi.json`'s `MessageResponse` component
+// described the *guild channel* shape (`channel_id`) even for this
+// endpoint, which actually sends `conversation_id` — found and fixed at
+// the schema source, issue #726, see `crates/server/src/conversations.rs`'s
+// own `#[schema(as = ConversationMessageResponse)]` comment).
+type ConversationMessageWire = components['schemas']['ConversationMessageResponse']
 
 declare module './core.js' {
   interface AccountSession {

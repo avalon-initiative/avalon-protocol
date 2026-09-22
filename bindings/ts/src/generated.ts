@@ -3189,6 +3189,17 @@ export interface components {
             /** Format: date-time */
             granted_at: string;
         };
+        ConversationMessageResponse: {
+            /** Format: uuid */
+            author: string;
+            body: string;
+            /** Format: uuid */
+            conversation_id: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            sent_at: string;
+        };
         ConversationResponse: {
             /** Format: uuid */
             id: string;
@@ -5218,7 +5229,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MessageResponse"][];
+                    "application/json": components["schemas"]["ConversationMessageResponse"][];
                 };
             };
         };
@@ -5243,7 +5254,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MessageResponse"];
+                    "application/json": components["schemas"]["ConversationMessageResponse"];
                 };
             };
         };

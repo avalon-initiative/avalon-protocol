@@ -2,6 +2,7 @@
 // guardian-based recovery when every passkey is lost. See
 // crates/server/src/recovery.rs.
 import { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
 export interface GuardianSettings {
   guardianIds: string[]
@@ -9,11 +10,7 @@ export interface GuardianSettings {
   updatedAt: string | null
 }
 
-interface GuardianSettingsWire {
-  guardian_ids: string[]
-  threshold: number
-  updated_at: string | null
-}
+type GuardianSettingsWire = components['schemas']['GuardianSettingsResponse']
 
 export interface RecoveryRequest {
   id: string
@@ -27,15 +24,7 @@ export interface RecoveryRequest {
 
 // Exported for reuse by ../recovery.ts's free-standing recovery-initiation
 // functions, which return this same shape but need no AccountSession.
-export interface RecoveryRequestWire {
-  id: string
-  identity_id: string
-  status: string
-  threshold: number
-  approvals_count: number
-  requested_at: string
-  delay_ends_at: string | null
-}
+export type RecoveryRequestWire = components['schemas']['RecoveryRequestResponse']
 
 export function requestFromWire(w: RecoveryRequestWire): RecoveryRequest {
   return {
@@ -45,7 +34,7 @@ export function requestFromWire(w: RecoveryRequestWire): RecoveryRequest {
     threshold: w.threshold,
     approvalsCount: w.approvals_count,
     requestedAt: w.requested_at,
-    delayEndsAt: w.delay_ends_at,
+    delayEndsAt: w.delay_ends_at ?? null,
   }
 }
 
@@ -54,10 +43,7 @@ export interface GuardianRequest {
   alreadyApproved: boolean
 }
 
-interface GuardianRequestWire {
-  request: RecoveryRequestWire
-  already_approved: boolean
-}
+type GuardianRequestWire = components['schemas']['GuardianRequestSummary']
 
 export interface GuardianOf {
   identityId: string
@@ -65,11 +51,7 @@ export interface GuardianOf {
   addedAt: string
 }
 
-interface GuardianOfWire {
-  identity_id: string
-  display_name: string
-  added_at: string
-}
+type GuardianOfWire = components['schemas']['GuardianOfSummary']
 
 declare module './core.js' {
   interface AccountSession {
@@ -98,7 +80,7 @@ declare module './core.js' {
 
 AccountSession.prototype.guardians = async function (this: AccountSession): Promise<GuardianSettings> {
   const w = await this.get<GuardianSettingsWire>('/me/recovery/guardians')
-  return { guardianIds: w.guardian_ids, threshold: w.threshold, updatedAt: w.updated_at }
+  return { guardianIds: w.guardian_ids, threshold: w.threshold, updatedAt: w.updated_at ?? null }
 }
 
 AccountSession.prototype.setGuardians = async function (
@@ -113,7 +95,7 @@ AccountSession.prototype.setGuardians = async function (
     threshold,
     ...signature,
   })
-  return { guardianIds: w.guardian_ids, threshold: w.threshold, updatedAt: w.updated_at }
+  return { guardianIds: w.guardian_ids, threshold: w.threshold, updatedAt: w.updated_at ?? null }
 }
 
 AccountSession.prototype.myRecoveryStatus = async function (this: AccountSession): Promise<RecoveryRequest | null> {

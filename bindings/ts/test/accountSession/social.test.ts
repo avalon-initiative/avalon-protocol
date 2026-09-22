@@ -118,12 +118,12 @@ describe('non-array response bodies are passed through, not crashed on', () => {
 
 describe('AccountSession.discoverPeople / searchIdentities', () => {
   it('unwraps the candidates/results envelope into a flat array', async () => {
+    // The real server response only ever carries `identity_id` — see
+    // src/accountSession/social.ts's own DiscoveryCandidate doc comment.
     mockFetchOnce({
-      candidates: [{ identity_id: 'id-1', display_name: 'Nova', avatar_url: null, mutual_friends: 2 }],
+      candidates: [{ identity_id: 'id-1' }],
     })
-    expect(await testSession().discoverPeople()).toEqual([
-      { identityId: 'id-1', displayName: 'Nova', avatarUrl: null, mutualFriends: 2, mutualGuilds: 0 },
-    ])
+    expect(await testSession().discoverPeople()).toEqual([{ identityId: 'id-1' }])
 
     mockFetchOnce({ results: [{ identity_id: 'id-2', display_name: 'Bramble', avatar_url: null }] })
     expect(await testSession().searchIdentities('bramble')).toEqual([

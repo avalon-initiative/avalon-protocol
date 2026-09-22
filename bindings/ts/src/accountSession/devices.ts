@@ -6,6 +6,7 @@
 import { AccountSession } from './core.js'
 import { deviceGrantApprovalSigningBytes } from '../crypto/signing.js'
 import { NoLocalSigningKeyError } from '../errors.js'
+import type { components } from '../generated.js'
 
 export interface Device {
   id: string
@@ -15,16 +16,16 @@ export interface Device {
   revokedAt: string | null
 }
 
-interface DeviceWire {
-  id: string
-  label: string | null
-  public_key: string
-  added_at: string
-  revoked_at?: string | null
-}
+type DeviceWire = components['schemas']['DeviceResponse']
 
 function fromWire(w: DeviceWire): Device {
-  return { id: w.id, label: w.label, publicKey: w.public_key, addedAt: w.added_at, revokedAt: w.revoked_at ?? null }
+  return {
+    id: w.id,
+    label: w.label ?? null,
+    publicKey: w.public_key,
+    addedAt: w.added_at,
+    revokedAt: w.revoked_at ?? null,
+  }
 }
 
 export interface DeviceGrant {
@@ -36,20 +37,13 @@ export interface DeviceGrant {
   expiresAt: string
 }
 
-interface DeviceGrantWire {
-  id: string
-  status: string
-  device_label: string | null
-  requested_signing_public_key: string
-  requested_at: string
-  expires_at: string
-}
+type DeviceGrantWire = components['schemas']['DeviceGrantResponse']
 
 function grantFromWire(w: DeviceGrantWire): DeviceGrant {
   return {
     id: w.id,
     status: w.status,
-    deviceLabel: w.device_label,
+    deviceLabel: w.device_label ?? null,
     requestedSigningPublicKey: w.requested_signing_public_key,
     requestedAt: w.requested_at,
     expiresAt: w.expires_at,
@@ -160,11 +154,16 @@ AccountSession.prototype.approveDevicePairing = async function (
   userCode: string,
 ): Promise<string> {
   const signature = this.sign('device_pairing.approve', [this.identity().id, userCode])
-  const response = await this.post<{ status: string }>('/auth/device/approve', { user_code: userCode, ...signature })
+  const response = await this.post<components['schemas']['ResolvePairingResponse']>('/auth/device/approve', {
+    user_code: userCode,
+    ...signature,
+  })
   return response.status
 }
 
 AccountSession.prototype.denyDevicePairing = async function (this: AccountSession, userCode: string): Promise<string> {
-  const response = await this.post<{ status: string }>('/auth/device/deny', { user_code: userCode })
+  const response = await this.post<components['schemas']['ResolvePairingResponse']>('/auth/device/deny', {
+    user_code: userCode,
+  })
   return response.status
 }

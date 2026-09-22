@@ -264,3 +264,42 @@ maybeDescribe('getLatestSth live round trip', () => {
     expect(new Date(sth.created_at).getTime()).not.toBeNaN()
   })
 })
+
+// Regression test for a real bug #726 found: crates/server/src/
+// conversations.rs::MessageResponse and guild_messages::MessageResponse
+// both registered as the OpenAPI schema name `MessageResponse` — utoipa's
+// aggregation let the second-registered one silently win, so
+// docs/generated/openapi.json's MessageResponse component described
+// guild_messages::MessageResponse's shape (channel_id) even for
+// /conversations/{id}/messages, which actually sends conversation_id.
+// AccountSession.conversationMessages/sendConversationMessage had no live
+// coverage until this test. Fixed by giving conversations::MessageResponse
+// its own #[schema(as = ConversationMessageResponse)] name.
+maybeDescribe('AccountSession conversation message live round trip (issue #726)', () => {
+  it('sendConversationMessage/conversationMessages round-trip a real message', async () => {
+    const alice = await seedIdentitySession(`conv-alice-${crypto.randomUUID()}`)
+    const bob = await seedIdentitySession(`conv-bob-${crypto.randomUUID()}`)
+    const friendshipParams = ['LEAST($1::uuid, $2::uuid)', 'GREATEST($1::uuid, $2::uuid)', '$3']
+    await pool.query(
+      `INSERT INTO friendships (a, b, since) VALUES (${friendshipParams.join(', ')})`,
+      [alice.identityId, bob.identityId, new Date()],
+    )
+    await pool.query(
+      `INSERT INTO indexer_friendships (a, b, since) VALUES (${friendshipParams.join(', ')})`,
+      [alice.identityId, bob.identityId, new Date()],
+    )
+
+    const client = new AvalonClient({ serverUrl: serverUrl! })
+    const aliceSession = await client.resumeAccountSession(alice.token)
+
+    const conversation = await aliceSession.createConversation([bob.identityId])
+    const sent = await aliceSession.sendConversationMessage(conversation.id, 'hello')
+    expect(sent.conversationId).toBe(conversation.id)
+    expect(sent.body).toBe('hello')
+
+    const messages = await aliceSession.conversationMessages(conversation.id)
+    expect(messages).toHaveLength(1)
+    expect(messages[0].id).toBe(sent.id)
+    expect(messages[0].conversationId).toBe(conversation.id)
+  })
+})

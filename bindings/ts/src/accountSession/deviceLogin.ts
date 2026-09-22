@@ -14,22 +14,13 @@
 import { request } from '../http.js'
 import { DeviceLoginDeniedError, DeviceLoginExpiredError, ProtocolError } from '../errors.js'
 import type { AccountSession } from './core.js'
+import type { components } from '../generated.js'
 
 const DEFAULT_POLL_INTERVAL_SECONDS = 5
 const MAX_POLL_INTERVAL_SECONDS = 60
 
-interface StartPairingResponseWire {
-  device_code: string
-  user_code: string
-  verification_uri: string
-  expires_in: number
-  poll_interval: number
-}
-
-interface PollPairingResponseWire {
-  status: string
-  token?: string | null
-}
+type StartPairingResponseWire = components['schemas']['StartPairingResponse']
+type PollPairingResponseWire = components['schemas']['PollPairingResponse']
 
 /** A pending cross-device pairing for an AccountSession login. Mirrors
  * the Rust/C# `AccountDeviceLogin` field-for-field. */
