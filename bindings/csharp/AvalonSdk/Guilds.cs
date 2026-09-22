@@ -318,6 +318,17 @@ namespace Avalon.Sdk
             return events.Select(Session.EventResponseToGuildEvent).ToList();
         }
 
+        /// <summary>GET /guilds/{id}/integrator-breakdown — requires guilds.read. How many
+        /// current members are actively bound to each integrator the guild plays, most-played
+        /// first (ties broken alphabetically). A display of real counts (issue #160), never a
+        /// system verdict — no minimum-member threshold, no fixed cap.</summary>
+        public async Task<Avalon.Sdk.Generated.GameBreakdownResponse> GameBreakdownAsync(CancellationToken ct = default)
+        {
+            _session.Require("guilds.read");
+            return await _session.GetJsonAsync<Avalon.Sdk.Generated.GameBreakdownResponse>(
+                $"{_session.ServerUrl}/guilds/{_guildId}/integrator-breakdown", ct).ConfigureAwait(false);
+        }
+
         /// <summary>A handle scoped to one channel within this guild.</summary>
         public ChannelHandle Channel(Guid id) => new ChannelHandle(_session, _guildId, id);
     }
@@ -368,6 +379,20 @@ namespace Avalon.Sdk
             }
             var message = await Session.ReadJsonAsync<Avalon.Sdk.Generated.MessageResponse>(response, ct).ConfigureAwait(false);
             return Session.MessageResponseToGuildMessage(message!);
+        }
+
+        /// <summary>GET /guilds/{id}/channels/{cid}/messages/archive — requires guilds.chat.
+        /// Same cursor-paginated, newest-first shape as <see cref="MessagesAsync"/>, but reads
+        /// from the separate archive table channel archival moves messages into — this does
+        /// not try to reconstruct membership as of when each archived message was originally
+        /// sent.</summary>
+        public async Task<IReadOnlyList<Avalon.Sdk.Generated.ArchivedMessageResponse>> ArchiveAsync(Guid? before = null, int? limit = null, CancellationToken ct = default)
+        {
+            _session.Require("guilds.chat");
+
+            return await _session.GetJsonAsync<List<Avalon.Sdk.Generated.ArchivedMessageResponse>>(
+                $"{_session.ServerUrl}/guilds/{_guildId}/channels/{_channelId}/messages/archive{BuildQuery(before, limit)}", ct).ConfigureAwait(false)
+                ?? new List<Avalon.Sdk.Generated.ArchivedMessageResponse>();
         }
 
         private static string BuildQuery(Guid? before, int? limit)

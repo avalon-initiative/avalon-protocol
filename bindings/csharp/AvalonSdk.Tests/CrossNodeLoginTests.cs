@@ -178,4 +178,34 @@ public class CrossNodeLoginTests
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
         Assert.Equal("https://example.invalid/auth/cross-node/submit", handler.Requests[0].Url);
     }
+
+    [Fact]
+    public async Task LookupCrossNodeLoginAsync_IsPublic_NoAuthorizationHeaderSent()
+    {
+        var handler = new StubHttpMessageHandler().Enqueue("""
+        { "status": "pending", "requesting_context": "https://requester.example", "expires_in": 300,
+          "integrator_verified": false, "display_name": null }
+        """);
+        var client = new AvalonClient(new AvalonConfig("https://example.invalid", "test-key"), handler.ToHttpClient());
+
+        var lookup = await client.LookupCrossNodeLoginAsync("ABCD-1234");
+
+        Assert.Equal("pending", lookup.Status);
+        Assert.Null(handler.Requests[0].AuthorizationToken);
+        Assert.Contains("/auth/cross-node/lookup", handler.Requests[0].Url);
+        Assert.Contains("user_code=ABCD-1234", handler.Requests[0].Url);
+    }
+
+    [Fact]
+    public async Task DenyCrossNodeLoginAsync_PostsTheUserCode()
+    {
+        var handler = new StubHttpMessageHandler().Enqueue("""{ "status": "denied" }""");
+        var client = new AvalonClient(new AvalonConfig("https://example.invalid", "test-key"), handler.ToHttpClient());
+
+        await client.DenyCrossNodeLoginAsync("ABCD-1234");
+
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+        Assert.Equal("https://example.invalid/auth/cross-node/deny", handler.Requests[0].Url);
+        Assert.Contains("ABCD-1234", handler.Requests[0].Body);
+    }
 }

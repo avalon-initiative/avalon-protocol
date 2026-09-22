@@ -21,6 +21,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -242,6 +243,418 @@ namespace Avalon.Sdk
             }
             var body = await ReadJsonAsync<Avalon.Sdk.Generated.AttestationResponse>(response, ct).ConfigureAwait(false);
             return body.Id;
+        }
+
+        /// <summary>GET /attestations/{id} — public, unauthenticated. Reuses
+        /// <see cref="VerifiedAttestation"/> as the return shape (issue #744): its fields are a
+        /// strict subset of the wire response (which also carries a <c>proof</c> this SDK has no
+        /// use for outside issuance), so the same hand-written type this file already needs for
+        /// <see cref="GetAchievementsAsync"/> — deliberately not
+        /// <c>Avalon.Sdk.Generated.AttestationReadResponse</c>, whose nested
+        /// <c>AuthenticityResponse</c>/<c>ValidityResponse</c> are excluded <c>oneOf</c> stubs —
+        /// covers this read too.</summary>
+        public async Task<VerifiedAttestation> GetAttestationAsync(Guid attestationId, CancellationToken ct = default)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{ServerUrl}/attestations/{attestationId}");
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            return await ReadJsonAsync<VerifiedAttestation>(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>POST /attestations/{id}/revoke — only the attestation's original issuer may
+        /// revoke it (issue #85/#744). Authenticated the same challenge-response way every
+        /// issuer-credentialed write in this file is; not gated behind a user capability grant,
+        /// since this is the issuer asserting something about its own issuance, not acting on a
+        /// specific player's behalf. The embedded signature covers
+        /// <c>avalon_protocol::achievements::revocation_signing_bytes</c> for
+        /// <paramref name="claimKind"/> ("achievement" or "milestone" — must match whichever
+        /// vocabulary originally issued this attestation).</summary>
+        public async Task<Avalon.Sdk.Generated.RevocationResponse> RevokeAttestationAsync(
+            Guid attestationId, string claimKind, string issuerRef, string reasonCode, string reason, CancellationToken ct = default)
+        {
+            if (IntegratorSlug is null || SigningKey is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            if (!Guid.TryParse(IntegratorKeyId, out var keyId))
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+
+            var signingBytes = Encoding.UTF8.GetBytes(
+                $"avalon:{claimKind}.revoked:v1:{issuerRef}:{attestationId}:{reasonCode}");
+            var signature = SignWithIssuerKey(signingBytes);
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/attestations/{attestationId}/revoke");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Content = JsonContent(new Avalon.Sdk.Generated.RevokeAttestationRequest
+            {
+                KeyId = keyId,
+                Signature = Convert.ToBase64String(signature),
+                ReasonCode = reasonCode,
+                Reason = reason,
+            });
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            return await ReadJsonAsync<Avalon.Sdk.Generated.RevocationResponse>(response, ct).ConfigureAwait(false);
+        }
+
+        // --- Achievement/milestone definition CRUD (issue #744) ---
+        //
+        // Create/update/list, for both claim vocabularies. Milestones share the
+        // exact same request/response wire shapes as achievements
+        // (crates/server/src/achievements.rs's own create_definition/
+        // list_achievement_definitions/list_milestone_definitions are one shared
+        // implementation under two routes) — only the path and, for the two
+        // signature-bearing issuance methods below, the id namespace differ.
+
+        /// <summary>POST /integrations/{slug}/achievements — defines a new achievement this
+        /// integrator can later issue. Challenge-authenticated only, no user capability (the
+        /// integrator declaring its own vocabulary, not acting on a player's behalf).</summary>
+        public async Task<Avalon.Sdk.Generated.AchievementDefinitionResponse> CreateAchievementDefinitionAsync(
+            string key, string name, string description, string? schema = null, string? icon = null, string? iconUrl = null, CancellationToken ct = default)
+        {
+            if (IntegratorSlug is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/integrations/{IntegratorSlug}/achievements");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Content = JsonContent(new Avalon.Sdk.Generated.CreateAchievementDefinitionRequest
+            {
+                Key = key,
+                Name = name,
+                Description = description,
+                Schema = schema,
+                Icon = icon,
+                IconUrl = iconUrl,
+            });
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            return await ReadJsonAsync<Avalon.Sdk.Generated.AchievementDefinitionResponse>(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>POST /integrations/{slug}/milestones — the App/Service-category
+        /// equivalent of <see cref="CreateAchievementDefinitionAsync"/> (issue #744/#324/#325);
+        /// rejected server-side with a claim-vocabulary mismatch if this integrator is
+        /// registered as a Game.</summary>
+        public async Task<Avalon.Sdk.Generated.AchievementDefinitionResponse> CreateMilestoneDefinitionAsync(
+            string key, string name, string description, string? schema = null, string? icon = null, string? iconUrl = null, CancellationToken ct = default)
+        {
+            if (IntegratorSlug is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/integrations/{IntegratorSlug}/milestones");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Content = JsonContent(new Avalon.Sdk.Generated.CreateAchievementDefinitionRequest
+            {
+                Key = key,
+                Name = name,
+                Description = description,
+                Schema = schema,
+                Icon = icon,
+                IconUrl = iconUrl,
+            });
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            return await ReadJsonAsync<Avalon.Sdk.Generated.AchievementDefinitionResponse>(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>PATCH /integrations/{slug}/achievements/{key} — every field is
+        /// "absent means untouched", including <paramref name="retired"/> (one-way: never used
+        /// to un-retire, matching the server's own doc comment).</summary>
+        public async Task<Avalon.Sdk.Generated.AchievementDefinitionResponse> UpdateAchievementDefinitionAsync(
+            string key, string? name = null, string? description = null, string? schema = null,
+            string? icon = null, string? iconUrl = null, bool? retired = null, CancellationToken ct = default)
+        {
+            if (IntegratorSlug is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            using var request = new HttpRequestMessage(HttpMethod.Patch, $"{ServerUrl}/integrations/{IntegratorSlug}/achievements/{key}");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Content = JsonContent(new Avalon.Sdk.Generated.UpdateAchievementDefinitionRequest
+            {
+                Name = name,
+                Description = description,
+                Schema = schema,
+                Icon = icon,
+                IconUrl = iconUrl,
+                Retired = retired,
+            });
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            return await ReadJsonAsync<Avalon.Sdk.Generated.AchievementDefinitionResponse>(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>PATCH /integrations/{slug}/milestones/{key} — the App/Service-category
+        /// equivalent of <see cref="UpdateAchievementDefinitionAsync"/>.</summary>
+        public async Task<Avalon.Sdk.Generated.AchievementDefinitionResponse> UpdateMilestoneDefinitionAsync(
+            string key, string? name = null, string? description = null, string? schema = null,
+            string? icon = null, string? iconUrl = null, bool? retired = null, CancellationToken ct = default)
+        {
+            if (IntegratorSlug is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            using var request = new HttpRequestMessage(HttpMethod.Patch, $"{ServerUrl}/integrations/{IntegratorSlug}/milestones/{key}");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Content = JsonContent(new Avalon.Sdk.Generated.UpdateAchievementDefinitionRequest
+            {
+                Name = name,
+                Description = description,
+                Schema = schema,
+                Icon = icon,
+                IconUrl = iconUrl,
+                Retired = retired,
+            });
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            return await ReadJsonAsync<Avalon.Sdk.Generated.AchievementDefinitionResponse>(response, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>GET /integrations/{slug}/achievements — every achievement this integrator
+        /// has defined, retired ones included. Public, unauthenticated.</summary>
+        public async Task<IReadOnlyList<Avalon.Sdk.Generated.AchievementDefinitionResponse>> ListAchievementDefinitionsAsync(
+            string slug, CancellationToken ct = default) =>
+            await GetJsonAsync<List<Avalon.Sdk.Generated.AchievementDefinitionResponse>>(
+                $"{ServerUrl}/integrations/{slug}/achievements", ct).ConfigureAwait(false)
+            ?? new List<Avalon.Sdk.Generated.AchievementDefinitionResponse>();
+
+        /// <summary>GET /integrations/{slug}/milestones — the App/Service-category equivalent
+        /// of <see cref="ListAchievementDefinitionsAsync"/>. Public, unauthenticated.</summary>
+        public async Task<IReadOnlyList<Avalon.Sdk.Generated.AchievementDefinitionResponse>> ListMilestoneDefinitionsAsync(
+            string slug, CancellationToken ct = default) =>
+            await GetJsonAsync<List<Avalon.Sdk.Generated.AchievementDefinitionResponse>>(
+                $"{ServerUrl}/integrations/{slug}/milestones", ct).ConfigureAwait(false)
+            ?? new List<Avalon.Sdk.Generated.AchievementDefinitionResponse>();
+
+        /// <summary>POST /integrations/{slug}/milestones/{key}/issue — the App/Service-category
+        /// equivalent of <see cref="IssueAchievementAsync"/> (issue #744/#324/#325).
+        /// <paramref name="category"/> is <c>"app"</c> or <c>"service"</c> — whichever this
+        /// integrator actually registered as — since the signed achievement-ref namespace
+        /// (<c>&lt;category&gt;:&lt;slug&gt;:milestone:&lt;key&gt;</c>) depends on it and this
+        /// SDK has no other way to know a caller's own registered category.</summary>
+        public async Task<Guid> IssueMilestoneAsync(string key, string category, CancellationToken ct = default)
+        {
+            Require("milestones.issue");
+
+            if (IntegratorSlug is null || SigningKey is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            if (!Guid.TryParse(IntegratorKeyId, out var keyId))
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+
+            var challenge = await RequestChallengeAsync(IntegratorSlug, ct).ConfigureAwait(false);
+            var nonce = Convert.FromBase64String(challenge.Nonce);
+            var challengeSignature = SignWithIssuerKey(nonce);
+
+            var issuerRef = $"{category}:{IntegratorSlug}";
+            var achievement = $"{category}:{IntegratorSlug}:milestone:{key}";
+            var signingBytes = Encoding.UTF8.GetBytes($"avalon:milestone.issued:v1:{issuerRef}:{IdentityGuid}:{achievement}");
+            var signature = SignWithIssuerKey(signingBytes);
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post, $"{ServerUrl}/integrations/{IntegratorSlug}/milestones/{key}/issue");
+            request.Headers.Add("x-avalon-integrator-key-id", IntegratorKeyId);
+            request.Headers.Add("x-avalon-integrator-challenge-id", challenge.ChallengeId.ToString());
+            request.Headers.Add("x-avalon-integrator-signature", Convert.ToBase64String(challengeSignature));
+            request.Headers.Add("x-avalon-identity-id", IdentityGuid.ToString());
+            request.Headers.Add("idempotency-key", Guid.NewGuid().ToString());
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.IssueAttestationRequest
+                {
+                    KeyId = keyId,
+                    Signature = Convert.ToBase64String(signature),
+                }),
+                Encoding.UTF8, "application/json");
+
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            var body = await ReadJsonAsync<Avalon.Sdk.Generated.AttestationResponse>(response, ct).ConfigureAwait(false);
+            return body.Id;
+        }
+
+        // --- Bulk issuance (issue #495/#744) ---
+        //
+        // One challenge-response proof plus one signature over the whole ordered
+        // claim list (avalon_protocol::achievements::bulk_attestation_signing_bytes)
+        // — never a per-claim signature. BulkIssueAttestationResponse's own
+        // `results` are hand-rolled here (BulkClaimResult) rather than the
+        // generated type, for the same reason ListMyAchievementsResponse is: the
+        // generated response's own oneOf member is one of this codegen's
+        // deliberately-excluded stubs.
+
+        /// <summary>One claim's own outcome from a bulk issuance call — mirrors the server's
+        /// own tagged <c>BulkClaimResult</c> (<c>"issued"</c>/<c>"failed"</c>).</summary>
+        public sealed class BulkClaimOutcome
+        {
+            [JsonPropertyName("status")]
+            public string Status { get; set; } = "";
+
+            [JsonPropertyName("key")]
+            public string Key { get; set; } = "";
+
+            /// <summary>Present only when <see cref="Status"/> is <c>"issued"</c>.</summary>
+            [JsonPropertyName("attestation")]
+            public Avalon.Sdk.Generated.AttestationResponse? Attestation { get; set; }
+
+            /// <summary>Present only when <see cref="Status"/> is <c>"failed"</c> — a stable
+            /// machine-readable code, matching this repo's own <c>AppError::code</c>
+            /// convention.</summary>
+            [JsonPropertyName("code")]
+            public string? Code { get; set; }
+
+            /// <summary>Present only when <see cref="Status"/> is <c>"failed"</c>.</summary>
+            [JsonPropertyName("error")]
+            public string? Error { get; set; }
+
+            public bool IsIssued => Status == "issued";
+        }
+
+        internal sealed class BulkIssueResultsResponse
+        {
+            [JsonPropertyName("results")]
+            public List<BulkClaimOutcome> Results { get; set; } = new List<BulkClaimOutcome>();
+        }
+
+        /// <summary>One claim to submit in a bulk issuance call — mirrors the server's own
+        /// <c>BulkClaimRequest</c>.</summary>
+        public sealed class BulkClaim
+        {
+            public BulkClaim(string key, object? evidence = null)
+            {
+                Key = key;
+                Evidence = evidence;
+            }
+
+            public string Key { get; }
+            public object? Evidence { get; }
+        }
+
+        /// <summary>Everything <see cref="BulkIssueAchievementsAsync"/>/
+        /// <see cref="BulkIssueMilestonesAsync"/> need to actually send their own literal-route
+        /// request — split out only so each keeps its own literal
+        /// <c>new HttpRequestMessage(HttpMethod.Post, $"...")</c> call site (matching this
+        /// SDK's, and `scripts/check-sdk-coverage.py`'s, existing "literal path per route"
+        /// convention) while sharing the signing-bytes/body-building logic.
+        /// <paramref name="claimKind"/> is folded into the domain-tagged signing bytes
+        /// (<c>avalon:&lt;claim_kind&gt;.issued.bulk:v1:...</c>) exactly as
+        /// <c>bulk_attestation_signing_bytes</c> requires, with each achievement ref
+        /// length-prefixed so two different orderings (or a key containing delimiter-like
+        /// bytes) can never sign identically.</summary>
+        private async Task<HttpContent> PrepareBulkIssueContentAsync(
+            string claimKind, string issuerNamespace, IReadOnlyList<BulkClaim> claims, CancellationToken ct)
+        {
+            if (IntegratorSlug is null || SigningKey is null)
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+            if (!Guid.TryParse(IntegratorKeyId, out var keyId))
+            {
+                throw new MissingIssuerCredentialsException();
+            }
+
+            var issuerRef = $"{issuerNamespace}:{IntegratorSlug}";
+            var achievementRefs = new List<string>(claims.Count);
+            foreach (var claim in claims)
+            {
+                achievementRefs.Add($"{issuerNamespace}:{IntegratorSlug}:{claimKind}:{claim.Key}");
+            }
+
+            var message = new List<byte>(Encoding.UTF8.GetBytes($"avalon:{claimKind}.issued.bulk:v1:{issuerRef}:{IdentityGuid}:"));
+            message.AddRange(BitConverter.GetBytes((uint)achievementRefs.Count).Reverse());
+            foreach (var achievementRef in achievementRefs)
+            {
+                var bytes = Encoding.UTF8.GetBytes(achievementRef);
+                message.AddRange(BitConverter.GetBytes((uint)bytes.Length).Reverse());
+                message.AddRange(bytes);
+            }
+            var signature = SignWithIssuerKey(message.ToArray());
+
+            return new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    key_id = keyId,
+                    signature = Convert.ToBase64String(signature),
+                    claims = claims.Select(c => new { key = c.Key, evidence = c.Evidence }).ToList(),
+                }),
+                Encoding.UTF8, "application/json");
+        }
+
+        /// <summary>POST /integrations/{slug}/achievements/bulk-issue (issue #495/#744) —
+        /// requires achievements.issue, same capability a single issuance does. Never
+        /// all-or-nothing: one claim failing (an unknown/retired key) doesn't fail the rest —
+        /// see each result's own <see cref="BulkClaimOutcome.Status"/>.</summary>
+        public async Task<IReadOnlyList<BulkClaimOutcome>> BulkIssueAchievementsAsync(
+            IReadOnlyList<BulkClaim> claims, CancellationToken ct = default)
+        {
+            Require("achievements.issue");
+            var content = await PrepareBulkIssueContentAsync("achievement", "game", claims, ct).ConfigureAwait(false);
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/integrations/{IntegratorSlug}/achievements/bulk-issue");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Headers.Add("x-avalon-identity-id", IdentityGuid.ToString());
+            request.Headers.Add("idempotency-key", Guid.NewGuid().ToString());
+            request.Content = content;
+
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            var body = await ReadJsonAsync<BulkIssueResultsResponse>(response, ct).ConfigureAwait(false);
+            return body.Results;
+        }
+
+        /// <summary>POST /integrations/{slug}/milestones/bulk-issue — the App/Service-category
+        /// equivalent of <see cref="BulkIssueAchievementsAsync"/>. <paramref name="category"/>
+        /// is <c>"app"</c> or <c>"service"</c>, same reasoning as
+        /// <see cref="IssueMilestoneAsync"/>.</summary>
+        public async Task<IReadOnlyList<BulkClaimOutcome>> BulkIssueMilestonesAsync(
+            string category, IReadOnlyList<BulkClaim> claims, CancellationToken ct = default)
+        {
+            Require("milestones.issue");
+            var content = await PrepareBulkIssueContentAsync("milestone", category, claims, ct).ConfigureAwait(false);
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/integrations/{IntegratorSlug}/milestones/bulk-issue");
+            await AttachIntegratorAuthAsync(request, ct).ConfigureAwait(false);
+            request.Headers.Add("x-avalon-identity-id", IdentityGuid.ToString());
+            request.Headers.Add("idempotency-key", Guid.NewGuid().ToString());
+            request.Content = content;
+
+            using var response = await Http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw ServerError(response.StatusCode);
+            }
+            var body = await ReadJsonAsync<BulkIssueResultsResponse>(response, ct).ConfigureAwait(false);
+            return body.Results;
         }
     }
 }

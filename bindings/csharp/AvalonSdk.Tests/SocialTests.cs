@@ -89,4 +89,49 @@ public class SocialTests
         Assert.EndsWith("/me/presence", request.Url);
         Assert.Equal("the-token", request.AuthorizationToken);
     }
+
+    [Fact]
+    public async Task UpdateIntegratorPresenceAsync_WithoutGrant_IsRejectedBeforeAnyRequest()
+    {
+        var handler = new StubHttpMessageHandler();
+        var session = Session.ForTesting(Array.Empty<string>(), handler.ToHttpClient());
+
+        await Assert.ThrowsAsync<CapabilityNotGrantedException>(
+            () => session.UpdateIntegratorPresenceAsync(Guid.NewGuid(), PresenceStatus.Online));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task UpdateIntegratorPresenceAsync_SendsAChallengeThenAPutRequest()
+    {
+        var identityId = Guid.NewGuid();
+        var nonce = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
+        var handler = new StubHttpMessageHandler()
+            .Enqueue($$"""{ "challenge_id": "11111111-1111-1111-1111-111111111111", "nonce": "{{nonce}}" }""")
+            .Enqueue($$"""{ "identity_id": "{{identityId}}", "status": "Online", "active_in": null, "updated_at": "2026-01-01T00:00:00Z" }""");
+        var session = Session.ForTesting(
+            new[] { "presence.publish" },
+            handler.ToHttpClient(),
+            integratorKeyId: Guid.NewGuid().ToString(),
+            integratorSlug: "dragons-inc",
+            signingKey: Enumerable.Range(0, 32).Select(i => (byte)i).ToArray());
+
+        var presence = await session.UpdateIntegratorPresenceAsync(identityId, PresenceStatus.Online);
+
+        Assert.Equal(identityId, presence.IdentityId);
+        Assert.Equal(HttpMethod.Put, handler.Requests[1].Method);
+        Assert.Contains($"/presence/{identityId}", handler.Requests[1].Url);
+    }
+
+    [Fact]
+    public async Task GetLocationsAsync_IsPublic_ReturnsShardBaseUrls()
+    {
+        var handler = new StubHttpMessageHandler().Enqueue("""{ "locations": ["https://node-a.example", "https://node-b.example"] }""");
+        var session = Session.ForTesting(Array.Empty<string>(), handler.ToHttpClient());
+
+        var locations = await session.GetLocationsAsync(Guid.NewGuid());
+
+        Assert.Equal(2, locations.Count);
+        Assert.Contains("https://node-a.example", locations);
+    }
 }
