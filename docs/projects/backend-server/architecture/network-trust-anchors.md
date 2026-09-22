@@ -20,7 +20,7 @@ versioned, publicly-published trust-anchor list. Each entry:
 |---|---|
 | `label` | Human-readable name for the network. |
 | `network_id` | The exact string a server sets `AVALON_NETWORK_ID` to and bakes into its ledger's genesis ([#173](https://github.com/LunarVagabond/avalon-protocol/issues/173)). |
-| `verify_key` | Hex-encoded Ed25519 public key — the public half of that network's settlement operator signing key (`AVALON_SETTLEMENT_VERIFY_KEY`, see `crates/chain/src/sth.rs` and `.env.example`). |
+| `verify_key` | Hex-encoded Ed25519 public key — the public half of that network's settlement operator signing key (`AVALON_SETTLEMENT_VERIFY_KEY`, see `crates/protocol/src/sth.rs` and `.env.example`). |
 | `signing_key_id` | Which key generation this is, matching `SignedTreeHead.signing_key_id` — informational; a rotated key gets a new entry (or a documented rotation), not a silent overwrite of this one. |
 | `environment` | Which tier this deployment is: `local-dev` (no real deployment — a freely-generated key checked in only to exercise the mechanism end to end), `dev` (a real, non-production, single-node deployment — infra on one machine), `int` (a real, non-production, 1-5 node interconnected test bed used to verify changes actually integrate across nodes before they reach mainnet), or `prod` (a real mainnet deployment, whose validator set is expected to grow and shrink over time — see [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40)). The Hub only calls out non-`prod` entries in its UI. |
 | `seed_nodes` | Issue #362: base URLs of this network's always-on anchor node(s) — the default bootstrap peer list a node configured for this `network_id` announces to (`POST /nodes/announce`) when it has no `AVALON_BOOTSTRAP_PEERS` of its own set. Reuses this file rather than a second committed list — an anchor node is exactly the "always-on node(s) each real deployment already plans to run" this file's entries already describe. Empty for a network with no anchor yet, or for the anchor's own entry (nothing to seed from). Not consumed by the Hub — server-to-server discovery only. |
@@ -81,7 +81,7 @@ client shows it as an unknown/unverified network, not mainnet.
   `@noble/curves/ed25519` (already a Hub dependency for the identity signing
   key, `src/crypto/signingKey.ts`) — the exact same
   `(tree_size, root_hash, network_id, timestamp)` message format
-  `crates/chain/src/sth.rs::signing_message` defines, reproduced byte-for-byte
+  `crates/protocol/src/sth.rs::signing_message` defines, reproduced byte-for-byte
   in `src/network/sthMessage.ts`.
 - `src/composables/useNetworkTrust.ts` + `src/components/NetworkStatus.vue` —
   surfaced in the Hub shell sidebar (`HubShell.vue`), always visible, never

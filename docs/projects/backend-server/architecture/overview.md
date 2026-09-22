@@ -200,11 +200,14 @@ settles are correct.
 
 - `crates/protocol/src/` — `identity`, `ids`, `integrators`, `integrator_schemas`,
   `guilds`, `social`, `achievements`, `permissions`, `events` modules; pure
-  types, no I/O.
+  types, no I/O. Also `sth` (moved from `crates/chain` by #773) — the
+  Ed25519 Signed Tree Head signing/verification scheme, pure enough to need
+  no chain/Postgres dependency, re-exported by `crates/chain` for its own
+  callers.
 - `crates/chain/` — `SettlementProvider` trait and a hash-chained,
   RFC 6962 Merkle-batched Postgres ledger (`postgres.rs`, `merkle.rs`,
-  `sth.rs`). Real, not stubbed, and signed at the tree-head level (not
-  per-entry) since #39/#210.
+  `avalon_protocol::sth`). Real, not stubbed, and signed at the tree-head
+  level (not per-entry) since #39/#210.
 - `crates/indexer/` — `PostgresIndexer` (`postgres.rs`, #42) is a real,
   dispatched, idempotent `Indexer`, with one projection module per read
   model under `projections/` (`profiles`, `friendships`, `guild_rosters`,

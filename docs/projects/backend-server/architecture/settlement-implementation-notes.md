@@ -37,7 +37,7 @@ the actual code ever disagree, the code is right and this doc is stale.
   `ledger_batches.batch_root` — the whole ledger's tree as of that batch,
   not a per-batch sub-tree, replacing the placeholder chain-tip value #38
   shipped. `commit` also signs and stores one `SignedTreeHead` per batch
-  (`crates/chain/src/sth.rs`, table `signed_tree_heads`,
+  (`crates/protocol/src/sth.rs`, table `signed_tree_heads`,
   `crates/server/db/migrations/0024_signed_tree_heads`) — Ed25519,
   STH-only per #39 (no per-entry signatures), covering
   `(tree_size, root_hash, network_id, timestamp)`. The signing key is

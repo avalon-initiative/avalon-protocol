@@ -25,8 +25,9 @@
 //!   corrupted STH, the exact scenario the ticket's acceptance criteria
 //!   calls for — and confirms it's caught and durably recorded.
 
+use avalon_chain::merkle;
 use avalon_chain::mirror::{self, ObservedSth};
-use avalon_chain::{merkle, sth};
+use avalon_protocol::sth;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

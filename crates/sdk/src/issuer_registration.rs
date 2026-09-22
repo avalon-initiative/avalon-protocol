@@ -183,7 +183,7 @@ mod tests {
     }
 
     async fn mount_verified_sth(server: &MockServer, signing_key: &SigningKey, network_id: &str) {
-        let sth = avalon_chain::sth::sign_tree_head(
+        let sth = avalon_protocol::sth::sign_tree_head(
             signing_key,
             "test-key",
             1,

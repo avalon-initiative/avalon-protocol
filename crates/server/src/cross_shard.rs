@@ -43,7 +43,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use avalon_chain::cross_shard::{compute_cross_shard_root_checked, CrossShardRoot, ShardTreeHead};
-use avalon_chain::sth::{self, SignedTreeHead};
+use avalon_protocol::sth::{self, SignedTreeHead};
 use axum::extract::State;
 use axum::Json;
 use ed25519_dalek::VerifyingKey;

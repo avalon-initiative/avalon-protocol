@@ -74,7 +74,7 @@ async fn prepare_then_finalize_with_a_valid_signature_commits_the_batch() {
 
     // The integrator signs the preview locally — this signing key never
     // touches the chain crate/managed host at any point.
-    let message = avalon_chain::sth::signing_message(
+    let message = avalon_protocol::sth::signing_message(
         preview.tree_size,
         &preview.root_hash,
         &preview.network_id,
@@ -134,7 +134,7 @@ async fn finalize_with_an_invalid_signature_is_rejected_and_inserts_nothing() {
 
     // Signed with the WRONG key — `finalize` verifies against
     // `integrator_key.verifying_key()`, so this must fail.
-    let message = avalon_chain::sth::signing_message(
+    let message = avalon_protocol::sth::signing_message(
         preview.tree_size,
         &preview.root_hash,
         &preview.network_id,
@@ -180,7 +180,7 @@ async fn finalize_after_the_tip_moved_since_prepare_is_rejected() {
     let batch = sample_batch("test.managed_hosting_stale");
 
     let preview = chain.prepare(&batch).await.expect("prepare failed");
-    let message = avalon_chain::sth::signing_message(
+    let message = avalon_protocol::sth::signing_message(
         preview.tree_size,
         &preview.root_hash,
         &preview.network_id,
@@ -227,7 +227,7 @@ async fn finalize_is_idempotent_on_a_replayed_batch_id() {
     let batch = sample_batch("test.managed_hosting_idempotent");
 
     let preview = chain.prepare(&batch).await.expect("prepare failed");
-    let message = avalon_chain::sth::signing_message(
+    let message = avalon_protocol::sth::signing_message(
         preview.tree_size,
         &preview.root_hash,
         &preview.network_id,

@@ -63,9 +63,9 @@
 
 use avalon_chain::merkle;
 use avalon_chain::mirror;
-use avalon_chain::sth::SignedTreeHead;
 use avalon_chain::{LedgerEntryView, SettlementProvider};
 use avalon_protocol::events::{Commitment, EventBatch};
+use avalon_protocol::sth::SignedTreeHead;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -870,7 +870,7 @@ pub async fn submit_ledger_batch(
 /// remote-signing flow, phase one. An integrator using a managed host
 /// (rather than self-hosting) submits its already-collected pending
 /// events; this handler returns the unsigned candidate tree head
-/// (`avalon_chain::sth::PreparedTreeHead`) the integrator needs to sign
+/// (`avalon_protocol::sth::PreparedTreeHead`) the integrator needs to sign
 /// *locally*, with its own settlement key — this node never holds, sees,
 /// or asks for that key. See `PostgresSettlementProvider::prepare`'s own
 /// doc comment for why the response is a stateless preview, not something
@@ -887,7 +887,7 @@ pub async fn prepare_batch(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(batch): Json<EventBatch>,
-) -> Result<Json<avalon_chain::sth::PreparedTreeHead>, AppError> {
+) -> Result<Json<avalon_protocol::sth::PreparedTreeHead>, AppError> {
     require_settlement_submit_key(&state, &headers)?;
     if state.managed_hosting_verify_key.is_none() {
         return Err(AppError::Unauthorized);
@@ -904,7 +904,7 @@ pub struct FinalizeBatchRequest {
     pub created_at: OffsetDateTime,
     pub signing_key_id: String,
     /// Hex-encoded Ed25519 signature over
-    /// `avalon_chain::sth::signing_message(tree_size, root_hash,
+    /// `avalon_protocol::sth::signing_message(tree_size, root_hash,
     /// network_id, created_at)` — the exact preview `prepare_batch`
     /// returned, computed and signed by the integrator's own settlement
     /// key.

@@ -10,7 +10,7 @@
 //! integration-test bar: fetch a real STH, fetch a real inclusion proof for
 //! an entry that actually exists, and verify it **client-side**, with no
 //! further server trust beyond the STH's Ed25519 signature —
-//! `avalon_chain::merkle`/`avalon_chain::sth` are used directly here the
+//! `avalon_chain::merkle`/`avalon_protocol::sth` are used directly here the
 //! same way an independent mirror would use them, not re-trusting whatever
 //! the server claims.
 //!
@@ -19,7 +19,8 @@
 //! a committed batch, so every test here polls briefly after triggering a
 //! write rather than assuming it's already settled.
 
-use avalon_chain::{merkle, sth};
+use avalon_chain::merkle;
+use avalon_protocol::sth;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

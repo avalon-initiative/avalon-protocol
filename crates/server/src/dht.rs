@@ -12,7 +12,7 @@
 //! **A libp2p `PeerId` is a brand-new identity domain, not a reuse of any
 //! existing key.** This codebase already has three separate key domains
 //! (player keys #73, issuer keys #80/#84, the settlement log operator's key
-//! #39 — see `avalon_chain::sth`) and none of them fit: player/issuer keys
+//! #39 — see `avalon_protocol::sth`) and none of them fit: player/issuer keys
 //! are about attestation/authorship, never held by a server process at all,
 //! and the settlement key's lifecycle (rotatable, tied to STH-signing) is
 //! semantically unrelated to peer-transport identity. A node now holds a
@@ -167,7 +167,7 @@ pub enum IdentityLoadError {
 
 /// Loads this node's libp2p identity keypair from
 /// `AVALON_LIBP2P_IDENTITY_KEY` (a raw 32-byte Ed25519 seed, hex-encoded —
-/// the same convention `avalon_chain::sth`'s `AVALON_SETTLEMENT_SIGNING_KEY`
+/// the same convention `avalon_protocol::sth`'s `AVALON_SETTLEMENT_SIGNING_KEY`
 /// already establishes), or generates a fresh one when unset.
 ///
 /// Unlike the settlement key, an unset value is **not** an error: this is a

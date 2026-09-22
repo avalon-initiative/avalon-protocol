@@ -9,13 +9,13 @@ place (see [`equivocation-response.md`](equivocation-response.md) for
 that judgment call) or alerting/paging (also #315, blocked on nothing now
 that #265's structured logging has landed, but not built yet).
 
-This is the settlement/log operator key specifically (`crates/chain/src/sth.rs`)
+This is the settlement/log operator key specifically (`crates/protocol/src/sth.rs`)
 — a different key domain from issuer keys (#80/#84) or user keys (#73).
 Nothing here rotates those.
 
 ## Why this needs a procedure at all
 
-`crates/chain/src/sth.rs`'s `signing_key_id` already lets a single STH name
+`crates/protocol/src/sth.rs`'s `signing_key_id` already lets a single STH name
 which key generation signed it, so historical STHs stay verifiable under
 the old key forever — rotating the active key never requires
 re-signing or invalidating anything already committed. The part that isn't

@@ -674,13 +674,13 @@ fn parse_peer_selection(input: &str, candidates: &[String]) -> Vec<String> {
 
 /// A remote `GET /ledger/sth/*` response, trimmed to what
 /// `check_switch_readiness` needs — deliberately not
-/// `avalon_chain::sth::SignedTreeHead` itself (that type has no
+/// `avalon_protocol::sth::SignedTreeHead` itself (that type has no
 /// `Deserialize`; it's only ever built in-process from a real signature,
 /// never trusted in from the wire, everywhere else this crate uses it).
 /// This command is the one place a `SignedTreeHead`-shaped value
 /// legitimately arrives over HTTP from a party this process doesn't
 /// control — converted immediately into the real type below so
-/// `avalon_chain::sth::verify_tree_head` (the same signature check every
+/// `avalon_protocol::sth::verify_tree_head` (the same signature check every
 /// other verifier in this codebase uses) can check it like any other.
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RemoteSth {
@@ -693,9 +693,9 @@ struct RemoteSth {
     created_at: time::OffsetDateTime,
 }
 
-impl From<RemoteSth> for avalon_chain::sth::SignedTreeHead {
+impl From<RemoteSth> for avalon_protocol::sth::SignedTreeHead {
     fn from(r: RemoteSth) -> Self {
-        avalon_chain::sth::SignedTreeHead {
+        avalon_protocol::sth::SignedTreeHead {
             tree_size: r.tree_size,
             root_hash: r.root_hash,
             network_id: r.network_id,
@@ -734,7 +734,7 @@ impl From<RemoteSth> for avalon_chain::sth::SignedTreeHead {
 ///    does, just run manually against two specific hosts on demand.
 /// 4. `--verify-key` (the shard's registered verify key, hex-encoded) is
 ///    optional but recommended — when given, both STHs' signatures are
-///    also checked with `avalon_chain::sth::verify_tree_head`, the same
+///    also checked with `avalon_protocol::sth::verify_tree_head`, the same
 ///    check `inspect-ledger` runs locally. Without it, a `READY` verdict
 ///    only means "these two hosts' claims agree with each other," not
 ///    "both are honest" — the whole reason this crate's convention is
@@ -802,13 +802,13 @@ async fn check_switch_readiness(raw_args: &[String]) {
         .build()
         .expect("failed to build HTTP client");
 
-    let report_sth = |label: &str, sth: &avalon_chain::sth::SignedTreeHead| {
+    let report_sth = |label: &str, sth: &avalon_protocol::sth::SignedTreeHead| {
         println!(
             "{label}: tree_size={} root_hash={}",
             sth.tree_size, sth.root_hash
         );
         if let Some(key) = &verify_key {
-            let ok = avalon_chain::sth::verify_tree_head(key, sth);
+            let ok = avalon_protocol::sth::verify_tree_head(key, sth);
             println!(
                 "{label}: signature {}",
                 if ok {
@@ -825,7 +825,7 @@ async fn check_switch_readiness(raw_args: &[String]) {
         }
     };
 
-    let old_sth: Option<avalon_chain::sth::SignedTreeHead> = match http
+    let old_sth: Option<avalon_protocol::sth::SignedTreeHead> = match http
         .get(format!("{old_host}/ledger/sth/latest?shard_id={shard_id}"))
         .send()
         .await
@@ -876,7 +876,7 @@ async fn check_switch_readiness(raw_args: &[String]) {
     };
     report_sth("old-host", &old_sth);
 
-    let new_sth: Option<avalon_chain::sth::SignedTreeHead> = match http
+    let new_sth: Option<avalon_protocol::sth::SignedTreeHead> = match http
         .get(format!(
             "{new_host}/ledger/sth/{}?shard_id={shard_id}",
             old_sth.tree_size
@@ -1117,9 +1117,9 @@ async fn inspect_ledger(full: bool) {
                     "✗ TAMPER EVIDENCE — recomputed root does not match the signed root".to_string()
                 }
             );
-            match avalon_chain::sth::load_verify_key_from_env() {
+            match avalon_protocol::sth::load_verify_key_from_env() {
                 Ok(verify_key) => {
-                    let signature_valid = avalon_chain::sth::verify_tree_head(&verify_key, sth);
+                    let signature_valid = avalon_protocol::sth::verify_tree_head(&verify_key, sth);
                     println!(
                         "  signature (key {}): {}",
                         sth.signing_key_id,
@@ -1139,7 +1139,7 @@ async fn inspect_ledger(full: bool) {
 /// Recomputes the RFC 6962 Merkle Tree Hash of every `entries` entry up to
 /// `sth.tree_size` and checks it against `sth.root_hash` — the structural
 /// half of STH verification, independent of the signature check
-/// (`avalon_chain::sth::verify_tree_head`). Pure and directly unit-testable
+/// (`avalon_protocol::sth::verify_tree_head`). Pure and directly unit-testable
 /// without Postgres; `inspect_ledger` is its only real caller.
 /// `entries` must already be ordered by `seq` ascending (as
 /// `PostgresSettlementProvider::list_entries` returns them). Takes the
@@ -1157,7 +1157,7 @@ async fn inspect_ledger(full: bool) {
 /// inspect-ledger` exists to never produce.
 fn merkle_root_matches(
     entries: &[avalon_chain::LedgerEntryView],
-    sth: &avalon_chain::sth::SignedTreeHead,
+    sth: &avalon_protocol::sth::SignedTreeHead,
 ) -> bool {
     let tree_size = sth.tree_size.max(0) as usize;
     let hashes: Vec<String> = entries
@@ -1182,8 +1182,8 @@ fn short_hash(hash: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avalon_chain::sth::sign_tree_head;
     use avalon_chain::LedgerEntryView;
+    use avalon_protocol::sth::sign_tree_head;
     use ed25519_dalek::SigningKey;
     use serde_json::json;
 
@@ -1321,12 +1321,12 @@ mod tests {
         // — must be reported as invalid.
         let wrong_key = SigningKey::generate(&mut rand::rng());
         assert!(
-            !avalon_chain::sth::verify_tree_head(&wrong_key.verifying_key(), &sth),
+            !avalon_protocol::sth::verify_tree_head(&wrong_key.verifying_key(), &sth),
             "a signature that doesn't verify against the configured key must be reported, not accepted"
         );
 
         // Sanity: the actual signing key's public half verifies fine.
-        assert!(avalon_chain::sth::verify_tree_head(
+        assert!(avalon_protocol::sth::verify_tree_head(
             &signing_key.verifying_key(),
             &sth
         ));

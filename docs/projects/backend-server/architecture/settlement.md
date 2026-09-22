@@ -600,7 +600,12 @@ Everything below is real and implemented unless noted otherwise.
   in `ledger_batches`, hash-chained via `entry_hash = SHA-256(prev_hash ‖
   event content)` across batch boundaries.
 - **Merkle root + Signed Tree Heads** (#210) — RFC 6962 Merkle Tree Hash over
-  the whole ledger, one Ed25519-signed `SignedTreeHead` per batch.
+  the whole ledger, one Ed25519-signed `SignedTreeHead` per batch. The
+  signing/verification scheme itself lives in `crates/protocol/src/sth.rs`
+  (moved out of `crates/chain` by #773, since it's pure Ed25519 code with no
+  Postgres dependency — the SDK needs it without needing all of `chain`);
+  `avalon-chain` re-exports it as `avalon_chain::sth` so its own callers are
+  unaffected.
 - **Incremental Merkle tree** (#349) — an in-memory O(log n) compact-range
   structure replaces from-scratch O(n) recomputation on every commit/proof;
   every root/proof is verified byte-identical to the from-scratch version.

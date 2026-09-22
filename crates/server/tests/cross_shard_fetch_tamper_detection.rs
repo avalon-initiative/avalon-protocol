@@ -26,8 +26,8 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use avalon_chain::sth::sign_tree_head;
 use avalon_chain::{hash_entry, merkle, EntryContent};
+use avalon_protocol::sth::sign_tree_head;
 use avalon_server::cross_shard_fetch::{fetch_verified_entries, CrossShardFetchError};
 
 const NETWORK_ID: &str = "avalon-tamper-test";

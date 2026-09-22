@@ -52,7 +52,7 @@ use crate::state::AppState;
 /// Domain-separates this module's DHT keyspace from any other future use
 /// of the same swarm (nothing else uses it yet, but #580's epic explicitly
 /// anticipates more than just this) — same motivation
-/// `avalon_chain::sth::signing_message`'s own fixed domain tag documents
+/// `avalon_protocol::sth::signing_message`'s own fixed domain tag documents
 /// for exactly the same reason: one scheme's key/message shape must never
 /// collide with another's.
 const KEY_PREFIX: &[u8] = b"avalon-interest-v1:";
