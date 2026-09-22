@@ -45,6 +45,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -229,13 +230,14 @@ pub(crate) async fn fetch_channel(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ChannelResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
     pub name: String,
     pub archived: bool,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
     pub announcement_only: bool,
     pub topic: Option<String>,
@@ -271,6 +273,13 @@ impl From<ChannelRow> for ChannelResponse {
 /// concept before this ticket. A non-member of a non-public guild is
 /// still 403'd, unchanged. Lists both active and archived channels; the
 /// client distinguishes via `archived`.
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/channels",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = Vec<ChannelResponse>)),
+)]
 pub async fn list_channels(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -321,12 +330,20 @@ pub async fn list_channels(
     Ok(Json(channels))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateChannelRequest {
     pub name: String,
 }
 
 /// `POST /guilds/{id}/channels` — requires `manage_channels`.
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/channels",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = CreateChannelRequest,
+    responses((status = 200, body = ChannelResponse)),
+)]
 pub async fn create_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -385,7 +402,7 @@ pub async fn create_channel(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateChannelRequest {
     pub name: String,
     /// Issue #250. `None` leaves the existing value untouched, same
@@ -407,6 +424,14 @@ pub struct UpdateChannelRequest {
 /// announcement-only/public. Requires `manage_channels` (resource-aware,
 /// issue #250). Renaming/retoggling an archived channel is allowed (it's
 /// still the same durable channel, just not accepting new posts).
+#[utoipa::path(
+    patch,
+    path = "/guilds/{id}/channels/{cid}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("cid" = Uuid, Path)),
+    request_body = UpdateChannelRequest,
+    responses((status = 200, body = ChannelResponse)),
+)]
 pub async fn update_channel(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -481,6 +506,13 @@ pub async fn update_channel(
 /// delete: history and past messages stay reachable, the channel simply
 /// stops accepting new posts (enforced in
 /// `crate::guild_messages::send_message`).
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/channels/{cid}/archive",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("cid" = Uuid, Path)),
+    responses((status = 200, body = ChannelResponse)),
+)]
 pub async fn archive_channel(
     State(state): State<AppState>,
     headers: HeaderMap,

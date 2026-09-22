@@ -34,6 +34,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -65,7 +66,7 @@ fn ordered_pair(x: Uuid, y: Uuid) -> (Uuid, Uuid) {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ResolveHandleResponse {
     pub identity_id: Uuid,
 }
@@ -78,6 +79,13 @@ pub struct ResolveHandleResponse {
 /// Session-authenticated like every other route in this module, both so an
 /// anonymous caller can't use it to enumerate handles and so it matches
 /// this module's existing "no integrator-credential auth path" convention.
+#[utoipa::path(
+    get,
+    path = "/friends/handle/{handle}",
+    tag = "friends",
+    params(("handle" = String, Path)),
+    responses((status = 200, body = ResolveHandleResponse)),
+)]
 pub async fn resolve_handle(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -96,20 +104,28 @@ pub async fn resolve_handle(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateFriendRequestRequest {
     pub to: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct FriendRequestResponse {
     pub id: Uuid,
     pub from: Uuid,
     pub to: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub requested_at: OffsetDateTime,
 }
 
+#[utoipa::path(
+    post,
+    path = "/friends/requests",
+    tag = "friends",
+    request_body = CreateFriendRequestRequest,
+    responses((status = 200, body = FriendRequestResponse)),
+)]
 pub async fn create_friend_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -215,14 +231,22 @@ async fn fetch_pending_request(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct FriendshipResponse {
     pub a: Uuid,
     pub b: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub since: OffsetDateTime,
 }
 
+#[utoipa::path(
+    post,
+    path = "/friends/requests/{id}/accept",
+    tag = "friends",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = FriendshipResponse)),
+)]
 pub async fn accept_friend_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -280,6 +304,13 @@ pub async fn accept_friend_request(
     Ok(Json(FriendshipResponse { a, b, since }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/friends/requests/{id}",
+    tag = "friends",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, description = "Friend request declined or withdrawn")),
+)]
 pub async fn decline_or_withdraw_friend_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -307,6 +338,13 @@ pub async fn decline_or_withdraw_friend_request(
     Ok(())
 }
 
+#[utoipa::path(
+    delete,
+    path = "/friends/{identity_id}",
+    tag = "friends",
+    params(("identity_id" = Uuid, Path)),
+    responses((status = 200, description = "Friendship removed")),
+)]
 pub async fn remove_friend(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -345,6 +383,12 @@ pub async fn remove_friend(
     Ok(())
 }
 
+#[utoipa::path(
+    get,
+    path = "/friends",
+    tag = "friends",
+    responses((status = 200, body = Vec<FriendshipResponse>)),
+)]
 pub async fn list_friends(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -363,6 +407,12 @@ pub async fn list_friends(
     Ok(Json(friendships))
 }
 
+#[utoipa::path(
+    get,
+    path = "/friends/requests",
+    tag = "friends",
+    responses((status = 200, body = Vec<FriendRequestResponse>)),
+)]
 pub async fn list_friend_requests(
     State(state): State<AppState>,
     headers: HeaderMap,
