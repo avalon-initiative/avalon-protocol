@@ -3205,6 +3205,25 @@ export interface components {
             id: string;
             participants: string[];
         };
+        ConversationSendMessageRequest: {
+            body: string;
+            /**
+             * Format: uuid
+             * @description The submitting client's journal `EntryId` (issue #110/#111), when
+             *     this request came from the SDK's deferred submission engine rather
+             *     than a direct online send. Optional — a message sent directly online
+             *     never sets this and never needs to dedupe against anything (see
+             *     migration `0037_conversation_message_idempotency`).
+             *
+             *     A retried request after a dropped response carries the *same*
+             *     `client_entry_id` as the original attempt — that's the whole
+             *     mechanism: [`send_message`] treats a conflict on
+             *     `(conversation_id, client_entry_id)` as "already applied" and
+             *     returns the existing row instead of erroring or inserting a
+             *     duplicate.
+             */
+            client_entry_id?: string | null;
+        };
         CreateAchievementDefinitionRequest: {
             description: string;
             /**
@@ -5245,7 +5264,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SendMessageRequest"];
+                "application/json": components["schemas"]["ConversationSendMessageRequest"];
             };
         };
         responses: {
@@ -8338,4 +8357,4 @@ export interface operations {
 }
 
 // Issue #735: the info.version this file's types were generated from.
-export const OPENAPI_SCHEMA_VERSION = "0.1.0" as const
+export const OPENAPI_SCHEMA_VERSION = "0.2.0" as const

@@ -360,7 +360,14 @@ pub async fn list_messages(
     Ok(Json(messages))
 }
 
+// Renamed in the published schema (issue #742, same class of bug #726
+// found and fixed for `MessageResponse`/`ConversationMessageResponse`): a
+// bare `ToSchema` name collides with `guild_messages::SendMessageRequest`
+// (both register as `SendMessageRequest` in `openapi.rs`'s aggregator;
+// utoipa lets the second-registered one win silently) — without this,
+// the published schema for this endpoint was missing `client_entry_id`.
 #[derive(Deserialize, ToSchema)]
+#[schema(as = ConversationSendMessageRequest)]
 pub struct SendMessageRequest {
     pub body: String,
     /// The submitting client's journal `EntryId` (issue #110/#111), when

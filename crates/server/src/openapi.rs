@@ -28,7 +28,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
-        version = "0.1.0"
+        version = "0.2.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,

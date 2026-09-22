@@ -47,7 +47,8 @@ pub struct ConversationMessage {
 // comment on the `#[schema(as = ...)]` fix, #726) and this crate originally
 // migrated onto the wrong (silently-overwritten) one, reading a
 // `channel_id` field the real `/conversations/{id}/messages` response never
-// actually sends.
+// actually sends. `SendMessageRequest`/`ConversationSendMessageRequest` had
+// the same collision (issue #742) — fixed the same way.
 impl TryFrom<crate::generated::ConversationMessageResponse> for ConversationMessage {
     type Error = SdkError;
 
@@ -131,8 +132,9 @@ impl AccountSession {
                     crate::generated::paths::chat::SEND_MESSAGE,
                     &[("id", &conversation_id.to_string())],
                 ),
-                &crate::generated::SendMessageRequest {
+                &crate::generated::ConversationSendMessageRequest {
                     body: body.to_string(),
+                    client_entry_id: None,
                 },
             )
             .await?;
