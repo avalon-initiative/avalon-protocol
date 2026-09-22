@@ -51,6 +51,40 @@ struct PollCrossNodeLoginResponse {
     token: Option<String>,
 }
 
+/// The approver-side read backing an approval screen — mirrors
+/// `crates/server/src/cross_node_login.rs::LookupCrossNodeLoginResponse`
+/// at the wire level. Never carries `request_code` (the polling device's
+/// own bearer credential, not the approver's business).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CrossNodeLoginLookup {
+    /// One of `"pending"`, `"denied"`, `"expired"`, `"approved"` — an
+    /// approval screen only ever meaningfully acts on `"pending"`.
+    pub status: String,
+    /// The requesting node's own context to show a human before they
+    /// decide whether to approve.
+    pub requesting_context: String,
+    /// Seconds until this request expires if it's never approved.
+    pub expires_in: i64,
+    /// Whether this node (the one being logged into) resolves to a real,
+    /// registered integrator or known network anchor — issue #649,
+    /// implementing #642's decided phishing-context requirement. Never a
+    /// hard gate; an unverified requester still gets a prompt, just a
+    /// clearly flagged one.
+    pub integrator_verified: bool,
+    /// A real registered display name — only present when
+    /// `integrator_verified` is `true`.
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+/// [`AvalonClient::deny_cross_node_login`]'s response — mirrors
+/// `crates/server/src/cross_node_login.rs::DenyResponse`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CrossNodeLoginDenial {
+    /// Always `"denied"` on success.
+    pub status: String,
+}
+
 #[derive(Serialize)]
 struct SubmitGrantRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,6 +216,85 @@ impl AvalonClient {
         })?;
         self.authenticate(&token).await
     }
+
+    /// `GET /auth/cross-node/lookup?user_code=...` (closed out by
+    /// #741/#749) — the approver's own half of the flow: reads real
+    /// context for a `user_code` *before* deciding whether to approve or
+    /// [`AvalonClient::deny_cross_node_login`] it. Unauthenticated —
+    /// there's routinely no session yet on the node an approver reaches
+    /// this from.
+    pub async fn lookup_cross_node_login(
+        &self,
+        user_code: &str,
+    ) -> Result<CrossNodeLoginLookup, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!("{}/auth/cross-node/lookup", self.config.server_url))
+                .query(&[("user_code", user_code)])
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `POST /auth/cross-node/deny` (closed out by #741/#749) — the
+    /// approver denying a pending cross-node login by its `user_code`.
+    /// Deliberately unauthenticated (see
+    /// `crates/server/src/cross_node_login.rs::deny`'s own doc comment: a
+    /// denial grants nothing, so the worst case of a guessed code is
+    /// griefing one's own pending request, not a security bypass).
+    pub async fn deny_cross_node_login(
+        &self,
+        user_code: &str,
+    ) -> Result<CrossNodeLoginDenial, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, false, |c| {
+            c.post(format!("{}/auth/cross-node/deny", self.config.server_url))
+                .json(&serde_json::json!({ "user_code": user_code }))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /identities/{id}/locations` (closed out by #741/#749) —
+    /// every location (server base URL) currently advertised for
+    /// `identity_id`, the DHT-backed set a requesting node resolves
+    /// *before* cross-node login can even start (there is routinely no
+    /// session yet at this point — see this method's own unauthenticated
+    /// posture, matching `crates/server/src/identity_locator.rs::get_locations`).
+    /// Empty, never an error, for an identity with no advertised location
+    /// (e.g. no DHT identity configured on the node it's home to).
+    pub async fn identity_locations(&self, identity_id: Uuid) -> Result<Vec<String>, SdkError> {
+        #[derive(Deserialize)]
+        struct LocationsResponse {
+            locations: Vec<String>,
+        }
+
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/identities/{identity_id}/locations",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        let body: LocationsResponse = response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        Ok(body.locations)
+    }
 }
 
 impl CrossNodeLogin<'_> {
@@ -231,5 +344,32 @@ impl CrossNodeLogin<'_> {
                 _ => return Err(SdkError::CrossNodeLoginExpired),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod approver_tests {
+    use super::*;
+
+    #[test]
+    fn cross_node_login_lookup_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({
+            "status": "pending",
+            "requesting_context": "https://ashen-realms.example",
+            "expires_in": 300,
+            "integrator_verified": true,
+            "display_name": "Ashen Realms",
+        });
+        let lookup: CrossNodeLoginLookup = serde_json::from_value(raw).unwrap();
+        assert_eq!(lookup.status, "pending");
+        assert!(lookup.integrator_verified);
+        assert_eq!(lookup.display_name.as_deref(), Some("Ashen Realms"));
+    }
+
+    #[test]
+    fn cross_node_login_denial_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({ "status": "denied" });
+        let denial: CrossNodeLoginDenial = serde_json::from_value(raw).unwrap();
+        assert_eq!(denial.status, "denied");
     }
 }

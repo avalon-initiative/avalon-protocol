@@ -695,3 +695,96 @@ async fn revoke_attestation_is_forbidden_for_a_different_issuer() {
         Err(avalon_sdk::SdkError::CapabilityNotGranted(_))
     ));
 }
+
+/// Exercises the achievement-definition CRUD surface (#324/#325, closed
+/// out by #741/#744) end to end: `Session::create_achievement_definition`
+/// -> `Session::issue_achievement` (already live-verified above) ->
+/// `AvalonClient::get_attestation`/`AvalonClient::list_achievement_definitions`,
+/// plus `Session::update_achievement_definition` retiring it afterward —
+/// this ticket's own named "definition-create -> issue -> read" round
+/// trip, through the typed SDK on both the write and the public-read
+/// sides.
+#[tokio::test]
+#[ignore]
+async fn create_achievement_definition_then_issue_then_read_it_back_via_the_sdk() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let display_name = format!("sdk-def-{}", Uuid::new_v4());
+
+    let identity = register_and_login(&http, &base, &display_name).await;
+    let integrator = register_integrator(&http, &base).await;
+
+    let connect = http
+        .post(format!("{base}/integrations/{}/connect", integrator.slug))
+        .bearer_auth(&identity.token)
+        .json(&json!({
+            "capabilities": ["achievements.issue", "achievements.read"],
+            "signing_key_id": identity.signing_key_id,
+            "signature": sign_connect(&identity.signing_key, &integrator.slug, &["achievements.issue", "achievements.read"]),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(connect.status().is_success(), "{:?}", connect.status());
+
+    let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
+        server_url: base.clone(),
+        integrator_credential_key_id: integrator.key_id.clone(),
+        integrator_slug: Some(integrator.slug.clone()),
+        signing_key: Some(integrator.signing_key.to_bytes()),
+        retry: Default::default(),
+    });
+    let session = client
+        .authenticate(&identity.token)
+        .await
+        .expect("authenticate() should succeed with a valid session token");
+
+    let definition = session
+        .create_achievement_definition(
+            &integrator.slug,
+            avalon_sdk::achievements::NewClaimDefinition {
+                key: "lost_relic".to_string(),
+                name: "Lost Relic".to_string(),
+                description: "Found the lost relic".to_string(),
+                schema: None,
+                icon: None,
+                icon_url: None,
+            },
+        )
+        .await
+        .expect("create_achievement_definition should succeed once authenticated as the issuer");
+    assert_eq!(definition.key, "lost_relic");
+    assert!(!definition.retired);
+
+    let listed = client
+        .list_achievement_definitions(&integrator.slug)
+        .await
+        .expect("list_achievement_definitions should succeed (public, unauthenticated)");
+    assert!(listed.iter().any(|d| d.key == "lost_relic"));
+
+    let attestation_id = session
+        .issue_achievement("lost_relic")
+        .await
+        .expect("issue_achievement should succeed against the just-created definition");
+
+    let read_back = client
+        .get_attestation(attestation_id)
+        .await
+        .expect("get_attestation should succeed (public, unauthenticated)");
+    assert_eq!(read_back.id, attestation_id);
+    assert_eq!(read_back.achievement, definition.id);
+
+    let updated = session
+        .update_achievement_definition(
+            &integrator.slug,
+            "lost_relic",
+            avalon_sdk::achievements::ClaimDefinitionUpdate {
+                retired: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update_achievement_definition should succeed once authenticated as the issuer");
+    assert!(updated.retired);
+    assert!(updated.retired_at.is_some());
+}

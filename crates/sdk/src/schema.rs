@@ -133,6 +133,28 @@ pub struct SchemaMapping {
     pub published_at: String,
 }
 
+/// One currently-visible Integrator Space instance about an identity —
+/// mirrors `crates/server/src/integrator_data.rs::VisibleIntegratorDataInstanceResponse`
+/// at the wire level. Unlike [`DataInstance`] this carries only the fields
+/// its schema's visibility rules currently allow, never the full instance.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisibleDataInstance {
+    /// The schema version this instance conforms to.
+    pub schema: String,
+    /// The publishing integrator's id.
+    pub integrator_id: Uuid,
+    /// When this instance was published, RFC3339.
+    pub published_at: String,
+    /// Only the fields the instance's schema currently makes visible.
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct DeleteInstanceRequest<'a> {
+    reason_code: &'a str,
+    reason: Option<&'a str>,
+}
+
 #[derive(Serialize)]
 struct PublishSchemaVersionRequest {
     proto_source: String,
@@ -329,6 +351,53 @@ impl Session {
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))
     }
+
+    /// `DELETE /integrations/{slug}/schemas/{version}/data/{subject}`
+    /// (#533, closed out by #741/#745) — an append-only tombstone for this
+    /// integrator's current instance belonging to `subject` under this
+    /// schema version: the original instance row is never touched, only
+    /// marked deleted (`docs/architecture/revocation.md`'s pattern) — the
+    /// original publish event, and the delete event this appends, both
+    /// stay observable in raw ledger history. Same auth posture as
+    /// [`Session::publish_schema_version`]: this integrator's own
+    /// challenge-response proof only, no second content-specific
+    /// signature.
+    pub async fn delete_instance(
+        &self,
+        version: u32,
+        subject: Uuid,
+        reason_code: &str,
+        reason: Option<&str>,
+    ) -> Result<(), SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let headers = self.integrator_auth_headers(slug).await?;
+
+        let body = DeleteInstanceRequest {
+            reason_code,
+            reason,
+        };
+
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            let mut request = c
+                .delete(format!(
+                    "{}/integrations/{slug}/schemas/{version}/data/{subject}",
+                    self.server_url
+                ))
+                .json(&body);
+            for (name, value) in &headers {
+                request = request.header(*name, value);
+            }
+            request
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        Ok(())
+    }
 }
 
 impl AvalonClient {
@@ -375,5 +444,97 @@ impl AvalonClient {
             .json()
             .await
             .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /integrations/{slug}/schemas` (closed out by #741/#745) — every
+    /// published version for this integrator, oldest first. Public and
+    /// unauthenticated, same visibility as [`AvalonClient::list_schema_mappings`].
+    /// Empty for an integrator that has never published.
+    pub async fn list_schema_versions(&self, slug: &str) -> Result<Vec<SchemaVersion>, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/integrations/{slug}/schemas",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /integrations/{slug}/schemas/{version}` (closed out by
+    /// #741/#745) — one published version, verbatim. Public,
+    /// unauthenticated — the same round-trip check
+    /// [`Session::publish_schema_version`]'s own module doc comment
+    /// describes.
+    pub async fn get_schema_version(
+        &self,
+        slug: &str,
+        version: u32,
+    ) -> Result<SchemaVersion, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/integrations/{slug}/schemas/{version}",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+
+    /// `GET /identities/{id}/integrator-data` (#384, closed out by
+    /// #741/#745) — every current (non-superseded, non-deleted) Integrator
+    /// Space instance published about `identity_id`, across every
+    /// integrator/schema, each already filtered server-side to only the
+    /// fields its schema currently makes visible (#381's visibility rules
+    /// — this SDK never re-applies or second-guesses that filtering).
+    /// Public, unauthenticated.
+    pub async fn identity_integrator_data(
+        &self,
+        identity_id: Uuid,
+    ) -> Result<Vec<VisibleDataInstance>, SdkError> {
+        let response = crate::http::send(&self.http, &self.config.retry, true, |c| {
+            c.get(format!(
+                "{}/identities/{identity_id}/integrator-data",
+                self.config.server_url
+            ))
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod visible_data_instance_tests {
+    use super::*;
+
+    #[test]
+    fn visible_data_instance_deserializes_from_the_documented_wire_shape() {
+        let raw = serde_json::json!({
+            "schema": "game:ashen-realms:schema:1",
+            "integrator_id": Uuid::nil(),
+            "published_at": "2026-01-01T00:00:00Z",
+            "fields": { "level": 42 },
+        });
+        let instance: VisibleDataInstance = serde_json::from_value(raw).unwrap();
+        assert_eq!(instance.schema, "game:ashen-realms:schema:1");
+        assert_eq!(instance.fields.get("level").unwrap(), 42);
     }
 }

@@ -12,15 +12,14 @@
 //!
 //! The issue describes presence *publishing* as `AvalonClient::publish_presence(identity_id,
 //! status)`, gated on an integrator credential and an active `IntegratorBinding` (#83).
-//! None of that exists in this repo yet — there is no `IntegratorCredential`, no
-//! `IntegratorBinding`, no capability-grant system. What #16 actually built is
-//! `PUT /me/presence`: an *identity*, under their own session, publishing their
-//! own status. It has no `active_in` field (no integrator can attribute that claim
-//! to itself yet) and cannot target another identity. So this module exposes
-//! `Session::update_presence` instead — matching what the server actually
-//! does — rather than an integrator-authority method the server has no endpoint
-//! for. Revisit once #26/#28/#83 land and a real integrator-side publish path
-//! exists.
+//! What #16 actually built is `PUT /me/presence`: an *identity*, under their own
+//! session, publishing their own status — no `active_in` field, can't target
+//! another identity. [`Session::update_presence`] wraps that. #26/#28/#83 have
+//! since landed a real integrator-authority path too — `PUT
+//! /presence/{identity_id}`, wrapped by [`Session::update_integrator_presence`]
+//! (closed out by #741/#749): an integrator, under its own challenge-response
+//! credential plus an active `presence.publish` grant, publishing on behalf of
+//! this session's own identity, `active_in` included.
 //!
 //! ## `presence_of` has no visibility filtering yet
 //!
@@ -33,12 +32,17 @@
 
 use std::collections::HashMap;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
+
 use avalon_protocol::ids::IdentityId;
 use avalon_protocol::permissions::Capability;
 use avalon_protocol::social::{Friendship, Presence, PresenceStatus};
 use futures_util::{SinkExt, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
+use uuid::Uuid;
 
 use crate::http::websocket_url;
 use crate::{SdkError, Session};
@@ -198,6 +202,81 @@ impl Session {
             c.put(format!("{}/me/presence", self.server_url))
                 .bearer_auth(&self.token)
                 .json(&UpdatePresenceRequest { status })
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(crate::http::map_error_response(response).await);
+        }
+        Ok(())
+    }
+
+    /// `PUT /presence/{identity_id}` (closed out by #741/#749) — an
+    /// *integrator* publishing presence on behalf of this session's own
+    /// identity, distinct from [`Session::update_presence`]'s own
+    /// self-service path: this one requires this integrator's challenge-
+    /// response credential plus an active `presence.publish` grant (the
+    /// same `x-avalon-integrator-*`/`x-avalon-identity-id` header shape
+    /// `achievements::Session::submit_achievement_issuance` already uses
+    /// for an integrator acting on this session's identity), and can set
+    /// `active_in` — which the self-service path deliberately cannot.
+    /// `active_in`, if set at all, must be this integrator's own id
+    /// (`AvalonConfig::integrator_slug`'s resolved integrator) — checked
+    /// server-side (`AppError::PresenceActiveInMismatch`), not merely
+    /// assumed client-side.
+    pub async fn update_integrator_presence(
+        &self,
+        status: PresenceStatus,
+        active_in: Option<Uuid>,
+    ) -> Result<(), SdkError> {
+        let slug = self
+            .integrator_slug
+            .as_deref()
+            .ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key_bytes = self.signing_key.ok_or(SdkError::MissingIssuerCredentials)?;
+        let signing_key = SigningKey::from_bytes(&signing_key_bytes);
+
+        #[derive(Deserialize)]
+        struct ChallengeResponse {
+            challenge_id: Uuid,
+            nonce: String,
+        }
+        #[derive(Serialize)]
+        struct UpdateIntegratorPresenceRequest {
+            status: PresenceStatus,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            active_in: Option<Uuid>,
+        }
+
+        let challenge_response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.post(format!("{}/integrations/{slug}/challenge", self.server_url))
+        })
+        .await?;
+        if !challenge_response.status().is_success() {
+            return Err(crate::http::map_error_response(challenge_response).await);
+        }
+        let challenge: ChallengeResponse = challenge_response
+            .json()
+            .await
+            .map_err(|e| SdkError::Protocol(e.to_string()))?;
+        let nonce = BASE64
+            .decode(&challenge.nonce)
+            .map_err(|_| SdkError::MissingIssuerCredentials)?;
+        let challenge_signature = signing_key.sign(&nonce);
+
+        let subject = self.identity().id.0;
+        let response = crate::http::send(&self.http, &self.retry, false, |c| {
+            c.put(format!("{}/presence/{subject}", self.server_url))
+                .header("x-avalon-integrator-key-id", &self.integrator_key_id)
+                .header(
+                    "x-avalon-integrator-challenge-id",
+                    challenge.challenge_id.to_string(),
+                )
+                .header(
+                    "x-avalon-integrator-signature",
+                    BASE64.encode(challenge_signature.to_bytes()),
+                )
+                .header("x-avalon-identity-id", subject.to_string())
+                .json(&UpdateIntegratorPresenceRequest { status, active_in })
         })
         .await?;
         if !response.status().is_success() {

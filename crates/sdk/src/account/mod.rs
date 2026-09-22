@@ -33,7 +33,12 @@
 //! per domain" convention for [`crate::Session`] — just for
 //! [`AccountSession`] instead.
 
-mod webauthn;
+/// `pub(crate)` (rather than private) so `crate::recovery` — social
+/// recovery's request-initiation half, #201, closed out by #741/#747 —
+/// can reuse the same virtual-authenticator ceremony driver instead of
+/// duplicating it; that flow needs a real WebAuthn registration ceremony
+/// too, on a caller that by definition has no [`AccountSession`] yet.
+pub(crate) mod webauthn;
 
 pub mod conversations;
 pub mod device_login;

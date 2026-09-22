@@ -61,9 +61,11 @@ pub mod device_login;
 pub(crate) mod generated;
 pub mod guilds;
 mod http;
+pub mod integrators;
 pub mod issuer_registration;
 pub mod managed_hosting;
 pub mod network;
+pub mod recovery;
 pub mod registry;
 pub mod schema;
 pub mod social;
@@ -477,5 +479,33 @@ impl Session {
     ) -> Result<Vec<achievements::BulkClaimOutcome>, SdkError> {
         self.require(Capability::AchievementsIssue)?;
         self.submit_bulk_achievement_issuance(keys).await
+    }
+
+    /// `POST /integrations/{slug}/milestones/{key}/issue` (#324/#325,
+    /// closed out by #741/#744) — the App/Service equivalent of
+    /// [`Session::issue_achievement`]; `category` must be this
+    /// integrator's own actually-registered
+    /// `avalon_protocol::integrators::IntegratorCategory` (see
+    /// `achievements::Session::submit_milestone_issuance` for why it's
+    /// required here but not for achievement issuance).
+    pub async fn issue_milestone(
+        &self,
+        key: &str,
+        category: avalon_protocol::integrators::IntegratorCategory,
+    ) -> Result<uuid::Uuid, SdkError> {
+        self.require(Capability::MilestonesIssue)?;
+        self.submit_milestone_issuance(key, category).await
+    }
+
+    /// `POST /integrations/{slug}/milestones/bulk-issue` (#495, closed out
+    /// by #741/#744) — the App/Service equivalent of
+    /// [`Session::issue_achievements_bulk`].
+    pub async fn bulk_issue_milestones(
+        &self,
+        keys: &[&str],
+        category: avalon_protocol::integrators::IntegratorCategory,
+    ) -> Result<Vec<achievements::BulkClaimOutcome>, SdkError> {
+        self.require(Capability::MilestonesIssue)?;
+        self.submit_bulk_milestone_issuance(keys, category).await
     }
 }

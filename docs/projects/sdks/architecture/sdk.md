@@ -1588,6 +1588,62 @@ protocol and the domain model in `crates/protocol`; they never pull in
     trip against two freshly-registered integrators; and a real
     `startCrossNodeLogin` -> `pollCrossNodeLogin` round trip (`pending`,
     then `slow_down` on an immediate re-poll).
+- Rust's share of #728's coverage gap, closed (issue #741, sub-issues
+  #744-#749): all 36 previously-uncovered routes now have a call site.
+  Achievement/milestone definition CRUD (`achievements.rs`) — `Session::
+  create_achievement_definition`/`update_achievement_definition`/
+  `create_milestone_definition`/`update_milestone_definition` (challenge-
+  response-only auth, no second content-specific signature — a definition
+  isn't a claim about a player) plus `AvalonClient::list_achievement_
+  definitions`/`list_milestone_definitions`/`get_attestation` (public
+  reads, the latter reusing `VerifiedAttestation` rather than a second,
+  parallel type). `Session::issue_milestone`/`bulk_issue_milestones` now
+  take an explicit `IntegratorCategory` (`App`/`Service`, never `Game`,
+  #324's split) since — unlike achievement issuance — a milestone
+  issuer's own ref prefix can't be hardcoded `"game:"`. Integrator-space
+  reads (`schema.rs`) — `AvalonClient::list_schema_versions`/
+  `get_schema_version`/`identity_integrator_data` plus `Session::
+  delete_instance` (an append-only tombstone, #533). A new
+  `crates/sdk/src/integrators.rs` — integrator registration and issuer-key
+  management (`AvalonClient::register_integrator`/`list_integrators`/
+  `get_integrator`/`list_issuer_keys`/`add_issuer_key`/`revoke_issuer_key`/
+  `integrator_whoami`) had zero prior coverage; all seven live on
+  `AvalonClient` rather than `Session`, matching `issuer_registration.rs`'s
+  precedent for a call that only needs an integrator credential, never a
+  user session. A new `crates/sdk/src/recovery.rs` — social recovery's
+  request-*initiation* half (issue #201) was entirely missing:
+  `AvalonClient::start_recovery_request` drives a real WebAuthn
+  registration ceremony (reusing `account::webauthn`, now `pub(crate)`
+  instead of private to `account`, rather than duplicating ~80 lines of
+  ceremony code) then `identity_recovery_status`/`get_recovery_request`/
+  `finalize_recovery_request` round out the public read/finalize side —
+  all necessarily unauthenticated, same as server-side, since the entire
+  premise of recovery is having no valid session. Registry/recognitions
+  (`registry.rs`) — `AvalonClient::get_integrator_registry` (the canonical
+  path for what `registry()` already read via #95's legacy alias),
+  `list_recognitions`/`list_recognized_by` (public reads), and `Session::
+  publish_recognition`/`revoke_recognition` (challenge-response writes).
+  Misc (#749) — `GuildHandle::game_breakdown`/`ChannelHandle::list_archive`
+  (`guilds.rs`), `AvalonClient::deny_cross_node_login`/
+  `lookup_cross_node_login`/`identity_locations` (`cross_node_login.rs`,
+  filling in the requester-side symmetric half TS is missing the
+  approver-side half of), and `Session::update_integrator_presence`
+  (`social.rs`) — a genuinely different auth path from `update_presence`:
+  an integrator publishing presence on behalf of a bound identity, not
+  the identity publishing its own. `python3 scripts/check-sdk-coverage.py`
+  confirms the `rust` section now reports `all routes covered`; `make
+  openapi-check` confirms no accidental server-side schema drift. Real
+  finding: `check-sdk-coverage.py`'s Rust extraction only matches a
+  *literal* path template directly inside `.get(format!("..."))`/etc. — a
+  shared helper building the URL from a runtime `route_segment` variable
+  (e.g. `format!("{}/integrations/{slug}/{route_segment}", ...)`)
+  normalizes to a path with an extra wildcard segment and silently fails
+  to match, even though the code is correct and passes every other check;
+  the achievement/milestone definition CRUD methods were rewritten to
+  build each literal URL at its own call site rather than share one
+  parameterized helper, once this became clear from the script still
+  reporting those six routes as gaps after the code was otherwise
+  complete and tested.
 
 ## Decisions and tickets
 
