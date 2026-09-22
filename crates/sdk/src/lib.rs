@@ -72,6 +72,10 @@ pub mod sync_journal;
 
 pub use account::device_login::AccountDeviceLogin;
 pub use account::{AccountCredentials, AccountSession, ProfileUpdate};
+/// The `info.version` of the `docs/generated/openapi.json` schema this
+/// build's generated types came from (issue #735) — lets a caller report
+/// or log which schema version this SDK build targets.
+pub use generated::OPENAPI_SCHEMA_VERSION;
 pub use http::RetryConfig;
 
 use avalon_protocol::identity::{Identity, Profile};

@@ -9,7 +9,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
 	build run start stop restart status test test-live fmt fmt-check lint sdk-examples sdk-doc check clean \
-	openapi openapi-check ts-sdk-types ts-sdk-types-check \
+	openapi openapi-check openapi-version-check ts-sdk-types ts-sdk-types-check \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
@@ -35,6 +35,7 @@ help:
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
 	@echo "  make openapi       regenerate docs/generated/openapi.json from server's annotated routes (issue #723)"
 	@echo "  make openapi-check fail if docs/generated/openapi.json is stale relative to the real routes"
+	@echo "  make openapi-version-check fail if the schema's shape changed vs. main without a version bump (issue #735)"
 	@echo "  make ts-sdk-types       regenerate bindings/ts/src/generated.ts from docs/generated/openapi.json (issue #726)"
 	@echo "  make ts-sdk-types-check fail if bindings/ts/src/generated.ts is stale relative to the schema"
 	@echo "  make migrate       apply pending db/migrations/ (up)"
@@ -164,6 +165,13 @@ openapi-check:
 	diff docs/generated/openapi.json /tmp/openapi.generated.json || \
 		(echo "docs/generated/openapi.json is stale — run 'make openapi' and commit the result" && exit 1)
 
+# Issue #735: openapi-check above only catches staleness (checked-in file
+# doesn't match the real routes) — this separately requires a version bump
+# whenever the schema's shape actually changed relative to main, so SDKs'
+# embedded OPENAPI_SCHEMA_VERSION constants stay a real drift signal.
+openapi-version-check:
+	./scripts/check-openapi-version.sh
+
 # Issue #726: bindings/ts/src/generated.ts (TypeScript wire-shape types from
 # docs/generated/openapi.json) is a generated artifact too — bindings/ts has
 # no build step at all (apps/hub consumes its raw TS source via a `file:`
@@ -176,7 +184,7 @@ ts-sdk-types:
 ts-sdk-types-check:
 	cd bindings/ts && npm run generate:check
 
-check: fmt-check lint test sdk-examples sdk-doc openapi-check ts-sdk-types-check
+check: fmt-check lint test sdk-examples sdk-doc openapi-check openapi-version-check ts-sdk-types-check
 
 clean:
 	cargo clean

@@ -46,7 +46,12 @@ async function main() {
   const doc = JSON.parse(readFileSync(SCHEMA_PATH, "utf8"));
   dedupeOperationIds(doc);
   const ast = await openapiTS(doc);
-  writeFileSync(OUT_PATH, astToString(ast));
+  const schemaVersion = doc.info.version;
+  const output =
+    astToString(ast) +
+    `\n// Issue #735: the info.version this file's types were generated from.\n` +
+    `export const OPENAPI_SCHEMA_VERSION = ${JSON.stringify(schemaVersion)} as const\n`;
+  writeFileSync(OUT_PATH, output);
 }
 
 main();

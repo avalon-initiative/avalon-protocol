@@ -78,6 +78,11 @@ export type { Capability, Friend, GuildMembership, ConversationSummary, Verified
 
 export type { Identity, Profile, Genre, SignedTreeHeadResponse } from './types.js'
 
+// Issue #735: the info.version of the openapi.json schema this build's
+// generated types were built from, so a caller can report/log which
+// schema version this SDK build targets.
+export { OPENAPI_SCHEMA_VERSION } from './generated.js'
+
 export { getLatestSth } from './ledger.js'
 
 export {

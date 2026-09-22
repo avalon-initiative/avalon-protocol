@@ -1157,6 +1157,42 @@ protocol and the domain model in `crates/protocol`; they never pull in
     (`openapi-typescript` is a devDependency only). Full Rust workspace
     test suite (`cargo test --workspace`) and `make openapi-check` both
     verified clean after the schema fix.
+- Schema/SDK versioning (issue #735, epic #722) — `docs/generated/
+  openapi.json`'s `info.version` (a static `"0.1.0"` since #723) now has
+  real enforcement behind it: `make openapi-version-check` (new, part of
+  `make check`) diffs the checked-in schema against the same file at
+  `origin/main` (falling back to local `main`) with `info.version` itself
+  stripped from both sides — if the rest of the document differs but the
+  version field doesn't, it fails and points at the literal in
+  `crates/server/src/openapi.rs` to bump (`scripts/
+  check-openapi-version.sh`). `make openapi-check` (#723, staleness) and
+  this check (shape-change-without-a-bump) are deliberately separate
+  targets — one catches "you forgot to regenerate," the other catches
+  "you regenerated but didn't bump."
+  - Both codegen pipelines now embed that same version so a build can
+    report which schema it targets: `crates/sdk/build.rs` emits
+    `pub const OPENAPI_SCHEMA_VERSION: &str` straight from the same
+    `doc["info"]["version"]` it already reads for type generation
+    (re-exported from `crates/sdk/src/lib.rs`, through the
+    otherwise-`pub(crate)` `generated` module), and `bindings/ts/scripts/
+    generate-types.mjs` appends an `export const OPENAPI_SCHEMA_VERSION`
+    to the end of `generated.ts` (re-exported from `bindings/ts/src/
+    index.ts`). Both are generated directly from the schema file, not
+    hand-copied, so they can't drift from it independently — each SDK has
+    a small permanent test (`crates/sdk/tests/schema_version.rs`,
+    `bindings/ts/test/schemaVersion.test.ts`) asserting the constant
+    matches `docs/generated/openapi.json`'s own `info.version` read fresh
+    off disk, to catch a future change to the generation step itself
+    breaking that link.
+  - `bindings/csharp` (#725) doesn't have this yet — its own typify-
+    equivalent codegen migration hasn't landed, so there's nothing to
+    embed the constant into. Revisit once #725 lands, per #735's own
+    acceptance criteria.
+  - No server-side compatibility *enforcement* (an SDK declaring its
+    schema version in a request header, checked or logged server-side) —
+    #735's own design section calls this out as a separate, bigger
+    compatibility-policy question than this ticket's plumbing, not
+    silently decided here.
 
 ## Decisions and tickets
 
