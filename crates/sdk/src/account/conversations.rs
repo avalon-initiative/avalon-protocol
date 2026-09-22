@@ -1,7 +1,6 @@
 //! Direct/small-group conversations (issue #102/#105) on
 //! [`super::AccountSession`] — see `crates/server/src/conversations.rs`.
 
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -10,7 +9,7 @@ use crate::SdkError;
 use super::AccountSession;
 
 /// A conversation this identity participates in.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Conversation {
     /// This conversation's own id.
     pub id: Uuid,
@@ -18,8 +17,17 @@ pub struct Conversation {
     pub participants: Vec<Uuid>,
 }
 
+impl From<crate::generated::ConversationResponse> for Conversation {
+    fn from(body: crate::generated::ConversationResponse) -> Self {
+        Conversation {
+            id: body.id,
+            participants: body.participants,
+        }
+    }
+}
+
 /// One message within a conversation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ConversationMessage {
     /// This message's own id.
     pub id: Uuid,
@@ -30,24 +38,28 @@ pub struct ConversationMessage {
     /// The message body.
     pub body: String,
     /// When it was sent.
-    #[serde(with = "time::serde::rfc3339")]
     pub sent_at: OffsetDateTime,
 }
 
-#[derive(Serialize)]
-struct CreateConversationRequest {
-    participants: Vec<Uuid>,
-}
+impl TryFrom<crate::generated::MessageResponse> for ConversationMessage {
+    type Error = SdkError;
 
-#[derive(Serialize)]
-struct SendConversationMessageRequest<'a> {
-    body: &'a str,
+    fn try_from(body: crate::generated::MessageResponse) -> Result<Self, SdkError> {
+        Ok(ConversationMessage {
+            id: body.id,
+            conversation_id: body.channel_id,
+            author: body.author,
+            body: body.body,
+            sent_at: super::parse_rfc3339(&body.sent_at)?,
+        })
+    }
 }
 
 impl AccountSession {
     /// `GET /conversations`.
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, SdkError> {
-        self.get("/conversations").await
+        let raw: Vec<crate::generated::ConversationResponse> = self.get("/conversations").await?;
+        Ok(raw.into_iter().map(Conversation::from).collect())
     }
 
     /// `POST /conversations` — idempotent on the final participant set
@@ -57,13 +69,15 @@ impl AccountSession {
         &self,
         participants: &[Uuid],
     ) -> Result<Conversation, SdkError> {
-        self.post(
-            "/conversations",
-            &CreateConversationRequest {
-                participants: participants.to_vec(),
-            },
-        )
-        .await
+        let raw: crate::generated::ConversationResponse = self
+            .post(
+                "/conversations",
+                &crate::generated::CreateConversationRequest {
+                    participants: participants.to_vec(),
+                },
+            )
+            .await?;
+        Ok(raw.into())
     }
 
     /// `GET /conversations/{id}/messages`, cursor-paginated with `before`.
@@ -81,11 +95,13 @@ impl AccountSession {
             query.push(("limit", limit.to_string()));
         }
         let query_refs: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        self.get_query(
-            &format!("/conversations/{conversation_id}/messages"),
-            &query_refs,
-        )
-        .await
+        let raw: Vec<crate::generated::MessageResponse> = self
+            .get_query(
+                &format!("/conversations/{conversation_id}/messages"),
+                &query_refs,
+            )
+            .await?;
+        raw.into_iter().map(ConversationMessage::try_from).collect()
     }
 
     /// `POST /conversations/{id}/messages`. Not signature-required (chat is
@@ -97,10 +113,14 @@ impl AccountSession {
         conversation_id: Uuid,
         body: &str,
     ) -> Result<ConversationMessage, SdkError> {
-        self.post(
-            &format!("/conversations/{conversation_id}/messages"),
-            &SendConversationMessageRequest { body },
-        )
-        .await
+        let raw: crate::generated::MessageResponse = self
+            .post(
+                &format!("/conversations/{conversation_id}/messages"),
+                &crate::generated::SendMessageRequest {
+                    body: body.to_string(),
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 }

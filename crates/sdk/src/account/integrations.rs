@@ -3,7 +3,7 @@
 //! anything the integrator does on its own behalf. See
 //! `crates/server/src/connections.rs`.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -12,32 +12,54 @@ use crate::SdkError;
 use super::{AccountSession, SignatureFields};
 
 /// The result of a successful `connect` call.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct IntegratorConnection {
     /// This binding's own id.
     pub binding_id: Uuid,
     /// The integrator connected to.
     pub integrator_id: Uuid,
     /// When the binding was established.
-    #[serde(with = "time::serde::rfc3339")]
     pub established_at: OffsetDateTime,
     /// Every capability actually granted (may be a subset of what was
     /// requested).
     pub granted_capabilities: Vec<String>,
 }
 
+impl TryFrom<crate::generated::ConnectResponse> for IntegratorConnection {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::ConnectResponse) -> Result<Self, SdkError> {
+        Ok(IntegratorConnection {
+            binding_id: body.binding_id,
+            integrator_id: body.integrator_id,
+            established_at: super::parse_rfc3339(&body.established_at)?,
+            granted_capabilities: body.granted_capabilities,
+        })
+    }
+}
+
 /// One currently-active grant within a [`MyConnection`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ConnectionGrant {
     /// The granted capability.
     pub capability: String,
     /// When it was granted.
-    #[serde(with = "time::serde::rfc3339")]
     pub granted_at: OffsetDateTime,
 }
 
+impl TryFrom<crate::generated::ConnectionGrant> for ConnectionGrant {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::ConnectionGrant) -> Result<Self, SdkError> {
+        Ok(ConnectionGrant {
+            capability: body.capability,
+            granted_at: super::parse_rfc3339(&body.granted_at)?,
+        })
+    }
+}
+
 /// One of the caller's own active integrator connections (bindings).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MyConnection {
     /// This binding's own id.
     pub binding_id: Uuid,
@@ -48,10 +70,28 @@ pub struct MyConnection {
     /// The connected integrator's display name.
     pub name: String,
     /// When the binding was established.
-    #[serde(with = "time::serde::rfc3339")]
     pub established_at: OffsetDateTime,
     /// Every currently-active grant.
     pub grants: Vec<ConnectionGrant>,
+}
+
+impl TryFrom<crate::generated::Connection> for MyConnection {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::Connection) -> Result<Self, SdkError> {
+        Ok(MyConnection {
+            binding_id: body.binding_id,
+            integrator_id: body.integrator_id,
+            slug: body.slug,
+            name: body.name,
+            established_at: super::parse_rfc3339(&body.established_at)?,
+            grants: body
+                .grants
+                .into_iter()
+                .map(ConnectionGrant::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -75,14 +115,16 @@ impl AccountSession {
     ) -> Result<IntegratorConnection, SdkError> {
         let joined = capabilities.join(",");
         let signature = self.sign("integration.connect", &[slug, &joined]);
-        self.post(
-            &format!("/integrations/{slug}/connect"),
-            &ConnectRequest {
-                capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
-                signature,
-            },
-        )
-        .await
+        let raw: crate::generated::ConnectResponse = self
+            .post(
+                &format!("/integrations/{slug}/connect"),
+                &ConnectRequest {
+                    capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
+                    signature,
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `DELETE /integrations/{slug}/connect`. Not signature-required
@@ -101,6 +143,7 @@ impl AccountSession {
     /// `GET /me/connections` — every integrator this identity has
     /// currently consented to, and what it granted each one.
     pub async fn my_connections(&self) -> Result<Vec<MyConnection>, SdkError> {
-        self.get("/me/connections").await
+        let raw: Vec<crate::generated::Connection> = self.get("/me/connections").await?;
+        raw.into_iter().map(MyConnection::try_from).collect()
     }
 }

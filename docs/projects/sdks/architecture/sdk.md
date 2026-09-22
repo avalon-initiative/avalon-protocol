@@ -543,37 +543,74 @@ protocol and the domain model in `crates/protocol`; they never pull in
     this ticket's focus; `AccountSession` has no `subscribe_presence`/chat
     websocket methods the way `Session` does (issue #136/#438's live-push
     surface), read-only point-in-time polling only.
-- `crates/sdk/build.rs` (issue #724, epic #722 — first slice) — `sdk` now
-  consumes generated wire-shape types for part of `account/mod.rs`'s own
-  surface: `typify` converts a hand-picked allowlist
-  (`build.rs`'s `SCHEMA_NAMES`) of `docs/generated/openapi.json`'s (#723)
-  `components.schemas` into Rust types at build time, written to `OUT_DIR`
-  and pulled in via `src/generated.rs`'s `include!`. `sdk` reads
-  `openapi.json` as a plain checked-in file (not a Cargo dependency on
-  `avalon-server`, which already depends on `avalon-sdk` — that edge can't
-  run the other way). Covers `ProfileResponse` (replacing the old
-  hand-written `MeResponse`), `DeviceResponse` (replacing `DeviceRow`),
-  `RegisterStartRequest`, `RegisterFinishResponse`, `SessionStartRequest`,
-  `SessionFinishResponse`. Two things this first slice explicitly does
-  *not* migrate, called out rather than silently absorbed: the four
-  WebAuthn-ceremony request/response types (`RegisterStartResponse`,
-  `RegisterFinishRequest`, `SessionStartResponse`, `SessionFinishRequest`)
-  stay hand-written, since their `challenge`/`credential`/
-  `webauthn_credential` fields are opaque `"type": "object"` blobs in the
-  schema (`webauthn-rs`'s own types have no `ToSchema` impl) and typify
-  would flatten them to `serde_json::Value`, discarding the real
-  `passkey_types::webauthn::*` typing the ceremony code depends on; and
-  `UpdateProfileRequest`'s three-state `PATCH /me` semantics (omitted =
-  untouched, `Some("")` = clear, `Some(v)` = set) stay hand-written pending
-  verification that typify's default output preserves omit-vs-null for
-  optional+nullable schema properties. Also worth noting: typify hardcodes
-  `"format": "date-time"` to `chrono`, which isn't a dependency anywhere in
-  this workspace (`time` is, everywhere) — `build.rs` strips that format
-  hint before generation so those fields come through as plain `String`,
-  parsed with `time`'s RFC3339 support at the few call sites that read
-  them, rather than adding a second date/time crate. The rest of
-  `crates/sdk/src/account/*` (guild_admin.rs, social.rs, devices.rs, etc.)
-  and #725/#726's C#/TypeScript ports are follow-on work, not yet started.
+- `crates/sdk/build.rs` (issue #724, epic #722) — `sdk` now consumes
+  generated wire-shape types for the whole `crates/sdk/src/account/*`
+  domain (registration/login, profile, passkeys, devices/grants/cross-device
+  pairing, recovery, conversations, friends/blocks/presence/discovery/
+  history, and full guild administration): `typify` converts a hand-picked
+  allowlist (`build.rs`'s `SCHEMA_NAMES`, ~85 entries) of
+  `docs/generated/openapi.json`'s (#723) `components.schemas` into Rust
+  types at build time, written to `OUT_DIR` and pulled in via
+  `src/generated.rs`'s `include!`. `sdk` reads `openapi.json` as a plain
+  checked-in file (not a Cargo dependency on `avalon-server`, which already
+  depends on `avalon-sdk` — that edge can't run the other way).
+  - Not migrated, called out rather than silently absorbed: the four
+    WebAuthn-ceremony request/response types (`RegisterStartResponse`,
+    `RegisterFinishRequest`, `SessionStartResponse`, `SessionFinishRequest`,
+    plus `passkeys.rs`'s `AddPasskeyStartResponse`/`AddPasskeyFinishRequest`)
+    stay hand-written — their `challenge`/`credential`/`webauthn_credential`
+    fields are opaque `"type": "object"` blobs in the schema (`webauthn-rs`'s
+    own types have no `ToSchema` impl), and typify would flatten them to
+    `serde_json::Value`, discarding the real `passkey_types::webauthn::*`
+    typing the ceremony code depends on. Pure signature-only wrapper bodies
+    (just `signing_key_id`/`signature`, e.g. `RevokePasskeyRequest`,
+    `ConnectRequest`) also stay hand-written, composed via the existing
+    `super::SignatureFields` + `#[serde(flatten)]` pattern — every *other*
+    signature-carrying request (role/override/member/ownership mutations,
+    device-pairing approval, guardian changes, ...) is generated instead,
+    with `signature`/`signing_key_id` destructured out of `SignatureFields`
+    at each call site rather than flattened.
+  - `UpdateProfileRequest`'s three-state `PATCH /me` semantics (omitted =
+    untouched, `Some("")` = clear, `Some(v)` = set) turned out to migrate
+    cleanly: every property is optional, and typify emits a single
+    `Option<T>` per field with `#[serde(skip_serializing_if =
+    "Option::is_none")]` by default — exactly the hand-written struct's own
+    behavior, no nested `Option<Option<T>>` needed. The same three-state
+    convention recurs in `UpdateGuildRequest`/`UpdateChannelRequest`, same
+    treatment.
+  - `Genre`, `PresenceStatus`, `GuildLink`, `RoleBadge` are replaced with the
+    existing `avalon_protocol::{identity,social,guilds}::*` types via
+    typify's `with_replacement`, not generated as duplicates.
+  - typify hardcodes `"format": "date-time"` to `chrono`, not a dependency
+    anywhere in this workspace (`time` is, everywhere) — `build.rs` strips
+    that format hint before generation so those fields come through as plain
+    `String`s, parsed/formatted with `time`'s own RFC3339 support
+    (`account::parse_rfc3339`/`format_rfc3339`) at the call sites that need
+    them, rather than adding a second date/time crate.
+  - Migrating surfaced a handful of real, pre-existing drift between the
+    hand-written SDK and the actual server responses, found rather than
+    introduced by this migration, fixed where safe and otherwise called out
+    at the affected struct: `social::DiscoveryCandidate` only ever carried
+    `identity_id` server-side, but the old hand-written type declared
+    `display_name` as non-optional — every real `discover_people()` call
+    would have failed to deserialize; fixed to match the real (narrower)
+    shape. `guild_admin::Guild`/`GuildEvent`/`UpdateGuildRequest`'s consumer
+    (`GuildUpdate`) don't yet expose several fields the real schemas already
+    carry (`member_count`/`integrators`/`game_breakdown_public`/
+    `favorite_games`/`roster_visibility` on `Guild`; `details_visible`/
+    `my_rsvp` on `GuildEvent`; `join_policy`/`links`/`roster_visibility`/
+    `game_breakdown_public` on the update path) — left as documented gaps,
+    not silently expanded, since adding new public surface wasn't this
+    migration's scope.
+  - Doesn't generate endpoint-path/method stub constants (the other half of
+    #724's original design) — every call site still builds its path with a
+    hand-written `format!()` string, matching this crate's existing
+    convention throughout. Worth a follow-up ticket if per-path duplication
+    across `sdk`/`bindings/csharp`/`bindings/ts` becomes a real maintenance
+    problem, not done here.
+  - #725 (`bindings/csharp`) and #726 (`bindings/ts`) — same migration for
+    the other two SDKs, following this pattern — are follow-on work, not yet
+    started.
 - `bindings/csharp/AvalonSdk/AccountSession.cs` (+
   `AccountSession.Passkeys.cs`/`.Devices.cs`/`.Recovery.cs`/`.Social.cs`/
   `.Conversations.cs`/`.GuildAdmin.cs`/`.Integrations.cs`, issue #700, on

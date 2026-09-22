@@ -11,15 +11,26 @@ use crate::SdkError;
 use super::{webauthn, AccountSession, SignatureFields};
 
 /// One of this identity's registered WebAuthn passkeys.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Passkey {
     /// The `identity_keys.id` this passkey is stored under.
     pub id: Uuid,
     /// User-chosen label, if any (e.g. "Work laptop's fingerprint sensor").
     pub label: Option<String>,
     /// When this passkey was registered.
-    #[serde(with = "time::serde::rfc3339")]
     pub added_at: OffsetDateTime,
+}
+
+impl TryFrom<crate::generated::PasskeyResponse> for Passkey {
+    type Error = SdkError;
+
+    fn try_from(body: crate::generated::PasskeyResponse) -> Result<Self, SdkError> {
+        Ok(Passkey {
+            id: body.id,
+            label: body.label,
+            added_at: super::parse_rfc3339(&body.added_at)?,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -44,7 +55,8 @@ struct RevokePasskeyRequest {
 impl AccountSession {
     /// `GET /me/passkeys` — every passkey registered to this identity.
     pub async fn list_passkeys(&self) -> Result<Vec<Passkey>, SdkError> {
-        self.get("/me/passkeys").await
+        let raw: Vec<crate::generated::PasskeyResponse> = self.get("/me/passkeys").await?;
+        raw.into_iter().map(Passkey::try_from).collect()
     }
 
     /// Registers an *additional* passkey for this identity, driving a real
@@ -57,29 +69,31 @@ impl AccountSession {
         let start: AddPasskeyStartResponse = self.post_empty("/me/passkeys/register/start").await?;
         let (webauthn_credential, _stored) =
             webauthn::registration_ceremony(start.challenge).await?;
-        self.post(
-            "/me/passkeys/register/finish",
-            &AddPasskeyFinishRequest {
-                ticket_id: start.ticket_id,
-                webauthn_credential,
-                label: label.map(str::to_string),
-            },
-        )
-        .await
+        let raw: crate::generated::PasskeyResponse = self
+            .post(
+                "/me/passkeys/register/finish",
+                &AddPasskeyFinishRequest {
+                    ticket_id: start.ticket_id,
+                    webauthn_credential,
+                    label: label.map(str::to_string),
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `PATCH /me/passkeys/{id}` — relabels a passkey. Not
     /// signature-required.
     pub async fn rename_passkey(&self, passkey_id: Uuid, label: &str) -> Result<Passkey, SdkError> {
-        #[derive(Serialize)]
-        struct RenamePasskeyRequest<'a> {
-            label: &'a str,
-        }
-        self.patch(
-            &format!("/me/passkeys/{passkey_id}"),
-            &RenamePasskeyRequest { label },
-        )
-        .await
+        let raw: crate::generated::PasskeyResponse = self
+            .patch(
+                &format!("/me/passkeys/{passkey_id}"),
+                &crate::generated::RenamePasskeyRequest {
+                    label: label.to_string(),
+                },
+            )
+            .await?;
+        raw.try_into()
     }
 
     /// `POST /me/passkeys/{id}/revoke` — always signs (`passkey.revoke_last`,

@@ -136,9 +136,17 @@ pub struct AccountSession {
 /// date-time` before handing schemas to typify, since typify hardcodes
 /// that format to `chrono`, not the `time` crate this workspace uses
 /// everywhere else) — parsed here with `time`'s own RFC3339 support.
-fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, SdkError> {
+pub(crate) fn parse_rfc3339(s: &str) -> Result<time::OffsetDateTime, SdkError> {
     time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
         .map_err(|e| SdkError::Protocol(format!("invalid RFC3339 timestamp {s:?}: {e}")))
+}
+
+/// The other direction of [`parse_rfc3339`] — building a request body's
+/// `String` date-time field (generated types carry these as plain
+/// strings, same reason as `parse_rfc3339`) from a `time::OffsetDateTime`.
+pub(crate) fn format_rfc3339(t: time::OffsetDateTime) -> Result<String, SdkError> {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| SdkError::Protocol(format!("formatting {t:?} as RFC3339: {e}")))
 }
 
 impl TryFrom<crate::generated::ProfileResponse> for (Identity, Profile) {
@@ -219,32 +227,6 @@ async fn find_own_signing_key_id(
         .into_iter()
         .find(|d| d.public_key == public_key_b64)
         .map(|d| d.id))
-}
-
-#[derive(Serialize)]
-struct UpdateProfileRequest<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    display_name: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    avatar_url: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bio: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    favorite_genres: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pronouns: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    banner_url: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    links: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timezone: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    theme_color: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    location: Option<&'a str>,
 }
 
 /// A partial update to an identity's own profile — every field `None`
@@ -339,18 +321,25 @@ impl AccountSession {
     /// self-description, not security state"). Updates
     /// [`AccountSession::profile`] in place from the response on success.
     pub async fn update_profile(&mut self, update: ProfileUpdate<'_>) -> Result<(), SdkError> {
-        let body = UpdateProfileRequest {
-            display_name: update.display_name,
-            avatar_url: update.avatar_url,
-            bio: update.bio,
+        let body = crate::generated::UpdateProfileRequest {
+            display_name: update.display_name.map(str::to_string),
+            avatar_url: update.avatar_url.map(str::to_string),
+            bio: update.bio.map(str::to_string),
             favorite_genres: update.favorite_genres,
-            pronouns: update.pronouns,
-            banner_url: update.banner_url,
-            status: update.status,
+            pronouns: update.pronouns.map(str::to_string),
+            banner_url: update.banner_url.map(str::to_string),
+            status: update.status.map(str::to_string),
             links: update.links,
-            timezone: update.timezone,
-            theme_color: update.theme_color,
-            location: update.location,
+            timezone: update.timezone.map(str::to_string),
+            theme_color: update.theme_color.map(str::to_string),
+            location: update.location.map(str::to_string),
+            // Not yet exposed on `ProfileUpdate` — a known, documented gap
+            // (see `docs/projects/sdks/architecture/sdk.md`'s "Today in the
+            // repo"), not something this migration should silently start
+            // sending.
+            discoverable: None,
+            main_guild: None,
+            presence_visibility: None,
         };
         let me: crate::generated::ProfileResponse = self.patch("/me", &body).await?;
         let (identity, profile) = me.try_into()?;
