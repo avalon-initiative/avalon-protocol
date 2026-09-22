@@ -15,6 +15,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::Postgres;
 use sqlx::{QueryBuilder, Row};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -67,12 +68,12 @@ pub(crate) fn compute_candidates(
     candidates
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DiscoveryCandidate {
     pub identity_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DiscoverPeopleResponse {
     pub candidates: Vec<DiscoveryCandidate>,
 }
@@ -82,6 +83,12 @@ pub struct DiscoverPeopleResponse {
 /// Computes candidates from the caller's own friends-of-friends and
 /// mutual-guild relationships, excluding the caller, existing friends, and
 /// any blocked relationship in either direction.
+#[utoipa::path(
+    get,
+    path = "/people/discover",
+    tag = "discovery",
+    responses((status = 200, body = DiscoverPeopleResponse)),
+)]
 pub async fn discover_people(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -146,20 +153,20 @@ fn normalized_query(q: &str) -> Option<&str> {
 const DEFAULT_SEARCH_LIMIT: i64 = 20;
 const MAX_SEARCH_LIMIT: i64 = 50;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct SearchIdentitiesQuery {
     pub q: String,
     pub limit: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SearchResultIdentity {
     pub identity_id: Uuid,
     pub display_name: String,
     pub avatar_url: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SearchIdentitiesResponse {
     pub results: Vec<SearchResultIdentity>,
 }
@@ -212,6 +219,13 @@ fn build_search_query(
 /// `friends::resolve_handle` exact-match path). Excludes the caller
 /// themselves and any blocked relationship in either direction, same as
 /// [`discover_people`].
+#[utoipa::path(
+    get,
+    path = "/identities/search",
+    tag = "discovery",
+    params(SearchIdentitiesQuery),
+    responses((status = 200, body = SearchIdentitiesResponse)),
+)]
 pub async fn search_identities(
     State(state): State<AppState>,
     headers: HeaderMap,

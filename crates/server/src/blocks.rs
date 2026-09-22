@@ -26,6 +26,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -103,15 +104,16 @@ pub(crate) async fn has_block_among(
     Ok(row.is_some())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateBlockRequest {
     pub identity_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct BlockResponse {
     pub blocked: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
 }
 
@@ -125,6 +127,13 @@ pub struct BlockResponse {
 /// resolved request, and a fourth precise outcome label isn't worth a
 /// schema change for what's an internal bookkeeping value never surfaced
 /// to either party as "resolved because of a block."
+#[utoipa::path(
+    post,
+    path = "/blocks",
+    tag = "blocks",
+    request_body = CreateBlockRequest,
+    responses((status = 200, body = BlockResponse)),
+)]
 pub async fn create_block(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -178,6 +187,13 @@ pub async fn create_block(
 /// `DELETE /blocks/:identity_id` — session-authenticated, blocker-only.
 /// Simply removes the row: no history, no event, mirrors presence's
 /// ephemerality rather than friendship's durability (module docs).
+#[utoipa::path(
+    delete,
+    path = "/blocks/{identity_id}",
+    tag = "blocks",
+    params(("identity_id" = Uuid, Path)),
+    responses((status = 200, description = "Block removed")),
+)]
 pub async fn remove_block(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -195,16 +211,23 @@ pub async fn remove_block(
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct BlockListEntry {
     pub blocked: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
 }
 
 /// `GET /blocks` — the caller's own block list, and *only* the caller's own
 /// — this endpoint (and every endpoint in this crate) never returns "who
 /// has blocked me" for any identity, per this module's own invariant.
+#[utoipa::path(
+    get,
+    path = "/blocks",
+    tag = "blocks",
+    responses((status = 200, body = Vec<BlockListEntry>)),
+)]
 pub async fn list_blocks(
     State(state): State<AppState>,
     headers: HeaderMap,

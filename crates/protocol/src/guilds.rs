@@ -58,7 +58,7 @@ pub struct Guild {
 /// URL it points at. Both fields are validated/capped server-side
 /// (`crates/server/src/guilds.rs`) — this type carries no invariant of its
 /// own beyond "these are the two fields a link has."
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GuildLink {
     pub label: String,
     pub url: String,
@@ -102,7 +102,7 @@ pub struct GuildRole {
 /// user-uploadable — a role's icon is chosen from this closed set, same
 /// "custom names allowed, custom permissions/values not yet" precedent
 /// [`GuildPermission`] already established for milestone 1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleBadgeIcon {
     Shield,
@@ -157,7 +157,7 @@ impl RoleBadgeIcon {
 
 /// Fixed milestone-1 vocabulary of role badge colors — same closed-set
 /// reasoning as [`RoleBadgeIcon`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleBadgeColor {
     Gray,
@@ -215,7 +215,7 @@ impl RoleBadgeColor {
 /// variant — without a breaking change to callers that just want "an icon
 /// and a color" out of a role (`packages/ui`'s planned `AvalonRoleBadge`,
 /// #24, is the first such caller).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RoleBadge {
     pub icon: RoleBadgeIcon,
     pub color: RoleBadgeColor,

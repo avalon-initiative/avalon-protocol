@@ -11,6 +11,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::channels::{
@@ -96,17 +97,18 @@ fn validate_message_body(body: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub channel_id: Uuid,
     pub author: Uuid,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub sent_at: OffsetDateTime,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct ListMessagesQuery {
     /// Cursor: a message id already seen by the caller. Results are the
     /// next page strictly older than it (by `sent_at`, `id` as tiebreak).
@@ -122,6 +124,13 @@ pub struct ListMessagesQuery {
 /// too, same "public flag widens exposure" shape events already have.
 /// Works for archived channels too (history stays readable — only
 /// posting stops).
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/channels/{cid}/messages",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("cid" = Uuid, Path), ListMessagesQuery),
+    responses((status = 200, body = Vec<MessageResponse>)),
+)]
 pub async fn list_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -173,15 +182,17 @@ pub async fn list_messages(
     Ok(Json(messages))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ArchivedMessageResponse {
     pub id: Uuid,
     pub channel_id: Uuid,
     pub author: Uuid,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub sent_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub archived_at: OffsetDateTime,
 }
 
@@ -192,6 +203,13 @@ pub struct ArchivedMessageResponse {
 /// [`list_messages`] uses — see the module doc comment's "Archive read
 /// access" section for why this doesn't try to reconstruct membership as
 /// of when each message was originally sent.
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/channels/{cid}/messages/archive",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("cid" = Uuid, Path), ListMessagesQuery),
+    responses((status = 200, body = Vec<ArchivedMessageResponse>)),
+)]
 pub async fn list_archive(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -244,7 +262,7 @@ pub async fn list_archive(
     Ok(Json(messages))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SendMessageRequest {
     pub body: String,
 }
@@ -252,6 +270,14 @@ pub struct SendMessageRequest {
 /// `POST /guilds/{id}/channels/{cid}/messages` — requires current guild
 /// membership; rejected if the channel is archived. No transaction, no
 /// outbox — see module doc comment.
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/channels/{cid}/messages",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("cid" = Uuid, Path)),
+    request_body = SendMessageRequest,
+    responses((status = 200, body = MessageResponse)),
+)]
 pub async fn send_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -421,6 +447,13 @@ pub async fn run_archive_expiry_worker(state: AppState) {
 /// doc comment's "Moderation deletion and the archive" section for why a
 /// moderator's takedown shouldn't be defeated just because cap-based
 /// pruning already moved the row into the archive.
+#[utoipa::path(
+    delete,
+    path = "/guilds/{id}/channels/{cid}/messages/{mid}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("cid" = Uuid, Path), ("mid" = Uuid, Path)),
+    responses((status = 200, description = "Message deleted")),
+)]
 pub async fn delete_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -483,7 +516,7 @@ const ANNOUNCEMENT_ALERTS_PER_CHANNEL: i64 = 10;
 /// The overall cap across every channel/guild combined.
 const ANNOUNCEMENT_ALERTS_TOTAL: i64 = 50;
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuildAnnouncementAlert {
     pub message_id: Uuid,
     pub channel_id: Uuid,
@@ -492,6 +525,7 @@ pub struct GuildAnnouncementAlert {
     pub author: Uuid,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub sent_at: OffsetDateTime,
 }
 
@@ -511,6 +545,12 @@ pub struct GuildAnnouncementAlert {
 /// takes, applied here without needing a separate cleanup step — a member
 /// who leaves a guild stops seeing its announcements on their very next
 /// poll, automatically.
+#[utoipa::path(
+    get,
+    path = "/me/guild-announcements",
+    tag = "guilds",
+    responses((status = 200, body = Vec<GuildAnnouncementAlert>)),
+)]
 pub async fn list_my_guild_announcements(
     State(state): State<AppState>,
     headers: HeaderMap,

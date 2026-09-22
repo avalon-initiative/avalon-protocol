@@ -10,6 +10,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::blocks;
@@ -126,13 +127,13 @@ fn all_related_to_caller(
         .all(|id| friends.contains(id) || guild_mates.contains(id))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ConversationResponse {
     pub id: Uuid,
     pub participants: Vec<Uuid>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateConversationRequest {
     pub participants: Vec<Uuid>,
 }
@@ -142,6 +143,13 @@ pub struct CreateConversationRequest {
 /// distinct identities or any participant the caller isn't related to (see
 /// the module doc comment's "Relationship gate" section). Idempotent on the
 /// final participant set — see "Idempotent creation" above.
+#[utoipa::path(
+    post,
+    path = "/conversations",
+    tag = "chat",
+    request_body = CreateConversationRequest,
+    responses((status = 200, body = ConversationResponse)),
+)]
 pub async fn create_conversation(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -223,6 +231,12 @@ pub async fn create_conversation(
 /// see the module doc comment's note on why, and
 /// [`require_unblocked_participant`] for the same rule applied to a single
 /// conversation.
+#[utoipa::path(
+    get,
+    path = "/conversations",
+    tag = "chat",
+    responses((status = 200, body = Vec<ConversationResponse>)),
+)]
 pub async fn list_my_conversations(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -252,17 +266,18 @@ pub async fn list_my_conversations(
     Ok(Json(conversations))
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,
     pub author: Uuid,
     pub body: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub sent_at: OffsetDateTime,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct ListMessagesQuery {
     /// Cursor: a message id already seen by the caller. Results are the
     /// next page strictly older than it (by `sent_at`, `id` as tiebreak) —
@@ -277,6 +292,13 @@ pub struct ListMessagesQuery {
 /// blocked participant's read fails exactly as their write does. See the
 /// module doc comment's "Blocking, enforced on both read and write"
 /// section.
+#[utoipa::path(
+    get,
+    path = "/conversations/{id}/messages",
+    tag = "chat",
+    params(("id" = Uuid, Path), ListMessagesQuery),
+    responses((status = 200, body = Vec<MessageResponse>)),
+)]
 pub async fn list_messages(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -328,7 +350,7 @@ pub async fn list_messages(
     Ok(Json(messages))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SendMessageRequest {
     pub body: String,
     /// The submitting client's journal `EntryId` (issue #110/#111), when
@@ -362,6 +384,14 @@ pub struct SendMessageRequest {
 /// for `participants_key`. This is what lets the SDK's deferred submission
 /// engine retry a submission whose response was dropped without ever
 /// double-applying it.
+#[utoipa::path(
+    post,
+    path = "/conversations/{id}/messages",
+    tag = "chat",
+    params(("id" = Uuid, Path)),
+    request_body = SendMessageRequest,
+    responses((status = 200, body = MessageResponse)),
+)]
 pub async fn send_message(
     State(state): State<AppState>,
     headers: HeaderMap,

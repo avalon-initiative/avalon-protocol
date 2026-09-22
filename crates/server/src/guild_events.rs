@@ -11,6 +11,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::channels::{guild_owner, require_member};
@@ -152,14 +153,14 @@ async fn fetch_event(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RsvpCounts {
     pub going: i64,
     pub maybe: i64,
     pub not_going: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct EventResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
@@ -167,11 +168,14 @@ pub struct EventResponse {
     pub title: String,
     pub description: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub starts_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub ends_at: Option<OffsetDateTime>,
     pub created_by: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
     pub rsvp_counts: RsvpCounts,
     /// Issue #448. `false` (the default) keeps this event member-only even
@@ -290,15 +294,17 @@ async fn event_response(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct ListEventsQuery {
     /// Inclusive lower bound on `starts_at`.
     #[serde(default)]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[param(value_type = Option<String>)]
     pub from: Option<OffsetDateTime>,
     /// Inclusive upper bound on `starts_at`.
     #[serde(default)]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[param(value_type = Option<String>)]
     pub to: Option<OffsetDateTime>,
 }
 
@@ -311,6 +317,13 @@ pub struct ListEventsQuery {
 /// need to stay internal even in a public guild. A non-member of a
 /// non-public guild is still 403'd, unchanged. Optionally filtered to a
 /// `starts_at` date range; omitted bounds are unbounded.
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/events",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ListEventsQuery),
+    responses((status = 200, body = Vec<EventResponse>)),
+)]
 pub async fn list_events(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -390,15 +403,17 @@ pub async fn list_events(
     Ok(Json(events))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateEventRequest {
     pub channel_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub starts_at: OffsetDateTime,
     #[serde(default)]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub ends_at: Option<OffsetDateTime>,
     /// Issue #448. Omitted defaults to `false` — member-only, same as
     /// every event before this field existed. Gated by the same
@@ -410,6 +425,14 @@ pub struct CreateEventRequest {
 
 /// `POST /guilds/{id}/events` — requires `event_manage`. No outbox
 /// write — see module doc comment.
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/events",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = CreateEventRequest,
+    responses((status = 200, body = EventResponse)),
+)]
 pub async fn create_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -469,15 +492,17 @@ pub async fn create_event(
     .map(Json)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateEventRequest {
     pub channel_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub starts_at: OffsetDateTime,
     #[serde(default)]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub ends_at: Option<OffsetDateTime>,
     /// Issue #448. Full replace like the rest of this request — always
     /// resent, not three-state.
@@ -488,6 +513,14 @@ pub struct UpdateEventRequest {
 /// `PATCH /guilds/{id}/events/{eid}` — reschedule/edit. Requires
 /// `event_manage` (resource-aware, issue #250). Full replace of the mutable fields, same "resend the
 /// whole thing" convention other guild PATCH endpoints use.
+#[utoipa::path(
+    patch,
+    path = "/guilds/{id}/events/{eid}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
+    request_body = UpdateEventRequest,
+    responses((status = 200, body = EventResponse)),
+)]
 pub async fn update_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -547,6 +580,13 @@ pub async fn update_event(
 /// module doc comment). Removes its RSVPs too, via the `ON DELETE CASCADE`
 /// FK on `guild_event_rsvps` (migration 0028) — nothing app-level to do
 /// here beyond deleting the event row itself.
+#[utoipa::path(
+    delete,
+    path = "/guilds/{id}/events/{eid}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
+    responses((status = 200, description = "Event deleted")),
+)]
 pub async fn delete_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -568,17 +608,18 @@ pub async fn delete_event(
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RsvpRequest {
     pub status: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RsvpResponse {
     pub event_id: Uuid,
     pub identity_id: Uuid,
     pub status: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub responded_at: OffsetDateTime,
 }
 
@@ -589,6 +630,14 @@ pub struct RsvpResponse {
 /// replaces the row in place, never inserts a duplicate — enforced by the
 /// `(event_id, identity_id)` primary key from migration 0028 plus
 /// `ON CONFLICT DO UPDATE` below.
+#[utoipa::path(
+    put,
+    path = "/guilds/{id}/events/{eid}/rsvp",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
+    request_body = RsvpRequest,
+    responses((status = 200, body = RsvpResponse)),
+)]
 pub async fn upsert_rsvp(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -622,11 +671,12 @@ pub async fn upsert_rsvp(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RsvpRosterEntry {
     pub identity_id: Uuid,
     pub status: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub responded_at: OffsetDateTime,
 }
 
@@ -637,6 +687,13 @@ pub struct RsvpRosterEntry {
 /// query, no `manage_*` permission required: RSVP status is ordinary
 /// guild-internal social info, same posture the member roster already
 /// takes (see module doc comment).
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/events/{eid}/rsvps",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("eid" = Uuid, Path)),
+    responses((status = 200, body = Vec<RsvpRosterEntry>)),
+)]
 pub async fn list_rsvps(
     State(state): State<AppState>,
     headers: HeaderMap,

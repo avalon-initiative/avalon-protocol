@@ -23,6 +23,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder, Row};
 use time::OffsetDateTime;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -458,7 +459,7 @@ fn validate_guild_icon(icon: &str) -> Result<Option<String>, AppError> {
 }
 
 /// Wire shape for one entry of `UpdateGuildRequest.links` (issue #153).
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct GuildLinkRequest {
     pub label: String,
     pub url: String,
@@ -498,7 +499,7 @@ fn validate_guild_links(links: &[GuildLinkRequest]) -> Result<Vec<GuildLink>, Ap
 /// validate-and-reject path (`AppError::InvalidRoleBadge`) as every other
 /// guild input in this module, instead of a generic JSON-deserialization
 /// rejection a caller can't distinguish from a malformed request body.
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RoleBadgeRequest {
     pub icon: String,
     pub color: String,
@@ -612,7 +613,7 @@ async fn fetch_guild(state: &AppState, guild_id: Uuid) -> Result<GuildRow, AppEr
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuildResponse {
     pub id: Uuid,
     pub name: String,
@@ -620,6 +621,7 @@ pub struct GuildResponse {
     pub description: String,
     pub owner: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
     pub member_count: i64,
     pub integrators: Vec<Uuid>,
@@ -691,7 +693,7 @@ async fn guild_response(state: &AppState, guild: GuildRow) -> Result<GuildRespon
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateGuildRequest {
     pub name: String,
     pub tag: String,
@@ -699,6 +701,13 @@ pub struct CreateGuildRequest {
     pub description: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds",
+    tag = "guilds",
+    request_body = CreateGuildRequest,
+    responses((status = 200, body = GuildResponse)),
+)]
 pub async fn create_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -818,6 +827,13 @@ pub async fn create_guild(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = GuildResponse)),
+)]
 pub async fn get_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -831,7 +847,7 @@ pub async fn get_guild(
     Ok(Json(guild_response(&state, guild).await?))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateGuildRequest {
     pub name: Option<String>,
     pub tag: Option<String>,
@@ -873,6 +889,14 @@ pub struct UpdateGuildRequest {
     pub roster_visibility: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/guilds/{id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = UpdateGuildRequest,
+    responses((status = 200, body = GuildResponse)),
+)]
 pub async fn update_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1050,7 +1074,7 @@ pub(crate) async fn actor_role_permissions(
         .unwrap_or_default())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RoleResponse {
     pub name_index: i32,
     pub name: String,
@@ -1096,6 +1120,13 @@ async fn fetch_role(
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/roles",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = Vec<RoleResponse>)),
+)]
 pub async fn list_roles(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1137,7 +1168,7 @@ fn normalize_permissions(raw: &[String]) -> Vec<String> {
         .collect()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateRoleRequest {
     pub name: String,
     #[serde(default)]
@@ -1157,6 +1188,14 @@ pub struct CreateRoleRequest {
     pub signature: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/roles",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = CreateRoleRequest,
+    responses((status = 200, body = RoleResponse)),
+)]
 pub async fn create_role(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1254,7 +1293,7 @@ pub async fn create_role(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateRoleRequest {
     pub name: Option<String>,
     pub permissions: Option<Vec<String>>,
@@ -1269,6 +1308,14 @@ pub struct UpdateRoleRequest {
     pub signature: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/guilds/{id}/roles/{idx}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("idx" = i32, Path)),
+    request_body = UpdateRoleRequest,
+    responses((status = 200, body = RoleResponse)),
+)]
 pub async fn update_role(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1398,7 +1445,7 @@ fn is_base_role(name_index: i32) -> bool {
 /// to carry the fresh-signature proof. `#[serde(default)]` so a bare `{}`
 /// (or, for a truly bodyless client, an empty body — `Json` still requires
 /// *some* valid JSON, so callers send `{}`) deserializes fine.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ToSchema)]
 pub struct DeleteRoleRequest {
     #[serde(default)]
     pub signing_key_id: Option<Uuid>,
@@ -1406,6 +1453,14 @@ pub struct DeleteRoleRequest {
     pub signature: Option<String>,
 }
 
+#[utoipa::path(
+    delete,
+    path = "/guilds/{id}/roles/{idx}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("idx" = i32, Path)),
+    request_body = DeleteRoleRequest,
+    responses((status = 200, description = "Role deleted")),
+)]
 pub async fn delete_role(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1492,7 +1547,7 @@ pub async fn delete_role(
 // management, the same authority tier as editing a role's base
 // permission list.
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PermissionOverrideResponse {
     pub id: Uuid,
     pub role_index: i32,
@@ -1543,7 +1598,7 @@ async fn require_live_resource(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SetPermissionOverrideRequest {
     pub role_index: i32,
     pub resource_kind: String,
@@ -1558,6 +1613,14 @@ pub struct SetPermissionOverrideRequest {
 
 /// `PUT /guilds/{id}/permission-overrides` — set (upsert) a grant/deny
 /// override for one role on one resource. Requires `manage_roles`.
+#[utoipa::path(
+    put,
+    path = "/guilds/{id}/permission-overrides",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = SetPermissionOverrideRequest,
+    responses((status = 200, body = PermissionOverrideResponse)),
+)]
 pub async fn set_permission_override(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1618,7 +1681,7 @@ pub async fn set_permission_override(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct ListPermissionOverridesQuery {
     pub resource_kind: String,
     pub resource_id: Uuid,
@@ -1626,6 +1689,13 @@ pub struct ListPermissionOverridesQuery {
 
 /// `GET /guilds/{id}/permission-overrides?resource_kind=&resource_id=` —
 /// every role's override rows for one resource. Requires `manage_roles`.
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/permission-overrides",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ListPermissionOverridesQuery),
+    responses((status = 200, body = Vec<PermissionOverrideResponse>)),
+)]
 pub async fn list_permission_overrides(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1670,7 +1740,7 @@ pub async fn list_permission_overrides(
 /// the role's base permission list. Requires `manage_roles`.
 /// #697/#698: no other body fields, exists only to carry the fresh-signature
 /// proof — same posture as [`DeleteRoleRequest`].
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ToSchema)]
 pub struct DeletePermissionOverrideRequest {
     #[serde(default)]
     pub signing_key_id: Option<Uuid>,
@@ -1678,6 +1748,14 @@ pub struct DeletePermissionOverrideRequest {
     pub signature: Option<String>,
 }
 
+#[utoipa::path(
+    delete,
+    path = "/guilds/{id}/permission-overrides/{override_id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("override_id" = Uuid, Path)),
+    request_body = DeletePermissionOverrideRequest,
+    responses((status = 200, description = "Permission override deleted")),
+)]
 pub async fn delete_permission_override(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1709,7 +1787,7 @@ pub async fn delete_permission_override(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct TransferOwnershipRequest {
     pub to: Uuid,
     /// #704's gap #2 / #697/#698: permanently hands another identity full
@@ -1718,6 +1796,14 @@ pub struct TransferOwnershipRequest {
     pub signature: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/transfer-ownership",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = TransferOwnershipRequest,
+    responses((status = 200, body = GuildResponse)),
+)]
 pub async fn transfer_ownership(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1813,6 +1899,13 @@ pub async fn transfer_ownership(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/integrations/{integrator_id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("integrator_id" = Uuid, Path)),
+    responses((status = 200, body = GuildResponse)),
+)]
 pub async fn associate_integrator(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1921,12 +2014,13 @@ fn can_join_directly(join_policy: JoinPolicy) -> bool {
     join_policy == JoinPolicy::Open
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuildMemberResponse {
     pub guild_id: Uuid,
     pub identity_id: Uuid,
     pub role_index: i32,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub joined_at: OffsetDateTime,
 }
 
@@ -1940,21 +2034,30 @@ async fn member_role_index(
         .ok_or(AppError::NotGuildMember)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateGuildInviteRequest {
     pub to: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuildInviteResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
     pub to: Uuid,
     pub from: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/invites",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = CreateGuildInviteRequest,
+    responses((status = 200, body = GuildInviteResponse)),
+)]
 pub async fn create_invite(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2033,13 +2136,14 @@ pub async fn create_invite(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MyGuildInviteResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
     pub guild_name: String,
     pub from: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
 }
 
@@ -2050,6 +2154,12 @@ pub struct MyGuildInviteResponse {
 /// has been missing since #21, mirroring the shape
 /// `recovery::guardian_requests` already established for the same "every
 /// active thing where the caller is on the receiving end" need.
+#[utoipa::path(
+    get,
+    path = "/me/guild-invites",
+    tag = "guilds",
+    responses((status = 200, body = Vec<MyGuildInviteResponse>)),
+)]
 pub async fn my_guild_invites(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2155,6 +2265,13 @@ async fn add_member(
     Ok((joined_at, event))
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/invites/{invite_id}/accept",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("invite_id" = Uuid, Path)),
+    responses((status = 200, body = GuildMemberResponse)),
+)]
 pub async fn accept_invite(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2206,6 +2323,13 @@ pub async fn accept_invite(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/invites/{invite_id}/decline",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("invite_id" = Uuid, Path)),
+    responses((status = 200, description = "Invite declined")),
+)]
 pub async fn decline_invite(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2227,6 +2351,13 @@ pub async fn decline_invite(
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/join",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = GuildMemberResponse)),
+)]
 pub async fn join_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2266,6 +2397,13 @@ pub async fn join_guild(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/leave",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, description = "Left the guild")),
+)]
 pub async fn leave_guild(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2365,6 +2503,13 @@ pub async fn leave_guild(
     Ok(())
 }
 
+#[utoipa::path(
+    delete,
+    path = "/guilds/{id}/members/{identity_id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("identity_id" = Uuid, Path)),
+    responses((status = 200, description = "Member removed")),
+)]
 pub async fn remove_member(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2432,13 +2577,13 @@ fn validate_join_request_message(message: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateJoinRequestRequest {
     #[serde(default)]
     pub message: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuildJoinRequestResponse {
     pub id: Uuid,
     pub guild_id: Uuid,
@@ -2446,8 +2591,10 @@ pub struct GuildJoinRequestResponse {
     pub message: Option<String>,
     pub status: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub decided_at: Option<OffsetDateTime>,
     pub decided_by: Option<Uuid>,
 }
@@ -2474,6 +2621,14 @@ fn join_request_response(
 /// pending is idempotent (returns the existing pending row) rather than an
 /// error or a duplicate, same posture [`create_invite`] takes for a
 /// duplicate invite.
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/join-requests",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = CreateJoinRequestRequest,
+    responses((status = 200, body = GuildJoinRequestResponse)),
+)]
 pub async fn create_join_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2539,7 +2694,7 @@ pub async fn create_join_request(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct ListJoinRequestsQuery {
     /// Defaults to `pending`-only; pass `all` to include every status.
     #[serde(default)]
@@ -2548,6 +2703,13 @@ pub struct ListJoinRequestsQuery {
 
 /// `GET /guilds/{id}/join-requests` — `manage_members`-gated. Lists
 /// pending requests by default (`?status=all` for every status).
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/join-requests",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ListJoinRequestsQuery),
+    responses((status = 200, body = Vec<GuildJoinRequestResponse>)),
+)]
 pub async fn list_join_requests(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2599,6 +2761,13 @@ pub async fn list_join_requests(
 /// doesn't — same `Json<Option<T>>` "single item belonging to the caller,
 /// or none" shape `recovery::my_recovery_status` already established,
 /// rather than a 404 for the "none" case.
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/join-requests/mine",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = Option<GuildJoinRequestResponse>)),
+)]
 pub async fn my_join_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2650,6 +2819,13 @@ async fn fetch_pending_join_request(
 /// through [`add_member`] — the same membership-add path [`accept_invite`]
 /// and [`join_guild`] already use, not a second one — and marks the
 /// request approved.
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/join-requests/{request_id}/approve",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("request_id" = Uuid, Path)),
+    responses((status = 200, body = GuildMemberResponse)),
+)]
 pub async fn approve_join_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2713,6 +2889,13 @@ pub async fn approve_join_request(
 /// `POST /guilds/{id}/join-requests/{request_id}/reject` —
 /// `manage_members`-gated. Not durable history — see this section's module
 /// doc comment.
+#[utoipa::path(
+    post,
+    path = "/guilds/{id}/join-requests/{request_id}/reject",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("request_id" = Uuid, Path)),
+    responses((status = 200, description = "Join request rejected")),
+)]
 pub async fn reject_join_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2752,6 +2935,13 @@ pub async fn reject_join_request(
 /// withdrawing their own pending request only; unlike approve/reject this
 /// is not `manage_members`-gated, same "consent from the other side" shape
 /// as `decline_invite`, just from the opposite party.
+#[utoipa::path(
+    delete,
+    path = "/guilds/{id}/join-requests/{request_id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("request_id" = Uuid, Path)),
+    responses((status = 200, description = "Join request withdrawn")),
+)]
 pub async fn withdraw_join_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2778,7 +2968,7 @@ pub async fn withdraw_join_request(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateGuildMemberRequest {
     pub role_index: i32,
     /// #697/#698: only required when the new role grants `manage_roles` or
@@ -2788,6 +2978,14 @@ pub struct UpdateGuildMemberRequest {
     pub signature: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/guilds/{id}/members/{identity_id}",
+    tag = "guilds",
+    params(("id" = Uuid, Path), ("identity_id" = Uuid, Path)),
+    request_body = UpdateGuildMemberRequest,
+    responses((status = 200, body = GuildMemberResponse)),
+)]
 pub async fn update_member_role(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2882,6 +3080,13 @@ pub async fn update_member_role(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/members",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = Vec<GuildMemberResponse>)),
+)]
 pub async fn list_members(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2930,14 +3135,21 @@ pub async fn list_members(
     Ok(Json(members))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MyGuildMembershipResponse {
     pub guild_id: Uuid,
     pub role_index: i32,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub joined_at: OffsetDateTime,
 }
 
+#[utoipa::path(
+    get,
+    path = "/me/guilds",
+    tag = "guilds",
+    responses((status = 200, body = Vec<MyGuildMembershipResponse>)),
+)]
 pub async fn list_my_guilds(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2992,7 +3204,7 @@ pub(crate) fn escape_like(input: &str) -> String {
         .replace('_', "\\_")
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct DiscoverGuildsQuery {
     /// Free-text search over `name`/`tag`/`description` (case-insensitive
     /// substring).
@@ -3015,7 +3227,7 @@ pub struct DiscoverGuildsQuery {
     pub cursor: Option<Uuid>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DiscoverGuildSummary {
     pub id: Uuid,
     pub name: String,
@@ -3024,6 +3236,7 @@ pub struct DiscoverGuildSummary {
     pub recruiting: bool,
     pub member_count: i64,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
     /// Issue #258: same already-public fields `GET /guilds/{id}` returns
     /// (#153/#246) — `null` when unset, no new visibility exposure.
@@ -3031,7 +3244,7 @@ pub struct DiscoverGuildSummary {
     pub icon: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DiscoverGuildsResponse {
     pub guilds: Vec<DiscoverGuildSummary>,
     /// `Some(id)` when another page exists — pass it back as `cursor=` to
@@ -3144,6 +3357,13 @@ fn build_discover_query(
     builder
 }
 
+#[utoipa::path(
+    get,
+    path = "/guilds/discover",
+    tag = "guilds",
+    params(DiscoverGuildsQuery),
+    responses((status = 200, body = DiscoverGuildsResponse)),
+)]
 pub async fn discover_guilds(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3193,7 +3413,7 @@ pub async fn discover_guilds(
 /// to it. Never includes an integrator with zero bound members — there's no
 /// "add" action here, only real binding data feeds this (see the module
 /// doc comment and `docs/architecture/guilds.md`).
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 pub struct GameBreakdownEntry {
     pub integrator_id: Uuid,
     pub integrator_slug: String,
@@ -3202,7 +3422,7 @@ pub struct GameBreakdownEntry {
     pub member_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct GameBreakdownResponse {
     pub guild_id: Uuid,
     /// Total current guild membership — the denominator for a
@@ -3281,6 +3501,13 @@ fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
 /// `game_breakdown_public`. A non-member with neither gets
 /// [`AppError::MissingGuildPermission`], same 403 the rest of this module
 /// already uses for "authenticated fine, just not authorized here".
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/integrator-breakdown",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = GameBreakdownResponse)),
+)]
 pub async fn game_breakdown(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3342,7 +3569,7 @@ async fn guild_bound_integrator_ids(
 }
 
 /// One entry in a guild's favorite-integrators pin list, as read back.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 pub struct FavoriteGameEntry {
     pub integrator_id: Uuid,
     pub integrator_slug: String,
@@ -3359,7 +3586,7 @@ pub struct FavoriteGameEntry {
     pub stale: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FavoriteGamesResponse {
     pub guild_id: Uuid,
     pub favorites: Vec<FavoriteGameEntry>,
@@ -3405,6 +3632,13 @@ async fn fetch_favorite_games(
 /// list is exactly the curated subset of affinity data a guild has chosen
 /// to put on public display, so it carries no additional gate beyond
 /// session authentication.
+#[utoipa::path(
+    get,
+    path = "/guilds/{id}/favorite-integrators",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = FavoriteGamesResponse)),
+)]
 pub async fn list_favorite_games(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3420,7 +3654,7 @@ pub async fn list_favorite_games(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SetFavoriteGamesRequest {
     /// The full desired ordered list of pinned integrator ids — always a full
     /// replace, never a per-entry patch, same "resend the whole list"
@@ -3463,6 +3697,14 @@ fn validate_favorite_game_ids(
 /// `update_guild`'s `links` replace already makes) and records a
 /// `guild.favorite_games_updated` outbox event, matching every other guild
 /// mutation in this module.
+#[utoipa::path(
+    put,
+    path = "/guilds/{id}/favorite-integrators",
+    tag = "guilds",
+    params(("id" = Uuid, Path)),
+    request_body = SetFavoriteGamesRequest,
+    responses((status = 200, body = FavoriteGamesResponse)),
+)]
 pub async fn set_favorite_games(
     State(state): State<AppState>,
     headers: HeaderMap,
