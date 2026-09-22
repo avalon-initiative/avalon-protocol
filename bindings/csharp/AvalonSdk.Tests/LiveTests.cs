@@ -219,6 +219,35 @@ public class LiveTests
         Assert.Contains(aliceMessages, m => m.Id == reply.Id);
     }
 
+    // Issue #742: conversations::SendMessageRequest and
+    // guild_messages::SendMessageRequest used to collide under the same bare
+    // schema name, silently dropping client_entry_id from the published
+    // schema for POST /conversations/{id}/messages. This proves the fix
+    // actually round-trips: a retried send with the same client_entry_id
+    // dedupes server-side instead of posting a duplicate message.
+    [Fact]
+    public async Task SendWithClientEntryId_RetryDedupesInsteadOfDuplicating()
+    {
+        if (ServerUrl is null || DatabaseUrl is null) return;
+
+        await using var conn = new NpgsqlConnection(DatabaseUrl);
+        await conn.OpenAsync();
+        var (aliceId, aliceToken) = await SeedIdentitySessionAsync(conn, $"alice-dedupe-{Guid.NewGuid():N}");
+        var (bobId, _) = await SeedIdentitySessionAsync(conn, $"bob-dedupe-{Guid.NewGuid():N}");
+        await SeedFriendshipAsync(conn, aliceId, bobId);
+
+        var aliceSession = SessionForCapabilities(await Client().AuthenticateAsync(aliceToken), "messages.read", "messages.send");
+        var aliceHandle = await aliceSession.DmAsync(bobId);
+
+        var clientEntryId = Guid.NewGuid();
+        var first = await aliceHandle.SendWithClientEntryIdAsync("retry me", clientEntryId);
+        var retried = await aliceHandle.SendWithClientEntryIdAsync("retry me", clientEntryId);
+        Assert.Equal(first.Id, retried.Id);
+
+        var messages = await aliceHandle.MessagesAsync();
+        Assert.Single(messages, m => m.Body == "retry me");
+    }
+
     private sealed class RegisteredIntegrator
     {
         public byte[] SigningKeySeed { get; set; } = Array.Empty<byte>();

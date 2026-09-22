@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/attestations/{id}": {
@@ -535,7 +535,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SendMessageRequest"
+                "$ref": "#/components/schemas/ConversationSendMessageRequest"
               }
             }
           },
@@ -6261,6 +6261,25 @@
               "type": "string",
               "format": "uuid"
             }
+          }
+        }
+      },
+      "ConversationSendMessageRequest": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "client_entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The submitting client's journal `EntryId` (issue #110/#111), when\nthis request came from the SDK's deferred submission engine rather\nthan a direct online send. Optional — a message sent directly online\nnever sets this and never needs to dedupe against anything (see\nmigration `0037_conversation_message_idempotency`).\n\nA retried request after a dropped response carries the *same*\n`client_entry_id` as the original attempt — that's the whole\nmechanism: [`send_message`] treats a conflict on\n`(conversation_id, client_entry_id)` as \"already applied\" and\nreturns the existing row instead of erroring or inserting a\nduplicate."
           }
         }
       },

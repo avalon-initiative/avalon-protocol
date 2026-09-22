@@ -13,7 +13,6 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -56,33 +55,6 @@ namespace Avalon.Sdk
                 Body = response.Body,
                 SentAt = response.SentAt,
             };
-    }
-
-    /// <summary>Issue #725: <c>docs/generated/openapi.json</c>'s <c>SendMessageRequest</c>
-    /// schema is missing <c>client_entry_id</c> — <c>crates/server/src/conversations.rs</c>'s
-    /// own <c>SendMessageRequest</c> struct has it (used for the deferred-submission
-    /// idempotency key), but that struct's bare type name collides with
-    /// <c>crates/server/src/guild_messages.rs::SendMessageRequest</c> in utoipa's
-    /// <c>openapi.rs</c> component registration (unlike
-    /// <c>conversations::MessageResponse</c>, which already works around an identical
-    /// collision via <c>#[schema(as = ConversationMessageResponse)]</c>) — one of the two
-    /// components silently wins and the other's shape, including <c>client_entry_id</c>, is
-    /// lost from the published schema. <c>Avalon.Sdk.Generated.SendMessageRequest</c> is
-    /// therefore not a safe replacement for this type: switching to it would silently drop
-    /// the ability to set <c>client_entry_id</c>, breaking
-    /// <see cref="ConversationHandle.SendWithClientEntryIdAsync"/>'s whole purpose. This one
-    /// request DTO stays hand-written until the server/codegen side fixes the collision (e.g.
-    /// a matching <c>#[schema(as = ...)]</c> on <c>conversations::SendMessageRequest</c>).</summary>
-    internal sealed class ConversationSendMessageRequest
-    {
-        [JsonPropertyName("body")]
-        public string Body { get; set; } = "";
-
-        /// <summary>Set only by SendWithClientEntryIdAsync, used by a future deferred
-        /// submission engine so a retried submission dedupes server-side instead of posting
-        /// twice. A direct SendAsync call always sends null here.</summary>
-        [JsonPropertyName("client_entry_id")]
-        public Guid? ClientEntryId { get; set; }
     }
 
     public sealed partial class Session
@@ -197,7 +169,7 @@ namespace Avalon.Sdk
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{_session.ServerUrl}/conversations/{ConversationId}/messages");
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _session.Token);
             request.Content = new StringContent(
-                JsonSerializer.Serialize(new ConversationSendMessageRequest { Body = body, ClientEntryId = clientEntryId }),
+                JsonSerializer.Serialize(new Avalon.Sdk.Generated.ConversationSendMessageRequest { Body = body, ClientEntryId = clientEntryId }),
                 Encoding.UTF8, "application/json");
             using var response = await _session.Http.SendAsync(request, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)

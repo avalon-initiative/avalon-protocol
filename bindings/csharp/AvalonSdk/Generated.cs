@@ -575,6 +575,32 @@ namespace Avalon.Sdk.Generated
     }
 
     [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.7.1.0 (NJsonSchema v11.6.1.0 (Newtonsoft.Json v13.0.0.0))")]
+    public partial class ConversationSendMessageRequest
+    {
+
+        [System.Text.Json.Serialization.JsonPropertyName("body")]
+        public string Body { get; set; } = default!;
+
+        /// <summary>
+        /// The submitting client's journal `EntryId` (issue #110/#111), when
+        /// <br/>this request came from the SDK's deferred submission engine rather
+        /// <br/>than a direct online send. Optional — a message sent directly online
+        /// <br/>never sets this and never needs to dedupe against anything (see
+        /// <br/>migration `0037_conversation_message_idempotency`).
+        /// <br/>
+        /// <br/>A retried request after a dropped response carries the *same*
+        /// <br/>`client_entry_id` as the original attempt — that's the whole
+        /// <br/>mechanism: [`send_message`] treats a conflict on
+        /// <br/>`(conversation_id, client_entry_id)` as "already applied" and
+        /// <br/>returns the existing row instead of erroring or inserting a
+        /// <br/>duplicate.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("client_entry_id")]
+        public System.Guid? ClientEntryId { get; set; } = default!;
+
+    }
+
+    [System.CodeDom.Compiler.GeneratedCode("NJsonSchema", "14.7.1.0 (NJsonSchema v11.6.1.0 (Newtonsoft.Json v13.0.0.0))")]
     public partial class CreateAchievementDefinitionRequest
     {
 
@@ -3735,6 +3761,6 @@ namespace Avalon.Sdk
         /// <summary>Issue #735/#725: the docs/generated/openapi.json `info.version`
         /// this file's generated types were produced from — generated straight from
         /// the same schema file, so it can't drift by construction.</summary>
-        public const string OpenApiSchemaVersion = "0.1.0";
+        public const string OpenApiSchemaVersion = "0.2.0";
     }
 }

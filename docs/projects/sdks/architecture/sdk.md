@@ -1267,23 +1267,25 @@ protocol and the domain model in `crates/protocol`; they never pull in
     string round-trips fine into a C# `string`), just an imprecise type,
     fixed at the one call site that needed the string form back
     (`x-avalon-integrator-challenge-id` header).
-  - Also found, not yet fixed here: `crates/server/src/conversations.rs`'s
-    `SendMessageRequest` (has `client_entry_id`, the deferred-submission
-    idempotency key) and `crates/server/src/guild_messages.rs`'s own,
-    differently-shaped `SendMessageRequest` (just `body`) both register
-    under the bare name `SendMessageRequest` in `crates/server/src/
-    openapi.rs`'s schema aggregator — the same class of utoipa bare-name
-    collision #726 already found and fixed for `MessageResponse` via
-    `#[schema(as = ConversationMessageResponse)]`, but this one doesn't have
-    an equivalent fix yet, so the published schema for `POST /conversations/
-    {id}/messages` is currently missing `client_entry_id`.
-    `Conversations.cs`'s own `ConversationSendMessageRequest` stays
-    hand-written, with a comment pointing at the collision, rather than
-    migrate onto the (currently incomplete) generated type and silently
-    drop `ConversationHandle.SendWithClientEntryIdAsync`'s retried-submission
-    dedup support.
-  - `dotnet build bindings/csharp/AvalonSdk.sln` and `dotnet test` (63
-    tests) both verified clean, netstandard2.1 target unaffected.
+  - `crates/server/src/conversations.rs`'s `SendMessageRequest` (has
+    `client_entry_id`, the deferred-submission idempotency key) and
+    `crates/server/src/guild_messages.rs`'s own, differently-shaped
+    `SendMessageRequest` (just `body`) used to both register under the
+    bare name `SendMessageRequest` in `crates/server/src/openapi.rs`'s
+    schema aggregator — the same class of utoipa bare-name collision #726
+    found and fixed for `MessageResponse`. Found during this migration,
+    fixed as issue #742 (`#[schema(as = ConversationSendMessageRequest)]`,
+    schema version bumped 0.1.0 → 0.2.0 per #735's own version-bump
+    discipline): `Conversations.cs`'s hand-written
+    `ConversationSendMessageRequest` workaround is gone, replaced by
+    `Avalon.Sdk.Generated.ConversationSendMessageRequest` directly, with a
+    new permanent live test
+    (`SendWithClientEntryId_RetryDedupesInsteadOfDuplicating`) proving a
+    retried send with the same `client_entry_id` actually dedupes
+    server-side now, not just that the field round-trips.
+  - `dotnet build bindings/csharp/AvalonSdk.sln` and `dotnet test` (69
+    tests, including the new dedup test) both verified clean,
+    netstandard2.1 target unaffected.
 - Schema/SDK versioning (issue #735, epic #722) — `docs/generated/
   openapi.json`'s `info.version` (a static `"0.1.0"` since #723) now has
   real enforcement behind it: `make openapi-version-check` (new, part of
