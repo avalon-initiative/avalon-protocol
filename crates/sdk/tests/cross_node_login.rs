@@ -23,7 +23,7 @@ use passkey_types::webauthn::{CredentialCreationOptions, CredentialRequestOption
 use serde_json::json;
 use uuid::Uuid;
 
-use avalon_protocol::cross_node_login::{signing_bytes, CrossNodeLoginGrant, DEFAULT_TTL_SECONDS};
+use avalon_sdk::cross_node_login::{signing_bytes, CrossNodeLoginGrant, DEFAULT_TTL_SECONDS};
 
 fn server_url() -> String {
     std::env::var("AVALON_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())

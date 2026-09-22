@@ -1,0 +1,141 @@
+{
+  "$schema": "./SCHEMA.md#attestation-signing",
+  "description": "Attestation issuance, bulk issuance, and revocation signing bytes (#31/#32/#85/#495, decoupled per #774). An issuer's Ed25519 key signs these exact bytes to authorize a claim about a subject; the verifying node rebuilds them independently and rejects anything that does not match. Every SDK reimplements this construction rather than sharing source with the server, so this file is the only thing keeping them in step. `claimKind` is \"achievement\" for game issuers and \"milestone\" for app/service issuers, and is folded into the signed bytes so a signature minted under one vocabulary can never be replayed as the other.",
+  "supportedIn": [
+    "rust",
+    "csharp",
+    "typescript"
+  ],
+  "signingKeySeedHex": "9a8b7c6d5e4f30211203344556677889aabbccddeeff00112233445566778899",
+  "signingPublicKeyHex": "6b3b44ec451660762e9a0ff1c92bdba30294ee2115a3ebd6364fc37502230020",
+  "vectors": [
+    {
+      "name": "game issuance",
+      "input": {
+        "operation": "issue",
+        "claimKind": "achievement",
+        "issuerRef": "game:ashen-realms",
+        "subject": "44444444-4444-4444-8444-444444444444",
+        "achievement": "game:ashen-realms:achievement:dragon_slayer"
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a616368696576656d656e742e6973737565643a76313a67616d653a617368656e2d7265616c6d733a34343434343434342d343434342d343434342d383434342d3434343434343434343434343a67616d653a617368656e2d7265616c6d733a616368696576656d656e743a647261676f6e5f736c61796572",
+        "signingBytesUtf8": "avalon:achievement.issued:v1:game:ashen-realms:44444444-4444-4444-8444-444444444444:game:ashen-realms:achievement:dragon_slayer",
+        "signatureHex": "71f4b370dfc95215ede0c550e9f71a0a06979b50ef5dfee35e3fb4e2643c1816848d52c1c0704a5267ad5861d39180dcd017504f878ce2e2b9dc14911366830c"
+      }
+    },
+    {
+      "name": "app milestone issuance",
+      "input": {
+        "operation": "issue",
+        "claimKind": "milestone",
+        "issuerRef": "app:wallet-app",
+        "subject": "44444444-4444-4444-8444-444444444444",
+        "achievement": "app:wallet-app:milestone:onboarded"
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a6d696c6573746f6e652e6973737565643a76313a6170703a77616c6c65742d6170703a34343434343434342d343434342d343434342d383434342d3434343434343434343434343a6170703a77616c6c65742d6170703a6d696c6573746f6e653a6f6e626f6172646564",
+        "signingBytesUtf8": "avalon:milestone.issued:v1:app:wallet-app:44444444-4444-4444-8444-444444444444:app:wallet-app:milestone:onboarded",
+        "signatureHex": "d52057898ce69b2866b5fde5e1ee8e6c86dc5690ae08890d28a8268afbad589b2e7744e291e3d228047c2115f6641b0867b6f8eb29b9a6e878eebb866ce5a002"
+      }
+    },
+    {
+      "name": "game bulk issuance",
+      "input": {
+        "operation": "bulk_issue",
+        "claimKind": "achievement",
+        "issuerRef": "game:ashen-realms",
+        "subject": "44444444-4444-4444-8444-444444444444",
+        "achievements": [
+          "game:ashen-realms:achievement:dragon_slayer",
+          "game:ashen-realms:achievement:lost_city"
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a616368696576656d656e742e6973737565642e62756c6b3a76313a67616d653a617368656e2d7265616c6d733a34343434343434342d343434342d343434342d383434342d3434343434343434343434343a000000020000002b67616d653a617368656e2d7265616c6d733a616368696576656d656e743a647261676f6e5f736c617965720000002767616d653a617368656e2d7265616c6d733a616368696576656d656e743a6c6f73745f63697479",
+        "signingBytesUtf8": "avalon:achievement.issued.bulk:v1:game:ashen-realms:44444444-4444-4444-8444-444444444444:\u0000\u0000\u0000\u0002\u0000\u0000\u0000+game:ashen-realms:achievement:dragon_slayer\u0000\u0000\u0000'game:ashen-realms:achievement:lost_city",
+        "signatureHex": "a8ec59beb0b75d2d4b771a621613724ad9749ad4359dc2474cd30b9cd2265d5f8ae0b322059e73c8b2e34659d81565156f8de2ed7b9c5156dc083b32b1de8c0b"
+      }
+    },
+    {
+      "name": "service bulk issuance, single claim",
+      "input": {
+        "operation": "bulk_issue",
+        "claimKind": "milestone",
+        "issuerRef": "service:ledger-watch",
+        "subject": "44444444-4444-4444-8444-444444444444",
+        "achievements": [
+          "service:ledger-watch:milestone:first_report"
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a6d696c6573746f6e652e6973737565642e62756c6b3a76313a736572766963653a6c65646765722d77617463683a34343434343434342d343434342d343434342d383434342d3434343434343434343434343a000000010000002b736572766963653a6c65646765722d77617463683a6d696c6573746f6e653a66697273745f7265706f7274",
+        "signingBytesUtf8": "avalon:milestone.issued.bulk:v1:service:ledger-watch:44444444-4444-4444-8444-444444444444:\u0000\u0000\u0000\u0001\u0000\u0000\u0000+service:ledger-watch:milestone:first_report",
+        "signatureHex": "3ac4aaa15d610e95d912ecec7cccdaf2b1fd111d52c846aba28a0c44b999f383d754caa1f48ce7dd2cb181488b8fb0ba2f58623ab3aca30a1a7e8de03e451d0f"
+      }
+    },
+    {
+      "name": "bulk issuance, split-boundary ambiguity guard",
+      "input": {
+        "operation": "bulk_issue",
+        "claimKind": "achievement",
+        "issuerRef": "game:ashen-realms",
+        "subject": "44444444-4444-4444-8444-444444444444",
+        "achievements": [
+          "ab",
+          "c"
+        ]
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a616368696576656d656e742e6973737565642e62756c6b3a76313a67616d653a617368656e2d7265616c6d733a34343434343434342d343434342d343434342d383434342d3434343434343434343434343a000000020000000261620000000163",
+        "signingBytesUtf8": "avalon:achievement.issued.bulk:v1:game:ashen-realms:44444444-4444-4444-8444-444444444444:\u0000\u0000\u0000\u0002\u0000\u0000\u0000\u0002ab\u0000\u0000\u0000\u0001c",
+        "signatureHex": "1b29dd0f912ede5438ef1714f2c8c989cfaa2337985886a856e83fba2b06fd1fa55ad6139b3c200523e8a52316f8acd9a57e48ffbc2e09f6005abf997c0c360d"
+      }
+    },
+    {
+      "name": "bulk issuance, empty claim list",
+      "input": {
+        "operation": "bulk_issue",
+        "claimKind": "achievement",
+        "issuerRef": "game:ashen-realms",
+        "subject": "44444444-4444-4444-8444-444444444444",
+        "achievements": []
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a616368696576656d656e742e6973737565642e62756c6b3a76313a67616d653a617368656e2d7265616c6d733a34343434343434342d343434342d343434342d383434342d3434343434343434343434343a00000000",
+        "signingBytesUtf8": "avalon:achievement.issued.bulk:v1:game:ashen-realms:44444444-4444-4444-8444-444444444444:\u0000\u0000\u0000\u0000",
+        "signatureHex": "da05730364abff609b45ea6b371f108869a87efa2aeb90ce2e007ff800d4e106d86fd9cdb68ee5dd17ed25fd3fad628d1c5172eb2f591c89e5e673d3fb238d00"
+      }
+    },
+    {
+      "name": "game revocation",
+      "input": {
+        "operation": "revoke",
+        "claimKind": "achievement",
+        "issuerRef": "game:ashen-realms",
+        "attestationId": "55555555-5555-4555-8555-555555555555",
+        "reasonCode": "issued_in_error"
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a616368696576656d656e742e7265766f6b65643a76313a67616d653a617368656e2d7265616c6d733a35353535353535352d353535352d343535352d383535352d3535353535353535353535353a6973737565645f696e5f6572726f72",
+        "signingBytesUtf8": "avalon:achievement.revoked:v1:game:ashen-realms:55555555-5555-4555-8555-555555555555:issued_in_error",
+        "signatureHex": "b2a7ec118155029b619badd3de9323f20f5ba2c95260c73efdc57fca764c04f624c8fbe6e40460a090cd36127414e9521aec668c4643a2677f74cec80e729b0c"
+      }
+    },
+    {
+      "name": "app milestone revocation",
+      "input": {
+        "operation": "revoke",
+        "claimKind": "milestone",
+        "issuerRef": "app:wallet-app",
+        "attestationId": "55555555-5555-4555-8555-555555555555",
+        "reasonCode": "definition_retired"
+      },
+      "expected": {
+        "signingBytesHex": "6176616c6f6e3a6d696c6573746f6e652e7265766f6b65643a76313a6170703a77616c6c65742d6170703a35353535353535352d353535352d343535352d383535352d3535353535353535353535353a646566696e6974696f6e5f72657469726564",
+        "signingBytesUtf8": "avalon:milestone.revoked:v1:app:wallet-app:55555555-5555-4555-8555-555555555555:definition_retired",
+        "signatureHex": "fc22c8366317043b2309d1afa3ee144c891694825025a20519e59c576f5227238a02caa5b3bec456aa8ee49944972d98ecf57ad413e4637a1026b5adb2836e01"
+      }
+    }
+  ]
+}

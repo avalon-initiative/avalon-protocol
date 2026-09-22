@@ -16,7 +16,7 @@
 //! the flow this test wants to exercise the SDK against — a real
 //! #20/#21/#22 guild, not a hand-seeded row.
 
-use avalon_protocol::ids::GuildId;
+use avalon_sdk::types::ids::GuildId;
 use avalon_sdk::{AvalonClient, AvalonConfig};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;

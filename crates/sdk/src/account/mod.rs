@@ -56,8 +56,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use avalon_protocol::identity::{Identity, Profile};
-use avalon_protocol::ids::{GuildId, IdentityId};
+use crate::types::identity::{Identity, Profile};
+use crate::types::ids::{GuildId, IdentityId};
 
 use crate::{AvalonClient, RetryConfig, SdkError};
 
@@ -273,7 +273,7 @@ pub struct ProfileUpdate<'a> {
     /// `None` leaves it untouched; `Some("")` clears it.
     pub bio: Option<&'a str>,
     /// `None` leaves it untouched; `Some(vec![])` clears the list. Each
-    /// entry must parse as a [`avalon_protocol::identity::Genre`] or the
+    /// entry must parse as a [`crate::types::identity::Genre`] or the
     /// server rejects the whole request.
     pub favorite_genres: Option<Vec<String>>,
     /// `None` leaves it untouched; `Some("")` clears it.

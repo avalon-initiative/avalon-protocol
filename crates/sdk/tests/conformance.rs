@@ -1,10 +1,8 @@
 //! Cross-SDK conformance suite (issue #727, epic #722) — loads the shared
 //! test vectors under `conformance/vectors/` (repo root) and asserts this
-//! crate's (and, where the behavior actually lives one layer down, the
-//! `avalon-protocol` crate this SDK depends on and re-exports through)
-//! real implementation produces byte-for-byte identical output. Pure,
-//! offline, no server/database needed — runs in `cargo test -p avalon-sdk`
-//! same as every other non-`--ignored` test here.
+//! crate's real implementation produces byte-for-byte identical output.
+//! Pure, offline, no server/database needed — runs in
+//! `cargo test -p avalon-sdk` same as every other non-`--ignored` test here.
 //!
 //! Client-side wire-shape codegen (#723-#726) already covers plain
 //! request/response shapes; this suite exists for the "smart client"
@@ -12,15 +10,23 @@
 //! derivation, a real multi-step handshake — see #714's own decision and
 //! `conformance/vectors/SCHEMA.md` for the full rationale.
 //!
+//! Since issue #774 this crate no longer shares Rust source with
+//! `avalon-protocol`, so the signing-byte constructions below are this
+//! SDK's own independent implementations, exactly like the C# and
+//! TypeScript SDKs'. These vectors are what proves they haven't drifted
+//! from the server's; `crates/protocol/tests/conformance.rs` asserts the
+//! *server* side of each of the same vector files, so a divergence fails a
+//! test on whichever side moved.
+//!
 //! When a vector's `supportedIn` doesn't list `"rust"`, this file asserts
 //! nothing false: it prints an explicit, named skip rather than faking a
 //! pass. See each vector file's own `notSupported.rust` entry for why.
 
-use avalon_protocol::continuation::signing_bytes as continuation_signing_bytes;
-use avalon_protocol::cross_node_login::signing_bytes as cross_node_login_signing_bytes;
-use avalon_protocol::interest_claim::{
-    signing_bytes as interest_claim_signing_bytes, ClaimedScope,
+use avalon_sdk::achievements::{
+    attestation_signing_bytes, bulk_attestation_signing_bytes, revocation_signing_bytes,
 };
+use avalon_sdk::cross_node_login::signing_bytes as cross_node_login_signing_bytes;
+use avalon_sdk::sth::signing_message as sth_signing_message;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -67,16 +73,39 @@ fn parse_uuid(v: &Value, field: &str) -> Uuid {
     .unwrap_or_else(|e| panic!("invalid uuid in {field}: {e}"))
 }
 
-fn parse_offset(v: &Value, field: &str) -> OffsetDateTime {
-    let secs = v[field]
-        .as_i64()
-        .unwrap_or_else(|| panic!("missing {field}"));
-    OffsetDateTime::from_unix_timestamp(secs)
-        .unwrap_or_else(|e| panic!("invalid timestamp {field}: {e}"))
-}
-
 fn to_hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
+}
+
+/// Asserts a vector's recorded signature both matches what this SDK
+/// produces for `bytes` and still verifies against the file's shared
+/// public key — the second half catches a vector file edited by hand to
+/// match a broken implementation.
+fn assert_signature_matches(
+    name: &str,
+    signing_key: &SigningKey,
+    bytes: &[u8],
+    expected_sig_hex: &str,
+) {
+    let signature = signing_key.sign(bytes);
+    assert_eq!(
+        to_hex(&signature.to_bytes()),
+        expected_sig_hex,
+        "[{name}] Ed25519 signature diverged from the shared vector — a payload signed by \
+         the Rust SDK would not be interchangeable with one from another SDK for the same input"
+    );
+
+    let verifying_key = VerifyingKey::from_bytes(signing_key.verifying_key().as_bytes()).unwrap();
+    let recorded_sig_bytes: [u8; 64] = hex::decode(expected_sig_hex)
+        .expect("signatureHex must be valid hex")
+        .try_into()
+        .expect("signatureHex must be 64 bytes");
+    verifying_key
+        .verify_strict(
+            bytes,
+            &ed25519_dalek::Signature::from_bytes(&recorded_sig_bytes),
+        )
+        .unwrap_or_else(|e| panic!("[{name}] recorded vector signature does not verify: {e}"));
 }
 
 #[test]
@@ -84,8 +113,8 @@ fn cross_node_login_grant_signing_matches_shared_vectors() {
     let doc = load("cross-node-login.json");
     assert!(
         supported_in(&doc, "rust"),
-        "cross-node-login.json must list rust in supportedIn — crates/sdk/src/cross_node_login.rs \
-         wraps avalon_protocol::cross_node_login::signing_bytes directly"
+        "cross-node-login.json must list rust in supportedIn — \
+         avalon_sdk::cross_node_login::signing_bytes implements it"
     );
 
     let signing_key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
@@ -99,11 +128,6 @@ fn cross_node_login_grant_signing_matches_shared_vectors() {
     for vector in doc["vectors"].as_array().unwrap() {
         let name = vector["name"].as_str().unwrap_or("<unnamed>");
         let input = &vector["input"];
-        let identity_id = parse_uuid(input, "identityId");
-        let signing_key_id = parse_uuid(input, "signingKeyId");
-        let destination_base_url = input["destinationBaseUrl"].as_str().unwrap();
-        let requesting_context = input["requestingContext"].as_str().unwrap();
-        let nonce = parse_uuid(input, "nonce");
         let issued_at =
             OffsetDateTime::from_unix_timestamp(input["issuedAtUnixSeconds"].as_i64().unwrap())
                 .unwrap();
@@ -112,43 +136,151 @@ fn cross_node_login_grant_signing_matches_shared_vectors() {
                 .unwrap();
 
         let bytes = cross_node_login_signing_bytes(
-            identity_id,
-            signing_key_id,
-            destination_base_url,
-            requesting_context,
-            nonce,
+            parse_uuid(input, "identityId"),
+            parse_uuid(input, "signingKeyId"),
+            input["destinationBaseUrl"].as_str().unwrap(),
+            input["requestingContext"].as_str().unwrap(),
+            parse_uuid(input, "nonce"),
             issued_at,
             expires_at,
         );
 
-        let expected_bytes_utf8 = vector["expected"]["signingBytesUtf8"].as_str().unwrap();
         assert_eq!(
             String::from_utf8(bytes.clone()).unwrap(),
-            expected_bytes_utf8,
+            vector["expected"]["signingBytesUtf8"].as_str().unwrap(),
             "[{name}] signing bytes diverged from the shared vector"
         );
+        assert_signature_matches(
+            name,
+            &signing_key,
+            &bytes,
+            vector["expected"]["signatureHex"].as_str().unwrap(),
+        );
+    }
+}
 
-        let signature = signing_key.sign(&bytes);
-        let expected_sig_hex = vector["expected"]["signatureHex"].as_str().unwrap();
+/// Issue #774's own safety net: this crate builds attestation issuance,
+/// bulk issuance, and revocation signing bytes itself rather than calling
+/// the server's construction, so this is the test that would catch the two
+/// drifting apart.
+#[test]
+fn attestation_signing_matches_shared_vectors() {
+    let doc = load("attestation-signing.json");
+    assert!(
+        supported_in(&doc, "rust"),
+        "attestation-signing.json must list rust in supportedIn — \
+         avalon_sdk::achievements implements all three constructions"
+    );
+
+    let signing_key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert_eq!(
+        to_hex(signing_key.verifying_key().as_bytes()),
+        doc["signingPublicKeyHex"].as_str().unwrap(),
+        "the shared test keypair's derived public key must match the vector file"
+    );
+
+    for vector in doc["vectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap_or("<unnamed>");
+        let input = &vector["input"];
+        let operation = input["operation"].as_str().unwrap();
+        let claim_kind = input["claimKind"].as_str().unwrap();
+        let issuer_ref = input["issuerRef"].as_str().unwrap();
+
+        let bytes = match operation {
+            "issue" => attestation_signing_bytes(
+                claim_kind,
+                issuer_ref,
+                parse_uuid(input, "subject"),
+                input["achievement"].as_str().unwrap(),
+            ),
+            "bulk_issue" => {
+                let achievements: Vec<String> = input["achievements"]
+                    .as_array()
+                    .expect("bulk_issue vectors carry an achievements array")
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_string())
+                    .collect();
+                bulk_attestation_signing_bytes(
+                    claim_kind,
+                    issuer_ref,
+                    parse_uuid(input, "subject"),
+                    &achievements,
+                )
+            }
+            "revoke" => revocation_signing_bytes(
+                claim_kind,
+                issuer_ref,
+                parse_uuid(input, "attestationId"),
+                input["reasonCode"].as_str().unwrap(),
+            ),
+            other => panic!("[{name}] unknown operation {other}"),
+        };
+
         assert_eq!(
-            to_hex(&signature.to_bytes()),
-            expected_sig_hex,
-            "[{name}] Ed25519 signature diverged from the shared vector — a grant minted by \
-             the Rust SDK would not be interchangeable with one from another SDK for the same input"
+            to_hex(&bytes),
+            vector["expected"]["signingBytesHex"].as_str().unwrap(),
+            "[{name}] signing bytes diverged from the shared vector"
+        );
+        if let Some(utf8) = vector["expected"]["signingBytesUtf8"].as_str() {
+            assert_eq!(
+                String::from_utf8(bytes.clone()).unwrap(),
+                utf8,
+                "[{name}] signing bytes diverged from the shared vector"
+            );
+        }
+        assert_signature_matches(
+            name,
+            &signing_key,
+            &bytes,
+            vector["expected"]["signatureHex"].as_str().unwrap(),
+        );
+    }
+}
+
+/// `crate::sth` is the other construction #774 made independent — a node's
+/// Signed Tree Head is what `avalon_sdk::network` verifies a network's
+/// identity against, so a drift here would make every pinned trust anchor
+/// reject a legitimate node.
+#[test]
+fn signed_tree_head_signing_matches_shared_vectors() {
+    let doc = load("signed-tree-head.json");
+    assert!(
+        supported_in(&doc, "rust"),
+        "signed-tree-head.json must list rust in supportedIn — \
+         avalon_sdk::sth implements it"
+    );
+
+    let signing_key = signing_key_from_seed_hex(doc["signingKeySeedHex"].as_str().unwrap());
+    assert_eq!(
+        to_hex(signing_key.verifying_key().as_bytes()),
+        doc["signingPublicKeyHex"].as_str().unwrap(),
+        "the shared test keypair's derived public key must match the vector file"
+    );
+
+    for vector in doc["vectors"].as_array().unwrap() {
+        let name = vector["name"].as_str().unwrap_or("<unnamed>");
+        let input = &vector["input"];
+        let created_at =
+            OffsetDateTime::from_unix_timestamp(input["createdAtUnixSeconds"].as_i64().unwrap())
+                .unwrap();
+        let bytes = sth_signing_message(
+            input["treeSize"].as_i64().unwrap(),
+            input["rootHashHex"].as_str().unwrap(),
+            input["networkId"].as_str().unwrap(),
+            created_at,
         );
 
-        // Round-trip: the vector's own recorded signature must still verify
-        // against the shared public key.
-        let verifying_key =
-            VerifyingKey::from_bytes(signing_key.verifying_key().as_bytes()).unwrap();
-        let recorded_sig_bytes: [u8; 64] =
-            hex::decode(expected_sig_hex).unwrap().try_into().unwrap();
-        verifying_key
-            .verify_strict(
-                &bytes,
-                &ed25519_dalek::Signature::from_bytes(&recorded_sig_bytes),
-            )
-            .unwrap_or_else(|e| panic!("[{name}] recorded vector signature does not verify: {e}"));
+        assert_eq!(
+            to_hex(&bytes),
+            vector["expected"]["signingBytesHex"].as_str().unwrap(),
+            "[{name}] signing bytes diverged from the shared vector"
+        );
+        assert_signature_matches(
+            name,
+            &signing_key,
+            &bytes,
+            vector["expected"]["signatureHex"].as_str().unwrap(),
+        );
     }
 }
 
@@ -167,30 +299,9 @@ fn session_continuation_token_signing_is_a_known_rust_sdk_gap() {
         .expect("notSupported.rust must explain why rust is missing");
     println!(
         "SKIP conformance/vectors/session-continuation.json for rust: {gap}\n\
-         (avalon_protocol::continuation::signing_bytes exists and is verified below against \
-         the shared vector's signing-bytes format, since crates/protocol IS shared workspace \
-         code — but nothing in crates/sdk exposes client-side minting yet)"
-    );
-
-    // Even though crates/sdk has no minting API, avalon_protocol (which
-    // crates/sdk depends on) defines the exact signing-bytes contract a
-    // future crates/sdk implementation would have to match — verify that
-    // contract against the vector now, so a change to the shared protocol
-    // format itself is still caught here.
-    let vector = &doc["vectors"][0];
-    let input = &vector["input"];
-    let identity_id = parse_uuid(input, "identityId");
-    let signing_key_id = parse_uuid(input, "signingKeyId");
-    let nonce = parse_uuid(input, "nonce");
-    let issued_at = parse_offset(input, "issuedAtUnixSeconds");
-    let expires_at = parse_offset(input, "expiresAtUnixSeconds");
-    let bytes =
-        continuation_signing_bytes(identity_id, signing_key_id, nonce, issued_at, expires_at);
-    let expected = vector["expected"]["signingBytesUtf8"].as_str().unwrap();
-    assert_eq!(
-        String::from_utf8(bytes).unwrap(),
-        expected,
-        "avalon_protocol::continuation::signing_bytes diverged from the shared vector"
+         (the server-side construction is still checked against this same vector by \
+         crates/protocol/tests/conformance.rs — nothing in crates/sdk exposes client-side \
+         minting yet)"
     );
 }
 
@@ -208,33 +319,9 @@ fn websocket_interest_claim_signing_is_a_known_rust_sdk_gap() {
         .expect("notSupported.rust must explain why rust is missing");
     println!(
         "SKIP conformance/vectors/websocket-interest-claim.json for rust: {gap}\n\
-         (avalon_protocol::interest_claim::signing_bytes is verified below against the shared \
-         vector's signing-bytes format — crates/sdk itself has no interest-claim handshake yet)"
-    );
-
-    let vector = &doc["vectors"][0];
-    let input = &vector["input"];
-    let identity_id = parse_uuid(input, "identityId");
-    let signing_key_id = parse_uuid(input, "signingKeyId");
-    let channel_id = parse_uuid(&input["scope"], "channelId");
-    let base_url = input["baseUrl"].as_str().unwrap();
-    let nonce = parse_uuid(input, "nonce");
-    let issued_at = parse_offset(input, "issuedAtUnixSeconds");
-    let expires_at = parse_offset(input, "expiresAtUnixSeconds");
-    let bytes = interest_claim_signing_bytes(
-        identity_id,
-        signing_key_id,
-        ClaimedScope::Channel { channel_id },
-        base_url,
-        nonce,
-        issued_at,
-        expires_at,
-    );
-    let expected = vector["expected"]["signingBytesUtf8"].as_str().unwrap();
-    assert_eq!(
-        String::from_utf8(bytes).unwrap(),
-        expected,
-        "avalon_protocol::interest_claim::signing_bytes diverged from the shared vector"
+         (the server-side construction is still checked against this same vector by \
+         crates/protocol/tests/conformance.rs — crates/sdk itself has no interest-claim \
+         handshake yet)"
     );
 }
 

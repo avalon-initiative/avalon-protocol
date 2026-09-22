@@ -25,9 +25,87 @@ use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use avalon_protocol::cross_node_login::{signing_bytes, CrossNodeLoginGrant, DEFAULT_TTL_SECONDS};
-
 use crate::{AvalonClient, SdkError, Session};
+
+/// How long a grant is valid for after `issued_at`, at mint time — the
+/// verifying node independently re-checks `expires_at` itself. Short: a
+/// grant is a one-shot approval consumed once by
+/// `POST /auth/cross-node/submit`, not a re-presented claim.
+pub const DEFAULT_TTL_SECONDS: i64 = 60;
+
+/// A self-signed assertion that a human, shown `requesting_context`, just
+/// approved logging `identity_id` (acting through `signing_key_id`) into
+/// `destination_base_url`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrossNodeLoginGrant {
+    /// The identity being logged in.
+    pub identity_id: Uuid,
+    /// Which of the identity's (possibly several) signing keys approved
+    /// this.
+    pub signing_key_id: Uuid,
+    /// The node this grant is good for logging into, and nowhere else —
+    /// inside the signed bytes, so an approved grant can't be relayed to a
+    /// node the human never saw.
+    pub destination_base_url: String,
+    /// The human-legible context shown to the approver before they
+    /// approved — carried in the signed bytes so the grant itself is
+    /// evidence of what was shown, not just a claim about it.
+    pub requesting_context: String,
+    /// Anti-replay: unique per grant, checked against a consumed-nonce
+    /// table by the verifying node.
+    pub nonce: Uuid,
+    /// When this grant was minted.
+    #[serde(with = "time::serde::rfc3339")]
+    pub issued_at: OffsetDateTime,
+    /// When it stops being accepted.
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: OffsetDateTime,
+    /// Lowercase hex-encoded Ed25519 signature over [`signing_bytes`].
+    pub signature: String,
+}
+
+impl CrossNodeLoginGrant {
+    /// The bytes this grant's own `signature` field covers — what both the
+    /// approving client and the verifying node compute independently.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        signing_bytes(
+            self.identity_id,
+            self.signing_key_id,
+            &self.destination_base_url,
+            &self.requesting_context,
+            self.nonce,
+            self.issued_at,
+            self.expires_at,
+        )
+    }
+}
+
+/// The exact bytes a [`CrossNodeLoginGrant`]'s signature covers —
+/// deliberately excludes `signature` itself and includes every other field,
+/// so a signature can never be replayed against a different identity, key,
+/// destination, context, or validity window than the one it was actually
+/// produced for.
+///
+/// Must stay byte-for-byte identical to the verifying node's own
+/// construction (`avalon_protocol::cross_node_login::signing_bytes`) and to
+/// the C#/TypeScript SDKs' — `conformance/vectors/cross-node-login.json`
+/// is what proves it still is.
+pub fn signing_bytes(
+    identity_id: Uuid,
+    signing_key_id: Uuid,
+    destination_base_url: &str,
+    requesting_context: &str,
+    nonce: Uuid,
+    issued_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
+) -> Vec<u8> {
+    format!(
+        "avalon:cross-node-login:v1:{identity_id}:{signing_key_id}:{destination_base_url}:{requesting_context}:{nonce}:{}:{}",
+        issued_at.unix_timestamp(),
+        expires_at.unix_timestamp(),
+    )
+    .into_bytes()
+}
 
 /// Same floor `device_login`'s own `DEFAULT_POLL_INTERVAL_SECONDS`
 /// documents, for the same reason — a server response should always carry

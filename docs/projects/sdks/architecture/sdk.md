@@ -159,13 +159,29 @@ Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
 `avalon-chain` or `avalon-server`.
 
-The Rust SDK (`crates/sdk`) itself no longer depends on `avalon-chain`
-either (#773, part of epic #771's move of the Rust SDK into a standalone
-`avalon-sdks` repo): `network.rs`'s STH-based network trust verification
-(`verify_network`), `managed_hosting.rs`, and `issuer_registration.rs` all
-use `avalon_protocol::sth::*` directly — `sth.rs`'s Ed25519 signing/
-verification code was pure enough to move from `crates/chain` into
-`crates/protocol` with no `sqlx`/Postgres dependency along for the ride.
+The Rust SDK (`crates/sdk`) depends on **no other crate in this
+workspace** — not `avalon-protocol`, not `avalon-chain`, not
+`avalon-server` (#772/#773/#774, epic #771's move of the Rust SDK into a
+standalone `avalon-sdks` repo). It is now structurally the same kind of
+thing the C# and TypeScript SDKs already were: schema-generated wire types
+plus a hand-written client layer, with its own copies of the domain types
+(`crates/sdk/src/types/`) and its own implementations of every
+signing-byte construction it needs (`achievements.rs`, `sth.rs`,
+`cross_node_login.rs`).
+
+That is a deliberate trade, and it costs something real. Until #774 the
+Rust SDK called `avalon_protocol::achievements::*` and
+`avalon_protocol::sth::*` directly, so client and server were
+*compiler-guaranteed* to sign the same bytes — drift was not expressible.
+Now it is, exactly as it always has been for C# and TypeScript. What
+replaces the compiler is the conformance suite: `conformance/vectors/`
+holds the canonical signing-byte and signature vectors,
+`crates/protocol/tests/conformance.rs` asserts the server's
+implementations against them, and each SDK's own runner asserts its
+implementation against the same files. A format change that isn't mirrored
+everywhere fails a test on whichever side moved. **Anything in an SDK that
+signs bytes must be covered by a vector** — that is the price of this
+layout, not an optional extra.
 
 ## Today in the repo
 
@@ -592,9 +608,12 @@ verification code was pure enough to move from `crates/chain` into
     behavior, no nested `Option<Option<T>>` needed. The same three-state
     convention recurs in `UpdateGuildRequest`/`UpdateChannelRequest`, same
     treatment.
-  - `Genre`, `PresenceStatus`, `GuildLink`, `RoleBadge` are replaced with the
+  - `Genre`, `PresenceStatus`, `GuildLink`, `RoleBadge` (plus
+    `RoleBadgeIcon`/`RoleBadgeColor`) were originally aliased onto the
     existing `avalon_protocol::{identity,social,guilds}::*` types via
-    typify's `with_replacement`, not generated as duplicates.
+    typify's `with_replacement`. #774 removed those overrides — they're
+    generated fresh from the schema like everything else here, and
+    re-exported under domain-shaped paths by `crates/sdk/src/types/`.
   - typify hardcodes `"format": "date-time"` to `chrono`, not a dependency
     anywhere in this workspace (`time` is, everywhere) — `build.rs` strips
     that format hint before generation so those fields come through as plain
@@ -1461,6 +1480,44 @@ verification code was pure enough to move from `crates/chain` into
     behavior lands in *any* SDK, in the same change — list the
     implementing SDK(s) in `supportedIn` immediately, even if the other
     two don't implement it yet.
+- Rust SDK decoupled from `avalon-protocol` (issue #774, epic #771) —
+  `crates/sdk/Cargo.toml` no longer lists `avalon-protocol` (or any other
+  crate in this workspace) as a dependency. Three pieces:
+  - **Wire types.** `build.rs`'s four `with_replacement` overrides are
+    gone; `Genre`, `PresenceStatus`, `GuildLink`, `RoleBadge`,
+    `RoleBadgeIcon`, and `RoleBadgeColor` are generated from
+    `docs/generated/openapi.json` like the rest of `SCHEMA_NAMES`.
+  - **Domain types.** `crates/sdk/src/types/` (`ids`, `identity`, `social`,
+    `guilds`, `permissions`, `integrators`, `events`) holds SDK-owned
+    copies of the structs and enums the SDK's public API exposes —
+    `IdentityId`, `GuildId`, `Capability`, `Profile`, `Presence`,
+    `ConversationMessage`, `JoinPolicy`, `IntegratorCategory` and the rest
+    — structurally identical to the server's, re-exporting the
+    schema-generated enums above so callers get one domain-shaped path
+    either way.
+  - **Signing.** `crates/sdk/src/sth.rs` and the grant type/`signing_bytes`
+    in `crates/sdk/src/cross_node_login.rs` are the SDK's own
+    implementations of what used to be `avalon_protocol::sth` and
+    `avalon_protocol::cross_node_login`; `achievements.rs`'s three
+    attestation constructions were already independent and are now `pub`,
+    so the conformance runner drives the real implementation rather than a
+    copy of it.
+  - The safety net is `conformance/vectors/attestation-signing.json` (8
+    vectors: game/app/service issuance, bulk issuance including the
+    empty-list and split-boundary ambiguity cases, and revocation under
+    both claim vocabularies) and
+    `conformance/vectors/signed-tree-head.json`. Both are consumed by
+    `crates/protocol/tests/conformance.rs` (the server side) and by each
+    SDK's own runner; `attestation-signing.json` is wired into all three
+    SDKs, `signed-tree-head.json` into Rust only, with the C#/TS gaps
+    recorded in its `notSupported` block rather than faked.
+  - Adding the vectors immediately surfaced a real bug they were built to
+    catch: `Session::issue_milestone`/`bulk_issue_milestones` signed
+    `avalon:achievement.issued:v1:...` for app/service issuers, where the
+    server verifies `avalon:milestone.issued:v1:...`
+    (`IntegratorCategory::claim_kind`). No test covered that path, and the
+    C#/TS SDKs had it right. The three signing-byte functions now take
+    `claim_kind` explicitly, matching the server's own signature.
 - SDK coverage check (issue #728, epic #722, per #714's decision) —
   `scripts/check-sdk-coverage.py` (`make sdk-coverage-check`, part of
   `make check-all`, not the plain `check` target, since it needs all

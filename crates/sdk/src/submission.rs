@@ -144,7 +144,7 @@ impl<'a> HttpTransport<'a> {
 /// an `SdkError` value, which is cheap to construct directly). See the
 /// module docs for the reasoning behind each case.
 fn classify_send_result(
-    result: Result<avalon_protocol::social::ConversationMessage, SdkError>,
+    result: Result<crate::types::social::ConversationMessage, SdkError>,
 ) -> Result<SubmitOutcome, SubmitError> {
     match result {
         Ok(_message) => Ok(SubmitOutcome::Applied),
@@ -1072,11 +1072,11 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    fn sample_message() -> avalon_protocol::social::ConversationMessage {
-        avalon_protocol::social::ConversationMessage {
+    fn sample_message() -> crate::types::social::ConversationMessage {
+        crate::types::social::ConversationMessage {
             id: Uuid::new_v4(),
             conversation_id: Uuid::new_v4(),
-            author: avalon_protocol::ids::IdentityId(Uuid::new_v4()),
+            author: crate::types::ids::IdentityId(Uuid::new_v4()),
             body: "hi".to_string(),
             sent_at: OffsetDateTime::now_utc(),
         }

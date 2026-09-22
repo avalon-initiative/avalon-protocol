@@ -38,7 +38,7 @@ pub struct Guild {
     /// When the guild was created.
     pub created_at: OffsetDateTime,
     /// `"open"`, `"invite_only"`, or `"application"` — see
-    /// `avalon_protocol::guilds::JoinPolicy`'s own stable vocabulary.
+    /// `crate::types::guilds::JoinPolicy`'s own stable vocabulary.
     pub join_policy: String,
     /// Message of the day, if set.
     pub motd: Option<String>,
@@ -47,7 +47,7 @@ pub struct Guild {
     /// Icon image URL, if set.
     pub icon: Option<String>,
     /// External links.
-    pub links: Vec<avalon_protocol::guilds::GuildLink>,
+    pub links: Vec<crate::types::guilds::GuildLink>,
     /// Whether the guild is currently recruiting.
     pub recruiting: bool,
     /// Whether the guild is publicly browsable/discoverable.
@@ -203,7 +203,7 @@ pub struct Role {
     /// Free-text description.
     pub description: String,
     /// Badge (icon/color).
-    pub badge: avalon_protocol::guilds::RoleBadge,
+    pub badge: crate::types::guilds::RoleBadge,
 }
 
 impl From<crate::generated::RoleResponse> for Role {
@@ -1115,7 +1115,7 @@ impl AccountSession {
     }
 
     /// `POST /guilds/{id}/join` — only meaningful when the guild's join
-    /// policy allows it (see `avalon_protocol::guilds::JoinPolicy`).
+    /// policy allows it (see `crate::types::guilds::JoinPolicy`).
     pub async fn join_guild(&self, guild_id: Uuid) -> Result<GuildMember, SdkError> {
         let raw: crate::generated::GuildMemberResponse = self
             .post_empty(&super::path(

@@ -3,7 +3,7 @@
 //! `crate::social`'s capability-gated integrator methods. See
 //! `crates/server/src/friends.rs`/`blocks.rs`/`presence.rs`/`discovery.rs`.
 
-use avalon_protocol::social::PresenceStatus;
+use crate::types::social::PresenceStatus;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -232,7 +232,7 @@ pub struct PublicIdentityProfile {
     /// Free-text bio, if set.
     pub bio: Option<String>,
     /// Self-described favorite genres.
-    pub favorite_genres: Vec<avalon_protocol::identity::Genre>,
+    pub favorite_genres: Vec<crate::types::identity::Genre>,
     /// Free-text pronouns, if set.
     pub pronouns: Option<String>,
     /// Banner image URL, if set.

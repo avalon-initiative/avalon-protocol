@@ -206,4 +206,107 @@ public class ConformanceTests
         var gap = root.GetProperty("notSupported").GetProperty("csharp").GetString();
         Assert.False(string.IsNullOrWhiteSpace(gap), "notSupported.csharp must explain the gap");
     }
+
+    // Same reflection approach as CrossNodeLoginSigningBytes above, for Session's three
+    // attestation signing-byte constructions (bindings/csharp/AvalonSdk/Achievements.cs).
+    // Those are private because nothing outside the SDK should be hand-rolling a signature;
+    // this suite still has to drive the real implementation rather than a copy of it.
+    private static byte[] InvokeSessionSigningBytes(string name, params object[] args)
+    {
+        var method = typeof(Session).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException(
+                $"Session.{name} not found by reflection — did Achievements.cs rename it?");
+        return (byte[])method.Invoke(null, args)!;
+    }
+
+    public static IEnumerable<object[]> AttestationSigningVectors()
+    {
+        using var doc = LoadVector("attestation-signing.json");
+        var vectors = new List<object[]>();
+        foreach (var v in doc.RootElement.GetProperty("vectors").EnumerateArray())
+        {
+            vectors.Add(new object[] { v.GetProperty("name").GetString()! });
+        }
+        return vectors;
+    }
+
+    [Fact]
+    public void AttestationSigning_VectorFile_ListsCSharpAsSupported()
+    {
+        using var doc = LoadVector("attestation-signing.json");
+        Assert.True(
+            SupportedIn(doc.RootElement, "csharp"),
+            "attestation-signing.json must list csharp in supportedIn — Achievements.cs implements it");
+    }
+
+    [Theory]
+    [MemberData(nameof(AttestationSigningVectors))]
+    public void AttestationSigning_MatchesSharedVector(string vectorName)
+    {
+        using var doc = LoadVector("attestation-signing.json");
+        var root = doc.RootElement;
+        var secretKey = HexToBytes(root.GetProperty("signingKeySeedHex").GetString()!);
+
+        JsonElement? found = null;
+        foreach (var v in root.GetProperty("vectors").EnumerateArray())
+        {
+            if (v.GetProperty("name").GetString() == vectorName) { found = v.Clone(); break; }
+        }
+        Assert.True(found.HasValue, $"vector {vectorName} not found");
+        var vector = found!.Value;
+        var input = vector.GetProperty("input");
+        var expected = vector.GetProperty("expected");
+
+        var claimKind = input.GetProperty("claimKind").GetString()!;
+        var issuerRef = input.GetProperty("issuerRef").GetString()!;
+        var operation = input.GetProperty("operation").GetString()!;
+
+        byte[] bytes;
+        switch (operation)
+        {
+            case "issue":
+                bytes = InvokeSessionSigningBytes(
+                    "AttestationSigningBytes",
+                    claimKind, issuerRef, Guid.Parse(input.GetProperty("subject").GetString()!),
+                    input.GetProperty("achievement").GetString()!);
+                break;
+            case "bulk_issue":
+                var refs = new List<string>();
+                foreach (var a in input.GetProperty("achievements").EnumerateArray())
+                {
+                    refs.Add(a.GetString()!);
+                }
+                bytes = InvokeSessionSigningBytes(
+                    "BulkAttestationSigningBytes",
+                    claimKind, issuerRef, Guid.Parse(input.GetProperty("subject").GetString()!),
+                    (IReadOnlyList<string>)refs);
+                break;
+            case "revoke":
+                bytes = InvokeSessionSigningBytes(
+                    "RevocationSigningBytes",
+                    claimKind, issuerRef, Guid.Parse(input.GetProperty("attestationId").GetString()!),
+                    input.GetProperty("reasonCode").GetString()!);
+                break;
+            default:
+                throw new InvalidOperationException($"unknown operation {operation}");
+        }
+
+        Assert.Equal(expected.GetProperty("signingBytesHex").GetString(), ToLowerHex(bytes));
+        var signature = InvokeSignWithIdentityKey(secretKey, bytes);
+        Assert.Equal(expected.GetProperty("signatureHex").GetString(), ToLowerHex(signature));
+    }
+
+    [Fact]
+    public void SignedTreeHead_IsAKnownCSharpSdkGap()
+    {
+        using var doc = LoadVector("signed-tree-head.json");
+        var root = doc.RootElement;
+        Assert.False(
+            SupportedIn(root, "csharp"),
+            "signed-tree-head.json now lists csharp in supportedIn, but this test only documents " +
+            "the gap — implement real STH signing/trust-anchor verification in AvalonSdk and real " +
+            "assertions here before flipping supportedIn");
+        var gap = root.GetProperty("notSupported").GetProperty("csharp").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(gap), "notSupported.csharp must explain the gap");
+    }
 }

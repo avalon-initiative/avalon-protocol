@@ -19,9 +19,9 @@
 //! cargo test -p avalon-sdk --test managed_hosting_live -- --ignored
 //! ```
 
-use avalon_protocol::events::{EventBatch, ProtocolEvent};
-use avalon_protocol::ids::GlobalId;
 use avalon_sdk::managed_hosting::{HostCandidate, ManagedHostingClient};
+use avalon_sdk::types::events::{EventBatch, ProtocolEvent};
+use avalon_sdk::types::ids::GlobalId;
 use ed25519_dalek::SigningKey;
 use serde_json::json;
 use time::OffsetDateTime;

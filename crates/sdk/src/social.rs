@@ -36,9 +36,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 
-use avalon_protocol::ids::IdentityId;
-use avalon_protocol::permissions::Capability;
-use avalon_protocol::social::{Friendship, Presence, PresenceStatus};
+use crate::types::ids::IdentityId;
+use crate::types::permissions::Capability;
+use crate::types::social::{Friendship, Presence, PresenceStatus};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -342,7 +342,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avalon_protocol::identity::{Identity, Profile};
+    use crate::types::identity::{Identity, Profile};
     use time::OffsetDateTime;
     use uuid::Uuid;
 

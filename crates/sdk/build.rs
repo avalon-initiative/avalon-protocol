@@ -28,9 +28,12 @@
 //!   mutations, `ApprovePairingRequest`, `SetGuardiansRequest`, ...) is
 //!   generated, with `signature`/`signing_key_id` destructured out of
 //!   `SignatureFields` at each call site instead of `#[serde(flatten)]`.
-//! - `Genre`, `PresenceStatus`, `GuildLink`, `RoleBadge` are replaced with
-//!   the existing `avalon_protocol::{identity,social,guilds}::*` types they
-//!   already correspond to, rather than generating duplicates.
+//!
+//! Nothing here is aliased onto another crate's Rust types: issue #774
+//! removed the `with_replacement` overrides that used to point `Genre`,
+//! `PresenceStatus`, `GuildLink`, and `RoleBadge` at `avalon_protocol`'s
+//! own definitions, so this crate's wire shapes are schema-derived
+//! end-to-end, exactly like the C#/TS SDKs'.
 //!
 //! Known, pre-existing gaps surfaced by comparing hand-written types against
 //! the real generated schemas (server response/request shapes the
@@ -137,20 +140,20 @@ const SCHEMA_NAMES: &[&str] = &[
     "PollPairingResponse",
     "RoleBadgeRequest",
     "GuildLinkRequest",
-    // Pulled in transitively by ProfileResponse.favorite_genres — replaced
-    // below with the existing `avalon_protocol::identity::Genre` rather
-    // than generated fresh, since that's already the real type
-    // `avalon_protocol::identity::Profile` (and its callers) uses.
+    // Domain enums/structs pulled in transitively by the response shapes
+    // above (ProfileResponse.favorite_genres, PresenceResponse.status,
+    // GuildResponse.links, RoleResponse.badge). Generated fresh from the
+    // schema like everything else here — issue #774 removed the
+    // `with_replacement` overrides that used to alias them onto
+    // `avalon_protocol`'s own Rust types, so this crate owns its wire
+    // shapes the same way the C#/TS SDKs already do. `crate::types`
+    // re-exports them under domain-shaped module paths.
     "Genre",
-    // Pulled in transitively by PresenceResponse/UpdatePresenceRequest —
-    // replaced below with the existing `avalon_protocol::social::PresenceStatus`.
     "PresenceStatus",
-    // Pulled in transitively by GuildResponse.links — replaced below with
-    // the existing `avalon_protocol::guilds::GuildLink`.
     "GuildLink",
-    // Pulled in transitively by RoleResponse.badge — replaced below with
-    // the existing `avalon_protocol::guilds::RoleBadge`.
     "RoleBadge",
+    "RoleBadgeIcon",
+    "RoleBadgeColor",
 ];
 
 /// Typify hardcodes `"format": "date-time"` to `chrono::DateTime<Utc>`,
@@ -213,27 +216,9 @@ fn main() {
         })
         .collect();
 
-    let mut settings = TypeSpaceSettings::default();
-    settings.with_replacement(
-        "Genre",
-        "avalon_protocol::identity::Genre",
-        std::iter::empty(),
-    );
-    settings.with_replacement(
-        "PresenceStatus",
-        "avalon_protocol::social::PresenceStatus",
-        std::iter::empty(),
-    );
-    settings.with_replacement(
-        "GuildLink",
-        "avalon_protocol::guilds::GuildLink",
-        std::iter::empty(),
-    );
-    settings.with_replacement(
-        "RoleBadge",
-        "avalon_protocol::guilds::RoleBadge",
-        std::iter::empty(),
-    );
+    // No `with_replacement` overrides: every schema in `SCHEMA_NAMES` is
+    // generated fresh from `docs/generated/openapi.json` (issue #774).
+    let settings = TypeSpaceSettings::default();
     let mut type_space = TypeSpace::new(&settings);
     type_space
         .add_ref_types(defs)

@@ -492,8 +492,12 @@ export async function revokeRecognition(
   })
 }
 
-/** Must match `avalon_protocol::achievements::revocation_signing_bytes`. */
-function revocationSigningBytes(
+/** The exact bytes an issuer's key signs to authorize a revocation. Must stay
+ * byte-for-byte identical to the server's own construction
+ * (`avalon_protocol::achievements::revocation_signing_bytes`) and to the Rust/C#
+ * SDKs' — checked against `conformance/vectors/attestation-signing.json`.
+ * Exported for that runner, not part of the public SDK surface. */
+export function revocationSigningBytes(
   claimKind: 'achievement' | 'milestone',
   issuerRef: string,
   attestationId: string,
