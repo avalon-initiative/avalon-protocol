@@ -22,6 +22,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder, Row};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::verify_event_signature;
@@ -166,14 +167,14 @@ fn validate_slug(slug: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct InitialKeyRequest {
     pub algorithm: String,
     /// Standard-base64-encoded raw public key bytes.
     pub public_key: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateIntegratorRequest {
     pub slug: String,
     pub name: String,
@@ -186,19 +187,20 @@ pub struct CreateIntegratorRequest {
     pub category: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorCredentialResponse {
     pub integrator_id: Uuid,
     pub key_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorResponse {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
     pub owner_name: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub registered_at: OffsetDateTime,
     pub status: String,
     pub category: String,
@@ -206,6 +208,13 @@ pub struct IntegratorResponse {
     pub credential: IntegratorCredentialResponse,
 }
 
+#[utoipa::path(
+    post,
+    path = "/integrations",
+    tag = "integrators",
+    request_body = CreateIntegratorRequest,
+    responses((status = 200, body = IntegratorResponse)),
+)]
 pub async fn register_integrator(
     State(state): State<AppState>,
     Json(body): Json<CreateIntegratorRequest>,
@@ -348,13 +357,14 @@ pub(crate) async fn fetch_integrator_id_by_slug(
     Ok(row.try_get("id")?)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorPublicResponse {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
     pub owner_name: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub registered_at: OffsetDateTime,
     pub status: String,
     pub category: String,
@@ -368,6 +378,13 @@ pub struct IntegratorPublicResponse {
 /// capabilities against what the integrator actually declared) both read; same
 /// visibility level `crates/server/src/guilds.rs`'s `get_guild` uses — no
 /// auth required, nothing here is sensitive.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = IntegratorPublicResponse)),
+)]
 pub async fn get_integrator(
     State(state): State<AppState>,
     axum::extract::Path(slug): axum::extract::Path<String>,
@@ -424,7 +441,7 @@ impl IntegratorsListSort {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ListIntegratorsQuery {
     /// Free-text search over `name`/`slug`/`developer` (case-insensitive
     /// substring) — same shape `guilds::DiscoverGuildsQuery::q` uses.
@@ -437,19 +454,20 @@ pub struct ListIntegratorsQuery {
     pub cursor: Option<Uuid>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorSummary {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
     pub owner_name: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub registered_at: OffsetDateTime,
     pub status: String,
     pub category: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ListIntegratorsResponse {
     pub integrators: Vec<IntegratorSummary>,
     /// `Some(id)` when another page exists — pass it back as `cursor=` to
@@ -515,6 +533,13 @@ fn build_integrators_list_query(
 /// `GET /integrations?q=&sort=&limit=&cursor=` (issue #270). Public, unauthenticated
 /// — same visibility level [`get_integrator`] already uses. See the module doc
 /// comment for the pagination/sort design.
+#[utoipa::path(
+    get,
+    path = "/integrations",
+    tag = "integrators",
+    params(ListIntegratorsQuery),
+    responses((status = 200, body = ListIntegratorsResponse)),
+)]
 pub async fn list_integrators(
     State(state): State<AppState>,
     Query(query): Query<ListIntegratorsQuery>,
@@ -553,16 +578,24 @@ pub async fn list_integrators(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorChallengeResponse {
     pub challenge_id: Uuid,
     /// Standard-base64-encoded random nonce the integrator must sign with its
     /// registered key and echo back (see [`authenticate_integrator`]).
     pub nonce: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub expires_at: OffsetDateTime,
 }
 
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/challenge",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = IntegratorChallengeResponse)),
+)]
 pub async fn create_integrator_challenge(
     State(state): State<AppState>,
     axum::extract::Path(slug): axum::extract::Path<String>,
@@ -679,6 +712,13 @@ pub(crate) async fn fetch_issuer_keys_batch(
 /// history and status" on its profile page — nothing here is sensitive the
 /// way the integrator's own root-key-authenticated endpoints are. Ordered oldest
 /// first so a viewer reads it as a timeline.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/keys",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<IssuerKeyResponse>)),
+)]
 pub async fn list_issuer_keys(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -801,7 +841,7 @@ pub(crate) async fn authenticate_integrator_root(
     Ok(integrator_id)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AddIssuerKeyRequest {
     pub algorithm: String,
     /// Standard-base64-encoded raw public key bytes, same shape
@@ -815,6 +855,7 @@ pub struct AddIssuerKeyRequest {
     #[serde(default = "default_key_purpose")]
     pub purpose: String,
     #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub valid_until: Option<OffsetDateTime>,
 }
 
@@ -822,17 +863,20 @@ fn default_key_purpose() -> String {
     KeyPurpose::Attestation.as_str().to_string()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IssuerKeyResponse {
     pub key_id: Uuid,
     pub algorithm: String,
     pub role: String,
     pub purpose: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub valid_from: OffsetDateTime,
     #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub valid_until: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
@@ -841,6 +885,14 @@ pub struct IssuerKeyResponse {
 /// authenticate as the named `slug` with a currently-valid **root** key
 /// ([`authenticate_integrator_root`]); an operational key, or a root key
 /// belonging to a different integrator, is rejected. Emits `issuer.key_added`.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/keys",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    request_body = AddIssuerKeyRequest,
+    responses((status = 200, body = IssuerKeyResponse)),
+)]
 pub async fn add_issuer_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -918,7 +970,7 @@ pub async fn add_issuer_key(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RevokeIssuerKeyRequest {
     pub reason: Option<String>,
 }
@@ -933,6 +985,14 @@ pub struct RevokeIssuerKeyRequest {
 /// endpoints elsewhere in this repo deliberately don't take, since a caller
 /// retrying a revoke against a key it no longer controls is exactly the
 /// kind of thing worth surfacing, not swallowing. Emits `issuer.key_revoked`.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/keys/{key_id}/revoke",
+    tag = "integrators",
+    params(("slug" = String, Path), ("key_id" = Uuid, Path)),
+    request_body = RevokeIssuerKeyRequest,
+    responses((status = 200, body = IssuerKeyResponse)),
+)]
 pub async fn revoke_issuer_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1000,7 +1060,7 @@ pub async fn revoke_issuer_key(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorWhoamiResponse {
     pub integrator_id: Uuid,
 }
@@ -1008,6 +1068,12 @@ pub struct IntegratorWhoamiResponse {
 /// Exists only to prove [`authenticate_integrator`] works end to end over real
 /// HTTP (this ticket's own suggestion) — not a real capability-bearing
 /// endpoint; #27 owns those.
+#[utoipa::path(
+    get,
+    path = "/integrations/whoami",
+    tag = "integrators",
+    responses((status = 200, body = IntegratorWhoamiResponse)),
+)]
 pub async fn integrator_whoami(
     State(state): State<AppState>,
     headers: HeaderMap,

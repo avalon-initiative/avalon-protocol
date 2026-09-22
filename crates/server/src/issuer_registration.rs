@@ -35,6 +35,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::verify_event_signature;
@@ -79,13 +80,13 @@ impl NetworkTier {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RegistrationChallengeRequest {
     /// Standard-base64-encoded Ed25519 public key bytes.
     pub issuer_pubkey: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RegistrationChallengeResponse {
     pub challenge_id: Uuid,
     /// Standard-base64-encoded random nonce — signed (as part of a larger
@@ -93,6 +94,7 @@ pub struct RegistrationChallengeResponse {
     /// back via [`register_issuer`].
     pub nonce: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub expires_at: OffsetDateTime,
 }
 
@@ -100,6 +102,13 @@ pub struct RegistrationChallengeResponse {
 /// single-use nonce, mirroring `integrators::create_integrator_challenge`'s
 /// shape. No auth: obtaining a challenge proves nothing by itself, only
 /// actually signing it (see [`register_issuer`]) does.
+#[utoipa::path(
+    post,
+    path = "/issuers/registration-challenge",
+    tag = "issuers",
+    request_body = RegistrationChallengeRequest,
+    responses((status = 200, body = RegistrationChallengeResponse)),
+)]
 pub async fn create_registration_challenge(
     State(state): State<AppState>,
     Json(body): Json<RegistrationChallengeRequest>,
@@ -132,7 +141,7 @@ pub async fn create_registration_challenge(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RegisterIssuerRequest {
     pub issuer_pubkey: String,
     pub issuer_ref: String,
@@ -141,10 +150,11 @@ pub struct RegisterIssuerRequest {
     pub proof_of_possession_signature: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IssuerRegistrationResponse {
     pub issuer_ref: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub registered_at: OffsetDateTime,
 }
 
@@ -171,6 +181,13 @@ fn proof_of_possession_message(
 /// this endpoint. Idempotent: registering an already-registered key
 /// updates its `issuer_ref` rather than erroring, matching this
 /// endpoint's "admission, not gatekeeping" posture.
+#[utoipa::path(
+    post,
+    path = "/issuers/register",
+    tag = "issuers",
+    request_body = RegisterIssuerRequest,
+    responses((status = 200, body = IssuerRegistrationResponse)),
+)]
 pub async fn register_issuer(
     State(state): State<AppState>,
     Json(body): Json<RegisterIssuerRequest>,

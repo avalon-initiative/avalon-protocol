@@ -36,6 +36,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::authz;
@@ -66,20 +67,23 @@ async fn authenticate_owning_integrator(
     Ok(path_integrator_id)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct PublishInstanceRequest {
     pub subject: Uuid,
+    #[schema(value_type = Object)]
     pub instance: serde_json::Value,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorDataInstanceResponse {
     pub id: String,
     pub schema_id: String,
     pub integrator_id: Uuid,
     pub subject: Uuid,
+    #[schema(value_type = Object)]
     pub instance: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub published_at: OffsetDateTime,
     pub superseded_by: Option<String>,
 }
@@ -88,6 +92,14 @@ pub struct IntegratorDataInstanceResponse {
 /// this integrator's instance data for `subject` against the named schema
 /// version. Always an insert, never an update to an existing row (see
 /// module doc comment).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/schemas/{version}/data",
+    tag = "integrator-space",
+    params(("slug" = String, Path), ("version" = u32, Path)),
+    request_body = PublishInstanceRequest,
+    responses((status = 200, body = IntegratorDataInstanceResponse)),
+)]
 pub async fn publish_instance(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -228,7 +240,7 @@ pub async fn publish_instance(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct DeleteInstanceRequest {
     #[serde(default = "default_delete_reason_code")]
     pub reason_code: String,
@@ -250,6 +262,18 @@ fn default_delete_reason_code() -> String {
 /// content" shape this module already uses for `superseded_by` above. The
 /// original `game_data.published` event, and the new `game_data.deleted`
 /// event this appends, both stay observable in raw ledger history.
+#[utoipa::path(
+    delete,
+    path = "/integrations/{slug}/schemas/{version}/data/{subject}",
+    tag = "integrator-space",
+    params(
+        ("slug" = String, Path),
+        ("version" = u32, Path),
+        ("subject" = Uuid, Path),
+    ),
+    request_body = DeleteInstanceRequest,
+    responses((status = 200, description = "Instance tombstoned")),
+)]
 pub async fn delete_instance(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -357,14 +381,16 @@ pub(crate) fn resolve_visible_fields(
         .collect()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct VisibleIntegratorDataInstanceResponse {
     pub schema: String,
     pub integrator_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub published_at: OffsetDateTime,
     /// Only the fields the instance's schema currently makes visible —
     /// see `resolve_visible_fields`.
+    #[schema(value_type = Object)]
     pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -375,6 +401,13 @@ pub struct VisibleIntegratorDataInstanceResponse {
 /// isn't found in the indexer's projection (should not happen for any
 /// instance the same projection itself produced) is skipped defensively
 /// rather than ever guessing a default — see the loop below.
+#[utoipa::path(
+    get,
+    path = "/identities/{id}/integrator-data",
+    tag = "integrator-space",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = Vec<VisibleIntegratorDataInstanceResponse>)),
+)]
 pub async fn get_identity_integrator_data(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
