@@ -66,8 +66,8 @@ wiremock.workspace = true
 # crate had moved to `avalon_protocol::network_trust` by #780).
 # Issue #775 (epic #771): crates/sdk moved to avalon-sdks, so this is now a
 # real external git dependency — see crates/cli/Cargo.toml's own comment
-# for the interim-`branch = "775-add-rust-sdk"` rationale.
-avalon-sdk = { git = "ssh://git@github.com/avalon-initiative/avalon-sdks", branch = "775-add-rust-sdk" }
+# for the interim-`branch = "main"` rationale.
+avalon-sdk = { git = "ssh://git@github.com/avalon-initiative/avalon-sdks", branch = "main" }
 
 [[bin]]
 name = "avalon-server"

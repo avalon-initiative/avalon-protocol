@@ -335,7 +335,7 @@ dependencies = [
 [[package]]
 name = "avalon-schema-derive"
 version = "0.1.0"
-source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=775-add-rust-sdk#b64597e0e0f88b13db72377ef858ef9e58c5fc62"
+source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=main#7923a2383eaf33f2fc525f8efa8f171aa395ef29"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -345,7 +345,7 @@ dependencies = [
 [[package]]
 name = "avalon-sdk"
 version = "0.1.0"
-source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=775-add-rust-sdk#b64597e0e0f88b13db72377ef858ef9e58c5fc62"
+source = "git+ssh://git@github.com/avalon-initiative/avalon-sdks?branch=main#7923a2383eaf33f2fc525f8efa8f171aa395ef29"
 dependencies = [
  "async-trait",
  "avalon-schema-derive",
@@ -4727,7 +4727,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
