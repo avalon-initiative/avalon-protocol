@@ -1,10 +1,13 @@
 # Rust SDK
 
-`crates/sdk` — the reference implementation of the [Avalon SDK](../README.md).
-"Reference" means it's built alongside `backend-server` itself, so it's the
-most complete SDK and the one other languages are checked against. See
-[`../architecture/sdk.md`](../architecture/sdk.md) for the design that
-applies to every language's SDK, not just this one.
+The reference implementation of the [Avalon SDK](../README.md). Physically
+lives in the `avalon-sdks` repo (`rust/`) as of issue #775 (epic #771) — no
+longer `crates/sdk` in this repo, and no longer an in-workspace dependency
+(`crates/cli` reaches it via a real git dependency). "Reference" means it's
+maintained by the same team as `backend-server`, so it's the most complete
+SDK and the one other languages are checked against — that hasn't changed,
+only where the source lives. See [`../architecture/sdk.md`](../architecture/sdk.md)
+for the design that applies to every language's SDK, not just this one.
 
 **Status (2026-09-21):** real, not stubbed. `authenticate()` is wired to a
 live server; friends/presence, guilds (roster/channels/chat), and
@@ -32,9 +35,9 @@ returns `NotImplemented` — the one known gap in an otherwise live surface.
    the pitch for game developers specifically, language-agnostic in
    substance even though it's filed here.
 
-Runnable, `make check`-compiled examples for each guide's core flow live in
-`crates/sdk/examples/` (`authenticate.rs`, `issue_achievement.rs`,
-`list_friends.rs`).
+Runnable examples for each guide's core flow live in `avalon-sdks`'
+`rust/examples/` (`authenticate.rs`, `issue_achievement.rs`,
+`list_friends.rs`) — build/lint them from that repo now, not this one.
 
 ## Related
 

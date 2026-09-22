@@ -64,7 +64,10 @@ wiremock.workspace = true
 # server to exercise capability enforcement end to end — test-only, not a
 # production dependency (the production `bundled_trust_anchors()` use this
 # crate had moved to `avalon_protocol::network_trust` by #780).
-avalon-sdk = { path = "../sdk" }
+# Issue #775 (epic #771): crates/sdk moved to avalon-sdks, so this is now a
+# real external git dependency — see crates/cli/Cargo.toml's own comment
+# for the interim-`branch = "main"` rationale.
+avalon-sdk = { git = "ssh://git@github.com/avalon-initiative/avalon-sdks", branch = "main" }
 
 [[bin]]
 name = "avalon-server"

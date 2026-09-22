@@ -34,7 +34,7 @@ Implemented first, in shipping order:
 
 | Language | Folder | Status (2026-09-21) |
 |---|---|---|
-| Rust (`crates/sdk`) | [`rust/`](rust/README.md) | Reference implementation. Real, live-tested; friends/presence/guilds/conversations work end to end against a live server; achievement issuance still returns `NotImplemented`. |
+| Rust (`avalon-sdks`' `rust/`, moved from `crates/sdk` by #775) | [`rust/`](rust/README.md) | Reference implementation. Real, live-tested; friends/presence/guilds/conversations/achievement issuance all work end to end against a live server, with no dependency on `avalon-protocol` at all (#774) — verified against the same conformance suite the server side asserts. |
 | C# (`bindings/csharp/AvalonSdk`, netstandard2.1, Unity-targeted) | [`csharp/`](csharp/README.md) | Real, building, tested — 52+ passing tests including opt-in live ones. The priority developer-facing surface, since it's what most integrating game studios will actually use. |
 | TypeScript (`bindings/ts`) | [`typescript/`](typescript/README.md) | Real and shipped (#701), browser-facing — drives a real WebAuthn ceremony. Also what `apps/hub` is actively migrating onto (epic #712), so it's exercised by a real production frontend, not only its own test suite. |
 

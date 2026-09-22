@@ -8,7 +8,7 @@ PID_FILE := $(PID_DIR)/avalon-server.pid
 LOG_FILE := $(LOG_DIR)/avalon-server.log
 
 .PHONY: help \
-	build run start stop restart status test test-live fmt fmt-check lint sdk-examples sdk-doc check clean \
+	build run start stop restart status test test-live fmt fmt-check lint check clean \
 	openapi openapi-check openapi-version-check ts-sdk-types ts-sdk-types-check \
 	csharp-sdk-types csharp-sdk-types-check sdk-coverage-check \
 	migrate migrate-down db-reset \
@@ -22,7 +22,8 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 help:
 	@echo "avalon-protocol — local dev commands"
 	@echo ""
-	@echo "Rust workspace (crates/) — the protocol, chain, indexer, server, sdk, cli"
+	@echo "Rust workspace (crates/) — protocol, chain, indexer, server, cli"
+	@echo "  (the Rust reference SDK lives in the avalon-sdks repo as of issue #775 — 'cargo build/test' here reach it via a git dependency, not a workspace member)"
 	@echo "  make build         cargo build --workspace"
 	@echo "  make run           run avalon-server in the foreground"
 	@echo "  make start         run avalon-server in the background (pid/log under $(RUN_DIR)/)"
@@ -134,29 +135,23 @@ fmt-check:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-# `avalon-sdk`'s runnable examples (issue #49) — `--all-targets` above
-# already lints them, but a dedicated build step catches an example that
-# compiles-but-clippy-skips (unlikely) and is what the ticket itself names
-# as the acceptance check.
-sdk-examples:
-	cargo build -p avalon-sdk --examples
-
-# `#![deny(missing_docs)]` (issue #49) is enforced by `cargo build`/`check`
-# already; this additionally catches broken intra-doc links, which are a
-# doc-only warning `cargo build` never sees.
-sdk-doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc -p avalon-sdk --no-deps
+# Issue #775 (epic #771): the Rust SDK's own examples/rustdoc checks
+# (formerly `sdk-examples`/`sdk-doc`, issue #49) moved with it into the
+# avalon-sdks repo — `cargo build -p avalon-sdk --examples`/`cargo doc -p
+# avalon-sdk` don't work here anymore since it's a git dependency, not a
+# workspace member. Run them from avalon-sdks directly.
 
 # Issue #723: `docs/generated/openapi.json` is a generated artifact, not
 # hand-maintained — regenerate it whenever an in-scope route/type changes.
-# Issue #726 found a real bootstrapping bug here: `avalon-server` depends on
-# `avalon-sdk`, whose own build.rs (issue #724) reads this exact file during
-# its build — a plain `cargo run ... > docs/generated/openapi.json` redirect
-# truncates the file the instant the shell opens it, before cargo even
-# starts, so `avalon-sdk`'s build.rs then fails to parse the (now-empty)
-# file mid-build, breaking the whole regeneration. Writing to a scratch
-# file first and moving it into place only after a successful run avoids
-# ever truncating the file `avalon-sdk`'s build depends on.
+# Issue #726 found a real bootstrapping bug here (still guarded against even
+# though issue #775 moved `avalon-sdk`'s own build.rs to read its own
+# vendored copy in avalon-sdks, no longer this file directly): a plain
+# `cargo run ... > docs/generated/openapi.json` redirect truncates the file
+# the instant the shell opens it, before cargo even starts — this repo's
+# own `dump-openapi` binary reads this same file indirectly via
+# avalon-server's build, so writing to a scratch file first and moving it
+# into place only after a successful run avoids ever truncating a file a
+# concurrent build might be reading mid-regeneration.
 openapi:
 	cargo run -p avalon-server --bin dump-openapi > /tmp/openapi.generated.json
 	mv /tmp/openapi.generated.json docs/generated/openapi.json
@@ -211,7 +206,7 @@ csharp-sdk-types-check:
 sdk-coverage-check:
 	python3 scripts/check-sdk-coverage.py
 
-check: fmt-check lint test sdk-examples sdk-doc openapi-check openapi-version-check ts-sdk-types-check
+check: fmt-check lint test openapi-check openapi-version-check ts-sdk-types-check
 
 clean:
 	cargo clean
