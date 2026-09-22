@@ -10,7 +10,7 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 .PHONY: help \
 	build run start stop restart status test test-live fmt fmt-check lint sdk-examples sdk-doc check clean \
 	openapi openapi-check openapi-version-check ts-sdk-types ts-sdk-types-check \
-	csharp-sdk-types csharp-sdk-types-check \
+	csharp-sdk-types csharp-sdk-types-check sdk-coverage-check \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
@@ -41,6 +41,7 @@ help:
 	@echo "  make ts-sdk-types-check fail if bindings/ts/src/generated.ts is stale relative to the schema"
 	@echo "  make csharp-sdk-types       regenerate bindings/csharp/AvalonSdk/Generated.cs from docs/generated/openapi.json (issue #725)"
 	@echo "  make csharp-sdk-types-check fail if bindings/csharp/AvalonSdk/Generated.cs is stale relative to the schema"
+	@echo "  make sdk-coverage-check fail if a server route has no call site in one or more SDKs (issue #728)"
 	@echo "  make migrate       apply pending db/migrations/ (up)"
 	@echo "  make migrate-down  revert the most recently applied migration"
 	@echo "  make db-reset      wipe the database (drop+recreate public schema) and reapply all migrations"
@@ -72,7 +73,7 @@ help:
 	@echo "  make register-integrator SLUG=<slug> NAME=<name> OWNER=<owner>  register a test integrator, save its key locally"
 	@echo "  make issue-achievement INTEGRATOR=<slug> ACHIEVEMENT=<key> TOKEN=<session-token>  issue an already-defined achievement to the identity behind TOKEN"
 	@echo ""
-	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test + csharp-sdk-types-check"
+	@echo "  make check-all     check (Rust) + web-lint + web-test + csharp-build + csharp-test + csharp-sdk-types-check + sdk-coverage-check"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
 
 # --- Rust workspace ----------------------------------------------------------
@@ -200,6 +201,15 @@ csharp-sdk-types-check:
 	cd bindings/csharp/codegen && dotnet run
 	git diff --exit-code bindings/csharp/AvalonSdk/Generated.cs || \
 		(echo "bindings/csharp/AvalonSdk/Generated.cs is stale — run 'make csharp-sdk-types' and commit the result" && exit 1)
+
+# Issue #728: a lightweight coverage backstop named by #714's decision —
+# diffs docs/generated/openapi.json's SDK-facing route table against each
+# SDK's real HTTP call sites (method + normalized path template, not exact
+# per-SDK method naming), and fails naming any route a given SDK never
+# calls. Needs all three SDKs' source present (Rust, bindings/ts,
+# bindings/csharp), so it's part of check-all, not the plain check target.
+sdk-coverage-check:
+	python3 scripts/check-sdk-coverage.py
 
 check: fmt-check lint test sdk-examples sdk-doc openapi-check openapi-version-check ts-sdk-types-check
 
@@ -361,7 +371,7 @@ issue-achievement:
 
 # --- Everything -------------------------------------------------------------
 
-check-all: check web-lint web-test csharp-build csharp-test csharp-sdk-types-check
+check-all: check web-lint web-test csharp-build csharp-test csharp-sdk-types-check sdk-coverage-check
 
 clean-all: clean
 	rm -rf node_modules apps/*/node_modules apps/*/dist packages/*/node_modules
