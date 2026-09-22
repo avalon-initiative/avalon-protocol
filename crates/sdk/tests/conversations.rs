@@ -8,7 +8,7 @@
 //! `Session::grant_for_testing` to exercise the capability-gated methods
 //! against a real server — see that method's doc comment.
 
-use avalon_protocol::ids::IdentityId;
+use avalon_sdk::types::ids::IdentityId;
 use avalon_sdk::{AvalonClient, AvalonConfig};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;

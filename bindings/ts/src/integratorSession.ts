@@ -106,8 +106,12 @@ interface ChallengeResponseWire {
   nonce: string
 }
 
-/** Must match `avalon_protocol::achievements::attestation_signing_bytes`. */
-function attestationSigningBytes(
+/** The exact bytes an issuer's key signs to authorize an attestation. Must stay
+ * byte-for-byte identical to the server's own construction
+ * (`avalon_protocol::achievements::attestation_signing_bytes`) and to the Rust/C#
+ * SDKs' — `conformance/vectors/attestation-signing.json` is what proves it does.
+ * Exported for that conformance runner, not part of the public SDK surface. */
+export function attestationSigningBytes(
   claimKind: 'achievement' | 'milestone',
   issuerRef: string,
   subject: string,
@@ -118,8 +122,10 @@ function attestationSigningBytes(
 
 /** Must match `avalon_protocol::achievements::bulk_attestation_signing_bytes`
  * byte-for-byte, including the big-endian u32 length prefixes that make two
- * different orderings/splits of the same achievement refs sign differently. */
-function bulkAttestationSigningBytes(
+ * different orderings/splits of the same achievement refs sign differently.
+ * Checked against `conformance/vectors/attestation-signing.json`; exported for
+ * that runner, not part of the public SDK surface. */
+export function bulkAttestationSigningBytes(
   claimKind: 'achievement' | 'milestone',
   issuerRef: string,
   subject: string,

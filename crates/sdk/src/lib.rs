@@ -69,8 +69,10 @@ pub mod recovery;
 pub mod registry;
 pub mod schema;
 pub mod social;
+pub mod sth;
 pub mod submission;
 pub mod sync_journal;
+pub mod types;
 
 pub use account::device_login::AccountDeviceLogin;
 pub use account::{AccountCredentials, AccountSession, ProfileUpdate};
@@ -80,9 +82,9 @@ pub use account::{AccountCredentials, AccountSession, ProfileUpdate};
 pub use generated::OPENAPI_SCHEMA_VERSION;
 pub use http::RetryConfig;
 
-use avalon_protocol::identity::{Identity, Profile};
-use avalon_protocol::ids::{GuildId, IdentityId};
-use avalon_protocol::permissions::Capability;
+use crate::types::identity::{Identity, Profile};
+use crate::types::ids::{GuildId, IdentityId};
+use crate::types::permissions::Capability;
 use serde::Deserialize;
 
 /// Every outcome a `Session`/`AvalonClient` method can return talking to a
@@ -235,7 +237,7 @@ struct MeResponse {
     display_name: String,
     avatar_url: Option<String>,
     bio: Option<String>,
-    favorite_genres: Vec<avalon_protocol::identity::Genre>,
+    favorite_genres: Vec<crate::types::identity::Genre>,
     pronouns: Option<String>,
     banner_url: Option<String>,
     status: Option<String>,
@@ -485,13 +487,13 @@ impl Session {
     /// closed out by #741/#744) — the App/Service equivalent of
     /// [`Session::issue_achievement`]; `category` must be this
     /// integrator's own actually-registered
-    /// `avalon_protocol::integrators::IntegratorCategory` (see
+    /// `crate::types::integrators::IntegratorCategory` (see
     /// `achievements::Session::submit_milestone_issuance` for why it's
     /// required here but not for achievement issuance).
     pub async fn issue_milestone(
         &self,
         key: &str,
-        category: avalon_protocol::integrators::IntegratorCategory,
+        category: crate::types::integrators::IntegratorCategory,
     ) -> Result<uuid::Uuid, SdkError> {
         self.require(Capability::MilestonesIssue)?;
         self.submit_milestone_issuance(key, category).await
@@ -503,7 +505,7 @@ impl Session {
     pub async fn bulk_issue_milestones(
         &self,
         keys: &[&str],
-        category: avalon_protocol::integrators::IntegratorCategory,
+        category: crate::types::integrators::IntegratorCategory,
     ) -> Result<Vec<achievements::BulkClaimOutcome>, SdkError> {
         self.require(Capability::MilestonesIssue)?;
         self.submit_bulk_milestone_issuance(keys, category).await

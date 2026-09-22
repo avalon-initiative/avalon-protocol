@@ -35,8 +35,8 @@
 
 use std::time::Duration;
 
-use avalon_protocol::events::{Commitment, EventBatch};
-use avalon_protocol::sth::{self, PreparedTreeHead};
+use crate::sth::{self, PreparedTreeHead};
+use crate::types::events::{Commitment, EventBatch};
 use ed25519_dalek::SigningKey;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;

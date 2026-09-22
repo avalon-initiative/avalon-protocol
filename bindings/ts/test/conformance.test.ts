@@ -15,6 +15,11 @@ import { signingBytes as crossNodeLoginSigningBytes } from '../src/crypto/crossN
 import { signingBytes as continuationSigningBytes } from '../src/crypto/continuation.js'
 import { signingBytes as interestClaimSigningBytes, type ClaimedScope } from '../src/crypto/interestClaim.js'
 import { deriveSigningKeyFromMnemonic, isValidMnemonic } from '../src/crypto/mnemonic.js'
+import {
+  attestationSigningBytes,
+  bulkAttestationSigningBytes,
+} from '../src/integratorSession.js'
+import { revocationSigningBytes } from '../src/integratorAccount.js'
 import { sign, verify } from '../src/crypto/signing.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -167,4 +172,48 @@ describe('conformance: BIP39 mnemonic-derived signing keys (#134/#712)', () => {
       expect(bytesToHex(derived.publicKey)).toBe(expected.derivedPublicKeyHex)
     })
   }
+})
+
+describe('conformance: attestation issuance/bulk-issuance/revocation signing (#774)', () => {
+  const doc = loadVector('attestation-signing.json')
+
+  it('lists typescript as supported', () => {
+    requireSupported(doc, 'typescript')
+  })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const vector of doc.vectors as any[]) {
+    it(`matches the shared vector: ${vector.name}`, () => {
+      const secretKey = hexToBytes(doc.signingKeySeedHex)
+      const { input, expected } = vector
+      const claimKind = input.claimKind as 'achievement' | 'milestone'
+
+      let bytes: Uint8Array
+      switch (input.operation) {
+        case 'issue':
+          bytes = attestationSigningBytes(claimKind, input.issuerRef, input.subject, input.achievement)
+          break
+        case 'bulk_issue':
+          bytes = bulkAttestationSigningBytes(claimKind, input.issuerRef, input.subject, input.achievements)
+          break
+        case 'revoke':
+          bytes = revocationSigningBytes(claimKind, input.issuerRef, input.attestationId, input.reasonCode)
+          break
+        default:
+          throw new Error(`unknown operation ${input.operation}`)
+      }
+
+      expect(bytesToHex(bytes)).toBe(expected.signingBytesHex)
+      expect(bytesToHex(sign(secretKey, bytes))).toBe(expected.signatureHex)
+    })
+  }
+})
+
+describe('conformance: Signed Tree Head signing (#39/#210)', () => {
+  const doc = loadVector('signed-tree-head.json')
+
+  it('is a known typescript SDK gap', () => {
+    expect(doc.supportedIn).not.toContain('typescript')
+    expect(doc.notSupported?.typescript, 'notSupported.typescript must explain the gap').toBeTruthy()
+  })
 })

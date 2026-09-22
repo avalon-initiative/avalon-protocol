@@ -12,7 +12,7 @@
 //! this test cares about the SDK's HTTP/deserialization layer, not how a
 //! session or friendship came to exist.
 
-use avalon_protocol::social::PresenceStatus;
+use avalon_sdk::types::social::PresenceStatus;
 use avalon_sdk::{AvalonClient, AvalonConfig};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -249,8 +249,8 @@ async fn presence_of_reflects_multiple_published_statuses() {
 
     let both = alice_session
         .presence_of(&[
-            avalon_protocol::ids::IdentityId(alice_id),
-            avalon_protocol::ids::IdentityId(bob_id),
+            avalon_sdk::types::ids::IdentityId(alice_id),
+            avalon_sdk::types::ids::IdentityId(bob_id),
         ])
         .await
         .expect("presence_of should succeed");
@@ -284,7 +284,7 @@ async fn subscribe_presence_receives_a_live_update_pushed_by_another_identity() 
         .grant_for_testing("presence.read");
 
     let mut updates = alice_session
-        .subscribe_presence(&[avalon_protocol::ids::IdentityId(bob_id)])
+        .subscribe_presence(&[avalon_sdk::types::ids::IdentityId(bob_id)])
         .await
         .expect("subscribe_presence should connect");
 
@@ -323,7 +323,7 @@ async fn subscribe_presence_without_grant_is_rejected_before_any_connection_live
     let session = client.authenticate(&token).await.unwrap();
 
     let result = session
-        .subscribe_presence(&[avalon_protocol::ids::IdentityId(Uuid::new_v4())])
+        .subscribe_presence(&[avalon_sdk::types::ids::IdentityId(Uuid::new_v4())])
         .await;
     assert!(matches!(
         result,

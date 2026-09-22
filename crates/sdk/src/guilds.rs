@@ -7,12 +7,12 @@
 
 use std::collections::HashMap;
 
-use avalon_protocol::guilds::{
+use crate::types::guilds::{
     Guild, GuildChannel, GuildEvent, GuildLink, GuildMember, GuildMessage, GuildRole, JoinPolicy,
 };
-use avalon_protocol::ids::{GuildId, IdentityId};
-use avalon_protocol::permissions::Capability;
-use avalon_protocol::social::Presence;
+use crate::types::ids::{GuildId, IdentityId};
+use crate::types::permissions::Capability;
+use crate::types::social::Presence;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -724,8 +724,8 @@ impl ChannelHandle<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avalon_protocol::identity::{Identity, Profile};
-    use avalon_protocol::social::PresenceStatus;
+    use crate::types::identity::{Identity, Profile};
+    use crate::types::social::PresenceStatus;
 
     fn test_session(granted: Vec<&str>) -> Session {
         let self_id = IdentityId(Uuid::new_v4());

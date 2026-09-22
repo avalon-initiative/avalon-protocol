@@ -52,6 +52,26 @@ Each file has this shape:
 - `bip39-mnemonic.json` — BIP39 recovery-phrase-derived signing keys
   (#134/#712). TypeScript only today
   (`bindings/ts/src/crypto/mnemonic.ts`).
+- `attestation-signing.json` — attestation issuance, bulk issuance, and
+  revocation signing bytes (#31/#32/#85/#495, added by #774). Supported in
+  all three SDKs, each with its own hand-written construction. This file is
+  load-bearing: since #774 the Rust SDK no longer calls the server's own
+  signing-byte functions, so nothing but these vectors keeps client and
+  server producing the same bytes.
+- `signed-tree-head.json` — the Signed Tree Head signing message
+  (#39/#210/#531, added by #774). Rust only today — the C# SDK has no
+  trust-anchor verification path, and the TypeScript side lives in
+  `apps/hub`, not in `bindings/ts`.
+
+## Both sides of the wire
+
+Unlike the four client-behavior vectors above, `attestation-signing.json`,
+`signed-tree-head.json`, `cross-node-login.json`,
+`session-continuation.json`, and `websocket-interest-claim.json` also
+describe something the *server* verifies. `crates/protocol/tests/conformance.rs`
+asserts `avalon-protocol`'s own implementations against those same files, so
+a format change fails a test whichever side moves first — an SDK's runner if
+the SDK drifts, the protocol runner if the server does.
 
 ## Standing requirement
 
