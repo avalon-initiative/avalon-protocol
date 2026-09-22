@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getIdentityIntegratorData } from '../src/identityData.js'
+import { getIdentityIntegratorData, getLocations } from '../src/identityData.js'
 
 const originalFetch = globalThis.fetch
 
@@ -21,5 +21,12 @@ describe('getIdentityIntegratorData', () => {
   it('passes through a non-array body instead of crashing on it', async () => {
     mockFetchOnce(null)
     expect(await getIdentityIntegratorData('http://127.0.0.1:1', 'id-1')).toBeNull()
+  })
+})
+
+describe('getLocations', () => {
+  it('returns the locations array from the response', async () => {
+    mockFetchOnce({ locations: ['http://node-a', 'http://node-b'] })
+    expect(await getLocations('http://127.0.0.1:1', 'id-1')).toEqual(['http://node-a', 'http://node-b'])
   })
 })

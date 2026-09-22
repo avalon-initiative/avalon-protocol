@@ -28,3 +28,14 @@ export async function getIdentityIntegratorData(
   if (!Array.isArray(w)) return w as unknown as VisibleIntegratorDataInstance[]
   return w.map((d) => ({ schema: d.schema, integratorId: d.integrator_id, publishedAt: d.published_at, fields: d.fields }))
 }
+
+interface LocationsResponseWire {
+  locations: string[]
+}
+
+/** `GET /identities/{id}/locations` — the network node base URLs this
+ * identity's data can currently be located at. Public, unauthenticated. */
+export async function getLocations(serverUrl: string, identityId: string): Promise<string[]> {
+  const w = await request<LocationsResponseWire>(serverUrl, `/identities/${identityId}/locations`)
+  return w.locations
+}

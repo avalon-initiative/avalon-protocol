@@ -11,6 +11,7 @@
 // the port this mirrors.
 import { request } from './http.js'
 import { mintCrossNodeLoginGrant, type CrossNodeLoginGrant } from './crypto/crossNodeLogin.js'
+import type { components } from './generated.js'
 
 export interface CrossNodeLoginLookup {
   status: 'pending' | 'denied' | 'expired' | 'approved'
@@ -89,4 +90,54 @@ export async function submitCrossNodeLoginGrant(
     body: { user_code: userCode, grant },
   })
   return w.token
+}
+
+export interface CrossNodeLoginStart {
+  requestCode: string
+  userCode: string
+  requestingContext: string
+  expiresIn: number
+  pollInterval: number
+}
+type CrossNodeLoginStartWire = components['schemas']['StartCrossNodeLoginResponse']
+
+/** `POST {baseUrl}/auth/cross-node/start` — called on the *requesting* node
+ * (a game/app console with no WebAuthn ceremony surface of its own) to mint
+ * the `userCode`/`requestCode` pair: `userCode` is shown to the human for
+ * typing/scanning on their own already-logged-in device, `requestCode` is
+ * this device's own opaque polling credential — never shown to the human,
+ * never sent anywhere but `pollCrossNodeLogin`. Unauthenticated. */
+export async function startCrossNodeLogin(baseUrl: string): Promise<CrossNodeLoginStart> {
+  const w = await request<CrossNodeLoginStartWire>(baseUrl, '/auth/cross-node/start', { method: 'POST' })
+  return {
+    requestCode: w.request_code,
+    userCode: w.user_code,
+    requestingContext: w.requesting_context,
+    expiresIn: w.expires_in,
+    pollInterval: w.poll_interval,
+  }
+}
+
+export interface CrossNodeLoginPoll {
+  // One of `pending`, `slow_down`, `denied`, `expired`, `approved`.
+  status: string
+  token?: string
+  expiresAt?: string
+}
+type CrossNodeLoginPollWire = components['schemas']['PollCrossNodeLoginResponse']
+
+/** `POST {baseUrl}/auth/cross-node/poll` — called by the requesting device,
+ * bearing `requestCode` (from `startCrossNodeLogin`) as its bearer token —
+ * this is an opaque polling credential, not a session token. Never
+ * poll faster than `startCrossNodeLogin`'s own `pollInterval`; a `pending`
+ * result becomes `slow_down` if this is ignored. `token` is only ever
+ * present once, on the single poll that observes `status: 'approved'` —
+ * the request is consumed atomically at that point, so a later poll for
+ * the same `requestCode` sees `expired`, not a repeat of the same token. */
+export async function pollCrossNodeLogin(baseUrl: string, requestCode: string): Promise<CrossNodeLoginPoll> {
+  const w = await request<CrossNodeLoginPollWire>(baseUrl, '/auth/cross-node/poll', {
+    method: 'POST',
+    token: requestCode,
+  })
+  return { status: w.status, token: w.token ?? undefined, expiresAt: w.expires_at ?? undefined }
 }

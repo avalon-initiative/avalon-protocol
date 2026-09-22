@@ -74,7 +74,16 @@ export type {
 } from './accountSession/index.js'
 
 export { IntegratorSession } from './integratorSession.js'
-export type { Capability, Friend, GuildMembership, ConversationSummary, VerifiedAttestation } from './integratorSession.js'
+export type {
+  Capability,
+  Friend,
+  GuildMembership,
+  ConversationSummary,
+  VerifiedAttestation,
+  Attestation as IssuedAttestation,
+  BulkClaimOutcome,
+  BulkClaimInput,
+} from './integratorSession.js'
 
 export type { Identity, Profile, Genre, SignedTreeHeadResponse } from './types.js'
 
@@ -92,6 +101,13 @@ export {
   listIntegrators,
   getIntegratorRegistry,
   listIssuerKeys,
+  getAttestation,
+  listSchemaVersions,
+  getSchemaVersion,
+  listMappings,
+  getMapping,
+  listRecognitions,
+  listRecognizedBy,
 } from './integratorDirectory.js'
 export type {
   IntegratorCategory,
@@ -102,9 +118,13 @@ export type {
   RegistryMetric,
   IntegratorRegistry,
   IssuerKey,
+  AttestationDetail,
+  SchemaVersion,
+  SchemaMapping,
+  Recognition,
 } from './integratorDirectory.js'
 
-export { getIdentityIntegratorData } from './identityData.js'
+export { getIdentityIntegratorData, getLocations } from './identityData.js'
 export type { VisibleIntegratorDataInstance } from './identityData.js'
 
 export {
@@ -116,10 +136,48 @@ export {
 } from './recovery.js'
 export type { StartRecoveryRequest, RecoveryStartResult, FinishRecoveryRequest } from './recovery.js'
 
-export { lookupCrossNodeLogin, denyCrossNodeLogin, submitCrossNodeLoginGrant } from './crossNodeLogin.js'
-export type { CrossNodeLoginLookup } from './crossNodeLogin.js'
+export {
+  lookupCrossNodeLogin,
+  denyCrossNodeLogin,
+  submitCrossNodeLoginGrant,
+  startCrossNodeLogin,
+  pollCrossNodeLogin,
+} from './crossNodeLogin.js'
+export type { CrossNodeLoginLookup, CrossNodeLoginStart, CrossNodeLoginPoll } from './crossNodeLogin.js'
 export { mintCrossNodeLoginGrant } from './crypto/crossNodeLogin.js'
 export type { CrossNodeLoginGrant } from './crypto/crossNodeLogin.js'
+
+export {
+  registerIntegrator,
+  integratorWhoami,
+  addIssuerKey,
+  revokeIssuerKey,
+  createAchievementDefinition,
+  updateAchievementDefinition,
+  createMilestoneDefinition,
+  updateMilestoneDefinition,
+  publishSchemaVersion,
+  publishMapping,
+  publishInstance,
+  deleteInstance,
+  publishRecognition,
+  revokeRecognition,
+  revokeAttestation,
+  createRegistrationChallenge,
+  registerIssuer,
+} from './integratorAccount.js'
+export type {
+  RegisterIntegratorInput,
+  RegisteredIntegrator,
+  IssuerKeyDetail,
+  AchievementDefinitionDetail,
+  CreateClaimDefinitionInput,
+  UpdateClaimDefinitionInput,
+  PublishSchemaVersionInput,
+  PublishMappingInput,
+  RevokeAttestationResult,
+  IssuerRegistration,
+} from './integratorAccount.js'
 
 export * from './errors.js'
 

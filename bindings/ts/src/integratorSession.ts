@@ -14,6 +14,7 @@ import { request } from './http.js'
 import { CapabilityNotGrantedError, MissingIssuerCredentialsError } from './errors.js'
 import { fromMeResponse, type Identity, type Profile, type MeResponseWire } from './types.js'
 import { sign as ed25519Sign, bytesToBase64, base64ToBytes } from './crypto/signing.js'
+import type { components } from './generated.js'
 
 export type Capability =
   | 'identity.read'
@@ -106,8 +107,85 @@ interface ChallengeResponseWire {
 }
 
 /** Must match `avalon_protocol::achievements::attestation_signing_bytes`. */
-function attestationSigningBytes(issuerRef: string, subject: string, achievement: string): Uint8Array {
-  return new TextEncoder().encode(`avalon:achievement.issued:v1:${issuerRef}:${subject}:${achievement}`)
+function attestationSigningBytes(
+  claimKind: 'achievement' | 'milestone',
+  issuerRef: string,
+  subject: string,
+  achievement: string,
+): Uint8Array {
+  return new TextEncoder().encode(`avalon:${claimKind}.issued:v1:${issuerRef}:${subject}:${achievement}`)
+}
+
+/** Must match `avalon_protocol::achievements::bulk_attestation_signing_bytes`
+ * byte-for-byte, including the big-endian u32 length prefixes that make two
+ * different orderings/splits of the same achievement refs sign differently. */
+function bulkAttestationSigningBytes(
+  claimKind: 'achievement' | 'milestone',
+  issuerRef: string,
+  subject: string,
+  achievements: string[],
+): Uint8Array {
+  const encoder = new TextEncoder()
+  const chunks: Uint8Array[] = [encoder.encode(`avalon:${claimKind}.issued.bulk:v1:${issuerRef}:${subject}:`)]
+  const countPrefix = new Uint8Array(4)
+  new DataView(countPrefix.buffer).setUint32(0, achievements.length, false)
+  chunks.push(countPrefix)
+  for (const achievement of achievements) {
+    const bytes = encoder.encode(achievement)
+    const lengthPrefix = new Uint8Array(4)
+    new DataView(lengthPrefix.buffer).setUint32(0, bytes.length, false)
+    chunks.push(lengthPrefix, bytes)
+  }
+  const total = chunks.reduce((sum, c) => sum + c.length, 0)
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.length
+  }
+  return out
+}
+
+interface ClaimProof {
+  keyId: string
+  algorithm: string
+  bytes: string
+}
+
+export interface Attestation {
+  id: string
+  issuer: string
+  subject: string
+  achievement: string
+  issuedAt: string
+  proof: ClaimProof
+}
+type AttestationWire = components['schemas']['AttestationResponse']
+function attestationFromWire(w: AttestationWire): Attestation {
+  return {
+    id: w.id,
+    issuer: w.issuer,
+    subject: w.subject,
+    achievement: w.achievement,
+    issuedAt: w.issued_at,
+    proof: { keyId: w.proof.key_id, algorithm: w.proof.algorithm, bytes: w.proof.bytes },
+  }
+}
+
+export type BulkClaimOutcome =
+  | { status: 'issued'; key: string; attestation: Attestation }
+  | { status: 'failed'; key: string; code: string; error: string }
+type BulkClaimResultWire = components['schemas']['BulkClaimResult']
+function bulkClaimOutcomeFromWire(w: BulkClaimResultWire): BulkClaimOutcome {
+  if (w.status === 'issued') {
+    return { status: 'issued', key: w.key, attestation: attestationFromWire(w.attestation) }
+  }
+  return { status: 'failed', key: w.key, code: w.code, error: w.error }
+}
+
+export interface BulkClaimInput {
+  key: string
+  evidence?: Record<string, unknown>
 }
 
 export class IntegratorSession {
@@ -256,7 +334,39 @@ export class IntegratorSession {
    * without any HTTP call if this integrator has no slug/signingKey
    * configured. */
   async issueAchievement(key: string): Promise<string> {
-    this.require('achievements.issue')
+    const claim = await this.prepareClaimIssuance('achievement', key)
+    const response = await request<{ id: string }>(this.serverUrl, `/integrations/${claim.slug}/achievements/${key}/issue`, {
+      method: 'POST',
+      headers: claim.headers,
+      body: claim.body,
+    })
+    return response.id
+  }
+
+  /** `milestones.issue`-gated — same shape as `issueAchievement`, against
+   * the `milestones` claim vocabulary instead. */
+  async issueMilestone(key: string): Promise<string> {
+    const claim = await this.prepareClaimIssuance('milestone', key)
+    const response = await request<{ id: string }>(this.serverUrl, `/integrations/${claim.slug}/milestones/${key}/issue`, {
+      method: 'POST',
+      headers: claim.headers,
+      body: claim.body,
+    })
+    return response.id
+  }
+
+  /** Shared core of `issueAchievement`/`issueMilestone` — the challenge-
+   * response + embedded-signature proofs both need, decoupled from the
+   * final request itself so each caller's own `request()` call still
+   * carries a literal path template (`scripts/check-sdk-coverage.py`
+   * matches call sites by literal path, not by tracing a dynamic one back
+   * to its route). See `issueAchievement`'s own doc comment for the
+   * two-proof shape. */
+  private async prepareClaimIssuance(
+    claimKind: 'achievement' | 'milestone',
+    key: string,
+  ): Promise<{ slug: string; headers: Record<string, string>; body: { key_id: string; signature: string } }> {
+    this.require(claimKind === 'achievement' ? 'achievements.issue' : 'milestones.issue')
     if (!this.integratorSlug || !this.signingKey) {
       throw new MissingIssuerCredentialsError()
     }
@@ -270,11 +380,11 @@ export class IntegratorSession {
 
     const subject = this.identityValue.id
     const issuerRef = `game:${slug}`
-    const achievement = `game:${slug}:achievement:${key}`
-    const signature = ed25519Sign(this.signingKey, attestationSigningBytes(issuerRef, subject, achievement))
+    const achievement = `game:${slug}:${claimKind}:${key}`
+    const signature = ed25519Sign(this.signingKey, attestationSigningBytes(claimKind, issuerRef, subject, achievement))
 
-    const response = await request<{ id: string }>(this.serverUrl, `/integrations/${slug}/achievements/${key}/issue`, {
-      method: 'POST',
+    return {
+      slug,
       headers: {
         'x-avalon-integrator-key-id': this.integratorKeyId,
         'x-avalon-integrator-challenge-id': challenge.challenge_id,
@@ -283,8 +393,130 @@ export class IntegratorSession {
         'idempotency-key': crypto.randomUUID(),
       },
       body: { key_id: this.integratorKeyId, signature: bytesToBase64(signature) },
+    }
+  }
+
+  /** `achievements.issue`-gated — `POST /integrations/{slug}/achievements/bulk-issue`
+   * (#495). One challenge-response proof, plus **one** signature over the
+   * whole ordered `claims` list — never a per-claim signature. Never
+   * all-or-nothing: a claim referencing an unknown/retired definition fails
+   * on its own, every other claim in the same call still succeeds — check
+   * each result's own `status`. */
+  async bulkIssueAchievements(claims: BulkClaimInput[]): Promise<BulkClaimOutcome[]> {
+    const bulk = await this.prepareBulkClaimIssuance('achievement', claims)
+    const response = await request<components['schemas']['BulkIssueAttestationResponse']>(
+      this.serverUrl,
+      `/integrations/${bulk.slug}/achievements/bulk-issue`,
+      { method: 'POST', headers: bulk.headers, body: bulk.body },
+    )
+    return response.results.map(bulkClaimOutcomeFromWire)
+  }
+
+  /** `milestones.issue`-gated — same shape as `bulkIssueAchievements`,
+   * against the `milestones` claim vocabulary instead. */
+  async bulkIssueMilestones(claims: BulkClaimInput[]): Promise<BulkClaimOutcome[]> {
+    const bulk = await this.prepareBulkClaimIssuance('milestone', claims)
+    const response = await request<components['schemas']['BulkIssueAttestationResponse']>(
+      this.serverUrl,
+      `/integrations/${bulk.slug}/milestones/bulk-issue`,
+      { method: 'POST', headers: bulk.headers, body: bulk.body },
+    )
+    return response.results.map(bulkClaimOutcomeFromWire)
+  }
+
+  /** Shared core of `bulkIssueAchievements`/`bulkIssueMilestones` — see
+   * `prepareClaimIssuance`'s own doc comment for why the final `request()`
+   * call stays in each caller rather than here. */
+  private async prepareBulkClaimIssuance(
+    claimKind: 'achievement' | 'milestone',
+    claims: BulkClaimInput[],
+  ): Promise<{
+    slug: string
+    headers: Record<string, string>
+    body: { key_id: string; signature: string; claims: { key: string; evidence: unknown }[] }
+  }> {
+    this.require(claimKind === 'achievement' ? 'achievements.issue' : 'milestones.issue')
+    if (!this.integratorSlug || !this.signingKey) {
+      throw new MissingIssuerCredentialsError()
+    }
+    const slug = this.integratorSlug
+
+    const challenge = await request<ChallengeResponseWire>(this.serverUrl, `/integrations/${slug}/challenge`, {
+      method: 'POST',
     })
-    return response.id
+    const nonce = base64ToBytes(challenge.nonce)
+    const challengeSignature = ed25519Sign(this.signingKey, nonce)
+
+    const subject = this.identityValue.id
+    const issuerRef = `game:${slug}`
+    const achievementRefs = claims.map((c) => `game:${slug}:${claimKind}:${c.key}`)
+    const signature = ed25519Sign(
+      this.signingKey,
+      bulkAttestationSigningBytes(claimKind, issuerRef, subject, achievementRefs),
+    )
+
+    return {
+      slug,
+      headers: {
+        'x-avalon-integrator-key-id': this.integratorKeyId,
+        'x-avalon-integrator-challenge-id': challenge.challenge_id,
+        'x-avalon-integrator-signature': bytesToBase64(challengeSignature),
+        'x-avalon-identity-id': subject,
+        'idempotency-key': crypto.randomUUID(),
+      },
+      body: {
+        key_id: this.integratorKeyId,
+        signature: bytesToBase64(signature),
+        claims: claims.map((c) => ({ key: c.key, evidence: c.evidence ?? null })),
+      },
+    }
+  }
+
+  /** `presence.publish`-gated — `PUT /presence/{identityId}`: an integrator
+   * publishing presence on behalf of this session's own identity, distinct
+   * from `updatePresence`'s `PUT /me/presence` (a user acting for
+   * themselves). Authenticated the same challenge-response way as
+   * `issueAchievement`, never with this session's bearer token — the
+   * server rejects a bearer-authenticated caller here outright, since this
+   * route requires an integrator caller specifically. Throws
+   * `MissingIssuerCredentialsError` without any HTTP call if this
+   * integrator has no slug/signingKey configured. */
+  async updateIntegratorPresence(status: string, activeIn?: string): Promise<void> {
+    this.require('presence.publish')
+    if (!this.integratorSlug || !this.signingKey) {
+      throw new MissingIssuerCredentialsError()
+    }
+    const slug = this.integratorSlug
+
+    const challenge = await request<ChallengeResponseWire>(this.serverUrl, `/integrations/${slug}/challenge`, {
+      method: 'POST',
+    })
+    const nonce = base64ToBytes(challenge.nonce)
+    const challengeSignature = ed25519Sign(this.signingKey, nonce)
+
+    const subject = this.identityValue.id
+    await request(this.serverUrl, `/presence/${subject}`, {
+      method: 'PUT',
+      headers: {
+        'x-avalon-integrator-key-id': this.integratorKeyId,
+        'x-avalon-integrator-challenge-id': challenge.challenge_id,
+        'x-avalon-integrator-signature': bytesToBase64(challengeSignature),
+        'x-avalon-identity-id': subject,
+      },
+      body: { status, active_in: activeIn ?? null },
+    })
+  }
+
+  /** `GET /me/grants` — this integrator's full granted-capability set for
+   * this session's own identity, straight from the server (`authenticate`
+   * already fetches this once internally to populate `hasCapability`, but
+   * discards the raw response — this is that same call, exposed). */
+  async myGrants(): Promise<{ integratorId: string; capabilities: Capability[] }> {
+    const w = await request<components['schemas']['MyGrantsResponse']>(this.serverUrl, '/me/grants', {
+      token: this.token,
+      headers: { 'x-avalon-integrator-key-id': this.integratorKeyId },
+    })
+    return { integratorId: w.integrator_id, capabilities: w.capabilities }
   }
 }
 

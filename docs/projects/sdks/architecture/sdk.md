@@ -1439,6 +1439,77 @@ protocol and the domain model in `crates/protocol`; they never pull in
     (`GET /guilds/discover`) makes the check newly fail naming exactly
     that route, confirming the detection path itself works, not just the
     baseline count.
+- TypeScript's share of the coverage gap closed (issue #741, sub-issues
+  #744-#749) — all 32 TS-flagged routes now have a call site;
+  `make sdk-coverage-check` reports `OK typescript (bindings/ts): all
+  routes covered` (Rust/C# gaps are separate, concurrently-tracked work).
+  - `bindings/ts/src/integratorSession.ts` gained `issueMilestone`
+    (mirrors `issueAchievement` against the separate `milestones`
+    vocabulary), `bulkIssueAchievements`/`bulkIssueMilestones` (#495's
+    one-signature-over-the-whole-ordered-list scheme, ported byte-for-byte
+    from `avalon_protocol::achievements::bulk_attestation_signing_bytes`),
+    `updateIntegratorPresence` (the integrator-acting-for-a-bound-identity
+    half of presence publishing, distinct from `updatePresence`'s own
+    first-party `PUT /me/presence` — the server rejects a bearer-
+    authenticated caller on this route outright, so it authenticates the
+    same challenge-response way `issueAchievement` does, never with the
+    session's token), and `myGrants` (exposes the `GET /me/grants` call
+    `authenticate` already made internally).
+  - `bindings/ts/src/integratorDirectory.ts` (public, unauthenticated
+    reads) gained `getAttestation`, `listSchemaVersions`/`getSchemaVersion`,
+    `listMappings`/`getMapping`, and `listRecognitions`/`listRecognizedBy`.
+  - `bindings/ts/src/identityData.ts` gained `getLocations`;
+    `bindings/ts/src/crossNodeLogin.ts` gained `startCrossNodeLogin`/
+    `pollCrossNodeLogin` (the approver-side node's own half of the flow —
+    TS already had the requester-side `lookup`/`deny`/`submit` calls).
+  - New file `bindings/ts/src/integratorAccount.ts`: free-standing
+    functions (not session methods — there is no session for this actor,
+    same reasoning `crossNodeLogin.ts`/`recovery.ts` already give) for the
+    surface an integrator manages about *itself*, proven entirely by its
+    own Ed25519 key(s) via the `POST /integrations/{slug}/challenge`
+    scheme, never an identity session token: `registerIntegrator`,
+    `integratorWhoami`, `addIssuerKey`/`revokeIssuerKey` (root-key-gated),
+    `createAchievementDefinition`/`updateAchievementDefinition`,
+    `createMilestoneDefinition`/`updateMilestoneDefinition`,
+    `publishSchemaVersion`, `publishMapping`, `publishInstance`/
+    `deleteInstance`, `publishRecognition`/`revokeRecognition`,
+    `revokeAttestation`, and `createRegistrationChallenge`/`registerIssuer`
+    (the per-network issuer-admission flow, #481 — this SDK has no network-
+    verification layer of its own yet, unlike the Rust SDK's
+    `verify_network`/`TargetNetwork`, matching `ledger.ts`'s own existing
+    disclaimer on the same omission — callers must independently confirm
+    the declared network before calling).
+  - Found along the way: the achievement/milestone-definition and
+    bulk-issuance methods originally shared one private helper parameterized
+    on route (`'achievements' | 'milestones'`), interpolated into the
+    `request()` call's path — this passed `tsc`/tests but silently broke
+    `check-sdk-coverage.py`'s literal-path-template detection (including
+    regressing the already-covered `issue_achievement` route), since the
+    script matches call sites by literal path text, not by tracing a
+    runtime variable back to its value. Fixed by keeping a literal path
+    template at every exported call site (two thin wrappers sharing a
+    "prepare the headers/body" helper instead of sharing the `request()`
+    call itself) — worth remembering for any future shared-helper
+    refactor across this SDK's route methods.
+  - Recovery request-initiation (#747) needed no new work:
+    `bindings/ts/src/recovery.ts` already had the full
+    `startRecoveryRequest`/`finishRecoveryRequest`/`getRecoveryRequest`/
+    `finalizeRecoveryRequest`/`getIdentityRecoveryStatus` surface before
+    this pass — confirmed by the coverage script never flagging a
+    `recovery`-tagged route for TS in the first place.
+  - Live-verified on this branch (`AVALON_SERVER_URL`/
+    `AVALON_LIVE_DATABASE_URL`, `npm run test:live`,
+    `bindings/ts/test/integratorAccount.live.test.ts`): a real
+    `registerIntegrator` -> `addIssuerKey` -> `integratorWhoami` round trip
+    (including a second, newly-added root key passing its own `whoami`);
+    a real `createAchievementDefinition` -> (account-side `connectIntegrator`
+    consent) -> `IntegratorSession.issueAchievement` -> `getAttestation`
+    round trip; a real `publishSchemaVersion` -> `publishInstance` ->
+    `listSchemaVersions`/`getSchemaVersion` round trip; a real
+    `publishRecognition` -> `listRecognitions` -> `revokeRecognition` round
+    trip against two freshly-registered integrators; and a real
+    `startCrossNodeLogin` -> `pollCrossNodeLogin` round trip (`pending`,
+    then `slow_down` on an immediate re-poll).
 
 ## Decisions and tickets
 

@@ -1,8 +1,10 @@
 // Public, unauthenticated integrator-directory/registry reads (issue
-// #270/#261/#90/#31/#324/#325) — free-standing functions, not session
-// methods, same convention as ledger.ts's getLatestSth. See
-// crates/server/src/integrations.rs/registry.rs/achievements.rs.
+// #270/#261/#90/#31/#324/#325/#384/#491/#89) — free-standing functions, not
+// session methods, same convention as ledger.ts's getLatestSth. See
+// crates/server/src/integrations.rs/registry.rs/achievements.rs/
+// integrator_schemas.rs/integrator_schema_mappings.rs/recognitions.rs.
 import { request } from './http.js'
+import type { components } from './generated.js'
 
 export type IntegratorCategory = 'game' | 'app' | 'service'
 
@@ -226,4 +228,148 @@ export async function listIssuerKeys(serverUrl: string, slug: string): Promise<I
     validUntil: k.valid_until,
     revokedAt: k.revoked_at,
   }))
+}
+
+export interface AttestationDetail {
+  id: string
+  issuer: string
+  subject: string
+  achievement: string
+  issuedAt: string
+  proof: { keyId: string; algorithm: string }
+  authenticity: components['schemas']['AuthenticityResponse']
+  validity: components['schemas']['ValidityResponse']
+  history: { event: string; at: string; reasonCode?: string; reason?: string }[]
+}
+type AttestationDetailWire = components['schemas']['AttestationReadResponse']
+
+/** `GET /attestations/{id}` (#33) — public, unauthenticated: an
+ * attestation's full read shape, including its authenticity/validity
+ * verdicts and revocation history. Never a `recognition` field — per ADR
+ * #76, recognition is computed by the reading integrator against its own
+ * trust policy, never by the server. */
+export async function getAttestation(serverUrl: string, id: string): Promise<AttestationDetail> {
+  const w = await request<AttestationDetailWire>(serverUrl, `/attestations/${id}`)
+  return {
+    id: w.id,
+    issuer: w.issuer,
+    subject: w.subject,
+    achievement: w.achievement,
+    issuedAt: w.issued_at,
+    proof: { keyId: w.proof.key_id, algorithm: w.proof.algorithm },
+    authenticity: w.authenticity,
+    validity: w.validity,
+    history: w.history.map((h) => ({ event: h.event, at: h.at, reasonCode: h.reason_code ?? undefined, reason: h.reason ?? undefined })),
+  }
+}
+
+export interface SchemaVersion {
+  id: string
+  integratorId: string
+  version: number
+  protoSource: string
+  publishedAt: string
+  supersededBy?: string
+  defaultVisibility: string
+  fieldVisibility: Record<string, string>
+}
+type SchemaVersionWire = components['schemas']['IntegratorSchemaVersionResponse']
+function schemaVersionFromWire(w: SchemaVersionWire): SchemaVersion {
+  return {
+    id: w.id,
+    integratorId: w.integrator_id,
+    version: w.version,
+    protoSource: w.proto_source,
+    publishedAt: w.published_at,
+    supersededBy: w.superseded_by ?? undefined,
+    defaultVisibility: w.default_visibility,
+    fieldVisibility: w.field_visibility,
+  }
+}
+
+/** `GET /integrations/{slug}/schemas` (#255/#384) — every published Integrator
+ * Space schema version for this integrator, oldest first. Public,
+ * unauthenticated. Empty for an integrator that has never published. */
+export async function listSchemaVersions(serverUrl: string, slug: string): Promise<SchemaVersion[]> {
+  const w = await request<SchemaVersionWire[]>(serverUrl, `/integrations/${slug}/schemas`)
+  if (!Array.isArray(w)) return w as unknown as SchemaVersion[]
+  return w.map(schemaVersionFromWire)
+}
+
+/** `GET /integrations/{slug}/schemas/{version}` — one published version,
+ * verbatim. Public, unauthenticated. */
+export async function getSchemaVersion(serverUrl: string, slug: string, version: number): Promise<SchemaVersion> {
+  const w = await request<SchemaVersionWire>(serverUrl, `/integrations/${slug}/schemas/${version}`)
+  return schemaVersionFromWire(w)
+}
+
+export interface SchemaMapping {
+  id: string
+  integratorId: string
+  fromSchemaId: string
+  toSchemaId: string
+  description: string
+  fieldCorrespondence: Record<string, string>
+  publishedAt: string
+}
+type SchemaMappingWire = components['schemas']['IntegratorSchemaMappingResponse']
+function schemaMappingFromWire(w: SchemaMappingWire): SchemaMapping {
+  return {
+    id: w.id,
+    integratorId: w.integrator_id,
+    fromSchemaId: w.from_schema_id,
+    toSchemaId: w.to_schema_id,
+    description: w.description,
+    fieldCorrespondence: w.field_correspondence,
+    publishedAt: w.published_at,
+  }
+}
+
+/** `GET /integrations/{slug}/mappings` (#491) — every published
+ * schema-to-schema mapping for this integrator, oldest first. Public,
+ * unauthenticated. Documents a correspondence only — never executed or
+ * interpreted by this SDK. */
+export async function listMappings(serverUrl: string, slug: string): Promise<SchemaMapping[]> {
+  const w = await request<SchemaMappingWire[]>(serverUrl, `/integrations/${slug}/mappings`)
+  if (!Array.isArray(w)) return w as unknown as SchemaMapping[]
+  return w.map(schemaMappingFromWire)
+}
+
+/** `GET /integrations/{slug}/mappings/{seq}` — one published mapping,
+ * verbatim. Public, unauthenticated. */
+export async function getMapping(serverUrl: string, slug: string, seq: number): Promise<SchemaMapping> {
+  const w = await request<SchemaMappingWire>(serverUrl, `/integrations/${slug}/mappings/${seq}`)
+  return schemaMappingFromWire(w)
+}
+
+export interface Recognition {
+  recognizerSlug: string
+  recognizedSlug: string
+  scope: string[]
+  publishedAt: string
+}
+type RecognitionWire = components['schemas']['RecognitionResponse']
+function recognitionFromWire(w: RecognitionWire): Recognition {
+  return {
+    recognizerSlug: w.recognizer_slug,
+    recognizedSlug: w.recognized_slug,
+    scope: w.scope,
+    publishedAt: w.published_at,
+  }
+}
+
+/** `GET /integrations/{slug}/recognitions` (#89) — every integrator `slug`
+ * currently, actively recognizes. Public, unauthenticated. */
+export async function listRecognitions(serverUrl: string, slug: string): Promise<Recognition[]> {
+  const w = await request<RecognitionWire[]>(serverUrl, `/integrations/${slug}/recognitions`)
+  if (!Array.isArray(w)) return w as unknown as Recognition[]
+  return w.map(recognitionFromWire)
+}
+
+/** `GET /integrations/{slug}/recognized-by` — every integrator that
+ * currently, actively recognizes `slug`. Public, unauthenticated. */
+export async function listRecognizedBy(serverUrl: string, slug: string): Promise<Recognition[]> {
+  const w = await request<RecognitionWire[]>(serverUrl, `/integrations/${slug}/recognized-by`)
+  if (!Array.isArray(w)) return w as unknown as Recognition[]
+  return w.map(recognitionFromWire)
 }
