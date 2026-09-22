@@ -24,6 +24,7 @@ use crate::error::AppError;
 use crate::handlers::{authenticate, authenticate_token};
 use crate::state::AppState;
 use avalon_protocol::permissions::{Capability, Visibility};
+use utoipa::ToSchema;
 
 /// A published presence entry that hasn't been refreshed within this window
 /// reads as `Offline`. Overridable via `AVALON_PRESENCE_TTL_SECS` (see
@@ -213,12 +214,13 @@ struct PresenceView {
     updated_at: OffsetDateTime,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct PresenceResponse {
     pub identity_id: Uuid,
     pub status: PresenceStatus,
     pub active_in: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub updated_at: OffsetDateTime,
 }
 
@@ -303,7 +305,7 @@ async fn set_hide_active_in(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdatePresenceRequest {
     pub status: PresenceStatus,
     /// Opt out of (or back into) `active_in` ever being shown, independent
@@ -318,6 +320,13 @@ pub struct UpdatePresenceRequest {
 /// `PUT /me/presence` — a user publishing their own status. Deliberately
 /// cannot set `active_in`: that's reserved for an integrator's own credential
 /// (`update_integrator_presence` below).
+#[utoipa::path(
+    put,
+    path = "/me/presence",
+    tag = "presence",
+    request_body = UpdatePresenceRequest,
+    responses((status = 200, body = PresenceResponse)),
+)]
 pub async fn update_my_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -361,7 +370,7 @@ fn validate_integrator_playing(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateIntegratorPresenceRequest {
     pub status: PresenceStatus,
     /// Must be the calling integrator's own id, or omitted/`null` — see
@@ -384,6 +393,14 @@ pub struct UpdateIntegratorPresenceRequest {
 /// identity or a revoked/missing grant, no separate hand-rolled check
 /// here (see `authz`'s own module doc comment on why that's the one
 /// authorization decision, not two).
+#[utoipa::path(
+    put,
+    path = "/presence/{identity_id}",
+    tag = "presence",
+    params(("identity_id" = Uuid, Path)),
+    request_body = UpdateIntegratorPresenceRequest,
+    responses((status = 200, body = PresenceResponse)),
+)]
 pub async fn update_integrator_presence(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -419,7 +436,7 @@ pub async fn update_integrator_presence(
     Ok(Json(response))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct PresenceQuery {
     /// Comma-separated identity ids, e.g. `?ids=<uuid>,<uuid>`.
     pub ids: String,
@@ -471,6 +488,13 @@ fn hidden_playing_view(view: PresenceResponse, hidden: &HashSet<Uuid>) -> Presen
 /// (`presence_preferences.hide_active_in`, see [`hide_active_in_for`]) is
 /// applied independently on top, so an identity visible to the caller can
 /// still have `active_in` come back `null` if they've opted out of it.
+#[utoipa::path(
+    get,
+    path = "/presence",
+    tag = "presence",
+    params(PresenceQuery),
+    responses((status = 200, body = Vec<PresenceResponse>)),
+)]
 pub async fn get_presence(
     State(state): State<AppState>,
     headers: HeaderMap,

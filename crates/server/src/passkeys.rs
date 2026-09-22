@@ -58,6 +58,7 @@ use crate::error::AppError;
 use crate::handlers::authenticate;
 use crate::outbox;
 use crate::state::AppState;
+use utoipa::ToSchema;
 
 fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
     GlobalId::new("identity", &identity_id.to_string(), "self", verb)
@@ -77,9 +78,10 @@ struct AddPasskeyCeremonyState {
     webauthn_state: PasskeyRegistration,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AddPasskeyStartResponse {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub challenge: CreationChallengeResponse,
 }
 
@@ -91,6 +93,12 @@ pub struct AddPasskeyStartResponse {
 /// that already registered one of them (e.g. the same physical key) won't
 /// silently re-register itself as a second, functionally duplicate
 /// credential.
+#[utoipa::path(
+    post,
+    path = "/me/passkeys/register/start",
+    tag = "devices",
+    responses((status = 200, body = AddPasskeyStartResponse)),
+)]
 pub async fn register_start(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -158,9 +166,10 @@ pub async fn register_start(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AddPasskeyFinishRequest {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
     /// A user-chosen label for the passkey being added (e.g. "Work
     /// laptop's fingerprint sensor") — purely descriptive, same convention
@@ -168,11 +177,12 @@ pub struct AddPasskeyFinishRequest {
     pub label: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PasskeyResponse {
     pub id: Uuid,
     pub label: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub added_at: OffsetDateTime,
 }
 
@@ -186,6 +196,13 @@ pub struct PasskeyResponse {
 /// session, on top of the ceremony `kind` already keeping this flow's
 /// tickets out of `handlers::register_finish`'s unauthenticated
 /// identity-creation path.
+#[utoipa::path(
+    post,
+    path = "/me/passkeys/register/finish",
+    tag = "devices",
+    request_body = AddPasskeyFinishRequest,
+    responses((status = 200, body = PasskeyResponse)),
+)]
 pub async fn register_finish(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -278,6 +295,12 @@ pub async fn register_finish(
 
 /// `GET /me/passkeys` — every passkey registered to the caller's identity,
 /// for the Hub's "your passkeys" list.
+#[utoipa::path(
+    get,
+    path = "/me/passkeys",
+    tag = "devices",
+    responses((status = 200, body = Vec<PasskeyResponse>)),
+)]
 pub async fn list_passkeys(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -302,13 +325,21 @@ pub async fn list_passkeys(
     Ok(Json(passkeys))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RenamePasskeyRequest {
     pub label: String,
 }
 
 /// `PATCH /me/passkeys/:id` — same unilateral-rename convention as
 /// `devices::rename_device`.
+#[utoipa::path(
+    patch,
+    path = "/me/passkeys/{id}",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    request_body = RenamePasskeyRequest,
+    responses((status = 200, body = PasskeyResponse)),
+)]
 pub async fn rename_passkey(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -345,7 +376,7 @@ pub async fn rename_passkey(
 /// only enforced when this revoke would leave zero passkeys, per
 /// [`needs_fresh_signature`]. Revoking one of several passkeys stays
 /// unsigned/ambient and these fields go unused.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ToSchema)]
 pub struct RevokePasskeyRequest {
     #[serde(default)]
     pub signing_key_id: Option<Uuid>,
@@ -368,6 +399,14 @@ fn needs_fresh_signature(remaining_before_revoke: i64) -> bool {
 /// one of several never does. The count check and the delete happen inside
 /// one transaction so a concurrent registration/revoke from another session
 /// can't race past the guard.
+#[utoipa::path(
+    post,
+    path = "/me/passkeys/{id}/revoke",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    request_body = RevokePasskeyRequest,
+    responses((status = 200, description = "Passkey revoked")),
+)]
 pub async fn revoke_passkey(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -47,6 +47,7 @@ use uuid::Uuid;
 use crate::auth::{generate_session_token, verify_event_signature};
 use crate::error::AppError;
 use crate::state::AppState;
+use utoipa::ToSchema;
 
 /// Identity-level signing keys (Layer 1, per
 /// `docs/architecture/identity-aggregate-view.md`'s two-layer model)
@@ -92,7 +93,7 @@ fn own_base_url(state: &AppState) -> Result<&str, AppError> {
     state.own_base_url.as_deref().ok_or(AppError::Unauthorized)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct StartCrossNodeLoginResponse {
     pub request_code: String,
     pub user_code: String,
@@ -107,6 +108,12 @@ pub struct StartCrossNodeLoginResponse {
 /// as a QR code / typed on the approving device), and stores a pending row
 /// binding this node's own `base_url` into what the approver will
 /// eventually sign over.
+#[utoipa::path(
+    post,
+    path = "/auth/cross-node/start",
+    tag = "identity",
+    responses((status = 200, body = StartCrossNodeLoginResponse)),
+)]
 pub async fn start(
     State(state): State<AppState>,
 ) -> Result<Json<StartCrossNodeLoginResponse>, AppError> {
@@ -148,12 +155,12 @@ pub async fn start(
     Err(AppError::CrossNodeLoginRequestCodeGenerationFailed)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct LookupQuery {
     pub user_code: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct LookupCrossNodeLoginResponse {
     /// One of `pending`, `denied`, `expired`, `approved` — an approval
     /// screen only ever meaningfully acts on `pending`; the others let it
@@ -269,6 +276,13 @@ fn is_verified_seed_node(
 /// returns nothing beyond what's needed to render the prompt — never
 /// `request_code` (the polling device's own bearer credential, not the
 /// approver's business).
+#[utoipa::path(
+    get,
+    path = "/auth/cross-node/lookup",
+    tag = "identity",
+    params(LookupQuery),
+    responses((status = 200, body = LookupCrossNodeLoginResponse)),
+)]
 pub async fn lookup(
     State(state): State<AppState>,
     Query(query): Query<LookupQuery>,
@@ -305,7 +319,7 @@ pub async fn lookup(
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PollCrossNodeLoginResponse {
     /// One of `pending`, `slow_down`, `denied`, `expired`, `approved`.
     pub status: String,
@@ -313,6 +327,7 @@ pub struct PollCrossNodeLoginResponse {
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub expires_at: Option<OffsetDateTime>,
 }
 
@@ -327,6 +342,12 @@ fn pending_status(status: &str) -> PollCrossNodeLoginResponse {
 /// `POST /auth/cross-node/poll` — unauthenticated; the bearer token here is
 /// the opaque `request_code`, not a session. Same single-use-on-approved
 /// shape as `device_pairing::poll_pairing`.
+#[utoipa::path(
+    post,
+    path = "/auth/cross-node/poll",
+    tag = "identity",
+    responses((status = 200, body = PollCrossNodeLoginResponse)),
+)]
 pub async fn poll(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -420,7 +441,7 @@ pub async fn poll(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SubmitGrantRequest {
     /// Present for the cross-device flow: which pending `start`ed request
     /// this grant resolves. `None` for the same-device fast path, which
@@ -430,7 +451,7 @@ pub struct SubmitGrantRequest {
     pub grant: CrossNodeLoginGrant,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SubmitGrantResponse {
     /// Present only on the same-device fast path (`user_code: None`) — the
     /// cross-device path's session token is picked up via `poll`, same as
@@ -439,6 +460,7 @@ pub struct SubmitGrantResponse {
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub expires_at: Option<OffsetDateTime>,
 }
 
@@ -703,6 +725,13 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
 /// attaches the session to that pending request for the waiting client to
 /// pick up via `poll`; with `user_code` absent (same-device fast path),
 /// returns the session token directly.
+#[utoipa::path(
+    post,
+    path = "/auth/cross-node/submit",
+    tag = "identity",
+    request_body = SubmitGrantRequest,
+    responses((status = 200, body = SubmitGrantResponse)),
+)]
 pub async fn submit(
     State(state): State<AppState>,
     Json(body): Json<SubmitGrantRequest>,
@@ -754,12 +783,12 @@ pub async fn submit(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UserCodeRequest {
     pub user_code: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DenyResponse {
     pub status: String,
 }
@@ -775,6 +804,13 @@ pub struct DenyResponse {
 /// denial grants nothing, so the worst case of a guessed `user_code` (8
 /// chars from a 32-symbol alphabet) is griefing one's own pending request,
 /// not a security bypass.
+#[utoipa::path(
+    post,
+    path = "/auth/cross-node/deny",
+    tag = "identity",
+    request_body = UserCodeRequest,
+    responses((status = 200, body = DenyResponse)),
+)]
 pub async fn deny(
     State(state): State<AppState>,
     Json(body): Json<UserCodeRequest>,

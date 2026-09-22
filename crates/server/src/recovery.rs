@@ -28,6 +28,7 @@ use crate::handlers::authenticate;
 use crate::outbox;
 use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
+use utoipa::ToSchema;
 
 const CEREMONY_TTL_MINUTES: i64 = 5;
 const RECOVERY_START_CEREMONY_KIND: &str = "recovery_start";
@@ -162,7 +163,7 @@ pub(crate) fn guard_rate_limit(recent_count: i64) -> Result<(), AppError> {
 // Guardian configuration — session-authenticated.
 // ---------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SetGuardiansRequest {
     pub guardian_ids: Vec<Uuid>,
     pub threshold: i32,
@@ -174,11 +175,12 @@ pub struct SetGuardiansRequest {
     pub signature: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuardianSettingsResponse {
     pub guardian_ids: Vec<Uuid>,
     pub threshold: i32,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub updated_at: Option<OffsetDateTime>,
 }
 
@@ -193,6 +195,13 @@ pub struct GuardianSettingsResponse {
 /// time. Replaces the set wholesale (delete-then-insert in one
 /// transaction) rather than diffing — simpler, and this isn't a
 /// high-frequency operation.
+#[utoipa::path(
+    put,
+    path = "/me/recovery/guardians",
+    tag = "recovery",
+    request_body = SetGuardiansRequest,
+    responses((status = 200, body = GuardianSettingsResponse)),
+)]
 pub async fn set_guardians(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -307,6 +316,12 @@ pub async fn set_guardians(
 /// `GET /me/recovery/guardians` — the caller's own current configuration.
 /// An identity with none configured gets an empty list and threshold 0,
 /// not a 404 — "not configured yet" is a normal state, not an error.
+#[utoipa::path(
+    get,
+    path = "/me/recovery/guardians",
+    tag = "recovery",
+    responses((status = 200, body = GuardianSettingsResponse)),
+)]
 pub async fn get_guardians(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -348,11 +363,12 @@ async fn fetch_guardian_settings(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuardianOfSummary {
     pub identity_id: Uuid,
     pub display_name: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub added_at: OffsetDateTime,
 }
 
@@ -362,6 +378,12 @@ pub struct GuardianOfSummary {
 /// via [`resign_guardian`] below, without the owner's cooperation — there is
 /// no accept step, matching `set_guardians`'s existing "active the moment
 /// the owner names you" behavior).
+#[utoipa::path(
+    get,
+    path = "/me/recovery/guardian-of",
+    tag = "recovery",
+    responses((status = 200, body = Vec<GuardianOfSummary>)),
+)]
 pub async fn guardian_of(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -400,6 +422,13 @@ pub async fn guardian_of(
 /// [`validate_guardian_settings`] enforces on the owner's own writes, kept
 /// true here too rather than left as a silent trap the owner discovers only
 /// when trying to actually recover.
+#[utoipa::path(
+    delete,
+    path = "/me/recovery/guardian-of/{identity_id}",
+    tag = "recovery",
+    params(("identity_id" = Uuid, Path)),
+    responses((status = 200, description = "Resigned as guardian")),
+)]
 pub async fn resign_guardian(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -469,15 +498,16 @@ struct RecoveryStartCeremonyState {
     webauthn_state: PasskeyRegistration,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RecoveryStartRequest {
     pub identity_id: Uuid,
     pub device_label: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RecoveryStartResponse {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub challenge: CreationChallengeResponse,
 }
 
@@ -508,6 +538,13 @@ async fn recent_request_count(state: &AppState, identity_id: Uuid) -> Result<i64
 /// rolling-window rate limit ([`guard_rate_limit`]) is checked *before*
 /// any WebAuthn ceremony work happens, since that ceremony is the
 /// expensive part.
+#[utoipa::path(
+    post,
+    path = "/recovery/requests/start",
+    tag = "recovery",
+    request_body = RecoveryStartRequest,
+    responses((status = 200, body = RecoveryStartResponse)),
+)]
 pub async fn start_request(
     State(state): State<AppState>,
     Json(body): Json<RecoveryStartRequest>,
@@ -583,13 +620,14 @@ pub async fn start_request(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RecoveryFinishRequest {
     pub ticket_id: Uuid,
+    #[schema(value_type = Object)]
     pub webauthn_credential: RegisterPublicKeyCredential,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RecoveryRequestResponse {
     pub id: Uuid,
     pub identity_id: Uuid,
@@ -597,8 +635,10 @@ pub struct RecoveryRequestResponse {
     pub threshold: i32,
     pub approvals_count: i64,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub requested_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub delay_ends_at: Option<OffsetDateTime>,
 }
 
@@ -609,6 +649,13 @@ pub struct RecoveryRequestResponse {
 /// word on "at most one active attempt" — a second `finish` racing this
 /// one for the same identity loses to the constraint, not to a
 /// check-then-act gap in application code.
+#[utoipa::path(
+    post,
+    path = "/recovery/requests/finish",
+    tag = "recovery",
+    request_body = RecoveryFinishRequest,
+    responses((status = 200, body = RecoveryRequestResponse)),
+)]
 pub async fn finish_request(
     State(state): State<AppState>,
     Json(body): Json<RecoveryFinishRequest>,
@@ -778,6 +825,13 @@ fn to_response(id: Uuid, row: RequestRow, approvals_count: i64) -> RecoveryReque
 /// creation, not the identity's possibly-since-changed live threshold)
 /// transitions the row into the delay phase in the same transaction as
 /// this approval.
+#[utoipa::path(
+    post,
+    path = "/recovery/requests/{id}/approve",
+    tag = "recovery",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = RecoveryRequestResponse)),
+)]
 pub async fn approve_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -896,7 +950,7 @@ pub async fn approve_request(
     }))
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, ToSchema)]
 pub struct CancelRecoveryRequest {
     pub reason: Option<String>,
 }
@@ -907,6 +961,14 @@ pub struct CancelRecoveryRequest {
 /// never lost) or any of its *current* guardians may cancel an in-flight
 /// attempt they believe is malicious, per [`guard_cancel_authority`]. A
 /// request already `completed`/`cancelled` cannot be cancelled again.
+#[utoipa::path(
+    post,
+    path = "/recovery/requests/{id}/cancel",
+    tag = "recovery",
+    params(("id" = Uuid, Path)),
+    request_body = CancelRecoveryRequest,
+    responses((status = 200, body = RecoveryRequestResponse)),
+)]
 pub async fn cancel_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -984,6 +1046,13 @@ pub async fn cancel_request(
 /// eagerly and loses the race to another caller (or to a future
 /// auto-finalize sweep, not built this pass — see PR description) doesn't
 /// need special-case handling.
+#[utoipa::path(
+    post,
+    path = "/recovery/requests/{id}/finalize",
+    tag = "recovery",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = RecoveryRequestResponse)),
+)]
 pub async fn finalize_request(
     State(state): State<AppState>,
     Path(request_id): Path<Uuid>,
@@ -1080,6 +1149,13 @@ pub async fn finalize_request(
 /// anyone, not just the owner or guardians — a public marker on the
 /// identity, same alternative #99 itself named. Never exposes which
 /// specific guardians have approved, only the count.
+#[utoipa::path(
+    get,
+    path = "/recovery/requests/{id}",
+    tag = "recovery",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = RecoveryRequestResponse)),
+)]
 pub async fn get_request(
     State(state): State<AppState>,
     Path(request_id): Path<Uuid>,
@@ -1097,6 +1173,13 @@ pub async fn get_request(
 /// active recovery" rather than searching historical/cancelled ones — the
 /// at-most-one-active-request index means there is at most one row to
 /// find.
+#[utoipa::path(
+    get,
+    path = "/identities/{id}/recovery/status",
+    tag = "recovery",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = Option<RecoveryRequestResponse>)),
+)]
 pub async fn identity_recovery_status(
     State(state): State<AppState>,
     Path(identity_id): Path<Uuid>,
@@ -1123,6 +1206,12 @@ pub async fn identity_recovery_status(
 /// wherever the owner still has *some* working session — reusing the same
 /// data shape rather than inventing a separate notification channel, per
 /// the ticket's "reuse rather than invent" guidance.
+#[utoipa::path(
+    get,
+    path = "/me/recovery/status",
+    tag = "recovery",
+    responses((status = 200, body = Option<RecoveryRequestResponse>)),
+)]
 pub async fn my_recovery_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1131,7 +1220,7 @@ pub async fn my_recovery_status(
     identity_recovery_status(State(state), Path(identity_id)).await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct GuardianRequestSummary {
     pub request: RecoveryRequestResponse,
     pub already_approved: bool,
@@ -1141,6 +1230,12 @@ pub struct GuardianRequestSummary {
 /// (across every identity, not just one) where the caller is currently a
 /// guardian, for the Hub's guardian-approval UI: "a friend of yours is
 /// trying to recover their identity, here's the pending request."
+#[utoipa::path(
+    get,
+    path = "/me/recovery/guardian-requests",
+    tag = "recovery",
+    responses((status = 200, body = Vec<GuardianRequestSummary>)),
+)]
 pub async fn guardian_requests(
     State(state): State<AppState>,
     headers: HeaderMap,

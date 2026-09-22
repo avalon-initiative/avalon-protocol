@@ -48,7 +48,7 @@ pub const DEFAULT_TTL_SECONDS: i64 = 60;
 /// A self-signed assertion that a human, shown `requesting_context`, just
 /// approved logging `identity_id` (acting through `signing_key_id`) into
 /// `destination_base_url`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CrossNodeLoginGrant {
     pub identity_id: Uuid,
     /// Which of the identity's (possibly several) signing keys approved
@@ -71,8 +71,10 @@ pub struct CrossNodeLoginGrant {
     /// `ContinuationToken::nonce`'s own doc comment establishes.
     pub nonce: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub issued_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub expires_at: OffsetDateTime,
     /// Lowercase hex-encoded Ed25519 signature over [`signing_bytes`].
     pub signature: String,
