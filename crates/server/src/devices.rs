@@ -52,6 +52,7 @@ use crate::error::AppError;
 use crate::handlers::authenticate;
 use crate::outbox;
 use crate::state::AppState;
+use utoipa::ToSchema;
 
 const GRANT_TTL_MINUTES: i64 = 15;
 
@@ -77,7 +78,7 @@ fn device_grant_approval_signing_bytes(
     .into_bytes()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RequestDeviceGrantRequest {
     /// Base64-encoded raw Ed25519 public key — freshly generated
     /// client-side for this device, never persisted locally until this
@@ -86,7 +87,7 @@ pub struct RequestDeviceGrantRequest {
     pub device_label: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DeviceGrantResponse {
     pub id: Uuid,
     pub status: String,
@@ -98,8 +99,10 @@ pub struct DeviceGrantResponse {
     /// key by reading it back off this response.
     pub requested_signing_public_key: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub requested_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub expires_at: OffsetDateTime,
 }
 
@@ -108,6 +111,13 @@ pub struct DeviceGrantResponse {
 /// (already proven by a real WebAuthn ceremony, per this repo's usual
 /// "every route just accepts a session bearer token" pattern) — approval,
 /// not this request, is where the stronger signature check lives.
+#[utoipa::path(
+    post,
+    path = "/me/devices/grants",
+    tag = "devices",
+    request_body = RequestDeviceGrantRequest,
+    responses((status = 200, body = DeviceGrantResponse)),
+)]
 pub async fn request_device_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -160,7 +170,7 @@ fn row_to_grant_response(row: &sqlx::postgres::PgRow) -> Result<DeviceGrantRespo
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ListDeviceGrantsQuery {
     /// Filters to exactly this status when present (e.g. `?status=pending`
     /// for the approval UI); returns every grant for the caller's identity
@@ -172,6 +182,13 @@ pub struct ListDeviceGrantsQuery {
 /// has requested, from any device (used both by a trusted device polling
 /// for pending requests to approve, and by the requesting device polling
 /// its own request's status).
+#[utoipa::path(
+    get,
+    path = "/me/devices/grants",
+    tag = "devices",
+    params(ListDeviceGrantsQuery),
+    responses((status = 200, body = Vec<DeviceGrantResponse>)),
+)]
 pub async fn list_device_grants(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -203,6 +220,13 @@ pub async fn list_device_grants(
 /// own grant's status until it flips to `approved`. Scoped to the caller's
 /// own identity like every other read here, so one identity can never poll
 /// another's pending grant.
+#[utoipa::path(
+    get,
+    path = "/me/devices/grants/{id}",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = DeviceGrantResponse)),
+)]
 pub async fn get_device_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -260,7 +284,7 @@ async fn fetch_pending_grant(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct ApproveDeviceGrantRequest {
     /// Which of the caller's own `identity_signing_keys` rows is approving
     /// this grant — must belong to the caller's identity and not be
@@ -272,7 +296,7 @@ pub struct ApproveDeviceGrantRequest {
     pub signature: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DeviceResponse {
     pub id: Uuid,
     pub label: Option<String>,
@@ -284,9 +308,11 @@ pub struct DeviceResponse {
     /// way `identity_created`'s payload already does.
     pub public_key: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub added_at: OffsetDateTime,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
@@ -298,6 +324,14 @@ pub struct DeviceResponse {
 /// comes from a device that itself already passed a real WebAuthn ceremony
 /// (every row in `identity_signing_keys` only exists because
 /// `register_finish` or a prior approval put it there).
+#[utoipa::path(
+    post,
+    path = "/me/devices/grants/{id}/approve",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    request_body = ApproveDeviceGrantRequest,
+    responses((status = 200, body = DeviceResponse)),
+)]
 pub async fn approve_device_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -393,6 +427,12 @@ pub async fn approve_device_grant(
 
 /// `GET /me/devices` — every signing key (active or revoked) registered to
 /// the caller's identity, for the Hub's device-list/revoke UI.
+#[utoipa::path(
+    get,
+    path = "/me/devices",
+    tag = "devices",
+    responses((status = 200, body = Vec<DeviceResponse>)),
+)]
 pub async fn list_devices(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -420,7 +460,7 @@ pub async fn list_devices(
     Ok(Json(devices))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RenameDeviceRequest {
     pub label: String,
 }
@@ -430,6 +470,14 @@ pub struct RenameDeviceRequest {
 /// the fact, and no device could be renamed at all. Same ownership check as
 /// `revoke_device` — any authenticated session for the identity may rename
 /// any of its own signing-key rows, active or revoked, unilaterally.
+#[utoipa::path(
+    patch,
+    path = "/me/devices/{id}",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    request_body = RenameDeviceRequest,
+    responses((status = 200, body = DeviceResponse)),
+)]
 pub async fn rename_device(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -471,6 +519,13 @@ pub async fn rename_device(
 /// milestone-1 precedent `friends.rs`'s `friend.requested` already uses;
 /// revocation only ever narrows trust, so it doesn't need the higher
 /// signing bar grant approval does.
+#[utoipa::path(
+    post,
+    path = "/me/devices/{id}/revoke",
+    tag = "devices",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, description = "Signing key revoked")),
+)]
 pub async fn revoke_device(
     State(state): State<AppState>,
     headers: HeaderMap,

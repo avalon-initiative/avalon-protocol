@@ -25,6 +25,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::authz::{authenticate_caller, require_capability, Caller};
@@ -306,7 +307,7 @@ async fn fetch_definition(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AchievementDefinitionResponse {
     pub id: String,
     pub integrator_id: Uuid,
@@ -324,11 +325,14 @@ pub struct AchievementDefinitionResponse {
     pub icon_url: Option<String>,
     pub version: i32,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub updated_at: OffsetDateTime,
     pub retired: bool,
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = String, format = "date-time", nullable)]
     pub retired_at: Option<OffsetDateTime>,
 }
 
@@ -350,12 +354,16 @@ fn definition_response(integrator_id: Uuid, row: DefinitionRow) -> AchievementDe
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateAchievementDefinitionRequest {
     pub key: String,
     pub name: String,
     pub description: String,
+    /// A `GlobalId` (`<namespace>:<owner>:<kind>:<key>`), serialized as a
+    /// plain string — `avalon_protocol::ids::GlobalId` has no `ToSchema`
+    /// impl of its own.
     #[serde(default)]
+    #[schema(value_type = String, nullable)]
     pub schema: Option<GlobalId>,
     /// One of [`BUILTIN_ICONS`]; omitted/`null` falls back to
     /// [`DEFAULT_ICON`] at read time (issue #332).
@@ -467,6 +475,14 @@ async fn create_definition(
 }
 
 /// `POST /integrations/{slug}/achievements`.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/achievements",
+    tag = "achievements",
+    params(("slug" = String, Path)),
+    request_body = CreateAchievementDefinitionRequest,
+    responses((status = 200, body = AchievementDefinitionResponse)),
+)]
 pub async fn create_achievement_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -477,6 +493,14 @@ pub async fn create_achievement_definition(
 }
 
 /// `POST /integrations/{slug}/milestones` (#324/#325).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/milestones",
+    tag = "achievements",
+    params(("slug" = String, Path)),
+    request_body = CreateAchievementDefinitionRequest,
+    responses((status = 200, body = AchievementDefinitionResponse)),
+)]
 pub async fn create_milestone_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -486,10 +510,12 @@ pub async fn create_milestone_definition(
     create_definition(&state, &headers, &slug, ClaimRoute::Milestones, body).await
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateAchievementDefinitionRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// See `CreateAchievementDefinitionRequest::schema`'s doc comment.
+    #[schema(value_type = String, nullable)]
     pub schema: Option<GlobalId>,
     /// One of [`BUILTIN_ICONS`], `Some(None)`-style clearing is not
     /// supported (omit the field to leave it untouched, same "absent means
@@ -660,6 +686,14 @@ async fn update_definition(
 }
 
 /// `PATCH /integrations/{slug}/achievements/{key}`.
+#[utoipa::path(
+    patch,
+    path = "/integrations/{slug}/achievements/{key}",
+    tag = "achievements",
+    params(("slug" = String, Path), ("key" = String, Path)),
+    request_body = UpdateAchievementDefinitionRequest,
+    responses((status = 200, body = AchievementDefinitionResponse)),
+)]
 pub async fn update_achievement_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -670,6 +704,14 @@ pub async fn update_achievement_definition(
 }
 
 /// `PATCH /integrations/{slug}/milestones/{key}` (#324/#325).
+#[utoipa::path(
+    patch,
+    path = "/integrations/{slug}/milestones/{key}",
+    tag = "achievements",
+    params(("slug" = String, Path), ("key" = String, Path)),
+    request_body = UpdateAchievementDefinitionRequest,
+    responses((status = 200, body = AchievementDefinitionResponse)),
+)]
 pub async fn update_milestone_definition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -736,6 +778,13 @@ async fn list_definitions(
 }
 
 /// `GET /integrations/{slug}/achievements`.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/achievements",
+    tag = "achievements",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<AchievementDefinitionResponse>)),
+)]
 pub async fn list_achievement_definitions(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -744,6 +793,13 @@ pub async fn list_achievement_definitions(
 }
 
 /// `GET /integrations/{slug}/milestones` (#324/#325).
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/milestones",
+    tag = "achievements",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<AchievementDefinitionResponse>)),
+)]
 pub async fn list_milestone_definitions(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -751,7 +807,7 @@ pub async fn list_milestone_definitions(
     list_definitions(&state, &slug, ClaimRoute::Milestones).await
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct IssueAttestationRequest {
     /// Which of the issuer's own keys signed this attestation — resolved
     /// against that issuer's full key history at the moment of issuance
@@ -767,23 +823,25 @@ pub struct IssueAttestationRequest {
     /// what's signed or stored as a column, since it's descriptive
     /// metadata, not something verification depends on.
     #[serde(default)]
+    #[schema(value_type = Object, nullable)]
     pub evidence: Option<serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct AttestationSignatureResponse {
     pub key_id: Uuid,
     pub algorithm: String,
     pub bytes: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct AttestationResponse {
     pub id: Uuid,
     pub issuer: String,
     pub subject: Uuid,
     pub achievement: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub issued_at: OffsetDateTime,
     pub proof: AttestationSignatureResponse,
 }
@@ -1011,6 +1069,14 @@ async fn issue_attestation(
 }
 
 /// `POST /integrations/{slug}/achievements/{key}/issue` (#32).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/achievements/{key}/issue",
+    tag = "achievements",
+    params(("slug" = String, Path), ("key" = String, Path)),
+    request_body = IssueAttestationRequest,
+    responses((status = 200, body = AttestationResponse)),
+)]
 pub async fn issue_achievement(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1021,6 +1087,14 @@ pub async fn issue_achievement(
 }
 
 /// `POST /integrations/{slug}/milestones/{key}/issue` (#32/#324/#325).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/milestones/{key}/issue",
+    tag = "achievements",
+    params(("slug" = String, Path), ("key" = String, Path)),
+    request_body = IssueAttestationRequest,
+    responses((status = 200, body = AttestationResponse)),
+)]
 pub async fn issue_milestone(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1033,10 +1107,11 @@ pub async fn issue_milestone(
 /// One claim in a [`BulkIssueAttestationRequest`] — just enough to look up
 /// its definition; the proof covering the whole ordered list lives once,
 /// at the request's top level (see that struct's own doc comment).
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct BulkClaimRequest {
     pub key: String,
     #[serde(default)]
+    #[schema(value_type = Object, nullable)]
     pub evidence: Option<serde_json::Value>,
 }
 
@@ -1049,7 +1124,7 @@ pub struct BulkClaimRequest {
 /// attestation server-side, through the exact same write path
 /// [`issue_attestation`] uses per-item; this endpoint is purely an
 /// API/transport-layer convenience over that, per #492's own invariant.
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct BulkIssueAttestationRequest {
     /// Which of the issuer's own keys signed the whole ordered list.
     pub key_id: Uuid,
@@ -1062,7 +1137,7 @@ pub struct BulkIssueAttestationRequest {
 /// One claim's own outcome — a bulk call is never all-or-nothing (#495's
 /// own invariant): a claim referencing an unknown or retired definition
 /// fails on its own, every other claim in the same call still succeeds.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BulkClaimResult {
     Issued {
@@ -1079,7 +1154,7 @@ pub enum BulkClaimResult {
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct BulkIssueAttestationResponse {
     /// Same order as the request's `claims` — a caller matches results
     /// back to what it submitted by position, not by searching for `key`
@@ -1316,6 +1391,14 @@ async fn bulk_issue_attestation(
 }
 
 /// `POST /integrations/{slug}/achievements/bulk-issue` (#495).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/achievements/bulk-issue",
+    tag = "achievements",
+    params(("slug" = String, Path)),
+    request_body = BulkIssueAttestationRequest,
+    responses((status = 200, body = BulkIssueAttestationResponse)),
+)]
 pub async fn bulk_issue_achievements(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1326,6 +1409,14 @@ pub async fn bulk_issue_achievements(
 }
 
 /// `POST /integrations/{slug}/milestones/bulk-issue` (#495).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/milestones/bulk-issue",
+    tag = "achievements",
+    params(("slug" = String, Path)),
+    request_body = BulkIssueAttestationRequest,
+    responses((status = 200, body = BulkIssueAttestationResponse)),
+)]
 pub async fn bulk_issue_milestones(
     State(state): State<AppState>,
     headers: HeaderMap,

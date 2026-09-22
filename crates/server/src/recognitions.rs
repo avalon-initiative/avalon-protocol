@@ -33,6 +33,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -62,18 +63,19 @@ async fn fetch_slug_by_id(state: &AppState, id: Uuid) -> Result<String, AppError
     row.try_get("slug").map_err(AppError::from)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct PublishRecognitionRequest {
     pub recognized_slug: String,
     pub scope: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RecognitionResponse {
     pub recognizer_slug: String,
     pub recognized_slug: String,
     pub scope: Vec<String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub published_at: OffsetDateTime,
 }
 
@@ -81,6 +83,14 @@ pub struct RecognitionResponse {
 /// `slug`'s recognition of `recognized_slug`. Always the caller's own
 /// declared policy about itself; never anything read from or written
 /// about the target beyond this one directional fact.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/recognitions",
+    tag = "registry",
+    params(("slug" = String, Path)),
+    request_body = PublishRecognitionRequest,
+    responses((status = 200, body = RecognitionResponse)),
+)]
 pub async fn publish_recognition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -142,7 +152,7 @@ pub async fn publish_recognition(
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RevokeRecognitionRequest {
     pub recognized_slug: String,
 }
@@ -150,6 +160,14 @@ pub struct RevokeRecognitionRequest {
 /// `POST /integrations/{slug}/recognitions/revoke` — marks `slug`'s
 /// recognition of `recognized_slug` revoked (`revoked_at` set, row kept).
 /// A no-op, not an error, if no recognition was ever published.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/recognitions/revoke",
+    tag = "registry",
+    params(("slug" = String, Path)),
+    request_body = RevokeRecognitionRequest,
+    responses((status = 200, description = "{ \"revoked\": bool }")),
+)]
 pub async fn revoke_recognition(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -205,6 +223,13 @@ pub async fn revoke_recognition(
 
 /// `GET /integrations/{slug}/recognitions` — every integrator `slug`
 /// currently, actively recognizes. Public, unauthenticated.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/recognitions",
+    tag = "registry",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<RecognitionResponse>)),
+)]
 pub async fn list_recognitions(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -230,6 +255,13 @@ pub async fn list_recognitions(
 
 /// `GET /integrations/{slug}/recognized-by` — every integrator that
 /// currently, actively recognizes `slug`. Public, unauthenticated.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/recognized-by",
+    tag = "registry",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<RecognitionResponse>)),
+)]
 pub async fn list_recognized_by(
     State(state): State<AppState>,
     Path(slug): Path<String>,

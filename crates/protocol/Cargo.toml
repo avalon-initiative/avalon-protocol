@@ -13,3 +13,7 @@ time.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 base64.workspace = true
+# Issue #723: domain types that appear directly in the SDK-facing OpenAPI
+# schema's response/request bodies (e.g. `identity::Genre`) need
+# `ToSchema` too — this is still a pure derive, no I/O added.
+utoipa.workspace = true

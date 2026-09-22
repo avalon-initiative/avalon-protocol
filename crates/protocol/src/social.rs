@@ -33,7 +33,7 @@ pub struct FriendRequest {
 /// overrides when set explicitly via `PUT /me/presence` — they persist
 /// (ignoring TTL expiry) until the caller explicitly sets `Online` again.
 /// See `crates/server/src/presence.rs::PresenceStore::get`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum PresenceStatus {
     Online,
     Away,

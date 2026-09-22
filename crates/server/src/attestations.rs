@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{Postgres, QueryBuilder, Row};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use avalon_chain::attestations::{verify_authenticity, verify_signature, Authenticity};
@@ -70,7 +71,7 @@ fn global_id_from_str(raw: &str) -> Option<avalon_protocol::ids::GlobalId> {
     serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AuthenticityResponse {
     Authentic { key_id: String },
@@ -86,7 +87,7 @@ impl From<Authenticity> for AuthenticityResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ValidityResponse {
     Valid,
@@ -104,7 +105,7 @@ impl From<avalon_protocol::achievements::Validity> for ValidityResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AttestationProofResponse {
     pub key_id: String,
     pub algorithm: String,
@@ -113,10 +114,11 @@ pub struct AttestationProofResponse {
 /// One entry in an attestation's history — `"issued"` always, plus
 /// `"revoked"` if a revocation entry exists (#85). Reinstatement/
 /// supersession entries would append here too, once either exists.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AttestationHistoryEntry {
     pub event: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub at: OffsetDateTime,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<String>,
@@ -124,13 +126,14 @@ pub struct AttestationHistoryEntry {
     pub reason: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AttestationReadResponse {
     pub id: Uuid,
     pub issuer: String,
     pub subject: Uuid,
     pub achievement: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub issued_at: OffsetDateTime,
     pub proof: AttestationProofResponse,
     pub authenticity: AuthenticityResponse,
@@ -140,6 +143,13 @@ pub struct AttestationReadResponse {
 }
 
 /// `GET /attestations/{id}` (#33) — public, unauthenticated.
+#[utoipa::path(
+    get,
+    path = "/attestations/{id}",
+    tag = "achievements",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = AttestationReadResponse)),
+)]
 pub async fn get_attestation(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -323,7 +333,7 @@ impl ClaimKindFilter {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 pub struct ListMyAchievementsQuery {
     /// Restrict to one issuer, by its `integrators.id` — the actual
     /// indexed foreign key `achievement_attestations.integrator_id` names,
@@ -342,7 +352,7 @@ pub struct ListMyAchievementsQuery {
     pub limit: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ListMyAchievementsResponse {
     pub achievements: Vec<AttestationReadResponse>,
     /// `Some(id)` when another page exists — pass it back as `before=` to
@@ -437,6 +447,13 @@ fn build_my_achievements_query(
 /// is fixed here by batching all four lookups across the whole page: a
 /// fixed four queries regardless of how many attestations are on the
 /// page, not `1 + 4*page_size`.
+#[utoipa::path(
+    get,
+    path = "/me/achievements",
+    tag = "achievements",
+    params(ListMyAchievementsQuery),
+    responses((status = 200, body = ListMyAchievementsResponse)),
+)]
 pub async fn list_my_achievements(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -550,7 +567,7 @@ async fn fetch_revocations_batch(
     Ok(result)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RevokeAttestationRequest {
     pub key_id: Uuid,
     /// Standard-base64-encoded detached Ed25519 signature over
@@ -560,16 +577,21 @@ pub struct RevokeAttestationRequest {
     /// not a free-text string — see that type's own doc comment. Still
     /// deserializes from a plain JSON string, so no wire-format change
     /// for existing callers; an unrecognized code decodes to `Other`
-    /// rather than a request error.
+    /// rather than a request error. Serializes/deserializes as a plain
+    /// string via hand-written `serde` impls, so it has no `ToSchema` of
+    /// its own — represented here as `String`.
+    #[schema(value_type = String)]
     pub reason_code: RevocationReasonCode,
     pub reason: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RevocationResponse {
     pub attestation_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub revoked_at: OffsetDateTime,
+    #[schema(value_type = String)]
     pub reason_code: RevocationReasonCode,
     pub reason: String,
 }
@@ -580,6 +602,14 @@ pub struct RevocationResponse {
 /// independently-checked embedded signature over
 /// [`revocation_signing_bytes`], so the revocation record itself carries
 /// cryptographic proof of who authorized it, not just an HTTP-layer claim.
+#[utoipa::path(
+    post,
+    path = "/attestations/{id}/revoke",
+    tag = "achievements",
+    params(("id" = Uuid, Path)),
+    request_body = RevokeAttestationRequest,
+    responses((status = 200, body = RevocationResponse)),
+)]
 pub async fn revoke_attestation(
     State(state): State<AppState>,
     headers: HeaderMap,

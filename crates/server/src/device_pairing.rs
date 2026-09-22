@@ -32,6 +32,7 @@ use crate::error::AppError;
 use crate::handlers::authenticate;
 use crate::signature_gate::{canonical_message, require_fresh_signature};
 use crate::state::AppState;
+use utoipa::ToSchema;
 
 const PAIRING_TTL_MINUTES: i64 = 10;
 /// Same lifetime `handlers::session_finish` mints for a normal WebAuthn
@@ -74,7 +75,7 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
         .ok_or(AppError::Unauthorized)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct StartPairingResponse {
     pub device_code: String,
     pub user_code: String,
@@ -90,6 +91,12 @@ pub struct StartPairingResponse {
 /// pending pairing row. Retries on a code collision — with 32^8 possible
 /// `user_code`s this only ever matters once a huge number are pending at
 /// once.
+#[utoipa::path(
+    post,
+    path = "/auth/device/start",
+    tag = "devices",
+    responses((status = 200, body = StartPairingResponse)),
+)]
 pub async fn start_pairing(
     State(state): State<AppState>,
 ) -> Result<Json<StartPairingResponse>, AppError> {
@@ -127,7 +134,7 @@ pub async fn start_pairing(
     Err(AppError::DevicePairingCodeGenerationFailed)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PollPairingResponse {
     /// One of `pending`, `slow_down`, `denied`, `expired`, `approved`.
     pub status: String,
@@ -135,6 +142,7 @@ pub struct PollPairingResponse {
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = "date-time")]
     pub expires_at: Option<OffsetDateTime>,
 }
 
@@ -151,6 +159,12 @@ fn pending_status(status: &str) -> PollPairingResponse {
 /// the winning poll atomically flips the row to `expired` in the same
 /// `UPDATE ... RETURNING` that reads the session, so a concurrent or later
 /// poll of the same `device_code` can never observe the token twice.
+#[utoipa::path(
+    post,
+    path = "/auth/device/poll",
+    tag = "devices",
+    responses((status = 200, body = PollPairingResponse)),
+)]
 pub async fn poll_pairing(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -241,7 +255,7 @@ pub async fn poll_pairing(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UserCodeRequest {
     pub user_code: String,
 }
@@ -252,14 +266,14 @@ pub struct UserCodeRequest {
 /// gap. `signing_key_id`/`signature` are optional on the wire (so
 /// deserialization never fails outright) but enforced as required by
 /// [`require_fresh_signature`] below.
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct ApprovePairingRequest {
     pub user_code: String,
     pub signing_key_id: Option<Uuid>,
     pub signature: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ResolvePairingResponse {
     pub status: String,
 }
@@ -286,6 +300,13 @@ async fn fetch_pending_pairing_id(state: &AppState, user_code: &str) -> Result<U
 /// `sessions` table — the exact same mechanism `handlers::session_finish`
 /// uses for a normal login — and attaches it to the pairing so the waiting
 /// client picks it up on its next poll.
+#[utoipa::path(
+    post,
+    path = "/auth/device/approve",
+    tag = "devices",
+    request_body = ApprovePairingRequest,
+    responses((status = 200, body = ResolvePairingResponse)),
+)]
 pub async fn approve_pairing(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -355,6 +376,13 @@ pub async fn approve_pairing(
 
 /// `POST /auth/device/deny` — same auth shape as [`approve_pairing`], the
 /// explicit rejection path. No session is ever minted.
+#[utoipa::path(
+    post,
+    path = "/auth/device/deny",
+    tag = "devices",
+    request_body = UserCodeRequest,
+    responses((status = 200, body = ResolvePairingResponse)),
+)]
 pub async fn deny_pairing(
     State(state): State<AppState>,
     headers: HeaderMap,

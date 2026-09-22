@@ -149,7 +149,7 @@ pub async fn resolve(state: &AppState, identity_id: Uuid) -> Vec<String> {
     .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct LocationsResponse {
     pub locations: Vec<String>,
 }
@@ -160,6 +160,13 @@ pub struct LocationsResponse {
 /// the response (a set of server base URLs) carries no personal data —
 /// same public-discovery posture `crate::nodes`'s peer-listing routes
 /// already take.
+#[utoipa::path(
+    get,
+    path = "/identities/{id}/locations",
+    tag = "identity",
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = LocationsResponse)),
+)]
 pub async fn get_locations(
     State(state): State<AppState>,
     Path(identity_id): Path<Uuid>,

@@ -113,3 +113,8 @@ redis = { version = "1.7", default-features = false, features = ["tokio-comp", "
 # parsing (Linux-only) when hosters may run on macOS/Windows too. Default
 # features cover CPU/memory/disk/process, which is all this needs.
 sysinfo = "0.39"
+# Issue #723 (epic #722, decision #714): generates the SDK-facing OpenAPI
+# schema straight from `server`'s real axum handler signatures/types
+# (`#[utoipa::path]`/`#[derive(ToSchema)]`) rather than a hand-written spec
+# that can drift from them.
+utoipa = { version = "5", features = ["uuid", "time"] }
