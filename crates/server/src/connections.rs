@@ -17,6 +17,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Row, Transaction};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -68,7 +69,7 @@ async fn active_binding(
     Ok(row.map(|r| r.try_get("id")).transpose()?)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct ConnectRequest {
     #[serde(default)]
     pub capabilities: Vec<String>,
@@ -78,11 +79,12 @@ pub struct ConnectRequest {
     pub signature: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ConnectResponse {
     pub binding_id: Uuid,
     pub integrator_id: Uuid,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub established_at: OffsetDateTime,
     pub granted_capabilities: Vec<String>,
 }
@@ -92,6 +94,14 @@ pub struct ConnectResponse {
 /// integrator the caller already has an active binding to does not create a
 /// second binding or emit a second `game.binding_established`, but it does
 /// still grant any newly-approved capabilities.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/connect",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    request_body = ConnectRequest,
+    responses((status = 200, body = ConnectResponse)),
+)]
 pub async fn connect(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -263,6 +273,13 @@ pub async fn connect(
 
 /// `DELETE /integrations/{slug}/grants/{capability}` — revokes one capability
 /// without ending the binding.
+#[utoipa::path(
+    delete,
+    path = "/integrations/{slug}/grants/{capability}",
+    tag = "integrators",
+    params(("slug" = String, Path), ("capability" = String, Path)),
+    responses((status = 200, description = "{ \"revoked\": true }")),
+)]
 pub async fn revoke_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -317,6 +334,13 @@ pub async fn revoke_grant(
 
 /// `DELETE /integrations/{slug}/connect` — ends the binding and revokes every
 /// active grant under it, in the same transaction (#83's invariant).
+#[utoipa::path(
+    delete,
+    path = "/integrations/{slug}/connect",
+    tag = "integrators",
+    params(("slug" = String, Path)),
+    responses((status = 200, description = "{ \"ended\": true }")),
+)]
 pub async fn disconnect(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -399,20 +423,22 @@ pub async fn disconnect(
     Ok(Json(serde_json::json!({ "ended": true })))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ConnectionGrant {
     pub capability: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub granted_at: OffsetDateTime,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct Connection {
     pub binding_id: Uuid,
     pub integrator_id: Uuid,
     pub slug: String,
     pub name: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub established_at: OffsetDateTime,
     pub grants: Vec<ConnectionGrant>,
 }
@@ -421,6 +447,12 @@ pub struct Connection {
 /// currently-active grants. Ended bindings are not included; a future
 /// history view can add them separately without changing this endpoint's
 /// meaning.
+#[utoipa::path(
+    get,
+    path = "/me/connections",
+    tag = "integrators",
+    responses((status = 200, body = Vec<Connection>)),
+)]
 pub async fn list_my_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -478,7 +510,7 @@ pub async fn list_my_connections(
 /// the one `AvalonClient` actually sends.
 const INTEGRATOR_KEY_ID_HEADER: &str = "x-avalon-integrator-key-id";
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MyGrantsResponse {
     pub integrator_id: Uuid,
     pub capabilities: Vec<String>,
@@ -499,6 +531,13 @@ pub struct MyGrantsResponse {
 /// the SDK already knows its own `integrator_credential_key_id`
 /// (`AvalonConfig`) and just needs a way to tell the server which integrator it
 /// is asking on behalf of.
+#[utoipa::path(
+    get,
+    path = "/me/grants",
+    tag = "integrators",
+    params(("x-avalon-integrator-key-id" = String, Header)),
+    responses((status = 200, body = MyGrantsResponse)),
+)]
 pub async fn my_grants(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -38,12 +38,13 @@ use avalon_indexer::registry::{compute_for_integrator, Metric};
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::error::AppError;
 use crate::integrators::fetch_integrator_id_by_slug;
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MetricResponse {
     pub value: i64,
     pub definition: &'static str,
@@ -67,7 +68,7 @@ impl From<Metric> for MetricResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorRegistryResponse {
     pub players: MetricResponse,
     pub total_players_ever: MetricResponse,
@@ -76,6 +77,16 @@ pub struct IntegratorRegistryResponse {
     pub unique_achievement_holders: MetricResponse,
 }
 
+/// Registered at `/integrations/{slug}/registry` (this macro's own path)
+/// and, per issue #95, identically at `/registry/{slug}` — same handler,
+/// two routes; see this module's own doc comment.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/registry",
+    tag = "registry",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = IntegratorRegistryResponse)),
+)]
 pub async fn get_integrator_registry(
     State(state): State<AppState>,
     Path(slug): Path<String>,

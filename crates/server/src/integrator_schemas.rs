@@ -16,6 +16,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -69,13 +70,14 @@ struct SchemaVersionRow {
     field_visibility: serde_json::Value,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorSchemaVersionResponse {
     pub id: String,
     pub integrator_id: Uuid,
     pub version: u32,
     pub proto_source: String,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub published_at: OffsetDateTime,
     pub superseded_by: Option<String>,
     pub default_visibility: String,
@@ -97,7 +99,7 @@ fn version_response(integrator_id: Uuid, row: SchemaVersionRow) -> IntegratorSch
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct PublishIntegratorSchemaVersionRequest {
     /// Raw `.proto` source text — parsed for real as of #384 (see
     /// `crate::proto_schema`), no longer stored opaque. Must declare
@@ -124,6 +126,14 @@ fn default_visibility_public() -> String {
 
 /// `POST /integrations/{slug}/schemas` — publish the next version. Always an
 /// insert, never an update to an existing row (see module doc comment).
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/schemas",
+    tag = "integrator-space",
+    params(("slug" = String, Path)),
+    request_body = PublishIntegratorSchemaVersionRequest,
+    responses((status = 200, body = IntegratorSchemaVersionResponse)),
+)]
 pub async fn publish_schema_version(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -273,6 +283,13 @@ pub async fn publish_schema_version(
 /// `GET /integrations/{slug}/schemas` — every published version for this integrator,
 /// oldest first. Public, unauthenticated (see module doc comment). Empty
 /// for an integrator that has never published.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/schemas",
+    tag = "integrator-space",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<IntegratorSchemaVersionResponse>)),
+)]
 pub async fn list_schema_versions(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -310,6 +327,13 @@ pub async fn list_schema_versions(
 /// Public, unauthenticated. This is the endpoint a round-trip fetch of a
 /// just-published version calls to prove the stored `proto_source` matches
 /// what was submitted exactly.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/schemas/{version}",
+    tag = "integrator-space",
+    params(("slug" = String, Path), ("version" = u32, Path)),
+    responses((status = 200, body = IntegratorSchemaVersionResponse)),
+)]
 pub async fn get_schema_version(
     State(state): State<AppState>,
     Path((slug, version)): Path<(String, u32)>,

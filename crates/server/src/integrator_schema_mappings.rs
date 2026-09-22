@@ -22,6 +22,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -62,7 +63,7 @@ struct MappingRow {
     published_at: OffsetDateTime,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IntegratorSchemaMappingResponse {
     pub id: String,
     pub integrator_id: Uuid,
@@ -71,6 +72,7 @@ pub struct IntegratorSchemaMappingResponse {
     pub description: String,
     pub field_correspondence: BTreeMap<String, String>,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = "date-time")]
     pub published_at: OffsetDateTime,
 }
 
@@ -88,7 +90,7 @@ fn mapping_response(integrator_id: Uuid, row: MappingRow) -> IntegratorSchemaMap
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct PublishIntegratorSchemaMappingRequest {
     /// The schema version this mapping maps *from* — must be a real,
     /// already-published version owned by the same integrator publishing
@@ -129,6 +131,14 @@ async fn require_owned_schema(
 /// this integrator's own schema versions. Always an insert; mappings have
 /// no lineage/superseding concept (see module doc comment), so unlike
 /// schema publication this never touches an existing row.
+#[utoipa::path(
+    post,
+    path = "/integrations/{slug}/mappings",
+    tag = "integrator-space",
+    params(("slug" = String, Path)),
+    request_body = PublishIntegratorSchemaMappingRequest,
+    responses((status = 200, body = IntegratorSchemaMappingResponse)),
+)]
 pub async fn publish_mapping(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -233,6 +243,13 @@ pub async fn publish_mapping(
 /// integrator, oldest first. Public, unauthenticated, same posture as
 /// schema-version listing. Empty for an integrator that has never
 /// published one.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/mappings",
+    tag = "integrator-space",
+    params(("slug" = String, Path)),
+    responses((status = 200, body = Vec<IntegratorSchemaMappingResponse>)),
+)]
 pub async fn list_mappings(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -266,6 +283,13 @@ pub async fn list_mappings(
 
 /// `GET /integrations/{slug}/mappings/{seq}` — one published mapping,
 /// verbatim. Public, unauthenticated.
+#[utoipa::path(
+    get,
+    path = "/integrations/{slug}/mappings/{seq}",
+    tag = "integrator-space",
+    params(("slug" = String, Path), ("seq" = u32, Path)),
+    responses((status = 200, body = IntegratorSchemaMappingResponse)),
+)]
 pub async fn get_mapping(
     State(state): State<AppState>,
     Path((slug, seq)): Path<(String, u32)>,
