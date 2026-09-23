@@ -51,6 +51,10 @@ requests go to a core authority node (`--server`, or `AVALON_SERVER_URL`).
    This is `POST /integrations/<slug>/keys` with `role: operational` and
    `purpose: shard_settlement`, signed by the root key. Use `--key <path>` if the
    root key is stored elsewhere.
+   The command authenticates as the integrator, so run it on a host that has both
+   `_running/keys/integrator-<slug>.signing-key` and `integrator-<slug>.json` (the
+   saved credentials holding the key id); pass `--key-id <uuid>` instead of the
+   JSON file if you only have the root key.
 4. On the node, set `AVALON_OWN_SHARD_ID=game:<slug>` (or the integrator's
    `app`/`service` category, optionally with `/<instance>`) and restart.
 
