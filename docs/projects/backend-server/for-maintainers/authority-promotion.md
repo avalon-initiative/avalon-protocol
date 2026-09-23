@@ -143,6 +143,10 @@ The new authority signs Signed Tree Heads with `AVALON_SETTLEMENT_SIGNING_KEY`.
    `core`, the key pinned in `docs/trusted-networks.json`; for a named shard,
    a registered `shard_settlement` key (see
    [`../for-hosters/choosing-your-shard.md`](../for-hosters/choosing-your-shard.md)).
+   If the lost authority's key is not being reused, generate a new key on the
+   promoted host and register its public half with `avalon add-shard-key`
+   before starting the node; the integrator's other shard keys stay valid, so
+   also revoke the lost key if it may be compromised.
 3. Unset `AVALON_SETTLEMENT_REMOTE_URL(S)` for that shard, so this node
    commits locally rather than forwarding to the dead authority, and remove
    the dead authority from `AVALON_MIRROR_PEERS`.
@@ -154,12 +158,17 @@ The new authority signs Signed Tree Heads with `AVALON_SETTLEMENT_SIGNING_KEY`.
    avalon rebuild-index
    ```
 
-   Sessions and login credentials are server-local and are not in the log,
-   so people log in again; everything the protocol promises durably is
-   rebuilt from history
+   The rebuild recreates each identity's registry row from its
+   `identity.created` event first, so it works on a database that never held
+   those identities. Sessions and login credentials are server-local and are
+   not in the log, so people log in again; everything the protocol promises
+   durably is rebuilt from history
    ([`../architecture/disaster-recovery.md`](../architecture/disaster-recovery.md)).
 6. Run `avalon inspect-ledger` and confirm `chain intact` and an entry count
-   equal to the converged `tree_size` from step 2.
+   equal to the converged `tree_size` from step 2. It reports the carried
+   tree heads as failing signature verification when the configured verify key
+   is not the lost authority's key; that is expected for heads the old key
+   signed, and the Merkle recompute line is the check that matters for them.
 7. Check `GET /ledger/sth/latest`: `network_id` and `tree_size` must match,
    and the root at that size must equal the converged root you recorded.
 
