@@ -549,6 +549,12 @@ pub struct ShardReplicationStatus {
 
 /// `GET /nodes/status` — read-only, same public posture as `list_peers`.
 pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
+    Json(build_status(&state))
+}
+
+/// Shared by `status` and `discover` so both build the exact same
+/// `NodeStatusResponse` from the same `AppState`.
+fn build_status(state: &AppState) -> NodeStatusResponse {
     let own_version = semver::Version::parse(crate::version::PROTOCOL_VERSION).ok();
     let newest_known_peer_version = state
         .peers
@@ -598,7 +604,7 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
             || confirmed_mirror_count >= state.replication_gate.min_confirmations,
     };
 
-    Json(NodeStatusResponse {
+    NodeStatusResponse {
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         network_id: state.chain.network_id().to_string(),
         roles: node_roles(),
@@ -606,6 +612,28 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
         newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
         resources,
         own_shard_replication,
+    }
+}
+
+/// Response shape for `GET /nodes/discover` — a verified node's own status
+/// alongside its full peer table, so an SDK that has reached exactly one
+/// node can expand its candidate pool in a single round trip instead of a
+/// separate `GET /nodes/peers` call.
+#[derive(Debug, Serialize)]
+pub struct DiscoverResponse {
+    pub self_status: NodeStatusResponse,
+    pub peers: Vec<PeerInfo>,
+}
+
+/// `GET /nodes/discover` — read-only, same public posture as `list_peers`/
+/// `status`. Combines both into one response for a caller that only needs
+/// a single request to go from "one verified node" to "a full candidate
+/// pool." Not ranked by latency or health — just this node's current view
+/// of its own status and peer table.
+pub async fn discover(State(state): State<AppState>) -> Json<DiscoverResponse> {
+    Json(DiscoverResponse {
+        self_status: build_status(&state),
+        peers: state.peers.list_all(),
     })
 }
 

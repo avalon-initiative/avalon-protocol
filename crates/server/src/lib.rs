@@ -284,6 +284,7 @@ fn settlement_only_routes(state: AppState) -> Router {
         .route("/nodes/announce", post(nodes::announce))
         .route("/nodes/peers", get(nodes::list_peers))
         .route("/nodes/status", get(nodes::status))
+        .route("/nodes/discover", get(nodes::discover))
         // Issue #658: hoster-only runtime log-level control.
         .route(
             "/nodes/log-level",
@@ -769,6 +770,7 @@ fn full_routes(state: AppState) -> Router {
         .route("/nodes/announce", post(nodes::announce))
         .route("/nodes/peers", get(nodes::list_peers))
         .route("/nodes/status", get(nodes::status))
+        .route("/nodes/discover", get(nodes::discover))
         // Issue #658: hoster-only runtime log-level control — see
         // `crate::admin`'s own module doc comment for why this is gated on
         // a separate `AVALON_ADMIN_TOKEN`, not the public posture every

@@ -364,11 +364,18 @@ mirroring the public network and a private, disconnected instance both
 "self-host" the same code — they are not the same thing; see
 [`./self-hosting.md`](./self-hosting.md).
 
-Not yet ported to C#/TypeScript, and no standalone server-side discovery/
-health/capabilities endpoint exists — #91 originally called for one; this
-first slice reuses `GET /ledger/sth/latest` instead. See
-[`./sdk.md`](../../sdks/architecture/sdk.md)'s "Known limitations" for the
-full current-state breakdown.
+Not yet ported to C#/TypeScript. `GET /nodes/discover`
+(`crates/server/src/nodes.rs`, #802) is the standalone server-side
+discovery endpoint #91 originally called for: given one already-verified
+node, it returns that node's own `GET /nodes/status` output plus its full
+`GET /nodes/peers` table in a single response, so a client that has
+reached exactly one node can expand its candidate pool without a second
+round trip. Not yet wired into any SDK's `connect()` — the Rust SDK still
+only tries `docs/trusted-networks.json`'s static `server_url`/`seed_nodes`
+list, one candidate at a time — and still not ranked candidate selection:
+`/nodes/discover` hands back a node's raw peer set, not a set ordered by
+latency, health, or role. See [`./sdk.md`](../../sdks/architecture/sdk.md)'s
+"Known limitations" for the full current-state breakdown.
 
 **Node-to-node announce/bootstrap discovery is real**: `POST
 /nodes/announce`/`GET /nodes/peers` (`crates/server/src/nodes.rs`) — a
