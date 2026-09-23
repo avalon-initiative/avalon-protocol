@@ -40,6 +40,7 @@ Always available:
 | `avalon migrate-network --target-database-url <url> --target-network-id <id>` | Migrates ledger data toward a new network deployment. |
 | `avalon discover-mirror-peers` | Peer discovery for mirror-watching nodes. |
 | `avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]` | Checks whether it's safe to switch a mirror/client over to a new host. |
+| `avalon verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]` | Offline check that a mirror's copy of a shard equals the authority's history (recomputed root vs. an observed STH, hash chain, open equivocations); exits non-zero unless converged. |
 | `avalon list-equivocations [network_id]` | Lists recorded equivocation events (conflicting Signed Tree Heads) for a network. |
 | `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]` | The operator action that resolves a detected equivocation — see [`../backend-server/for-maintainers/equivocation-response.md`](../backend-server/for-maintainers/equivocation-response.md). |
 | `avalon logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]` | Reads `avalon-server`'s own log file, strips ANSI codes, redacts known-sensitive values, and normalizes to line-delimited JSON — safe to attach when filing a bug report. |

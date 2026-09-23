@@ -231,7 +231,7 @@ not just structural: with the primary process stopped entirely, the mirror's
 from its own independently-verified data. Two things this does not by itself
 solve: **write availability** during a primary outage (a mirror-only node
 never becomes a new writer/authority on its own — promotion is a manual,
-operator-driven runbook, not automatic failover, deliberately never automatic
+operator-driven runbook ([`authority-promotion.md`](../for-maintainers/authority-promotion.md)), not automatic failover, deliberately never automatic
 election, which would reopen the no-consensus decision) and the harder
 multi-writer/consensus question, which remains genuinely open.
 

@@ -81,6 +81,10 @@ async fn main() {
         Some("list-equivocations") => {
             list_equivocations(args.next()).await;
         }
+        Some("verify-mirror-convergence") => {
+            let raw_args: Vec<String> = args.collect();
+            verify_mirror_convergence(&raw_args).await;
+        }
         Some("logs") => {
             let sub = args.next();
             match sub.as_deref() {
@@ -143,7 +147,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -247,7 +251,7 @@ async fn list_equivocations(network_id_arg: Option<String>) {
             ),
             _ => println!(
                 "│ status:    ✗ UNRESOLVED — mirror-watcher refuses to backfill this network \
-                 past this point until this is resolved (see docs/maintainers/equivocation-response.md)"
+                 past this point until this is resolved (see docs/projects/backend-server/for-maintainers/equivocation-response.md)"
             ),
         }
         println!("└──────────────────────────────────────────────────────");
@@ -257,7 +261,7 @@ async fn list_equivocations(network_id_arg: Option<String>) {
 /// `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]`
 /// — issue #316, the write side of #300's decided equivocation response
 /// procedure. Records that an operator has completed the investigation
-/// playbook (`docs/maintainers/equivocation-response.md`) and determined
+/// playbook (`docs/projects/backend-server/for-maintainers/equivocation-response.md`) and determined
 /// which of the two disagreeing root hashes at `tree_size` was legitimate.
 ///
 /// `--shard-id` (defaults to `"core"`) — every shard under a
@@ -919,6 +923,111 @@ async fn check_switch_readiness(raw_args: &[String]) {
     );
 }
 
+/// `avalon verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]`
+/// — an offline check that this node's mirrored copy of a shard is the
+/// authority's complete, unbroken history, using only what this node
+/// already stored: recomputes the Merkle root over every mirrored entry
+/// and requires it to equal an observed, signature-verified STH at the
+/// furthest `tree_size` any peer attested to, with an intact hash chain and
+/// no open equivocation. Needs no connection to the authority, so it works
+/// while the authority is down. Exits 0 only when converged.
+async fn verify_mirror_convergence(raw_args: &[String]) {
+    const USAGE: &str =
+        "usage: avalon verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]";
+    let mut network_id: Option<String> = None;
+    let mut shard_id = avalon_chain::mirror::CORE_SHARD_ID.to_string();
+    let mut source: Option<String> = None;
+    let mut iter = raw_args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--shard-id" => shard_id = iter.next().cloned().unwrap_or_else(|| usage_exit(USAGE)),
+            "--source" => source = Some(iter.next().cloned().unwrap_or_else(|| usage_exit(USAGE))),
+            other if !other.starts_with("--") && network_id.is_none() => {
+                network_id = Some(other.to_string())
+            }
+            _ => usage_exit(USAGE),
+        }
+    }
+    let network_id = network_id.unwrap_or_else(|| usage_exit(USAGE));
+
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to Postgres");
+    let report =
+        avalon_chain::mirror::check_convergence(&pool, &network_id, &shard_id, source.as_deref())
+            .await
+            .expect("failed to check mirror convergence");
+
+    println!("network_id: {network_id}  shard_id: {shard_id}");
+    println!("mirrored entries:     {}", report.mirrored_count);
+    match &report.recomputed_root {
+        Some(root) => println!("recomputed root:      {}", short_hash(root)),
+        None => println!("recomputed root:      (nothing mirrored)"),
+    }
+    match &report.latest_observed {
+        Some(sth) => println!(
+            "furthest observed STH: tree_size {} root {} (source {}, key {})",
+            sth.tree_size,
+            short_hash(&sth.root_hash),
+            sth.source_url,
+            sth.signing_key_id
+        ),
+        None => println!("furthest observed STH: (none)"),
+    }
+    println!(
+        "hash chain:           {}",
+        match report.chain_breaks.first() {
+            None => "unbroken".to_string(),
+            Some(first) => format!(
+                "{} broken link(s), first at seq {first}",
+                report.chain_breaks.len()
+            ),
+        }
+    );
+    println!("open equivocations:   {}", report.unresolved_equivocations);
+
+    let verdict = report.verdict;
+    println!("{}", describe_convergence(&verdict));
+    if !matches!(
+        verdict,
+        avalon_chain::mirror::ConvergenceVerdict::Converged { .. }
+    ) {
+        std::process::exit(2);
+    }
+}
+
+fn usage_exit(usage: &str) -> ! {
+    eprintln!("{usage}");
+    std::process::exit(1);
+}
+
+fn describe_convergence(verdict: &avalon_chain::mirror::ConvergenceVerdict) -> String {
+    use avalon_chain::mirror::ConvergenceVerdict as V;
+    match verdict {
+        V::Converged { tree_size } => format!(
+            "VERDICT: CONVERGED — the mirrored history matches an observed STH at tree_size {tree_size}"
+        ),
+        V::NothingMirrored => "VERDICT: NOTHING_MIRRORED — this node holds no mirrored entries for this shard".to_string(),
+        V::Behind { mirrored, observed } => format!(
+            "VERDICT: BEHIND — {mirrored} entries mirrored but an STH attests to tree_size {observed}; the last {} entries are missing from this node",
+            observed - mirrored
+        ),
+        V::NoObservedSth => "VERDICT: NO_OBSERVED_STH — no signed tree head was ever observed for this shard, so there is nothing to verify the mirrored data against".to_string(),
+        V::RootMismatch { tree_size } => format!(
+            "VERDICT: ROOT_MISMATCH — no observed STH at tree_size {tree_size} has the root recomputed from the mirrored entries; do not promote (see docs/projects/backend-server/for-maintainers/equivocation-response.md)"
+        ),
+        V::ChainBroken { breaks } => format!(
+            "VERDICT: CHAIN_BROKEN — {breaks} mirrored entr(ies) do not link to their predecessor; do not promote"
+        ),
+        V::BlockedByEquivocation { findings } => format!(
+            "VERDICT: BLOCKED — {findings} unresolved equivocation finding(s); resolve them first (see docs/projects/backend-server/for-maintainers/equivocation-response.md)"
+        ),
+    }
+}
+
 /// The three possible outcomes of comparing `new-host`'s root hash at
 /// `old-host`'s `tree_size` against `old-host`'s own root hash — pure
 /// decision logic, split out from `check_switch_readiness`'s I/O for
@@ -946,7 +1055,7 @@ impl SwitchVerdict {
                 "VERDICT: READY — old-host and new-host agree on the shard's history up to tree_size {old_tree_size}"
             ),
             SwitchVerdict::Mismatch => format!(
-                "VERDICT: MISMATCH — old-host and new-host report DIFFERENT root hashes at the SAME tree_size {old_tree_size} — do not switch, investigate before proceeding (see docs/maintainers/equivocation-response.md)"
+                "VERDICT: MISMATCH — old-host and new-host report DIFFERENT root hashes at the SAME tree_size {old_tree_size} — do not switch, investigate before proceeding (see docs/projects/backend-server/for-maintainers/equivocation-response.md)"
             ),
         }
     }

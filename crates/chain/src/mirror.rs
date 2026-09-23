@@ -408,7 +408,7 @@ pub async fn unresolved_equivocations(
 /// Records an operator's investigation outcome for every unresolved
 /// finding at `network_id`/`shard_id`/`tree_size`: `legitimate_root_hash`
 /// is whichever of that finding's two disagreeing root hashes was
-/// determined genuine (per `docs/maintainers/equivocation-response.md`'s
+/// determined genuine (per `docs/projects/backend-server/for-maintainers/equivocation-response.md`'s
 /// investigation playbook). This alone does not touch `mirrored_entries` —
 /// pair with [`discard_mirrored_entries_from`] to actually roll back any
 /// content this node already mirrored from the losing branch before
@@ -819,6 +819,241 @@ pub async fn mirrored_leaf_index_for_seq(
     .transpose()
 }
 
+/// The observed STH with the highest `tree_size` for `network_id`/`shard_id`
+/// (optionally from one `source_url`), if any — the furthest point a peer
+/// has ever attested to, regardless of how much of it this node has
+/// mirrored.
+pub async fn latest_observed_sth(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    source_url: Option<&str>,
+) -> Result<Option<ObservedSth>, SettlementError> {
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT source_url, network_id, shard_id, tree_size, root_hash, signature, signing_key_id, \
+         created_at, observed_at FROM observed_sths WHERE network_id = ",
+    );
+    builder.push_bind(network_id);
+    builder.push(" AND shard_id = ").push_bind(shard_id);
+    if let Some(source_url) = source_url {
+        builder.push(" AND source_url = ").push_bind(source_url);
+    }
+    builder.push(" ORDER BY tree_size DESC LIMIT 1");
+    let row = builder
+        .build()
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    row.map(observed_sth_from_row).transpose()
+}
+
+/// Every mirrored `seq` (for `network_id`/`shard_id`, optionally one
+/// `source_url`) whose `prev_hash` is not the previous mirrored entry's
+/// `entry_hash` — empty when the mirrored hash chain is unbroken. The first
+/// mirrored entry has no predecessor in this table and is not checked.
+pub async fn mirrored_chain_breaks(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    source_url: Option<&str>,
+) -> Result<Vec<i64>, SettlementError> {
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "SELECT seq FROM (SELECT seq, prev_hash, LAG(entry_hash) OVER (ORDER BY seq) AS expected \
+         FROM mirrored_entries WHERE network_id = ",
+    );
+    builder.push_bind(network_id);
+    builder.push(" AND shard_id = ").push_bind(shard_id);
+    if let Some(source_url) = source_url {
+        builder.push(" AND source_url = ").push_bind(source_url);
+    }
+    builder.push(") t WHERE expected IS NOT NULL AND prev_hash <> expected ORDER BY seq");
+    let rows = builder
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    rows.into_iter()
+        .map(|row| {
+            row.try_get::<i64, _>("seq")
+                .map_err(|e| SettlementError::Storage(e.to_string()))
+        })
+        .collect()
+}
+
+/// Everything [`evaluate_convergence`] needs, gathered by the caller from
+/// this node's own mirror tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConvergenceInputs {
+    /// Number of mirrored entries, which is also the Merkle `tree_size`
+    /// they cover.
+    pub mirrored_count: i64,
+    /// `tree_size` of the furthest observed STH, if any was ever observed.
+    pub latest_observed_tree_size: Option<i64>,
+    /// Whether an observed STH exists at `mirrored_count` whose root equals
+    /// the root recomputed from the mirrored entries.
+    pub matching_sth_at_mirrored_count: bool,
+    /// Mirrored `seq`s whose `prev_hash` link is broken.
+    pub chain_breaks: Vec<i64>,
+    /// Count of unresolved equivocation findings for this shard.
+    pub unresolved_equivocations: usize,
+}
+
+/// Whether a mirror's copy of a shard is safe to treat as the authority's
+/// complete history. Only [`ConvergenceVerdict::Converged`] means yes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConvergenceVerdict {
+    /// The mirrored entries recompute to the exact root of an observed STH
+    /// at the furthest `tree_size` any peer attested to, with an unbroken
+    /// hash chain and no open equivocation.
+    Converged {
+        /// The `tree_size` both the mirror and the newest STH cover.
+        tree_size: i64,
+    },
+    /// Nothing has been mirrored for this shard yet.
+    NothingMirrored,
+    /// The mirror holds fewer entries than the furthest observed STH covers.
+    Behind {
+        /// Entries mirrored so far.
+        mirrored: i64,
+        /// `tree_size` of the furthest observed STH.
+        observed: i64,
+    },
+    /// No STH was ever observed at all, so there is nothing to compare the
+    /// mirrored data against.
+    NoObservedSth,
+    /// Observed STHs exist at the mirrored `tree_size`, but none has the
+    /// root recomputed from the mirrored entries.
+    RootMismatch {
+        /// The `tree_size` at which the roots disagree.
+        tree_size: i64,
+    },
+    /// The mirrored hash chain has broken links.
+    ChainBroken {
+        /// How many links are broken.
+        breaks: usize,
+    },
+    /// An unresolved equivocation finding exists for this shard.
+    BlockedByEquivocation {
+        /// How many unresolved findings.
+        findings: usize,
+    },
+}
+
+/// Pure decision logic behind the convergence check, in order of severity:
+/// open equivocation, broken chain, nothing mirrored, no observed STH,
+/// lagging behind, root mismatch, and only then converged.
+pub fn evaluate_convergence(inputs: &ConvergenceInputs) -> ConvergenceVerdict {
+    if inputs.unresolved_equivocations > 0 {
+        return ConvergenceVerdict::BlockedByEquivocation {
+            findings: inputs.unresolved_equivocations,
+        };
+    }
+    if !inputs.chain_breaks.is_empty() {
+        return ConvergenceVerdict::ChainBroken {
+            breaks: inputs.chain_breaks.len(),
+        };
+    }
+    if inputs.mirrored_count == 0 {
+        return ConvergenceVerdict::NothingMirrored;
+    }
+    let Some(observed) = inputs.latest_observed_tree_size else {
+        return ConvergenceVerdict::NoObservedSth;
+    };
+    if observed > inputs.mirrored_count {
+        return ConvergenceVerdict::Behind {
+            mirrored: inputs.mirrored_count,
+            observed,
+        };
+    }
+    if inputs.matching_sth_at_mirrored_count {
+        return ConvergenceVerdict::Converged {
+            tree_size: inputs.mirrored_count,
+        };
+    }
+    ConvergenceVerdict::RootMismatch {
+        tree_size: inputs.mirrored_count,
+    }
+}
+
+/// A convergence check's evidence and conclusion, as gathered from this
+/// node's own mirror tables by [`check_convergence`].
+#[derive(Debug, Clone)]
+pub struct ConvergenceReport {
+    /// Number of mirrored entries examined.
+    pub mirrored_count: i64,
+    /// Hex Merkle root recomputed over every mirrored entry, if any exist.
+    pub recomputed_root: Option<String>,
+    /// The furthest observed STH, if any.
+    pub latest_observed: Option<ObservedSth>,
+    /// Mirrored `seq`s with a broken `prev_hash` link.
+    pub chain_breaks: Vec<i64>,
+    /// Unresolved equivocation findings for this shard.
+    pub unresolved_equivocations: usize,
+    /// The conclusion drawn from the above.
+    pub verdict: ConvergenceVerdict,
+}
+
+/// Gathers everything [`evaluate_convergence`] needs from this node's own
+/// tables and returns it with the verdict. Needs no connection to the
+/// authority, so it works while the authority is down.
+pub async fn check_convergence(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    source_url: Option<&str>,
+) -> Result<ConvergenceReport, SettlementError> {
+    let progress = mirrored_progress(pool, network_id, shard_id, source_url).await?;
+    let hashes = mirrored_entry_hashes_up_to(
+        pool,
+        network_id,
+        shard_id,
+        progress.verified_count,
+        source_url,
+    )
+    .await?;
+    let recomputed_root = if hashes.is_empty() {
+        None
+    } else {
+        let root = crate::merkle::mth_of_hex_hashes(&hashes)
+            .map_err(|e| SettlementError::Storage(format!("invalid mirrored entry hash: {e}")))?;
+        Some(hex::encode(root))
+    };
+    let latest_observed = latest_observed_sth(pool, network_id, shard_id, source_url).await?;
+    let matching = match &recomputed_root {
+        Some(root) => {
+            observed_sth_matching_root(
+                pool,
+                network_id,
+                shard_id,
+                progress.verified_count,
+                root,
+                source_url,
+            )
+            .await?
+        }
+        None => None,
+    };
+    let chain_breaks = mirrored_chain_breaks(pool, network_id, shard_id, source_url).await?;
+    let unresolved_equivocations = unresolved_equivocations(pool, network_id, shard_id)
+        .await?
+        .len();
+    let verdict = evaluate_convergence(&ConvergenceInputs {
+        mirrored_count: progress.verified_count,
+        latest_observed_tree_size: latest_observed.as_ref().map(|sth| sth.tree_size),
+        matching_sth_at_mirrored_count: matching.is_some(),
+        chain_breaks: chain_breaks.clone(),
+        unresolved_equivocations,
+    });
+    Ok(ConvergenceReport {
+        mirrored_count: progress.verified_count,
+        recomputed_root,
+        latest_observed,
+        chain_breaks,
+        unresolved_equivocations,
+        verdict,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,5 +1177,92 @@ mod tests {
 
         let findings = detect_equivocation(&existing, &candidate);
         assert_eq!(findings.len(), 3);
+    }
+
+    fn converged_inputs() -> ConvergenceInputs {
+        ConvergenceInputs {
+            mirrored_count: 10,
+            latest_observed_tree_size: Some(10),
+            matching_sth_at_mirrored_count: true,
+            chain_breaks: Vec::new(),
+            unresolved_equivocations: 0,
+        }
+    }
+
+    #[test]
+    fn convergence_requires_matching_root_at_the_furthest_observed_size() {
+        assert_eq!(
+            evaluate_convergence(&converged_inputs()),
+            ConvergenceVerdict::Converged { tree_size: 10 }
+        );
+    }
+
+    #[test]
+    fn a_mirror_behind_the_furthest_observed_sth_is_not_converged() {
+        let inputs = ConvergenceInputs {
+            latest_observed_tree_size: Some(14),
+            matching_sth_at_mirrored_count: false,
+            ..converged_inputs()
+        };
+        assert_eq!(
+            evaluate_convergence(&inputs),
+            ConvergenceVerdict::Behind {
+                mirrored: 10,
+                observed: 14
+            }
+        );
+    }
+
+    #[test]
+    fn a_root_that_matches_no_observed_sth_is_a_mismatch() {
+        let inputs = ConvergenceInputs {
+            matching_sth_at_mirrored_count: false,
+            ..converged_inputs()
+        };
+        assert_eq!(
+            evaluate_convergence(&inputs),
+            ConvergenceVerdict::RootMismatch { tree_size: 10 }
+        );
+    }
+
+    #[test]
+    fn open_equivocation_and_broken_chains_outrank_an_otherwise_matching_root() {
+        let equivocating = ConvergenceInputs {
+            unresolved_equivocations: 1,
+            ..converged_inputs()
+        };
+        assert_eq!(
+            evaluate_convergence(&equivocating),
+            ConvergenceVerdict::BlockedByEquivocation { findings: 1 }
+        );
+        let broken = ConvergenceInputs {
+            chain_breaks: vec![4, 5],
+            ..converged_inputs()
+        };
+        assert_eq!(
+            evaluate_convergence(&broken),
+            ConvergenceVerdict::ChainBroken { breaks: 2 }
+        );
+    }
+
+    #[test]
+    fn an_empty_mirror_or_one_with_no_observed_sth_is_never_converged() {
+        let empty = ConvergenceInputs {
+            mirrored_count: 0,
+            ..converged_inputs()
+        };
+        assert_eq!(
+            evaluate_convergence(&empty),
+            ConvergenceVerdict::NothingMirrored
+        );
+        let unobserved = ConvergenceInputs {
+            latest_observed_tree_size: None,
+            matching_sth_at_mirrored_count: false,
+            ..converged_inputs()
+        };
+        assert_eq!(
+            evaluate_convergence(&unobserved),
+            ConvergenceVerdict::NoObservedSth
+        );
     }
 }

@@ -32,6 +32,8 @@ first-run failures. Beyond that:
 - If your node watches peers (`AVALON_MIRROR_PEERS` set) and its
   mirror-watcher reports equivocation, see
   [`equivocation-response.md`](../for-maintainers/equivocation-response.md).
+- If the node that authors a shard has failed and a mirror has to take over,
+  see [`authority-promotion.md`](../for-maintainers/authority-promotion.md).
 - To rotate the settlement signing key itself — routine hygiene or a
   suspected compromise — see
   [`key-rotation.md`](../for-maintainers/key-rotation.md).
