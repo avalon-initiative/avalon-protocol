@@ -376,6 +376,16 @@ async fn main() {
         }
     }
 
+    let mirror_peers_configured = std::env::var("AVALON_MIRROR_PEERS")
+        .map(|v| v.split(',').any(|s| !s.trim().is_empty()))
+        .unwrap_or(false);
+    if let Some(msg) = avalon_server::core_author_guard::missing_core_mirror_advisory(
+        &own_shard_id,
+        mirror_peers_configured,
+    ) {
+        tracing::warn!("{msg}");
+    }
+
     // Issue #629, implementing #622's decision: this node's own record of
     // which peers have confirmed mirroring which shard, plus its resolved
     // minimum-replication gate config — see `avalon_server::replication`'s

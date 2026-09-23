@@ -207,18 +207,38 @@ currently-unrevoked `shard_settlement` keys and verifies the shard's fetched
 STH against them — falling back to the interim `AVALON_SHARD_VERIFY_KEYS`
 static config only when nothing resolves from the database.
 
-The one simplification from the original design: rather than an inclusion
-proof of the `issuer.key_added` event against the core shard's STH (which
-would let a *remote* node verify a shard without its own direct database
-access to `issuer_keys`), this node's own local `issuer_keys` table —
-durable, written in the same transaction as the `issuer.key_added` event
-itself — is queried directly. Both give the same answer for a node that
-already has the event applied locally; the inclusion-proof form only matters
-for a node verifying a shard it hasn't locally indexed `issuer.key_added`
-for, which isn't yet a real scenario at this scale. Live-verified: a
-`shard_settlement` key registers and reads back with its purpose over the
-real API, and purpose-gating is unit-tested directly
-(`crates/protocol/src/integrators.rs`, `crates/server/tests/shard_trust_anchors.rs`).
+**Two sources, unioned.** `resolve_shard_verify_keys_from_db` returns the
+union (without duplicates) of two derivations:
+
+- The node's local `issuer_keys` table, written in the same transaction as the
+  `issuer.key_added` event. This is the fast path on the registrar, the node
+  where the integrator registered.
+- Keys derived from the node's **mirrored core ledger**
+  (`avalon_server::mirrored_shard_keys`). The mirror-watcher stores a core
+  entry only after verifying its inclusion proof against a signature-checked
+  STH from the pinned network key, so keys derived this way are rooted at the
+  pinned core key rather than at a local table. The derivation reads the
+  integrator's `game.registered` event (which fixes its id and category) and its
+  `issuer.key_added` / `issuer.key_revoked` events in `seq` order. A key is
+  valid when it was added with purpose `shard_settlement` and no revocation
+  names its key id. `valid_until` is not applied, matching the local
+  resolver, and a key of any other purpose is never returned.
+
+Because of the mirrored derivation, a node that is not the registrar, and a
+node whose core authority is unreachable, still verifies sibling shards as long
+as it holds the relevant core history.
+
+Limits: the node must mirror the core shard (`AVALON_MIRROR_PEERS` pointing at
+the core authority); entries whose payload has been pruned cannot contribute,
+and a pruned `game.registered` yields no keys because the integrator's
+category and id are unknown. Cross-node login's "verified requester" check
+uses the same two sources.
+
+Live-verified: a `shard_settlement` key registers and reads back with its
+purpose over the real API, purpose-gating is unit-tested directly
+(`crates/protocol/src/integrators.rs`, `crates/server/tests/shard_trust_anchors.rs`),
+and a live test resolves a key from seeded mirrored entries with no local row
+and stops resolving it after a mirrored revocation.
 
 ## Genesis reset / migration
 

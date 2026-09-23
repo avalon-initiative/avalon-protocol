@@ -86,6 +86,23 @@ pub fn evaluate(inputs: &CoreAuthorInputs<'_>, anchors: &[TrustAnchorEntry]) -> 
     }
 }
 
+/// Advisory for a node authoring a named shard without any configured mirror
+/// peers; `None` when no advisory applies.
+pub fn missing_core_mirror_advisory(
+    own_shard_id: &str,
+    mirror_peers_configured: bool,
+) -> Option<String> {
+    if own_shard_id == CORE_SHARD_ID || mirror_peers_configured {
+        return None;
+    }
+    Some(format!(
+        "this node authors the named shard `{own_shard_id}` but AVALON_MIRROR_PEERS is empty, so \
+         it mirrors no core history: clients pinned to the network cannot verify a node that \
+         serves no mirrored core history, and this node cannot verify sibling shards while the \
+         core authority is unreachable. Set AVALON_MIRROR_PEERS to the core authority"
+    ))
+}
+
 static OUTCOME: OnceLock<Option<bool>> = OnceLock::new();
 
 /// Records the startup outcome for `GET /nodes/status`.
@@ -196,6 +213,16 @@ mod tests {
         let d = evaluate(&inputs("core", &key, true), &[a]);
         assert_eq!(d, CoreAuthorDecision::NotApplicable);
         assert_eq!(d.pinned(), None);
+    }
+
+    #[test]
+    fn advisory_only_for_named_shard_without_mirror_peers() {
+        let msg = missing_core_mirror_advisory("game:wow/2", false).expect("advisory");
+        assert!(msg.contains("game:wow/2"));
+        assert!(msg.contains("AVALON_MIRROR_PEERS"));
+        assert!(missing_core_mirror_advisory("game:wow/2", true).is_none());
+        assert!(missing_core_mirror_advisory("core", false).is_none());
+        assert!(missing_core_mirror_advisory("core", true).is_none());
     }
 
     #[test]

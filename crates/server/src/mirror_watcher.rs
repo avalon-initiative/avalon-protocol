@@ -195,6 +195,7 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 async fn discover_and_verify_shard_peers(
     client: &reqwest::Client,
     pool: &PgPool,
+    network_id: &str,
     shard_registry: &crate::nodes::ShardRegistry,
     own_base_url: Option<&str>,
     already_configured: &BTreeSet<String>,
@@ -211,7 +212,9 @@ async fn discover_and_verify_shard_peers(
             continue;
         }
 
-        let db_keys = crate::cross_shard::resolve_shard_verify_keys_from_db(pool, &shard_id).await;
+        let db_keys =
+            crate::cross_shard::resolve_shard_verify_keys_from_db(pool, network_id, &shard_id)
+                .await;
         if db_keys.is_empty() {
             tracing::info!(
                 shard_id,
@@ -402,6 +405,7 @@ pub async fn run_worker(
             let discovered = discover_and_verify_shard_peers(
                 &client,
                 &pool,
+                chain.network_id(),
                 &shard_registry,
                 own_base_url.as_deref(),
                 &config.known_shard_ids,
