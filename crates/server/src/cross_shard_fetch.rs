@@ -172,7 +172,7 @@ async fn fetch_verified_sth(
         return Err(CrossShardFetchError::NetworkMismatch);
     }
 
-    let db_keys = resolve_shard_verify_keys_from_db(pool, shard_id).await;
+    let db_keys = resolve_shard_verify_keys_from_db(pool, this_network_id, shard_id).await;
     let static_key = static_verify_keys.get(shard_id);
     let verified = db_keys
         .iter()

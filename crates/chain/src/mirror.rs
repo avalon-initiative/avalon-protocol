@@ -724,6 +724,34 @@ pub async fn mirrored_entries_since(
     rows.into_iter().map(mirrored_entry_from_row).collect()
 }
 
+/// Mirrored entries of `network_id`/`shard_id` whose `kind` is one of `kinds`
+/// and whose payload `slug` field equals `slug`, oldest first. Entries with a
+/// NULL (pruned) payload never match the slug filter.
+pub async fn mirrored_entries_by_kinds_and_slug(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    kinds: &[&str],
+    slug: &str,
+) -> Result<Vec<MirroredEntry>, SettlementError> {
+    let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_string()).collect();
+    let rows = sqlx::query(
+        "SELECT source_url, network_id, shard_id, seq, event_id, kind, issuer, subject, payload, \
+         event_timestamp, version, prev_hash, entry_hash, batch_id, verified_tree_size \
+         FROM mirrored_entries \
+         WHERE network_id = $1 AND shard_id = $2 AND kind = ANY($3) AND payload->>'slug' = $4 \
+         ORDER BY seq ASC",
+    )
+    .bind(network_id)
+    .bind(shard_id)
+    .bind(&kinds)
+    .bind(slug)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    rows.into_iter().map(mirrored_entry_from_row).collect()
+}
+
 /// Issue #520 — mirror-side equivalent of
 /// `PostgresSettlementProvider::entry_hashes_up_to`: the first `tree_size`
 /// mirrored entries' `entry_hash` *for this shard*, oldest first.

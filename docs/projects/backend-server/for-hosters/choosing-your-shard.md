@@ -101,6 +101,26 @@ The guard checks the key, not registration. A node with a named shard whose key
 was never registered starts, but peers and clients cannot verify its tree heads;
 `GET /ledger/cross-shard-root` lists such a shard as missing.
 
+## Mirror the core authority
+
+Every node, including one that authors a named shard, should set
+`AVALON_MIRROR_PEERS` to the core authority. Two reasons:
+
+- Clients pinned to the network see only mirrored core history. A node that
+  serves none cannot be verified by those clients.
+- The registration events for every shard's keys live in the core ledger. A
+  node holding a mirror derives sibling shards' `shard_settlement` keys from it,
+  so it can still verify other shards, and compose
+  `GET /ledger/cross-shard-root`, while the core authority is unreachable.
+  Without a mirror, only the registrar's local key table has them.
+
+A node with a named `AVALON_OWN_SHARD_ID` and an empty `AVALON_MIRROR_PEERS`
+logs one warning at startup:
+
+```
+this node authors the named shard `<shard>` but AVALON_MIRROR_PEERS is empty, so it mirrors no core history: clients pinned to the network cannot verify a node that serves no mirrored core history, and this node cannot verify sibling shards while the core authority is unreachable. Set AVALON_MIRROR_PEERS to the core authority
+```
+
 ## High availability for one operator
 
 One shard is one ledger with one signing history. Two patterns keep it available;

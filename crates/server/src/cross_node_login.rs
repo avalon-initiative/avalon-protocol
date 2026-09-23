@@ -226,6 +226,17 @@ async fn resolve_requester_verification(state: &AppState) -> (bool, Option<Strin
                     return (true, Some(name));
                 }
             }
+            let mirrored = crate::mirrored_shard_keys::resolve_mirrored_shard_authority(
+                &state.pool,
+                state.chain.network_id(),
+                &state.own_shard_id,
+            )
+            .await;
+            if !mirrored.keys.is_empty() {
+                if let Some(name) = mirrored.display_name {
+                    return (true, Some(name));
+                }
+            }
         }
         return (false, None);
     }

@@ -198,9 +198,13 @@ impl From<FetchedSth> for SignedTreeHead {
 /// integrator) and any other unparseable id return no keys, same as an
 /// integrator that has never registered a `shard_settlement` key. Only
 /// currently-unrevoked keys are returned — rotation/compromise reuses
-/// `issuer.key_revoked` unchanged, per this mechanism's own design.
+/// `issuer.key_revoked` unchanged, per this mechanism's own design. The
+/// result is the union of the local table and the keys derivable from this
+/// node's mirrored core-shard ledger ([`crate::mirrored_shard_keys`]), so a
+/// node that is not the registrar still resolves them.
 pub(crate) async fn resolve_shard_verify_keys_from_db(
     pool: &PgPool,
+    network_id: &str,
     shard_id: &str,
 ) -> Vec<VerifyingKey> {
     let Some((namespace, owner)) = avalon_protocol::shard::shard_authority(shard_id) else {
@@ -219,13 +223,24 @@ pub(crate) async fn resolve_shard_verify_keys_from_db(
     .await
     .unwrap_or_default();
 
-    rows.into_iter()
+    let mut keys: Vec<VerifyingKey> = rows
+        .into_iter()
         .filter_map(|row| {
             let bytes: Vec<u8> = row.try_get::<Vec<u8>, _>("public_key").ok()?;
             let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
             VerifyingKey::from_bytes(&array).ok()
         })
-        .collect()
+        .collect();
+
+    let mirrored =
+        crate::mirrored_shard_keys::resolve_mirrored_shard_authority(pool, network_id, shard_id)
+            .await;
+    for key in mirrored.keys {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 /// Fetches, verifies, and aggregates every known shard's current STH —
@@ -247,6 +262,7 @@ pub(crate) async fn resolve_shard_verify_keys_from_db(
 /// into `missing_shard_ids` like any other unverifiable shard.
 pub async fn fetch_and_compute(
     pool: &PgPool,
+    network_id: &str,
     urls: &HashMap<String, String>,
     static_verify_keys: &HashMap<String, VerifyingKey>,
 ) -> (CrossShardRoot, Vec<ShardTreeHead>) {
@@ -254,7 +270,7 @@ pub async fn fetch_and_compute(
     let mut shards = Vec::new();
 
     for (shard_id, url) in urls {
-        let db_keys = resolve_shard_verify_keys_from_db(pool, shard_id).await;
+        let db_keys = resolve_shard_verify_keys_from_db(pool, network_id, shard_id).await;
         let static_key = static_verify_keys.get(shard_id);
         if db_keys.is_empty() && static_key.is_none() {
             tracing::warn!(
@@ -349,8 +365,13 @@ pub async fn compute_for_this_node(
         (Vec::new(), BTreeSet::new())
     } else {
         let static_verify_keys = config.map(|c| c.verify_keys.clone()).unwrap_or_default();
-        let (_urls_only_root, ext_shards) =
-            fetch_and_compute(&state.pool, &urls, &static_verify_keys).await;
+        let (_urls_only_root, ext_shards) = fetch_and_compute(
+            &state.pool,
+            state.chain.network_id(),
+            &urls,
+            &static_verify_keys,
+        )
+        .await;
         (ext_shards, urls.keys().cloned().collect())
     };
 
@@ -525,7 +546,7 @@ mod tests {
             format!("game:{slug}/2"),
             format!("game:{slug}/eu-west-1"),
         ] {
-            let keys = resolve_shard_verify_keys_from_db(&pool, &id).await;
+            let keys = resolve_shard_verify_keys_from_db(&pool, "unused-net", &id).await;
             assert_eq!(keys, vec![expected], "{id}");
         }
         for id in [
@@ -536,7 +557,7 @@ mod tests {
             "core".to_string(),
         ] {
             assert!(
-                resolve_shard_verify_keys_from_db(&pool, &id)
+                resolve_shard_verify_keys_from_db(&pool, "unused-net", &id)
                     .await
                     .is_empty(),
                 "{id}"
@@ -550,6 +571,114 @@ mod tests {
             .ok();
         sqlx::query("DELETE FROM integrators WHERE id = $1")
             .bind(integrator_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    fn mirrored_core_entry(
+        network_id: &str,
+        seq: i64,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> avalon_chain::mirror::MirroredEntry {
+        avalon_chain::mirror::MirroredEntry {
+            source_url: "http://peer".to_string(),
+            network_id: network_id.to_string(),
+            shard_id: "core".to_string(),
+            seq,
+            event_id: uuid::Uuid::new_v4(),
+            kind: kind.to_string(),
+            issuer: "game:x:self:k".to_string(),
+            subject: "game:x:self:k".to_string(),
+            payload: Some(payload),
+            event_timestamp: OffsetDateTime::now_utc(),
+            version: 1,
+            prev_hash: "aa".repeat(32),
+            entry_hash: format!("{seq:064x}"),
+            batch_id: uuid::Uuid::new_v4(),
+            verified_tree_size: seq,
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn shard_keys_resolve_from_mirrored_core_events_without_a_local_row() {
+        use base64::Engine;
+
+        avalon_devenv::load();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&database_url)
+            .await
+            .expect("failed to connect to Postgres");
+
+        let uid = uuid::Uuid::new_v4().simple().to_string();
+        let network_id = format!("mirrored-keys-{uid}");
+        let slug = format!("mk-{uid}");
+        let game_id = uuid::Uuid::new_v4();
+        let key_id = uuid::Uuid::new_v4();
+        let shard_key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(shard_key.verifying_key().to_bytes());
+
+        let registered = mirrored_core_entry(
+            &network_id,
+            1,
+            "game.registered",
+            serde_json::json!({
+                "game_id": game_id, "slug": slug, "name": "Mirrored", "developer": "d",
+                "category": "game", "requested_capabilities": [],
+                "initial_key": {"key_id": uuid::Uuid::new_v4(), "algorithm": "ed25519",
+                                "public_key": b64},
+            }),
+        );
+        let added = mirrored_core_entry(
+            &network_id,
+            2,
+            "issuer.key_added",
+            serde_json::json!({
+                "game_id": game_id, "slug": slug, "key_id": key_id, "algorithm": "ed25519",
+                "public_key": b64, "role": "operational", "purpose": "shard_settlement",
+            }),
+        );
+        for entry in [&registered, &added] {
+            avalon_chain::mirror::insert_mirrored_entry(&pool, entry)
+                .await
+                .expect("insert mirrored entry");
+        }
+
+        let expected = shard_key.verifying_key();
+        for id in [format!("game:{slug}"), format!("game:{slug}/2")] {
+            let keys = resolve_shard_verify_keys_from_db(&pool, &network_id, &id).await;
+            assert_eq!(keys, vec![expected], "{id}");
+        }
+        assert!(
+            resolve_shard_verify_keys_from_db(&pool, "other-network", &format!("game:{slug}"))
+                .await
+                .is_empty()
+        );
+
+        let revoked = mirrored_core_entry(
+            &network_id,
+            3,
+            "issuer.key_revoked",
+            serde_json::json!({
+                "game_id": game_id, "slug": slug, "key_id": key_id,
+                "revoked_at": "2026-01-01T00:00:00Z",
+            }),
+        );
+        avalon_chain::mirror::insert_mirrored_entry(&pool, &revoked)
+            .await
+            .expect("insert mirrored revocation");
+        assert!(
+            resolve_shard_verify_keys_from_db(&pool, &network_id, &format!("game:{slug}"))
+                .await
+                .is_empty()
+        );
+
+        sqlx::query("DELETE FROM mirrored_entries WHERE network_id = $1")
+            .bind(&network_id)
             .execute(&pool)
             .await
             .ok();
