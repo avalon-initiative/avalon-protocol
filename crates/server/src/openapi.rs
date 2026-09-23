@@ -28,7 +28,7 @@ use utoipa::OpenApi;
     info(
         title = "Avalon Protocol API",
         description = "SDK-facing API surface: identity/auth, profile/presence, social graph, chat, devices/passkeys/recovery, guilds, and the integrator/achievements/registry surface. Node/ledger/mirror/internal infrastructure routes are out of scope — no SDK wraps them.",
-        version = "0.2.0"
+        version = "0.3.0"
     ),
     paths(
         crate::achievements::bulk_issue_achievements,
@@ -182,6 +182,8 @@ use utoipa::OpenApi;
         crate::recovery::resign_guardian,
         crate::recovery::set_guardians,
         crate::recovery::start_request,
+        crate::rollback::list_rollback_candidates,
+        crate::rollback::reverse_event,
         crate::registry::get_integrator_registry,
     ),
     components(schemas(
@@ -340,6 +342,10 @@ use utoipa::OpenApi;
         crate::recovery::RecoveryStartRequest,
         crate::recovery::RecoveryStartResponse,
         crate::recovery::SetGuardiansRequest,
+        crate::rollback::ReverseEventRequest,
+        crate::rollback::ReverseEventResponse,
+        crate::rollback::RollbackCandidate,
+        crate::rollback::RollbackCandidatesResponse,
         crate::registry::IntegratorRegistryResponse,
         crate::registry::MetricResponse,
         avalon_protocol::identity::Genre,

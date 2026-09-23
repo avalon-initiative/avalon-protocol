@@ -78,6 +78,18 @@ pub enum AppError {
     SigningKeyNotFound,
     #[error("passkey not found")]
     PasskeyNotFound,
+    #[error("no completed recovery exists for this identity")]
+    RollbackNoCompletedRecovery,
+    #[error(
+        "rollback window is invalid: `since` must be a timestamp before the recovery completed"
+    )]
+    InvalidRollbackWindow,
+    #[error("event is not eligible for rollback")]
+    RollbackEventNotEligible,
+    #[error("{0}")]
+    RollbackNotReversible(String),
+    #[error("event has already been reversed")]
+    RollbackAlreadyReversed,
     #[error("device grant not found or already resolved")]
     DeviceGrantNotFound,
     #[error("device grant has expired")]
@@ -487,6 +499,11 @@ impl AppError {
             AppError::BlockNotFound => "BLOCK_NOT_FOUND",
             AppError::SigningKeyNotFound => "SIGNING_KEY_NOT_FOUND",
             AppError::PasskeyNotFound => "PASSKEY_NOT_FOUND",
+            AppError::RollbackNoCompletedRecovery => "ROLLBACK_NO_COMPLETED_RECOVERY",
+            AppError::InvalidRollbackWindow => "INVALID_ROLLBACK_WINDOW",
+            AppError::RollbackEventNotEligible => "ROLLBACK_EVENT_NOT_ELIGIBLE",
+            AppError::RollbackNotReversible(_) => "ROLLBACK_NOT_REVERSIBLE",
+            AppError::RollbackAlreadyReversed => "ROLLBACK_ALREADY_REVERSED",
             AppError::DeviceGrantNotFound => "DEVICE_GRANT_NOT_FOUND",
             AppError::DeviceGrantExpired => "DEVICE_GRANT_EXPIRED",
             AppError::ApproverKeyInvalid => "APPROVER_KEY_INVALID",
@@ -678,7 +695,12 @@ impl IntoResponse for AppError {
             AppError::BlockNotFound => StatusCode::NOT_FOUND,
             AppError::SigningKeyNotFound
             | AppError::DeviceGrantNotFound
-            | AppError::PasskeyNotFound => StatusCode::NOT_FOUND,
+            | AppError::PasskeyNotFound
+            | AppError::RollbackEventNotEligible => StatusCode::NOT_FOUND,
+            AppError::InvalidRollbackWindow => StatusCode::BAD_REQUEST,
+            AppError::RollbackNoCompletedRecovery
+            | AppError::RollbackNotReversible(_)
+            | AppError::RollbackAlreadyReversed => StatusCode::CONFLICT,
             AppError::DeviceGrantExpired => StatusCode::GONE,
             AppError::ApproverKeyInvalid | AppError::InvalidGrantSignature => {
                 StatusCode::UNAUTHORIZED

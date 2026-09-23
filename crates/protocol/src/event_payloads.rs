@@ -350,6 +350,18 @@ pub struct FriendRemovedPayload {
     pub actor: Uuid,
 }
 
+/// Compensating event: supersedes the effect of `reverses_event_id` after a
+/// recovery, without altering or removing the original ledger entry.
+/// `effect` is `"friendship_removed"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FriendRelationshipReversedPayload {
+    pub reverses_event_id: Uuid,
+    pub recovery_request_id: Uuid,
+    pub identity_id: Uuid,
+    pub counterparty_id: Uuid,
+    pub effect: String,
+}
+
 // --- guild.* ------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -424,6 +436,21 @@ pub struct GuildMemberRemovedPayload {
     pub identity_id: Uuid,
     pub reason: String,
     pub actor: Uuid,
+}
+
+/// Compensating event: supersedes the effect of `reverses_event_id` after a
+/// recovery, without altering or removing the original ledger entry.
+/// `effect` is `"membership_removed"` or `"membership_restored"`;
+/// `role_index` is the role the identity holds after the reversal (only
+/// meaningful for `membership_restored`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuildMembershipReversedPayload {
+    pub reverses_event_id: Uuid,
+    pub recovery_request_id: Uuid,
+    pub guild_id: Uuid,
+    pub identity_id: Uuid,
+    pub effect: String,
+    pub role_index: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1295,6 +1322,56 @@ mod tests {
         assert_eq!(serde_json::to_value(&payload).unwrap(), json);
         assert_eq!(
             serde_json::from_value::<GuildMemberAddedPayload>(json).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn friend_relationship_reversed_round_trips() {
+        let payload = FriendRelationshipReversedPayload {
+            reverses_event_id: Uuid::nil(),
+            recovery_request_id: Uuid::nil(),
+            identity_id: Uuid::nil(),
+            counterparty_id: Uuid::nil(),
+            effect: "friendship_removed".to_string(),
+        };
+        let z = "00000000-0000-0000-0000-000000000000";
+        let json = serde_json::json!({
+            "reverses_event_id": z,
+            "recovery_request_id": z,
+            "identity_id": z,
+            "counterparty_id": z,
+            "effect": "friendship_removed",
+        });
+        assert_eq!(serde_json::to_value(&payload).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<FriendRelationshipReversedPayload>(json).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn guild_membership_reversed_round_trips() {
+        let payload = GuildMembershipReversedPayload {
+            reverses_event_id: Uuid::nil(),
+            recovery_request_id: Uuid::nil(),
+            guild_id: Uuid::nil(),
+            identity_id: Uuid::nil(),
+            effect: "membership_restored".to_string(),
+            role_index: 1,
+        };
+        let z = "00000000-0000-0000-0000-000000000000";
+        let json = serde_json::json!({
+            "reverses_event_id": z,
+            "recovery_request_id": z,
+            "guild_id": z,
+            "identity_id": z,
+            "effect": "membership_restored",
+            "role_index": 1,
+        });
+        assert_eq!(serde_json::to_value(&payload).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<GuildMembershipReversedPayload>(json).unwrap(),
             payload
         );
     }

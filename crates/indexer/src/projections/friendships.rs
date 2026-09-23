@@ -67,6 +67,12 @@ pub fn decode(event: &ProtocolEvent) -> Option<FriendshipWrite> {
             let b = super::uuid_field(&event.payload, "b")?;
             Some(FriendshipWrite::Remove { a, b })
         }
+        "friend.relationship_reversed" => {
+            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            let counterparty_id = super::uuid_field(&event.payload, "counterparty_id")?;
+            let (a, b) = ordered_pair(identity_id, counterparty_id);
+            Some(FriendshipWrite::Remove { a, b })
+        }
         _ => None,
     }
 }
@@ -278,6 +284,27 @@ mod tests {
                 serde_json::json!({ "from": "not-a-uuid" })
             )),
             None
+        );
+    }
+
+    #[test]
+    fn decodes_friend_relationship_reversed_into_an_ordered_remove() {
+        let x = Uuid::new_v4();
+        let y = Uuid::new_v4();
+        let source_event = event(
+            "friend.relationship_reversed",
+            serde_json::json!({
+                "reverses_event_id": Uuid::new_v4(),
+                "recovery_request_id": Uuid::new_v4(),
+                "identity_id": x,
+                "counterparty_id": y,
+                "effect": "friendship_removed",
+            }),
+        );
+        let (a, b) = ordered_pair(x, y);
+        assert_eq!(
+            decode(&source_event),
+            Some(FriendshipWrite::Remove { a, b })
         );
     }
 }

@@ -90,6 +90,23 @@ pub fn decode(event: &ProtocolEvent) -> Option<GuildRosterWrite> {
                 identity_id,
             })
         }
+        "guild.membership_reversed" => {
+            let guild_id = super::uuid_field(&event.payload, "guild_id")?;
+            let identity_id = super::uuid_field(&event.payload, "identity_id")?;
+            match event.payload.get("effect")?.as_str()? {
+                "membership_removed" => Some(GuildRosterWrite::Remove {
+                    guild_id,
+                    identity_id,
+                }),
+                "membership_restored" => Some(GuildRosterWrite::Upsert {
+                    guild_id,
+                    identity_id,
+                    role_index: role_index(&event.payload)?,
+                    joined_at: event.timestamp,
+                }),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -444,5 +461,37 @@ mod tests {
             )),
             None
         );
+    }
+
+    #[test]
+    fn decodes_membership_reversed_by_effect() {
+        let guild_id = Uuid::new_v4();
+        let identity_id = Uuid::new_v4();
+        let reversal = |effect: &str| {
+            event(
+                "guild.membership_reversed",
+                serde_json::json!({
+                    "reverses_event_id": Uuid::new_v4(),
+                    "recovery_request_id": Uuid::new_v4(),
+                    "guild_id": guild_id,
+                    "identity_id": identity_id,
+                    "effect": effect,
+                    "role_index": 1,
+                }),
+            )
+        };
+        assert_eq!(
+            decode(&reversal("membership_removed")),
+            Some(GuildRosterWrite::Remove {
+                guild_id,
+                identity_id
+            })
+        );
+        let restored = decode(&reversal("membership_restored")).unwrap();
+        assert!(matches!(
+            restored,
+            GuildRosterWrite::Upsert { role_index: 1, .. }
+        ));
+        assert_eq!(decode(&reversal("something_else")), None);
     }
 }

@@ -49,7 +49,7 @@ async fn require_guild_action_signature(
 
 const OWNER_ROLE_INDEX: i32 = 0;
 const OFFICER_ROLE_INDEX: i32 = 1;
-const MEMBER_ROLE_INDEX: i32 = 2;
+pub(crate) const MEMBER_ROLE_INDEX: i32 = 2;
 
 /// Cap on `GuildRole.description` — same "short, capped text
 /// field" treatment as `validate_tag`, just a longer bound since a role
@@ -2007,7 +2007,7 @@ fn can_remove_member(
 
 /// True if `join_policy` permits `POST /guilds/{id}/join` directly, without
 /// an invite.
-fn can_join_directly(join_policy: JoinPolicy) -> bool {
+pub(crate) fn can_join_directly(join_policy: JoinPolicy) -> bool {
     join_policy == JoinPolicy::Open
 }
 

@@ -139,7 +139,10 @@ impl PostgresIndexer {
                     identity_signing_keys::apply(tx, &write).await?;
                 }
             }
-            "friend.requested" | "friend.accepted" | "friend.removed" => {
+            "friend.requested"
+            | "friend.accepted"
+            | "friend.removed"
+            | "friend.relationship_reversed" => {
                 if let Some(write) = friendships::decode(event) {
                     friendships::apply(tx, &write).await?;
                 }
@@ -147,6 +150,7 @@ impl PostgresIndexer {
             "guild.created"
             | "guild.member_added"
             | "guild.member_removed"
+            | "guild.membership_reversed"
             | "guild.role_changed" => {
                 if let Some(write) = guild_rosters::decode(event) {
                     guild_rosters::apply(tx, &write).await?;

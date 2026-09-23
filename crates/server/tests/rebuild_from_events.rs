@@ -671,6 +671,211 @@ async fn rebuild_reproduces_projections_exactly() {
     );
 }
 
+/// Compensating rollback events (`friend.relationship_reversed`,
+/// `guild.membership_reversed`) must replay to the same projection state the
+/// live handlers produced: a reversed friendship stays gone, a reversed join
+/// stays gone, and a restored leave stays a member.
+#[tokio::test]
+#[ignore]
+async fn rebuild_reproduces_rollback_reversals() {
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+
+    let pool = test_pool().await;
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let (alice_id, alice_token, ..) = register_and_login(&http, &base).await;
+    let (bob_id, bob_token, bob_key, bob_key_id) = register_and_login(&http, &base).await;
+    let since = (OffsetDateTime::now_utc() - time::Duration::seconds(5))
+        .format(&Rfc3339)
+        .unwrap();
+
+    let request: serde_json::Value =
+        auth(http.post(format!("{base}/friends/requests")), &alice_token)
+            .json(&serde_json::json!({ "to": bob_id }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    auth(
+        http.post(format!(
+            "{base}/friends/requests/{}/accept",
+            request["id"].as_str().unwrap()
+        )),
+        &bob_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+
+    let mut guilds = Vec::new();
+    for _ in 0..2 {
+        let suffix = Uuid::new_v4().simple().to_string();
+        let created: serde_json::Value = auth(http.post(format!("{base}/guilds")), &alice_token)
+            .json(&serde_json::json!({
+                "name": format!("Rollback Rebuild {}", &suffix[..8]),
+                "tag": suffix[..5].to_uppercase(),
+                "description": "rollback rebuild fixture",
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let guild_id = created["id"].as_str().unwrap().to_string();
+        auth(
+            http.patch(format!("{base}/guilds/{guild_id}")),
+            &alice_token,
+        )
+        .json(&serde_json::json!({ "join_policy": "open" }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+        auth(
+            http.post(format!("{base}/guilds/{guild_id}/join")),
+            &bob_token,
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+        guilds.push(guild_id);
+    }
+    // The second guild is left voluntarily, then restored by rollback.
+    auth(
+        http.post(format!("{base}/guilds/{}/leave", guilds[1])),
+        &bob_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+
+    wait_for_outbox_drain(&pool).await;
+
+    sqlx::query(
+        "INSERT INTO recovery_requests \
+         (identity_id, pending_passkey_data, pending_credential_id, threshold_at_request, status, completed_at) \
+         VALUES ($1, '{}'::jsonb, $2, 1, 'completed', now())",
+    )
+    .bind(bob_id)
+    .bind(Uuid::new_v4().as_bytes().as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let listing: serde_json::Value = auth(
+        http.get(format!("{base}/me/rollback/candidates"))
+            .query(&[("since", since.as_str())]),
+        &bob_token,
+    )
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let to_reverse: Vec<String> = listing["candidates"]
+        .as_array()
+        .unwrap_or_else(|| panic!("unexpected candidates body: {listing}"))
+        .iter()
+        .filter(|c| {
+            c["reversible"] == true
+                && (c["kind"] == "friend.accepted"
+                    || (c["kind"] == "guild.member_added"
+                        && c["summary"].as_str().unwrap().contains(&guilds[0]))
+                    || c["kind"] == "guild.member_removed")
+        })
+        .map(|c| c["event_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(to_reverse.len(), 3, "{listing}");
+
+    for event_id in &to_reverse {
+        let message = format!("avalon:rollback.reverse:v1:{event_id}:{bob_id}:{since}");
+        let response = auth(
+            http.post(format!("{base}/me/rollback/{event_id}/reverse")),
+            &bob_token,
+        )
+        .json(&serde_json::json!({
+            "since": since,
+            "signing_key_id": bob_key_id,
+            "signature": BASE64.encode(bob_key.sign(message.as_bytes()).to_bytes()),
+        }))
+        .send()
+        .await
+        .unwrap();
+        assert!(
+            response.status().is_success(),
+            "{:?} {:?}",
+            response.status(),
+            response.text().await
+        );
+    }
+
+    wait_for_outbox_drain(&pool).await;
+
+    let live = (
+        snapshot_table(&pool, "indexer_friendships").await,
+        snapshot_table(&pool, "indexer_guild_members").await,
+    );
+    let chain = chain(&pool).await;
+    avalon_server::rebuild::rebuild_index_from_ledger(&chain, &pool)
+        .await
+        .expect("rebuild failed");
+    let rebuilt = (
+        snapshot_table(&pool, "indexer_friendships").await,
+        snapshot_table(&pool, "indexer_guild_members").await,
+    );
+
+    let members = |guild: &str| -> Vec<Uuid> {
+        let guild: Uuid = guild.parse().unwrap();
+        rebuilt
+            .1
+            .iter()
+            .filter(|row| row.contains(&guild.to_string()))
+            .map(|row| {
+                let value: serde_json::Value = serde_json::from_str(row).unwrap();
+                value["identity_id"].as_str().unwrap().parse().unwrap()
+            })
+            .collect()
+    };
+    assert!(
+        !rebuilt
+            .0
+            .iter()
+            .any(|row| row.contains(&alice_id.to_string()) && row.contains(&bob_id.to_string())),
+        "reversed friendship must stay gone after a rebuild"
+    );
+    assert!(
+        !members(&guilds[0]).contains(&bob_id),
+        "reversed join must stay gone after a rebuild"
+    );
+    assert!(
+        members(&guilds[1]).contains(&bob_id),
+        "restored leave must stay a membership after a rebuild"
+    );
+    // Rows for identities other tests created may legitimately differ
+    // between the live and rebuilt passes; this fixture's own rows must not.
+    let ours = |rows: &[String]| -> Vec<String> {
+        rows.iter()
+            .filter(|row| row.contains(&bob_id.to_string()))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(ours(&live.0), ours(&rebuilt.0));
+    assert_eq!(ours(&live.1), ours(&rebuilt.1));
+}
+
 /// Replaying the exact same ledger history a second time — a second
 /// disaster, or a second `avalon rebuild-index` run — must be a no-op:
 /// same snapshot, not a drift or a duplicate-row error.
