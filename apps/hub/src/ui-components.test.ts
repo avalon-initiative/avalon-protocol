@@ -9,6 +9,7 @@ import type { AvalonIconName } from '@avalon/ui'
 import {
   AvalonAchievementCard,
   AvalonAvatar,
+  AvalonBadgeIcon,
   AvalonBottomNav,
   AvalonCalendarMonth,
   AvalonCapabilityConsentRow,
@@ -263,6 +264,17 @@ describe('AvalonUserChip', () => {
     expect(wrapper.text()).toContain('Nova')
     expect(wrapper.text()).toContain('Nova#4821')
   })
+})
+
+describe('AvalonBadgeIcon', () => {
+  it.each(['achievement', 'rare', 'epic', 'legendary', 'event', 'rank', 'guild', 'special'] as const)(
+    'renders the %s tier',
+    (tier) => {
+      const wrapper = mount(AvalonBadgeIcon, { props: { tier } })
+      expect(wrapper.attributes('aria-label')).toBe(tier)
+      expect(wrapper.find('polygon').exists()).toBe(true)
+    },
+  )
 })
 
 describe('AvalonRoleBadge', () => {

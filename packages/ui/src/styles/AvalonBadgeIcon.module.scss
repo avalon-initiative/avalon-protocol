@@ -1,0 +1,42 @@
+.badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--tier);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--tier) 45%, transparent));
+}
+
+.frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.outer {
+  fill: color-mix(in srgb, var(--tier) 30%, var(--av-color-bg));
+  stroke: var(--tier);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.inner {
+  fill: var(--av-color-surface);
+  stroke: color-mix(in srgb, var(--tier) 55%, transparent);
+  stroke-width: 1;
+}
+
+.glyph {
+  position: relative;
+}
+
+.achievement { --tier: var(--av-color-warning); }
+.rare { --tier: var(--av-color-accent-secondary); }
+.epic { --tier: var(--av-color-primary); }
+.legendary { --tier: var(--av-color-warning); }
+.event { --tier: var(--av-color-success); }
+.rank { --tier: var(--av-color-accent-tertiary); }
+.guild { --tier: var(--av-color-accent-secondary); }
+.special { --tier: var(--av-color-text-secondary); }
