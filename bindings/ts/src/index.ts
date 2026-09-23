@@ -85,7 +85,7 @@ export type {
   BulkClaimInput,
 } from './integratorSession.js'
 
-export type { Identity, Profile, Genre, SignedTreeHeadResponse } from './types.js'
+export type { Identity, Profile, Genre, SignedTreeHeadResponse, NodeStatusResponse } from './types.js'
 
 // Issue #735: the info.version of the openapi.json schema this build's
 // generated types were built from, so a caller can report/log which
@@ -93,6 +93,7 @@ export type { Identity, Profile, Genre, SignedTreeHeadResponse } from './types.j
 export { OPENAPI_SCHEMA_VERSION } from './generated.js'
 
 export { getLatestSth } from './ledger.js'
+export { getNodeStatus } from './nodeStatus.js'
 
 export {
   listAchievementDefinitions,

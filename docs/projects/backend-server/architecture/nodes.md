@@ -494,10 +494,14 @@ Concrete node-to-node version awareness (`crates/server/src/version.rs`):
   baseline, never lower it. Exclusion is reversible: a peer that upgrades
   starts reporting a passing version and is naturally re-admitted on its next
   announce/gossip cycle.
-- `GET /nodes/status` surfaces this node's own `protocol_version` and, when
-  known via peer gossip, a `stale` flag — a self-diagnostic "you may want to
-  upgrade" signal only; nothing reads it to change behavior. The same
-  response also carries a `resources` block — this node's own host-level
+- `GET /nodes/status` surfaces this node's own `protocol_version`, its
+  configured `roles` (`AVALON_NODE_ROLES`, `combined` reported as-is), and,
+  when known via peer gossip, a `stale` flag — a self-diagnostic "you may
+  want to upgrade" signal only; nothing reads `stale` to change behavior.
+  `roles` is what a caller that already has this node's URL uses for
+  capability negotiation (#91) — settlement/indexer/realtime/gateway,
+  before routing a request to it. The same response also carries a
+  `resources` block — this node's own host-level
   CPU/memory/disk/process metrics plus its DB pool size/in-use — with the
   identical posture: every field is independently optional, a metric this
   process can't read on a given platform is `None` rather than a failed

@@ -235,6 +235,32 @@ async fn node_status_reports_internally_consistent_resource_metrics() {
     );
 }
 
+/// `GET /nodes/status` reports this node's own `AVALON_NODE_ROLES`.
+/// Asserts against the real default (`combined`, `node_roles()`'s
+/// fallback) rather than a specific deployment's configuration.
+#[tokio::test]
+#[ignore]
+async fn node_status_reports_own_roles() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http
+        .get(format!("{base}/nodes/status"))
+        .send()
+        .await
+        .expect("GET /nodes/status failed — is `make start` running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+
+    let body: serde_json::Value = response.json().await.expect("response was not JSON");
+    let roles = body["roles"]
+        .as_array()
+        .expect("roles should be a JSON array");
+    assert!(
+        !roles.is_empty(),
+        "node_roles() never returns empty — falls back to [\"combined\"]"
+    );
+}
+
 /// Requires `AVALON_SECOND_NODE_SERVER_URL` — a second real `avalon-server`
 /// process sharing this network's `network_id` (any Postgres is fine,
 /// shared or separate, since the peer table is in-memory per process).

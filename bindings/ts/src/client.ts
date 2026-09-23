@@ -31,6 +31,8 @@ import {
 } from './crypto/signing.js'
 import { generateMnemonicSigningKey } from './crypto/mnemonic.js'
 import { authenticate as authenticateIntegrator, type AuthenticateOptions, type IntegratorSession } from './integratorSession.js'
+import { getNodeStatus } from './nodeStatus.js'
+import type { NodeStatusResponse } from './types.js'
 
 export interface AvalonClientConfig {
   serverUrl: string
@@ -220,6 +222,13 @@ export class AvalonClient {
    * capabilities. */
   async authenticate(options: Omit<AuthenticateOptions, 'serverUrl'>): Promise<IntegratorSession> {
     return authenticateIntegrator({ ...options, serverUrl: this.serverUrl })
+  }
+
+  /** `GET /nodes/status` for this client's configured `serverUrl` —
+   * `roles` reports which of settlement/indexer/realtime/gateway this
+   * node runs. */
+  async status(): Promise<NodeStatusResponse> {
+    return getNodeStatus(this.serverUrl)
   }
 }
 

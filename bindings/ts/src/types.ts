@@ -90,3 +90,16 @@ export interface SignedTreeHeadResponse {
   created_at: string
   protocol_version: string
 }
+
+/** `GET /nodes/status`'s wire response — matches
+ * `crates/server/src/nodes.rs::NodeStatusResponse`. Only the fields this
+ * SDK consumes; the real response also carries `resources` and
+ * `own_shard_replication`, omitted here since nothing in this SDK reads
+ * them. */
+export interface NodeStatusResponse {
+  protocol_version: string
+  network_id: string
+  roles: string[]
+  stale: boolean
+  newest_known_peer_version: string | null
+}

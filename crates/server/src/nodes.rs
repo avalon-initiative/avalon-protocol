@@ -497,6 +497,10 @@ pub async fn list_peers(State(state): State<AppState>) -> Json<Vec<PeerInfo>> {
 pub struct NodeStatusResponse {
     pub protocol_version: String,
     pub network_id: String,
+    /// This node's own `AVALON_NODE_ROLES` ([`node_roles`]) — `combined`
+    /// reported as-is, not expanded, matching
+    /// [`AnnounceRequest::roles`]/[`PeerInfo::roles`].
+    pub roles: Vec<String>,
     /// `true` when some known peer (via #362's peer table) reports a
     /// *newer* `protocol_version` than this node's own — a self-diagnostic
     /// "you may want to upgrade" signal for the operator, never used to
@@ -597,6 +601,7 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
     Json(NodeStatusResponse {
         protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
         network_id: state.chain.network_id().to_string(),
+        roles: node_roles(),
         stale,
         newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
         resources,
@@ -1382,6 +1387,7 @@ mod tests {
         let response = NodeStatusResponse {
             protocol_version: crate::version::PROTOCOL_VERSION.to_string(),
             network_id: "avalon-dev-local".to_string(),
+            roles: vec!["combined".to_string()],
             stale: false,
             newest_known_peer_version: None,
             resources: crate::resources::NodeResourceMetrics::default(),

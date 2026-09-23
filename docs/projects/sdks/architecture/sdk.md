@@ -459,8 +459,12 @@ currently report full route coverage against the published API.
 - **No `Avalon::connect()` discovery.** `AvalonConfig { server_url }` is
   the opposite of the target-shape discovery model above — a developer
   configures an explicit server URL today rather than the SDK discovering
-  and selecting a node on its own. Node discovery and capability
-  negotiation remain future work.
+  and selecting a node on its own. This remains future work (#91).
+  Capability negotiation for an already-known URL is partially real: `GET
+  /nodes/status` reports a node's own `roles` (settlement/indexer/
+  realtime/gateway), and the TypeScript SDK exposes it via
+  `AvalonClient.status()`/`getNodeStatus()`. Not yet ported to the Rust or
+  C# SDKs.
 - **Visibility scoping is partial.** Presence reads and guild rosters are
   scoped server-side by the subject's own visibility settings. Guild
   `channels()`/`messages()` are not — any member with `guilds.chat` sees
