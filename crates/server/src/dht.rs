@@ -448,6 +448,25 @@ async fn run_worker(
                 };
                 match command {
                     DhtCommand::PutRecord { key, value, ttl } => {
+                        // A solo node (no known DHT peers yet — the common
+                        // case right after startup, or a genuinely small
+                        // network) can never satisfy `Quorum::One`: that
+                        // quorum counts *other* peers, not this node's own
+                        // local store (#581's finding, referenced below).
+                        // Every put would be a guaranteed, immediate
+                        // failure — for `identity_locator`'s callers alone
+                        // that's one doomed query per known identity, every
+                        // `interest::REFRESH_INTERVAL`, which in a
+                        // long-lived dev database with hundreds of
+                        // identities and no connected peers turns into a
+                        // continuous stream of failing queries burning CPU
+                        // for no possible benefit. Skipping here is exactly
+                        // equivalent to the query failing instantly, just
+                        // without paying for it — normal puts resume the
+                        // moment any peer is known.
+                        if known_peers.is_empty() {
+                            continue;
+                        }
                         let record = kad::Record {
                             key: key.into(),
                             value,
