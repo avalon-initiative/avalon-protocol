@@ -203,12 +203,9 @@ pub(crate) async fn resolve_shard_verify_keys_from_db(
     pool: &PgPool,
     shard_id: &str,
 ) -> Vec<VerifyingKey> {
-    let Some((namespace, owner)) = shard_id.split_once(':') else {
+    let Some((namespace, owner)) = avalon_protocol::shard::shard_authority(shard_id) else {
         return Vec::new();
     };
-    if !matches!(namespace, "game" | "app" | "service") {
-        return Vec::new();
-    }
 
     let rows = sqlx::query(
         "SELECT ik.public_key FROM issuer_keys ik \
@@ -481,5 +478,80 @@ mod tests {
         let registry = ShardRegistry::new();
         let urls = combined_shard_urls(None, &registry);
         assert!(urls.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn sibling_shards_resolve_the_owners_shard_settlement_keys() {
+        avalon_devenv::load();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect(&database_url)
+            .await
+            .expect("failed to connect to Postgres");
+
+        let slug = format!("sib-{}", uuid::Uuid::new_v4().simple());
+        let integrator_id = uuid::Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        sqlx::query(
+            "INSERT INTO integrators (id, slug, name, owner_name, registered_at, status, category) \
+             VALUES ($1, $2, $3, $4, $5, 'active', 'game')",
+        )
+        .bind(integrator_id)
+        .bind(&slug)
+        .bind("Sibling Test")
+        .bind("Owner")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .expect("insert integrator");
+
+        let shard_key = ed25519_dalek::SigningKey::generate(&mut rand::rng());
+        sqlx::query(
+            "INSERT INTO issuer_keys (key_id, integrator_id, algorithm, public_key, role, purpose, created_at) \
+             VALUES ($1, $2, 'ed25519', $3, 'operational', 'shard_settlement', $4)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(integrator_id)
+        .bind(shard_key.verifying_key().to_bytes().to_vec())
+        .bind(now)
+        .execute(&pool)
+        .await
+        .expect("insert shard key");
+
+        let expected = shard_key.verifying_key();
+        for id in [
+            format!("game:{slug}"),
+            format!("game:{slug}/2"),
+            format!("game:{slug}/eu-west-1"),
+        ] {
+            let keys = resolve_shard_verify_keys_from_db(&pool, &id).await;
+            assert_eq!(keys, vec![expected], "{id}");
+        }
+        for id in [
+            format!("game:{slug}x"),
+            format!("game:{slug}x/2"),
+            format!("app:{slug}/2"),
+            format!("game:{slug}/BAD"),
+            "core".to_string(),
+        ] {
+            assert!(
+                resolve_shard_verify_keys_from_db(&pool, &id)
+                    .await
+                    .is_empty(),
+                "{id}"
+            );
+        }
+
+        sqlx::query("DELETE FROM issuer_keys WHERE integrator_id = $1")
+            .bind(integrator_id)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM integrators WHERE id = $1")
+            .bind(integrator_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 }

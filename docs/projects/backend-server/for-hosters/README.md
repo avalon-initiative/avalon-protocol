@@ -24,6 +24,11 @@ No Rust or Node toolchain is required for anything on this page — only
    rolling out a routine upgrade or an emergency security patch, and
    rolling back if a new version breaks something.
 
+4. [`choosing-your-shard.md`](choosing-your-shard.md) — which shard your node
+   authors (`core` is reserved for the network's pinned core authority), how
+   to get a registered shard key, the startup guard's errors, and running one
+   shard with hot standby or sibling shards.
+
 ## If something goes wrong
 
 Both guides above have their own troubleshooting section for the common

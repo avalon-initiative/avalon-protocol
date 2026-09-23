@@ -63,6 +63,50 @@ separate by construction). `AVALON_OWN_SHARD_ID` (default `"core"`)
 declares which shard, if any, this node authors — every `/ledger/*` read
 has to know this to answer correctly once a node holds both roles.
 
+**A node's ledger is its shard.** Events whose issuer is an identity
+(identity, social, guild) are routed to the reserved `core` label, but a node
+with no `AVALON_SETTLEMENT_REMOTE_URL(S)` entry for that label commits them to
+its own local ledger. Whatever a node commits locally is therefore the history
+of the shard named by its `AVALON_OWN_SHARD_ID`, signed with its
+`AVALON_SETTLEMENT_SIGNING_KEY`.
+
+**`core` is the reserved label of the network's pinned core authority**, the
+one node whose settlement key is the `verify_key` pinned for the network in
+`docs/trusted-networks.json`. Every other node authors a named, registered
+shard (`game:<slug>`, `app:<slug>`, `service:<slug>`) and signs with a
+`shard_settlement` key registered for that integrator. A node that leaves
+`AVALON_OWN_SHARD_ID` at its `core` default while holding a different key
+would become a second author of `core`; clients pinned to the network key
+would see its tree heads as a mismatch, indistinguishable from an impostor.
+
+**Startup guard.** When `AVALON_OWN_SHARD_ID` is `core` and the network has a
+pinned anchor, the server compares its own settlement verify key with the
+pinned one. On a mismatch it refuses to start when the anchor's `environment`
+is not `local-dev`, or when `AVALON_BOOTSTRAP_PEERS`/`AVALON_MIRROR_PEERS` is
+set (joining an existing network is never a legitimate second `core` author).
+A lone `local-dev` node with no peers logs a warning and continues. The result
+is reported as the optional `core_author_pinned` field of `GET /nodes/status`
+(`true` pinned, `false` tolerated mismatch, absent when the node is not a
+`core` author or its network has no anchor). See
+[`../for-hosters/choosing-your-shard.md`](../for-hosters/choosing-your-shard.md).
+
+**Sibling shards.** A shard id is `{namespace}:{owner}[/{instance}]`, where
+`instance` is 1-64 characters of `[a-z0-9-]` starting with `[a-z0-9]`.
+Key and authority resolution use `owner` only, so `game:wow/1` and
+`game:wow/2` are both authorized by the `shard_settlement` keys of the
+integrator `wow`, while remaining separate ledgers with separate tree heads
+and mirrors. `AVALON_OWN_SHARD_ID` is validated at startup (`core` or a valid
+extended id). Events issued by the integrator itself (attestations,
+revocations) still route to `{namespace}:{owner}` without an instance; a
+sibling node receives them only if that node is the configured remote
+authority for that exact shard id.
+
+**The core authority is the trust root registrar.** A shard's authority is the
+integrator's `shard_settlement` key, recorded as an event in the core
+authority's ledger. Registering a new integrator and its shard key is a
+request to the core authority; a new shard cannot be trusted by clients until
+the core authority has recorded both.
+
 **Real example, live in this sandbox**: a second, physically separate node
 runs Combined-capability (same as every node), Full-tier, and holds *both*
 shard roles — mirror of the primary's `core` shard, and authority for its

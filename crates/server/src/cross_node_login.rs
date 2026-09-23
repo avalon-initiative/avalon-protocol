@@ -204,8 +204,10 @@ pub struct LookupCrossNodeLoginResponse {
 ///   — a shared network shard has no integrator, but a canonical anchor
 ///   node is still a real, checkable fact.
 async fn resolve_requester_verification(state: &AppState) -> (bool, Option<String>) {
-    if let Some((namespace, owner)) = state.own_shard_id.split_once(':') {
-        if matches!(namespace, "game" | "app" | "service") {
+    if state.own_shard_id != avalon_protocol::shard::CORE_SHARD_ID {
+        if let Some((namespace, owner)) =
+            avalon_protocol::shard::shard_authority(&state.own_shard_id)
+        {
             let row = sqlx::query(
                 "SELECT i.name FROM integrators i \
                  JOIN issuer_keys ik ON ik.integrator_id = i.id \

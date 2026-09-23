@@ -1,0 +1,141 @@
+# Choosing your shard
+
+Every node authors exactly one shard: the history it commits to its own ledger
+and signs with its own settlement key. `AVALON_OWN_SHARD_ID` names it. This page
+explains which value a node should use, how to get a registered key for it, what
+the startup guard checks, and how one operator runs a shard with redundancy.
+
+## Which shard does my node author?
+
+| You are | Set `AVALON_OWN_SHARD_ID` | Signing key |
+|---|---|---|
+| Running the network's core authority, the node whose key is pinned in `docs/trusted-networks.json` | `core` (the default) | The pinned key |
+| Running a lone throwaway `local-dev` node (a fresh `make stack-up`) | `core` (the default) | The generated key; the server warns that it is not pinned |
+| Running anything else on a real network: a game, app or service, or a community node | `game:<slug>`, `app:<slug>` or `service:<slug>` | A `shard_settlement` key registered for the integrator `<slug>` |
+| Running a second or third node for the same integrator | `game:<slug>/<instance>` | Any unrevoked `shard_settlement` key registered for `<slug>` |
+
+`core` is the reserved label of the network's pinned core authority. A node that
+holds some other key and leaves the default in place becomes a second author of
+`core`. Clients pinned to the network key see its tree heads as a mismatch, the
+same as an impostor's. The startup guard below exists to stop that.
+
+`instance` is 1-64 characters of `[a-z0-9-]`, starting with `[a-z0-9]`. The owner
+part (`<slug>`) alone decides which keys are accepted, so `game:wow/1` and
+`game:wow/2` are both verified against the keys registered for `wow`.
+
+## Getting a registered shard key
+
+A shard key is an operational issuer key with purpose `shard_settlement`,
+authorized by the integrator's root key. The network's core authority records the
+integrator and the key, so the core authority is the registrar: registration
+requests go to a core authority node (`--server`, or `AVALON_SERVER_URL`).
+
+1. Generate the node's settlement key pair if the node does not have one yet
+   (see [`hosting-quickstart.md`](hosting-quickstart.md)); the node holds the
+   private half in `AVALON_SETTLEMENT_SIGNING_KEY`.
+2. Register the integrator, if it is not registered yet. This saves the
+   integrator's root key under `_running/keys/integrator-<slug>.signing-key`:
+
+   ```
+   avalon register-integrator --slug <slug> --name "<name>" --owner-name "<owner>" --server <core-authority-url>
+   ```
+
+3. Register the node's public settlement key as a shard key. The verify key is
+   taken from `AVALON_SETTLEMENT_VERIFY_KEY`, or derived from
+   `AVALON_SETTLEMENT_SIGNING_KEY`, unless `--verify-key <hex>` is given:
+
+   ```
+   avalon add-shard-key --integrator <slug> --server <core-authority-url>
+   ```
+
+   This is `POST /integrations/<slug>/keys` with `role: operational` and
+   `purpose: shard_settlement`, signed by the root key. Use `--key <path>` if the
+   root key is stored elsewhere.
+4. On the node, set `AVALON_OWN_SHARD_ID=game:<slug>` (or the integrator's
+   `app`/`service` category, optionally with `/<instance>`) and restart.
+
+Both commands are in the default `dev-tools` build of the `avalon` binary. Any
+number of unrevoked shard keys may exist for one integrator; each verifies the
+whole owner's shard family.
+
+## The startup guard
+
+When `AVALON_OWN_SHARD_ID` is `core` and the node has a settlement signing key,
+the server compares that key's public half with the `verify_key` pinned for
+`AVALON_NETWORK_ID` in `docs/trusted-networks.json`.
+
+| Situation | Result |
+|---|---|
+| Keys match | Starts. `GET /nodes/status` reports `core_author_pinned: true`. |
+| Keys differ, anchor `environment` is `dev`, `int` or `prod` | Refuses to start. |
+| Keys differ, anchor is `local-dev`, `AVALON_BOOTSTRAP_PEERS` or `AVALON_MIRROR_PEERS` is set | Refuses to start. |
+| Keys differ, anchor is `local-dev`, no peers configured | Starts with a warning. `core_author_pinned: false`. |
+| The network has no anchor, or the shard is not `core` | No check. `core_author_pinned` is absent. |
+
+The refusal reads:
+
+```
+refusing to start: this node authors the reserved `core` shard on network `<network>` but its settlement key does not match the key pinned for that network. Pinned key: id `<id>`, verify key <hex>. This node's key: id `<id>`, verify key <hex>. Clients pinned to `<network>` will report this node's tree heads as a key mismatch. Fix by either (1) setting AVALON_SETTLEMENT_SIGNING_KEY to the pinned key, if this node IS the network's core authority, or (2) authoring a named shard: set AVALON_OWN_SHARD_ID to a registered shard (for example `game:<integrator-slug>`) and use that shard's registered shard_settlement key
+```
+
+Fixes:
+
+- The node is the core authority: restore the pinned key in
+  `AVALON_SETTLEMENT_SIGNING_KEY` (and its `AVALON_SETTLEMENT_SIGNING_KEY_ID`).
+- The node is anything else: follow "Getting a registered shard key" above and set
+  `AVALON_OWN_SHARD_ID`.
+- The node is a newcomer's local experiment that started failing because it
+  added peers: either use a named shard, or remove the peer settings.
+
+An invalid `AVALON_OWN_SHARD_ID` also refuses to start:
+
+```
+refusing to start: AVALON_OWN_SHARD_ID="<value>" is invalid: <reason>. Use `core` (only for the network's pinned core authority) or a registered shard id of the form `game|app|service:<integrator-slug>[/<instance>]`
+```
+
+The guard checks the key, not registration. A node with a named shard whose key
+was never registered starts, but peers and clients cannot verify its tree heads;
+`GET /ledger/cross-shard-root` lists such a shard as missing.
+
+## High availability for one operator
+
+One shard is one ledger with one signing history. Two patterns keep it available;
+they differ in whether the ledger is shared.
+
+### Hot standby of one shard
+
+Register a second `shard_settlement` key for the same integrator and run a second
+node with `AVALON_OWN_SHARD_ID` set to the same shard id, configured as a standby:
+
+- The standby's database is an operator-run replica of the active node's
+  database. The protocol does not replicate a ledger between two authors; the
+  operator's database replication does.
+- Only one node may sign at a time. Enforce this with a lease or fence the
+  operator controls (for example a lock in the database or an orchestrator's
+  leader election), starting the standby's `avalon-server` only after the active
+  node is confirmed stopped or fenced.
+- Two nodes signing the same shard concurrently fork its ledger. Peers detect
+  this as equivocation (see
+  [`equivocation-response.md`](../for-maintainers/equivocation-response.md)) and
+  refuse both. Preventing it is the operator's responsibility; the protocol only
+  detects it.
+- Takeover follows [`authority-promotion.md`](../for-maintainers/authority-promotion.md).
+  Using a distinct second key lets the old key be revoked afterwards without
+  rotating the standby.
+
+### Sibling shards for load balancing and failover
+
+Give each node its own shard id under the same owner: `game:wow/1`, `game:wow/2`.
+Every sibling is authorized by the same integrator keys, but each is an
+independent ledger with its own tree heads:
+
+- Writes are routed to one sibling by the operator's choice of remote authority
+  (`AVALON_SETTLEMENT_REMOTE_URLS` on the nodes that forward writes). To fail
+  over, point new writes at a healthy sibling.
+- Ledgers are never merged. A sibling's history stays in that sibling's shard.
+- Mirrors that already followed a sibling keep its full verified history after
+  the sibling dies, so no history is lost even though the node is gone.
+- Events issued by the integrator itself (attestations and their revocations)
+  route to `game:<slug>` without an instance. Sibling nodes receive them only when
+  configured as the remote authority for that exact shard id, so route them to the
+  sibling that should own that traffic.

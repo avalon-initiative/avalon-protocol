@@ -328,6 +328,53 @@ async fn main() {
     // than inline in `state` below, its previous location) so #599's
     // shard-gossip worker can be told the same value.
     let own_shard_id = std::env::var("AVALON_OWN_SHARD_ID").unwrap_or_else(|_| "core".to_string());
+    if let Err(e) = avalon_protocol::shard::parse_shard_id(&own_shard_id) {
+        tracing::error!(
+            "refusing to start: AVALON_OWN_SHARD_ID={own_shard_id:?} is invalid: {e}. Use `core` \
+             (only for the network's pinned core authority) or a registered shard id of the form \
+             `game|app|service:<integrator-slug>[/<instance>]`"
+        );
+        std::process::exit(1);
+    }
+
+    // A node committing `own_shard_id` through a remote authority does not sign it locally.
+    let signs_own_shard_locally = remote_submit
+        .as_ref()
+        .is_none_or(|r| !r.targets().contains_key(own_shard_id.as_str()));
+    if signs_own_shard_locally {
+        if let Ok((signing_key, signing_key_id)) = avalon_protocol::sth::load_signing_key_from_env()
+        {
+            let node_verify_key_hex = hex::encode(signing_key.verifying_key().to_bytes());
+            let peers_configured = ["AVALON_BOOTSTRAP_PEERS", "AVALON_MIRROR_PEERS"]
+                .iter()
+                .any(|var| {
+                    std::env::var(var)
+                        .map(|v| v.split(',').any(|s| !s.trim().is_empty()))
+                        .unwrap_or(false)
+                });
+            let decision = avalon_server::core_author_guard::evaluate(
+                &avalon_server::core_author_guard::CoreAuthorInputs {
+                    own_shard_id: &own_shard_id,
+                    network_id: &network_id,
+                    node_verify_key_hex: &node_verify_key_hex,
+                    node_signing_key_id: &signing_key_id,
+                    peers_configured,
+                },
+                avalon_protocol::network_trust::bundled_trust_anchors(),
+            );
+            match &decision {
+                avalon_server::core_author_guard::CoreAuthorDecision::Refuse(msg) => {
+                    tracing::error!("refusing to start: {msg}");
+                    std::process::exit(1);
+                }
+                avalon_server::core_author_guard::CoreAuthorDecision::WarnUnpinned(msg) => {
+                    tracing::warn!("{msg}");
+                }
+                _ => {}
+            }
+            avalon_server::core_author_guard::record_outcome(&decision);
+        }
+    }
 
     // Issue #629, implementing #622's decision: this node's own record of
     // which peers have confirmed mirroring which shard, plus its resolved

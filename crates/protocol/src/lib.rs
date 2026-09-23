@@ -24,5 +24,6 @@ pub mod interest_claim;
 pub mod network_trust;
 pub mod permissions;
 pub mod revocation;
+pub mod shard;
 pub mod social;
 pub mod sth;

@@ -980,6 +980,145 @@ pub(crate) async fn register_issuer(args: RegisterIssuerArgs) {
     }
 }
 
+pub(crate) const ADD_SHARD_KEY_USAGE: &str =
+    "usage: avalon add-shard-key --integrator <slug> [--verify-key <hex>] [--key <path>] [--server <url>]";
+
+/// Arguments for `avalon add-shard-key`. `verify_key` defaults to the public
+/// key resolved from `AVALON_SETTLEMENT_VERIFY_KEY` /
+/// `AVALON_SETTLEMENT_SIGNING_KEY` in the environment.
+#[derive(Debug)]
+pub(crate) struct AddShardKeyArgs {
+    integrator: String,
+    verify_key: Option<String>,
+    key_path: Option<String>,
+    server: Option<String>,
+}
+
+impl AddShardKeyArgs {
+    pub(crate) fn parse(args: &[String]) -> Result<Self, String> {
+        let mut integrator = None;
+        let mut verify_key = None;
+        let mut key_path = None;
+        let mut server = None;
+
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--integrator" => {
+                    integrator = Some(iter.next().ok_or("--integrator requires a value")?.clone())
+                }
+                "--verify-key" => {
+                    verify_key = Some(iter.next().ok_or("--verify-key requires a value")?.clone())
+                }
+                "--key" => key_path = Some(iter.next().ok_or("--key requires a value")?.clone()),
+                "--server" => {
+                    server = Some(iter.next().ok_or("--server requires a value")?.clone())
+                }
+                other => return Err(format!("unrecognized argument: {other}")),
+            }
+        }
+
+        Ok(Self {
+            integrator: integrator.ok_or("--integrator is required")?,
+            verify_key,
+            key_path,
+            server,
+        })
+    }
+
+    fn resolve_verify_key_base64(&self) -> Result<String, String> {
+        let bytes: Vec<u8> = match &self.verify_key {
+            Some(hex_key) => {
+                let bytes = hex::decode(hex_key.trim())
+                    .map_err(|e| format!("--verify-key is not valid hex: {e}"))?;
+                let array: [u8; 32] = bytes
+                    .try_into()
+                    .map_err(|_| "--verify-key must be 32 bytes (64 hex chars)".to_string())?;
+                ed25519_dalek::VerifyingKey::from_bytes(&array)
+                    .map_err(|_| "--verify-key is not a valid Ed25519 public key".to_string())?;
+                array.to_vec()
+            }
+            None => avalon_protocol::sth::load_verify_key_from_env()
+                .map_err(|e| {
+                    format!("no --verify-key given and none resolvable from the environment: {e}")
+                })?
+                .to_bytes()
+                .to_vec(),
+        };
+        Ok(BASE64.encode(bytes))
+    }
+}
+
+/// `avalon add-shard-key` — registers this node's settlement verify key as a
+/// `shard_settlement` operational key on `--integrator`, authorized by that
+/// integrator's root key (`--key`, defaulting to what `register-integrator`
+/// saved), through `AvalonClient::add_issuer_key`.
+pub(crate) async fn add_shard_key(args: AddShardKeyArgs) {
+    let public_key = args.resolve_verify_key_base64().unwrap_or_else(|message| {
+        eprintln!("{message}");
+        std::process::exit(1);
+    });
+    let base = args.server.clone().unwrap_or_else(server_url);
+
+    let key_path =
+        args.key_path.clone().map(PathBuf::from).unwrap_or_else(|| {
+            key_dir().join(format!("integrator-{}.signing-key", args.integrator))
+        });
+    let key_base64 = std::fs::read_to_string(&key_path).unwrap_or_else(|_| {
+        eprintln!(
+            "no signing key found at {} — pass --key <path> (the integrator's root key), or run `avalon register-integrator` first.",
+            key_path.display()
+        );
+        std::process::exit(1);
+    });
+    let key_bytes: [u8; 32] = BASE64
+        .decode(key_base64.trim())
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .unwrap_or_else(|| {
+            eprintln!(
+                "{} did not contain a valid base64-encoded 32-byte Ed25519 key.",
+                key_path.display()
+            );
+            std::process::exit(1);
+        });
+
+    let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
+        server_url: base,
+        integrator_credential_key_id: String::new(),
+        integrator_slug: Some(args.integrator.clone()),
+        signing_key: Some(key_bytes),
+        retry: Default::default(),
+    });
+
+    let result = client
+        .add_issuer_key(avalon_sdk::integrators::NewIssuerKey {
+            algorithm: "ed25519".to_string(),
+            public_key,
+            role: "operational".to_string(),
+            purpose: Some("shard_settlement".to_string()),
+            valid_until: None,
+        })
+        .await;
+    match result {
+        Ok(key) => {
+            println!();
+            println!(
+                "Registered shard_settlement key {} for integrator '{}'.",
+                key.key_id, args.integrator
+            );
+            println!(
+                "Set AVALON_OWN_SHARD_ID=game:{} (or the matching app:/service: namespace, optionally with a /<instance> suffix) on the node holding the matching signing key.",
+                args.integrator
+            );
+        }
+        Err(e) => {
+            eprintln!("add_issuer_key failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! `StoredPasskey`'s round-trip is the one piece of #115 worth unit
@@ -1249,6 +1388,34 @@ mod tests {
         ]))
         .expect_err("both --network-id and --env should fail to parse");
         assert!(err.contains("exactly one"));
+    }
+
+    #[test]
+    fn add_shard_key_args_requires_integrator() {
+        let err = AddShardKeyArgs::parse(&args(&[])).expect_err("missing --integrator");
+        assert!(err.contains("--integrator"));
+    }
+
+    #[test]
+    fn add_shard_key_verify_key_validation() {
+        let good = AddShardKeyArgs::parse(&args(&[
+            "--integrator",
+            "wow",
+            "--verify-key",
+            &hex::encode(
+                ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            ),
+        ]))
+        .expect("parse");
+        assert!(good.resolve_verify_key_base64().is_ok());
+        let bad = AddShardKeyArgs::parse(&args(&["--integrator", "wow", "--verify-key", "zz"]))
+            .expect("parse");
+        assert!(bad.resolve_verify_key_base64().is_err());
+        let short = AddShardKeyArgs::parse(&args(&["--integrator", "wow", "--verify-key", "aa"]))
+            .expect("parse");
+        assert!(short.resolve_verify_key_base64().is_err());
     }
 
     #[test]

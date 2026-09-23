@@ -11,6 +11,7 @@ pub mod chat_replication;
 pub mod connections;
 pub mod continuation;
 pub mod conversations;
+pub mod core_author_guard;
 pub mod cross_node_login;
 pub mod cross_shard;
 pub mod cross_shard_fetch;
