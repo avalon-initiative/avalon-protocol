@@ -453,7 +453,7 @@ two don't implement it yet.
 
 ## SDK coverage check
 
-`scripts/check-sdk-coverage.py` diffs `docs/generated/openapi.json`'s
+`scripts/check-sdk-coverage.py` (in the `avalon-sdks` repo, run against its vendored `docs/generated/openapi.json`) diffs the
 SDK-facing route table against each SDK's real HTTP call sites and fails,
 naming the exact route(s), when one or more SDKs never call a route the
 server exposes. It matches on HTTP method plus a normalized path template,
