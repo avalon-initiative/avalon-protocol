@@ -251,7 +251,7 @@ async fn list_equivocations(network_id_arg: Option<String>) {
             ),
             _ => println!(
                 "│ status:    ✗ UNRESOLVED — mirror-watcher refuses to backfill this network \
-                 past this point until this is resolved (see docs/maintainers/equivocation-response.md)"
+                 past this point until this is resolved (see docs/projects/backend-server/for-maintainers/equivocation-response.md)"
             ),
         }
         println!("└──────────────────────────────────────────────────────");
@@ -261,7 +261,7 @@ async fn list_equivocations(network_id_arg: Option<String>) {
 /// `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]`
 /// — issue #316, the write side of #300's decided equivocation response
 /// procedure. Records that an operator has completed the investigation
-/// playbook (`docs/maintainers/equivocation-response.md`) and determined
+/// playbook (`docs/projects/backend-server/for-maintainers/equivocation-response.md`) and determined
 /// which of the two disagreeing root hashes at `tree_size` was legitimate.
 ///
 /// `--shard-id` (defaults to `"core"`) — every shard under a
@@ -956,59 +956,18 @@ async fn verify_mirror_convergence(raw_args: &[String]) {
         .connect(&database_url)
         .await
         .expect("failed to connect to Postgres");
-    let source = source.as_deref();
-
-    let progress = avalon_chain::mirror::mirrored_progress(&pool, &network_id, &shard_id, source)
-        .await
-        .expect("failed to read mirror progress");
-    let hashes = avalon_chain::mirror::mirrored_entry_hashes_up_to(
-        &pool,
-        &network_id,
-        &shard_id,
-        progress.verified_count,
-        source,
-    )
-    .await
-    .expect("failed to read mirrored entry hashes");
-    let recomputed_root = if hashes.is_empty() {
-        None
-    } else {
-        Some(hex::encode(
-            avalon_chain::merkle::mth_of_hex_hashes(&hashes)
-                .expect("mirrored entry hashes must be valid hex"),
-        ))
-    };
-    let latest = avalon_chain::mirror::latest_observed_sth(&pool, &network_id, &shard_id, source)
-        .await
-        .expect("failed to read observed STHs");
-    let matching = match &recomputed_root {
-        Some(root) => avalon_chain::mirror::observed_sth_matching_root(
-            &pool,
-            &network_id,
-            &shard_id,
-            progress.verified_count,
-            root,
-            source,
-        )
-        .await
-        .expect("failed to look up matching STH"),
-        None => None,
-    };
-    let chain_breaks =
-        avalon_chain::mirror::mirrored_chain_breaks(&pool, &network_id, &shard_id, source)
+    let report =
+        avalon_chain::mirror::check_convergence(&pool, &network_id, &shard_id, source.as_deref())
             .await
-            .expect("failed to check mirrored hash chain");
-    let unresolved = avalon_chain::mirror::unresolved_equivocations(&pool, &network_id, &shard_id)
-        .await
-        .expect("failed to read equivocation findings");
+            .expect("failed to check mirror convergence");
 
     println!("network_id: {network_id}  shard_id: {shard_id}");
-    println!("mirrored entries:     {}", progress.verified_count);
-    match &recomputed_root {
+    println!("mirrored entries:     {}", report.mirrored_count);
+    match &report.recomputed_root {
         Some(root) => println!("recomputed root:      {}", short_hash(root)),
         None => println!("recomputed root:      (nothing mirrored)"),
     }
-    match &latest {
+    match &report.latest_observed {
         Some(sth) => println!(
             "furthest observed STH: tree_size {} root {} (source {}, key {})",
             sth.tree_size,
@@ -1020,26 +979,17 @@ async fn verify_mirror_convergence(raw_args: &[String]) {
     }
     println!(
         "hash chain:           {}",
-        if chain_breaks.is_empty() {
-            "unbroken".to_string()
-        } else {
-            format!(
-                "{} broken link(s), first at seq {}",
-                chain_breaks.len(),
-                chain_breaks[0]
-            )
+        match report.chain_breaks.first() {
+            None => "unbroken".to_string(),
+            Some(first) => format!(
+                "{} broken link(s), first at seq {first}",
+                report.chain_breaks.len()
+            ),
         }
     );
-    println!("open equivocations:   {}", unresolved.len());
+    println!("open equivocations:   {}", report.unresolved_equivocations);
 
-    let verdict =
-        avalon_chain::mirror::evaluate_convergence(&avalon_chain::mirror::ConvergenceInputs {
-            mirrored_count: progress.verified_count,
-            latest_observed_tree_size: latest.as_ref().map(|sth| sth.tree_size),
-            matching_sth_at_mirrored_count: matching.is_some(),
-            chain_breaks,
-            unresolved_equivocations: unresolved.len(),
-        });
+    let verdict = report.verdict;
     println!("{}", describe_convergence(&verdict));
     if !matches!(
         verdict,
@@ -1105,7 +1055,7 @@ impl SwitchVerdict {
                 "VERDICT: READY — old-host and new-host agree on the shard's history up to tree_size {old_tree_size}"
             ),
             SwitchVerdict::Mismatch => format!(
-                "VERDICT: MISMATCH — old-host and new-host report DIFFERENT root hashes at the SAME tree_size {old_tree_size} — do not switch, investigate before proceeding (see docs/maintainers/equivocation-response.md)"
+                "VERDICT: MISMATCH — old-host and new-host report DIFFERENT root hashes at the SAME tree_size {old_tree_size} — do not switch, investigate before proceeding (see docs/projects/backend-server/for-maintainers/equivocation-response.md)"
             ),
         }
     }

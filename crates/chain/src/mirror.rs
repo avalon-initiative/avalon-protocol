@@ -408,7 +408,7 @@ pub async fn unresolved_equivocations(
 /// Records an operator's investigation outcome for every unresolved
 /// finding at `network_id`/`shard_id`/`tree_size`: `legitimate_root_hash`
 /// is whichever of that finding's two disagreeing root hashes was
-/// determined genuine (per `docs/maintainers/equivocation-response.md`'s
+/// determined genuine (per `docs/projects/backend-server/for-maintainers/equivocation-response.md`'s
 /// investigation playbook). This alone does not touch `mirrored_entries` —
 /// pair with [`discard_mirrored_entries_from`] to actually roll back any
 /// content this node already mirrored from the losing branch before
@@ -973,6 +973,85 @@ pub fn evaluate_convergence(inputs: &ConvergenceInputs) -> ConvergenceVerdict {
     ConvergenceVerdict::RootMismatch {
         tree_size: inputs.mirrored_count,
     }
+}
+
+/// A convergence check's evidence and conclusion, as gathered from this
+/// node's own mirror tables by [`check_convergence`].
+#[derive(Debug, Clone)]
+pub struct ConvergenceReport {
+    /// Number of mirrored entries examined.
+    pub mirrored_count: i64,
+    /// Hex Merkle root recomputed over every mirrored entry, if any exist.
+    pub recomputed_root: Option<String>,
+    /// The furthest observed STH, if any.
+    pub latest_observed: Option<ObservedSth>,
+    /// Mirrored `seq`s with a broken `prev_hash` link.
+    pub chain_breaks: Vec<i64>,
+    /// Unresolved equivocation findings for this shard.
+    pub unresolved_equivocations: usize,
+    /// The conclusion drawn from the above.
+    pub verdict: ConvergenceVerdict,
+}
+
+/// Gathers everything [`evaluate_convergence`] needs from this node's own
+/// tables and returns it with the verdict. Needs no connection to the
+/// authority, so it works while the authority is down.
+pub async fn check_convergence(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+    source_url: Option<&str>,
+) -> Result<ConvergenceReport, SettlementError> {
+    let progress = mirrored_progress(pool, network_id, shard_id, source_url).await?;
+    let hashes = mirrored_entry_hashes_up_to(
+        pool,
+        network_id,
+        shard_id,
+        progress.verified_count,
+        source_url,
+    )
+    .await?;
+    let recomputed_root = if hashes.is_empty() {
+        None
+    } else {
+        let root = crate::merkle::mth_of_hex_hashes(&hashes)
+            .map_err(|e| SettlementError::Storage(format!("invalid mirrored entry hash: {e}")))?;
+        Some(hex::encode(root))
+    };
+    let latest_observed = latest_observed_sth(pool, network_id, shard_id, source_url).await?;
+    let matching = match &recomputed_root {
+        Some(root) => {
+            observed_sth_matching_root(
+                pool,
+                network_id,
+                shard_id,
+                progress.verified_count,
+                root,
+                source_url,
+            )
+            .await?
+        }
+        None => None,
+    };
+    let chain_breaks = mirrored_chain_breaks(pool, network_id, shard_id, source_url).await?;
+    let unresolved_equivocations = unresolved_equivocations(pool, network_id, shard_id)
+        .await?
+        .len();
+    let verdict = evaluate_convergence(&ConvergenceInputs {
+        mirrored_count: progress.verified_count,
+        latest_observed_tree_size: latest_observed.as_ref().map(|sth| sth.tree_size),
+        matching_sth_at_mirrored_count: matching.is_some(),
+        chain_breaks: chain_breaks.clone(),
+        unresolved_equivocations,
+    });
+    Ok(ConvergenceReport {
+        mirrored_count: progress.verified_count,
+        recomputed_root,
+        latest_observed,
+        chain_breaks,
+        unresolved_equivocations,
+        verdict,
+    })
 }
 
 #[cfg(test)]
