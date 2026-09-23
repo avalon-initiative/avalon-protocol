@@ -524,6 +524,12 @@ pub struct NodeStatusResponse {
     /// can see how durable a shard actually is *before* trusting it with
     /// anything, not just after a registration attempt is rejected.
     pub own_shard_replication: ShardReplicationStatus,
+    /// `Some(true)` when this node authors `core` with its network's pinned
+    /// settlement key, `Some(false)` when it authors `core` with a different
+    /// key (tolerated only for a lone `local-dev` node), `None` when it does
+    /// not author `core` or its network has no pinned key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub core_author_pinned: Option<bool>,
 }
 
 /// Issue #629: how many distinct peers currently confirm mirroring a
@@ -612,6 +618,7 @@ fn build_status(state: &AppState) -> NodeStatusResponse {
         newest_known_peer_version: newest_known_peer_version.map(|v| v.to_string()),
         resources,
         own_shard_replication,
+        core_author_pinned: crate::core_author_guard::recorded_outcome(),
     }
 }
 
@@ -1427,8 +1434,10 @@ mod tests {
                 within_grace_period: true,
                 eligible_for_new_registrations: true,
             },
+            core_author_pinned: Some(true),
         };
         let json = serde_json::to_value(&response).expect("must serialize even when empty");
+        assert_eq!(json["core_author_pinned"], true);
         assert!(json.get("resources").is_some());
         assert_eq!(
             json["resources"]["cpu"]["usage_percent"],

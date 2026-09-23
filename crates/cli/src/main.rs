@@ -134,6 +134,18 @@ async fn main() {
             }
         }
         #[cfg(feature = "dev-tools")]
+        Some("add-shard-key") => {
+            let raw_args: Vec<String> = args.collect();
+            match dev_tools::AddShardKeyArgs::parse(&raw_args) {
+                Ok(parsed) => dev_tools::add_shard_key(parsed).await,
+                Err(message) => {
+                    eprintln!("{message}");
+                    eprintln!("{}", dev_tools::ADD_SHARD_KEY_USAGE);
+                    std::process::exit(1);
+                }
+            }
+        }
+        #[cfg(feature = "dev-tools")]
         Some("register-issuer") => {
             let raw_args: Vec<String> = args.collect();
             match dev_tools::RegisterIssuerArgs::parse(&raw_args) {
@@ -149,7 +161,7 @@ async fn main() {
             eprintln!(
                 "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
                 if cfg!(feature = "dev-tools") {
-                    "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|pair-device"
+                    "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|add-shard-key --integrator <slug> [--verify-key <hex>] [--key <path>] [--server <url>]|pair-device"
                 } else {
                     ""
                 }

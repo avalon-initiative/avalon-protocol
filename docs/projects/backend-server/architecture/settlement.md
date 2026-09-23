@@ -572,6 +572,22 @@ routing needs:
   `shard_id=url` map — the existing singular `AVALON_SETTLEMENT_REMOTE_URL` env var
   keeps working unchanged as the implicit `core=<url>` entry).
 
+A node's ledger is its shard: the reserved `core` label only names where
+identity-issued events *route*; when no remote authority is configured for that
+label the handling node commits them locally, into the ledger of whichever shard it
+authors (`AVALON_OWN_SHARD_ID`). `core` denotes the network's pinned core authority
+alone, and every other node authors a named, registered shard. Shard ids may carry a
+sibling suffix, `{namespace}:{owner}[/{instance}]` (for example `game:wow/1`,
+`game:wow/2`): key resolution (`resolve_shard_verify_keys_from_db`) uses `owner`
+only, so all siblings verify against the same integrator's `shard_settlement` keys,
+while each sibling keeps its own ledger and tree heads and no ledgers are merged.
+Integrator-issued events keep routing to `{namespace}:{owner}`; a sibling receives
+writes only when it is configured as the remote authority for its exact shard id. The
+core authority is also the trust root registrar: an integrator and its
+`shard_settlement` key become known to the network through events recorded in its
+ledger. See [`nodes.md`](./nodes.md) for the startup guard that refuses an unpinned
+`core` author.
+
 This keeps exactly one legitimate write authority per shard, never contested — routing
 picks *which* shard's authority to use, it never introduces a second writer for the
 same shard. A deployment with no `AVALON_SETTLEMENT_REMOTE_URLS` configured has
