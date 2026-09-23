@@ -337,21 +337,38 @@ broken/misconfigured node.
 ## Discovery
 
 A developer should not need to know `postgres://...` or
-`http://node-37.example.com`. The SDK should eventually resolve a node itself:
+`http://node-37.example.com`. The Rust SDK resolves a node itself, given a
+target network rather than a URL (#91's first landed slice, `network.rs`'s
+`discover`/`AvalonClient::connect`):
 
 ```rust
-let avalon = Avalon::connect().await?;
+let avalon = AvalonClient::connect(
+    TargetNetwork::NetworkId("avalon-mainnet-1".into()),
+    DiscoveryConfig { integrator_credential_key_id, integrator_slug, signing_key, retry },
+).await?;
 ```
 
-Selection criteria over time: latency, geographic proximity, availability,
-protocol version, advertised capabilities, health, settlement support, operator
-preference, and, later, operator reputation. Version and capability negotiation
-happen on connect; failover and retry live inside the SDK
-([`./sdk.md`](../../sdks/architecture/sdk.md)). Self-hosting stays possible without any central
-registry — `connect_to(url)` remains for local development and private
-deployments. A node mirroring the public network and a private, disconnected
-instance both "self-host" the same code — they are not the same thing; see
+Candidates come from `docs/trusted-networks.json`'s `server_url`/`seed_nodes`
+for the matching network entry — no separate discovery registry yet, since
+that file is already exactly "a published node list" (#91's design lists
+this as one of three acceptable discovery sources, alongside a well-known
+endpoint or DNS). Each candidate is verified the same way an already-known
+URL is (`GET /ledger/sth/latest` against the entry's pinned `verify_key`);
+the first that verifies wins. Selection is "first that verifies," not yet
+ranked by latency, geographic proximity, health, or operator preference —
+those remain future refinements once there's more than one anchor node per
+network to choose between. Self-hosting stays possible without any central
+registry — `AvalonConfig { server_url }` remains for local development and
+private deployments, entirely unaffected by `connect()`'s existence. A node
+mirroring the public network and a private, disconnected instance both
+"self-host" the same code — they are not the same thing; see
 [`./self-hosting.md`](./self-hosting.md).
+
+Not yet ported to C#/TypeScript, and no standalone server-side discovery/
+health/capabilities endpoint exists — #91 originally called for one; this
+first slice reuses `GET /ledger/sth/latest` instead. See
+[`./sdk.md`](../../sdks/architecture/sdk.md)'s "Known limitations" for the
+full current-state breakdown.
 
 **Node-to-node announce/bootstrap discovery is real**: `POST
 /nodes/announce`/`GET /nodes/peers` (`crates/server/src/nodes.rs`) — a
@@ -368,8 +385,10 @@ announce/exchange peer set grows past its bootstrap list over time —
 `run_worker` keeps its own growing `active_peers` list, seeded from the
 bootstrap set (never evicted) and extended, capped by `AVALON_NODE_MAX_PEERS`
 (default 50), with peers discovered through announce exchanges. Not built:
-capability-aware routing (the SDK's own discovery, below, still takes a bare
-`server_url`).
+capability-aware routing — the Rust SDK's own zero-URL `connect()` (below)
+picks any STH-verified candidate from `docs/trusted-networks.json`, not
+the best one by role/latency/health; C# and TypeScript SDKs still take
+only a bare `server_url`, with no discovery of their own yet.
 
 **Realtime relay and DHT bootstrap consume this peer table.** The realtime
 relay (see [`presence.md`](./presence.md)/[`communication.md`](./communication.md))
@@ -441,9 +460,11 @@ reasoning depends on the peer mesh staying small and fully interconnected; a
 larger mesh is exactly what the DHT-scoped interest routing above narrows the
 targeting to.
 
-**No SDK-side discovery yet**: the SDK's client config still takes a bare
-URL — the peer table above is a server-to-server mechanism, not yet consumed
-by client-side routing. No export format for the log exists yet either.
+**No capability-aware SDK-side routing yet**: the peer table above is a
+server-to-server mechanism, not consumed by client-side routing — the Rust
+SDK's `connect()` (above) only picks a verified server to talk to, it
+doesn't route individual calls by role. C# and TypeScript client configs
+still take only a bare URL. No export format for the log exists yet either.
 
 ## Version rollout
 
