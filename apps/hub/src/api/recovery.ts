@@ -2,7 +2,7 @@
 // half only (`crates/server/src/recovery.rs`'s unauthenticated endpoints).
 // The session-authenticated half (guardian configuration, status,
 // approve/cancel) now lives directly on `AccountSession`
-// (`@avalon/sdk`'s `accountSession/recovery.ts`) — Profile.vue calls
+// (`@avalon-initiative/protocol-sdk`'s `accountSession/recovery.ts`) — Profile.vue calls
 // `session.session.guardians()`/`.setGuardians()`/etc. itself, no wrapper
 // needed, since signing moved inside `AccountSession` too.
 import {
@@ -12,7 +12,7 @@ import {
   getIdentityRecoveryStatus as sdkGetIdentityRecoveryStatus,
   runRegistrationCeremony as sdkRunRegistrationCeremony,
   type RecoveryRequest,
-} from '@avalon/sdk'
+} from '@avalon-initiative/protocol-sdk'
 import { getServerUrl } from './serverUrl'
 
 export function finalizeRecoveryRequest(requestId: string): Promise<RecoveryRequest> {
@@ -24,7 +24,7 @@ export function getIdentityRecoveryStatus(identityId: string): Promise<RecoveryR
 }
 
 // Drives the new device's WebAuthn registration ceremony end-to-end — same
-// two-step start/finish shape `addPasskey` (`@avalon/sdk` AccountSession)
+// two-step start/finish shape `addPasskey` (`@avalon-initiative/protocol-sdk` AccountSession)
 // uses, but unauthenticated throughout: no bearer token exists yet for
 // this device against this identity, that's the entire point of recovery.
 export async function startRecovery(

@@ -76,10 +76,11 @@ own "Current implementation" section for the full, current detail.
   ([`architecture/overview.md`](architecture/overview.md)), since the
   concepts it maps are defined by these four crates.
 - [`for-hosters/`](for-hosters/README.md) — running your own `avalon-server`
-  node: quickstart, TLS/production deployment.
+  node: quickstart, TLS/production deployment, upgrading a running node.
 - [`for-maintainers/`](for-maintainers) — backend-specific operational docs:
-  rotating the settlement signing key, responding to equivocation, the
-  milestone-1 end-to-end walkthrough.
+  cutting a release, testing a local multi-node network, rotating the
+  settlement signing key, responding to equivocation, the milestone-1
+  end-to-end walkthrough.
 
 ## Related projects
 

@@ -15,8 +15,8 @@
 // rendered cards), so a poll tick briefly flipping it has no visible
 // effect on a page that already has content.
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { listIntegrators } from '@avalon/sdk'
-import type { IntegratorSummary } from '@avalon/sdk'
+import { listIntegrators } from '@avalon-initiative/protocol-sdk'
+import type { IntegratorSummary } from '@avalon-initiative/protocol-sdk'
 import { buildIntegratorsListQueryString, type ListIntegratorsParams } from '../api/integrations'
 import { getServerUrl } from '../api/serverUrl'
 

@@ -11,17 +11,9 @@ packages/*/node_modules/
 storybook-static/
 *.tsbuildinfo
 
-# Regenerated from docs/trusted-networks.json on every dev/build/test run
-# (apps/hub/vite.config.ts) — never hand-edited, see issue #232.
-apps/hub/src/generated/
-
 # Tauri
 apps/mobile-hub/src-tauri/target/
 apps/mobile-hub/src-tauri/gen/
-
-# .NET (bindings/csharp)
-bindings/csharp/**/bin/
-bindings/csharp/**/obj/
 
 # -----------------------------------------------------------------------------
 # Common patterns — OS junk, editors, secrets, scratch. Stack-specific entries
@@ -88,7 +80,6 @@ Session.vim
 *.ntvs*
 *.njsproj
 *.sln
-!bindings/csharp/*.sln
 *.sw?
 
 # Debug and profiling

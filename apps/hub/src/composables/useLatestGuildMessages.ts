@@ -4,7 +4,7 @@
 // guild — a full cross-channel merge is more than a Home summary widget
 // needs; Guild.vue's own channel list is where that already happens.
 import { onUnmounted, ref, watch, type Ref } from 'vue'
-import type { AccountSession, Guild, GuildMessage } from '@avalon/sdk'
+import type { AccountSession, Guild, GuildMessage } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000

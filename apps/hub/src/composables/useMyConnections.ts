@@ -3,7 +3,7 @@
 // needed for milestone 1" shape apps/hub/src/composables/useGuildDetail.ts
 // already establishes.
 import { onMounted, onUnmounted, ref } from 'vue'
-import type { MyConnection } from '@avalon/sdk'
+import type { MyConnection } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000

@@ -337,21 +337,45 @@ broken/misconfigured node.
 ## Discovery
 
 A developer should not need to know `postgres://...` or
-`http://node-37.example.com`. The SDK should eventually resolve a node itself:
+`http://node-37.example.com`. Every official SDK (Rust, C#, TypeScript) resolves a
+node itself, given a target network rather than a URL (#91,
+`discover`/`AvalonClient::connect`; Rust shown):
 
 ```rust
-let avalon = Avalon::connect().await?;
+let avalon = AvalonClient::connect(
+    TargetNetwork::NetworkId("avalon-mainnet-1".into()),
+    DiscoveryConfig { integrator_credential_key_id, integrator_slug, signing_key, retry },
+).await?;
 ```
 
-Selection criteria over time: latency, geographic proximity, availability,
-protocol version, advertised capabilities, health, settlement support, operator
-preference, and, later, operator reputation. Version and capability negotiation
-happen on connect; failover and retry live inside the SDK
-([`./sdk.md`](../../sdks/architecture/sdk.md)). Self-hosting stays possible without any central
-registry — `connect_to(url)` remains for local development and private
-deployments. A node mirroring the public network and a private, disconnected
-instance both "self-host" the same code — they are not the same thing; see
+Candidates come from `docs/trusted-networks.json`'s `server_url`/`seed_nodes`
+for the matching network entry — no separate discovery registry yet, since
+that file is already exactly "a published node list" (#91's design lists
+this as one of three acceptable discovery sources, alongside a well-known
+endpoint or DNS). Each candidate is verified the same way an already-known
+URL is (`GET /ledger/sth/latest` against the entry's pinned `verify_key`);
+the first that verifies wins. Selection is "first that verifies," not yet
+ranked by latency, geographic proximity, health, or operator preference —
+those remain future refinements once there's more than one anchor node per
+network to choose between. Self-hosting stays possible without any central
+registry — `AvalonConfig { server_url }` remains for local development and
+private deployments, entirely unaffected by `connect()`'s existence. A node
+mirroring the public network and a private, disconnected instance both
+"self-host" the same code — they are not the same thing; see
 [`./self-hosting.md`](./self-hosting.md).
+
+`GET /nodes/discover`
+(`crates/server/src/nodes.rs`, #802) is the standalone server-side
+discovery endpoint #91 originally called for: given one already-verified
+node, it returns that node's own `GET /nodes/status` output plus its full
+`GET /nodes/peers` table in a single response, so a client that has
+reached exactly one node can expand its candidate pool without a second
+round trip. Not yet wired into any SDK's `connect()` — each SDK still
+only tries `docs/trusted-networks.json`'s static `server_url`/`seed_nodes`
+list, one candidate at a time — and still not ranked candidate selection:
+`/nodes/discover` hands back a node's raw peer set, not a set ordered by
+latency, health, or role. See [`./sdk.md`](../../sdks/architecture/sdk.md)'s
+"Known limitations" for the full current-state breakdown.
 
 **Node-to-node announce/bootstrap discovery is real**: `POST
 /nodes/announce`/`GET /nodes/peers` (`crates/server/src/nodes.rs`) — a
@@ -368,8 +392,9 @@ announce/exchange peer set grows past its bootstrap list over time —
 `run_worker` keeps its own growing `active_peers` list, seeded from the
 bootstrap set (never evicted) and extended, capped by `AVALON_NODE_MAX_PEERS`
 (default 50), with peers discovered through announce exchanges. Not built:
-capability-aware routing (the SDK's own discovery, below, still takes a bare
-`server_url`).
+capability-aware routing — every SDK's zero-URL `connect()` (below)
+picks any STH-verified candidate from `docs/trusted-networks.json`, not
+the best one by role/latency/health.
 
 **Realtime relay and DHT bootstrap consume this peer table.** The realtime
 relay (see [`presence.md`](./presence.md)/[`communication.md`](./communication.md))
@@ -441,9 +466,10 @@ reasoning depends on the peer mesh staying small and fully interconnected; a
 larger mesh is exactly what the DHT-scoped interest routing above narrows the
 targeting to.
 
-**No SDK-side discovery yet**: the SDK's client config still takes a bare
-URL — the peer table above is a server-to-server mechanism, not yet consumed
-by client-side routing. No export format for the log exists yet either.
+**No capability-aware SDK-side routing yet**: the peer table above is a
+server-to-server mechanism, not consumed by client-side routing — the
+SDKs' `connect()` (above) only pick a verified server to talk to, they
+don't route individual calls by role. No export format for the log exists yet either.
 
 ## Version rollout
 
@@ -494,10 +520,14 @@ Concrete node-to-node version awareness (`crates/server/src/version.rs`):
   baseline, never lower it. Exclusion is reversible: a peer that upgrades
   starts reporting a passing version and is naturally re-admitted on its next
   announce/gossip cycle.
-- `GET /nodes/status` surfaces this node's own `protocol_version` and, when
-  known via peer gossip, a `stale` flag — a self-diagnostic "you may want to
-  upgrade" signal only; nothing reads it to change behavior. The same
-  response also carries a `resources` block — this node's own host-level
+- `GET /nodes/status` surfaces this node's own `protocol_version`, its
+  configured `roles` (`AVALON_NODE_ROLES`, `combined` reported as-is), and,
+  when known via peer gossip, a `stale` flag — a self-diagnostic "you may
+  want to upgrade" signal only; nothing reads `stale` to change behavior.
+  `roles` is what a caller that already has this node's URL uses for
+  capability negotiation (#91) — settlement/indexer/realtime/gateway,
+  before routing a request to it. The same response also carries a
+  `resources` block — this node's own host-level
   CPU/memory/disk/process metrics plus its DB pool size/in-use — with the
   identical posture: every field is independently optional, a metric this
   process can't read on a given platform is `None` rather than a failed

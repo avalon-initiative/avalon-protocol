@@ -15,7 +15,7 @@ import type {
   GuildMember as SdkGuildMember,
   PresenceStatus,
   Role,
-} from '@avalon/sdk'
+} from '@avalon-initiative/protocol-sdk'
 
 // Query params for GET /guilds/discover — mirrors
 // crates/server/src/guilds.rs::DiscoverGuildsQuery. Purely a request

@@ -11,7 +11,7 @@
 // swaps which conversation is open without a route remount. An empty
 // `conversationId` (nothing selected yet) is a valid, quiet state.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import type { ConversationMessage, RealtimeSubscription } from '@avalon/sdk'
+import type { ConversationMessage, RealtimeSubscription } from '@avalon-initiative/protocol-sdk'
 import { toOldestFirst } from '../api/conversations'
 import { markConversationSeen } from '../api/notifications'
 import { useSessionStore } from '../api/session'

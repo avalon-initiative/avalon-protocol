@@ -16,7 +16,7 @@ import {
   type Passkey,
   type ProfileUpdate,
   type RecoveryRequest,
-} from '@avalon/sdk'
+} from '@avalon-initiative/protocol-sdk'
 import { beginDeviceGrantRequest } from '../api/deviceGrants'
 import { useSessionStore } from '../api/session'
 import { loadSigningKeySeed, storeSigningKeySeed } from '../api/signingKeyStorage'

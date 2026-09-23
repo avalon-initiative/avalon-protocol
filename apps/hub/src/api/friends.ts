@@ -5,7 +5,7 @@
 // crates/sdk/src/social.rs's Session::friends()/merge_friend in Rust —
 // same shape, ported to TypeScript for the Hub, which doesn't consume the
 // Rust SDK directly. Display names are resolved via GET /identities/profiles.
-import type { AccountSession, Friendship, FriendRequest, PresenceStatus } from '@avalon/sdk'
+import type { AccountSession, Friendship, FriendRequest, PresenceStatus } from '@avalon-initiative/protocol-sdk'
 
 export interface Friend {
   identityId: string

@@ -9,7 +9,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField } from '@avalon/ui'
-import type { RecoveryRequest } from '@avalon/sdk'
+import type { RecoveryRequest } from '@avalon-initiative/protocol-sdk'
 import { avalonClient, useSessionStore } from '../api/session'
 import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import { finalizeRecoveryRequest, getIdentityRecoveryStatus, startRecovery } from '../api/recovery'

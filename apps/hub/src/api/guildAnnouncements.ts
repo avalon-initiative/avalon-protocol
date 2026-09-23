@@ -6,7 +6,7 @@
 // crates/server/src/guild_messages.rs's own doc comment on the endpoint):
 // read/unread is entirely this Hub's own client-local concern, computed
 // from a per-channel "last seen" timestamp kept in localStorage.
-import type { GuildAnnouncementAlert } from '@avalon/sdk'
+import type { GuildAnnouncementAlert } from '@avalon-initiative/protocol-sdk'
 
 const LAST_SEEN_STORAGE_KEY = 'avalon:guildAnnouncements:lastSeen'
 

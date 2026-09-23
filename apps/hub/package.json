@@ -6,7 +6,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/generate-trusted-networks.mjs",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -14,7 +13,7 @@
   },
   "dependencies": {
     "@avalon/ui": "*",
-    "@avalon/sdk": "file:../../bindings/ts",
+    "@avalon-initiative/protocol-sdk": "^0.1.0",
     "vue": "^3.5.43",
     "vue-router": "^5.3.1",
     "pinia": "^4.0.3",

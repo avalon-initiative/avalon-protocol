@@ -11,7 +11,7 @@ import {
   totalRsvps,
   validateEventForm,
 } from './guildEvents'
-import type { GuildEvent, RsvpRosterEntry } from '@avalon/sdk'
+import type { GuildEvent, RsvpRosterEntry } from '@avalon-initiative/protocol-sdk'
 
 function makeEvent(overrides: Partial<GuildEvent> = {}): GuildEvent {
   return {

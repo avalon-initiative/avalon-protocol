@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../.github/assets/graphics/avalon-pitch-gaming.png" alt="Avalon Network — one identity, friends, guilds, and achievements carried across every game you play" width="720">
+</p>
+
 # Documentation
 
 This tree is organized two ways at once, and both are meant to get you to the

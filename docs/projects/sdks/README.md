@@ -34,9 +34,9 @@ Implemented first, in shipping order:
 
 | Language | Folder | Status |
 |---|---|---|
-| Rust (`avalon-sdks`' `rust/`, not `crates/sdk` in this repo) | [`rust/`](rust/README.md) | Reference implementation. Real, live-tested; friends/presence/guilds/conversations/achievement issuance all work end to end against a live server, with no dependency on `avalon-protocol` at all — verified against the same conformance suite the server side asserts. |
-| C# (`bindings/csharp/AvalonSdk`, netstandard2.1, Unity-targeted) | [`csharp/`](csharp/README.md) | Real, building, tested — 52+ passing tests including opt-in live ones. The priority developer-facing surface, since it's what most integrating game studios will actually use. |
-| TypeScript (`bindings/ts`) | [`typescript/`](typescript/README.md) | Real and shipped, browser-facing — drives a real WebAuthn ceremony. Also what `apps/hub` runs on, so it's exercised by a real production frontend, not only its own test suite. |
+| Rust (`avalon-sdks`' `languages/rust/`, not `crates/sdk` in this repo) | [`rust/`](rust/README.md) | Reference implementation. Real, live-tested; friends/presence/guilds/conversations/achievement issuance all work end to end against a live server, with no dependency on `avalon-protocol` at all — verified against the same conformance suite the server side asserts. |
+| C# (`avalon-sdks`' `languages/csharp/AvalonSdk`, not `bindings/csharp` in this repo, netstandard2.1, Unity-targeted) | [`csharp/`](csharp/README.md) | Real, building, tested — 126+ passing tests including opt-in live ones. The priority developer-facing surface, since it's what most integrating game studios will actually use. |
+| TypeScript (`avalon-sdks`' `languages/typescript/`, not `bindings/ts` in this repo, published as `@avalon-initiative/protocol-sdk` on GitHub Packages) | [`typescript/`](typescript/README.md) | Real and shipped, browser-facing — drives a real WebAuthn ceremony. Also what `apps/hub` runs on (as a real published dependency now, not a local path), so it's exercised by a real production frontend, not only its own test suite. |
 
 **See [`language-support.md`](language-support.md) for the full, canonical
 table** — every language above with its detailed status, plus every

@@ -7,7 +7,7 @@ import {
   markConversationSeen,
   markGuardianOfSeen,
 } from './notifications'
-import type { ConversationMessage } from '@avalon/sdk'
+import type { ConversationMessage } from '@avalon-initiative/protocol-sdk'
 
 beforeEach(() => {
   localStorage.clear()

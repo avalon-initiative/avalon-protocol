@@ -1,17 +1,22 @@
 # C# SDK
 
-`bindings/csharp/AvalonSdk` (NuGet package id `Avalon.Sdk`, root namespace
-`Avalon.Sdk`) — the flagship *external* [Avalon SDK](../README.md) for game
-developers. Targets `netstandard2.1` deliberately, not `net8+`: Unity's
-Mono/IL2CPP runtimes are the primary target, and netstandard2.1 is Unity's
-minimum supported C# API compatibility level as of writing.
+The `csharp/AvalonSdk` project in the `avalon-sdks` repo (NuGet package id
+`Avalon.Sdk`, root namespace `Avalon.Sdk`) — the flagship *external*
+[Avalon SDK](../README.md) for game developers. Physically lives in
+`avalon-sdks` (`languages/csharp/`) as of issue #775 (epic #771), moved out of this
+repo's `bindings/csharp` alongside the Rust SDK's own earlier move —
+neither this repo's `Makefile` nor its CI touch it anymore; `dotnet
+build`/`dotnet test` run from `avalon-sdks` directly. Targets
+`netstandard2.1` deliberately, not `net8+`: Unity's Mono/IL2CPP runtimes
+are the primary target, and netstandard2.1 is Unity's minimum supported
+C# API compatibility level as of writing.
 
 See [`../architecture/sdk.md`](../architecture/sdk.md) for the design that
 applies to every language's SDK — this page is the C#-specific "how," not
 the "why."
 
 **Status:** real, building, and tested — `dotnet build` / `dotnet test`
-both work, 52+ passing tests including opt-in live ones against a real
+both work, 126+ passing tests including opt-in live ones against a real
 server and database (see `AvalonSdk.Tests/LiveTests.cs`'s own header
 comment for the exact `DATABASE_URL` format it needs — an Npgsql
 keyword/value string, not this repo's own `.env`-style Postgres URI). Not

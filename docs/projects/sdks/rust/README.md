@@ -1,7 +1,7 @@
 # Rust SDK
 
 The reference implementation of the [Avalon SDK](../README.md). Physically
-lives in the `avalon-sdks` repo (`rust/`) — not `crates/sdk` in this repo,
+lives in the `avalon-sdks` repo (`languages/rust/`) — not `crates/sdk` in this repo,
 and not an in-workspace dependency (`crates/cli` reaches it via a real git
 dependency). "Reference" means it's maintained by the same team as
 `backend-server`, so it's the most complete SDK and the one other languages

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MESSAGE_BODY_MAX_CHARS, toOldestFirst, validateComposerBody } from './guildChat'
-import type { GuildMessage } from '@avalon/sdk'
+import type { GuildMessage } from '@avalon-initiative/protocol-sdk'
 
 describe('validateComposerBody', () => {
   it('rejects an empty body', () => {

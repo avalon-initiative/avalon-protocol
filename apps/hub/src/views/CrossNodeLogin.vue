@@ -16,7 +16,7 @@
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { AvalonButton, AvalonCard, AvalonIcon, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
-import { lookupCrossNodeLogin, denyCrossNodeLogin, submitCrossNodeLoginGrant } from '@avalon/sdk'
+import { lookupCrossNodeLogin, denyCrossNodeLogin, submitCrossNodeLoginGrant } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'
 import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import styles from '../styles/page.module.scss'

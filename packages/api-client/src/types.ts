@@ -1042,10 +1042,7 @@ export type MyConnectionsResponse = IntegratorBindingResponse[]
 
 // Settlement / transparency-log reads, matching
 // `crates/server/src/settlement.rs::SignedTreeHeadResponse` field-for-field.
-// `tree_size` and `created_at`'s unix-seconds form both feed
-// `apps/hub/src/network/sthMessage.ts`'s byte-for-byte reconstruction of
-// `crates/chain/src/sth.rs::signing_message` — see that module.
-export interface SignedTreeHeadResponse {
+// export interface SignedTreeHeadResponse {
   tree_size: number
   // Lowercase hex-encoded RFC 6962 Merkle Tree Hash.
   root_hash: string

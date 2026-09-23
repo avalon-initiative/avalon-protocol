@@ -12,12 +12,12 @@ const runRegistrationCeremonyMock = vi.fn<
 >()
 
 // startRecovery calls runRegistrationCeremony indirectly (via
-// @avalon/sdk's own recovery.ts helper, which imports it from its sibling
+// @avalon-initiative/protocol-sdk's own recovery.ts helper, which imports it from its sibling
 // ./crypto/webauthn) — mocking that resolved file directly, rather than the
-// @avalon/sdk package entrypoint, is what actually intercepts the internal
+// @avalon-initiative/protocol-sdk package entrypoint, is what actually intercepts the internal
 // call; a mock of the barrel export wouldn't reach a call made from
 // *inside* that same package.
-vi.mock('@avalon/sdk/src/crypto/webauthn', () => ({
+vi.mock('@avalon-initiative/protocol-sdk/src/crypto/webauthn', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
 }))
 

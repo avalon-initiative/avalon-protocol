@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { activeCapabilities, capabilityDescription, CAPABILITY_DESCRIPTIONS } from './connections'
-import type { MyConnection } from '@avalon/sdk'
+import type { MyConnection } from '@avalon-initiative/protocol-sdk'
 
 describe('capabilityDescription', () => {
   it('returns the plain-language description for a known capability', () => {

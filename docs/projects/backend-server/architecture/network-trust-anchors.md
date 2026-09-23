@@ -22,7 +22,7 @@ versioned, publicly-published trust-anchor list. Each entry:
 | `verify_key` | Hex-encoded Ed25519 public key — the public half of that network's settlement operator signing key (`AVALON_SETTLEMENT_VERIFY_KEY`, see `crates/protocol/src/sth.rs` and `.env.example`). |
 | `signing_key_id` | Which key generation this is, matching `SignedTreeHead.signing_key_id` — informational; a rotated key gets a new entry (or a documented rotation), not a silent overwrite of this one. |
 | `environment` | Which tier this deployment is: `local-dev` (no real deployment — a freely-generated key checked in only to exercise the mechanism end to end), `dev` (a real, non-production, single-node deployment — infra on one machine), `int` (a real, non-production, 1-5 node interconnected test bed used to verify changes actually integrate across nodes before they reach mainnet), or `prod` (a real mainnet deployment, whose validator set is expected to grow and shrink over time). The Hub only calls out non-`prod` entries in its UI. |
-| `seed_nodes` | Base URLs of this network's always-on anchor node(s) — the default bootstrap peer list a node configured for this `network_id` announces to (`POST /nodes/announce`) when it has no `AVALON_BOOTSTRAP_PEERS` of its own set. Reuses this file rather than a second committed list — an anchor node is exactly the "always-on node(s) each real deployment already plans to run" this file's entries already describe. Empty for a network with no anchor yet, or for the anchor's own entry (nothing to seed from). Not consumed by the Hub — server-to-server discovery only. |
+| `seed_nodes` | Base URLs of this network's always-on anchor node(s) — the default bootstrap peer list a node configured for this `network_id` announces to (`POST /nodes/announce`) when it has no `AVALON_BOOTSTRAP_PEERS` of its own set. Reuses this file rather than a second committed list — an anchor node is exactly the "always-on node(s) each real deployment already plans to run" this file's entries already describe. Empty for a network with no anchor yet, or for the anchor's own entry (nothing to seed from). Also consumed by every official SDK's zero-URL `connect()`, which tries these (after the entry's own `server_url`) as its candidate list. |
 
 Being a committed file in this repo *is* the integrity story: changing a
 trusted entry goes through the same PR review and git history as any other
@@ -30,10 +30,10 @@ change here, not a quiet edit behind an API nobody watches. There is
 deliberately no runtime "publish a new trust anchor" endpoint.
 
 The [README](../../../../README.md#trusted-networks) renders the same file as a
-table, not a second hand-maintained copy — `apps/hub` (below) reads it
-end to end at build time via `apps/hub/src/network/trustAnchors.ts`, and a
-test (`apps/hub/src/network/trustAnchors.readme.test.ts`) fails if the README
-table drifts from the JSON.
+table, not a second hand-maintained copy — every official SDK bundles the same
+file (the TypeScript SDK, which `apps/hub` consumes, mirrors it via its own
+generate step), and a test (`apps/hub/src/network/trustAnchors.readme.test.ts`)
+fails if the README table drifts from the JSON.
 
 ## What this repo actually has today
 
@@ -66,22 +66,14 @@ client shows it as an unknown/unverified network, not mainnet.
 
 ## Hub enforcement
 
-`apps/hub`:
+`apps/hub` does not implement any of the verification itself — it only
+talks to the protocol layer through `@avalon-initiative/protocol-sdk`, whose
+`AvalonClient.verifyNetwork()` fetches `GET /ledger/sth/latest`, matches the
+STH's `network_id` against the SDK's bundled trust-anchor list, and
+independently re-verifies the STH's Ed25519 signature against that entry's
+`verify_key` (the same `(tree_size, root_hash, network_id, timestamp)` message
+`crates/protocol/src/sth.rs::signing_message` defines).
 
-- `src/network/trustAnchors.ts` — the bundled trust-anchor list (generated
-  at build/dev/test time from `docs/trusted-networks.json`, see that file's
-  header comment in `vite.config.ts` — never hand-copied).
-- `src/api/client.ts` — `getLatestSth()`, `GET /ledger/sth/latest`
-  against whatever `VITE_AVALON_SERVER_URL` the Hub is built against
-  (`src/api/client.ts`).
-- `src/network/verifyNetwork.ts` — matches the fetched STH's `network_id`
-  against the bundled list and, if found, independently re-verifies the
-  STH's Ed25519 signature against that entry's `verify_key` using
-  `@noble/curves/ed25519` (already a Hub dependency for the identity signing
-  key, `src/crypto/signingKey.ts`) — the exact same
-  `(tree_size, root_hash, network_id, timestamp)` message format
-  `crates/protocol/src/sth.rs::signing_message` defines, reproduced byte-for-byte
-  in `src/network/sthMessage.ts`.
 - `src/composables/useNetworkTrust.ts` + `src/components/NetworkStatus.vue` —
   surfaced in the Hub shell sidebar (`HubShell.vue`), always visible, never
   buried in settings: which network the session is connected to, and one of
@@ -271,17 +263,14 @@ and re-run without any risk to the network being migrated from.
 
 - `docs/trusted-networks.json` — the canonical list (one `local-dev`
   `avalon-dev-local` entry, see above).
-- `apps/hub/src/network/` — trust-anchor loading, STH message
-  reconstruction, and verification (`trustAnchors.ts`, `sthMessage.ts`,
-  `verifyNetwork.ts`, unit-tested in
-  `apps/hub/src/network/verifyNetwork.test.ts` against a real generated
-  Ed25519 keypair: a valid STH signature passes, a forged one or one signed
-  by a different key is flagged, not silently accepted).
+- The TypeScript SDK's `network/` module (`avalon-sdks` repository) — trust-anchor
+  loading, STH message reconstruction, verification, and zero-URL discovery,
+  unit-tested against real generated Ed25519 keypairs: a valid STH signature
+  passes, a forged one or one signed by a different key is flagged, not
+  silently accepted. The C# and Rust SDKs carry the same surface.
 - `apps/hub/src/composables/useNetworkTrust.ts`,
   `apps/hub/src/components/NetworkStatus.vue` — the always-visible Hub-side
   UI, wired into `HubShell.vue`'s sidebar.
-- `apps/hub/src/api/client.ts` — the Hub's settlement/ledger API client
-  (`GET /ledger/sth/latest`).
 - README's ["Trusted networks"](../../../../README.md#trusted-networks) section.
 - The Rust SDK's network module (`avalon-sdks` repository) — the SDK-side
   equivalent: `TrustAnchorEntry`/`bundled_trust_anchors()` (embedded from

@@ -31,21 +31,6 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # C# SDK for game developers (Unity-targeted, netstandard2.1).
-  - package-ecosystem: "nuget"
-    directory: "/bindings/csharp"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    labels:
-      - "developer-experience"
-    commit-message:
-      prefix: "[noissue] - "
-    groups:
-      nuget-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
   # Keeps the workflow files themselves patched.
   - package-ecosystem: "github-actions"
     directory: "/"

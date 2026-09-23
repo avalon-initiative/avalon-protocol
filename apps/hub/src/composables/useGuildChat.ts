@@ -13,7 +13,7 @@
 // not an error: every loader below short-circuits on it rather than hitting
 // the API with a malformed URL.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import type { ArchivedMessage, ChannelMessageUpdate, Guild, GuildChannel, GuildMessage, RealtimeSubscription } from '@avalon/sdk'
+import type { ArchivedMessage, ChannelMessageUpdate, Guild, GuildChannel, GuildMessage, RealtimeSubscription } from '@avalon-initiative/protocol-sdk'
 import { hasGuildPermission, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
 import { toOldestFirst } from '../api/guildChat'

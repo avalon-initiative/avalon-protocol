@@ -33,7 +33,7 @@ import type {
   Guild,
   GuildMember as SdkGuildMember,
   Role,
-} from '@avalon/sdk'
+} from '@avalon-initiative/protocol-sdk'
 
 const OWNER = 'owner-id'
 const OFFICER = 'officer-id'

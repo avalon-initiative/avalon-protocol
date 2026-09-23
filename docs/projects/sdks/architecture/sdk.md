@@ -155,7 +155,7 @@ Non-Rust SDKs and third-party network implementations need only the wire
 protocol and the domain model in `crates/protocol`; they never pull in
 `avalon-chain` or `avalon-server`.
 
-The Rust SDK physically lives in the `avalon-sdks` repo (`rust/`) rather
+The Rust SDK physically lives in the `avalon-sdks` repo (`languages/rust/`) rather
 than `crates/sdk` in this repo; `crates/cli` reaches it via a real git
 dependency, not a workspace path. It has **no dependency on any other
 crate in this workspace** — not `avalon-protocol`, not `avalon-chain`, not
@@ -311,8 +311,9 @@ constant instead of a literal string at every call site.
 
 ### C# SDK surface
 
-`bindings/csharp/AvalonSdk` is a real, building C# port of the same
-surface: auth/session, friends/presence, guilds, conversations,
+`avalon-sdks`' `languages/csharp/AvalonSdk` (moved from this repo's `bindings/csharp`
+by #775) is a real, building C# port of the same surface: auth/session,
+friends/presence, guilds, conversations,
 sync-journal, achievements (including definition CRUD and bulk issuance),
 integrator-space schema/mapping/instance-data, integrator registration and
 key management, social recovery's request-initiation flow, and
@@ -349,12 +350,12 @@ plus opt-in live tests against a real server and Postgres.
 
 ### TypeScript SDK surface
 
-`bindings/ts` is a self-contained TypeScript SDK implementing both
-`AccountSession` and `IntegratorSession` from scratch, ES modules, `vitest`
-for tests. It is not a workspace member — installed separately from inside
-`bindings/ts` itself, with no internal dependency on `packages/api-client`,
-`apps/hub`, or `apps/mobile-hub` anywhere in its source, even though
-`apps/hub`'s entire data-fetching surface runs on it in production.
+`avalon-sdks`' `languages/typescript/` (moved from this repo's `bindings/ts`) is a
+self-contained TypeScript SDK implementing both `AccountSession` and
+`IntegratorSession` from scratch, ES modules, `vitest` for tests.
+Published to GitHub Packages as `@avalon-initiative/protocol-sdk`;
+`apps/hub`'s entire data-fetching surface runs on the published package
+in production, not a local path.
 
 Unlike the C# port (which scopes WebAuthn ceremony-driving out entirely)
 and the Rust port (which drives a virtual/software authenticator, since it
@@ -367,7 +368,7 @@ already-minted-token path, and `.startAccountDeviceLogin()` is the same
 device-originated-login pattern the other SDKs have.
 
 `AccountSession` mirrors the Rust/C# surface field-for-field, split one
-file per domain under `bindings/ts/src/accountSession/`, attached to the
+file per domain under `typescript/src/accountSession/`, attached to the
 class prototype and merged into the `AccountSession` interface via
 TypeScript declaration merging (since TS classes can't be split across
 files the way a C# `partial class` can). Every signature-required action
@@ -456,11 +457,26 @@ currently report full route coverage against the published API.
 
 ## Known limitations
 
-- **No `Avalon::connect()` discovery.** `AvalonConfig { server_url }` is
-  the opposite of the target-shape discovery model above — a developer
-  configures an explicit server URL today rather than the SDK discovering
-  and selecting a node on its own. Node discovery and capability
-  negotiation remain future work.
+- **Zero-URL `connect()` discovery is real in all three SDKs (#91), but
+  unranked.** `AvalonClient::connect(target, config)` (Rust),
+  `AvalonClient.ConnectAsync(target, config)` (C#) and
+  `AvalonClient.connect(target)` (TypeScript) resolve a `TargetNetwork` (an
+  exact `network_id` or a deployment tier) to a live server with no URL
+  supplied up front: candidates come only from `docs/trusted-networks.json`'s
+  own `server_url`/`seed_nodes` fields for matching entries, each fetched and
+  verified via the same `GET /ledger/sth/latest` STH check `verify_network()`
+  uses for an already-known URL — so a candidate that answers but isn't
+  cryptographically the target network is rejected, not silently accepted.
+  First candidate that verifies wins; every rejected candidate is retained so
+  a caller can see why. Explicit-URL construction remains fully supported for
+  self-hosted/local-dev connections — this is additive. No SDK yet consumes
+  the server's `GET /nodes/discover` peer-set expansion or ranks candidates by
+  latency/health/role. Capability negotiation for
+  an already-known URL is real, across all three official SDKs:
+  `GET /nodes/status` reports a node's own `roles`
+  (settlement/indexer/realtime/gateway), exposed as
+  `AvalonClient.status()`/`getNodeStatus()` (TypeScript),
+  `AvalonClient::node_status()` (Rust), and `GetNodeStatusAsync()` (C#).
 - **Visibility scoping is partial.** Presence reads and guild rosters are
   scoped server-side by the subject's own visibility settings. Guild
   `channels()`/`messages()` are not — any member with `guilds.chat` sees

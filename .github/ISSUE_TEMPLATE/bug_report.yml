@@ -44,7 +44,7 @@ body:
     id: component
     attributes:
       label: Affected component
-      placeholder: e.g. crates/server, crates/chain, apps/hub, bindings/csharp
+      placeholder: e.g. crates/server, crates/chain, apps/hub, packages/ui
 
   - type: input
     id: version

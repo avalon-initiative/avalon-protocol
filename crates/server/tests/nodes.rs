@@ -235,6 +235,81 @@ async fn node_status_reports_internally_consistent_resource_metrics() {
     );
 }
 
+/// `GET /nodes/status` reports this node's own `AVALON_NODE_ROLES`.
+/// Asserts against the real default (`combined`, `node_roles()`'s
+/// fallback) rather than a specific deployment's configuration.
+#[tokio::test]
+#[ignore]
+async fn node_status_reports_own_roles() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+
+    let response = http
+        .get(format!("{base}/nodes/status"))
+        .send()
+        .await
+        .expect("GET /nodes/status failed — is `make start` running?");
+    assert!(response.status().is_success(), "{:?}", response.status());
+
+    let body: serde_json::Value = response.json().await.expect("response was not JSON");
+    let roles = body["roles"]
+        .as_array()
+        .expect("roles should be a JSON array");
+    assert!(
+        !roles.is_empty(),
+        "node_roles() never returns empty — falls back to [\"combined\"]"
+    );
+}
+
+/// `GET /nodes/discover` must return exactly what `GET /nodes/status` and
+/// `GET /nodes/peers` would each return on their own, bundled into one
+/// response — the whole point being one round trip instead of two.
+#[tokio::test]
+#[ignore]
+async fn discover_matches_separate_status_and_peers_calls() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+
+    // Make sure there's at least one peer on record so the comparison below
+    // is meaningful, not just two empty lists agreeing.
+    announce(&http, &base, &caller_base_url, &network_id()).await;
+
+    let discover: serde_json::Value = http
+        .get(format!("{base}/nodes/discover"))
+        .send()
+        .await
+        .expect("GET /nodes/discover failed — is `make start` running?")
+        .json()
+        .await
+        .expect("GET /nodes/discover response was not JSON");
+
+    let status: serde_json::Value = http
+        .get(format!("{base}/nodes/status"))
+        .send()
+        .await
+        .expect("GET /nodes/status failed")
+        .json()
+        .await
+        .expect("GET /nodes/status response was not JSON");
+    assert_eq!(
+        discover["self_status"]["protocol_version"], status["protocol_version"],
+        "discover's self_status must match GET /nodes/status"
+    );
+    assert_eq!(
+        discover["self_status"]["network_id"], status["network_id"],
+        "discover's self_status must match GET /nodes/status"
+    );
+
+    let discover_peers = discover["peers"].as_array().unwrap();
+    assert!(
+        discover_peers
+            .iter()
+            .any(|p| p["base_url"] == caller_base_url),
+        "discover's peers must include the just-announced peer"
+    );
+}
+
 /// Requires `AVALON_SECOND_NODE_SERVER_URL` — a second real `avalon-server`
 /// process sharing this network's `network_id` (any Postgres is fine,
 /// shared or separate, since the peer table is in-memory per process).
