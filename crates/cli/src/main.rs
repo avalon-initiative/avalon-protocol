@@ -85,6 +85,10 @@ async fn main() {
             let raw_args: Vec<String> = args.collect();
             verify_mirror_convergence(&raw_args).await;
         }
+        Some("promote-mirror") => {
+            let raw_args: Vec<String> = args.collect();
+            promote_mirror(&raw_args).await;
+        }
         Some("logs") => {
             let sub = args.next();
             match sub.as_deref() {
@@ -159,7 +163,7 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
+                "usage: avalon <inspect-ledger|inspect-ledger-full|outbox-status|prune-ledger [--dry-run]|rebuild-index|migrate-network --target-database-url <url> --target-network-id <id>|discover-mirror-peers|check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]|list-equivocations [network_id]|verify-mirror-convergence <network_id> [--shard-id <id>] [--source <url>]|promote-mirror <network_id> [--shard-id <id>] [--source <url>] --target-database-url <url> [--dry-run]|resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]|logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]{}>",
                 if cfg!(feature = "dev-tools") {
                     "|create-identity|login <identity_id>|register-integrator|register-game --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]|issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]|register-issuer --integrator <slug> (--network-id <network_id> | --env <dev|int|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]|add-shard-key --integrator <slug> [--verify-key <hex>] [--key <path>] [--server <url>]|pair-device"
                 } else {
@@ -1009,6 +1013,114 @@ async fn verify_mirror_convergence(raw_args: &[String]) {
     ) {
         std::process::exit(2);
     }
+}
+
+/// `avalon promote-mirror <network_id> [--shard-id <id>] [--source <url>]
+/// --target-database-url <url> [--dry-run]` — seeds a fresh, migrated
+/// database with this node's converged mirrored copy of a shard so a
+/// replacement settlement authority can continue its hash chain. Reads the
+/// mirror from `DATABASE_URL`; writes only to the target, in one
+/// transaction. `--dry-run` runs every check without writing.
+async fn promote_mirror(raw_args: &[String]) {
+    use avalon_chain::promotion::{promote_mirror, PromoteParams, PromotionError};
+    const USAGE: &str = "usage: avalon promote-mirror <network_id> [--shard-id <id>] [--source <url>] --target-database-url <url> [--dry-run]";
+    let mut network_id: Option<String> = None;
+    let mut shard_id = avalon_chain::mirror::CORE_SHARD_ID.to_string();
+    let mut source: Option<String> = None;
+    let mut target_url: Option<String> = None;
+    let mut dry_run = false;
+    let mut iter = raw_args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--shard-id" => shard_id = iter.next().cloned().unwrap_or_else(|| usage_exit(USAGE)),
+            "--source" => source = Some(iter.next().cloned().unwrap_or_else(|| usage_exit(USAGE))),
+            "--target-database-url" => {
+                target_url = Some(iter.next().cloned().unwrap_or_else(|| usage_exit(USAGE)))
+            }
+            "--dry-run" => dry_run = true,
+            other if !other.starts_with("--") && network_id.is_none() => {
+                network_id = Some(other.to_string())
+            }
+            _ => usage_exit(USAGE),
+        }
+    }
+    let network_id = network_id.unwrap_or_else(|| usage_exit(USAGE));
+    let target_url = target_url.unwrap_or_else(|| usage_exit(USAGE));
+
+    let source_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    if source_url == target_url {
+        eprintln!("--target-database-url must differ from DATABASE_URL (the mirror's database)");
+        std::process::exit(1);
+    }
+    let source_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&source_url)
+        .await
+        .expect("failed to connect to source Postgres (DATABASE_URL)");
+    let target_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&target_url)
+        .await
+        .expect("failed to connect to target Postgres (--target-database-url)");
+
+    let result = promote_mirror(
+        &source_pool,
+        &target_pool,
+        &PromoteParams {
+            network_id: &network_id,
+            shard_id: &shard_id,
+            source_url: source.as_deref(),
+            dry_run,
+        },
+    )
+    .await;
+    let report = match result {
+        Ok(report) => report,
+        Err(PromotionError::NotConverged { verdict }) => {
+            println!("{}", describe_convergence(&verdict));
+            eprintln!("promotion refused: the mirror is not converged");
+            std::process::exit(2);
+        }
+        Err(e) => {
+            eprintln!("promotion failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!(
+        "network_id: {}  shard_id: {}",
+        report.network_id, report.shard_id
+    );
+    println!(
+        "entries: {} in {} batch(es), highest seq {}",
+        report.entries, report.batches, report.highest_seq
+    );
+    println!("root: {}", short_hash(&report.root));
+    println!(
+        "entries with a pruned payload (carried without content): {}",
+        report.pruned_entries
+    );
+    println!(
+        "signed tree heads carried: {} ({} batch(es) without a matching observed STH)",
+        report.sths_carried, report.sths_missing
+    );
+    println!("next entry will receive seq {}", report.next_seq);
+    if report.dry_run {
+        println!("DRY RUN: every check passed; nothing was written to the target");
+        return;
+    }
+    println!(
+        "PROMOTED: the target ledger was written and re-verified (chain intact, root matches)"
+    );
+    println!("next steps on the promoted host:");
+    println!("  1. set AVALON_NETWORK_ID={}", report.network_id);
+    println!("  2. set AVALON_OWN_SHARD_ID={}", report.shard_id);
+    println!(
+        "  3. set AVALON_SETTLEMENT_SIGNING_KEY / _KEY_ID to the key registered for this shard (for core, the key pinned in docs/trusted-networks.json)"
+    );
+    println!("  4. point DATABASE_URL at the target database and start avalon-server");
+    println!("  5. run `avalon rebuild-index`");
+    println!("  6. repoint peers and mirrors at this node");
 }
 
 fn usage_exit(usage: &str) -> ! {

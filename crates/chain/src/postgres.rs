@@ -18,7 +18,8 @@ use crate::sth::SignedTreeHead;
 use crate::{merkle, sth, SettlementError, SettlementProvider};
 
 /// All-zero hash, the `prev_hash` of the very first entry in the chain.
-const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub(crate) const GENESIS_HASH: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// The fields that make up an entry's content hash — grouped so recomputing
 /// a hash (at insert time from a `ProtocolEvent`, or at verify time from a

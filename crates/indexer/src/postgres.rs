@@ -93,6 +93,33 @@ impl PostgresIndexer {
                 .await?;
         }
 
+        // `identities` is the registry every projection row references, and
+        // it is not truncated above. A ledger replayed into a database that
+        // never held these identities (a promoted node) has to recreate the
+        // rows first: later events can precede their own `identity.created`
+        // in ledger order (passkey and signing-key events are committed
+        // ahead of it), so creating each row while replaying is too late.
+        for event in events {
+            if event.kind != "identity.created" {
+                continue;
+            }
+            let Some(identity_id) = event
+                .payload
+                .get("identity_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<uuid::Uuid>().ok())
+            else {
+                continue;
+            };
+            sqlx::query(
+                "INSERT INTO identities (id, created_at) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(identity_id)
+            .bind(event.timestamp)
+            .execute(&mut *tx)
+            .await?;
+        }
+
         for event in events {
             self.apply_in_tx(&mut tx, event).await?;
         }
