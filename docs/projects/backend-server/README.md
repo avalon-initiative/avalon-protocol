@@ -36,19 +36,17 @@ one binary today, and — per the current repo-split plan — they're intended
 to move together if this repository ever splits into several, as the "core"
 repo everything else (SDKs, Hub, CLI) depends on rather than lives inside.
 
-**One binary, but not necessarily one process.** Milestone 1 ran all of this
-as a single `avalon-server` process. As of epic #291 (closed 2026-09-20,
-sub-issues #661–665), that's no longer the only option: the same compiled
-binary can be started multiple times with different `AVALON_NODE_ROLES`
+**One binary, but not necessarily one process.** The same compiled binary
+can be started multiple times with different `AVALON_NODE_ROLES`
 (`settlement`, `indexer`, `realtime`, `gateway`, or `combined`), and those
 processes talk to each other over an internal RPC protocol. So a hosting
-setup can genuinely be several specialized processes today, not just a
-single monolith with room to split later — see
+setup can genuinely be several specialized processes, not just a single
+monolith with room to split later — see
 [`architecture/nodes.md`](architecture/nodes.md) for the roles and
 [`architecture/overview.md`](architecture/overview.md) for the "three
 verticals" model those roles map onto.
 
-**Status (2026-09-21):** the most mature project in this repository. Real,
+**Status:** the most mature project in this repository. Real,
 live-tested end to end against Postgres, not scaffolding — identity/auth
 (passkey + Ed25519 signing key, multi-device, social recovery, cross-device
 pairing), the social graph (friends, blocks, presence, discovery), guilds
@@ -56,8 +54,7 @@ pairing), the social graph (friends, blocks, presence, discovery), guilds
 (issuer keys, signed issuance, authenticity/validity/recognition kept
 separate, revocation history), and a real hash-chained Merkle ledger with
 mirror sync. See [`architecture/overview.md`](architecture/overview.md)'s
-own "Today in the repo" section — kept more current than this paragraph will
-stay.
+own "Current implementation" section for the full, current detail.
 
 ## Find your door
 
@@ -74,9 +71,8 @@ stay.
 
 - [`architecture/`](architecture/README.md) — the normative reference. One
   file per protocol-domain topic (identity, guilds, achievements, trust
-  model, settlement, nodes, ...), each ending in "Today in the repo" (what's
-  actually built, with code paths) and "Decisions and tickets" (the GitHub
-  issues that govern it). This is also where the whole-system map lives
+  model, settlement, nodes, ...), each describing the current model and
+  implementation. This is also where the whole-system map lives
   ([`architecture/overview.md`](architecture/overview.md)), since the
   concepts it maps are defined by these four crates.
 - [`for-hosters/`](for-hosters/README.md) — running your own `avalon-server`
@@ -94,3 +90,5 @@ stay.
   talks to this backend over the same API surface a client would.
 - [`../hub/`](../hub/README.md) is a *client* of this backend, same as any
   integrator — it has no backend of its own.
+</content>
+</invoke>

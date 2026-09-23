@@ -30,7 +30,7 @@ export interface RegisterFinishRequest {
   webauthn_credential: RegistrationResponseJSON
   event_signing_public_key: string
   event_signature: string
-  // A user-chosen label for the device completing this ceremony (#145) —
+  // A user-chosen label for the device completing this ceremony —
   // purely descriptive.
   device_label: string | null
 }
@@ -87,7 +87,7 @@ export interface ProfileResponse {
   // Issue #510: this identity's globally-unique, case-insensitive handle
   // in its own right — the short handle users share with each other
   // instead of a raw identity id. No separate `handle`/discriminator
-  // field exists any more (issue #128's old scheme).
+  // field exists any more.
   display_name: string
   avatar_url: string | null
   // Issue #155's small, user-optional self-description fields — same
@@ -131,7 +131,7 @@ export interface ProfileResponse {
 export interface UpdateProfileRequest {
   display_name?: string
   avatar_url?: string
-  // Three-state fields (issue #155): omitted leaves the existing value
+  // Three-state fields: omitted leaves the existing value
   // untouched, "" clears it, a non-empty string validates then sets it —
   // same convention avatar_url already uses.
   bio?: string
@@ -160,7 +160,7 @@ export interface UpdateProfileRequest {
   presence_visibility?: string
 }
 
-// GET /identities/search?q=&limit= (issue #205) — the opt-in counterpart to
+// GET /identities/search?q=&limit= — the opt-in counterpart to
 // GET /people/discover, matching crates/server/src/discovery.rs's
 // SearchIdentitiesResponse. Only ever returns identities with
 // discoverable = true.
@@ -174,7 +174,7 @@ export interface SearchIdentitiesResponse {
   results: SearchResultIdentity[]
 }
 
-// Friends/presence wire types (issue #18), matching
+// Friends/presence wire types, matching
 // crates/server/src/friends.rs and crates/server/src/presence.rs
 // field-for-field — plain snake_case, unlike the WebAuthn challenge shapes
 // above.
@@ -218,7 +218,7 @@ export interface ResolveHandleResponse {
   identity_id: string
 }
 
-// GET /people/discover (issue #204) — matches
+// GET /people/discover — matches
 // crates/server/src/discovery.rs's DiscoverPeopleResponse. No request
 // params: the only input is the caller's own session, never a search term
 // (see that module's own doc comment).
@@ -230,7 +230,7 @@ export interface DiscoverPeopleResponse {
   candidates: DiscoveryCandidate[]
 }
 
-// GET /me/history (issue #121) — the caller's own protocol event history,
+// GET /me/history — the caller's own protocol event history,
 // matching crates/server/src/handlers.rs's HistoryEntryResponse.
 export interface HistoryEntryResponse {
   event_id: string
@@ -240,7 +240,7 @@ export interface HistoryEntryResponse {
   timestamp: string
 }
 
-// GET /me/guild-announcements (issue #280) — recent posts to any
+// GET /me/guild-announcements — recent posts to any
 // announcement-only channel in any guild the caller currently belongs to,
 // matching crates/server/src/guild_messages.rs's GuildAnnouncementAlert.
 export interface GuildAnnouncementAlert {
@@ -253,7 +253,7 @@ export interface GuildAnnouncementAlert {
   sent_at: string
 }
 
-// Device-registration / linked-device grant model (issue #135), matching
+// Device-registration / linked-device grant model, matching
 // crates/server/src/devices.rs field-for-field.
 
 export interface RequestDeviceGrantRequest {
@@ -290,7 +290,7 @@ export interface RenameDeviceRequest {
   label: string
 }
 
-// Cross-device pairing (issue #307), matching
+// Cross-device pairing, matching
 // crates/server/src/device_pairing.rs field-for-field. Bootstraps a session
 // for a WebAuthn-incapable client — distinct from the device grant model
 // above, which adds a signing key to an identity that's already
@@ -326,7 +326,7 @@ export interface ResolvePairingResponse {
   status: 'approved' | 'denied'
 }
 
-// Cross-node login (epic #623), matching
+// Cross-node login, matching
 // crates/server/src/cross_node_login.rs field-for-field. Unlike device
 // pairing above, these calls target an arbitrary requesting node's own
 // base_url, not this Hub's own configured server — see
@@ -358,10 +358,10 @@ export interface CrossNodeLoginDenyResponse {
   status: 'denied'
 }
 
-// Multi-passkey registration (issue #200), matching
+// Multi-passkey registration, matching
 // crates/server/src/passkeys.rs field-for-field. Distinct from the
 // DeviceGrantResponse/DeviceResponse pair above: those manage
-// `identity_signing_keys` (event-authorship keys, #135), these manage
+// `identity_signing_keys` (event-authorship keys), these manage
 // `identity_keys` (WebAuthn login credentials) — same "device with a label
 // and a revoke button" shape in the UI, different underlying table and
 // security property, per docs/architecture/identity.md.
@@ -397,7 +397,7 @@ export interface RevokePasskeyRequest {
   signature?: string
 }
 
-// Social recovery (issue #201), matching crates/server/src/recovery.rs
+// Social recovery, matching crates/server/src/recovery.rs
 // field-for-field.
 
 export interface SetGuardiansRequest {
@@ -475,7 +475,7 @@ export interface PresenceResponse {
   updated_at: string
 }
 
-// GET /identities/profiles?ids=... (issue #161) — another identity's
+// GET /identities/profiles?ids=... — another identity's
 // public profile fields only, batched.
 export interface PublicProfileResponse {
   identity_id: string
@@ -483,11 +483,11 @@ export interface PublicProfileResponse {
   avatar_url: string | null
 }
 
-// GET /identities/:id/profile (issue #403) — a single identity's full
+// GET /identities/:id/profile — a single identity's full
 // self-description fields, same exposure level as ProfileResponse (GET
 // /me) above, minus `discoverable` (that's the viewed identity's own
 // search-visibility setting, not something the viewer needs).
-// GET /identities/:id/integrator-data (issue #384/#465) — matches
+// GET /identities/:id/integrator-data — matches
 // crates/server/src/integrator_data.rs::VisibleIntegratorDataInstanceResponse
 // field-for-field. `fields` is already filtered server-side to only what
 // the schema currently makes visible; the Hub must never attempt its own
@@ -517,11 +517,11 @@ export interface PublicIdentityProfileResponse {
   effective_main_guild: string | null
 }
 
-// Guild/roster/channel/message wire types (issue #24), matching
+// Guild/roster/channel/message wire types, matching
 // crates/server/src/guilds.rs, crates/server/src/channels.rs, and
 // crates/server/src/guild_messages.rs field-for-field.
 
-// One entry in GuildResponse.links (issue #153), matching
+// One entry in GuildResponse.links, matching
 // crates/protocol/src/guilds.rs::GuildLink field-for-field.
 export interface GuildLink {
   label: string
@@ -542,7 +542,7 @@ export interface GuildResponse {
   // so every guild is "invite_only" in practice. See guilds.ts's own note.
   join_policy: string
   // Issue #153, all four below. motd/banner are null when unset;
-  // recruiting gates the "recruiting only" discovery filter (#154) and
+  // recruiting gates the "recruiting only" discovery filter and
   // whether this guild shows up under a recruiting=false lookup for
   // strangers at all (see build_discover_query's membership gating).
   motd: string | null
@@ -565,7 +565,7 @@ export interface GuildResponse {
   // breakdown, which stays behind game_breakdown_public).
   favorite_games: FavoriteGameEntry[]
   // Issue #87. Who can see this guild's member list, independent of the
-  // recruiting/public overrides (#449/#455) that can widen it further —
+  // recruiting/public overrides that can widen it further —
   // one of "public" | "authenticated_only" | "friends" | "guild_members" |
   // "private".
   roster_visibility: string
@@ -602,13 +602,13 @@ export interface UpdateGuildRequest {
   // bypassing the invite and join-request/approval flows entirely.
   join_policy?: 'invite_only' | 'open'
   // Issue #87. Omitted leaves it untouched. The recruiting/public overrides
-  // (#449/#455) can still widen roster exposure beyond whatever this is
+  // can still widen roster exposure beyond whatever this is
   // set to; this only controls the underlying baseline.
   roster_visibility?: string
 }
 
-// GET /guilds/{id}/integrator-breakdown (issue #206, implementing decision #160):
-// aggregated count of guild members holding an active IntegratorBinding (#83) per
+// GET /guilds/{id}/integrator-breakdown:
+// aggregated count of guild members holding an active IntegratorBinding per
 // integrator, computed on read — never a manager-declared association (superseded
 // #20 behavior, see docs/architecture/guilds.md). No minimum-member
 // threshold: every integrator with at least one bound member appears.
@@ -626,7 +626,7 @@ export interface GameBreakdownResponse {
 }
 
 // GET /guilds/{id}/favorite-integrators and PUT /guilds/{id}/favorite-integrators
-// (issue #207, implementing decision #160): a manage_guild-curated, capped
+// a manage_guild-curated, capped
 // (5), ordered pin list drawn only from integrators that already appear in the
 // affinity breakdown above. `stale` is computed live against the same
 // binding data on every read — a stale pin is never auto-removed (see
@@ -777,7 +777,7 @@ export interface DiscoverGuildSummary {
   member_count: number
   created_at: string
   // Issue #258: same already-public fields GuildResponse carries
-  // (#153/#246) — null when unset.
+  // null when unset.
   banner: string | null
   icon: string | null
 }
@@ -841,7 +841,7 @@ export interface UpdateChannelRequest {
   public?: boolean
 }
 
-// Per-resource guild permission overrides (issue #250), matching
+// Per-resource guild permission overrides, matching
 // crates/server/src/guilds.rs::PermissionOverrideResponse /
 // SetPermissionOverrideRequest field-for-field.
 export type GuildResourceKind = 'channel' | 'event'
@@ -897,7 +897,7 @@ export interface SendMessageRequest {
   body: string
 }
 
-// Direct/small-group conversations (issue #102/#105), matching
+// Direct/small-group conversations, matching
 // crates/server/src/conversations.rs field-for-field. Deliberately its own
 // shapes rather than reusing GuildResponse/MessageResponse above — a
 // conversation has no guild context, and its messages carry
@@ -925,12 +925,12 @@ export interface SendConversationMessageRequest {
   client_entry_id?: string
 }
 
-// Integrator registration (#26) / binding + grant consent flow (#27, #83) wire
-// types, matching crates/server/src/integrations.rs and its #27 companion module
+// Integrator registration / binding + grant consent flow wire
+// types, matching crates/server/src/integrations.rs and its companion module
 // field-for-field. `requested_capabilities` is a declaration only — see
 // integrators.rs's own module doc comment — never itself a grant.
 
-// What kind of integrator a registration is (#282). Additive on the wire.
+// What kind of integrator a registration is. Additive on the wire.
 export type IntegratorCategory = 'game' | 'app' | 'service'
 
 export interface IntegratorResponse {
@@ -975,17 +975,17 @@ export interface ListIntegratorsParams {
   cursor?: string
 }
 
-// One registry metric (issue #261), matching
+// One registry metric, matching
 // crates/server/src/registry.rs::MetricResponse field-for-field — never
-// rendered as a bare `value` anywhere in the Hub (issue #270's own
-// invariant); see AvalonMetricTile in @avalon/ui.
+// rendered as a bare `value` anywhere in the Hub; see AvalonMetricTile
+// in @avalon/ui.
 export interface MetricResponse {
   value: number
   definition: string
   class: string
 }
 
-// GET /integrations/{slug}/registry's response (issue #261), matching
+// GET /integrations/{slug}/registry's response, matching
 // crates/server/src/registry.rs::IntegratorRegistryResponse field-for-field.
 export interface IntegratorRegistryResponse {
   players: MetricResponse
@@ -995,7 +995,7 @@ export interface IntegratorRegistryResponse {
   unique_achievement_holders: MetricResponse
 }
 
-// GET /integrations/{slug}/keys's response (issue #90): an issuer's full key
+// GET /integrations/{slug}/keys's response: an issuer's full key
 // history, oldest first — public and unauthenticated, matching
 // crates/server/src/integrations.rs::IssuerKeyResponse field-for-field.
 export interface IssuerKeyResponse {
@@ -1040,7 +1040,7 @@ export interface IntegratorBindingResponse {
 // wrapper object.
 export type MyConnectionsResponse = IntegratorBindingResponse[]
 
-// Settlement / transparency-log reads (issues #210/#211/#232), matching
+// Settlement / transparency-log reads, matching
 // `crates/server/src/settlement.rs::SignedTreeHeadResponse` field-for-field.
 // `tree_size` and `created_at`'s unix-seconds form both feed
 // `apps/hub/src/network/sthMessage.ts`'s byte-for-byte reconstruction of
@@ -1057,7 +1057,7 @@ export interface SignedTreeHeadResponse {
   created_at: string
 }
 
-// Guild events calendar + RSVP (issue #169). See
+// Guild events calendar + RSVP. See
 // `crates/server/src/guild_events.rs` and `docs/architecture/guilds.md`'s
 // "Guild events calendar + RSVP" section for the durability call: no
 // `guild_events`/`guild_event_rsvps` row is protocol history, both are
@@ -1134,7 +1134,7 @@ export interface ListEventsQuery {
   to?: string
 }
 
-// Per-member RSVP roster (issue #248) — GET /guilds/{id}/events/{eid}/rsvps.
+// Per-member RSVP roster — GET /guilds/{id}/events/{eid}/rsvps.
 // Every `guild_event_rsvps` row for the event, unaggregated (the roster
 // behind `EventResponse.rsvp_counts`).
 export interface RsvpRosterEntry {
@@ -1143,7 +1143,7 @@ export interface RsvpRosterEntry {
   responded_at: string
 }
 
-// GET /me/achievements (issue #34/#35), matching
+// GET /me/achievements, matching
 // crates/server/src/attestations.rs's AttestationReadResponse and its
 // nested types field-for-field. `authenticity`/`validity` are internally
 // tagged on `status` (serde's `tag = "status", rename_all = "snake_case"`)
@@ -1183,11 +1183,11 @@ export interface AttestationResponse {
   validity: AttestationValidityResponse
   history: AttestationHistoryEntryResponse[]
   // Deliberately no `recognition` field — see
-  // crates/server/src/attestations.rs's own module doc comment (ADR #76:
-  // recognition is the consumer's own policy call, never the server's).
+  // crates/server/src/attestations.rs's own module doc comment —
+  // recognition is the consumer's own policy call, never the server's.
 }
 
-// GET /me/achievements's response envelope (issue #377) — matching
+// GET /me/achievements's response envelope — matching
 // crates/server/src/attestations.rs::ListMyAchievementsResponse. Wraps
 // what used to be a bare array so the endpoint could gain cursor
 // pagination without silently truncating a caller that isn't ready for
@@ -1200,8 +1200,8 @@ export interface ListMyAchievementsResponse {
   next_cursor: string | null
 }
 
-// GET /integrations/{slug}/achievements and GET /integrations/{slug}/milestones
-// (#31/#324/#325), matching crates/server/src/achievements.rs's
+// GET /integrations/{slug}/achievements and GET /integrations/{slug}/milestones,
+// matching crates/server/src/achievements.rs's
 // AchievementDefinitionResponse field-for-field. `id` is the definition's
 // GlobalId string ("game:<slug>:achievement:<key>" or the milestone
 // equivalent) — the same string AttestationResponse.achievement carries,
@@ -1214,7 +1214,7 @@ export interface AchievementDefinitionResponse {
   description: string
   schema?: string
   // Always populated server-side (falls back to the hardcoded default,
-  // "trophy", when the definition has neither field set — issue #332).
+  // "trophy", when the definition has neither field set).
   icon: string
   icon_url?: string
   version: number

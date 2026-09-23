@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// One claim on the achievements view (issue #35): issuer, dates, and
-// verification result rendered as facts (ADR #77 — the Hub renders
+// One claim on the achievements view: issuer, dates, and
+// verification result rendered as facts — the Hub renders
 // verification results, it never computes or displays trust/rank). A
 // revoked claim stays visible with both its issuance and revocation dates
 // (#81/#85's durable-history invariant) — never removed, never collapsed

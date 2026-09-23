@@ -15,7 +15,7 @@
 //! request handlers calling `PostgresIndexer::apply_in_tx` today
 //! (`identity.created`/`profile.updated` via `handlers::register_finish`/
 //! `update_profile`; `friend.*` via `friends.rs`; `guild.*` via
-//! `guilds.rs`, issue #506). So:
+//! `guilds.rs`). So:
 //!
 //! - For `profiles`, this test compares real pre-rebuild state against
 //!   post-rebuild state directly — the strong "nothing was lost" claim,
@@ -193,7 +193,7 @@ fn auth(request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilde
 
 /// Polls `protocol_outbox` until every enqueued event has been drained into
 /// `ledger_entries` — `avalon-server`'s outbox worker runs on its own timer
-/// (`AVALON_OUTBOX_POLL_INTERVAL_SECS`, issue #363), so this test can't just
+/// (`AVALON_OUTBOX_POLL_INTERVAL_SECS`), so this test can't just
 /// act and immediately read the ledger.
 async fn wait_for_outbox_drain(pool: &PgPool) {
     for _ in 0..100 {

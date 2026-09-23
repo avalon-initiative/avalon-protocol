@@ -1,5 +1,4 @@
-//! Exercises the per-(issuer, subject) write-rate quota (issue #365,
-//! implementing a piece of #306's decided abuse floor) against a real,
+//! Exercises the per-(issuer, subject) write-rate quota against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 //!

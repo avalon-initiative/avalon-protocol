@@ -1,7 +1,7 @@
 //! Everything that *mutates* state against a real `avalon-server` — creating
 //! identities, logging in via a virtual (software-only) passkey, and
 //! registering integrators — lives in this module, gated behind the `dev-tools`
-//! Cargo feature (issue #173's second layer).
+//! Cargo feature.
 //!
 //! `avalon inspect-ledger`/`inspect-ledger-full`/`outbox-status` (in
 //! `main.rs`) stay outside this gate: they're read-only ops/diagnostic
@@ -11,15 +11,14 @@
 //! (`create_identity`, `login`) or performs an administrative write that, in
 //! a real deployment, should be self-service by the actual user or integrator
 //! developer through the real API — not an operator running a CLI on their
-//! behalf (see `docs/architecture/settlement.md` and the discussion on
-//! issue #173). `dev-tools` is on by default (this crate is exactly the
+//! behalf (see `docs/architecture/settlement.md`). `dev-tools` is on by default (this crate is exactly the
 //! "local dev/ops CLI" its own top-level doc comment describes), but a build
 //! meant to ship anywhere near a production deployment should be built with
 //! `--no-default-features` — at which point this entire module, and every
 //! dependency it alone pulls in (`rand`, `passkey-*`, `coset`, `reqwest`,
 //! `url`), is compiled out of the binary completely, not merely hidden
-//! behind a runtime check. `ed25519-dalek` itself is the one exception as
-//! of issue #210 — `main.rs`'s always-available `inspect-ledger` now needs
+//! behind a runtime check. `ed25519-dalek` itself is the one exception —
+//! `main.rs`'s always-available `inspect-ledger` now needs
 //! `VerifyingKey` for signed-tree-head verification, so it's a required
 //! dependency of this crate, not gated behind `dev-tools` alongside the
 //! signing usage below.
@@ -60,7 +59,7 @@ fn passkey_path(identity_id: Uuid) -> PathBuf {
     key_dir().join(format!("{identity_id}.passkey.json"))
 }
 
-/// A JSON-serializable mirror of `passkey_types::Passkey` (issue #115).
+/// A JSON-serializable mirror of `passkey_types::Passkey`.
 ///
 /// `Passkey` itself has no `Serialize`/`Deserialize` impl in this version of
 /// `passkey-types` — its fields are all `pub`, so this converts field by
@@ -219,14 +218,14 @@ pub(crate) async fn create_identity() {
 
     // The event-signing key: nothing in this milestone lets a user carry
     // it between sessions except a local file, so it's saved here for later
-    // reuse (e.g. a future `profile.updated`-signing command, issue #86).
+    // reuse (e.g. a future `profile.updated`-signing command).
     let key_dir = key_dir();
     std::fs::create_dir_all(&key_dir).ok();
     let key_path = key_dir.join(format!("{identity_id}.signing-key"));
     std::fs::write(&key_path, BASE64.encode(signing_key.to_bytes()))
         .expect("failed to write signing key file");
 
-    // The passkey (issue #115): on a real device this lives with the
+    // The passkey: on a real device this lives with the
     // platform authenticator and this CLI would never touch it — but this
     // CLI *is* the device here (a virtual, in-process one, gone the moment
     // this process exits), so `avalon login` has no way to "ask the same
@@ -264,7 +263,7 @@ pub(crate) async fn create_identity() {
     println!("└─────────────────────────────────────────────────────────────┘");
 }
 
-/// `avalon login <identity_id>` (issue #115) — a dev/test convenience, not a
+/// `avalon login <identity_id>` — a dev/test convenience, not a
 /// pattern for any real deployment: this drives a genuine
 /// `/sessions/start` → `/sessions/finish` WebAuthn ceremony, the same as a
 /// browser would, but prints the resulting bearer token straight to the
@@ -361,7 +360,7 @@ pub(crate) async fn login(identity_id: Uuid) {
     println!("throwaway database, not a pattern to carry into any real deployment.");
 }
 
-/// `avalon pair-device` (issue #307) — drives the `start`/`poll` side of
+/// `avalon pair-device` — drives the `start`/`poll` side of
 /// cross-device pairing, standing in for a real WebAuthn-incapable client
 /// (a console, a headless game engine) so the flow is testable end to end
 /// without one. Prints the `user_code` for a user to enter on the Hub's
@@ -439,7 +438,7 @@ pub(crate) async fn pair_device() {
 }
 
 /// What `register_integrator` saves alongside the raw private-key file, so
-/// `issue_achievement` (issue #48) can resolve `--integrator <slug>` to a
+/// `issue_achievement` can resolve `--integrator <slug>` to a
 /// `key_id` without the operator having to paste it back in from
 /// registration's one-time printout.
 #[derive(Serialize, Deserialize)]
@@ -476,7 +475,7 @@ impl RegisterIntegratorArgs {
             match arg.as_str() {
                 "--slug" => slug = Some(iter.next().ok_or("--slug requires a value")?.clone()),
                 "--name" => name = Some(iter.next().ok_or("--name requires a value")?.clone()),
-                // `--developer` is the original spelling (#29), kept working
+                // `--developer` is the original spelling, kept working
                 // as an alias so existing scripts don't break.
                 "--owner-name" | "--developer" => {
                     owner_name = Some(iter.next().ok_or("--owner-name requires a value")?.clone())
@@ -501,10 +500,8 @@ impl RegisterIntegratorArgs {
     }
 }
 
-/// `avalon register-integrator` (issue #29) — registers a test integrator against #26's
-/// registration endpoint, sent to `POST /integrations` (#293's canonical
-/// alias for the same `POST /integrations` handler — a `register-integrator`
-/// command alias is a separate, lower-priority follow-up, not this),
+/// `avalon register-integrator` — registers a test integrator against the
+/// registration endpoint, sent to `POST /integrations`,
 /// generating a fresh Ed25519 signing keypair locally (the
 /// only algorithm `crate::auth::verify_event_signature` on the server side
 /// can verify — see `crates/server/src/integrations.rs`). Only the public key is
@@ -578,8 +575,8 @@ pub(crate) async fn register_integrator(args: RegisterIntegratorArgs) {
     std::fs::write(&key_path, &private_key_base64).expect("failed to write signing key file");
 
     // `key_id` itself (as opposed to the private key) is otherwise only
-    // ever printed once, below — save it too (issue #48's own
-    // `issue-achievement` needs it) so a later command can look it up by
+    // ever printed once, below — save it too (`issue-achievement`
+    // needs it) so a later command can look it up by
     // `--integrator <slug>` alone instead of requiring the operator to
     // paste it back in. See `load_integrator_credentials`.
     let credentials_path = key_dir.join(format!("integrator-{}.json", args.slug));
@@ -745,12 +742,12 @@ impl IssueAchievementArgs {
     }
 }
 
-/// `avalon issue-achievement` (issue #48) — issues `--achievement` (already
+/// `avalon issue-achievement` — issues `--achievement` (already
 /// defined against `--integrator` via `POST /integrations/{slug}/achievements`,
 /// a step this command doesn't do itself) to the identity behind `--token`,
 /// through `avalon-sdk` exactly the way a real game/app/service would
-/// (`Session::issue_achievement`, #34) — never a raw HTTP request built by
-/// hand, per this ticket's own "developer-facing commands go through the
+/// (`Session::issue_achievement`) — never a raw HTTP request built by
+/// hand, following the "developer-facing commands go through the
 /// SDK/API" invariant. Resolves `--key`/`--key-id` from what
 /// `register_integrator` saved for `--integrator` when not given
 /// explicitly.
@@ -914,7 +911,7 @@ impl RegisterIssuerArgs {
     }
 }
 
-/// `avalon register-issuer` (issue #483, on top of #481's endpoint) —
+/// `avalon register-issuer` —
 /// registers `--integrator`'s signing key as an issuer on the network it
 /// declares intent for, through `avalon_sdk::AvalonClient::register_issuer`
 /// exactly the way a real game/app/service would — never a raw HTTP
@@ -1098,8 +1095,8 @@ mod tests {
         assert!(err.contains("--slug"));
     }
 
-    /// `--developer` is the original spelling of what is now `--owner-name`
-    /// (#290), kept working as an alias so existing scripts don't break. The
+    /// `--developer` is the original spelling of what is now `--owner-name`,
+    /// kept working as an alias so existing scripts don't break. The
     /// flag spelling never affects anything downstream, so both produce an
     /// identical `RegisterIntegratorArgs`.
     #[test]

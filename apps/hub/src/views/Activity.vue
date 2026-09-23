@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// "What does the network know about me" (issue #121) — the caller's own
+// "What does the network know about me" — the caller's own
 // protocol event history, read straight off the ledger
 // (crates/server/src/handlers.rs's my_history) rather than a summarized
 // digest, so a fresh identity's single `identity.created` entry and a busy

@@ -25,7 +25,7 @@
 //! gesture is what supplies the "real human, right now" guarantee a bare
 //! continuation token lacks. Verifying a grant is entirely this crate's
 //! (and the verifying node's) job; nothing here decides whether a caller
-//! *should* accept one — see `crates/server` (issue #634) for the actual
+//! *should* accept one — see `crates/server` for the actual
 //! lifecycle and verification path.
 //!
 //! **`destination_base_url` is inside the signed bytes, not alongside
@@ -41,7 +41,7 @@ use uuid::Uuid;
 /// How long a grant is valid for after `issued_at`, at mint time — the
 /// verifying node independently re-checks `expires_at` itself. Short, same
 /// reasoning as `continuation::DEFAULT_TTL_SECONDS`: this is a one-shot
-/// approval consumed once by `POST /auth/cross-node/submit` (#634), not a
+/// approval consumed once by `POST /auth/cross-node/submit`, not a
 /// re-presented claim like `InterestClaim`.
 pub const DEFAULT_TTL_SECONDS: i64 = 60;
 

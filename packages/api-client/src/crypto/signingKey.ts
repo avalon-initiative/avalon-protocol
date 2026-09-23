@@ -1,4 +1,4 @@
-// The identity's Ed25519 event-signing key (issue #73) — distinct from the
+// The identity's Ed25519 event-signing key — distinct from the
 // WebAuthn passkey, which lives entirely with the browser/platform and never
 // passes through this module. See docs/architecture/identity.md.
 //
@@ -9,7 +9,7 @@
 // this module's mnemonic derivation, #134, is the disaster-recovery
 // fallback underneath it — #122 decided to build both, not either/or).
 //
-// Key derivation (#134): the secret key is never random on its own anymore —
+// Key derivation: the secret key is never random on its own anymore —
 // it's deterministically derived from a BIP39 mnemonic phrase, the same
 // wordlist/entropy-encoding standard every crypto wallet already uses. Any
 // device that has the phrase can re-derive the exact same key entirely
@@ -109,7 +109,7 @@ export function loadSigningKey(identityId: string): Uint8Array | null {
 }
 
 /**
- * Generates a fresh Ed25519 keypair for a device-grant request (#135) —
+ * Generates a fresh Ed25519 keypair for a device-grant request —
  * deliberately *not* persisted here. The design this implements keeps a
  * requesting device's secret key in memory only until its grant is
  * approved; persisting it before that would mean a rejected/abandoned

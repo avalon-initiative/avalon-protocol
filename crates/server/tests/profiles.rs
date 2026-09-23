@@ -1,4 +1,4 @@
-//! Exercises `GET /identities/profiles` (issue #161) against a real,
+//! Exercises `GET /identities/profiles` against a real,
 //! running `avalon-server`. Gated `--ignored` since it needs live infra —
 //! see `make test-live` / `make start`. Test identities are seeded directly
 //! via SQL rather than through a real WebAuthn ceremony — same approach as

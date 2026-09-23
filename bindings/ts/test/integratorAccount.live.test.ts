@@ -1,4 +1,4 @@
-// Live round trips for issue #741's TypeScript SDK coverage gap (#744-#749)
+// Live round trips for the TypeScript SDK's coverage gap
 // against a real, running avalon-server and real Postgres — same
 // conventions as account.live.test.ts (AVALON_SERVER_URL/
 // AVALON_LIVE_DATABASE_URL, `npm run test:live`).

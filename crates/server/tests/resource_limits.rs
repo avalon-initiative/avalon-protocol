@@ -1,4 +1,4 @@
-//! Exercises the hoster-configurable resource limits (issue #363,
+//! Exercises the hoster-configurable resource limits,
 //! implementing #287's decided shape) against a real, running
 //! `avalon-server`. Gated `--ignored` since it needs live infra — see
 //! `make test-live` / `make start`.

@@ -1,4 +1,4 @@
-//! Exercises public recognition relationships (issue #89) against a real,
+//! Exercises public recognition relationships against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 //!

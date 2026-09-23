@@ -11,38 +11,34 @@ else open. Think of it as the one lobby that sits outside every game.
 
 ## What this is, technically (the meta)
 
-`apps/hub` — a Vue3 + Vite + TypeScript web client, and, per
-[ADR #77](https://github.com/LunarVagabond/avalon-protocol/issues/77), **a
-client of the network like any other — it has no backend of its own.**
-Every read and write it does goes through the same SDK surface (currently
-mid-migration onto `@avalon/sdk`, issue #712) that a game or app would use.
+`apps/hub` — a Vue3 + Vite + TypeScript web client, and **a client of the
+network like any other — it has no backend of its own.** Every read and
+write it does goes through the same SDK surface (`@avalon/sdk`) that a
+game or app would use.
 
-**Status (2026-09-21):** a real, persistent shell with nested routed pages —
-not a stub or a design mockup. Identity setup (passkeys, devices, guardian
-recovery), friends/blocks/presence/discovery, guilds (roles, channels,
-chat, events), achievements, and integrator discovery/connections are all
-implemented, not placeholder screens — see `apps/hub/src/views/` for the
-current page list (`Home`, `Friends`, `Guild(s)`, `Achievements`,
-`Messages`, `Profile`, `IntegrationDirectory`, `Connections`,
-`CrossNodeLogin`, `RecoverIdentity`, `PairDevice`, ...).
+**Status:** a real, persistent shell with nested routed pages — not a stub
+or a design mockup. Identity setup (passkeys, devices, guardian recovery),
+friends/blocks/presence/discovery, guilds (roles, channels, chat, events),
+achievements, and integrator discovery/connections are all implemented,
+not placeholder screens — see `apps/hub/src/views/` for the current page
+list (`Home`, `Friends`, `Guild(s)`, `Achievements`, `Messages`, `Profile`,
+`IntegrationDirectory`, `Connections`, `CrossNodeLogin`, `RecoverIdentity`,
+`PairDevice`, ...).
 
 ## Find your door
 
 | I am... | Start here |
 |---|---|
 | A user of a game/app/service that integrates Avalon, wanting to understand the Hub | [`for-users.md`](for-users.md) |
-| Contributing code to the Hub itself | [`architecture/hub.md`](architecture/hub.md), then [`architecture/hub-implementation-log.md`](architecture/hub-implementation-log.md) for the detail behind any one line of that doc |
+| Contributing code to the Hub itself | [`architecture/hub.md`](architecture/hub.md) |
 | Building the desktop/mobile companion instead | [`../mobile-hub/README.md`](../mobile-hub/README.md) |
 | Looking for the shared component library the Hub is built from | [`../ui/README.md`](../ui/README.md) |
 
 ## In this folder
 
 - [`architecture/hub.md`](architecture/hub.md) — the normative reference:
-  the Hub's role in the network, what it is and isn't responsible for.
-- [`architecture/hub-implementation-log.md`](architecture/hub-implementation-log.md) —
-  the detailed, evolving log behind `hub.md`'s summary — what's actually
-  built, file by file, kept so `hub.md` itself can stay focused on the
-  Hub's role rather than becoming a changelog.
+  the Hub's role in the network, what it is and isn't responsible for, and
+  what's built today.
 - [`for-users.md`](for-users.md) — plain-language guide to what you can do
   in the Hub.
 

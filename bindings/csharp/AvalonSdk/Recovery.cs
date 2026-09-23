@@ -1,12 +1,11 @@
-// Social recovery request-initiation (issue #201, closed out for C#'s share
-// of #741 by #747) — free-standing AvalonClient methods, deliberately not
+// Social recovery request-initiation — free-standing AvalonClient methods, deliberately not
 // Session methods: the whole premise of recovery is the caller has no valid
 // session for the identity being recovered yet (this repo's one deliberate
 // exception to "every route requires a session," per
 // crates/server/src/recovery.rs's own module doc comment). Mirrors
 // bindings/ts/src/recovery.ts almost exactly, which is itself this SDK's
 // only cross-language reference for this surface (Rust has none yet
-// either — see issue #747's own note). See AccountSession.Recovery.cs for
+// either). See AccountSession.Recovery.cs for
 // the already-logged-in side (guardian management, approve/cancel, status)
 // this file does not duplicate.
 //

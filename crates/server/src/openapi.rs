@@ -1,4 +1,4 @@
-//! Issue #723 (epic #722, decision #714): the generated OpenAPI schema for
+//! The generated OpenAPI schema for
 //! `server`'s SDK-facing API surface (identity/auth, profile/presence,
 //! social graph, chat, devices/passkeys/recovery, guilds, integrator/
 //! achievements/registry) — deliberately excludes `/ledger/*`, `/nodes/*`,
@@ -6,7 +6,7 @@
 //!
 //! Generated from the real handler signatures/types via
 //! `#[utoipa::path]`/`#[derive(ToSchema)]` on each in-scope handler, not
-//! hand-written — the whole point per #714's decision. `make openapi`
+//! hand-written — the whole point. `make openapi`
 //! regenerates `docs/generated/openapi.json`; `make openapi-check` (part
 //! of `make check`) fails CI if that file is stale relative to this
 //! module's annotations. This module's own `paths(...)` list staying in

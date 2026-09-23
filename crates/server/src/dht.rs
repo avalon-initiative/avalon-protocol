@@ -1,33 +1,33 @@
-//! Interest-scoped realtime routing via a libp2p Kademlia DHT — issue #582,
-//! part of epic #580 implementing #542's decision. This module owns two
-//! things: this node's libp2p identity/bootstrap (#582), and a small
+//! Interest-scoped realtime routing via a libp2p Kademlia DHT. This module owns two
+//! things: this node's libp2p identity/bootstrap, and a small
 //! command channel exposing the swarm's `put_record`/`get_record` to the
-//! rest of the process (#583) — the swarm itself still lives entirely
+//! rest of the process — the swarm itself still lives entirely
 //! inside [`run_worker`]'s spawned task, so any other code that wants to
 //! touch the DHT does it by sending a [`DhtCommand`] rather than reaching
 //! into the swarm directly. `crate::interest` is the one real caller today,
 //! for guild-channel/conversation interest registration and lookup; no
-//! actual relay re-scoping happens here — that's #584.
+//! actual relay re-scoping happens here.
 //!
 //! **A libp2p `PeerId` is a brand-new identity domain, not a reuse of any
 //! existing key.** This codebase already has three separate key domains
-//! (player keys #73, issuer keys #80/#84, the settlement log operator's key
-//! #39 — see `avalon_protocol::sth`) and none of them fit: player/issuer keys
+//! (player keys, issuer keys, the settlement log operator's key
+//! — see `avalon_protocol::sth`) and none of them fit: player/issuer keys
 //! are about attestation/authorship, never held by a server process at all,
 //! and the settlement key's lifecycle (rotatable, tied to STH-signing) is
 //! semantically unrelated to peer-transport identity. A node now holds a
 //! *fourth*, independent identity purely for DHT transport — see
 //! [`load_or_generate_identity_from_env`].
 //!
-//! **Bootstrap reuses #362, it doesn't replace it.** `PeerInfo` (extended by
-//! this issue with `libp2p_peer_id`/`libp2p_listen_addrs`) is gossiped
+//! **Bootstrap reuses the existing peer-announce mechanism, it doesn't
+//! replace it.** `PeerInfo` (extended
+//! with `libp2p_peer_id`/`libp2p_listen_addrs`) is gossiped
 //! through the exact same `POST /nodes/announce` mechanism `crate::nodes`
 //! already runs — a peer's DHT identity just rides along with everything
 //! else it already announces. [`run_worker`] here does no announcing of its
 //! own; it only watches `PeerTable` (already kept fresh by
 //! `nodes::run_worker`) for peers whose DHT identity it hasn't dialed yet.
 //!
-//! **`AVALON_DHT_ENABLED` defaults to on (ADR #593)** — an opt-*out*
+//! **`AVALON_DHT_ENABLED` defaults to on** — an opt-*out*
 //! escape hatch, not an opt-in gate. There are no real deployments of
 //! this software outside this project's own development sandbox yet, so
 //! there was no one to protect with an opt-in default, and DHT-based
@@ -35,8 +35,7 @@
 //! in it from the start rather than each operator individually deciding
 //! to turn it on later. Set it to `false` for a single-node/private
 //! self-hoster who wants zero DHT overhead, or if a real problem surfaces
-//! while this is still genuinely young, unproven-at-real-scale code (see
-//! ADR #593 for the full reasoning).
+//! while this is still genuinely young, unproven-at-real-scale code.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -68,8 +67,8 @@ pub enum DhtCommand {
     /// (`crate::interest`) is expected to re-send this periodically for as
     /// long as the registration should stay live; there is no separate
     /// "deregister" command; letting a record's TTL lapse is the only way
-    /// a registration goes away, matching #583's own ticket design (no
-    /// explicit cleanup needed on every disconnect path).
+    /// a registration goes away — no explicit cleanup needed on every
+    /// disconnect path.
     PutRecord {
         key: Vec<u8>,
         value: Vec<u8>,
@@ -104,13 +103,13 @@ const IDENTIFY_PROTOCOL_VERSION: &str = "/avalon/dht/1.0.0";
 /// not "the message gets ignored," the substream negotiation itself fails.
 const KAD_PROTOCOL_VERSION: &str = "/avalon/kad/1.0.0";
 
-/// Issue #608: every network this node's DHT swarm exists for gets its own
+/// Every network this node's DHT swarm exists for gets its own
 /// namespaced Kademlia protocol id, so a peer configured for a different
 /// `network_id` can never negotiate a Kademlia substream with this node at
-/// all — the real fix for the gap #584/#596 originally left as a known,
+/// all — the real fix for a gap previously left as a known,
 /// accepted limitation ("the DHT keyspace itself has no `network_id`
 /// segregation... in practice this doesn't leak across networks today only
-/// because #582's bootstrap can itself only ever reach peers already
+/// because bootstrap can itself only ever reach peers already
 /// admitted into this same network's peer table, not because the DHT layer
 /// enforces it directly"). This closes that gap structurally: reachability
 /// at the DHT layer is now bounded to `network_id`, not merely incidental
@@ -140,7 +139,7 @@ fn identify_protocol_version(network_id: &str) -> String {
 /// `AVALON_ANNOUNCE_INTERVAL_SECS` (default 180s); scanning noticeably
 /// faster than that just means a newly-announced peer's DHT identity is
 /// picked up sooner without needing its own separate signal. Configurable
-/// (issue #583) so a live test can turn this down without waiting out a
+/// so a live test can turn this down without waiting out a
 /// real deployment's cadence — see
 /// `crates/server/tests/interest_dht.rs`.
 const DEFAULT_BOOTSTRAP_SCAN_INTERVAL: Duration = Duration::from_secs(30);
@@ -175,7 +174,7 @@ pub enum IdentityLoadError {
 /// so an ephemeral per-restart identity is a reasonable dev default — the
 /// worst case is other nodes needing to re-learn this node's `PeerId` after
 /// a restart, a reversible availability blip, never a security gate (the
-/// same posture #368's protocol-version floor already takes for peer
+/// same posture the protocol-version floor already takes for peer
 /// admission). An operator who wants a stable `PeerId` sets the env var.
 pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, IdentityLoadError> {
     match std::env::var("AVALON_LIBP2P_IDENTITY_KEY") {
@@ -201,11 +200,11 @@ pub fn load_or_generate_identity_from_env() -> Result<identity::Keypair, Identit
 
 /// `AVALON_DHT_ENABLED`/`AVALON_LIBP2P_LISTEN_ADDR`/
 /// `AVALON_LIBP2P_EXTERNAL_ADDR` resolved once at startup. `None` (via
-/// [`from_env`](Self::from_env)) means #582/#580's DHT work doesn't run at
-/// all — every pre-#582 deployment's behavior, unchanged.
+/// [`from_env`](Self::from_env)) means the DHT work doesn't run at
+/// all — every deployment without it configured behaves unchanged.
 pub struct DhtConfig {
     pub identity: identity::Keypair,
-    /// Issue #608: this node's own `chain.network_id()`, threaded through to
+    /// This node's own `chain.network_id()`, threaded through to
     /// [`build_swarm`] so the Kademlia protocol id — and the `identify`
     /// exchange's advertised version — are both scoped to it. Every
     /// `DhtConfig` is built from a real, already-validated `network_id`
@@ -213,7 +212,7 @@ pub struct DhtConfig {
     /// `main.rs`), so this is never empty in practice.
     pub network_id: String,
     pub listen_addr: Multiaddr,
-    /// Issue #582, discovered live against the two-node LAN sandbox's
+    /// Discovered live against the two-node LAN sandbox's
     /// actual Docker-deployed shape: a containerized node's own
     /// `NewListenAddr` events only ever report its container-internal
     /// bridge/loopback addresses, never its host's LAN-reachable one —
@@ -232,7 +231,7 @@ pub struct DhtConfig {
 
 impl DhtConfig {
     /// `Ok(None)` when `AVALON_DHT_ENABLED` is explicitly set to a falsy
-    /// value (`false`/`0`) — unset defaults to *enabled* (ADR #593: an
+    /// value (`false`/`0`) — unset defaults to *enabled* (an
     /// opt-out escape hatch, not an opt-in gate — see this module's own
     /// doc comment for why). `AVALON_LIBP2P_LISTEN_ADDR` defaults to
     /// `/ip4/0.0.0.0/tcp/0` (an ephemeral port on every interface),
@@ -282,7 +281,7 @@ impl DhtConfig {
 /// This node's own DHT identity, as observed once at startup — handed to
 /// `crate::nodes::run_worker` so it rides along on every outbound announce
 /// (see this module's own doc comment), plus the [`DhtCommandSender`]
-/// (#583) any other code uses to issue `put_record`/`get_record` against
+/// any other code uses to issue `put_record`/`get_record` against
 /// the swarm this handle was created from.
 pub struct DhtHandle {
     pub peer_id: PeerId,
@@ -313,7 +312,7 @@ fn build_swarm(identity: identity::Keypair, network_id: &str) -> Swarm<DhtBehavi
 }
 
 /// Builds the DHT swarm, binds `config.listen_addr`, and spawns the
-/// long-running worker that keeps it fed from `peers` (#362's peer table).
+/// long-running worker that keeps it fed from `peers` (the peer table).
 /// Returns as soon as this node's own listen addresses are known (bounded
 /// by [`INITIAL_LISTEN_COLLECTION_WINDOW`]) so the caller can include them
 /// in this node's own outbound announces from the very first one — see
@@ -344,7 +343,7 @@ pub async fn start(peers: PeerTable, config: DhtConfig) -> DhtHandle {
         }
     }
 
-    // #582, discovered live against a real Docker-deployed node: an
+    // Discovered live against a real Docker-deployed node: an
     // observed listen address is only ever container-internal in that
     // shape — never what a LAN/WAN peer should actually dial. An operator
     // who sets AVALON_LIBP2P_EXTERNAL_ADDR is telling us so explicitly;
@@ -405,12 +404,12 @@ fn new_dht_peer(info: &PeerInfo, known: &HashSet<PeerId>) -> Option<(PeerId, Vec
 
 /// Never returns. Handles `identify` responses (feeding a directly-dialed
 /// peer's own reported listen addresses into `kad` — without this, a fresh
-/// connection never actually populates the DHT routing table; #581's spike
-/// hit exactly this), on `bootstrap_scan_interval` scans `peers` for any
-/// DHT identity not yet dialed, and (#583) services [`DhtCommand`]s from
+/// connection never actually populates the DHT routing table), on
+/// `bootstrap_scan_interval` scans `peers` for any
+/// DHT identity not yet dialed, and services [`DhtCommand`]s from
 /// `commands`.
 ///
-/// **Issue #608**: `expected_identify_version` is this node's own
+/// `expected_identify_version` is this node's own
 /// `identify_protocol_version(network_id)`. A peer whose reported
 /// `protocol_version` doesn't match it is immediately disconnected —
 /// defense in depth on top of [`kad_protocol_name`]'s own hard protocol-id
@@ -426,10 +425,10 @@ async fn run_worker(
 ) {
     let mut known_peers: HashSet<PeerId> = HashSet::new();
     let mut scan_interval = tokio::time::interval(bootstrap_scan_interval);
-    // The first tick fires immediately; bootstrap from whatever #362
-    // already knows about right away rather than waiting a full interval.
+    // The first tick fires immediately; bootstrap from whatever the peer
+    // table already knows about right away rather than waiting a full interval.
 
-    // #583: one entry per in-flight `get_record` query, accumulating
+    // One entry per in-flight `get_record` query, accumulating
     // `FoundRecord` values until `ProgressStep::last` says the query is
     // done — a `get_record` can (and usually does) yield more than one
     // `OutboundQueryProgressed` event before it finishes.
@@ -452,7 +451,7 @@ async fn run_worker(
                         // case right after startup, or a genuinely small
                         // network) can never satisfy `Quorum::One`: that
                         // quorum counts *other* peers, not this node's own
-                        // local store (#581's finding, referenced below).
+                        // local store (referenced below).
                         // Every put would be a guaranteed, immediate
                         // failure — for `identity_locator`'s callers alone
                         // that's one doomed query per known identity, every
@@ -509,7 +508,7 @@ async fn run_worker(
             event = swarm.select_next_some() => {
                 if let SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } = event {
                     // Seed the routing table from the connection's own
-                    // address immediately, same fix #581's spike needed —
+                    // address immediately —
                     // otherwise a peer dialed directly (not yet known to
                     // `kad`) can't be looked up until `identify` completes
                     // its own round trip.
@@ -525,7 +524,7 @@ async fn run_worker(
                     // only logs the *attempt*, never its outcome. Not
                     // removed from `known_peers`: a persistently
                     // unreachable peer just doesn't get retried until it
-                    // re-announces (matching #362's own peer table's
+                    // re-announces (matching the peer table's
                     // pruning-based recovery, not an independent retry
                     // policy here).
                     tracing::warn!(?peer_id, "avalon-dht: outgoing connection failed: {error}");
@@ -534,7 +533,7 @@ async fn run_worker(
                 )) = event
                 {
                     if info.protocol_version != expected_identify_version {
-                        // Issue #608: a peer identifying for a different
+                        // A peer identifying for a different
                         // network — its own kad protocol id already
                         // couldn't negotiate a single RPC with this swarm
                         // (see `kad_protocol_name`'s own doc comment), but
@@ -562,9 +561,9 @@ async fn run_worker(
                             // Fire-and-forget from the caller's perspective
                             // (`crate::interest` just re-puts on its own
                             // refresh timer) — nowhere else to surface this
-                            // but a log. Expected in a small network per
-                            // #581's own finding (quorum counts *other*
-                            // peers, not this node's own local store).
+                            // but a log. Expected in a small network:
+                            // quorum counts *other*
+                            // peers, not this node's own local store.
                             tracing::warn!("avalon-dht: put_record failed: {e}");
                         }
                         kad::QueryResult::GetRecord(result) => {
@@ -687,7 +686,7 @@ mod tests {
 
     #[test]
     fn dht_config_from_env_is_some_when_unset() {
-        // ADR #593: unset defaults to enabled now, not disabled.
+        // Unset defaults to enabled, not disabled.
         // SAFETY-of-intent note: process-global env var, same posture
         // `crate::nodes`'s own `node_roles_defaults_to_combined_when_unset`
         // test already takes.

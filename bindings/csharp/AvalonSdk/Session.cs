@@ -20,7 +20,7 @@ namespace Avalon.Sdk
     /// <summary>Mirrors <c>SdkError::CapabilityNotGranted</c> — the session token is fine but
     /// this integrator hasn't been granted the capability a method requires. Thrown client-side
     /// as a fast-fail by <see cref="Session"/>'s own <c>Require</c> check before any request is
-    /// made; the server enforces the same thing independently (issue #28) — this is not the
+    /// made; the server enforces the same thing independently — this is not the
     /// security boundary.</summary>
     public sealed class CapabilityNotGrantedException : Exception
     {
@@ -58,7 +58,7 @@ namespace Avalon.Sdk
 
     /// <summary>
     /// The server rejected a conversation read/send with "not a participant" — deliberately
-    /// carries nothing beyond that (issue #97: never reveal a block, not even indirectly).
+    /// carries nothing beyond that: never reveal a block, not even indirectly.
     /// Mirrors <c>SdkError::NotConversationParticipant</c>.
     /// </summary>
     public sealed class NotConversationParticipantException : Exception
@@ -270,7 +270,7 @@ namespace Avalon.Sdk
         /// <summary>Translates a non-success HTTP response into the matching exception.</summary>
         internal static Exception ServerError(System.Net.HttpStatusCode status) => new AvalonRequestException(status);
 
-        /// <summary>GET /identities/{id}/locations (epic #623, issue #635/#749) — every shard
+        /// <summary>GET /identities/{id}/locations — every shard
         /// base URL this identity has any durable history on, resolved over the DHT identity
         /// locator. Public: the response carries no personal data, only server base
         /// URLs.</summary>
@@ -281,7 +281,7 @@ namespace Avalon.Sdk
             return new List<string>(body.Locations);
         }
 
-        // --- Shared integrator-challenge-authed HTTP (issue #741/#744-#749) ---
+        // --- Shared integrator-challenge-authed HTTP ---
         //
         // A whole family of slug-owner writes (achievement/milestone definition
         // CRUD, attestation revocation, issuer-key management, schema/mapping/

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Same identity-id-first login ceremony as apps/hub's Login.vue (#55),
+// Same identity-id-first login ceremony as apps/hub's Login.vue,
 // composed from the same @avalon/ui components and the shared
-// @avalon/api-client module (#60) — no local WebAuthn/session logic here.
+// @avalon/api-client module — no local WebAuthn/session logic here.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon/ui'
@@ -22,7 +22,7 @@ async function onSubmit() {
   try {
     const { token } = await login(identityId.value)
     // This device's local signing key (if any) is resolved lazily later,
-    // same as apps/hub — reconnect-across-nodes support (#525) just isn't
+    // same as apps/hub — reconnect-across-nodes support just isn't
     // available until then, which is fine, not required for login itself.
     await session.login(token, identityId.value, null)
     await router.push({ name: 'home' })

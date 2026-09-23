@@ -146,7 +146,7 @@ describe('Guilds', () => {
     expect(wrapper.text()).not.toContain('Filtered to guilds playing')
   })
 
-  // Issue #432/ADR #437: a tier-2 browse view — should pick up a newly
+  // A tier-2 browse view — should pick up a newly
   // created public guild without a manual reload, but only once the
   // Discover tab is actually opened (it's lazy-loaded).
   it('polls the Discover board for newly created guilds once opened', async () => {

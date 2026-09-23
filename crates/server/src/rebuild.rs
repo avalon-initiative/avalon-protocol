@@ -1,6 +1,6 @@
-//! The rebuild-from-events flow, closing issue #43.
+//! The rebuild-from-events flow.
 //!
-//! ADR #75's claim ("Postgres is a projection") is worthless until
+//! The claim that "Postgres is a projection" is worthless until
 //! something proves it by actually dropping the read model and
 //! regenerating it from `ledger_entries` alone. [`rebuild_index_from_ledger`]
 //! is that proof: it reads every entry off the settlement ledger in `seq`
@@ -14,7 +14,7 @@
 //! test that drives this directly and diffs a snapshot before/after).
 //!
 //! Scope: only the promised-durable projections `PROJECTION_TABLES` lists
-//! are touched. `sessions`, `credentials` (until #73), presence (#78), and
+//! are touched. `sessions`, `credentials` (for now), presence, and
 //! any other cache are explicitly out of scope — see
 //! `docs/architecture/disaster-recovery.md`.
 
@@ -23,7 +23,7 @@ use avalon_indexer::postgres::PostgresIndexer;
 use sqlx::PgPool;
 
 /// `entries_skipped_undecodable` counts a ledger entry whose payload was
-/// pruned (issue #208) or whose issuer/subject wasn't a well-formed
+/// pruned or whose issuer/subject wasn't a well-formed
 /// `GlobalId` — should never happen for a genuine ledger entry, but
 /// skipped rather than panicking, same posture
 /// `mirror_watcher::protocol_event_from_mirrored` already takes for

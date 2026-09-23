@@ -1,4 +1,4 @@
-//! Exercises `GET /me/guild-announcements` (issue #280) against a real,
+//! Exercises `GET /me/guild-announcements` against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 

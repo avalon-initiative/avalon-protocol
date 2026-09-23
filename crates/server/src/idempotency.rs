@@ -1,17 +1,17 @@
 //! A generic idempotency cache for mutations that need to survive a
-//! client-side retry without double-applying (issue #47's "never retry a
+//! client-side retry without double-applying ("never retry a
 //! non-idempotent write without an idempotency key" invariant). Backed by
 //! the `idempotency_keys` table (`db/migrations/0054_idempotency_keys`),
 //! keyed by `(integrator_id, idempotency_key, endpoint)`.
 //!
 //! This first pass wires exactly one write path —
-//! `achievements::issue_attestation`, the concrete example #47 itself
-//! names ("issue_achievement and future mutations") — since double-issuing
+//! `achievements::issue_attestation` ("issue_achievement and future
+//! mutations") — since double-issuing
 //! an attestation is the worst failure mode a bare request retry could
 //! cause. Extending this to every other mutating endpoint in the server is
 //! a documented follow-up, not attempted here: each write has its own
 //! shape of "what does replaying the cached response even mean," and
-//! generalizing that honestly is more than this ticket's pass can cover.
+//! generalizing that honestly is more than this pass can cover.
 
 use axum::http::HeaderMap;
 use serde::de::DeserializeOwned;

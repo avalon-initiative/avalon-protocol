@@ -1,7 +1,7 @@
-// One conversation's message thread (issue #105) — cursor-paginated
+// One conversation's message thread — cursor-paginated
 // history (before/limit, matching crates/server/src/conversations.rs),
 // newest at the bottom, load-older on demand, new messages arrive live over
-// the /ws/messages socket (issue #438) rather than a poll. Same shape as
+// the /ws/messages socket rather than a poll. Same shape as
 // useGuildChat.ts, minus everything that's guild-specific (no channel/role/
 // permission lookups, and conversations have no moderation-delete endpoint
 // — see conversations.rs's module doc comment).
@@ -53,14 +53,14 @@ export function useConversationThread(conversationId: Ref<string>) {
     const rows = Array.isArray(page) ? page : []
     messages.value = toOldestFirst(rows)
     hasMoreOlder.value = rows.length === MESSAGE_PAGE_SIZE
-    // Opening a conversation is what "reads" it (issue #466's unread-DM
-    // tracking) — mirrors HubShell.vue's onSelectAnnouncement marking a
+    // Opening a conversation is what "reads" it for unread-DM
+    // tracking — mirrors HubShell.vue's onSelectAnnouncement marking a
     // guild announcement's channel seen the moment it's actually opened.
     const newest = messages.value[messages.value.length - 1]
     if (newest) markConversationSeen(targetId, newest.sentAt)
   }
 
-  // Opens the live socket for `targetId` (issue #438) — closes whatever
+  // Opens the live socket for `targetId` — closes whatever
   // was subscribed before, so switching conversations never leaves a stale
   // connection pushing updates for one the reader left.
   function subscribeToConversation(targetId: string) {

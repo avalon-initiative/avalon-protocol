@@ -1,4 +1,4 @@
-// Session-continuation tokens (issue #525) — the AccountSession-side
+// Session-continuation tokens — the AccountSession-side
 // minting half of `avalon_protocol::continuation` / `crates/server/src/
 // continuation.rs`. A short-lived, self-signed assertion that lets an
 // already-logged-in identity keep working against a *different* node than

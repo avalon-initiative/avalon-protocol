@@ -1,4 +1,4 @@
-// Pure guild-events logic (issue #169), kept separate from
+// Pure guild-events logic, kept separate from
 // apps/hub/src/api/guilds.ts and guildChat.ts since it's about calendar
 // sorting/formatting/RSVP-state, not roster/role merging or message
 // composition — following the same split guildChat.ts already documents.
@@ -130,7 +130,7 @@ export function rsvpStatusLabel(status: RsvpStatus): string {
   }
 }
 
-// Per-member RSVP roster (issue #248). Groups raw guild_event_rsvps rows
+// Per-member RSVP roster. Groups raw guild_event_rsvps rows
 // (GET .../events/{eid}/rsvps) into going/maybe/not_going buckets of
 // resolved display names, in RSVP_STATUS_ORDER — pure and independently
 // testable, same split useGuildChat's resolveAuthorNames/authorNames map

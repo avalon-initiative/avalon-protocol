@@ -1,5 +1,5 @@
-// Device-registration / linked-device grant model (issue #135) and cross-device pairing
-// approval (issue #307/#704) on AccountSession — identity_signing_keys rows (event-authorship
+// Device-registration / linked-device grant model and cross-device pairing
+// approval on AccountSession — identity_signing_keys rows (event-authorship
 // keys), distinct from AccountSession.Passkeys.cs (WebAuthn login credentials). Mirrors
 // crates/sdk/src/account/devices.rs. No WebAuthn ceremony involved anywhere in this file, so
 // every method here is fully ported.
@@ -79,7 +79,7 @@ namespace Avalon.Sdk
                 $"/me/devices/{signingKeyId}", new Avalon.Sdk.Generated.RenameDeviceRequest { Label = label }, ct).ConfigureAwait(false);
 
         /// <summary><c>POST /me/devices/{signing_key_id}/revoke</c> — unilateral,
-        /// ambient-token (revocation only ever narrows trust, per #697).</summary>
+        /// ambient-token (revocation only ever narrows trust).</summary>
         public async Task RevokeDeviceAsync(Guid signingKeyId, CancellationToken ct = default) =>
             await PostEmptyNoResponseAsync($"/me/devices/{signingKeyId}/revoke", ct).ConfigureAwait(false);
 
@@ -133,7 +133,7 @@ namespace Avalon.Sdk
                 ct).ConfigureAwait(false);
         }
 
-        /// <summary><c>POST /auth/device/approve</c> (issue #307/#704) — approves a
+        /// <summary><c>POST /auth/device/approve</c> — approves a
         /// cross-device pairing request identified by <paramref name="userCode"/>, always
         /// signed (<c>device_pairing.approve</c>, <c>[identity_id, user_code]</c>).</summary>
         public async Task<string> ApproveDevicePairingAsync(string userCode, CancellationToken ct = default)

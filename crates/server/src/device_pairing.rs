@@ -1,10 +1,10 @@
-//! Cross-device pairing (issue #307): lets a WebAuthn-incapable client (a
+//! Cross-device pairing: lets a WebAuthn-incapable client (a
 //! game engine with no embedded browser, a console, a headless context)
 //! bootstrap a real session without ever implementing a WebAuthn ceremony
 //! itself.
 //!
-//! Structurally close to `crate::devices`'s request/approve/poll shape
-//! (#135/#122), but a genuinely different problem: that module adds a
+//! Structurally close to `crate::devices`'s request/approve/poll shape,
+//! but a genuinely different problem: that module adds a
 //! trusted signing device to an identity that's *already* authenticated
 //! somewhere; this module bootstraps a session for a client that has *no*
 //! prior session at all. Kept as its own module rather than bolted onto
@@ -260,9 +260,9 @@ pub struct UserCodeRequest {
     pub user_code: String,
 }
 
-/// Issue #704: `POST /auth/device/approve` mints a brand-new, independently-
+/// `POST /auth/device/approve` mints a brand-new, independently-
 /// usable session for a different device off nothing but the approver's
-/// ambient session today — #697/#698's signature-required tier closes that
+/// ambient session, so a signature-required tier closes that
 /// gap. `signing_key_id`/`signature` are optional on the wire (so
 /// deserialization never fails outright) but enforced as required by
 /// [`require_fresh_signature`] below.
@@ -315,7 +315,7 @@ pub async fn approve_pairing(
     let identity_id = authenticate(&state, &headers).await?;
     let pairing_id = fetch_pending_pairing_id(&state, &body.user_code).await?;
 
-    // #704's gap #1: proof-of-possession of the identity's own signing key,
+    // Proof-of-possession of the identity's own signing key,
     // on top of the ambient session, before minting a second independently-
     // usable session for an entirely different device. Deliberately signs
     // over `user_code`/`identity_id` rather than the server-internal

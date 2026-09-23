@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A three-way RSVP toggle (issue #169) — always the caller's own status,
+// A three-way RSVP toggle — always the caller's own status,
 // never another member's (see .types.ts). Purely presentational: the
 // parent owns the actual PUT .../rsvp call and passes the result back
 // down as `currentStatus`.

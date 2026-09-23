@@ -1,4 +1,4 @@
-//! The capability-enforcement extractor and guard (issue #28) — resolves
+//! The capability-enforcement extractor and guard — resolves
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
 //! specific capability" (`require_capability`). See
 //! `docs/architecture/security-model.md`'s "Authorization: one capability,
@@ -169,9 +169,9 @@ async fn fetch_grant(
 
 /// Whether an active `bindings` row exists for `(identity_id, integrator_id)`,
 /// with no specific capability grant required — the user-consent check
-/// `integrator_data::publish_instance` (#384) uses, matching
+/// `integrator_data::publish_instance` uses, matching
 /// `issue_attestation`'s "an active binding to this issuer" language but
-/// without a capability grant on top (#384 doesn't define one; publishing
+/// without a capability grant on top (publishing
 /// instance data about a bound user is closer to schema/achievement
 /// *definition* than to acting on a user's other resources). Reuses
 /// [`fetch_binding`] rather than a second hand-rolled query, same posture
@@ -341,7 +341,7 @@ mod live_tests {
     //! every `crates/server/tests/*.rs` file, but living here instead of
     //! there (see this module's own top-level doc comment for why: a
     //! `tests/*.rs` file is a separate crate and cannot see `pub(crate)`
-    //! items at all). Skipped in this sandbox per `.claude/CLAUDE.md` (no
+    //! items at all). Skipped in this sandbox (no
     //! reachable Postgres here) — written but not run against a live
     //! database.
     //!

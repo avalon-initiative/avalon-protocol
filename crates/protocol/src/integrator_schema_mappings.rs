@@ -1,5 +1,4 @@
-//! Schema-to-schema mapping model (issue #491, the last unfiled acceptance
-//! item under epic #182). See `crates/protocol/src/integrator_schemas.rs`'s
+//! Schema-to-schema mapping model. See `crates/protocol/src/integrator_schemas.rs`'s
 //! own module doc comment for the schema-version model this builds on.
 //!
 //! **Not an execution engine.** A [`IntegratorSchemaMapping`] documents a

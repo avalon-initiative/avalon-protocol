@@ -1,6 +1,6 @@
 //! Guild creation, roles, ownership transfer, membership lifecycle, and
-//! discovery (issues #20/#21/#154). A guild is a network-level primitive,
-//! not an integrator's (#74). See `docs/architecture/guilds.md` and
+//! discovery. A guild is a network-level primitive,
+//! not an integrator's. See `docs/architecture/guilds.md` and
 //! `guilds-implementation-log.md`'s "Today in the repo" for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
@@ -52,49 +52,49 @@ const OWNER_ROLE_INDEX: i32 = 0;
 const OFFICER_ROLE_INDEX: i32 = 1;
 const MEMBER_ROLE_INDEX: i32 = 2;
 
-/// Cap on `GuildRole.description` (issue #152) — same "short, capped text
+/// Cap on `GuildRole.description` — same "short, capped text
 /// field" treatment as `validate_tag`, just a longer bound since a role
 /// description is prose, not a 2-5 character tag.
 const MAX_ROLE_DESCRIPTION_LEN: usize = 200;
 
-/// Cap on `Guild.motd` (issue #153) — same order of magnitude as
+/// Cap on `Guild.motd` — same order of magnitude as
 /// `MAX_BIO_LEN` in `handlers.rs`, since a MOTD is short prose too.
 const MAX_GUILD_MOTD_LEN: usize = 500;
 
-/// Cap on `Guild.banner`'s URL length (issue #153) — same bound
+/// Cap on `Guild.banner`'s URL length — same bound
 /// `MAX_AVATAR_URL_LEN` uses.
 const MAX_GUILD_BANNER_URL_LEN: usize = 2048;
 
-/// Cap on `Guild.icon`'s URL length (issue #246) — a small badge image is
+/// Cap on `Guild.icon`'s URL length — a small badge image is
 /// no more likely to need a longer URL than a banner, so this uses the
 /// same bound as [`MAX_GUILD_BANNER_URL_LEN`], as its own named constant
 /// rather than reusing the banner's, in case the two ever need to diverge.
 const MAX_GUILD_ICON_URL_LEN: usize = 2048;
 
-/// Cap on the number of entries in `Guild.links` (issue #153) — keeps this
-/// from becoming an arbitrary free-form content field, per the ticket.
+/// Cap on the number of entries in `Guild.links` — keeps this
+/// from becoming an arbitrary free-form content field.
 const MAX_GUILD_LINKS: usize = 5;
 
-/// Cap on a single `GuildLink.label`'s length (issue #153).
+/// Cap on a single `GuildLink.label`'s length.
 const MAX_GUILD_LINK_LABEL_LEN: usize = 60;
 
-/// Cap on a single `GuildLink.url`'s length (issue #153) — same bound
+/// Cap on a single `GuildLink.url`'s length — same bound
 /// `MAX_AVATAR_URL_LEN`/`MAX_GUILD_BANNER_URL_LEN` use.
 const MAX_GUILD_LINK_URL_LEN: usize = 2048;
 
 /// Cap on the number of entries in a guild's curated favorite-integrators pin
-/// list (issue #207) — same "top N, not a free-form list" shape
+/// list — same "top N, not a free-form list" shape
 /// [`MAX_GUILD_LINKS`] already uses, capped at a smaller number since this
 /// is meant to be a deliberately curated highlight, not a catalog.
 const MAX_GUILD_FAVORITE_GAMES: usize = 5;
 
-/// Default/maximum page size for `GET /guilds/discover` (issue #154) — same
+/// Default/maximum page size for `GET /guilds/discover` — same
 /// "small default, capped maximum" shape `guild_messages`'s
 /// `DEFAULT_MESSAGE_PAGE_SIZE`/`MAX_MESSAGE_PAGE_SIZE` already use.
 const DEFAULT_DISCOVER_PAGE_SIZE: i64 = 20;
 const MAX_DISCOVER_PAGE_SIZE: i64 = 100;
 
-/// Cap on `GuildJoinRequest.message` (issue #242) — a short free-text note
+/// Cap on `GuildJoinRequest.message` — a short free-text note
 /// from the applicant, not an essay; same order of magnitude as
 /// `MAX_ROLE_DESCRIPTION_LEN`.
 const MAX_JOIN_REQUEST_MESSAGE_LEN: usize = 300;
@@ -113,7 +113,7 @@ fn guild_ref(guild_id: Uuid, verb: &str) -> GlobalId {
 /// so it can never be revoked by editing a role row. Anyone else needs
 /// `permission` present in their own role's permission list, resolved by
 /// [`actor_role_permissions`]. `pub(crate)` so `channels.rs`/`guild_messages.rs`
-/// (#22) can reuse it for `manage_channels` checks.
+/// can reuse it for `manage_channels` checks.
 pub(crate) fn has_guild_permission(
     guild_owner: Uuid,
     actor: Uuid,
@@ -126,8 +126,7 @@ pub(crate) fn has_guild_permission(
     actor_permissions.iter().any(|p| p == permission.as_str())
 }
 
-/// Pure resolution of a resource-scoped permission check (issue #250,
-/// shape decided by #243): owner always passes, same as
+/// Pure resolution of a resource-scoped permission check: owner always passes, same as
 /// [`has_guild_permission`]. Otherwise, when an override exists for this
 /// exact (role, resource, permission) triple it decides the outcome
 /// outright — `Some(true)` grants even if the base list lacks the
@@ -210,7 +209,7 @@ async fn fetch_override(
     }
 }
 
-/// Resource-aware sibling of [`has_guild_permission`] (issue #250): same
+/// Resource-aware sibling of [`has_guild_permission`]: same
 /// owner bypass, but for a non-owner actor it consults
 /// `guild_permission_overrides` for this exact resource before falling
 /// back to the role's flat base permission list (via
@@ -252,14 +251,13 @@ pub(crate) async fn has_resource_permission(
     ))
 }
 
-/// Pure resolution of `View`/`ViewDetails` for one resource (issue #458,
-/// implementing #454's decision) — deliberately **not** routed through
+/// Pure resolution of `View`/`ViewDetails` for one resource — deliberately **not** routed through
 /// [`resolve_resource_permission`], since these two have a baseline
 /// unlike every other permission: with no override, a *member* has both
 /// (existing behavior, unchanged for a guild with no overrides at all),
 /// and a *non-member* gets exactly `resource_public` for both — never a
 /// flat `false`, matching how a public event/guild already exposes
-/// content to non-members today (#448/#449).
+/// content to non-members today.
 ///
 /// `ViewDetails` always implies `View`: an explicit `view_details` grant
 /// (`view_details_override == Some(true)`) makes `View` true even under
@@ -294,7 +292,7 @@ pub(crate) fn resolve_view_permission(
     view_override.unwrap_or(true)
 }
 
-/// Resource-aware `View`/`ViewDetails` check (issue #458) — the
+/// Resource-aware `View`/`ViewDetails` check — the
 /// override-fetching, membership-aware sibling of
 /// [`resolve_view_permission`], same shape [`has_resource_permission`]
 /// gives [`resolve_resource_permission`]. `resource_public` is the
@@ -447,7 +445,7 @@ fn validate_guild_banner(banner: &str) -> Result<Option<String>, AppError> {
 
 /// Same empty-string-clears convention `validate_guild_banner` uses,
 /// reusing the same `http`/`https`-URL validation — mirrors it exactly,
-/// just for `Guild.icon` (issue #246) rather than `Guild.banner`.
+/// just for `Guild.icon` rather than `Guild.banner`.
 fn validate_guild_icon(icon: &str) -> Result<Option<String>, AppError> {
     if icon.is_empty() {
         return Ok(None);
@@ -458,14 +456,14 @@ fn validate_guild_icon(icon: &str) -> Result<Option<String>, AppError> {
     Ok(Some(icon.to_string()))
 }
 
-/// Wire shape for one entry of `UpdateGuildRequest.links` (issue #153).
+/// Wire shape for one entry of `UpdateGuildRequest.links`.
 #[derive(Deserialize, ToSchema)]
 pub struct GuildLinkRequest {
     pub label: String,
     pub url: String,
 }
 
-/// Issue #153's invariants: at most [`MAX_GUILD_LINKS`] entries, each
+/// Invariants: at most [`MAX_GUILD_LINKS`] entries, each
 /// label 1-[`MAX_GUILD_LINK_LABEL_LEN`] characters, each url a valid
 /// `http`/`https` URL within [`MAX_GUILD_LINK_URL_LEN`] characters. Unlike
 /// `motd`/`banner`, a link entry has no "empty means clear" state of its
@@ -564,9 +562,9 @@ struct GuildRow {
     roster_visibility: String,
 }
 
-/// True if `guild_id` is currently `public` (issue #449) — a lightweight
-/// single-column check for callers (like `crate::guild_events::list_events`,
-/// issue #448) that only need this one flag rather than the full
+/// True if `guild_id` is currently `public` — a lightweight
+/// single-column check for callers (like `crate::guild_events::list_events`)
+/// that only need this one flag rather than the full
 /// [`fetch_guild`] row. 404s if the guild doesn't exist, same as every
 /// other guild lookup.
 pub(crate) async fn is_guild_public(state: &AppState, guild_id: Uuid) -> Result<bool, AppError> {
@@ -792,8 +790,8 @@ pub async fn create_guild(
         version: 1,
     };
     // Owner membership (role_index 0) is derived from this same event —
-    // see `avalon_indexer::projections::guild_rosters`'s module doc comment
-    // (issue #506): folded into `guild.created` rather than a separate
+    // see `avalon_indexer::projections::guild_rosters`'s module doc comment:
+    // folded into `guild.created` rather than a separate
     // `guild.member_added`, since owner membership is implied by guild
     // creation itself, not a distinct durable fact.
     state.indexer.apply_in_tx(&mut tx, &event).await?;
@@ -841,7 +839,7 @@ pub async fn get_guild(
 ) -> Result<Json<GuildResponse>, AppError> {
     // Public metadata is readable by any authenticated identity (see
     // module doc comment / ticket "Read visibility") — the roster itself
-    // is #21's concern, and isn't returned here.
+    // is a separate concern, and isn't returned here.
     authenticate(&state, &headers).await?;
     let guild = fetch_guild(&state, guild_id).await?;
     Ok(Json(guild_response(&state, guild).await?))
@@ -852,37 +850,37 @@ pub struct UpdateGuildRequest {
     pub name: Option<String>,
     pub tag: Option<String>,
     pub description: Option<String>,
-    /// Issue #153. Three states, same as `UpdateProfileRequest::bio`:
+    /// Three states, same as `UpdateProfileRequest::bio`:
     /// omitted (untouched), `Some("")` (clear to `NULL`), `Some(nonempty)`
     /// (validate against [`MAX_GUILD_MOTD_LEN`], then set).
     pub motd: Option<String>,
-    /// Issue #153. Same three-state convention as `motd`, same
+    /// Same three-state convention as `motd`, same
     /// `http`/`https`-URL validation as a profile's `avatar_url`.
     pub banner: Option<String>,
-    /// Issue #246. Same three-state convention as `banner`, same
+    /// Same three-state convention as `banner`, same
     /// `http`/`https`-URL validation.
     pub icon: Option<String>,
-    /// Issue #153. Two states, not three: omitted (untouched) or
+    /// Two states, not three: omitted (untouched) or
     /// `Some(list)`, which always fully replaces the stored list —
     /// including `Some(vec![])` to clear it. Each entry is validated; an
     /// invalid entry rejects the whole request rather than being dropped.
     pub links: Option<Vec<GuildLinkRequest>>,
-    /// Issue #153. Omitted leaves it untouched.
+    /// Omitted leaves it untouched.
     pub recruiting: Option<bool>,
-    /// Issue #449. Omitted leaves it untouched. Independent of
+    /// Omitted leaves it untouched. Independent of
     /// `recruiting` — see `avalon_protocol::guilds::Guild::public`'s doc
     /// comment.
     pub public: Option<bool>,
     /// "invite_only" or "open" (see [`JoinPolicy`]) — omitted leaves it
     /// untouched. `Open` lets any authenticated identity join instantly via
     /// `POST /guilds/{id}/join` (`can_join_directly`/`join_guild`), bypassing
-    /// the invite (#21) and join-request/approval (#242) flows entirely.
+    /// the invite and join-request/approval flows entirely.
     pub join_policy: Option<String>,
-    /// Issue #206. Omitted leaves it untouched. Controls only whether the
+    /// Omitted leaves it untouched. Controls only whether the
     /// integrator affinity breakdown is shown on this guild's *public* profile —
     /// a `manage_guild` holder can always see it internally either way.
     pub game_breakdown_public: Option<bool>,
-    /// Issue #87. `"public"` (anyone), `"guild_members"` (only current
+    /// `"public"` (anyone), `"guild_members"` (only current
     /// members), or `"private"` (nobody, via this endpoint, but a
     /// `manage_guild` holder — see `update_guild`'s own permission check —
     /// can always change it back). Omitted leaves it untouched.
@@ -1537,7 +1535,7 @@ pub async fn delete_role(
     Ok(())
 }
 
-// --- Per-resource permission overrides (issue #250) --------------------
+// --- Per-resource permission overrides -----------------------------------
 //
 // Not durable/outbox history — same "hot, editable configuration, not an
 // append-only fact" posture `guild_roles.permissions` itself already has
@@ -1847,7 +1845,7 @@ pub async fn transfer_ownership(
 
     // A single UPDATE of the one `owner` column: the guild is never
     // observably ownerless or dual-owned between statements, satisfying
-    // "a guild never has zero or two owners" (issue #20's invariant).
+    // "a guild never has zero or two owners" invariant.
     sqlx::query("UPDATE guilds SET owner = $2 WHERE id = $1")
         .bind(guild_id)
         .bind(body.to)
@@ -1961,7 +1959,7 @@ pub async fn associate_integrator(
     Ok(Json(guild_response(&state, guild).await?))
 }
 
-// --- Membership lifecycle (issue #21) -------------------------------------
+// --- Membership lifecycle -------------------------------------------------
 
 /// True if `actor` may leave a guild owned by `guild_owner` without first
 /// transferring ownership away — false only for the owner themself.
@@ -2148,10 +2146,10 @@ pub struct MyGuildInviteResponse {
 }
 
 /// `GET /me/guild-invites` — every unresolved invite where the caller is
-/// the invitee (issue #442). Without this, the only way an invitee learns
+/// the invitee. Without this, the only way an invitee learns
 /// an invite exists at all is being told its raw id out of band by the
 /// sender — this is the "receiving end" listing `Guild.vue`'s invite flow
-/// has been missing since #21, mirroring the shape
+/// has been missing, mirroring the shape
 /// `recovery::guardian_requests` already established for the same "every
 /// active thing where the caller is on the receiving end" need.
 #[utoipa::path(
@@ -2217,11 +2215,11 @@ async fn fetch_pending_invite(
 /// Upserts `identity_id` into `indexer_guild_members` at `role_index` and
 /// enqueues the durable `guild.member_added` event, in the given
 /// transaction. The one membership-add code path, shared by
-/// [`accept_invite`], [`join_guild`], and [`approve_join_request`] (issue
-/// #242) so approving a join request can't drift from what invites/
+/// [`accept_invite`], [`join_guild`], and [`approve_join_request`]
+/// so approving a join request can't drift from what invites/
 /// direct-join already do.
 ///
-/// A real correctness check, not just advisory (issue #506): the indexer's
+/// A real correctness check, not just advisory: the indexer's
 /// own upsert is idempotent (`ON CONFLICT ... DO UPDATE`), so it can't by
 /// itself signal "was already a member" the way the old table's unique
 /// violation did — this reads `guild_rosters::is_member` first, inside the
@@ -2432,7 +2430,7 @@ pub async fn leave_guild(
     // clear it back to `None` here, in the same transaction as the
     // membership removal, via the normal `profile.updated` event/outbox/
     // indexer path rather than a bespoke `UPDATE profiles` — `profiles` is
-    // a rebuildable projection (issue #42) and must only ever change
+    // a rebuildable projection and must only ever change
     // through that path.
     let current_main_guild: Option<Uuid> =
         sqlx::query_scalar("SELECT main_guild FROM profiles WHERE identity_id = $1")
@@ -2560,10 +2558,10 @@ pub async fn remove_member(
     Ok(())
 }
 
-// --- Join requests (issue #242) --------------------------------------------
+// --- Join requests ---------------------------------------------------------
 //
 // Symmetric to `guild_invites` above but initiated by the applicant instead
-// of a manager: a stranger browsing the Discover board (#154) applies to a
+// of a manager: a stranger browsing the Discover board applies to a
 // `recruiting` guild instead of waiting to be invited. `guild_join_requests`
 // is a projection, same durability posture as `guild_invites` — a
 // pending/approved/rejected/withdrawn transition is not itself durable
@@ -3169,10 +3167,10 @@ pub async fn list_my_guilds(
     Ok(Json(memberships))
 }
 
-/// `sort=` values `GET /guilds/discover` (issue #154) accepts. `MostMembers`
-/// depends on #21's roster (`guild_members`), which is real today, so all
-/// three ticket-listed options are implemented — no "trending"/engagement
-/// ranking, per the ticket's explicit "not yet" on that.
+/// `sort=` values `GET /guilds/discover` accepts. `MostMembers`
+/// depends on the roster (`guild_members`), which is real today, so all
+/// three options are implemented — no "trending"/engagement
+/// ranking yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiscoverSort {
     Newest,
@@ -3195,7 +3193,7 @@ impl DiscoverSort {
 /// in an `ILIKE` pattern (Postgres's default `ILIKE` escape character is
 /// backslash) — otherwise a caller's own `q=` or `tag=` value could inject
 /// wildcard behavior rather than being matched literally. `pub(crate)` since
-/// `crates/server/src/discovery.rs`'s `GET /identities/search` (#205) reuses
+/// `crates/server/src/discovery.rs`'s `GET /identities/search` reuses
 /// it for the exact same reason rather than re-implementing the escape.
 pub(crate) fn escape_like(input: &str) -> String {
     input
@@ -3214,7 +3212,7 @@ pub struct DiscoverGuildsQuery {
     pub recruiting: Option<bool>,
     /// Case-insensitive exact match on `guilds.tag`.
     pub tag: Option<String>,
-    /// Filter to guilds associated (issue #20's `associate_integrator`) with this
+    /// Filter to guilds associated (via `associate_integrator`) with this
     /// integrator id.
     pub integrator: Option<Uuid>,
     /// `newest` (default) | `alphabetical` | `most_members`.
@@ -3238,8 +3236,8 @@ pub struct DiscoverGuildSummary {
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub created_at: OffsetDateTime,
-    /// Issue #258: same already-public fields `GET /guilds/{id}` returns
-    /// (#153/#246) — `null` when unset, no new visibility exposure.
+    /// Same already-public fields `GET /guilds/{id}` returns —
+    /// `null` when unset, no new visibility exposure.
     pub banner: Option<String>,
     pub icon: Option<String>,
 }
@@ -3252,8 +3250,8 @@ pub struct DiscoverGuildsResponse {
     pub next_cursor: Option<Uuid>,
 }
 
-/// `GET /guilds/discover?q=&recruiting=&tag=&integrator=&sort=&limit=&cursor=`
-/// (issue #154). `recruiting=false` is still membership-gated, not a raw
+/// `GET /guilds/discover?q=&recruiting=&tag=&integrator=&sort=&limit=&cursor=`.
+/// `recruiting=false` is still membership-gated, not a raw
 /// filter — see `docs/architecture/guilds-implementation-log.md`'s
 /// discovery-board section for the full `recruiting` visibility rule and
 /// why. Builds the `guilds.discover` query — split out from
@@ -3406,7 +3404,7 @@ pub async fn discover_guilds(
     }))
 }
 
-// --- Integrator affinity breakdown (issue #206, implementing decision #160) -----
+// --- Integrator affinity breakdown ----------------------------------------
 
 /// One integrator's slice of a guild's integrator affinity breakdown: how many of the
 /// guild's current members hold an active [`IntegratorBinding`](avalon_protocol::integrators::IntegratorBinding)
@@ -3433,7 +3431,7 @@ pub struct GameBreakdownResponse {
     /// No minimum-member threshold and no fixed cap — every integrator with at
     /// least one bound member appears, ordered by member count descending
     /// (ties broken alphabetically by name for a stable, readable order).
-    /// This is a display of real counts, not a system verdict, per #160.
+    /// This is a display of real counts, not a system verdict.
     pub breakdown: Vec<GameBreakdownEntry>,
 }
 
@@ -3463,14 +3461,14 @@ fn can_view_game_breakdown(
 /// Builds the aggregation query behind [`game_breakdown`] — split out so
 /// the shape of the query can be unit-tested via [`sqlx::QueryBuilder::sql`]
 /// without a live Postgres connection, same pattern [`build_discover_query`]
-/// already established for #154.
+/// already established.
 ///
 /// Groups the guild's current members (`guild_members`) by their active
-/// `bindings` (`ended_at IS NULL`, issue #83), joined against `integrators` for
+/// `bindings` (`ended_at IS NULL`), joined against `integrators` for
 /// display name/slug. A member with no active binding to any integrator
 /// contributes to no row; a member bound to several integrators contributes to
 /// each. No `HAVING` / minimum-count filter — every integrator with at least one
-/// bound member is included, per #160's "no minimum-member threshold"
+/// bound member is included, per the "no minimum-member threshold"
 /// invariant.
 fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
@@ -3489,10 +3487,9 @@ fn build_game_breakdown_query(guild_id: Uuid) -> QueryBuilder<Postgres> {
     builder
 }
 
-/// `GET /guilds/{id}/integrator-breakdown` (issue #206, implementing decision
-/// #160). Milestone-1 stand-in: a direct query over `guild_members` JOIN
-/// `bindings` JOIN `integrators`, same precedent [`discover_guilds`] (#154)
-/// already set, not #42's real indexer read model. Derived/computed on
+/// `GET /guilds/{id}/integrator-breakdown`. Milestone-1 stand-in: a direct query over `guild_members` JOIN
+/// `bindings` JOIN `integrators`, same precedent [`discover_guilds`]
+/// already set, not the real indexer read model. Derived/computed on
 /// every read — no protocol event, no durable table backs this (see the
 /// module doc comment).
 ///
@@ -3547,10 +3544,9 @@ pub async fn game_breakdown(
     }))
 }
 
-// --- Favorite integrators: curated top-5 pin list (issue #207, implementing -----
-// --- decision #160) --------------------------------------------------------
+// --- Favorite integrators: curated top-5 pin list -------------------------
 
-/// Every integrator the guild currently has a real affinity for, per #206's
+/// Every integrator the guild currently has a real affinity for, per the
 /// aggregation (`build_game_breakdown_query`): at least one current member
 /// holds an active binding to it. This is the *only* source of truth a pin
 /// may be validated against — reused as-is (not a separate query) so
@@ -3626,7 +3622,7 @@ async fn fetch_favorite_games(
     Ok(favorites)
 }
 
-/// `GET /guilds/{id}/favorite-integrators` (issue #207). Same "any authenticated
+/// `GET /guilds/{id}/favorite-integrators`. Same "any authenticated
 /// identity may read a guild's public metadata" visibility as `GET
 /// /guilds/{id}` itself (see that handler's doc comment) — the favorites
 /// list is exactly the curated subset of affinity data a guild has chosen
@@ -3658,14 +3654,14 @@ pub async fn list_favorite_games(
 pub struct SetFavoriteGamesRequest {
     /// The full desired ordered list of pinned integrator ids — always a full
     /// replace, never a per-entry patch, same "resend the whole list"
-    /// convention `UpdateGuildRequest::links` already established for #153.
+    /// convention `UpdateGuildRequest::links` already established.
     /// Position in this array is the new display order.
     pub integrator_ids: Vec<Uuid>,
 }
 
 /// [`MAX_GUILD_FAVORITE_GAMES`]-capped, order-preserving, no duplicates, and
-/// every entry must currently appear in `bound_ids` (#206's live affinity
-/// breakdown) — the one invariant this ticket exists to enforce: a pin can
+/// every entry must currently appear in `bound_ids` (the live affinity
+/// breakdown) — a pin can
 /// never manufacture an association with an integrator the guild has no real,
 /// currently-bound connection to.
 fn validate_favorite_game_ids(
@@ -3687,10 +3683,10 @@ fn validate_favorite_game_ids(
     Ok(())
 }
 
-/// `PUT /guilds/{id}/favorite-integrators` (issue #207). Gated by the same
-/// `manage_guild`/owner permission as #206's breakdown-visibility toggle
+/// `PUT /guilds/{id}/favorite-integrators`. Gated by the same
+/// `manage_guild`/owner permission as the breakdown-visibility toggle
 /// (via [`has_guild_permission`]) — reuses that check rather than inventing
-/// a new one, per the ticket. Validates every id against the guild's real,
+/// a new one. Validates every id against the guild's real,
 /// current affinity (see [`validate_favorite_game_ids`]) before writing
 /// anything; on success, replaces the stored list atomically (delete +
 /// reinsert, same "small enough this doesn't need per-row diffing" call
@@ -4267,7 +4263,7 @@ mod tests {
 
     #[test]
     fn explicit_recruiting_true_filters_exactly_no_membership_gate_needed() {
-        // Recruiting guilds are already public-by-design (#20), so this is a
+        // Recruiting guilds are already public-by-design, so this is a
         // plain exact filter with no membership subquery.
         let mut query = empty_discover_query();
         query.recruiting = Some(true);
@@ -4395,8 +4391,8 @@ mod tests {
         assert!(!builder.sql().as_str().contains("WHERE id ="));
     }
 
-    /// Issue #258: `banner`/`icon` are already-public fields on a guild
-    /// (readable via `GET /guilds/{id}` since #153/#246) — Discover's
+    /// `banner`/`icon` are already-public fields on a guild
+    /// (readable via `GET /guilds/{id}`) — Discover's
     /// `SELECT` must include them too so `DiscoverGuildSummary` can carry
     /// them without a second round trip.
     #[test]
@@ -4540,10 +4536,9 @@ mod tests {
         ));
     }
 
-    // --- resolve_resource_permission (issue #250) -----------------------
+    // --- resolve_resource_permission --------------------------------------
     //
-    // Pure-function coverage of every state the ticket's Tests section
-    // calls out. `has_resource_permission`/`fetch_override` themselves
+    // Pure-function coverage of every state. `has_resource_permission`/`fetch_override` themselves
     // need a live Postgres (covered by `crates/server/tests/guilds.rs`,
     // gated `--ignored`) — this is the DB-free model of their exact
     // grant/deny/absent resolution logic.
@@ -4624,7 +4619,7 @@ mod tests {
         ));
     }
 
-    // --- resolve_view_permission (issue #458) ----------------------------
+    // --- resolve_view_permission ------------------------------------------
 
     #[test]
     fn view_owner_bypass_survives_every_deny() {

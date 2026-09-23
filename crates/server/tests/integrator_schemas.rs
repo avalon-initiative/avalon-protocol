@@ -1,7 +1,7 @@
-//! Exercises Integrator Space schema publication (issue #255) against a real,
+//! Exercises Integrator Space schema publication against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`. Skipped in this
-//! sandbox per `.claude/CLAUDE.md` (no reachable Postgres here); written but
+//! sandbox (no reachable Postgres here); written but
 //! not run against a live database.
 //!
 //! Mirrors `crates/server/tests/achievements.rs`'s own pattern for the

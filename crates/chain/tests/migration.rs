@@ -1,4 +1,4 @@
-//! Exercises `avalon_chain::migration` (issue #484) against real Postgres —
+//! Exercises `avalon_chain::migration` against real Postgres —
 //! gated `--ignored`, see `make test-live`. Each test gets its own pair of
 //! throwaway schemas (source/target), mirroring `settlement.rs`'s
 //! `isolated_genesis_pool` pattern, extended with the extra tables a

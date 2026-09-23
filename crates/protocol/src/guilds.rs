@@ -18,43 +18,42 @@ pub struct Guild {
     pub owner: IdentityId,
     pub created_at: OffsetDateTime,
     /// Whether the guild accepts open joins (`POST /guilds/{id}/join`) or
-    /// requires an invite (issue #21). Defaults to `InviteOnly`.
+    /// requires an invite. Defaults to `InviteOnly`.
     pub join_policy: JoinPolicy,
-    /// Message-of-the-day (issue #153) — short, capped prose set by the
+    /// Message-of-the-day — short, capped prose set by the
     /// owner/`manage_guild`. `None` means unset, same "no value" convention
     /// `identity::Profile.bio` already uses; an empty string is never
     /// stored, it's normalized to `None` on the way in.
     pub motd: Option<String>,
-    /// Banner image URL (issue #153) — same `http`/`https`-only, length-capped
+    /// Banner image URL — same `http`/`https`-only, length-capped
     /// validation as a profile's `avatar_url`. `None` means unset.
     pub banner: Option<String>,
-    /// Small badge/icon image URL (issue #246) — a compact identity mark,
+    /// Small badge/icon image URL — a compact identity mark,
     /// distinct from [`Guild::banner`]'s wide cover-image role. Same
     /// `http`/`https`-only, length-capped validation as `banner`. `None`
     /// means unset.
     pub icon: Option<String>,
     /// Small, capped list of external links (Discord, website, ...) the
-    /// guild wants to point at (issue #153). Ordered; a caller that wants a
+    /// guild wants to point at. Ordered; a caller that wants a
     /// different order resends the whole list, same "full replace, not a
     /// per-entry patch" convention `favorite_genres` already established.
     pub links: Vec<GuildLink>,
-    /// Whether this guild is advertising for new members (issue #153). Feeds
-    /// the discovery board (issue #154) — a real, queryable column, not
+    /// Whether this guild is advertising for new members. Feeds
+    /// the discovery board — a real, queryable column, not
     /// derived from anything else.
     pub recruiting: bool,
-    /// Whether this guild is publicly viewable — its roster and (once
-    /// #448 lands) its public events are visible to any authenticated
+    /// Whether this guild is publicly viewable — its roster and its public
+    /// events are visible to any authenticated
     /// identity, independent of whether it's currently [`Guild::recruiting`]
-    /// (issue #449, decided: these are separate concerns — a full guild may
+    /// (these are separate concerns — a full guild may
     /// still want a public presence, and a recruiting guild may want to
-    /// keep its roster private until someone actually applies). Before
-    /// #449, `recruiting` alone controlled roster visibility
-    /// (`crates/server/src/guilds.rs::list_members`); that override now
-    /// keys off `public` instead.
+    /// keep its roster private until someone actually applies). Roster
+    /// visibility (`crates/server/src/guilds.rs::list_members`) keys off
+    /// `public`.
     pub public: bool,
 }
 
-/// One entry in [`Guild::links`] (issue #153): a human label paired with the
+/// One entry in [`Guild::links`]: a human label paired with the
 /// URL it points at. Both fields are validated/capped server-side
 /// (`crates/server/src/guilds.rs`) — this type carries no invariant of its
 /// own beyond "these are the two fields a link has."
@@ -64,8 +63,8 @@ pub struct GuildLink {
     pub url: String,
 }
 
-/// Whether a guild can be joined directly or only entered via invite
-/// (issue #21). A guild setting, not a role permission — it governs who may
+/// Whether a guild can be joined directly or only entered via invite.
+/// A guild setting, not a role permission — it governs who may
 /// even attempt to join, before any role-based authority applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,7 +97,7 @@ pub struct GuildRole {
     pub name_index: u32,
 }
 
-/// Fixed milestone-1 vocabulary of role badge icons (issue #152). Not
+/// Fixed milestone-1 vocabulary of role badge icons. Not
 /// user-uploadable — a role's icon is chosen from this closed set, same
 /// "custom names allowed, custom permissions/values not yet" precedent
 /// [`GuildPermission`] already established for milestone 1.
@@ -206,15 +205,15 @@ impl RoleBadgeColor {
     }
 }
 
-/// A role's small, fixed visual identity (issue #152): an icon id from a
+/// A role's small, fixed visual identity: an icon id from a
 /// closed enum paired with a color id from a closed enum — deliberately
 /// not a free-form asset/upload, no user-supplied image hosting in scope
 /// for milestone 1. Shaped as icon+color today (rather than e.g. a single
 /// opaque badge id) so it can grow into a richer badge system later —
 /// more icons/colors, tiers, an uploaded custom asset as an additional
 /// variant — without a breaking change to callers that just want "an icon
-/// and a color" out of a role (`packages/ui`'s planned `AvalonRoleBadge`,
-/// #24, is the first such caller).
+/// and a color" out of a role (`packages/ui`'s planned `AvalonRoleBadge`
+/// is the first such caller).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RoleBadge {
     pub icon: RoleBadgeIcon,
@@ -237,16 +236,15 @@ impl Default for RoleBadge {
 }
 
 /// Guild-level permissions a role can carry. A small, fixed vocabulary for
-/// milestone 1 (issue #20) rather than an open/extensible bitset — custom
+/// milestone 1 rather than an open/extensible bitset — custom
 /// role *names* are allowed, custom permissions are not, yet — but no
-/// longer a *closed* set: issue #250 (decided by #243) adds a per-resource
-/// override layer on top (see [`GuildPermissionOverride`]) without
+/// longer a *closed* set: a per-resource
+/// override layer sits on top (see [`GuildPermissionOverride`]) without
 /// changing this enum's own closed-vocabulary posture.
 ///
-/// `EventManage` was added by #250 and no longer piggybacks on
-/// `ManageChannels` the way #169's guild-events work originally had it —
-/// see `crates/server/src/guild_events.rs`. `ChannelPost` was added by the
-/// same ticket to prove the override layer out end-to-end via
+/// `EventManage` no longer piggybacks on
+/// `ManageChannels` the way the original guild-events work had it —
+/// see `crates/server/src/guild_events.rs`. `ChannelPost` was added to prove the override layer out end-to-end via
 /// announcement-only channels (`GuildChannel`/`guild_channels.announcement_only`
 /// below): a channel in that mode requires `ChannelPost` to post, resolved
 /// per-channel through the override layer rather than a guild-wide grant.
@@ -259,7 +257,7 @@ pub enum GuildPermission {
     ManageChannels,
     EventManage,
     ChannelPost,
-    /// Issue #458, implementing #454's decision: can the resource (an event
+    /// Can the resource (an event
     /// or channel) be seen to exist at all — appears in listings — without
     /// necessarily seeing its content. Resolved specially, not through the
     /// generic [`crate::guilds`] override fallback every other permission
@@ -267,7 +265,7 @@ pub enum GuildPermission {
     /// A [`Self::ViewDetails`] grant always implies this one; the two are
     /// never independently absent for a role that holds `ViewDetails`.
     View,
-    /// Issue #458: can the resource's actual content be read (an event's
+    /// Can the resource's actual content be read (an event's
     /// description/RSVPs, a channel's messages) — implies [`Self::View`].
     /// See `resolve_view_permission`'s own doc comment for the exact
     /// resolution rules (baseline true for members, derived from the
@@ -328,8 +326,8 @@ impl GuildPermission {
     }
 }
 
-/// A guild resource a [`GuildPermissionOverride`] can be scoped to (issue
-/// #250) — currently a channel or an event, the two resource-shaped
+/// A guild resource a [`GuildPermissionOverride`] can be scoped to —
+/// currently a channel or an event, the two resource-shaped
 /// things channel/event endpoints in `crates/server/src/guilds.rs` gate on.
 /// Fixed, closed set — same posture as [`JoinPolicy`]/[`RoleBadgeIcon`]
 /// elsewhere in this module.
@@ -358,7 +356,7 @@ impl GuildResourceKind {
 }
 
 /// A per-resource override on top of a role's flat [`GuildPermission`]
-/// base list (issue #250, shape decided by #243): grants or denies one
+/// base list: grants or denies one
 /// permission to one role, scoped to a single channel or event. Base role
 /// permissions (`GuildRole`'s stored `permissions` list) stay the source
 /// of truth when no override row exists for a resource; when one does, an
@@ -404,7 +402,7 @@ pub struct GuildChannel {
     pub id: uuid::Uuid,
     pub guild_id: GuildId,
     pub name: String,
-    /// Issue #250's channel-organization proof point for the per-resource
+    /// Channel-organization proof point for the per-resource
     /// override layer: when `true`, posting requires the `ChannelPost`
     /// [`GuildPermission`], resolved per-channel through the override
     /// layer rather than a role's guild-wide base list (a role earns post
@@ -413,7 +411,7 @@ pub struct GuildChannel {
     /// `false` (the default) keeps today's behavior: any current guild
     /// member may post.
     pub announcement_only: bool,
-    /// Short line describing what this channel is for (issue #276),
+    /// Short line describing what this channel is for,
     /// rendered in the channel header — same "no value" convention as
     /// `Guild::motd`/`Guild::banner`: `None` means unset, an empty string
     /// is never stored (normalized to `None` server-side on the way in).
@@ -430,16 +428,16 @@ pub struct GuildMessage {
     pub sent_at: OffsetDateTime,
 }
 
-/// A scheduled guild event (issue #169) — raid night, tournament prep,
-/// meetup, anything a guild plans in advance. Distinct from #88's integrator
-/// event *result* attestations: this is a plan for something upcoming, not
+/// A scheduled guild event — raid night, tournament prep,
+/// meetup, anything a guild plans in advance. Distinct from an integrator
+/// event *result* attestation: this is a plan for something upcoming, not
 /// a durable claim about something that already happened.
 ///
 /// `guild_events` (and `GuildEventRsvp` below) are a projection-only table
 /// with no `guild.event_*` protocol event kind — see
 /// `crates/server/src/guild_events.rs`'s module doc comment for the full
-/// durability reasoning (same "hot state, not history" treatment #22 gave
-/// chat messages).
+/// durability reasoning (same "hot state, not history" treatment chat
+/// messages get).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuildEvent {
     pub id: uuid::Uuid,
@@ -455,7 +453,7 @@ pub struct GuildEvent {
     pub created_by: IdentityId,
     pub created_at: OffsetDateTime,
     /// Whether a non-member of a [`Guild::public`] guild may see this
-    /// event (issue #448) — `false` (the default) keeps an event
+    /// event — `false` (the default) keeps an event
     /// member-only even when the guild itself is public, for genuinely
     /// internal events (officer planning, loot council) a guild still
     /// wants to run privately. Never widens what a *member* sees — every

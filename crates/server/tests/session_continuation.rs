@@ -48,7 +48,7 @@ fn new_virtual_client() -> VirtualClient {
 /// Registers a brand-new identity, returning its id, a logged-in session
 /// token, and the real `SigningKey` used for `identity.created` — the
 /// exact private key backing the identity's very first, now-durable
-/// (#525) `identity_signing_keys` row.
+/// `identity_signing_keys` row.
 async fn create_identity_and_log_in(
     http: &reqwest::Client,
     base: &str,

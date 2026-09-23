@@ -44,7 +44,7 @@ export type AvalonIconName =
   | 'follow'
   | 'muted'
   | 'block'
-  // Achievement/milestone icons (issue #332) — the built-in set an
+  // Achievement/milestone icons — the built-in set an
   // AvalonAchievementCard falls back to when a definition has no
   // integrator-hosted `icon_url`. See AchievementIconName in
   // AvalonAchievementCard.types.ts, which mirrors this same fixed-key
@@ -53,7 +53,7 @@ export type AvalonIconName =
   | 'star'
   | 'shield'
   | 'sword'
-  // Role badge icons (issue #152's RoleBadgeIcon vocabulary, #462) — the
+  // Role badge icons (the RoleBadgeIcon vocabulary) — the
   // remaining 5 of that fixed 8-icon set not already covered above.
   | 'crown'
   | 'wrench'

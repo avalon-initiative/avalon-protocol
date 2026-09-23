@@ -1,8 +1,8 @@
-//! Guild events calendar + RSVP (issue #169) — deliberately NOT protocol
+//! Guild events calendar + RSVP — deliberately NOT protocol
 //! history, same posture as `crate::guild_messages`. See
 //! `docs/architecture/guilds-implementation-log.md`'s "Guild events
-//! calendar + RSVP" section for the durability call, and "`event_manage`
-//! (issue #250)" for the per-resource-override authorization model.
+//! calendar + RSVP" section for the durability call, and "`event_manage`"
+//! for the per-resource-override authorization model.
 
 use avalon_protocol::guilds::{GuildPermission, GuildResourceKind, RsvpStatus};
 use axum::extract::{Path, Query, State};
@@ -43,7 +43,7 @@ async fn require_manage_events(
 
 /// Resource-aware `event_manage` check against one specific event — used
 /// by `update_event`/`delete_event`, which already have an `event_id` to
-/// scope a per-resource override to (issue #250).
+/// scope a per-resource override to.
 async fn require_manage_event_resource(
     state: &AppState,
     guild_id: Uuid,
@@ -112,7 +112,7 @@ pub(crate) struct EventRow {
 }
 
 /// `pub(crate)` re-export of [`fetch_event`]'s existence check, for
-/// `crate::guilds::require_live_resource` (issue #250) — a permission
+/// `crate::guilds::require_live_resource` — a permission
 /// override can only be written against a live event, same "resource
 /// must currently exist" rule channel overrides get via
 /// `crate::channels::fetch_channel`.
@@ -309,10 +309,10 @@ pub struct ListEventsQuery {
 }
 
 /// `GET /guilds/{id}/events?from=&to=` — current members see every event.
-/// A non-member of a [`crate::guilds::GuildResponse::public`] guild (issue
-/// #448) sees only `public` events instead of being 403'd outright — the
+/// A non-member of a [`crate::guilds::GuildResponse::public`] guild
+/// sees only `public` events instead of being 403'd outright — the
 /// same "guild-level flag widens exposure of an otherwise-gated resource"
-/// shape `list_members`'s roster override already established for #449,
+/// shape `list_members`'s roster override already established,
 /// scoped per-event here since (unlike a roster) some events genuinely
 /// need to stay internal even in a public guild. A non-member of a
 /// non-public guild is still 403'd, unchanged. Optionally filtered to a
@@ -504,14 +504,14 @@ pub struct UpdateEventRequest {
     #[serde(with = "time::serde::rfc3339::option")]
     #[schema(value_type = Option<String>, format = "date-time")]
     pub ends_at: Option<OffsetDateTime>,
-    /// Issue #448. Full replace like the rest of this request — always
+    /// Full replace like the rest of this request — always
     /// resent, not three-state.
     #[serde(default)]
     pub public: bool,
 }
 
 /// `PATCH /guilds/{id}/events/{eid}` — reschedule/edit. Requires
-/// `event_manage` (resource-aware, issue #250). Full replace of the mutable fields, same "resend the
+/// `event_manage` (resource-aware). Full replace of the mutable fields, same "resend the
 /// whole thing" convention other guild PATCH endpoints use.
 #[utoipa::path(
     patch,
@@ -576,7 +576,7 @@ pub async fn update_event(
 }
 
 /// `DELETE /guilds/{id}/events/{eid}` — requires `event_manage` (resource-
-/// aware, issue #250). A real hard delete: events aren't history (see
+/// aware). A real hard delete: events aren't history (see
 /// module doc comment). Removes its RSVPs too, via the `ON DELETE CASCADE`
 /// FK on `guild_event_rsvps` (migration 0028) — nothing app-level to do
 /// here beyond deleting the event row itself.

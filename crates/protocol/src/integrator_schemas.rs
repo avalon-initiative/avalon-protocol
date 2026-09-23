@@ -1,8 +1,8 @@
-//! Integrator Space schema publication (issue #255, decided by #181).
+//! Integrator Space schema publication.
 //!
 //! An integrator may publish a description of how its own data is structured, so
 //! other developers and the registry can read its shape — see
-//! `docs/architecture/integrator-space.md`. #181 decided the representation:
+//! `docs/architecture/integrator-space.md`. The representation is
 //! protobuf IDL (`.proto`), stored as opaque source text. Avalon never
 //! parses or compiles it — that would require real `.proto`
 //! parsing/codegen for a description this crate only needs to store,

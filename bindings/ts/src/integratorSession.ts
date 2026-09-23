@@ -315,7 +315,7 @@ export class IntegratorSession {
 
   /** `achievements.read`-gated — this identity's own attestation history.
    * No `recognition` field: that's computed by this integrator against its
-   * own trust policy, per ADR #76, never by this SDK on the caller's
+   * own trust policy, never by this SDK on the caller's
    * behalf. */
   async achievements(): Promise<VerifiedAttestation[]> {
     this.require('achievements.read')
@@ -402,8 +402,8 @@ export class IntegratorSession {
     }
   }
 
-  /** `achievements.issue`-gated — `POST /integrations/{slug}/achievements/bulk-issue`
-   * (#495). One challenge-response proof, plus **one** signature over the
+  /** `achievements.issue`-gated — `POST /integrations/{slug}/achievements/bulk-issue`.
+   * One challenge-response proof, plus **one** signature over the
    * whole ordered `claims` list — never a per-claim signature. Never
    * all-or-nothing: a claim referencing an unknown/retired definition fails
    * on its own, every other claim in the same call still succeeds — check

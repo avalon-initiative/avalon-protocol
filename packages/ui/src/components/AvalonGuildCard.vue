@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A clickable summary card for "my guilds" (issue #24) — the caller
+// A clickable summary card for "my guilds" — the caller
 // decides what a click does (usually a route push); this component knows
 // nothing about routing.
 import styles from '../styles/AvalonGuildCard.module.scss'

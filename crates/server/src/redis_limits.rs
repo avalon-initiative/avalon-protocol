@@ -1,5 +1,5 @@
 //! Optional, per-hoster shared rate-limit/concurrency-ceiling backend
-//! (issue #545, resolving #537's gap: `AVALON_RATE_LIMIT_PER_MINUTE`/
+//! (resolving a gap: `AVALON_RATE_LIMIT_PER_MINUTE`/
 //! `AVALON_MAX_CONCURRENT_REQUESTS` were purely in-process state, so a
 //! hoster running more than one `avalon-server` process got that many
 //! independent copies of each ceiling instead of one that actually held

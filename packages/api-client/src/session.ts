@@ -1,9 +1,9 @@
 // Session token only — identity/profile data is always re-read from
-// GET /me, never cached here (issue #55's invariant). Persisted through
+// GET /me, never cached here. Persisted through
 // the pluggable `./storage` adapter (see its own module doc comment):
 // `localStorage` by default (hub's original #55/#99/#122 stopgap,
 // unchanged), or a platform secure-storage adapter when one has been
-// configured (mobile-hub, #60) — this store never touches `localStorage`
+// configured (mobile-hub) — this store never touches `localStorage`
 // directly so it doesn't have to know which one it's running against.
 //
 // Storage is inherently async once it isn't guaranteed to be `localStorage`
@@ -14,7 +14,7 @@
 // site (route guards included) still sees already-hydrated state exactly
 // as before this became pluggable.
 //
-// `reconnect` (issue #525) is a narrow exception to the #55 invariant
+// `reconnect` is a narrow exception to the invariant above
 // above: not profile data (never displayed, never treated as authoritative
 // for anything but minting), just the two identifiers
 // `crypto/continuation.ts::mintContinuationToken` needs to prove "the

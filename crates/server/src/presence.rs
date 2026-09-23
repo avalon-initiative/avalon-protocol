@@ -1,5 +1,5 @@
-//! Presence tracking: publish + read (issue #16). Ephemeral realtime
-//! state per ADR #78 — never a `ProtocolEvent`, never durable, lost on
+//! Presence tracking: publish + read. Ephemeral realtime
+//! state — never a `ProtocolEvent`, never durable, lost on
 //! restart. See `docs/architecture/presence.md`'s "Rules" and "Today in
 //! the repo" sections for the publish/read auth model, sticky manual
 //! overrides, and the durable `hide_active_in` opt-out.
@@ -52,7 +52,7 @@ const UPDATE_CHANNEL_CAPACITY: usize = 256;
 pub struct PresenceStore {
     entries: Arc<RwLock<HashMap<Uuid, PresenceEntry>>>,
     ttl: Duration,
-    /// Fan-out for `presence::presence_ws` (issue #136) — every `set()`
+    /// Fan-out for `presence::presence_ws` — every `set()`
     /// call also broadcasts the new status, so a subscribed websocket
     /// client learns about a friend coming online without polling
     /// `GET /presence`. A lossy broadcast, not a queue: a slow/absent
@@ -259,7 +259,7 @@ async fn hide_active_in_for(state: &AppState, ids: &[Uuid]) -> Result<HashSet<Uu
 }
 
 /// Reads `profiles.presence_visibility` for every id in `ids` in one
-/// batched query (issue #87). An id with no `profiles` row (shouldn't
+/// batched query. An id with no `profiles` row (shouldn't
 /// happen for a real identity, but never assumed) falls back to
 /// `Visibility::Friends` — this endpoint's own original hardcoded
 /// default, preserved rather than silently becoming more permissive for a
@@ -381,7 +381,7 @@ pub struct UpdateIntegratorPresenceRequest {
 
 /// `PUT /presence/:identity_id` — an integrator publishing presence on behalf of
 /// a user it's bound to. Authenticated via `crate::authz`'s
-/// `Caller`/`require_capability` (issue #28): the caller must be
+/// `Caller`/`require_capability`: the caller must be
 /// `Caller::Integrator` (a user session hitting this route is rejected — that
 /// endpoint is `PUT /me/presence` above), the path `identity_id` must
 /// match the identity the integrator claims to act for
@@ -444,8 +444,8 @@ pub struct PresenceQuery {
 
 /// True if `caller` may see `subject`'s real presence: always for their
 /// own entry; otherwise a block between them always hides it (checked
-/// first, issue #97 — a block wins even under a `Public` setting); beyond
-/// that, `subject`'s own stored `Visibility` decides (issue #87) —
+/// first — a block wins even under a `Public` setting); beyond
+/// that, `subject`'s own stored `Visibility` decides —
 /// `Public`/`AuthenticatedOnly` always visible here (`GET /presence`
 /// already requires a valid session, so "authenticated" is trivially
 /// true), `Friends` only if `friend_ids` contains `subject`,
@@ -927,11 +927,10 @@ mod tests {
         assert_eq!(hidden_playing_view(hidden_view, &hidden).active_in, None);
     }
 
-    /// The ticket's own explicit ask (issue #16's Tests section): a
-    /// grep-level check that no handler in this file calls
+    /// A grep-level check that no handler in this file calls
     /// `state.chain` `.commit` — belt-and-suspenders on top of the fact
     /// that this module imports neither `avalon_chain` nor `crate::outbox`
-    /// at all (ADR #78). Reads its own source via `include_str!` rather
+    /// at all. Reads its own source via `include_str!` rather
     /// than walking the filesystem, so it runs the same in any working
     /// directory `cargo test` is invoked from.
     ///

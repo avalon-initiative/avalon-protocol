@@ -3,8 +3,7 @@
 //! See `Proposal.md` §18. Registering does not grant any capability by
 //! itself; a user must still authorize each capability (`permissions`).
 //!
-//! Issuer key lifecycle (issue #80, decided; implemented here per #84):
-//! see [`KeyRole`] and [`IssuerKey`].
+//! Issuer key lifecycle: see [`KeyRole`] and [`IssuerKey`].
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -13,12 +12,12 @@ use uuid::Uuid;
 use crate::ids::IntegratorId;
 use crate::permissions::Capability;
 
-/// An integrator's registration status (issue #26). Grown by #84 to catalogue the
+/// An integrator's registration status, catalogueing the
 /// full set `docs/architecture/issuers.md`'s status column always
 /// named (`Active`/`Suspended`/`Revoked`/`Deprecated`) — milestone 1 still
 /// only ever *sets* `Active`; the network-level authorization model for who
 /// can transition an issuer into the other three, and the endpoints that do
-/// it, are explicit follow-up work (#84's own scope note), not built here.
+/// it, are explicit follow-up work, not built here.
 /// A growable enum rather than a bare `bool` so those states have somewhere
 /// to land later without a wire format change, same shape `JoinPolicy`
 /// (`crates/protocol/src/guilds.rs`) already established in this crate.
@@ -52,8 +51,7 @@ impl IntegratorStatus {
     }
 }
 
-/// An issuer key's role (issue #80, decided; implemented here per #84) —
-/// the axis that determines what the key is trusted to authorize, entirely
+/// An issuer key's role — the axis that determines what the key is trusted to authorize, entirely
 /// independent of whether it's currently valid (see [`IssuerKey::is_valid_at`]).
 ///
 /// - **`Root`** — the sole authority for changing the issuer's own key set
@@ -98,15 +96,15 @@ impl KeyRole {
 }
 
 /// What an issuer key is authorized to sign — a second, independent axis
-/// from [`KeyRole`] (issue #543): `role` governs *who can change the key
+/// from [`KeyRole`]: `role` governs *who can change the key
 /// set*, `purpose` governs *what the key speaks for*. Introduced for
-/// sharded settlement (#527): a shard operator's settlement-signing key
+/// sharded settlement: a shard operator's settlement-signing key
 /// is authorized through this exact same issuer-key registration flow,
 /// scoped with `ShardSettlement` rather than a second, separate registry
 /// — see `docs/architecture/network-trust-anchors.md`'s "Per-shard trust
 /// anchors" section. Defaults to `Attestation` (`#[serde(default)]` at
-/// every call site that reads one) so every key registered before #543
-/// existed — including pre-existing recorded ledger history — keeps
+/// every call site that reads one) so every key registered before this
+/// purpose axis existed — including pre-existing recorded ledger history — keeps
 /// decoding exactly as it always meant: an attestation-signing key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -133,18 +131,17 @@ impl KeyPurpose {
     }
 }
 
-/// One key in an issuer's key history (issue #80, decided; implemented here
-/// per #84) — the record [`resolve_valid_signing_key`] and
+/// One key in an issuer's key history — the record [`resolve_valid_signing_key`] and
 /// [`resolve_valid_root_key`] search. Pure data plus pure point-in-time
-/// queries; no I/O, matching #84's own suggested placement.
+/// queries; no I/O.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssuerKey {
     pub key_id: Uuid,
     pub algorithm: String,
     pub public_key: Vec<u8>,
     pub role: KeyRole,
-    /// Issue #543. `#[serde(default)]` so decoding a pre-#543 record
-    /// (nothing in its wire shape ever mentioned this field) falls back
+    /// `#[serde(default)]` so decoding a record from before this field
+    /// existed (nothing in its wire shape ever mentioned it) falls back
     /// to `KeyPurpose::Attestation` — exactly what every key registered
     /// before this existed already meant.
     #[serde(default)]
@@ -240,10 +237,10 @@ pub fn resolve_valid_root_key(
         .find(|k| k.key_id == key_id && k.is_valid_at(at) && k.authorizes_key_changes())
 }
 
-/// What kind of integrator a registrant is (issue #282, decision #275).
+/// What kind of integrator a registrant is.
 /// The variant names are the category vocabulary itself, so they stay
-/// `Game`/`App`/`Service` even after #290 renamed the surrounding
-/// primitives to `Integrator*` — and `as_str()` remains the durable wire
+/// `Game`/`App`/`Service` even after the surrounding
+/// primitives were renamed to `Integrator*` — and `as_str()` remains the durable wire
 /// string. Defaults to `Game`, so a caller that omits `category` is
 /// unaffected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -273,8 +270,8 @@ impl IntegratorCategory {
         })
     }
 
-    /// The claim-vocabulary word this category's issuers use for what #31
-    /// originally called "Achievement" (issue #324, decided): `Game`
+    /// The claim-vocabulary word this category's issuers use for what was
+    /// originally called "Achievement": `Game`
     /// issuers keep `"achievement"` exactly as-is — zero churn for what
     /// already shipped — `App`/`Service` issuers share `"milestone"`, one
     /// word for both rather than a third one per category, since an app
@@ -307,8 +304,8 @@ pub struct Integrator {
     pub category: IntegratorCategory,
 }
 
-/// The first signing key an integrator registers with (issue #26). Shaped so issue
-/// #84 (issuer key lifecycle — rotation, multiple keys, revocation) can
+/// The first signing key an integrator registers with. Shaped so the
+/// issuer key lifecycle (rotation, multiple keys, revocation) can
 /// extend rather than replace it: this only ever describes the one key
 /// recorded at registration time, never a full key history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,13 +332,13 @@ pub struct IntegratorCredential {
     pub key_id: String,
 }
 
-/// "This identity participates in this integrator" — nothing more (issue #83). No
+/// "This identity participates in this integrator" — nothing more. No
 /// characters, race, class, level, appearance, or progression: those stay in
 /// the integrator's own database, and this type deliberately has no field for any
 /// of them. See `docs/architecture/bindings.md`.
 ///
 /// A binding is established by the **user**, through the consent flow
-/// (issue #27, `POST /integrations/{slug}/connect`) — never created by an integrator
+/// (`POST /integrations/{slug}/connect`) — never created by an integrator
 /// unilaterally. Capability grants (`PermissionGrant`, `permissions.rs`) are
 /// scoped to a binding: no active binding, no grants, and ending a binding
 /// ends every grant under it. Ending a binding does not delete history —

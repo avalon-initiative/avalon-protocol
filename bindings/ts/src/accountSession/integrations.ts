@@ -1,4 +1,4 @@
-// Integrator connect/consent (issue #27/#83) on AccountSession — an
+// Integrator connect/consent on AccountSession — an
 // identity granting or revoking its own consent to an integrator. See
 // crates/server/src/connections.rs.
 import { AccountSession } from './core.js'

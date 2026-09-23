@@ -2,16 +2,15 @@
 
 What to do when this node's mirror-watcher reports equivocation — two
 different signed tree heads (STHs) for the same network and `tree_size`,
-from the same operator key. Scope decided in issue #300, implemented in
-#316: an investigation playbook plus a mirror-recovery mechanism. Key
-rotation itself is covered in [`key-rotation.md`](key-rotation.md); real
-alerting/paging for equivocation detection specifically is **not** covered
-here yet — tracked separately in #315.
+from the same operator key. This covers an investigation playbook plus a
+mirror-recovery mechanism. Key rotation itself is covered in
+[`key-rotation.md`](key-rotation.md); real alerting/paging for equivocation
+detection specifically is **not** covered here yet.
 
 ## Background
 
 `crates/chain/src/mirror.rs`'s `detect_equivocation` and
-`crates/server/src/mirror_watcher.rs` build *detection* only (#299): a
+`crates/server/src/mirror_watcher.rs` build *detection* only: a
 mirror that observes two disagreeing root hashes for the same
 `network_id`/`tree_size` records it durably in `equivocation_findings` and
 logs it loudly. Once detected, `mirror_watcher::backfill_network` refuses
@@ -94,7 +93,7 @@ at or beyond `tree_size` for that network. It is deliberately coarse: it
 drops content from *both* branches at or past that point, not just the
 losing one, because there is no local way to tell after the fact which
 already-mirrored row came from which branch. The mirror-watcher's normal
-multi-peer backfill (#299) re-fetches and re-verifies everything dropped
+multi-peer backfill re-fetches and re-verifies everything dropped
 this way from the now-resolved-legitimate branch on its next tick — this
 is re-verification, not permanent data loss of anything the network
 itself considers canonical.
@@ -115,11 +114,12 @@ since the equivocation gate stops backfill the same tick detection fires),
   log lines — see
   [`local-development.md`](../../../maintainers/local-development.md#structured-fields-not-just-message-text).
   With `AVALON_LOG_FORMAT=json` those are real JSON keys a hoster can
-  forward to their own log aggregator and alert on directly (#315 —
-  deliberately scoped to making the signal forwardable, not to shipping a
-  paging integration).
+  forward to their own log aggregator and alert on directly — this makes
+  the signal forwardable, but does not itself ship a paging integration.
 - **Automated rotation.** [`key-rotation.md`](key-rotation.md) is a written
   manual procedure, not automation — nothing here rotates a key for you.
-- **Automatic resolution.** Deliberately never built — see "Trust model:
-  why no witness quorum" in issue #301 and `docs/projects/backend-server/architecture/settlement.md`
-  for why this stays a human decision.
+- **Automatic resolution.** Deliberately never built — see
+  `docs/projects/backend-server/architecture/settlement.md` for why this
+  stays a human decision.
+</content>
+</invoke>

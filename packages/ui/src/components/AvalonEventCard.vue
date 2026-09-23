@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A guild calendar entry (issue #169) — title/time/RSVP counts. The caller
+// A guild calendar entry — title/time/RSVP counts. The caller
 // supplies the RSVP control via the `actions` slot, keeping this component
 // itself dumb about mutation (same "props in, click out" split
 // AvalonGuildCard/AvalonChannelList already use).

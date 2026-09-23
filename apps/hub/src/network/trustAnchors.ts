@@ -15,7 +15,7 @@ export interface TrustAnchorEntry {
   verify_key: string
   signing_key_id: string
   // The server URL this network is reachable at — what the network
-  // selector (#232) switches `apps/hub/src/api/client.ts`'s base URL to
+  // selector switches `apps/hub/src/api/client.ts`'s base URL to
   // when a viewer picks this entry. Optional: a trust-anchor entry's *key*
   // is what matters for verification, so an entry can be published to pin
   // a key ahead of its deployment having a known public URL yet.

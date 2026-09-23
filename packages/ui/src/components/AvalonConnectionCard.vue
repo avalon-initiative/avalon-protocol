@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// One connected integrator (#83's IntegratorBinding) + its active grants (#27), with a
+// One connected integrator (IntegratorBinding) + its active grants, with a
 // per-grant revoke button and a disconnect button. Emits capability
 // strings / no payload — the caller (Connections.vue) owns the actual API
 // calls and the slug this card belongs to.

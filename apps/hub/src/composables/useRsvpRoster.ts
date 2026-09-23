@@ -1,12 +1,12 @@
-// Per-member RSVP roster (issue #248): who's going/maybe/can't-go for one
+// Per-member RSVP roster: who's going/maybe/can't-go for one
 // guild event, opened by clicking an event card. Shared between the Events
 // tab and the Calendar tab's selected-day list in Guild.vue — one composable
 // backing one AvalonRsvpRosterPanel instance, rather than each tab building
 // its own fetch-and-group logic.
 //
 // Fetches raw guild_event_rsvps rows (GET .../events/{eid}/rsvps, any
-// current member) then resolves identity ids to display_name (issue #510)
-// via the existing batched GET /identities/profiles (issue #161) — same
+// current member) then resolves identity ids to display_name
+// via the existing batched GET /identities/profiles — same
 // pattern useGuildChat's resolveAuthorNames and api/guilds.ts's
 // listMembersWithPresence already use.
 import { ref, type Ref } from 'vue'

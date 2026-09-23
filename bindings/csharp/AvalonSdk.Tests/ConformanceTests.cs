@@ -10,13 +10,13 @@ using Xunit;
 namespace Avalon.Sdk.Tests;
 
 /// <summary>
-/// Cross-SDK conformance suite (issue #727, epic #722) — loads the shared test vectors under
+/// Cross-SDK conformance suite — loads the shared test vectors under
 /// <c>conformance/vectors/</c> (repo root) and asserts this SDK's real implementation produces
 /// byte-for-byte identical output to the Rust/TypeScript SDKs for the same input. Offline, no
 /// server needed — runs in the default <c>dotnet test</c> job alongside every other unit test
 /// here.
 ///
-/// Client-side wire-shape codegen (#723-#726) already covers plain request/response shapes;
+/// Client-side wire-shape codegen already covers plain request/response shapes;
 /// this suite exists for "smart client" behavior codegen can't produce — see
 /// <c>conformance/vectors/SCHEMA.md</c> for the full rationale and the standing
 /// "add a vector when you add smart-client behavior" requirement.

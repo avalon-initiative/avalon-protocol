@@ -1,4 +1,4 @@
-// Signed DHT interest claims (issue #610) — the AccountSession-side
+// Signed DHT interest claims — the AccountSession-side
 // minting half of `avalon_protocol::interest_claim` /
 // `crates/server/src/interest.rs`. A short assertion self-signed with the
 // identity's own Ed25519 event-signing key, binding a guild channel or
@@ -23,7 +23,7 @@ function toHex(bytes: Uint8Array): string {
 }
 
 /** Must match `avalon_protocol::interest_claim::signing_bytes` byte-for-byte.
- * Exported (issue #727) so the conformance suite can assert this format
+ * Exported so the conformance suite can assert this format
  * directly against the shared vectors, same as `continuation.ts`'s and
  * `crossNodeLogin.ts`'s own exported `signingBytes`. */
 export function signingBytes(

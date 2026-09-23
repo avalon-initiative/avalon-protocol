@@ -1,6 +1,6 @@
 {
   "$schema": "./SCHEMA.md#session-continuation",
-  "description": "Session-continuation token minting (issue #525, avalon_protocol::continuation). A ContinuationToken is a short-lived, self-signed assertion an already-logged-in identity mints locally so it can keep working against a *different* node than the one that issued its opaque session token, wire-encoded as 'AVCT1.<base64url(json)>' straight into an Authorization: Bearer header. This is the primitive #712's automatic reconnect-on-401 behavior (issue #525) is built on.",
+  "description": "Session-continuation token minting (avalon_protocol::continuation). A ContinuationToken is a short-lived, self-signed assertion an already-logged-in identity mints locally so it can keep working against a *different* node than the one that issued its opaque session token, wire-encoded as 'AVCT1.<base64url(json)>' straight into an Authorization: Bearer header. This is the primitive automatic reconnect-on-401 behavior is built on.",
   "supportedIn": ["typescript"],
   "notSupported": {
     "rust": "crates/sdk has no client-side ContinuationToken minting at all — avalon_protocol::continuation::signing_bytes exists (server-side verification only, crates/server/src/continuation.rs), but nothing in crates/sdk calls it. A caller of crates/sdk that needs cross-node reconnect today has no way to get one. Real gap, not just untested.",

@@ -19,13 +19,13 @@ for people, not games.
 **Two build modes.** Some commands are always available, safe to run
 against a real deployment (read-only diagnostics, or operator actions gated
 by their own confirmation). Others exist only when the binary is built with
-the default `dev-tools` Cargo feature (issue #173) — building with
+the default `dev-tools` Cargo feature — building with
 `--no-default-features` doesn't just refuse those commands at runtime, it
 removes them and every dependency only they need from the binary entirely.
 
-**Status (2026-09-21):** real, used day to day in this repo's own
-development workflow. `crates/cli/tests/milestone_1_walkthrough.rs` uses it
-to drive the automated version of the full milestone-1 vertical slice.
+**Status:** real, used day to day in this repo's own development workflow.
+`crates/cli/tests/milestone_1_walkthrough.rs` uses it to drive the
+automated version of the full milestone-1 vertical slice.
 
 ## Commands
 
@@ -35,25 +35,25 @@ Always available:
 |---|---|
 | `avalon inspect-ledger` / `inspect-ledger-full` | Read-only ledger view; `-full` also shows each entry's payload. Safe against a real deployment. |
 | `avalon outbox-status` | Diagnostics for the write/settlement outbox pattern identity/guild/achievement writes use to stay atomic with their ledger entry. |
-| `avalon prune-ledger [--dry-run]` | The operator-facing entry point for node-tiered retention pruning (issue #208) — reads `AVALON_RETENTION_*` from the environment and reports or executes exactly what that config says. |
+| `avalon prune-ledger [--dry-run]` | The operator-facing entry point for node-tiered retention pruning — reads `AVALON_RETENTION_*` from the environment and reports or executes exactly what that config says. |
 | `avalon rebuild-index` | Rebuilds the indexer's projections from durable ledger history — the practical proof that query state is genuinely reconstructable. |
 | `avalon migrate-network --target-database-url <url> --target-network-id <id>` | Migrates ledger data toward a new network deployment. |
 | `avalon discover-mirror-peers` | Peer discovery for mirror-watching nodes. |
 | `avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id <id>] [--verify-key <hex>]` | Checks whether it's safe to switch a mirror/client over to a new host. |
 | `avalon list-equivocations [network_id]` | Lists recorded equivocation events (conflicting Signed Tree Heads) for a network. |
 | `avalon resolve-equivocation <network_id> <tree_size> <legitimate_root_hash> [--shard-id <id>] [--discard-mirrored]` | The operator action that resolves a detected equivocation — see [`../backend-server/for-maintainers/equivocation-response.md`](../backend-server/for-maintainers/equivocation-response.md). |
-| `avalon logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]` | Reads `avalon-server`'s own log file, strips ANSI codes, redacts known-sensitive values, and normalizes to line-delimited JSON — safe to attach to a filed GitHub issue (issue #659). |
+| `avalon logs export [<file>] [--file <path>] [--tail <n>] [--since <rfc3339-timestamp>]` | Reads `avalon-server`'s own log file, strips ANSI codes, redacts known-sensitive values, and normalizes to line-delimited JSON — safe to attach when filing a bug report. |
 
 Only in `dev-tools` builds (the default):
 
 | Command | What it does |
 |---|---|
 | `avalon create-identity` | Creates a test identity, no real WebAuthn ceremony needed. |
-| `avalon login <identity_id>` | Logs in as an existing identity (issue #115). |
-| `avalon pair-device` | Drives the `start`/`poll` side of cross-device pairing (issue #307) — stands in for a real WebAuthn-incapable client so that flow is testable without a real console/engine. |
-| `avalon register-integrator --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]` | Registers a test integrator (game/app/service). `register-game` is a working deprecated alias — the original name (issue #29) before the #290 rename. |
-| `avalon issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]` | Issues an already-defined achievement to the identity behind `--token`, through the Rust SDK, resolving the issuer's signing key/key id from what `register-integrator` saved unless overridden (issue #48). |
-| `avalon register-issuer --integrator <slug> (--network-id <network_id> \| --env <dev\|int\|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]` | Registers an integrator's key as an issuer on an explicitly declared target network — refuses client-side on a mismatch against the server's independently STH-verified network rather than trusting its bare `network_id` (issue #483, on top of #481's endpoint). |
+| `avalon login <identity_id>` | Logs in as an existing identity. |
+| `avalon pair-device` | Drives the `start`/`poll` side of cross-device pairing — stands in for a real WebAuthn-incapable client so that flow is testable without a real console/engine. |
+| `avalon register-integrator --slug <slug> --name <name> --owner-name <owner> [--capability <cap>]... [--server <url>]` | Registers a test integrator (game/app/service). `register-game` is a working deprecated alias for the same command. |
+| `avalon issue-achievement --integrator <slug> --achievement <key> --token <session-token> [--key <path>] [--key-id <uuid>] [--server <url>]` | Issues an already-defined achievement to the identity behind `--token`, through the Rust SDK, resolving the issuer's signing key/key id from what `register-integrator` saved unless overridden. |
+| `avalon register-issuer --integrator <slug> (--network-id <network_id> \| --env <dev\|int\|mainnet>) [--issuer-ref <ref>] [--key <path>] [--server <url>]` | Registers an integrator's key as an issuer on an explicitly declared target network — refuses client-side on a mismatch against the server's independently STH-verified network rather than trusting its bare `network_id`. |
 
 Run `avalon` with no arguments (or an unrecognized one) for the exact
 current usage string, which is generated from the same source as this

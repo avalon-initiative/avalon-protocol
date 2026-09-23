@@ -1,4 +1,4 @@
-// Integrator-connect consent view (#27) for a given slug: loads the integrator's
+// Integrator-connect consent view for a given slug: loads the integrator's
 // public registration info once (no polling needed — an integrator's declared
 // capabilities don't change while a user is looking at the consent
 // screen), and owns the checked-capabilities set the view submits.

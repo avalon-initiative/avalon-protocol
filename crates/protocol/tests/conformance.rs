@@ -1,10 +1,10 @@
-//! Server side of the cross-SDK conformance suite (issue #727, extended by
-//! #774) — the same shared vectors under `conformance/vectors/` that each
+//! Server side of the cross-SDK conformance suite — the same shared vectors
+//! under `conformance/vectors/` that each
 //! SDK's own runner consumes, asserted here against this crate's
 //! implementations, which are what `avalon-server` actually verifies
 //! incoming signatures with.
 //!
-//! This half exists because #774 made the Rust SDK an independent
+//! This half exists because the Rust SDK is now an independent
 //! reimplementation like the C# and TypeScript ones: before it, the SDK
 //! called these functions directly and the compiler guaranteed the two
 //! agreed. Now nothing does — except these vectors, checked from both

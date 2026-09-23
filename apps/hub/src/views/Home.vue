@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The landing page after login (issue #148/#312): welcome header, a
+// The landing page after login: welcome header, a
 // featured/connected-integrators strip, quick actions, friends online, guilds,
 // latest guild messages, and recent activity — every section backed by an
 // API that already exists (integrators.ts/guilds.ts/guildChat.ts), no new

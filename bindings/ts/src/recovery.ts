@@ -1,4 +1,4 @@
-// Social recovery request-initiation (issue #201) — free-standing
+// Social recovery request-initiation — free-standing
 // functions, deliberately not AccountSession methods: the caller has no
 // session yet for the identity being recovered, the same reasoning
 // AccountSession's own doc comment gives for why `register`/`login` are

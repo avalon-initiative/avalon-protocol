@@ -1,7 +1,7 @@
-//! Exercises `AchievementDefinition` CRUD per integrator (issue #31) against a
+//! Exercises `AchievementDefinition` CRUD per integrator against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`. Skipped in this
-//! sandbox per `.claude/CLAUDE.md` (no reachable Postgres here); written but
+//! sandbox (no reachable Postgres here); written but
 //! not run against a live database.
 //!
 //! Mirrors `crates/server/tests/integrations.rs`'s own pattern for the

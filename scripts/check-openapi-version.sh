@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Issue #735: `docs/generated/openapi.json`'s `info.version` only means
+# `docs/generated/openapi.json`'s `info.version` only means
 # anything if it's actually bumped whenever the schema's shape changes —
-# `make openapi-check` (#723) already catches staleness (checked-in file
+# `make openapi-check` already catches staleness (checked-in file
 # doesn't match the real routes), but says nothing about whether a real
 # shape change was paired with a version bump. This compares the
 # checked-in schema against the same file at $1 (default: origin/main,

@@ -1,5 +1,5 @@
-// Public, unauthenticated per-identity integrator-published data (issue
-// #384/#465) — free-standing, same convention as ledger.ts's getLatestSth.
+// Public, unauthenticated per-identity integrator-published data —
+// free-standing, same convention as ledger.ts's getLatestSth.
 // See crates/server/src/integrator_data.rs.
 import { request } from './http.js'
 

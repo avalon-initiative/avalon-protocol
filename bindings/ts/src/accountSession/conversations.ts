@@ -1,4 +1,4 @@
-// Direct/small-group conversations (issue #102/#105) on AccountSession —
+// Direct/small-group conversations on AccountSession —
 // see crates/server/src/conversations.rs.
 import { AccountSession } from './core.js'
 import type { components } from '../generated.js'

@@ -11,8 +11,8 @@ themselves from the event-kind table plus separate code reading — a new
 contributor, a prospective integrator, a hoster.
 
 Every payload below is copied from the actual `serde_json::json!` call site
-that builds it (linked inline), not reverse-engineered from the schema
-table — if a payload here and its cited source ever disagree, the source is
+that builds it, not reverse-engineered from the schema
+table — if a payload here and its source ever disagree, the source is
 right and this doc is stale.
 
 ## The cast
@@ -45,10 +45,9 @@ identity's key into existence in the first place.
 }
 ```
 
-No `username` field exists anywhere in this or any later event — issue
-#510: `display_name` (`Nova`, above) is the whole handle itself, globally
-unique and case-insensitive, no discriminator suffix (superseded #128's
-`name#1234` scheme). See [`./identity.md`](./identity.md).
+No `username` field exists anywhere in this or any later event —
+`display_name` (`Nova`, above) is the whole handle itself, globally
+unique and case-insensitive, no discriminator suffix. See [`./identity.md`](./identity.md).
 
 ### 2. Nova sets a bio and pronouns
 
@@ -77,7 +76,7 @@ from the object, not `null` (`null` means an explicit clear — see
 Ashen Realms itself already exists on the network from its own earlier
 `game.registered` event (written once, at the integrator's own registration —
 not repeated here since this is Nova's ledger walkthrough, not Ashen
-Realms'; see [`./protocol-events.md`](./protocol-events.md#today-in-the-repo)
+Realms'; see [`./protocol-events.md`](./protocol-events.md#current-implementation)
 for that payload's shape). Nova connecting to it
 (`crates/server/src/connections.rs`) is its own event:
 
@@ -101,7 +100,7 @@ for that payload's shape). Nova connecting to it
 Connecting typically grants one or more capabilities in the same request —
 each is its own `permission.granted` event (one per capability, not a list
 inside the binding event), omitted here for brevity; see
-[`./protocol-events.md`](./protocol-events.md#today-in-the-repo)'s
+[`./protocol-events.md`](./protocol-events.md#current-implementation)'s
 `connections.rs` entry for that payload's exact shape.
 
 ### 4. Ashen Realms slays a dragon: an achievement is issued
@@ -114,7 +113,7 @@ it to Nova once she earns it. Issuance is the first event kind in this
 whole walkthrough that carries a **real embedded signature** — Ashen
 Realms' own Ed25519 key signs the attestation itself, not just the HTTP
 request that submitted it (see
-[`./achievements-and-attestations.md`](./achievements-and-attestations.md#issuance-is-signed-not-merely-authenticated-32)):
+[`./achievements-and-attestations.md`](./achievements-and-attestations.md#issuance-is-signed-not-merely-authenticated)):
 
 ```json
 {
@@ -200,7 +199,7 @@ say who caused what within it; the two aren't always the same identity.
 Ashen Realms can also publish its own data model — a versioned `.proto`
 schema description — into this same ledger, same envelope, a completely
 different `kind` (`game_schema.published`,
-`crates/server/src/integrator_schemas.rs`, issue #255):
+`crates/server/src/integrator_schemas.rs`):
 
 ```json
 {
@@ -221,20 +220,18 @@ different `kind` (`game_schema.published`,
 }
 ```
 
-This is **shape only** — "here is how our data is structured," not an
-actual instance of Nova's in-game character. Data exposure (a real
-`character` instance, e.g. Nova's own level/skills, entering the ledger)
-is [Integrator Space](./integrator-space.md)'s explicitly unbuilt half — see that
-doc's own "Schema vs. data exposure" section. An integrator-defined *fact about a
-specific user* that does land on the ledger today only ever does so
-through the achievement/milestone mechanism above (optionally carrying an
-issuer-declared `schema` reference in its own definition, matching a
-published schema's `GlobalId`), not through some other, more general
-custom-event path — no such path exists yet. [Integrator event result
+This is **shape only** — "here is how our data is structured," not by itself
+an actual instance of Nova's in-game character (real instance data is
+[Integrator Space](./integrator-space.md)'s own separate,
+now-also-built mechanism — see that doc's "Schema vs. data exposure"
+section). An integrator-defined *fact about a specific user* also lands on
+the ledger through the achievement/milestone mechanism above (optionally
+carrying an issuer-declared `schema` reference in its own definition,
+matching a published schema's `GlobalId`). [Integrator event result
 attestations](./achievements-and-attestations.md) (tournaments, seasonal
 championships) are the same `achievement.issued`/`.defined` mechanism with
-an game-event schema, not a separate event kind — see issue #88, currently
-on hold.
+a game-event schema, not a separate event kind — currently on hold as a
+feature, not because the mechanism can't support it.
 
 ## What never appears here
 
@@ -254,8 +251,7 @@ and [`./privacy.md`](./privacy.md):
   `crates/server/tests/guild_messages_no_ledger.rs`).
 - **Ordinary gameplay** — HP, XP ticks, movement, combat, matchmaking,
   Ashen Realms' own in-game economy. Avalon never sees any of it unless a
-  integrator deliberately chooses to describe or expose it through Integrator Space
-  (schema publication today; data exposure, unbuilt).
+  integrator deliberately chooses to describe or expose it through Integrator Space.
 - **Typing indicators, connection state** — never durable, never even
   operational-tier storage beyond what a live connection needs.
 
@@ -267,27 +263,13 @@ whole point: Avalon durably remembers facts that matter *across* integrators and
 *to* the user's own portable identity, and stays out of everything that's
 just one integrator being an integrator.
 
-## Today in the repo
+## Current implementation
 
 Every payload above is copied verbatim (field names, nesting, and the
-`GlobalId` string shapes) from the real emitter cited under each event —
-see [`./protocol-events.md`](./protocol-events.md#today-in-the-repo) for
+`GlobalId` string shapes) from the real emitter it's drawn from — see
+[`./protocol-events.md`](./protocol-events.md#current-implementation) for
 the complete, currently-implemented emitter list this walkthrough draws
 from. UUIDs and signature bytes above are illustrative placeholders, not
 real; every field name and object shape they sit inside is real.
-
-## Decisions and tickets
-
-This is a worked illustration, not a design document — it records no
-decisions of its own. It draws on:
-
-- [`./protocol-events.md`](./protocol-events.md) — the event kind
-  catalogue this walks through instances of; issue #82 (kind catalogue +
-  versioning policy).
-- [`./integrator-space.md`](./integrator-space.md) — schema publication vs. data
-  exposure; issue #255 (schema publication, built), issue #181 (decided
-  representation).
-- [`./achievements-and-attestations.md`](./achievements-and-attestations.md) —
-  issuance signing; issue #88 (integrator event result attestations, on hold).
-- [`./privacy.md`](./privacy.md) — durable vs. ephemeral/operational
-  tiers.
+</content>
+</invoke>

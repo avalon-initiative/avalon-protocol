@@ -1,5 +1,4 @@
-//! Cross-shard commitment (issue #529, implementing #527's decided
-//! sharded-settlement design). See `docs/architecture/settlement.md`'s
+//! Cross-shard commitment. See `docs/architecture/settlement.md`'s
 //! "Cross-shard commitment" section for the full design this
 //! implements — this module is the aggregation math alone, deliberately
 //! pure and DB-free (no network I/O, no Postgres): given the set of
@@ -10,7 +9,7 @@
 //! [`compute_cross_shard_root`]'s own doc comment.
 //!
 //! Gathering the actual `(shard_id, SignedTreeHead)` pairs this module
-//! consumes — via #362's peer gossip, or a shard's own `/ledger/sth/latest`
+//! consumes — via peer gossip, or a shard's own `/ledger/sth/latest`
 //! — is `avalon-server`'s concern (`crate::cross_shard` there), not this
 //! crate's.
 
@@ -22,7 +21,7 @@ use crate::sth::SignedTreeHead;
 /// caller is responsible for having already verified `sth`'s signature
 /// against that shard's own registered key (see
 /// `docs/architecture/network-trust-anchors.md`'s "Per-shard trust
-/// anchors" section, #543) before handing it to this module — aggregation
+/// anchors" section) before handing it to this module — aggregation
 /// itself does not re-verify shard-level authenticity, only combines
 /// already-trusted inputs deterministically.
 #[derive(Debug, Clone, PartialEq, Eq)]

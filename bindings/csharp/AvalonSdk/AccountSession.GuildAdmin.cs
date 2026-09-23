@@ -61,8 +61,8 @@ namespace Avalon.Sdk
         public bool Public { get; set; }
     }
 
-    /// <summary>One guild in a discovery-board listing (<c>GET /guilds/discover</c>, issue
-    /// #154) — a narrower public summary than <see cref="AccountGuild"/>. Mirrors the Rust
+    /// <summary>One guild in a discovery-board listing (<c>GET /guilds/discover</c>)
+    /// — a narrower public summary than <see cref="AccountGuild"/>. Mirrors the Rust
     /// SDK's <c>account::guild_admin::DiscoverGuildSummary</c>.</summary>
     public sealed class DiscoverGuildSummary
     {
@@ -107,7 +107,7 @@ namespace Avalon.Sdk
         public Guid? NextCursor { get; set; }
     }
 
-    /// <summary>One curated favorite-integrator pin (issue #207, decision #160). Mirrors the
+    /// <summary>One curated favorite-integrator pin. Mirrors the
     /// Rust SDK's <c>account::guild_admin::FavoriteGameEntry</c>.</summary>
     public sealed class FavoriteGameEntry
     {
@@ -242,7 +242,7 @@ namespace Avalon.Sdk
     }
 
     /// <summary>One of the caller's own pending invites, across every guild (<c>GET
-    /// /me/guild-invites</c>, issue #442). Mirrors the Rust SDK's
+    /// /me/guild-invites</c>). Mirrors the Rust SDK's
     /// <c>account::guild_admin::MyGuildInvite</c>.</summary>
     public sealed class MyGuildInvite
     {
@@ -262,7 +262,7 @@ namespace Avalon.Sdk
         public DateTimeOffset CreatedAt { get; set; }
     }
 
-    /// <summary>An applicant-initiated join request (issue #242). Mirrors the Rust SDK's
+    /// <summary>An applicant-initiated join request. Mirrors the Rust SDK's
     /// <c>account::guild_admin::GuildJoinRequest</c>.</summary>
     public sealed class GuildJoinRequest
     {
@@ -312,14 +312,14 @@ namespace Avalon.Sdk
         public DateTimeOffset CreatedAt { get; set; }
 
         /// <summary>Whether posting requires the <c>channel_post</c> permission via override
-        /// (issue #250) rather than any current member being able to post.</summary>
+        /// rather than any current member being able to post.</summary>
         [JsonPropertyName("announcement_only")]
         public bool AnnouncementOnly { get; set; }
 
         [JsonPropertyName("topic")]
         public string? Topic { get; set; }
 
-        /// <summary>Non-member visibility baseline for a public guild (issue #458).</summary>
+        /// <summary>Non-member visibility baseline for a public guild.</summary>
         [JsonPropertyName("public")]
         public bool Public { get; set; }
     }
@@ -392,8 +392,7 @@ namespace Avalon.Sdk
         [JsonPropertyName("rsvp_counts")]
         public RsvpCounts RsvpCounts { get; set; } = new RsvpCounts();
 
-        /// <summary>Whether a non-member of a public guild may see this event (issue
-        /// #448).</summary>
+        /// <summary>Whether a non-member of a public guild may see this event.</summary>
         [JsonPropertyName("public")]
         public bool Public { get; set; }
     }
@@ -417,7 +416,7 @@ namespace Avalon.Sdk
     }
 
     /// <summary>One entry of an event's per-member RSVP roster (<c>GET
-    /// /guilds/{id}/events/{eid}/rsvps</c>, issue #248). Mirrors the Rust SDK's
+    /// /guilds/{id}/events/{eid}/rsvps</c>). Mirrors the Rust SDK's
     /// <c>account::guild_admin::RsvpRosterEntry</c>.</summary>
     public sealed class RsvpRosterEntry
     {
@@ -642,7 +641,7 @@ namespace Avalon.Sdk
         public async Task<IReadOnlyList<MyGuildMembership>> MyGuildsAsync(CancellationToken ct = default) =>
             await GetAsync<List<MyGuildMembership>>("/me/guilds", ct).ConfigureAwait(false);
 
-        /// <summary><c>GET /me/guild-invites</c> (issue #442).</summary>
+        /// <summary><c>GET /me/guild-invites</c>.</summary>
         public async Task<IReadOnlyList<MyGuildInvite>> MyGuildInvitesAsync(CancellationToken ct = default) =>
             await GetAsync<List<MyGuildInvite>>("/me/guild-invites", ct).ConfigureAwait(false);
 
@@ -668,7 +667,7 @@ namespace Avalon.Sdk
         public async Task LeaveGuildAsync(Guid guildId, CancellationToken ct = default) =>
             await PostEmptyNoResponseAsync($"/guilds/{guildId}/leave", ct).ConfigureAwait(false);
 
-        /// <summary><c>POST /guilds/{id}/join-requests</c> (issue #242).</summary>
+        /// <summary><c>POST /guilds/{id}/join-requests</c>.</summary>
         public async Task<GuildJoinRequest> CreateJoinRequestAsync(Guid guildId, string? message = null, CancellationToken ct = default) =>
             await PostAsync<Avalon.Sdk.Generated.CreateJoinRequestRequest, GuildJoinRequest>(
                 $"/guilds/{guildId}/join-requests", new Avalon.Sdk.Generated.CreateJoinRequestRequest { Message = message }, ct).ConfigureAwait(false);
@@ -678,7 +677,7 @@ namespace Avalon.Sdk
             await GetAsync<List<GuildJoinRequest>>($"/guilds/{guildId}/join-requests", ct).ConfigureAwait(false);
 
         /// <summary><c>GET /guilds/{id}/join-requests/mine</c> — the caller's own pending
-        /// request for this guild, or <c>null</c> (issue #256).</summary>
+        /// request for this guild, or <c>null</c>.</summary>
         public async Task<GuildJoinRequest?> MyJoinRequestAsync(Guid guildId, CancellationToken ct = default) =>
             await GetNullableAsync<GuildJoinRequest>($"/guilds/{guildId}/join-requests/mine", ct).ConfigureAwait(false);
 
@@ -695,7 +694,7 @@ namespace Avalon.Sdk
         public async Task WithdrawJoinRequestAsync(Guid guildId, Guid requestId, CancellationToken ct = default) =>
             await DeleteAsync($"/guilds/{guildId}/join-requests/{requestId}", ct).ConfigureAwait(false);
 
-        /// <summary><c>GET /guilds/{id}/favorite-integrators</c> (issue #207).</summary>
+        /// <summary><c>GET /guilds/{id}/favorite-integrators</c>.</summary>
         public async Task<FavoriteGames> FavoriteGamesAsync(Guid guildId, CancellationToken ct = default) =>
             await GetAsync<FavoriteGames>($"/guilds/{guildId}/favorite-integrators", ct).ConfigureAwait(false);
 

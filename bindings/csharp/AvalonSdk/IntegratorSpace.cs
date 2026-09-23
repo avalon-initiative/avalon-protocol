@@ -1,6 +1,5 @@
 // Integrator Space schema publication, schema-to-schema mapping, and
-// instance-data publication/read (issue #255/#384/#491, closed out for C#'s
-// share of #741 by #745) — mirrors crates/server/src/integrator_schemas.rs,
+// instance-data publication/read — mirrors crates/server/src/integrator_schemas.rs,
 // integrator_schema_mappings.rs, and integrator_data.rs almost exactly.
 //
 // Writes (publish/delete) are challenge-authenticated only, same posture
@@ -19,7 +18,7 @@ namespace Avalon.Sdk
 {
     public sealed partial class Session
     {
-        // --- Schema versions (issue #255/#384/#745) ---
+        // --- Schema versions ---
 
         /// <summary>POST /integrations/{slug}/schemas — publishes the next version of this
         /// integrator's own data schema. Always an insert, never an update to an existing
@@ -65,7 +64,7 @@ namespace Avalon.Sdk
             await GetJsonAsync<Avalon.Sdk.Generated.IntegratorSchemaVersionResponse>(
                 $"{ServerUrl}/integrations/{slug}/schemas/{version}", ct).ConfigureAwait(false);
 
-        // --- Schema-to-schema mappings (issue #491/#745) ---
+        // --- Schema-to-schema mappings ---
 
         /// <summary>POST /integrations/{slug}/mappings — documents a correspondence between
         /// two of this integrator's own already-published schema versions. Never interpreted
@@ -112,7 +111,7 @@ namespace Avalon.Sdk
             await GetJsonAsync<Avalon.Sdk.Generated.IntegratorSchemaMappingResponse>(
                 $"{ServerUrl}/integrations/{slug}/mappings/{seq}", ct).ConfigureAwait(false);
 
-        // --- Instance data (issue #384/#745) ---
+        // --- Instance data ---
 
         /// <summary>POST /integrations/{slug}/schemas/{version}/data — publishes (or
         /// supersedes) this integrator's own instance data about <paramref name="subject"/>
@@ -137,7 +136,7 @@ namespace Avalon.Sdk
             return await ReadJsonAsync<Avalon.Sdk.Generated.IntegratorDataInstanceResponse>(response, ct).ConfigureAwait(false);
         }
 
-        /// <summary>DELETE /integrations/{slug}/schemas/{version}/data/{subject} (issue #533) —
+        /// <summary>DELETE /integrations/{slug}/schemas/{version}/data/{subject} —
         /// an append-only tombstone: the original instance's data is never mutated, only marked
         /// deleted. The original publish event stays visible in raw ledger history either
         /// way.</summary>
@@ -161,7 +160,7 @@ namespace Avalon.Sdk
             }
         }
 
-        /// <summary>GET /identities/{id}/integrator-data (issue #384) — every current
+        /// <summary>GET /identities/{id}/integrator-data — every current
         /// (non-superseded, non-deleted) instance published about <paramref name="identityId"/>
         /// across every integrator/schema, each already filtered to only the fields its
         /// schema's own visibility policy currently makes visible. Public, unauthenticated —

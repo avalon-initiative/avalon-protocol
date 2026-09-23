@@ -1,4 +1,4 @@
-//! Friend requests, friendships, and their durable events (issue #15).
+//! Friend requests, friendships, and their durable events.
 //!
 //! Every mutation here requires the caller's own user session — there is
 //! no integrator-credential auth path in this repo yet (see `crates/server/src/auth.rs`),
@@ -10,12 +10,12 @@
 //! `friend.requested` and `friend.accepted` (or `friend.removed`) are
 //! written into the outbox in the same transaction as the `friendships`/
 //! `friend_requests` projection change, same pattern `handlers::register_finish`
-//! established for #71. A declined or withdrawn *request* is not durable
+//! established. A declined or withdrawn *request* is not durable
 //! history — resolving it is a plain projection update with no event.
 //!
 //! Events here are session-authenticated but not yet individually signed —
 //! no general per-event signing ceremony exists in this repo, only
-//! `identity.created`'s one-off Ed25519 signature (#73). This matches
+//! `identity.created`'s one-off Ed25519 signature. This matches
 //! `docs/architecture/protocol-events.md`'s "network as signer" milestone-1
 //! stand-in, attributed to the acting identity via `issuer` rather than to
 //! the node, since the request already proves the actor's session.
@@ -49,8 +49,8 @@ fn identity_ref(identity_id: Uuid, verb: &str) -> GlobalId {
 /// Every identity `caller` is currently friends with — one batched query,
 /// same shape as `crate::blocks::block_partners`. Used by
 /// `presence::get_presence`/`presence::handle_presence_socket` to apply
-/// presence's default friends-only visibility scope (issue #16), pending
-/// the full per-resource scope granularity issue #87 owns.
+/// presence's default friends-only visibility scope, pending
+/// the full per-resource scope granularity.
 pub(crate) async fn friend_partners(
     state: &AppState,
     caller: Uuid,
@@ -71,11 +71,11 @@ pub struct ResolveHandleResponse {
     pub identity_id: Uuid,
 }
 
-/// Resolves a `display_name` handle (issue #128, updated by #510 to a
-/// globally-unique, case-insensitive `display_name` — no discriminator) to
+/// Resolves a `display_name` handle (a globally-unique, case-insensitive
+/// `display_name` — no discriminator) to
 /// an identity id for the "add friend" flow — exact match only, never
-/// partial/fuzzy. Fuzzy name search is a separate, bigger question (issue
-/// #129) with its own privacy tradeoffs, deliberately not folded in here.
+/// partial/fuzzy. Fuzzy name search is a separate, bigger question
+/// with its own privacy tradeoffs, deliberately not folded in here.
 /// Session-authenticated like every other route in this module, both so an
 /// anonymous caller can't use it to enumerate handles and so it matches
 /// this module's existing "no integrator-credential auth path" convention.

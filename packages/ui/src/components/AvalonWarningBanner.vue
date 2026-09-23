@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A persistent, non-dismissible notice (issue #199) — deliberately has no
+// A persistent, non-dismissible notice — deliberately has no
 // close/dismiss affordance, unlike a toast: it's meant to keep showing for
 // as long as the condition it describes (e.g. "only one passkey
 // registered") is true, not just until someone acknowledges it once.

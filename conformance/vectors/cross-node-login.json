@@ -1,6 +1,6 @@
 {
   "$schema": "./SCHEMA.md#cross-node-login",
-  "description": "Cross-node login grant signing (epic #623/#707, avalon_protocol::cross_node_login::signing_bytes). A CrossNodeLoginGrant is a short, self-signed assertion an already-registered identity mints with its own Ed25519 event-signing key to log into a node it has never registered a passkey on. Each SDK must derive byte-for-byte identical signing bytes and an identical Ed25519 signature from the same inputs and signing key.",
+  "description": "Cross-node login grant signing (avalon_protocol::cross_node_login::signing_bytes). A CrossNodeLoginGrant is a short, self-signed assertion an already-registered identity mints with its own Ed25519 event-signing key to log into a node it has never registered a passkey on. Each SDK must derive byte-for-byte identical signing bytes and an identical Ed25519 signature from the same inputs and signing key.",
   "supportedIn": ["rust", "csharp", "typescript"],
   "signingKeySeedHex": "1f2e3d4c5b6a79887766554433221100aabbccddeeff00112233445566778899",
   "signingPublicKeyHex": "55efacfd3ecf9d98c762fbeae43fb7377b613b7c7dc3a1bf389e5e59c32b57dd",

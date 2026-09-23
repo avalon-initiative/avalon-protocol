@@ -1,6 +1,5 @@
-//! User discovery: both halves of #129's decided shape — scoped,
-//! always-on friends-of-friends/mutual-guild surfacing (#204) and opt-in
-//! global name/handle search (#205). See
+//! User discovery: scoped, always-on friends-of-friends/mutual-guild
+//! surfacing and opt-in global name/handle search. See
 //! `docs/architecture/social-graph.md`'s "Today in the repo" for the
 //! discoverable-preference default, why `discover_people` never takes a
 //! query parameter, and the shared block/friend-exclusion logic.
@@ -38,7 +37,7 @@ async fn friends_of_friends(
 
 /// Every identity that shares at least one guild membership with `caller`,
 /// not yet filtered against the caller's own friends/blocks/self. Also
-/// reused by `conversations::create_conversation` (issue #269).
+/// reused by `conversations::create_conversation`.
 pub(crate) async fn mutual_guild_members(
     state: &AppState,
     caller: Uuid,
@@ -110,7 +109,7 @@ pub async fn discover_people(
     }))
 }
 
-// --- Opt-in global search (issue #205) --------------------------------
+// --- Opt-in global search ------------------------------------------------
 
 /// Upserts `identity_id`'s own `discoverable` preference — the same
 /// "insert lazily on first toggle, `ON CONFLICT` update after" shape
@@ -119,7 +118,7 @@ pub async fn discover_people(
 /// history, so there's nothing else it needs to stay atomic with (see the
 /// module doc comment). Takes effect immediately — the very next
 /// `search_identities` call (run against `&state.pool`, not a snapshot)
-/// reflects it, satisfying #205's "no grace period" invariant.
+/// reflects it, satisfying the "no grace period" invariant.
 pub(crate) async fn set_discoverable(
     state: &AppState,
     identity_id: Uuid,
@@ -174,7 +173,7 @@ pub struct SearchIdentitiesResponse {
 /// Builds the `GET /identities/search` query — split out from
 /// [`search_identities`] so the filter logic is unit-testable via
 /// [`sqlx::QueryBuilder::sql`] without a live Postgres connection, the
-/// same precedent `guilds::build_discover_query` (#154) set.
+/// same precedent `guilds::build_discover_query` set.
 ///
 /// Three conditions, none optional: `discoverable = true` (the entire
 /// point of this ticket — a non-opted-in identity must never appear, even
@@ -184,8 +183,8 @@ pub struct SearchIdentitiesResponse {
 /// (excludes every identity with a block relationship to `caller` in
 /// either direction — `blocked` is `blocks::block_partners`'s already
 /// direction-agnostic output, reused rather than reimplemented, same as
-/// `discovery::compute_candidates` does for #204). `q` is matched
-/// case-insensitively against `display_name` — issue #510: `display_name`
+/// `discovery::compute_candidates` does). `q` is matched
+/// case-insensitively against `display_name` — `display_name`
 /// is the handle now, no separate discriminator suffix to also match.
 fn build_search_query(
     caller: Uuid,
@@ -210,7 +209,7 @@ fn build_search_query(
     builder
 }
 
-/// `GET /identities/search?q=&limit=` (issue #205) — session-authenticated
+/// `GET /identities/search?q=&limit=` — session-authenticated
 /// open name/handle search, the opt-in counterpart to [`discover_people`]'s
 /// always-on scoped surfacing. Matches only identities with
 /// `discoverable = true` (see module doc comment); a non-opted-in identity

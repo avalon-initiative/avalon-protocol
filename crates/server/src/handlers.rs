@@ -325,11 +325,11 @@ pub async fn register_finish(
             "self",
             "created",
         ),
-        // The initial promised-durable profile state rides along (#86) —
+        // The initial promised-durable profile state rides along —
         // `display_name` is the identity's public face, not a login
         // credential (no `username` exists anywhere), and without it
-        // `profiles` couldn't be rebuilt from history. It's also, as of
-        // #510, the identity's globally-unique handle in its own right —
+        // `profiles` couldn't be rebuilt from history. It's also
+        // the identity's globally-unique handle in its own right —
         // no discriminator.
         payload: serde_json::to_value(IdentityCreatedPayload {
             identity_id: ceremony.identity_id,
@@ -353,7 +353,7 @@ pub async fn register_finish(
     }
     insert_identity?;
 
-    // `profiles` is a projection (issue #42): the row is written by the
+    // `profiles` is a projection: the row is written by the
     // indexer applying `event` below, not by an `INSERT` here. Calling
     // `apply_in_tx` against this same transaction — rather than
     // `state.indexer.apply`, which would open its own — keeps the
@@ -659,13 +659,13 @@ pub struct ProfileResponse {
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = "date-time")]
     pub identity_created_at: OffsetDateTime,
-    /// Issue #510: this identity's globally-unique, case-insensitive
+    /// This identity's globally-unique, case-insensitive
     /// handle in its own right — no separate `handle`/discriminator field
-    /// exists any more (issue #128's old scheme). Add-friend-by-handle
+    /// exists any more. Add-friend-by-handle
     /// resolves this field directly.
     pub display_name: String,
     pub avatar_url: Option<String>,
-    /// Small, user-optional self-description fields (issue #155) — same
+    /// Small, user-optional self-description fields — same
     /// promised-durable tier and same public exposure level as
     /// `display_name`/`avatar_url` above (no capability gate, no integrator ever
     /// sees more of it than `GET /me`/`GET /identities/profiles` already
@@ -673,7 +673,7 @@ pub struct ProfileResponse {
     pub bio: Option<String>,
     pub favorite_genres: Vec<Genre>,
     pub pronouns: Option<String>,
-    /// Expanded self-described fields (issue #372) — same promised-durable
+    /// Expanded self-described fields — same promised-durable
     /// tier and same public exposure level as `bio`/`favorite_genres`/
     /// `pronouns` above.
     pub banner_url: Option<String>,
@@ -812,8 +812,8 @@ pub struct ProfilesQuery {
 /// `display_name`/`avatar_url` already are: the least-sensitive public-face
 /// fields. This endpoint has no further visibility gating (any session can
 /// batch-resolve arbitrary identity ids), so `bio`/`favorite_genres`/
-/// `pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/
-/// `theme_color`/`location` (#372) are deliberately withheld here even
+/// `pronouns` and `banner_url`/`status`/`links`/`timezone`/
+/// `theme_color`/`location` are deliberately withheld here even
 /// though they're unauthenticated-readable on one's own `GET /me` — batch
 /// stranger lookup is a materially wider exposure than a single
 /// self-disclosed profile view, and widening it is a scoping decision for
@@ -825,15 +825,15 @@ pub struct PublicProfileResponse {
     pub avatar_url: Option<String>,
 }
 
-/// Another identity's full self-description profile — issue #403's decided
-/// widening of #393's read-only profile card. Deliberately a **separate,
+/// Another identity's full self-description profile — a decided
+/// widening of the read-only profile card. Deliberately a **separate,
 /// single-identity endpoint** rather than a widened `list_profiles`: the
 /// batch endpoint above stays exactly as narrow as it already is (any
 /// session can resolve arbitrarily many ids at once, so it only ever
 /// returns the least-sensitive public-face fields), while this endpoint
 /// exposes the same fields `GET /me` already does — `bio`/`favorite_genres`/
-/// `pronouns` (#155) and `banner_url`/`status`/`links`/`timezone`/
-/// `theme_color`/`location` (#372) — but only for one identity per request,
+/// `pronouns` and `banner_url`/`status`/`links`/`timezone`/
+/// `theme_color`/`location` — but only for one identity per request,
 /// matching a real profile-card view rather than a roster resolve. Omits
 /// `discoverable` and `presence_visibility`: both describe the *viewed*
 /// identity's own settings preferences, not something the viewer needs
@@ -961,7 +961,7 @@ pub async fn list_profiles(
     Ok(Json(profiles))
 }
 
-/// One event from the caller's own protocol history (issue #121) — "what
+/// One event from the caller's own protocol history — "what
 /// does the network know about me." `subject` is included since not every
 /// event an identity issues is *about* itself the same way (e.g.
 /// `friend.requested` is issued by the requester but its subject is the
@@ -1040,12 +1040,12 @@ pub struct UpdateProfileRequest {
     /// Two states, not three: omitted (untouched) or `Some(list)`, which
     /// always fully replaces the stored list — including `Some(vec![])` to
     /// clear it. Each entry must parse as a [`Genre`]; an unknown value is
-    /// rejected outright rather than silently dropped (issue #155).
+    /// rejected outright rather than silently dropped.
     pub favorite_genres: Option<Vec<String>>,
     /// Three states, same as `bio`.
     pub pronouns: Option<String>,
     /// Three states, same as `avatar_url` — a second image slot, separate
-    /// from the avatar, for the Hub profile page header (issue #372).
+    /// from the avatar, for the Hub profile page header.
     pub banner_url: Option<String>,
     /// Three states, same as `bio`, capped at
     /// [`avalon_protocol::identity::MAX_STATUS_LEN`].
@@ -1053,7 +1053,7 @@ pub struct UpdateProfileRequest {
     /// Two states, not three: omitted (untouched) or `Some(list)`, which
     /// always fully replaces the stored list — including `Some(vec![])` to
     /// clear it. Same shape as `favorite_genres`, but each entry is a
-    /// free-form URL rather than a fixed vocabulary value (issue #372).
+    /// free-form URL rather than a fixed vocabulary value.
     pub links: Option<Vec<String>>,
     /// Three states, same as `bio`. Length-checked only, not validated
     /// against the real IANA time zone database — see
@@ -1072,7 +1072,7 @@ pub struct UpdateProfileRequest {
     /// otherwise) — so its validation lives in `validate_main_guild` rather
     /// than one of the pure `validate_*` functions above.
     pub main_guild: Option<String>,
-    /// Issue #205's opt-in global search toggle. Two states, not three
+    /// Opt-in global search toggle. Two states, not three
     /// (there's no "clear" state for a plain boolean): `None` leaves the
     /// existing preference untouched, `Some(bool)` sets it. Off by
     /// default for every identity (no row in `discovery_preferences` at
@@ -1083,7 +1083,7 @@ pub struct UpdateProfileRequest {
     /// comment for why, matching `presence_preferences.hide_active_in`'s
     /// identical precedent.
     pub discoverable: Option<bool>,
-    /// Issue #87. `"public"`/`"authenticated_only"`/`"friends"` (the
+    /// `"public"`/`"authenticated_only"`/`"friends"` (the
     /// default)/`"private"` — who may read this identity's presence via
     /// `GET /presence`. `"guild_members"` is accepted (presence has no
     /// guild context, so it behaves like `"private"` — nobody but the
@@ -1164,8 +1164,8 @@ fn validate_pronouns(pronouns: &str) -> Result<Option<String>, AppError> {
     Ok(Some(pronouns.to_string()))
 }
 
-/// `favorite_genres` is a fixed, small controlled vocabulary, not free text
-/// (issue #155) — an unknown value is rejected outright, not silently
+/// `favorite_genres` is a fixed, small controlled vocabulary, not free text —
+/// an unknown value is rejected outright, not silently
 /// dropped, the same reasoning `GuildPermission` parsing already
 /// established: a bad value here is more likely a real client bug than a
 /// schema drift. Also enforces the [`MAX_FAVORITE_GENRES`] count cap and
@@ -1220,8 +1220,8 @@ fn validate_links(links: &[String]) -> Result<Vec<String>, AppError> {
 /// Same empty-string-means-clear convention as [`validate_avatar_url`]. A
 /// non-empty value must be within [`MAX_TIMEZONE_LEN`] characters. This is a
 /// length check only — NOT validated against the real IANA time zone
-/// database, since no such crate exists in this workspace today (issue
-/// #372); a known, documented gap, not silently pretended-correct.
+/// database, since no such crate exists in this workspace today;
+/// a known, documented gap, not silently pretended-correct.
 fn validate_timezone(timezone: &str) -> Result<Option<String>, AppError> {
     if timezone.is_empty() {
         return Ok(None);
@@ -1286,7 +1286,7 @@ async fn validate_main_guild(
     Ok(Some(guild_id))
 }
 
-/// The payload `profile.updated` carries (#86, widened by #155): only the
+/// The payload `profile.updated` carries: only the
 /// fields this request actually changed. An explicitly cleared
 /// `avatar_url`/`bio`/`pronouns` is `null`; an untouched one is absent —
 /// the same three-state distinction `update_profile` itself makes.
@@ -1426,7 +1426,7 @@ pub async fn update_profile(
         None => None,
     };
 
-    // `discoverable` (#205) is deliberately handled outside the
+    // `discoverable` is deliberately handled outside the
     // transaction below, the same way `presence::update_my_presence`
     // handles `hide_active_in`: it's a user preference, not durable
     // protocol history, so it has no `profile.updated` payload and needs
@@ -1451,8 +1451,8 @@ pub async fn update_profile(
     }
 
     // `display_name`, `avatar_url`, `bio`, `favorite_genres`, and `pronouns`
-    // are all promised-durable (ADR #75, the table in
-    // docs/architecture/identity.md; #155 widened the set), so a change to
+    // are all promised-durable (see the table in
+    // docs/architecture/identity.md), so a change to
     // any of them emits `profile.updated` in the same transaction as the
     // row — through the outbox, exactly like `register_finish`. A request
     // that changes nothing emits nothing. Network-attributed rather than
@@ -1508,7 +1508,7 @@ pub async fn update_profile(
 
     let mut tx = state.pool.begin().await?;
 
-    // `profiles` is a projection (issue #42): the write below happens
+    // `profiles` is a projection: the write below happens
     // through the indexer applying `event`, in this same transaction, not
     // through a bespoke `UPDATE` here — matching `register_finish`. A
     // request that changed nothing has no event, so nothing to apply; the

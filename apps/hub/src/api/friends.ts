@@ -1,11 +1,10 @@
-// Orchestrates friends + presence + display names for issue #18: fetches
+// Orchestrates friends + presence + display names: fetches
 // all three separately and merges them client-side, since GET /friends
 // embeds neither presence nor a display name server-side (see
 // crates/server/src/friends.rs — Friendship has no such fields). Mirrors
 // crates/sdk/src/social.rs's Session::friends()/merge_friend in Rust —
 // same shape, ported to TypeScript for the Hub, which doesn't consume the
-// Rust SDK directly. Display names are resolved via GET /identities/profiles
-// (issue #161).
+// Rust SDK directly. Display names are resolved via GET /identities/profiles.
 import type { AccountSession, Friendship, FriendRequest, PresenceStatus } from '@avalon/sdk'
 
 export interface Friend {

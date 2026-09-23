@@ -1,4 +1,4 @@
-// Cross-node login grants (epic #623, issue #639) — the browser-side
+// Cross-node login grants — the browser-side
 // minting half of `avalon_protocol::cross_node_login::CrossNodeLoginGrant` /
 // `crates/server/src/cross_node_login.rs`. See that Rust module's own doc
 // comment for the full design: a self-signed assertion, with the identity's

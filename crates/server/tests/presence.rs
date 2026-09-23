@@ -1,7 +1,7 @@
-//! Exercises the presence publish/read flow (issue #16) against a real,
+//! Exercises the presence publish/read flow against a real,
 //! running `avalon-server`. Gated `--ignored` since it needs live infra —
-//! see `make test-live` / `make start`. Skipped in this sandbox per
-//! `.claude/CLAUDE.md` (no reachable Postgres here); written but not run
+//! see `make test-live` / `make start`. Skipped in this sandbox
+//! (no reachable Postgres here); written but not run
 //! against a live database, same posture as every other `--ignored` file
 //! in this directory.
 //!

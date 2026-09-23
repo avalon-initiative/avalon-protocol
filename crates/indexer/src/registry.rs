@@ -1,8 +1,7 @@
-//! The Integrator Registry's derived-metrics read model — issue #261,
-//! the first concrete slice of the epic-sized #89. See
+//! The Integrator Registry's derived-metrics read model. See
 //! `docs/architecture/registry.md`'s "Today in the repo" for the metric
 //! definitions, why nothing is ranked/combined, and the `coarsen`/
-//! `min_cohort` privacy floor (#96) enforced centrally here.
+//! `min_cohort` privacy floor enforced centrally here.
 
 use serde::Serialize;
 use sqlx::PgPool;
@@ -31,13 +30,13 @@ pub fn min_cohort() -> i64 {
 /// constant — small enough that a legitimate small/indie integrator's registry
 /// entry isn't withheld outright, large enough that "fewer than 5" doesn't
 /// narrow a cohort down to one identifiable person. Revisit with real data
-/// once the registry has real external traffic; see issue #96.
+/// once the registry has real external traffic.
 pub const DEFAULT_MIN_COHORT: i64 = 5;
 
 /// One labeled fact: a value, its precise definition, and the class of
 /// evidence it came from. Never serialized as a bare number.
 ///
-/// `exact` (issue #96): `true` means `value` is the real count; `false`
+/// `exact`: `true` means `value` is the real count; `false`
 /// means `value` is the configured floor and the real count is only known
 /// to be somewhere in `1..floor` — a consumer should render this as
 /// "fewer than `value`", never as if it were precise.
@@ -61,9 +60,9 @@ impl Metric {
     }
 }
 
-/// The cohort-size floor itself (issue #96), pulled out of [`Metric`] so it
-/// can be unit tested directly against the boundary cases the ticket cares
-/// about (zero, just under the floor, exactly at the floor, well above it)
+/// The cohort-size floor itself, pulled out of [`Metric`] so it
+/// can be unit tested directly against the boundary cases
+/// (zero, just under the floor, exactly at the floor, well above it)
 /// without touching Postgres. `0` always stays exact — see this module's
 /// own doc comment for why "nobody" isn't a privacy concern.
 fn coarsen(raw_value: i64, floor: i64) -> (i64, bool) {

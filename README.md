@@ -32,24 +32,15 @@ The internet was built to connect people to each other. Identity and social
 connection never became part of that shared foundation the way addressing and
 routing did, so every app and platform built its own incompatible version on
 top instead — and the network built to connect everyone ended up full of
-places that each make you start over. Avalon is an attempt to put that layer
-where it always should have been: not owned by any one platform, and not
-rebuilt from scratch by every game that needs it. See
-[Why Avalon](docs/WhyAvalon.md) for the full argument.
+places that each make you start over. Avalon puts that layer where it always
+should have been: not owned by any one platform, and not rebuilt from scratch
+by every game that needs it. See [Why Avalon](docs/WhyAvalon.md) for the full
+argument.
 
-## We are the Avalon Initiative
-
-Not one studio, and not a platform selling access to the games that use it.
-Run a node, mirror the log, build against the SDK, or ship a game that plugs
-in — however you touch this network, you're not a customer of it, you're part
-of it. An open protocol only stays open as long as more than one party is
-actually running it; every operator, integrator, and contributor here is
-that party, not just whoever wrote the reference implementation first.
-
-## Why Avalon
+## Design principles
 
 - **Identity is separate from characters.** One persistent identity, any number of
-  unrelated characters across games — see [ADR: Identity Is Separate From Game Characters](https://github.com/LunarVagabond/avalon-protocol/issues/67).
+  unrelated characters across games.
 - **Interoperability is opt-in.** A game chooses which Avalon capabilities it wants
   (identity, guilds, achievements, ...) and which other issuers' attestations it
   trusts. Nothing is forced.
@@ -58,24 +49,24 @@ that party, not just whoever wrote the reference implementation first.
 - **History is verifiable, not just shared.** Achievements are signed attestations
   a receiving game can independently verify and decide whether to trust — not
   arbitrary rows in someone else's database.
-- **Settlement is a public transparency log, not federation or blockchain consensus.** Milestone 1 is a signed, append-only ledger. Long-term, durable facts are independently verifiable and mirrorable by anyone — not gated behind servers whitelisting each other, and not requiring mining/consensus to referee a scarcity problem Avalon doesn't have — see [ADR: Attestations Before Blockchain](https://github.com/LunarVagabond/avalon-protocol/issues/68) and [ADR: Settlement Is a Public Transparency Log](https://github.com/LunarVagabond/avalon-protocol/issues/70).
+- **Settlement is a public transparency log, not federation or blockchain consensus.**
+  Milestone 1 is a signed, append-only ledger. Durable facts are independently
+  verifiable and mirrorable by anyone — not gated behind servers whitelisting
+  each other, and consensus is a permissioned validator set reaching agreement,
+  not mining or a stake-weighted token.
 - **Don't build the universe.** Avalon is the railroad between games, not another
   platform trying to own every destination.
 
-## Closing the gap
-
-Tools already exist that solve part of this problem, each in its own way.
-Discord is the clearest example: one identity, one friends list, presence and
-communities that already span every game you play — proof the demand this
-README opens with is real, not hypothetical. What none of them give you is
-anything a game can actually build on: there's no achievement a game can
-issue and another can independently verify, no way for a game to trust a
-claim made outside its own database, and no social graph a user actually
-owns in a portable sense — it belongs to whichever platform happens to be
-hosting it. Avalon Protocol closes that gap. It isn't a competitor to
-Discord, Slack, or anything like them — it's the open identity and social
-layer underneath, that any of them could plug into as a client, the same way
-a game or the Hub app can.
+Tools already exist that solve part of this problem — Discord is the clearest
+example, with one identity, one friends list, and presence that spans every
+game you play. What none of them give you is anything a game can actually
+build on: an achievement a game can issue and another can independently
+verify, a claim made outside its own database that it can trust, or a social
+graph a user actually owns in a portable sense rather than one that belongs to
+whichever platform happens to host it. Avalon isn't a competitor to Discord,
+Slack, or anything like them — it's the open identity and social layer
+underneath, that any of them could plug into as a client, the same way a game
+or the Hub app can.
 
 ## Status
 
@@ -83,21 +74,25 @@ The core vertical slice is real and working end to end against a live
 Postgres instance, not scaffolding. Identity and auth: a self-custodied
 keypair — a WebAuthn passkey for login plus a separate Ed25519 key that
 signs the events an identity authors — with multi-device registration,
-guardian-based social recovery, and cross-device pairing all real and
-live-tested, wired through `avalon create-identity`, the Rust SDK, and the
-C# SDK. The chain crate has a real hash-chained, Merkle-rooted Postgres
-ledger with Signed Tree Heads and mirror-facing proof/sync endpoints
-(`avalon inspect-ledger`); identity, guild, and achievement writes are
-atomic with their ledger entry via an outbox pattern. The social graph
-(friends, blocks, presence, scoped discovery) and guilds (roles with
-per-resource permission overrides, membership, channels, chat, events with
-RSVP, discovery) are built out with real server endpoints and a working Hub
-UI. Achievements/attestations are wired end to end — a category-driven
-claim vocabulary, two-tier root/operational issuer keys, signed issuance,
-authenticity/validity/recognition kept as separate questions, signed
-append-only revocation history — through both SDKs and a Hub achievements
-view. See [`docs/projects/backend-server/architecture/`](docs/projects/backend-server/architecture/) for the current state
-of each area, one file per topic.
+guardian-based social recovery, and cross-device pairing, wired through
+`avalon create-identity`, the Rust SDK, and the C# SDK. The chain crate has
+a real hash-chained, Merkle-rooted Postgres ledger with Signed Tree Heads
+and mirror-facing proof/sync endpoints (`avalon inspect-ledger`); identity,
+guild, and achievement writes are atomic with their ledger entry via an
+outbox pattern. The social graph (friends, blocks, presence, scoped
+discovery) and guilds (roles with per-resource permission overrides,
+membership, channels, chat, events with RSVP, discovery) are built out with
+real server endpoints and a working Hub UI. Achievements/attestations are
+wired end to end — a category-driven claim vocabulary, two-tier
+root/operational issuer keys, signed issuance, authenticity/validity/
+recognition kept as separate questions, signed append-only revocation
+history — through both SDKs and a Hub achievements view. See
+[`docs/projects/backend-server/architecture/`](docs/projects/backend-server/architecture/)
+for the current state of each area, one file per topic.
+
+Login is identity-ID-first today, not fully usernameless: discoverable
+login without an identity ID requires attested resident WebAuthn
+credentials, which isn't built yet.
 
 ## Running locally
 
@@ -115,22 +110,25 @@ C# SDK, resetting the database, and running the live test suite).
 
 ```text
 crates/
-  protocol/   pure domain types & traits — identity, guilds, achievements, events
+  protocol/   pure domain types & traits — identity, guilds, achievements, events;
+              also owns Signed Tree Head signing/verification
   chain/      SettlementProvider trait + ledger implementation (not a blockchain yet)
   indexer/    fast-read query layer, rebuildable from durable protocol events
   server/     the network-facing API/auth service every client talks to
-  sdk/        Rust reference SDK
   cli/        local dev/ops tooling (`avalon` binary)
+  devenv/     loads the workspace root's .env from a fixed path
 
 apps/
   hub/          web client — Vue3, the first doorway into Avalon
   mobile-hub/   Tauri companion app (desktop/mobile), same UI as hub
 
 packages/
-  ui/         shared Vue3 component library used by both hub apps (Storybook)
+  ui/           shared Vue3 component library used by both hub apps (Storybook)
+  api-client/   shared API client + session store used by hub and mobile-hub
 
 bindings/
   csharp/     flagship external SDK for game developers (Unity-targeted)
+  ts/         TypeScript reference SDK
 
 docs/
   README.md      doc-set map: which directory is for you, suggested reading order
@@ -139,23 +137,20 @@ docs/
   users/         docs for people using games/apps/services that integrate Avalon
   maintainers/   docs for contributors to this repo (repo-wide)
   stakeholders/
-    Proposal.md  the living design document (narrative)
+    Proposal.md  product overview
     README.md    docs for people evaluating Avalon from the outside
   projects/      one folder per deployable, each self-contained enough to
                  move to its own repo later — see projects/README.md
     backend-server/  the network itself: architecture/, for-hosters/, for-maintainers/
-    sdks/            every official SDK (rust/, csharp/) + one shared architecture/
+    sdks/            every official SDK (rust/, typescript/, csharp/) + one shared architecture/
     cli/             the `avalon` dev/ops CLI
     hub/             the web client
     mobile-hub/      the Tauri desktop/mobile shell
     ui/              the shared Vue3 component library
 ```
 
-Architecture decisions are tracked as closed GitHub issues labeled
-`architecture-decision-record`, not as files in this repo — see
-[decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record)
-and [still-open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen)
-decisions.
+The Rust reference SDK lives in a separate `avalon-sdks` repository rather
+than in this workspace; see [`docs/projects/sdks/rust/README.md`](docs/projects/sdks/rust/README.md).
 
 ## Trusted networks
 
@@ -182,13 +177,13 @@ governance problem, not one client-side pinning can fix).
 This repo has no publicly deployed Avalon network yet, so the entry above is
 a template: a real, freely-generated Ed25519 key with no server behind it,
 checked in so the pinning mechanism is exercised end to end rather than left
-as an unfilled stub. Adding a real network is a normal reviewed PR against
-`docs/trusted-networks.json`: append its `network_id` and the actual hex from
-that deployment's `AVALON_SETTLEMENT_VERIFY_KEY` (see `.env.example`). Three
-deployment tiers are supported — `avalon-dev-<name>` (single-node),
-`avalon-int-<name>` (a 1-5 node interconnected test bed for verifying changes
-integrate before mainnet), and `avalon-mainnet-N` (the real, independently
-growing/shrinking validator set) — see
+as an unfilled stub. Adding a real network means appending its `network_id`
+and the actual hex from that deployment's `AVALON_SETTLEMENT_VERIFY_KEY`
+(see `.env.example`) to `docs/trusted-networks.json`. Three deployment tiers
+are supported — `avalon-dev-<name>` (single-node), `avalon-int-<name>` (a
+1-5 node interconnected test bed for verifying changes integrate before
+mainnet), and `avalon-mainnet-N` (the real, independently growing/shrinking
+validator set) — see
 [`docs/projects/backend-server/architecture/network-trust-anchors.md`](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
 
@@ -199,25 +194,7 @@ an unpinned network rather than trusting it silently — see
 
 ## Learn more
 
-| Design | Decisions | Process |
-|---|---|---|
-| [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md) | [Decided](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record) · [Open](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) | [Contributing](.github/CONTRIBUTING.md) |
-
-## Contributing
-
-This repo is private and pre-release; see [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the
-workflow once it opens up.
-
-## Support the project
-
-Avalon stays useful because people use it, report what's broken, and help
-build it out — that's worth as much as the financial side. If you enjoy the
-protocol and want to support development directly, buying a coffee is
-appreciated but entirely optional:
-
-<a href="https://www.buymeacoffee.com/lunarvagabond" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
-
-Code, docs, bug reports, and testing feedback all help just as much.
+[Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md)
 
 ## License
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// Friends/presence page (issue #18) inside the shell (issue #148). Loading,
+// Friends/presence page inside the shell. Loading,
 // live presence, and the membership poll live in useFriendsPresence — this
 // view owns only the add/accept/decline/remove actions, plus the
-// "people you may know" suggestions section (issue #204).
+// "people you may know" suggestions section.
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -34,7 +34,7 @@ const {
   refresh,
 } = useFriendsPresence()
 
-// "People you may know" (issue #204) — friends-of-friends and mutual-guild
+// "People you may know" — friends-of-friends and mutual-guild
 // suggestions, loaded once on mount alongside the rest of the page. A
 // suggestion never disappears the moment it's added (the server response
 // doesn't change until a page reload) — instead its row flips to a
@@ -81,7 +81,7 @@ onUnmounted(() => {
   if (suggestionsPollHandle) clearInterval(suggestionsPollHandle)
 })
 
-// User search (issue #205) — the opt-in global counterpart to "people
+// User search — the opt-in global counterpart to "people
 // you may know" above. Only ever returns identities that have turned on
 // their own `discoverable` preference (Profile.vue); a blank query issues
 // no request at all (see api.searchIdentities). Reuses AvalonSuggestionRow
@@ -135,7 +135,7 @@ function cancelAddFriend() {
   addFriendError.value = ''
 }
 
-// Accepts either a raw identity id or a display_name handle (#128, #510) —
+// Accepts either a raw identity id or a display_name handle —
 // a handle (anything that isn't a UUID) is resolved to an identity id
 // first, since createFriendRequest always targets an identity id on the
 // wire.

@@ -1,4 +1,4 @@
-//! Exercises `GET /ledger/entries?subject=` (issue #364, implementing one
+//! Exercises `GET /ledger/entries?subject=` (implementing one
 //! of #306's decided pieces) against a real, running `avalon-server` and
 //! Postgres. Gated `--ignored` since it needs live infra — see `make
 //! test-live` / `make start`.

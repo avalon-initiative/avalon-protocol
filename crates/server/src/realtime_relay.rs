@@ -1,5 +1,5 @@
-//! One-hop live realtime event relay across nodes (issue #539, implementing
-//! #535's decided design), built on the #362 peer table
+//! One-hop live realtime event relay across nodes, implementing
+//! the decided design, built on the peer table
 //! (`crate::nodes::PeerTable`).
 //!
 //! Today's realtime fan-out (`crate::presence::PresenceStore`,
@@ -26,42 +26,42 @@
 //! prevent one — today's peer mesh is small and fully interconnected, so
 //! one hop already reaches everyone.
 //!
-//! **DHT-scoped delivery for guild-channel/conversation events (#584,
-//! implementing #542's decision).** [`relay_targets`] looks up
+//! **DHT-scoped delivery for guild-channel/conversation events,
+//! implementing the decided design.** [`relay_targets`] looks up
 //! `crate::interest`'s DHT-backed registry for exactly who has a local
 //! subscriber for the event's own channel/conversation id, instead of
 //! posting to every realtime-capable peer in the full HTTP peer table —
-//! the actual behavior change this whole epic (#580) exists for. Two
+//! the actual behavior change this whole epic exists for. Two
 //! things still take the original full-peer-loop path unconditionally:
 //! `RelayEvent::Presence` (presence has no guild/conversation scope to
 //! look anything up by — see `crate::interest`'s own module doc on this),
 //! and *any* event on a node with no DHT identity at all
-//! (`AVALON_DHT_ENABLED` unset) — every pre-#584 deployment's behavior,
+//! (`AVALON_DHT_ENABLED` unset) — every earlier deployment's behavior,
 //! unchanged, exactly the same "unconfigured node behaves as it always
-//! did" posture #582/#583 already established. A DHT lookup against a
+//! did" posture already established. A DHT lookup against a
 //! small, fully-interconnected mesh trivially resolves back to "everyone
 //! who's actually subscribed," so the small-mesh case stays correct as a
 //! natural degenerate case rather than needing its own special path.
 //!
-//! **Cross-network reachability closed (#608)**: `crate::dht`'s Kademlia
+//! **Cross-network reachability closed**: `crate::dht`'s Kademlia
 //! protocol id is now `network_id`-scoped, so a differently-networked peer
 //! can no longer negotiate a Kademlia RPC with this swarm at all — this
 //! module's own DHT lookups are structurally bounded to this node's own
-//! network now, not merely protected by #582's bootstrap incidentally
-//! never reaching a foreign peer. **Known limitation, not solved here
-//! (tracked as #610):** nothing yet authorizes *which scope* an
+//! network now, not merely protected by the bootstrap incidentally
+//! never reaching a foreign peer. **Known limitation, not solved here:**
+//! nothing yet authorizes *which scope* an
 //! already-admitted, same-network node can register interest in — a
 //! same-network node with no real subscriber for a channel/conversation
 //! can still register interest in it and receive this relay's content for
-//! it. See #610 for the concrete leak and proposed signed-membership fix.
+//! it. The concrete leak needs a proposed signed-membership fix.
 //!
 //! **Never touches Postgres.** A relayed chat message only feeds this
 //! node's `ChatBus` (live push to already-connected clients) — it is
 //! never written into `guild_messages`/`conversation_messages` here.
 //! Async at-rest replication of chat history to additional nodes is a
-//! separate, explicitly scoped-out concern (#540). A relayed presence
+//! separate, explicitly scoped-out concern. A relayed presence
 //! update *does* update `PresenceStore`'s in-memory map (presence has no
-//! Postgres-backed source of truth to defer to — see ADR #78 — so the
+//! Postgres-backed source of truth to defer to — so the
 //! in-memory map *is* the state a relayed update needs to reach).
 //!
 //! **Best-effort, fire-and-forget.** Relaying is a liveness/reach
@@ -148,7 +148,7 @@ fn interest_scope_for(event: &RelayEvent) -> Option<InterestScope> {
     }
 }
 
-/// Resolves who `event` should actually be posted to (issue #584) — a DHT
+/// Resolves who `event` should actually be posted to — a DHT
 /// interest lookup scoped to `event`'s own channel/conversation id when
 /// this node has a DHT identity and `event` has such a scope to look up in
 /// the first place, [`full_peer_loop_targets`] otherwise. This node's own

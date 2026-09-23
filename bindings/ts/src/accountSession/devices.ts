@@ -1,5 +1,5 @@
-// Device-registration / linked-device grant model (issue #135) and
-// cross-device pairing approval (issue #307/#704) on AccountSession —
+// Device-registration / linked-device grant model and
+// cross-device pairing approval on AccountSession —
 // identity_signing_keys rows (event-authorship keys), distinct from
 // passkeys.ts (WebAuthn login credentials). See
 // crates/server/src/devices.rs/device_pairing.rs.
@@ -73,7 +73,7 @@ declare module './core.js' {
      * passed a real WebAuthn ceremony. Throws `NoLocalSigningKeyError` if
      * this session has no local signing key. */
     approveDeviceGrant(grantId: string, requestedSigningPublicKeyB64: string): Promise<Device>
-    /** `POST /auth/device/approve` (#307/#704) — approves a cross-device
+    /** `POST /auth/device/approve` — approves a cross-device
      * pairing request by `userCode`, always signed
      * (`device_pairing.approve`, `[identityId, userCode]`). */
     approveDevicePairing(userCode: string): Promise<string>

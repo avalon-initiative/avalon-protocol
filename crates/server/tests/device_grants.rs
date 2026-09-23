@@ -1,5 +1,5 @@
-//! Exercises the device-registration/linked-device grant model (issue
-//! #135) against a real, running `avalon-server` and Postgres. Gated
+//! Exercises the device-registration/linked-device grant model
+//! against a real, running `avalon-server` and Postgres. Gated
 //! `--ignored` since it needs live infra — see `make test-live` / `make
 //! start`.
 //!

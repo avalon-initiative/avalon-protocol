@@ -205,7 +205,7 @@ impl PermissionGrant {
 /// Who else can see a resource — orthogonal to [`PermissionGrant`], which
 /// answers "what may a specific integrator do for a specific user."
 /// `Visibility` answers "who, viewer-relationship-wise, gets to read this
-/// at all" (issue #87): a stranger, any authenticated identity, a friend,
+/// at all": a stranger, any authenticated identity, a friend,
 /// a fellow guild member, or nobody but the subject themselves. An
 /// integrator's own read access is governed entirely by its capability
 /// grant, checked separately — `Visibility` never widens or narrows that;

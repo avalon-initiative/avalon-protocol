@@ -1,4 +1,4 @@
-// Social recovery (issue #201) — exercises startRecovery, the only
+// Social recovery — exercises startRecovery, the only
 // function left in api/recovery.ts (its session-scoped guardian functions
 // moved onto AccountSession itself — see bindings/ts's own
 // accountSession/recovery.test.ts): `fetch` is stubbed for the server

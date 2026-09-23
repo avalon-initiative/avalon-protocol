@@ -1,5 +1,5 @@
 // Friends list + live presence, shared by the Friends page and the Home
-// dashboard (issue #148) so neither duplicates the load/subscribe/poll
+// dashboard so neither duplicates the load/subscribe/poll
 // dance. Registers its own mount/unmount hooks — call it from `<script
 // setup>` of whichever page needs it; only one page is mounted at a time,
 // so only one presence socket is ever open.

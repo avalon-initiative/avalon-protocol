@@ -157,7 +157,7 @@ make test-live    # cargo test --workspace -- --ignored, needs `make start` runn
 they need a real server and database — a real WebAuthn ceremony over HTTP,
 not a mock. Run `make start` first.
 
-### `.env` loading in tests and live-verification code (issue #671)
+### `.env` loading in tests and live-verification code
 
 Every `--ignored` live test, plus `crates/server/src/outbox.rs` and
 `crates/server/src/mirror_watcher.rs`'s own test modules, load `.env`
@@ -194,7 +194,7 @@ Everything `make start` produces lives under `_running/` at the repo root
 build artifacts; `make clean-all` also removes `node_modules`, JS build
 output, and the C# `bin`/`obj` directories.
 
-`avalon-server` logs via `tracing` (issue #265) — every line in
+`avalon-server` logs via `tracing` — every line in
 `_running/logs/avalon-server.log` (or stdout/stderr if you run the binary
 directly) goes through it, including each HTTP request's own
 method/path/status/latency span. Two env vars control it, both read at
@@ -222,8 +222,8 @@ become real top-level JSON keys, not something an aggregator has to regex
 out of prose. A stable `event` field (e.g. `event = "equivocation_detected"`)
 is the intended thing to alert on — the message text next to it is free to
 get reworded later without breaking an alert rule built against the field.
-This repo doesn't ship any alerting/paging integration itself (#315,
-deliberately out of scope) — the fields exist so a hoster who forwards
+This repo doesn't ship any alerting/paging integration itself, deliberately
+out of scope — the fields exist so a hoster who forwards
 `avalon-server`'s logs to their own aggregator can build one there.
 
 ### Sharing logs when filing an issue
@@ -231,12 +231,12 @@ deliberately out of scope) — the fields exist so a hoster who forwards
 Never paste raw log text straight into a filed GitHub issue — it may still
 carry ANSI color codes from the human-readable format, and worse, it can
 easily contain a real secret that ended up in a log line (a `DATABASE_URL`,
-a signing key, a bearer token). Run `avalon logs export` first (issue #659):
+a signing key, a bearer token). Run `avalon logs export` first:
 
 ```bash
 avalon logs export                              # _running/logs/avalon-server.log, whole file
 avalon logs export --tail 200                    # just the last 200 lines
-avalon logs export --since 2026-09-20T00:00:00Z  # only lines from that point on
+avalon logs export --since 2026-01-01T00:00:00Z  # only lines from that point on
 avalon logs export --file /path/to/other.log
 ```
 

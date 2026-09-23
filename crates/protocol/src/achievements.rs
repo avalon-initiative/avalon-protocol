@@ -3,7 +3,7 @@
 //! Avalon records that an issuer made a claim about a user. It never
 //! dictates what a receiving integrator does with that claim — see
 //! `docs/stakeholders/Proposal.md` §8–9, `docs/architecture/achievements-and-attestations.md`, and the trust
-//! model in `docs/architecture/trust-model.md` (issue #76).
+//! model in `docs/architecture/trust-model.md`.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -16,8 +16,8 @@ pub struct AchievementDefinition {
     pub issuer: Issuer,
     pub name: String,
     pub description: String,
-    /// An issuer-declared schema reference (e.g. an integrator-event-result schema,
-    /// #88) so a consumer can recognize a claim's shape independently of the
+    /// An issuer-declared schema reference (e.g. an integrator-event-result schema)
+    /// so a consumer can recognize a claim's shape independently of the
     /// issuer's own naming for it. Optional: not every definition needs one.
     pub schema: Option<GlobalId>,
     /// Bumped on every `achievement.definition_updated`; the definition's
@@ -27,10 +27,10 @@ pub struct AchievementDefinition {
 }
 
 /// Whoever is entitled to issue attestations. `Game`/`App`/`Service` mirror
-/// `IntegratorCategory` (issue #282, decision #275) — additive sibling
+/// `IntegratorCategory` — additive sibling
 /// variants sharing `IntegratorId`'s id space, each minting its own `GlobalId`
 /// namespace prefix (`game:`/`app:`/`service:`) for events they author.
-/// `Issuer::Game` itself is unchanged, per #275.
+/// `Issuer::Game` itself is unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Issuer {
     Game(IntegratorId),
@@ -49,9 +49,8 @@ impl Issuer {
         }
     }
 
-    /// The claim-vocabulary word this issuer's category uses (issue #324,
-    /// decided; #325 built the definition-CRUD half, #32 this attestation
-    /// half): `"achievement"` for `Game`, `"milestone"` for `App`/
+    /// The claim-vocabulary word this issuer's category uses:
+    /// `"achievement"` for `Game`, `"milestone"` for `App`/
     /// `Service` — matches `avalon_protocol::integrators::IntegratorCategory::claim_kind()`
     /// exactly (kept as its own method here rather than converting through
     /// `IntegratorCategory`, since `Issuer` is what this module's own types
@@ -70,12 +69,12 @@ impl Issuer {
     }
 }
 
-/// A detached Ed25519 signature over an attestation's canonical bytes
-/// (issue #32), produced by one of the issuer's own keys
+/// A detached Ed25519 signature over an attestation's canonical bytes,
+/// produced by one of the issuer's own keys
 /// (`avalon_protocol::integrators::IssuerKey`) — never by the node operator.
 /// `key_id` names which of the issuer's (possibly several) keys signed it,
 /// so verification can resolve that exact key's point-in-time validity at
-/// `issued_at` (#84's `resolve_valid_signing_key`) rather than assuming the
+/// `issued_at` (`resolve_valid_signing_key`) rather than assuming the
 /// issuer's current key set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature {
@@ -89,11 +88,10 @@ pub struct Signature {
 /// The receiving integrator decides independently whether it trusts `issuer` and
 /// what the claim means to it — see `TrustRelationship` and `Proposal.md` §9.
 ///
-/// **No `revoked_at` here** (issue #32, per #81's decided revocation
-/// mechanics): a mutable status field on durable protocol history is
-/// exactly what #75's ADR forbids. Revocation is its own append-only entry
-/// — tracked as #85, not built yet, and deliberately not improvised here as
-/// a side effect of shipping issuance.
+/// **No `revoked_at` here**: a mutable status field on durable protocol
+/// history is exactly what this protocol's revocation model forbids.
+/// Revocation is its own append-only entry — not built yet, and
+/// deliberately not improvised here as a side effect of shipping issuance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AchievementAttestation {
     pub id: AttestationId,
@@ -102,7 +100,7 @@ pub struct AchievementAttestation {
     pub achievement: GlobalId,
     pub issued_at: OffsetDateTime,
     /// Verified against the issuer's own key
-    /// (`avalon_chain::attestations::verify_authenticity`, #33) before this
+    /// (`avalon_chain::attestations::verify_authenticity`) before this
     /// attestation is ever stored — see [`attestation_signing_bytes`] for
     /// exactly what's signed.
     pub proof: Signature,
@@ -126,10 +124,9 @@ pub fn attestation_signing_bytes(
     format!("avalon:{claim_kind}.issued:v1:{issuer_ref}:{subject}:{achievement}").into_bytes()
 }
 
-/// The exact bytes an issuer's key signs to authorize a *bulk* issuance
-/// (issue #495, implementing #492's decided shape: N ordinary attestations
-/// sharing one request/signature envelope, not a new claim-set attestation
-/// type). One signature covers the whole ordered `achievements` list for
+/// The exact bytes an issuer's key signs to authorize a *bulk* issuance:
+/// N ordinary attestations sharing one request/signature envelope, not a
+/// new claim-set attestation type. One signature covers the whole ordered `achievements` list for
 /// one `subject` — each entry is that claim's own full [`GlobalId`] wire
 /// string (the same value a single [`attestation_signing_bytes`] call
 /// would sign), length-prefixed so two different orderings of the same
@@ -335,11 +332,10 @@ mod issuer_tests {
     }
 }
 
-/// An attestation's point-in-time status (issue #85, implementing #81's
-/// decided mechanics) — never a mutable field on the attestation itself.
-/// Computed from whether a revocation entry exists and when it took
-/// effect, not read from a flag. Reinstatement (a later entry reversing a
-/// revocation, per #81's decision) and supersession are deliberately not
+/// An attestation's point-in-time status — never a mutable field on the
+/// attestation itself. Computed from whether a revocation entry exists and
+/// when it took effect, not read from a flag. Reinstatement (a later entry
+/// reversing a revocation) and supersession are deliberately not
 /// built in this pass — no protocol event kind for either exists yet
 /// (`docs/architecture/protocol-events.md` catalogues `achievement.revoked`
 /// but no attestation-level "reinstated"/"superseded" kind), and neither
@@ -369,11 +365,11 @@ pub fn attestation_status_at(
     }
 }
 
-/// "Is this attestation still good right now" (issue #33/#85, ADR #76's
-/// second of three separate questions — authentic, valid, recognized —
-/// never merged into one boolean). Checks the attestation's own revocation
-/// status ([`attestation_status_at`], #85) and the issuer's current
-/// `IntegratorStatus` (#84 catalogued `Suspended`/`Revoked`/`Deprecated`, but
+/// "Is this attestation still good right now" (the second of three separate
+/// questions — authentic, valid, recognized — never merged into one
+/// boolean). Checks the attestation's own revocation
+/// status ([`attestation_status_at`]) and the issuer's current
+/// `IntegratorStatus` (`Suspended`/`Revoked`/`Deprecated` are catalogued, but
 /// nothing can transition an issuer into them yet — no point-in-time
 /// issuer-status history exists either, so that half of this check is
 /// still "as of now", not "as of `at`"; the attestation-revocation half
@@ -468,7 +464,7 @@ impl RecognitionScope {
 }
 
 /// One integrator's decision to trust another issuer's attestations,
-/// optionally scoped (issue #33) to specific claim kinds/schemas/versions/
+/// optionally scoped to specific claim kinds/schemas/versions/
 /// time windows. `scopes.is_empty()` means unscoped — every claim from
 /// `trusted_issuer` is recognized, matching this type's original
 /// unscoped-only shape exactly (additive, not a breaking change).
@@ -481,8 +477,8 @@ pub struct TrustRelationship {
     pub scopes: Vec<RecognitionScope>,
 }
 
-/// "Does *this consumer's own policy* recognize this claim" (issue #33,
-/// ADR #76's third question) — evaluated entirely on the consumer's side
+/// "Does *this consumer's own policy* recognize this claim" (the third of
+/// the three separate questions) — evaluated entirely on the consumer's side
 /// (SDK or the integrator's own code), never a boolean the server computes or
 /// returns. Deliberately separate from [`Validity`]/authenticity: a claim
 /// can be authentic and valid and still `NotRecognized` here, and the API

@@ -1,11 +1,11 @@
-// BIP39 mnemonic-derived signing keys (issue #134's recovery fallback) —
+// BIP39 mnemonic-derived signing keys (a recovery fallback) —
 // reimplemented here from packages/api-client/src/crypto/signingKey.ts's
 // `deriveSigningKeyFromMnemonic`/`generateAndStoreSigningKey`/
-// `recoverAndStoreSigningKey`, since #701's own AccountSession registration
+// `recoverAndStoreSigningKey`, since AccountSession registration
 // (`AvalonClient.register`) generates a genuinely random key with no
 // recovery phrase at all — a real gap relative to what Hub's own
 // production `createIdentity` flow already does and needs to keep doing
-// once it migrates onto this SDK (issue #712). Storage stays Hub's own
+// once it migrates onto this SDK. Storage stays Hub's own
 // concern (this module never touches localStorage) — only the pure
 // mnemonic<->key derivation moves here.
 import { ed25519 } from '@noble/curves/ed25519'

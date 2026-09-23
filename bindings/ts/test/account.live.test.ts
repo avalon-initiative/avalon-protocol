@@ -73,7 +73,7 @@ maybeDescribe('AccountSession live round trips', () => {
     const guild = await session.createGuild(`Guild ${crypto.randomUUID().slice(0, 8)}`, `T${crypto.randomUUID().slice(0, 4)}`, 'a test guild')
     expect(guild.owner).toBe(identityId)
 
-    // guild.role.create is signature-required (#697/#698) — this only
+    // guild.role.create is signature-required — this only
     // succeeds if AccountSession.createRole actually attached a valid
     // signature the server verified.
     const role = await session.createRole(guild.id, 'Quartermaster', ['manage_members'], 'trusted role')

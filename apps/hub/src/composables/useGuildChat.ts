@@ -1,14 +1,14 @@
-// Channel chat, embedded in Guild.vue's Channels tab (issue #22/#24, later
-// folded out of the standalone GuildChannel.vue route by #241): cursor-
+// Channel chat, embedded in Guild.vue's Channels tab (later
+// folded out of the standalone GuildChannel.vue route): cursor-
 // paginated history (`before`/`limit`, matching
 // crates/server/src/guild_messages.rs), newest at the bottom, load-older on
-// demand. New messages arrive live over the /ws/messages socket (issue
-// #438) rather than a poll — a channel that used to be milestone-1 poll-only
+// demand. New messages arrive live over the /ws/messages socket
+// rather than a poll — a channel that used to be milestone-1 poll-only
 // per its own now-outdated design note; see docs/architecture/communication.md.
 //
 // `channelId` is expected to change while this composable stays mounted —
 // the Channels tab sidebar swaps it as the reader picks a different channel,
-// with no route navigation or component remount in between (#241). An empty
+// with no route navigation or component remount in between. An empty
 // `channelId` (no channel selected/available yet) is a valid, quiet state,
 // not an error: every loader below short-circuits on it rather than hitting
 // the API with a malformed URL.
@@ -50,8 +50,8 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
   // archive tier instead — flipped inside loadOlder, reset by load()
   // whenever the channel changes.
   const readingArchive = ref(false)
-  // identity id -> display_name (issue #510), resolved via
-  // GET /identities/profiles (issue #161) for whichever authors show up
+  // identity id -> display_name, resolved via
+  // GET /identities/profiles for whichever authors show up
   // in the currently-loaded messages. Never removed once resolved — an
   // author's name doesn't need to change mid-session for a chat view.
   const authorNames = ref<Record<string, string>>({})
@@ -141,7 +141,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     messages.value = toOldestFirst(Array.isArray(page) ? page : [])
     // A full page definitely means more live history remains. A shorter
     // page (including empty) means the live table is exhausted for this
-    // channel, but the archive tier (#253/#464) might still hold older
+    // channel, but the archive tier might still hold older
     // history — stays true so a scroll can find out via loadOlder's own
     // live/archive fallthrough below, rather than assuming "no more"
     // from the live table alone.
@@ -149,7 +149,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     await resolveAuthorNames(messages.value)
   }
 
-  // Opens the live socket for `targetChannelId` (issue #438) — closes
+  // Opens the live socket for `targetChannelId` — closes
   // whatever was subscribed before, so a channel switch never leaves a
   // stale connection pushing updates for a channel the reader left.
   function subscribeToChannel(targetChannelId: string) {
@@ -182,7 +182,7 @@ export function useGuildChat(guildId: Ref<string>, channelId: Ref<string>) {
     try {
       // Undefined when there are no live messages loaded at all — a
       // channel whose entire current history has already aged into the
-      // archive tier (issue #253/#464). That's still a valid state to
+      // archive tier. That's still a valid state to
       // page from: it just means the very next read has to go straight
       // to the archive with no cursor, same as the live-exhausted case
       // below.

@@ -1,8 +1,8 @@
-//! Guild chat channels (issue #22).
+//! Guild chat channels.
 //!
 //! A `GuildChannel` (`crates/protocol/src/guilds.rs`) is guild structure,
 //! not chat content — it's a rebuildable projection of durable history,
-//! same pattern as `guilds`/`guild_roles` from issue #20
+//! same pattern as `guilds`/`guild_roles`
 //! (`crates/server/src/guilds.rs`). Creating, renaming, and archiving a
 //! channel all write a `guild.channel_*` event into the outbox in the same
 //! transaction as the `guild_channels` row change; the actual chat
@@ -12,7 +12,7 @@
 //!
 //! **Membership.** Reading or managing channels requires the caller to
 //! currently be a member of the guild — [`is_guild_member`] queries the
-//! real `guild_members` table #21 built.
+//! real `guild_members` table.
 //!
 //! `manage_channels` gates create/rename/archive. Creation has no channel
 //! yet to scope a check to, so it uses the flat guild-wide check
@@ -20,12 +20,12 @@
 //! this, with `crate::guilds::actor_role_permissions` imported here as
 //! `actor_permissions`). Rename/archive already have a concrete channel,
 //! so they go through the resource-aware sibling
-//! (`crate::guilds::has_resource_permission`, issue #250) instead — a role
+//! (`crate::guilds::has_resource_permission`) instead — a role
 //! can be granted or denied `manage_channels` on one specific channel via
 //! a per-resource override, on top of (or instead of) holding it
 //! guild-wide.
 //!
-//! **Announcement-only channels (issue #250).** `GuildChannel.announcement_only`
+//! **Announcement-only channels.** `GuildChannel.announcement_only`
 //! (`guild_channels.announcement_only`) is this ticket's end-to-end proof
 //! point for the override layer: when set, `crate::guild_messages::send_message`
 //! requires the `ChannelPost` permission — resolved per-channel through
@@ -58,7 +58,7 @@ use crate::state::AppState;
 
 const CHANNEL_NAME_MAX_CHARS: usize = 100;
 
-/// Cap on `GuildChannel.topic` (issue #276) — short prose, same order of
+/// Cap on `GuildChannel.topic` — short prose, same order of
 /// magnitude as `MAX_ROLE_DESCRIPTION_LEN` in `crate::guilds` rather than
 /// `Guild::motd`'s longer cap, since a channel topic is meant to be a
 /// single line, not a paragraph.
@@ -142,8 +142,8 @@ async fn require_manage_channels(
     }
 }
 
-/// Resource-aware `manage_channels` check against one specific channel
-/// (issue #250) — used once a channel already exists to scope a
+/// Resource-aware `manage_channels` check against one specific channel —
+/// used once a channel already exists to scope a
 /// per-resource override to (rename, archive, announcement-only toggle).
 pub(crate) async fn require_manage_channel_resource(
     state: &AppState,
@@ -241,10 +241,9 @@ pub struct ChannelResponse {
     pub created_at: OffsetDateTime,
     pub announcement_only: bool,
     pub topic: Option<String>,
-    /// Issue #458. Non-member visibility baseline for this channel —
-    /// same meaning as `guild_events.public` (#448), just newly added
-    /// for channels, which had no non-member visibility concept before
-    /// this ticket at all.
+    /// Non-member visibility baseline for this channel —
+    /// same meaning as `guild_events.public`, just newly added
+    /// for channels, which had no non-member visibility concept before.
     pub public: bool,
 }
 
@@ -265,12 +264,12 @@ impl From<ChannelRow> for ChannelResponse {
 
 /// `GET /guilds/{id}/channels` — a member sees every channel they hold
 /// `view` on (baseline: all of them, unless a role override says
-/// otherwise — issue #458). A non-member of a
+/// otherwise). A non-member of a
 /// [`crate::guilds::GuildResponse::public`] guild sees only `public`
 /// channels instead of being 403'd outright — same shape
-/// `guild_events::list_events` already established for events (#448),
+/// `guild_events::list_events` already established for events,
 /// extended to channels here since they had no non-member visibility
-/// concept before this ticket. A non-member of a non-public guild is
+/// concept before. A non-member of a non-public guild is
 /// still 403'd, unchanged. Lists both active and archived channels; the
 /// client distinguishes via `archived`.
 #[utoipa::path(
@@ -421,8 +420,8 @@ pub struct UpdateChannelRequest {
 }
 
 /// `PATCH /guilds/{id}/channels/{cid}` — rename, retopic, and/or toggle
-/// announcement-only/public. Requires `manage_channels` (resource-aware,
-/// issue #250). Renaming/retoggling an archived channel is allowed (it's
+/// announcement-only/public. Requires `manage_channels` (resource-aware).
+/// Renaming/retoggling an archived channel is allowed (it's
 /// still the same durable channel, just not accepting new posts).
 #[utoipa::path(
     patch,
@@ -502,7 +501,7 @@ pub async fn update_channel(
 }
 
 /// `POST /guilds/{id}/channels/{cid}/archive` — requires `manage_channels`
-/// (resource-aware, issue #250). A soft flag (`archived_at`), not a
+/// (resource-aware). A soft flag (`archived_at`), not a
 /// delete: history and past messages stay reachable, the channel simply
 /// stops accepting new posts (enforced in
 /// `crate::guild_messages::send_message`).

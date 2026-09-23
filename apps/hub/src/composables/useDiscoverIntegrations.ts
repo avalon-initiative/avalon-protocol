@@ -1,5 +1,4 @@
-// Integrator directory (issue #270): GET /integrations (#293's canonical alias
-// for GET /integrations) behind reactive filters (search text, sort). Mirrors
+// Integrator directory: GET /integrations behind reactive filters (search text, sort). Mirrors
 // useDiscoverGuilds.ts's shape closely — server-side filtering/sorting/
 // pagination via the endpoint's own `next_cursor` (crates/server/src/integrations.rs's
 // keyset pagination — never re-derived or re-sorted client-side, since only
@@ -7,7 +6,7 @@
 // endpoint is public and unauthenticated, so unlike useDiscoverGuilds this
 // needs no session token at all.
 //
-// Issue #432/ADR #437: a tier-2 view (a browse list someone might sit on
+// A tier-2 view (a browse list someone might sit on
 // for a while) — polls on the same interval useMyConnections/useMyGuilds
 // already use, same reasoning: a newly published integration should show
 // up without a manual reload. Polling reuses `refresh()` directly rather

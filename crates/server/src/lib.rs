@@ -70,7 +70,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 /// The Hub (and any other browser client) is a different origin than
-/// `avalon-server` by construction (issue #77 — Hub is a client, never
+/// `avalon-server` by construction (Hub is a client, never
 /// bundled with the backend), so every browser request here is
 /// cross-origin and needs an explicit CORS grant or the browser blocks it
 /// before the request is even sent. Origin is configurable via
@@ -153,8 +153,8 @@ impl KeyExtractor for IntegratorOrIpKeyExtractor {
     }
 }
 
-/// `redis_limiter` is `Some` only when `AVALON_REDIS_URL` is configured
-/// (issue #545) — built by the caller (`main.rs`), since connecting to
+/// `redis_limiter` is `Some` only when `AVALON_REDIS_URL` is configured —
+/// built by the caller (`main.rs`), since connecting to
 /// Redis is async and this function isn't. `None` (the default) keeps
 /// every layer below exactly as it's always been; see
 /// `crate::redis_limits`'s own module doc comment for what changes when
@@ -163,22 +163,22 @@ impl KeyExtractor for IntegratorOrIpKeyExtractor {
 /// The full router — every Gateway-facing route (identity/auth, social,
 /// guilds, achievements, integrations) plus the Settlement (`/ledger/*`)
 /// and node-mesh (`/nodes/*`) surface. This is what every roles
-/// configuration other than a genuinely standalone Settlement node gets
-/// (issue #664) — `combined` (the default) is unchanged from before this
-/// ticket. See [`router_settlement_only`] for the reduced surface a
+/// configuration other than a genuinely standalone Settlement node gets —
+/// `combined` (the default) is unchanged from before this
+/// change. See [`router_settlement_only`] for the reduced surface a
 /// Settlement-only process serves instead.
 pub fn router(state: AppState, redis_limiter: Option<redis_limits::RedisLimiterState>) -> Router {
     apply_common_layers(full_routes(state), redis_limiter)
 }
 
-/// Issue #664: the route table a genuinely standalone Settlement node
+/// The route table a genuinely standalone Settlement node
 /// serves — `/ledger/*` (read+write, `crate::settlement`), `/nodes/*`
 /// (peer discovery, status, admin log-level — node-mesh plumbing, not
 /// Gateway-facing) and `/mirror/notify` (push-based mirror-sync wake).
 /// Deliberately excludes every WebAuthn/session/social/guild/achievement
 /// route, plus `/nodes/relay` and `/nodes/replicate-chat` (both
 /// presence/chat-relay concepts with no meaning on a node with no local
-/// Gateway traffic) and `/internal/indexer/*` (Indexer role, #662's own
+/// Gateway traffic) and `/internal/indexer/*` (Indexer role, its own
 /// concern, not Settlement's). A request to any route this table doesn't
 /// define gets axum's ordinary 404, not a panic or a route that happens to
 /// work — see `crates/server/tests/settlement_only.rs` for the live check.
@@ -191,7 +191,7 @@ pub fn router_settlement_only(
 
 /// The tail every router variant shares: tracing, CORS, and the
 /// concurrency/rate-limit layer pair (in-process or Redis-backed,
-/// depending on `redis_limiter` — see issue #545). Factored out of
+/// depending on `redis_limiter`). Factored out of
 /// [`router`]/[`router_settlement_only`] so a Settlement-only process gets
 /// exactly the same operational posture (rate limits, request tracing,
 /// CORS) as the combined binary, not a stripped-down one.
@@ -468,7 +468,7 @@ fn full_routes(state: AppState) -> Router {
             "/integrations/{slug}/keys/{key_id}/revoke",
             post(integrators::revoke_issuer_key),
         )
-        // #481 (implementing #479's decided ADR): per-network issuer
+        // Per-network issuer
         // registration gate — deliberately not nested under
         // /integrations/{slug}/... since the wire shape is pubkey-first,
         // not integrator-id-first (see issuer_registration.rs's module
@@ -517,8 +517,8 @@ fn full_routes(state: AppState) -> Router {
             "/integrations/{slug}/achievements/{key}",
             patch(achievements::update_achievement_definition),
         )
-        // #32: issuance — a signed AchievementAttestation, gated on the
-        // subject user's own achievements.issue grant (#28), not just
+        // Issuance — a signed AchievementAttestation, gated on the
+        // subject user's own achievements.issue grant, not just
         // the integrator's own credential.
         .route(
             "/integrations/{slug}/achievements/{key}/issue",
@@ -791,10 +791,10 @@ fn full_routes(state: AppState) -> Router {
             "/nodes/replicate-chat",
             post(chat_replication::replicate_chat_handler),
         )
-        // Issue #661: operator-internal, node-to-node RPC (epic #291's
-        // Node Role Separation) — see `crate::internal_role`'s own module
+        // Operator-internal, node-to-node RPC (Node Role Separation) —
+        // see `crate::internal_role`'s own module
         // doc comment for why this is a *third*, deliberately distinct
-        // auth domain from both `/ledger/*` (issue #40, cross-operator)
+        // auth domain from both `/ledger/*` (cross-operator)
         // and `/nodes/log-level` (this operator's own admin console)
         // above. `apply_indexer_event`/`rebuild_indexer` are the first,
         // proven instance of the pattern — the `Indexer` role over HTTP.

@@ -1,4 +1,4 @@
-// One registry metric (issue #261's `{ value, definition, class }` triple,
+// One registry metric (the `{ value, definition, class }` triple,
 // crates/server/src/registry.rs::MetricResponse field-for-field) rendered
 // with its definition and class label — issue #270's own hard invariant:
 // no metric may ever render as a bare number anywhere in the Hub. `label`

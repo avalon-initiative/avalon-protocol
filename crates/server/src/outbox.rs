@@ -1,4 +1,4 @@
-//! The outbox pattern, closing issue #71.
+//! The outbox pattern.
 //!
 //! An app-data write and the durable protocol event it accompanies must
 //! land together or not at all. Previously the app-data transaction
@@ -14,15 +14,15 @@
 //! immediately is not data loss — it is already durably recorded here, and
 //! is retried on the worker's next tick.
 //!
-//! Batching (issue #38): a drain tick groups every row it picks up into one
+//! Batching: a drain tick groups every row it picks up into one
 //! `EventBatch` and commits it with a single `SettlementProvider::commit`
 //! call, not one call per event — a batch closes whenever the worker runs;
 //! a batch of one event is legal (an idle system draining a single pending
 //! row). Rows are marked with the `batch_id` the commit actually produced,
-//! not left `NULL` — the column has been reserved for this since #71's
+//! not left `NULL` — the column has been reserved for this since the
 //! `0003_outbox` migration.
 //!
-//! **Remote-submit mode (issue #313).** When `AVALON_SETTLEMENT_REMOTE_URL`
+//! **Remote-submit mode.** When `AVALON_SETTLEMENT_REMOTE_URL`
 //! is configured, a drain tick posts its `EventBatch` to `POST
 //! /ledger/submit` on the named remote Settlement authority instead of
 //! calling `chain.commit` against this node's own pool — the authority runs
@@ -31,8 +31,8 @@
 //! default), this worker behaves exactly as it always has — see
 //! [`RemoteSubmitConfig::from_env`] and [`RemoteSubmitConfig::submit`].
 //!
-//! **Shard-aware routing (issue #532, implementing #527's decided sharded
-//! settlement).** A single drain tick can now span more than one shard's
+//! **Shard-aware routing, implementing the decided sharded
+//! settlement design.** A single drain tick can now span more than one shard's
 //! worth of pending rows — [`shard_id_for_event`] derives which shard an
 //! event belongs to from its `issuer`'s [`GlobalId`] namespace (`game`/
 //! `app`/`service` routes to that integrator's own shard; everything else
@@ -50,7 +50,7 @@
 //! `docs/architecture/settlement.md`'s "Write routing to the correct
 //! shard" section for the full design.
 //!
-//! **Push-based mirror sync (issue #596).** Right after a batch commits
+//! **Push-based mirror sync.** Right after a batch commits
 //! *locally* (never after a remote submit — that authority's own outbox
 //! fires its own push when it commits), [`drain_locked`] fetches this
 //! node's fresh `checkpoint()` and calls
@@ -357,7 +357,7 @@ impl RemoteSubmitConfig {
 }
 
 /// Drains pending outbox rows, oldest first, forever — into `chain`
-/// directly, or (issue #313) into a remote Settlement authority named by
+/// directly, or into a remote Settlement authority named by
 /// `remote`. Spawned once at server startup (`main.rs`) as a background
 /// task in the same process — not a separate binary or deployment. Never
 /// returns; intended to be handed to `tokio::spawn`.
@@ -428,8 +428,8 @@ async fn drain_locked(
     .fetch_all(&mut *conn)
     .await?;
 
-    // Issue #532: grouped by shard, not one flat list — a protocol event
-    // is never its own settlement action (#38), but two different shards'
+    // Grouped by shard, not one flat list — a protocol event
+    // is never its own settlement action, but two different shards'
     // events are never allowed into the same batch either, since a batch
     // closes under exactly one shard's authority. `BTreeMap` (not
     // `HashMap`) purely so shard processing order is deterministic run to

@@ -1,4 +1,4 @@
-// "People you may know" (issue #204) — fetches GET /people/discover, then
+// "People you may know" — fetches GET /people/discover, then
 // resolves display names for the returned candidates via the same batch
 // GET /identities/profiles lookup api/friends.ts's listFriendsWithPresence
 // already uses. A missing profile falls back to the raw identity id,

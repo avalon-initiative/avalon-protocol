@@ -1,11 +1,11 @@
-//! Multi-passkey management for an already-authenticated identity
-//! (issue #200) — the cheap, near-term mitigation for issue #99's identity-
+//! Multi-passkey management for an already-authenticated identity —
+//! the cheap, near-term mitigation for the identity-
 //! recovery decision: losing one device's passkey shouldn't mean losing the
 //! identity, as long as at least one other passkey was registered first.
 //!
 //! Deliberately its own module, separate from `handlers.rs`'s
 //! `register_start`/`register_finish` (identity *creation*, unauthenticated)
-//! and separate from `devices.rs`'s Ed25519 signing-key device list (#135) —
+//! and separate from `devices.rs`'s Ed25519 signing-key device list —
 //! same "not the same concept" distinction `docs/architecture/identity.md`
 //! draws between the two key domains. `identity_keys` (this module) is the
 //! WebAuthn login credential; `identity_signing_keys` (`devices.rs`) is the
@@ -394,8 +394,8 @@ fn needs_fresh_signature(remaining_before_revoke: i64) -> bool {
 
 /// `POST /me/passkeys/:id/revoke` — deletes one passkey. Revoking the
 /// identity's last remaining passkey requires a fresh signature from one of
-/// the identity's registered `identity_signing_keys` (issue #704/#698 —
-/// upgraded from the old client-side `?confirm=true` speed bump); revoking
+/// the identity's registered `identity_signing_keys` (upgraded from the
+/// old client-side `?confirm=true` speed bump); revoking
 /// one of several never does. The count check and the delete happen inside
 /// one transaction so a concurrent registration/revoke from another session
 /// can't race past the guard.

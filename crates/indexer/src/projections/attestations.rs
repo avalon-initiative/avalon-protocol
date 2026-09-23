@@ -7,7 +7,7 @@
 //! (Achievements & Attestations) is still scaffolding, same as this crate
 //! was before this ticket. This projection exists so #30's future issuing
 //! flow has a read model ready to consume it on day one, matching the
-//! ticket's design (issue #42), and so its own idempotency/decode behavior
+//! ticket's design, and so its own idempotency/decode behavior
 //! is provable now via fixture events rather than only once a real issuer
 //! exists. `revoked_at` is a cache of the latest relevant event, per
 //! `docs/architecture/query-and-indexing.md`'s "current status is a cache"
@@ -105,7 +105,7 @@ pub async fn apply(
 /// Current attestation state, derived by folding decoded writes in
 /// order — pure and unit-testable without Postgres, same purpose
 /// `projections::integrator_bindings::fold`/`BindingState` serve for the
-/// binding metrics: it lets the Integrator Registry's (#89, first slice #261)
+/// binding metrics: it lets the Integrator Registry's
 /// achievement metrics be proven against hand-built fixture events, no
 /// live Postgres needed.
 #[derive(Debug, Clone, PartialEq, Eq)]

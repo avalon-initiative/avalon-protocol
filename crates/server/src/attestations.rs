@@ -1,6 +1,5 @@
-//! Attestation reads and revocation (issues #33 and #85, implementing ADR
-//! #76's "authentic, valid, recognized are three separate questions"
-//! model and #81's decided revocation mechanics). `GET
+//! Attestation reads and revocation, keeping authentic, valid, and
+//! recognized as three separate questions. `GET
 //! /attestations/{id}` is a public, unauthenticated read — same visibility
 //! level `integrators::get_integrator`/`achievements::list_achievement_definitions`
 //! already use — returning an attestation with its computed authenticity
@@ -17,7 +16,7 @@
 //! /integrations/{slug}/recognition`) is deferred, not built in this pass — see
 //! this module's own tracking note in `docs/architecture/trust-model.md`.
 //!
-//! **Revocation is a signed, appended entry (#85), never a mutation.**
+//! **Revocation is a signed, appended entry, never a mutation.**
 //! `POST /attestations/{id}/revoke` inserts a new row into the separate
 //! `attestation_revocations` table — `achievement_attestations` itself is
 //! never touched. Only the original issuer (any of its currently-valid
@@ -112,7 +111,7 @@ pub struct AttestationProofResponse {
 }
 
 /// One entry in an attestation's history — `"issued"` always, plus
-/// `"revoked"` if a revocation entry exists (#85). Reinstatement/
+/// `"revoked"` if a revocation entry exists. Reinstatement/
 /// supersession entries would append here too, once either exists.
 #[derive(Serialize, ToSchema)]
 pub struct AttestationHistoryEntry {
@@ -142,7 +141,7 @@ pub struct AttestationReadResponse {
     // Deliberately no `recognition` field — see module doc comment.
 }
 
-/// `GET /attestations/{id}` (#33) — public, unauthenticated.
+/// `GET /attestations/{id}` — public, unauthenticated.
 #[utoipa::path(
     get,
     path = "/attestations/{id}",
@@ -431,16 +430,16 @@ fn build_my_achievements_query(
     builder
 }
 
-/// `GET /me/achievements?integrator_id=&claim_kind=&before=&limit=` (#34,
-/// paginated/filtered per #377) — bearer-authenticated as the reading
+/// `GET /me/achievements?integrator_id=&claim_kind=&before=&limit=` —
+/// paginated/filtered, bearer-authenticated as the reading
 /// identity, returning that identity's own attestation history (every
 /// issuer, active and revoked alike): the identity reading its own
 /// record, not a per-consumer trust question, so no additional
 /// authorization beyond "this is genuinely you" is needed — matching
 /// `GET /attestations/{id}`'s own "authenticity/validity are facts, never
 /// gated behind a specific issuer's permission" posture. Also the read
-/// path `crates/sdk/src/achievements.rs::Session::achievements` (#34) and
-/// the Hub's achievements view (#35) are designed against.
+/// path `crates/sdk/src/achievements.rs::Session::achievements` and
+/// the Hub's achievements view are designed against.
 ///
 /// The N+1 `build_attestation_response` had (one integrator-category, one
 /// integrator-status, one issuer-keys, one revocation query — *per row*)
@@ -596,7 +595,7 @@ pub struct RevocationResponse {
     pub reason: String,
 }
 
-/// `POST /attestations/{id}/revoke` (#85). Only the attestation's original
+/// `POST /attestations/{id}/revoke`. Only the attestation's original
 /// issuer may revoke it — authenticated via the same challenge-response
 /// scheme every issuer-credentialed endpoint uses, plus (like issuance) an
 /// independently-checked embedded signature over

@@ -28,7 +28,7 @@ pub mod profiles;
 
 /// Pulls a `Uuid`-shaped string field out of an event payload. Shared by
 /// every projection below since `ProtocolEvent::payload` is a bare
-/// `serde_json::Value` (no typed payloads yet — issue #82), and a `Uuid`
+/// `serde_json::Value` (no typed payloads yet), and a `Uuid`
 /// always round-trips through JSON as a string.
 pub(crate) fn uuid_field(payload: &serde_json::Value, key: &str) -> Option<uuid::Uuid> {
     payload.get(key)?.as_str()?.parse().ok()

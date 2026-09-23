@@ -13,9 +13,6 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-# FIXME: update to the new org (github.com/avalon-initiative or wherever
-# the protocol repo actually lands) once that move happens — destination
-# not settled yet, so left pointing at the real current repo for now.
 repository = "https://github.com/LunarVagabond/avalon-protocol"
 
 [workspace.dependencies]
@@ -53,7 +50,7 @@ dotenvy = "0.15"
 # `init_tracing`). No existing dependency in the workspace already does
 # this, so it's new, but small and well-known.
 strip-ansi-escapes = "0.2"
-# issue #659: `avalon logs export`'s shape-based redaction fallback
+# `avalon logs export`'s shape-based redaction fallback
 # (`postgres://user:pass@...` credentials, `Bearer <token>` headers) —
 # already present transitively (several dependencies pull it in), promoted
 # to a direct dependency rather than adding a new one.
@@ -65,25 +62,25 @@ url = { version = "2", features = ["serde"] }
 passkey-types = "0.5"
 passkey-client = "0.5"
 passkey-authenticator = { version = "0.5", features = ["testable"] }
-# A local mock HTTP server for the SDK's own retry/error-mapping tests
-# (issue #47) — these need to control exact response sequences (a 503 then
-# a 200, a hung connection for the timeout case) that no `--ignored` test
-# against the real `avalon-server` could deterministically produce.
+# A local mock HTTP server for the SDK's own retry/error-mapping tests —
+# these need to control exact response sequences (a 503 then a 200, a hung
+# connection for the timeout case) that no `--ignored` test against the real
+# `avalon-server` could deterministically produce.
 wiremock = "0.6"
 # passkey-client's default `Client<S, U, P, F>` TLD-verifier type parameter
 # (`public_suffix::PublicSuffixList`) isn't re-exported from passkey-client
 # itself — naming the full virtual-client type in an integration test (see
 # crates/server/tests/passkeys.rs) needs this as a direct dependency too.
 public-suffix = "0.1"
-# rust-protobuf project, version-aligned (issue #384's amendment): parses
-# untrusted `.proto` source text at runtime (no `protoc` binary dependency)
-# and builds/reads dynamic messages against the resulting descriptor.
+# rust-protobuf project, version-aligned: parses untrusted `.proto` source
+# text at runtime (no `protoc` binary dependency) and builds/reads dynamic
+# messages against the resulting descriptor.
 protobuf = "3.7.2"
 protobuf-parse = "3.7.2"
 protobuf-json-mapping = "3.7.2"
-# issue #386: `avalon-schema-derive`'s `#[derive(AvalonSchema)]`
-# proc-macro, generating `.proto` text from a Rust struct's own fields
-# (syn parses the struct, quote emits the generated `impl` block).
+# `avalon-schema-derive`'s `#[derive(AvalonSchema)]` proc-macro, generating
+# `.proto` text from a Rust struct's own fields (syn parses the struct,
+# quote emits the generated `impl` block).
 syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
@@ -92,13 +89,13 @@ proc-macro2 = "1"
 # not usable from a dependent crate) — a scoped, auto-cleaned temp file per
 # parse request is the plumbing for that, not a new persistent artifact.
 tempfile = "3"
-# Issue #368: real semver ordering for node-to-node protocol version
-# comparison (MIN_SUPPORTED_PEER_VERSION / AVALON_MIN_PEER_VERSION), rather
-# than string comparison — already present transitively (many crates in
-# this workspace depend on it), promoted to a direct dependency here.
+# Real semver ordering for node-to-node protocol version comparison
+# (MIN_SUPPORTED_PEER_VERSION / AVALON_MIN_PEER_VERSION), rather than
+# string comparison — already present transitively (many crates in this
+# workspace depend on it), promoted to a direct dependency here.
 semver = "1"
-# Issue #545: optional, per-hoster shared rate-limit/concurrency-ceiling
-# backend (AVALON_REDIS_URL) — a hoster running more than one avalon-server
+# Optional, per-hoster shared rate-limit/concurrency-ceiling backend
+# (AVALON_REDIS_URL) — a hoster running more than one avalon-server
 # process for their own deployment can point all of them at their own
 # Redis so a configured limit means "across my own N processes," not
 # "per process." Never shared across different hosters/operators — see
@@ -106,13 +103,12 @@ semver = "1"
 # gives a cheap-to-clone, auto-reconnecting async connection; `tokio-comp`
 # is this server's only async runtime.
 redis = { version = "1.7", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
-# Issue #517: cross-platform host resource metrics (CPU/memory/disk) for
+# Cross-platform host resource metrics (CPU/memory/disk) for
 # `GET /nodes/status`'s `resources` block — avoids hand-rolling `/proc`
 # parsing (Linux-only) when hosters may run on macOS/Windows too. Default
 # features cover CPU/memory/disk/process, which is all this needs.
 sysinfo = "0.39"
-# Issue #723 (epic #722, decision #714): generates the SDK-facing OpenAPI
-# schema straight from `server`'s real axum handler signatures/types
-# (`#[utoipa::path]`/`#[derive(ToSchema)]`) rather than a hand-written spec
-# that can drift from them.
+# Generates the SDK-facing OpenAPI schema straight from `server`'s real
+# axum handler signatures/types (`#[utoipa::path]`/`#[derive(ToSchema)]`)
+# rather than a hand-written spec that can drift from them.
 utoipa = { version = "5", features = ["uuid", "time"] }

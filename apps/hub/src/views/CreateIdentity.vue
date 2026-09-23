@@ -28,7 +28,7 @@ const error = ref('')
 const createdIdentityId = ref('')
 const copied = ref(false)
 
-// The signing key's BIP39 recovery phrase (#134) — shown exactly once,
+// The signing key's BIP39 recovery phrase — shown exactly once,
 // right here, same reasoning as the identity id above: this is the only
 // moment the user will ever see it, since it's never stored anywhere.
 const signingKeyMnemonic = ref('')

@@ -1,7 +1,7 @@
-// Social recovery (issue #201/#443) on AccountSession — M-of-N guardian-based recovery when
+// Social recovery on AccountSession — M-of-N guardian-based recovery when
 // every passkey is lost. Mirrors crates/sdk/src/account/recovery.rs. No WebAuthn ceremony
 // involved (the unauthenticated recovery-initiation calls themselves are a deliberate,
-// separate gap noted in docs/architecture/sdk.md, same as the Rust SDK's own #699 scope note
+// separate gap noted in docs/architecture/sdk.md
 // — they don't belong on AccountSession at all, since the whole premise is the caller has no
 // session for the identity being recovered).
 

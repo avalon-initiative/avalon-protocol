@@ -1,4 +1,4 @@
-//! Blocking — private, unilateral, server-side application state (issue #97).
+//! Blocking — private, unilateral, server-side application state.
 //!
 //! Never a protocol/settlement event and never a `crates/protocol` type,
 //! unlike friendship — see `crates/server/db/migrations/0006_blocks/up.sql`
@@ -6,7 +6,7 @@
 //! settlement log is a public transparency log anyone can mirror, and
 //! nobody ever needs to verify a block the way an integrator verifies an
 //! attestation). Losing this table means users re-block people — the
-//! same acceptable failure mode presence already has (ADR #78), not a fact
+//! same acceptable failure mode presence already has, not a fact
 //! anyone needs to prove later.
 //!
 //! **The load-bearing invariant: the blocked party is never told, through
@@ -84,8 +84,8 @@ pub(crate) async fn block_partners(
 
 /// True if any block row (either direction) exists entirely *within*
 /// `participants` — i.e. some pair `(a, b)` both present in the slice has a
-/// block between them. Used by `crate::conversations::send_message` (issue
-/// #102) to enforce blocking across a group conversation: unlike
+/// block between them. Used by `crate::conversations::send_message`
+/// to enforce blocking across a group conversation: unlike
 /// [`has_block_between`]'s fixed pair, a conversation can have more than
 /// two participants, so the check has to be "does a blocked pair exist
 /// anywhere in this set," not just "are the two request-scoped identities
@@ -265,7 +265,7 @@ mod tests {
     //! (presence hidden in both directions, friend requests rejected
     //! indistinguishably from a nonexistent identity, unblock restoring
     //! access) is covered by `crates/server/tests/blocks.rs`, gated
-    //! `--ignored`. `has_block_among` (issue #102) gets a pure-logic model
+    //! `--ignored`. `has_block_among` gets a pure-logic model
     //! below since its "any pair within an arbitrary-size set" semantics
     //! are worth exercising directly; every other function here is a thin,
     //! directly-verified SQL wrapper, unlike e.g. `friends::ordered_pair`.

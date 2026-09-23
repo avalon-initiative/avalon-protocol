@@ -1,5 +1,4 @@
-//! Integrator Space instance-data projection (issue #384, implementing #381's
-//! decided policy): decodes `game_data.published`
+//! Integrator Space instance-data projection: decodes `game_data.published`
 //! (`crates/server/src/integrator_data.rs::publish_instance`) into an upsert of
 //! the new instance row, plus — when the event names a `supersedes`
 //! id — an update of that earlier row's `superseded_by`. Same shape as

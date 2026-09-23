@@ -1,4 +1,4 @@
-// The landing page (issue #148): a welcome header from GET /me, and
+// The landing page: a welcome header from GET /me, and
 // sensible empty states when a fresh identity has no friends or history.
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'

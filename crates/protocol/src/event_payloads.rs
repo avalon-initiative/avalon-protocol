@@ -1,5 +1,5 @@
 //! Typed `ProtocolEvent::payload` shapes, one per [`crate::events::ProtocolEventKindVariant`]
-//! (issue #82) — the emitter builds one of these and serializes it via
+//! — the emitter builds one of these and serializes it via
 //! `serde_json::to_value`, instead of hand-typing an ad-hoc
 //! `serde_json::json!({...})` at each call site. `docs/architecture/protocol-events-catalogue.md`
 //! is the normative, human-readable description of the same shapes.
@@ -135,7 +135,7 @@ pub struct IdentityRecoveredPayload {
 
 // --- profile.updated --------------------------------------------------------
 //
-// Sparse by design (issue #86, widened by #155): only the keys that actually
+// Sparse by design: only the keys that actually
 // changed are present at all. Shared by `handlers.rs::update_profile` and
 // `guilds.rs::leave_guild` (which clears `main_guild`).
 

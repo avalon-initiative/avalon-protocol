@@ -1,6 +1,6 @@
-# Builds `avalon-server` and its `migrate` companion binary (issue #289),
-# plus `avalon-cli`'s `avalon` binary built `--no-default-features` (issue
-# #511 — `discover-mirror-peers` specifically, a read-only ops command that
+# Builds `avalon-server` and its `migrate` companion binary,
+# plus `avalon-cli`'s `avalon` binary built `--no-default-features`
+# (`discover-mirror-peers` specifically, a read-only ops command that
 # needs to run from `make stack-up`'s Docker-only bring-up path with no host
 # Rust toolchain; `--no-default-features` keeps the passkey/WebAuthn dev-tool
 # dependencies this image never uses out of this build entirely) — the

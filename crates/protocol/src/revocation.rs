@@ -1,5 +1,5 @@
-//! A revocation/deletion's coded reason (issue #534) — replaces the
-//! free-text `reason_code: String` `attestation_revocations` and #533's
+//! A revocation/deletion's coded reason — replaces the
+//! free-text `reason_code: String` `attestation_revocations` and
 //! `game_data.deleted` both used, with a real, extensible vocabulary that
 //! *means* something: whether the original claim/instance should keep
 //! showing up (marked revoked/deleted) in a current-state projection, or
@@ -7,7 +7,7 @@
 //!
 //! Same `Known`/`Other` open-enum shape
 //! [`crate::events::ProtocolEventKind`] already established for
-//! `ProtocolEvent::kind` (issue #82), for the identical reason: an old
+//! `ProtocolEvent::kind`, for the identical reason: an old
 //! build must never choke on a reason code introduced after it shipped —
 //! [`RevocationReasonCode::from_str`] is infallible, and an unrecognized
 //! code falls back to [`RevocationReasonCode::Other`] rather than an

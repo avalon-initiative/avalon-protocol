@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Social recovery (issue #201) — the unauthenticated entry point for a
+// Social recovery — the unauthenticated entry point for a
 // user who has lost every passkey for an identity and has guardians
 // configured. Reachable from Login.vue without a session, same as
 // CreateIdentity.vue; unlike that flow, this one drives a WebAuthn
@@ -78,7 +78,7 @@ async function onFinalize() {
     const identityId = request.value.identityId
     request.value = await finalizeRecoveryRequest(request.value.id)
     const accountSession = await avalonClient().loginWithIdentityId(identityId)
-    // Issue #525: guardian-based recovery (#201) only ever registers a new
+    // Guardian-based recovery only ever registers a new
     // WebAuthn passkey, never a new Ed25519 signing key (startRecovery
     // above), so loadSigningKeySeed correctly returns null here until this
     // device separately goes through #135's device-grant flow — no

@@ -1,4 +1,4 @@
-//! Exercises the schema-to-schema mapping model (issue #491) against a
+//! Exercises the schema-to-schema mapping model against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!

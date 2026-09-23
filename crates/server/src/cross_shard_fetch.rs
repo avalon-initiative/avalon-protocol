@@ -1,6 +1,6 @@
-//! Cross-shard projection resolution with inclusion proof — epic #623,
-//! issue #636. Given a specific `shard_id` + `base_url` (typically learned
-//! from #635's identity locator), fetches every ledger entry for a
+//! Cross-shard projection resolution with inclusion proof.
+//! Given a specific `shard_id` + `base_url` (typically learned
+//! from the identity locator), fetches every ledger entry for a
 //! `subject` from that remote node and verifies each one end-to-end before
 //! trusting its payload at all — no full shard mirroring required, the
 //! same trust-minimization property a continuously-backfilling mirror
@@ -11,7 +11,7 @@
 //! 1. A signature-checked Signed Tree Head (`GET /ledger/sth/latest`),
 //!    verified against a shard's *real* trust anchor —
 //!    [`crate::cross_shard::resolve_shard_verify_keys_from_db`], the same
-//!    #543 mechanism `crate::cross_shard`'s own cross-shard-root
+//!    mechanism `crate::cross_shard`'s own cross-shard-root
 //!    aggregation already uses, deliberately not a second trust mechanism.
 //!    A shard whose key can't be resolved (neither a registered issuer key
 //!    nor `AVALON_SHARD_VERIFY_KEYS`) is unverifiable here for exactly the
@@ -33,11 +33,11 @@
 //!    still pass — this is what actually binds the payload to the proof.
 //!
 //! **Generic on purpose**: returns every verified entry for `subject`,
-//! never picks "the one" — #636's own scope is the fetch-and-verify
+//! never picks "the one" — this module's own scope is the fetch-and-verify
 //! primitive, not identity-signing-key-specific business logic (which key
-//! is still active, revocation, etc.) that a caller like #634's
-//! verification path owns for itself. Reusable for any subject/kind this
-//! epic or a later one needs (achievements, attestations), not just
+//! is still active, revocation, etc.) that a caller's own
+//! verification path owns for itself. Reusable for any subject/kind
+//! (achievements, attestations), not just
 //! `identity.signing_key_added`.
 
 use std::collections::HashMap;
@@ -189,7 +189,7 @@ async fn fetch_verified_sth(
 
 /// Fetches, and fully verifies (see module doc comment for the four-step
 /// chain), every ledger entry for `subject` on `shard_id`, reached at
-/// `base_url`. Entries whose payload has been pruned (issue #208) are
+/// `base_url`. Entries whose payload has been pruned are
 /// skipped — a pruned payload can never be hash-recomputed, so there is
 /// nothing here to verify, not a failure of this fetch itself.
 pub async fn fetch_verified_entries(

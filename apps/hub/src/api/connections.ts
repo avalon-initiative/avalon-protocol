@@ -1,5 +1,5 @@
 // Plain-language capability descriptions + pure helpers for the integrator
-// connect/consent flow (#27, #83). Mirrors apps/hub/src/api/guilds.ts's
+// connect/consent flow. Mirrors apps/hub/src/api/guilds.ts's
 // shape: wire-format merging/lookup logic that's testable without a
 // network call, kept out of the view components themselves.
 import type { MyConnection } from '@avalon/sdk'

@@ -1,4 +1,4 @@
-//! Durable passkey credentials (issue #523, Part 1 of #521's decision) —
+//! Durable passkey credentials —
 //! `identity.passkey_registered`/`.passkey_revoked` decode into an upsert
 //! of `indexer_identity_passkeys`. This projection exists specifically for
 //! a mirror-only node: a live node that actually ran the WebAuthn ceremony

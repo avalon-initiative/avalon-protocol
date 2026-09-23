@@ -21,8 +21,7 @@ you're working inside this workspace, until it is.)
 
 For local development, clone this repo and run `make start` (see
 [`local-development.md`](local-development.md)) — it needs `.env` with a
-`DATABASE_URL` pointing at a real Postgres, per the repo root
-`README.md`/`CLAUDE.md`.
+`DATABASE_URL` pointing at a real Postgres, per the repo root `README.md`.
 
 ## 3. Build a client
 
@@ -122,6 +121,5 @@ dependency.
 - [`guilds-and-friends.md`](guilds-and-friends.md) — rosters and presence.
 - [`errors-and-retries.md`](errors-and-retries.md) — the `SdkError` taxonomy
   and what's safe to retry.
-- A complete, runnable version of everything above is
-  `crates/sdk/examples/authenticate.rs` — `cargo run -p avalon-sdk --example
-  authenticate`.
+- A complete, runnable version of everything above is `rust/examples/authenticate.rs`
+  in the `avalon-sdks` repo — `cargo run -p avalon-sdk --example authenticate`.

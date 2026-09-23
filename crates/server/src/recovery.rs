@@ -1,5 +1,5 @@
-//! Social recovery via an M-of-N set of trusted guardians (issue #201) —
-//! the answer #99 decided on for losing every registered device at once.
+//! Social recovery via an M-of-N set of trusted guardians —
+//! the answer decided on for losing every registered device at once.
 //! See `docs/architecture/identity.md`'s "Social recovery via M-of-N
 //! guardians" and "Today in the repo" sections for the full
 //! configure/request/approve/finalize state machine and its abuse-
@@ -187,7 +187,7 @@ pub struct GuardianSettingsResponse {
 /// `PUT /me/recovery/guardians` — (re)configures the caller's guardian set
 /// and threshold in one call, requiring the caller's *current* session
 /// (`authenticate`) the whole invariant rests on. Every guardian must be a
-/// current friend (issue #15's network-level primitive is deliberately the
+/// current friend (the network-level primitive is deliberately the
 /// only pool this draws from — see the ticket) and not the caller
 /// themselves; the full set is validated together via
 /// [`validate_guardian_settings`] rather than incrementally, so a client
@@ -373,7 +373,7 @@ pub struct GuardianOfSummary {
 }
 
 /// `GET /me/recovery/guardian-of` — every identity that currently names the
-/// caller as one of their recovery guardians (issue #443's opt-out consent
+/// caller as one of their recovery guardians (the opt-out consent
 /// model: a guardian can always see who's relying on them and self-remove
 /// via [`resign_guardian`] below, without the owner's cooperation — there is
 /// no accept step, matching `set_guardians`'s existing "active the moment
@@ -416,7 +416,7 @@ pub async fn guardian_of(
 
 /// `DELETE /me/recovery/guardian-of/{identity_id}` — a guardian removing
 /// themselves from someone else's guardian set, without that owner's
-/// cooperation (issue #443). If this drops the owner's guardian count below
+/// cooperation. If this drops the owner's guardian count below
 /// their configured threshold, the threshold is clamped down to the new
 /// count instead — the same "recovery must stay satisfiable" invariant
 /// [`validate_guardian_settings`] enforces on the owner's own writes, kept

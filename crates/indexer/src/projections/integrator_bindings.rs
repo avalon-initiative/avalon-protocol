@@ -13,7 +13,7 @@
 //! source of truth (capability/grant state), not "two writers of one
 //! projection."
 //!
-//! This is the Integrator Registry's (#89, first slice #261) source for the
+//! This is the Integrator Registry's source for the
 //! `players` and `total players ever` metrics: `crate::registry` reads
 //! this table's aggregate counts, never per-player rows, matching the
 //! registry's "aggregates only" invariant.

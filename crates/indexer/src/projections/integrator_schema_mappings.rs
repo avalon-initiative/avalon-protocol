@@ -1,5 +1,5 @@
-//! The Integrator Registry's schema-mapping discovery projection (issue
-//! #491): an integrator's published `IntegratorSchemaMapping`s, surfaced
+//! The Integrator Registry's schema-mapping discovery projection: an
+//! integrator's published `IntegratorSchemaMapping`s, surfaced
 //! through the same indexer-projection machinery every other read model in
 //! this crate already uses — same posture
 //! `crate::projections::integrator_schemas` established for schema

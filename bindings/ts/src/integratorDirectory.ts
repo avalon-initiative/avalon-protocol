@@ -1,6 +1,6 @@
-// Public, unauthenticated integrator-directory/registry reads (issue
-// #270/#261/#90/#31/#324/#325/#384/#491/#89) — free-standing functions, not
-// session methods, same convention as ledger.ts's getLatestSth. See
+// Public, unauthenticated integrator-directory/registry reads —
+// free-standing functions, not session methods, same convention as
+// ledger.ts's getLatestSth. See
 // crates/server/src/integrations.rs/registry.rs/achievements.rs/
 // integrator_schemas.rs/integrator_schema_mappings.rs/recognitions.rs.
 import { request } from './http.js'
@@ -169,7 +169,7 @@ export interface RegistryMetric {
   class: string
 }
 
-/** `GET /integrations/{slug}/registry`'s response (issue #261) — never
+/** `GET /integrations/{slug}/registry`'s response — never
  * rendered as a bare `value` anywhere downstream. */
 export interface IntegratorRegistry {
   players: RegistryMetric
@@ -214,7 +214,7 @@ interface IssuerKeyWire {
   revoked_at: string | null
 }
 
-/** `GET /integrations/{slug}/keys` (issue #90) — an issuer's full key
+/** `GET /integrations/{slug}/keys` — an issuer's full key
  * history, oldest first, root and operational, valid and revoked. Same
  * public/unauthenticated visibility as `getIntegrator`/`listIntegrators`. */
 export async function listIssuerKeys(serverUrl: string, slug: string): Promise<IssuerKey[]> {
@@ -243,10 +243,10 @@ export interface AttestationDetail {
 }
 type AttestationDetailWire = components['schemas']['AttestationReadResponse']
 
-/** `GET /attestations/{id}` (#33) — public, unauthenticated: an
+/** `GET /attestations/{id}` — public, unauthenticated: an
  * attestation's full read shape, including its authenticity/validity
- * verdicts and revocation history. Never a `recognition` field — per ADR
- * #76, recognition is computed by the reading integrator against its own
+ * verdicts and revocation history. Never a `recognition` field —
+ * recognition is computed by the reading integrator against its own
  * trust policy, never by the server. */
 export async function getAttestation(serverUrl: string, id: string): Promise<AttestationDetail> {
   const w = await request<AttestationDetailWire>(serverUrl, `/attestations/${id}`)
@@ -287,7 +287,7 @@ function schemaVersionFromWire(w: SchemaVersionWire): SchemaVersion {
   }
 }
 
-/** `GET /integrations/{slug}/schemas` (#255/#384) — every published Integrator
+/** `GET /integrations/{slug}/schemas` — every published Integrator
  * Space schema version for this integrator, oldest first. Public,
  * unauthenticated. Empty for an integrator that has never published. */
 export async function listSchemaVersions(serverUrl: string, slug: string): Promise<SchemaVersion[]> {
@@ -325,7 +325,7 @@ function schemaMappingFromWire(w: SchemaMappingWire): SchemaMapping {
   }
 }
 
-/** `GET /integrations/{slug}/mappings` (#491) — every published
+/** `GET /integrations/{slug}/mappings` — every published
  * schema-to-schema mapping for this integrator, oldest first. Public,
  * unauthenticated. Documents a correspondence only — never executed or
  * interpreted by this SDK. */
@@ -358,7 +358,7 @@ function recognitionFromWire(w: RecognitionWire): Recognition {
   }
 }
 
-/** `GET /integrations/{slug}/recognitions` (#89) — every integrator `slug`
+/** `GET /integrations/{slug}/recognitions` — every integrator `slug`
  * currently, actively recognizes. Public, unauthenticated. */
 export async function listRecognitions(serverUrl: string, slug: string): Promise<Recognition[]> {
   const w = await request<RecognitionWire[]>(serverUrl, `/integrations/${slug}/recognitions`)

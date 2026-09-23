@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A "people you may know" row (issue #204) — data comes in as props only,
+// A "people you may know" row — data comes in as props only,
 // same "no fetch/token/route awareness here" invariant AvalonFriendRow
 // documents. The only action is `add`, which the page maps to the normal
-// POST /friends/requests flow (#15); this component never sends a
+// POST /friends/requests flow; this component never sends a
 // friend request itself.
 import styles from '../styles/AvalonSuggestionRow.module.scss'
 import AvalonAvatar from './AvalonAvatar.vue'

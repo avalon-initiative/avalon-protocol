@@ -35,7 +35,7 @@ using Org.BouncyCastle.Crypto.Signers;
 namespace Avalon.Sdk
 {
     /// <summary>
-    /// A first-party session for an identity's own account (issue #700/#699) — see this
+    /// A first-party session for an identity's own account — see this
     /// file's own header comment for how one is obtained and how signing works. Distinct
     /// from <see cref="Session"/>: no shared fields, no conversion, no capability-grant
     /// model (an account's own actions are gated by what the account itself is allowed to

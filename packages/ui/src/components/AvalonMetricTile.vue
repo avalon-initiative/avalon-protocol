@@ -4,7 +4,7 @@
 // left to every call site to remember: the numeric value is never rendered
 // without its class label and definition alongside it. No composite score,
 // no ranking — this tile shows exactly what the registry endpoint
-// returned (#261), nothing derived or re-weighted.
+// returned, nothing derived or re-weighted.
 import styles from '../styles/AvalonMetricTile.module.scss'
 import type { AvalonMetricTileProps } from '../types/AvalonMetricTile.types'
 

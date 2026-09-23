@@ -68,7 +68,7 @@ export interface RegisteredIntegrator {
   credentialKeyId: string
 }
 
-/** `POST /integrations` (#29/#293) — registers a brand-new integrator with
+/** `POST /integrations` — registers a brand-new integrator with
  * one initial Ed25519 key. Unauthenticated: anyone may register a slug, on
  * a first-come basis (slugs are forever, never renamed or reused). Only the
  * public key ever reaches the server — the caller must already hold the
@@ -138,7 +138,7 @@ function issuerKeyDetailFromWire(w: components['schemas']['IssuerKeyResponse']):
   }
 }
 
-/** `POST /integrations/{slug}/keys` (#80/#84) — adds a new key to this
+/** `POST /integrations/{slug}/keys` — adds a new key to this
  * integrator's key set. Requires a currently-valid **root** key to
  * authenticate (`rootKeyId`/`rootSigningKey`) — an operational key is
  * rejected, since only a root key may authorize a key-set change. */
@@ -249,7 +249,7 @@ export async function createAchievementDefinition(
   return achievementDefinitionDetailFromWire(w)
 }
 
-/** `POST /integrations/{slug}/milestones` (#324/#325) — same shape as
+/** `POST /integrations/{slug}/milestones` — same shape as
  * `createAchievementDefinition`, against the separate `milestones` claim
  * vocabulary. */
 export async function createMilestoneDefinition(
@@ -314,7 +314,7 @@ export async function updateAchievementDefinition(
   return achievementDefinitionDetailFromWire(w)
 }
 
-/** `PATCH /integrations/{slug}/milestones/{key}` (#324/#325) — same shape
+/** `PATCH /integrations/{slug}/milestones/{key}` — same shape
  * as `updateAchievementDefinition`, against the `milestones` vocabulary. */
 export async function updateMilestoneDefinition(
   serverUrl: string,
@@ -351,7 +351,7 @@ export interface PublishSchemaVersionInput {
   fieldVisibility?: Record<string, 'public' | 'private'>
 }
 
-/** `POST /integrations/{slug}/schemas` (#384) — publishes the next
+/** `POST /integrations/{slug}/schemas` — publishes the next
  * Integrator Space schema version; always an insert, never an update to an
  * existing version. Requires this integrator's own key to authenticate. */
 export async function publishSchemaVersion(
@@ -380,7 +380,7 @@ export interface PublishMappingInput {
   fieldCorrespondence?: Record<string, string>
 }
 
-/** `POST /integrations/{slug}/mappings` (#491) — publishes a mapping
+/** `POST /integrations/{slug}/mappings` — publishes a mapping
  * between two of this integrator's own already-published schema versions.
  * Documents a correspondence only; never executed or interpreted. Requires
  * this integrator's own key to authenticate. */
@@ -404,7 +404,7 @@ export async function publishMapping(
   })
 }
 
-/** `POST /integrations/{slug}/schemas/{version}/data` (#384) — publishes
+/** `POST /integrations/{slug}/schemas/{version}/data` — publishes
  * (or supersedes) this integrator's Integrator Space instance data for
  * `subjectIdentityId` against schema `version`. `subjectIdentityId` must
  * already have an active binding to this integrator, and `instance` must
@@ -427,7 +427,7 @@ export async function publishInstance(
   })
 }
 
-/** `DELETE /integrations/{slug}/schemas/{version}/data/{subject}` (#533) —
+/** `DELETE /integrations/{slug}/schemas/{version}/data/{subject}` —
  * an append-only tombstone: the original instance row is never mutated,
  * only marked deleted (`docs/architecture/revocation.md`'s pattern). The
  * original publish event, and the deletion event this appends, both stay
@@ -451,7 +451,7 @@ export async function deleteInstance(
   })
 }
 
-/** `POST /integrations/{slug}/recognitions` (#89) — publishes (or updates)
+/** `POST /integrations/{slug}/recognitions` — publishes (or updates)
  * `slug`'s recognition of `recognizedSlug`, for `scope`. Always the
  * caller's own declared policy about itself; upserted, not append-only —
  * republishing updates `scope`/`publishedAt` in place and clears any prior
@@ -513,7 +513,7 @@ export interface RevokeAttestationResult {
   reason: string
 }
 
-/** `POST /attestations/{id}/revoke` (#85) — only the attestation's original
+/** `POST /attestations/{id}/revoke` — only the attestation's original
  * issuer may revoke it. Two independent proofs, mirroring issuance: the
  * challenge-response scheme every issuer-credentialed endpoint uses, plus
  * an embedded signature over the revocation's own canonical bytes. Callers
@@ -549,7 +549,7 @@ export async function revokeAttestation(
   return { attestationId: w.attestation_id, revokedAt: w.revoked_at, reasonCode: w.reason_code, reason: w.reason }
 }
 
-/** `POST /issuers/registration-challenge` (#481) — issues a short-lived,
+/** `POST /issuers/registration-challenge` — issues a short-lived,
  * single-use nonce for `registerIssuer` to sign proof-of-possession over.
  * Unauthenticated: obtaining a challenge proves nothing by itself. */
 export async function createRegistrationChallenge(
@@ -569,7 +569,7 @@ export interface IssuerRegistration {
   registeredAt: string
 }
 
-/** `POST /issuers/register` (#481) — per-network issuer admission,
+/** `POST /issuers/register` — per-network issuer admission,
  * independent of `crates/sdk`'s own network-verification layer (this SDK
  * has none of its own yet, see `ledger.ts`'s doc comment on the same
  * omission) — callers must independently confirm `declaredNetworkId`

@@ -51,9 +51,8 @@ folder.
    an integrator's death," which is the fastest way to feel the shape of the
    whole system in one sitting.
 4. Whichever [`projects/backend-server/architecture/`](projects/backend-server/architecture/)
-   topic doc matches the area you're about to touch. One file per topic;
-   each ends with a "Today in the repo" section pointing at the actual code,
-   more current than any prose summary elsewhere will stay.
+   topic doc matches the area you're about to touch. One file per topic,
+   describing the system as it stands today.
 5. [`maintainers/README.md`](maintainers/README.md) →
    [`../.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md) for the
    actual contribution workflow (branching, commit/PR format, issue

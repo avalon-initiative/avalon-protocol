@@ -1,4 +1,4 @@
-//! Verifies (#397) that nothing in Avalon's own WebAuthn configuration
+//! Verifies that nothing in Avalon's own WebAuthn configuration
 //! blocks hybrid transport ("use a phone or tablet") — the standard
 //! WebAuthn ceremony where a nearby phone proves proximity over Bluetooth
 //! and unlocks its own resident passkey to authenticate an otherwise

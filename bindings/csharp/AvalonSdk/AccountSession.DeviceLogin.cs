@@ -1,6 +1,6 @@
-// AvalonClient.StartAccountDeviceLoginAsync (issue #707, mirrored from crates/sdk/src/
-// account/device_login.rs into C#) — an AccountSession-returning counterpart to #307's
-// cross-device pairing (crates/server/src/device_pairing.rs). Without this, a client with no
+// AvalonClient.StartAccountDeviceLoginAsync (mirrored from crates/sdk/src/
+// account/device_login.rs into C#) — an AccountSession-returning counterpart to the
+// cross-device pairing flow (crates/server/src/device_pairing.rs). Without this, a client with no
 // WebAuthn ceremony surface of its own (a Unity game, a console) had no way to originate a
 // first-party account login at all — only ResumeAccountSessionAsync, which needs a token
 // minted somewhere else first. The Rust SDK's own integrator-Session equivalent
@@ -123,7 +123,7 @@ namespace Avalon.Sdk
     public sealed partial class AvalonClient
     {
         /// <summary>
-        /// Starts a cross-device pairing (#307) via <c>POST /auth/device/start</c>, resolving
+        /// Starts a cross-device pairing via <c>POST /auth/device/start</c>, resolving
         /// to an <see cref="AccountSession"/> rather than the integrator <see cref="Session"/>.
         /// Use this instead of <see cref="ResumeAccountSessionAsync"/> when this process has no
         /// WebAuthn ceremony surface of its own.

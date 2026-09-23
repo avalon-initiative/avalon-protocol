@@ -1,17 +1,17 @@
-//! The mirror-watcher (issue #299) — verifies and stores STHs/entries
+//! The mirror-watcher — verifies and stores STHs/entries
 //! polled from configured peers, run as a background task inside
 //! `avalon-server`. See `docs/architecture/nodes.md`'s "Today in the
 //! repo" section for the multi-peer polling/backfill/equivocation-
 //! detection design and why it lives in-process rather than as a CLI
 //! daemon.
 //!
-//! **Two deliberate tiers (issue #596).** Polling every configured peer on
+//! **Two deliberate tiers.** Polling every configured peer on
 //! [`MirrorWatcherConfig::poll_interval`] is the permissionless baseline —
 //! mirroring this way needs zero registration and never will, since a
 //! public transparency log must never gate reading on registering with
 //! anyone. On top of that, this worker also registers this node's own
 //! interest (via `crate::interest::InterestScope::for_network`, the exact
-//! same DHT-backed registration #583 built for guild-channel/conversation
+//! same DHT-backed registration built for guild-channel/conversation
 //! routing) in every `network_id` it successfully verifies an STH for —
 //! never in one it merely hopes to mirror, so a hostile or unpinned
 //! `network_id` a peer might claim is never registered either. A
@@ -23,10 +23,10 @@
 //! role for a peer that's actually receiving pushes shrinks to "bound
 //! worst-case staleness if a push is ever missed or this node's DHT
 //! identity is disabled" — which is why [`MirrorWatcherConfig::from_env`]'s
-//! default interval is now meaningfully longer than it was pre-#596; see
+//! default interval is now meaningfully longer than it used to be; see
 //! its own doc comment.
 //!
-//! **Issue #599: `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` opts a node
+//! **`AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` opts a node
 //! into auto-mirroring every shard it discovers via peer-announce gossip
 //! (`crate::nodes::ShardRegistry`), on top of whatever `AVALON_MIRROR_PEERS`
 //! explicitly names.** [`discover_and_verify_shard_peers`] is the
@@ -36,16 +36,15 @@
 //! anchor (`fetch_and_verify_sth`, below) — the right check for mirroring
 //! another *whole network*. A gossip-discovered shard is a different
 //! shard *within this node's own network*, signed with an
-//! integrator-registered `shard_settlement` key (#543), which almost
+//! integrator-registered `shard_settlement` key, which almost
 //! never matches this network's root trust-anchor key — so a discovered
 //! shard's STH is verified via `crate::cross_shard::resolve_shard_verify_keys_from_db`
-//! instead, the exact same #543 mechanism `crate::cross_shard`'s own
+//! instead, the exact same mechanism `crate::cross_shard`'s own
 //! aggregation already uses. Only a shard whose STH verifies this way is
 //! ever added to this tick's backfill targets; discovering a shard's
-//! existence never implies trusting it (same invariant #599's own ticket
-//! states explicitly). `AVALON_MIRROR_PEERS`/`AVALON_KNOWN_SHARDS` remain
-//! valid, unchanged, narrower configuration — this is additive. #596's push
-//! registration and #599's discovered-shard auto-mirroring are independent
+//! existence never implies trusting it. `AVALON_MIRROR_PEERS`/`AVALON_KNOWN_SHARDS` remain
+//! valid, unchanged, narrower configuration — this is additive. Push
+//! registration and discovered-shard auto-mirroring are independent
 //! of each other and compose without special-casing: a discovered shard is
 //! just another network-scoped mirror target as far as push/interest
 //! registration is concerned.
@@ -118,7 +117,7 @@ pub struct MirrorWatcherConfig {
     /// verified via the network-trust-anchor path; auto-discovery only
     /// ever adds a shard this config doesn't already name.
     pub known_shard_ids: BTreeSet<String>,
-    /// `AVALON_MIRROR_ALL_DISCOVERED_SHARDS` (issue #599) — see this
+    /// `AVALON_MIRROR_ALL_DISCOVERED_SHARDS` — see this
     /// module's own doc comment. Opt-in, independent of whether `peers`
     /// above is empty: a node can auto-mirror discovered shards with zero
     /// explicit `AVALON_MIRROR_PEERS` configuration at all.
@@ -127,13 +126,13 @@ pub struct MirrorWatcherConfig {
 
 impl MirrorWatcherConfig {
     /// `Some` when either `AVALON_MIRROR_PEERS` names at least one peer,
-    /// or `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` (issue #599) — either
+    /// or `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true` — either
     /// alone is enough for this worker to have something to do; `None`
     /// (neither set) is the signal `main.rs` uses to skip spawning the
     /// watcher entirely, the same "only spawn if configured" pattern
     /// `retention::RetentionConfig::should_prune` already uses.
     ///
-    /// Poll interval defaults to 120s (raised from 30s by issue #596),
+    /// Poll interval defaults to 120s (raised from 30s),
     /// overridable via `AVALON_MIRROR_POLL_INTERVAL_SECS` — an STH is a
     /// few hundred bytes of JSON, so bandwidth was never the constraint;
     /// 30s was originally chosen as a sensible cadence for a purely
@@ -180,17 +179,17 @@ impl MirrorWatcherConfig {
 }
 
 /// See [`MirrorWatcherConfig::from_env`]'s own doc comment for why this
-/// changed from 30 to 120 (issue #596).
+/// changed from 30 to 120.
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 120;
 
-/// Issue #599: verifies (never trusts by discovery alone) every
+/// Verifies (never trusts by discovery alone) every
 /// gossip-discovered shard this node hasn't already explicitly
 /// configured, when `AVALON_MIRROR_ALL_DISCOVERED_SHARDS=true`. See this
 /// module's own doc comment for why this uses a different verification
-/// path (`crate::cross_shard::resolve_shard_verify_keys_from_db`, #543)
+/// path (`crate::cross_shard::resolve_shard_verify_keys_from_db`)
 /// than [`fetch_and_verify_sth`] below. Returns `(shard_id, url,
 /// SignedTreeHead)` for every discovered shard whose STH verified — a
-/// shard that's unreachable, has no #543-registered key yet, or fails
+/// shard that's unreachable, has no registered key yet, or fails
 /// verification is simply left out this tick (retried again next tick,
 /// never trusted on spec alone).
 async fn discover_and_verify_shard_peers(
@@ -262,15 +261,15 @@ async fn discover_and_verify_shard_peers(
 /// others from being watched or from covering for it during backfill.
 ///
 /// Bundles [`run_worker`]'s dependencies beyond the core
-/// pool/chain/indexer/config quartet — `interest`/`own_base_url` (issue
-/// #596) register this node's own interest in every `network_id` phase 1
+/// pool/chain/indexer/config quartet — `interest`/`own_base_url`
+/// register this node's own interest in every `network_id` phase 1
 /// actually verifies an STH for (harmless, no-op bookkeeping if
 /// `AVALON_DHT_ENABLED` is unset, see `crate::interest`'s own module doc
 /// comment on that); `wake` is woken by `crate::mirror_push::notify`'s
 /// handler on an incoming push notification, short-circuiting the rest of
 /// the current poll interval; `shard_registry`/`own_base_url` also feed
-/// [`discover_and_verify_shard_peers`] (issue #599); `own_shard_id` (issue
-/// #604) is this node's own locally-authored shard, needed so
+/// [`discover_and_verify_shard_peers`]; `own_shard_id`
+/// is this node's own locally-authored shard, needed so
 /// [`check_equivocation`] only folds this node's own signed history into a
 /// comparison for observations of *that* shard. Grouped into one struct
 /// purely to keep [`run_worker`]'s own signature under clippy's
@@ -347,7 +346,7 @@ pub async fn run_worker(
         // Phase 1: poll every peer independently for its latest STH,
         // verify + store + equivocation-check each one. Peers that
         // succeed are grouped by (network_id, shard_id), since that's
-        // what phase 2 backfills over and (issue #604) two different
+        // what phase 2 backfills over and two different
         // shards under the same network_id must never be corroborated or
         // backfilled together, even if they happen to report the same
         // tree_size.
@@ -616,13 +615,13 @@ async fn fetch_and_verify_sth(
 }
 
 /// Resolves the verify key for whatever `network_id` a peer's STH actually
-/// claims, rather than one process-wide key (issue #515) — the same
+/// claims, rather than one process-wide key — the same
 /// per-network trust-anchor lookup `avalon_protocol::network_trust::evaluate_network_trust`
-/// uses client-side (#482), applied here so a node mirroring peers across
+/// uses client-side, applied here so a node mirroring peers across
 /// more than one legitimate, pinned network verifies each against its own
 /// correct key. `None` for a `network_id` with no entry in
 /// `docs/trusted-networks.json` at all — the caller treats that as a hard
-/// refusal (issue #513), never a fallback to some other key. Pure, for
+/// refusal, never a fallback to some other key. Pure, for
 /// direct unit testing (same split-out pattern `nodes::resolve_bootstrap_peers`
 /// already uses in this repo).
 fn verify_key_for_network(
@@ -641,7 +640,7 @@ fn verify_key_for_network(
 /// the signed payload.
 ///
 /// `shard_id`, when given, is sent as an explicit `?shard_id=` query
-/// param — issue #573's own footgun, restated here since [`discover_and_verify_shard_peers`]
+/// param — a footgun restated here since [`discover_and_verify_shard_peers`]
 /// found it live: a peer serving more than one shard (mirroring one,
 /// authoring another, same as `avalon-peer` in this project's own sandbox
 /// topology) answers a bare `/ledger/sth/latest` with whichever shard
@@ -671,8 +670,8 @@ async fn fetch_latest_sth(
     Ok((dto.into(), protocol_version))
 }
 
-/// Sends `request`, retrying with backoff on HTTP 429 — issue #604's live
-/// testing surfaced this codebase's own rate limiter (#363/#545) as a real
+/// Sends `request`, retrying with backoff on HTTP 429 — live
+/// testing surfaced this codebase's own rate limiter as a real
 /// concern for backfill, not just a hypothetical: backfilling a real,
 /// busy history's worth of individual `/ledger/entries`/`/ledger/proof/inclusion`
 /// requests can legitimately exceed `AVALON_RATE_LIMIT_PER_MINUTE`
@@ -680,7 +679,7 @@ async fn fetch_latest_sth(
 /// tick's backfill just aborts, retried whole-hog next poll interval)
 /// makes backfilling any sufficiently large history painfully slow at
 /// best. Respects a `Retry-After` header when the rate limiter sends one
-/// (issue #363's `GovernorLayer` does), else falls back to a short fixed
+/// (`GovernorLayer` does), else falls back to a short fixed
 /// backoff. Bounded to a handful of attempts so a persistently
 /// misbehaving/adversarial peer still surfaces as a real failure rather
 /// than retrying forever — the existing per-tick retry (next poll
@@ -860,7 +859,7 @@ async fn backfill_network(
 /// `(network_id, shard_id, seq)`, so failing over between peers within the
 /// same shard never duplicates or restarts progress, and two different
 /// shards' entries — even at the same `seq` — are never confused for each
-/// other (issue #604; see `avalon_chain::mirror::insert_mirrored_entry`'s
+/// other (see `avalon_chain::mirror::insert_mirrored_entry`'s
 /// doc comment).
 ///
 /// Aborts (without storing anything further this pass) the moment *every*
@@ -1099,8 +1098,8 @@ async fn backfill(
 }
 
 /// Decodes a verified `MirroredEntry` into the same `ProtocolEvent` shape
-/// `outbox::drain_once` builds from `protocol_outbox` rows — issue #313.
-/// `None` for a pruned payload (issue #208 retention — the entry is still
+/// `outbox::drain_once` builds from `protocol_outbox` rows.
+/// `None` for a pruned payload (retention — the entry is still
 /// mirrored, just not applicable to the indexer) or an `issuer`/`subject`
 /// that isn't a well-formed `GlobalId`, which should never happen for a
 /// genuine ledger entry but is handled as a skip, not a panic, since this is
@@ -1538,8 +1537,8 @@ mod tests {
             .expect("failed to connect to Postgres — is it reachable?")
     }
 
-    /// The equivocation gate ([`backfill_network`]'s first check, issue
-    /// #316) against real Postgres: a network with an unresolved finding
+    /// The equivocation gate ([`backfill_network`]'s first check)
+    /// against real Postgres: a network with an unresolved finding
     /// must not have anything written to `mirrored_entries`, even when
     /// handed a well-formed, internally-consistent observation set that
     /// would otherwise corroborate cleanly. This is the "mirror stops

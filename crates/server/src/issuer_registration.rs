@@ -1,5 +1,4 @@
-//! Per-network issuer registration gate (issue #481, implementing the ADR
-//! decided in #479): network isolation is enforced by admission, not by
+//! Per-network issuer registration gate: network isolation is enforced by admission, not by
 //! binding `network_id` into attestation/event signatures
 //! (`crates/protocol/src/achievements.rs`'s `attestation_signing_bytes`
 //! deliberately excludes it — a signature verifies identically on every
@@ -7,7 +6,7 @@
 //! (`crate::integrators`'s `issuer_keys`, custody/rotation history) still
 //! isn't enough to write on a given network unless that same public key
 //! has also been admitted here — authenticity and network-admission are
-//! two independent checks, composing with #76's authenticity/validity/
+//! two independent checks, composing with the authenticity/validity/
 //! recognition split rather than replacing any part of it.
 //!
 //! Two distinct tables, on purpose — see migration 0059's own comment:
@@ -175,7 +174,7 @@ fn proof_of_possession_message(
     .into_bytes()
 }
 
-/// `POST /issuers/register` (#481) — explicit, self-service, never
+/// `POST /issuers/register` — explicit, self-service, never
 /// reviewed/approved on any tier (see module doc comment); the "gate" is
 /// which networks admit an unregistered key implicitly, not who may call
 /// this endpoint. Idempotent: registering an already-registered key
@@ -192,7 +191,7 @@ pub async fn register_issuer(
     State(state): State<AppState>,
     Json(body): Json<RegisterIssuerRequest>,
 ) -> Result<Json<IssuerRegistrationResponse>, AppError> {
-    // Belt-and-suspenders alongside the SDK/CLI-side check (#483): a
+    // Belt-and-suspenders alongside the SDK/CLI-side check: a
     // request declaring a network other than this server's own is a
     // client-side mistake, not an authentication failure.
     if body.declared_network_id != state.chain.network_id() {
@@ -299,7 +298,7 @@ async fn enqueue_registration_event(
     Ok(())
 }
 
-/// Write-path gate (#481): called from wherever an attestation/event
+/// Write-path gate: called from wherever an attestation/event
 /// signature has already verified authentic against the issuer's key
 /// history (`crate::achievements`'s `verify_authenticity` call) — see
 /// module doc comment for why this is a second, independent check. Must

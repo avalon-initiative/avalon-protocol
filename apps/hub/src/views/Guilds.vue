@@ -1,7 +1,6 @@
 <script setup lang="ts">
-// "My guilds" landing page (issue #24): every guild the caller belongs to
-// (GET /me/guilds), plus a header-button "create guild" form in a modal
-// (issue #281).
+// "My guilds" landing page: every guild the caller belongs to
+// (GET /me/guilds), plus a header-button "create guild" form in a modal.
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {

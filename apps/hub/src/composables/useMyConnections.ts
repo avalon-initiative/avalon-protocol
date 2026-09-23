@@ -1,4 +1,4 @@
-// Connected-integrators view (#27, #83): every binding the caller has, with its
+// Connected-integrators view: every binding the caller has, with its
 // currently-active grants. Loads once, then polls — same "no WebSocket
 // needed for milestone 1" shape apps/hub/src/composables/useGuildDetail.ts
 // already establishes.

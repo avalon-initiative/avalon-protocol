@@ -883,7 +883,7 @@ describe('AvalonAchievementCard', () => {
   // Three same-named claims from three different issuers (a real scenario
   // — nothing stops three integrators from each having their own "Dragon
   // Slayer") must render as three distinct issuer chips, never merged or
-  // deduplicated by name (issue #35's own invariant).
+  // deduplicated by name.
   it('renders distinct issuer chips for three same-named claims from different issuers', () => {
     const issuers = ['Ashen Realms', 'Frostpeak', 'Ironclad Studios']
     const wrappers = issuers.map((issuerName) =>
@@ -895,7 +895,7 @@ describe('AvalonAchievementCard', () => {
   })
 
   // A revoked claim keeps its issuance visible and shows the revocation
-  // alongside it once history is expanded — never an empty slot (#81/#85).
+  // alongside it once history is expanded — never an empty slot.
   it('shows both dates for a revoked claim once history is expanded', async () => {
     const wrapper = mount(AvalonAchievementCard, {
       props: {
@@ -916,7 +916,7 @@ describe('AvalonAchievementCard', () => {
     expect(wrapper.text()).toContain('cheated')
   })
 
-  // ADR #77: the Hub renders verification results, it never computes or
+  // The Hub renders verification results, it never computes or
   // displays trust/rank — no score, ranking, or leaderboard-style element
   // should ever appear on this card.
   it('never renders a score, rank, or leaderboard-style element', () => {

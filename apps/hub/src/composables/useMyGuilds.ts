@@ -1,4 +1,4 @@
-// "My guilds" list for the Guilds.vue landing page (issue #24). GET
+// "My guilds" list for the Guilds.vue landing page. GET
 // /me/guilds only returns { guildId, roleIndex, joinedAt } — guild
 // name/tag/description/memberCount come from a separate GET /guilds/{id}
 // per membership, same "the membership endpoint doesn't embed the thing

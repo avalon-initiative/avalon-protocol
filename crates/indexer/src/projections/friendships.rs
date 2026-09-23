@@ -3,8 +3,7 @@
 //! Deliberately its own `indexer_friendships` table
 //! (`crates/server/db/migrations/0015_indexer_projections`), not the old
 //! `friendships` table (`crates/server/db/migrations/0004_social_graph`,
-//! now dead — `crates/server/src/friends.rs` stopped writing it as of
-//! issue #506).
+//! now dead — `crates/server/src/friends.rs` stopped writing it).
 //!
 //! `friend.requested` is a recognized kind with no effect here — a pending
 //! request has no current-state row in a friendship roster (see
@@ -177,7 +176,7 @@ where
 
 /// Every identity with a current friendship to at least one id in
 /// `identity_ids` — the "friends of friends" set `crate::server::discovery`
-/// needs (issue #506), before it's filtered against the caller's own
+/// needs, before it's filtered against the caller's own
 /// friends/blocks/self. Empty input short-circuits to an empty result
 /// rather than issuing an `ANY($1)` query with an empty array.
 pub async fn friends_of_any<'e, E>(

@@ -1,4 +1,4 @@
-// Signed DHT interest claims (issue #610) — the browser-side minting half of
+// Signed DHT interest claims — the browser-side minting half of
 // `avalon_protocol::interest_claim` / `crates/server/src/interest.rs`. See
 // that Rust module's own doc comment for the full design: a short assertion
 // self-signed with the identity's own Ed25519 event-signing key (the same

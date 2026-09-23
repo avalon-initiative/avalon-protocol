@@ -24,15 +24,14 @@ Avalon Identity X
 Avalon holds the two bindings. It does not know what an Avion or a Sea Lion is,
 and it never will unless an integrator explicitly promotes a fact into durable history
 as an attestation, **or explicitly publishes it as instance data against a
-schema it published itself** (Integrator Space's data-exposure mechanism, #255/#384,
-decided #381) — subject to that schema's own declared visibility. Absent one
-of those two explicit acts, the character rows stay keyed on the integrator's side,
-referencing the binding or the identity id; Avalon stores none of their
-attributes. Publishing instance data is deliberately narrow in spirit even
-though it's technically unrestricted in shape: small, portable, fun-to-carry
-flavor data (a character's name, level, race, class, titles), never a
-character's full mechanical state (inventory, skills, stats used for integrator
-balance) — see [`./identity-aggregate-view.md`](./identity-aggregate-view.md)
+schema it published itself** (Integrator Space's data-exposure mechanism) — subject
+to that schema's own declared visibility. Absent one of those two explicit acts, the
+character rows stay keyed on the integrator's side, referencing the binding or the
+identity id; Avalon stores none of their attributes. Publishing instance data is
+deliberately narrow in spirit even though it's technically unrestricted in shape:
+small, portable, fun-to-carry flavor data (a character's name, level, race, class,
+titles), never a character's full mechanical state (inventory, skills, stats used for
+integrator balance) — see [`./identity-aggregate-view.md`](./identity-aggregate-view.md)
 for a full worked example and the visibility rules.
 
 ## What a binding is
@@ -64,7 +63,7 @@ Integrator A
         manage its own integrator-side character data
         issue Integrator A attestations about that identity
         read whatever Integrator B has explicitly published (attestations,
-            or instance data Integrator B opted into being visible, #381)
+            or instance data Integrator B opted into being visible)
 
     cannot:
         read or write Integrator B's own internal, unpublished profile of the
@@ -94,13 +93,12 @@ authentic attestations from Integrator A (which Integrator B may or may not reco
 in its own database. It never sees Integrator A's character, and Integrator A never learns
 about Integrator B's unless X's permissions expose it.
 
-## Today in the repo
+## Current implementation
 
 - `crates/protocol/src/integrators.rs` — `IntegratorBinding { identity_id, integrator_id,
-  established_at, ended_at }`, real now (#83), alongside `Integrator`,
-  `IntegratorRegistration`, `IntegratorCredential`. No game-specific field exists on it,
-  by design.
-- `crates/server/src/connections.rs` (#27/#83) — `POST /integrations/{slug}/connect`
+  established_at, ended_at }`, alongside `Integrator`, `IntegratorRegistration`,
+  `IntegratorCredential`. No game-specific field exists on it, by design.
+- `crates/server/src/connections.rs` — `POST /integrations/{slug}/connect`
   is the consent flow: it validates every approved capability against what
   the integrator declared at registration (`GET /integrations/{slug}` /
   `integrator_requested_capabilities`, rejecting anything undeclared), creates the
@@ -112,26 +110,12 @@ about Integrator B's unless X's permissions expose it.
   revokes a single grant; `DELETE /integrations/{slug}/connect` ends the binding
   and revokes every active grant under it in the same transaction; `GET
   /me/connections` lists the caller's active bindings with their active
-  grants. `bindings`/`permission_grants` (migration `0012_game_bindings`)
-  are projections — `game.binding_established`, `game.binding_ended`,
-  `permission.granted`, `permission.revoked` are the durable history, and
-  are network-attributed for now (the same milestone-1 stand-in
-  `game.registered` uses), not yet identity-signed despite what the
-  event-kind catalogue eventually intends.
-- `crates/sdk/src/lib.rs` — `authenticate()` now calls `GET /me/grants`
-  (identified by `AvalonConfig::integrator_credential_key_id`) and populates
-  `Session.granted` from the caller's real active grants for that integrator,
-  rather than always returning an empty list.
-
-## Decisions and tickets
-
-- [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — integrator
-  profile/binding type, events, endpoints, and the SDK check.
-- [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) — ADR:
-  identity is separate from game characters.
-- [#27](https://github.com/LunarVagabond/avalon-protocol/issues/27) —
-  capability grant/revoke consent flow (produces the binding).
-- [#28](https://github.com/LunarVagabond/avalon-protocol/issues/28) —
-  permission enforcement middleware.
-- [#25](https://github.com/LunarVagabond/avalon-protocol/issues/25) — Epic:
-  Integrator Registration & Permissions.
+  grants. `bindings`/`permission_grants` are projections — `game.binding_established`,
+  `game.binding_ended`, `permission.granted`, `permission.revoked` are the durable
+  history, and are network-attributed for now (the same milestone stand-in
+  `game.registered` uses), not yet identity-signed.
+- The Rust SDK's `authenticate()` calls `GET /me/grants` (identified by
+  `AvalonConfig::integrator_credential_key_id`) and populates `Session.granted` from
+  the caller's real active grants for that integrator.
+</content>
+</invoke>

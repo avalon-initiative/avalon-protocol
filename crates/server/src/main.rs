@@ -138,7 +138,7 @@ async fn main() {
         .expect("failed to run migrations");
 
     // Creates this ledger's genesis on a fresh database, or refuses to start
-    // at all if it's already rooted in a different network_id (issue #173) —
+    // at all if it's already rooted in a different network_id —
     // deliberately fatal, before anything binds a listener or serves a
     // single request.
     let chain = avalon_chain::PostgresSettlementProvider::connect(pool.clone(), &network_id)
@@ -196,8 +196,8 @@ async fn main() {
     // shard, if any.
     let shard_registry = avalon_server::nodes::ShardRegistry::new();
 
-    // Issue #582/#580: this node's libp2p DHT identity — on by default as
-    // of ADR #593 (`AVALON_DHT_ENABLED=false`/`0` opts out), resolved (and
+    // This node's libp2p DHT identity — on by default
+    // (`AVALON_DHT_ENABLED=false`/`0` opts out), resolved (and
     // the swarm bound and its worker spawned) before `announce_config`
     // below so this node's very first outbound announce already carries
     // it.
@@ -337,15 +337,15 @@ async fn main() {
     let mirror_confirmations = avalon_server::replication::MirrorConfirmationRegistry::new();
     let replication_gate = replication::ReplicationGateConfig::from_env();
 
-    // Issue #663: extends `AVALON_NODE_ROLES` from purely-advertised
+    // Extends `AVALON_NODE_ROLES` from purely-advertised
     // metadata into a real, load-bearing gate for the `realtime` role —
-    // same mechanism #662 (Indexer) and #664 (Settlement) also use for
+    // same mechanism the Indexer and Settlement roles also use for
     // consistency. `realtime_remote_url` is `None` when this process
     // holds the role itself (serves `/ws/presence`/`/ws/messages`
     // locally, exactly as every deployment before this issue); `Some(url)`
     // proxies every WebSocket connection through to that remote Realtime
     // node instead (see `crate::realtime_proxy`'s module doc comment for
-    // the full design and its own referenced ADR). A role list excluding
+    // the full design). A role list excluding
     // `realtime` with no valid `AVALON_REALTIME_URL` refuses to start,
     // same "fail loudly, never silently degrade" precedent every other
     // startup-time check in this function already establishes.
@@ -467,8 +467,8 @@ async fn main() {
         realtime_remote_url,
     };
 
-    // Node-tiered durable history retention (issue #208, implementing
-    // #180's decision) — always printed, so an operator always sees which
+    // Node-tiered durable history retention, implementing
+    // the decided policy — always printed, so an operator always sees which
     // tier and pruning state this process is running as, the same
     // transparency the network_id line above gives. See
     // `avalon_chain::retention`'s module doc comment for the full design
@@ -484,19 +484,19 @@ async fn main() {
     }
 
     // Drains the identity/etc. outbox into the ledger at its own pace —
-    // see crates/server/src/outbox.rs (issue #71). `AVALON_SETTLEMENT_REMOTE_URL`
-    // (issue #313) switches this from committing locally to posting each
+    // see crates/server/src/outbox.rs. `AVALON_SETTLEMENT_REMOTE_URL`
+    // switches this from committing locally to posting each
     // batch to a remote Settlement authority; unset (the default), nothing
     // changes. `remote_submit` itself was built earlier, above `state`'s
     // own construction — see that site's comment.
     //
-    // Issue #664: gated on `gateway_enabled` — the outbox table only ever
+    // Gated on `gateway_enabled` — the outbox table only ever
     // gets rows from Gateway-facing handlers (identity/guild/etc. writes
     // sharing a transaction with their own outbox insert); a Settlement-only
     // node never runs any of those handlers, so its own outbox table stays
     // empty and this worker would have nothing to drain. Managed-hosting's
-    // two-phase flow (#531, `POST /ledger/prepare-batch`/`finalize-batch`)
-    // and #313's own `POST /ledger/submit` commit directly, bypassing the
+    // two-phase flow (`POST /ledger/prepare-batch`/`finalize-batch`)
+    // and `POST /ledger/submit` commit directly, bypassing the
     // outbox entirely — neither depends on this worker running.
     if gateway_enabled {
         tokio::spawn(outbox::run_worker(
@@ -508,14 +508,14 @@ async fn main() {
     }
 
     // Hard-deletes guild message archive rows past their retention window —
-    // see crates/server/src/guild_messages.rs (issue #253). Gateway-only
-    // (issue #664): guild chat archives only exist because a Gateway
+    // see crates/server/src/guild_messages.rs. Gateway-only:
+    // guild chat archives only exist because a Gateway
     // handler wrote them.
     if gateway_enabled {
         tokio::spawn(guild_messages::run_archive_expiry_worker(state.clone()));
     }
 
-    // Mirror-watcher (issue #299, implementing #40's decided design):
+    // Mirror-watcher, implementing the decided design:
     // watches whatever peers `AVALON_MIRROR_PEERS` names, verifying and
     // storing their STHs, detecting equivocation, and backfilling entry
     // content — see crates/server/src/mirror_watcher.rs. Only spawned when
@@ -550,7 +550,7 @@ async fn main() {
         ));
     }
 
-    // Minimum replication guarantee (issue #629) — spawned unconditionally,
+    // Minimum replication guarantee — spawned unconditionally,
     // same posture the announce worker just below takes: even a node with
     // no peers known yet still needs this loop running so it picks up
     // peers (and therefore confirmed-mirror counts) the moment any appear.
@@ -564,7 +564,7 @@ async fn main() {
         replication::ReplicationConfig::from_env(),
     ));
 
-    // Node-to-node announce/bootstrap discovery (issue #362) — spawned
+    // Node-to-node announce/bootstrap discovery — spawned
     // unconditionally, unlike the mirror-watcher above: even this
     // network's anchor node (an empty resolved peer list) still needs to
     // serve announce/list-peers requests from everyone else. See

@@ -1,4 +1,4 @@
-//! Issue #484 (per #476/#479's decided ADR): tooling for a deliberate
+//! Tooling for a deliberate
 //! `avalon-mainnet-N` -> `avalon-mainnet-(N+1)` genesis reset. Since
 //! attestation/event signatures deliberately never bind `network_id`
 //! (`crates/protocol/src/achievements.rs`'s `attestation_signing_bytes`),
@@ -6,8 +6,8 @@
 //! module only has to carry forward the two things that *are*
 //! network-scoped: the outgoing network's final ledger checkpoint (so the
 //! new network's history is auditable as a continuation, not "started from
-//! nothing") and its issuer admission registry (`issuer_network_registrations`,
-//! #481), so no issuer — including ones no longer reachable — has to
+//! nothing") and its issuer admission registry (`issuer_network_registrations`),
+//! so no issuer — including ones no longer reachable — has to
 //! re-register, let alone re-sign anything.
 //!
 //! This is deliberately a rare, operator-run migration (`avalon

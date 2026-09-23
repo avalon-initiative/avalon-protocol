@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// The persistent logged-in shell (issue #148): a fixed sidebar on desktop,
+// The persistent logged-in shell: a fixed sidebar on desktop,
 // a bottom nav on mobile, a header with the caller's user chip, and a
 // <RouterView /> for the page. Pages are nested child routes under this
 // layout (see router/index.ts). Nav entries for features that don't exist
 // yet (chat, discover) are rendered disabled with a "Soon" tag
 // rather than hidden, so the layout reflects the roadmap honestly. Guilds
-// (issue #24) and Integrators (issue #270) are no longer among them.
+// and Integrators are no longer among them.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonBottomNav, AvalonIcon, AvalonPresenceBadge, AvalonSidebarNav, AvalonUserChip } from '@avalon/ui'

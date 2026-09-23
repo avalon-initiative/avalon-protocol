@@ -1,5 +1,5 @@
-// Turns a raw HistoryEntryResponse (issue #121) into something an actual
-// user would want to read — issue #146. Kept as pure functions, testable
+// Turns a raw HistoryEntryResponse into something an actual
+// user would want to read. Kept as pure functions, testable
 // without mounting Activity.vue: given an event, what should the feed say.
 import type { HistoryEntry } from '@avalon/sdk'
 
@@ -16,7 +16,7 @@ function stringField(payload: unknown, key: string): string | undefined {
 
 /**
  * A human-readable summary for one event kind. Unknown/future kinds
- * (this list will keep growing as more event kinds ship — #82) fall back to
+ * (this list will keep growing as more event kinds ship) fall back to
  * the raw `kind` string rather than throwing or rendering nothing.
  */
 export function summarizeActivityEntry(entry: HistoryEntry): string {
@@ -35,7 +35,7 @@ export function summarizeActivityEntry(entry: HistoryEntry): string {
     }
     case 'identity.signing_key_revoked':
       return 'Device access revoked.'
-    // Guild events (#22/#24) — /me/history is issuer-filtered to the
+    // Guild events — /me/history is issuer-filtered to the
     // caller's own events only (see crates/server/src/handlers.rs::my_history),
     // so every one of these is something the caller themselves did.
     case 'guild.created': {

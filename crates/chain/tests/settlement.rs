@@ -1,14 +1,14 @@
 //! Exercises `PostgresSettlementProvider::commit`/`verify`/`get_commitment`
-//! against a real Postgres instance (issue #38 — event batching; issue #210
-//! — the real Merkle root and Signed Tree Head `commit` now also produces).
+//! against a real Postgres instance (event batching, plus the real Merkle
+//! root and Signed Tree Head `commit` now also produces).
 //! Gated `--ignored` since it needs live infra — see `make test-live` /
 //! `make start`; mirrors the pattern `crates/server/tests/*.rs` already
 //! uses for its own live-only tests (see e.g. `crates/server/tests/history.rs`).
 //!
-//! Since issue #210, `commit` also needs `AVALON_SETTLEMENT_SIGNING_KEY` set
+//! `commit` also needs `AVALON_SETTLEMENT_SIGNING_KEY` set
 //! (see `.env.example`) — every test here goes through `test_pool()`, which
-//! loads the workspace root's `.env` via `avalon_devenv::load()` (issue
-//! #671) the same way `make test-live` expects.
+//! loads the workspace root's `.env` via `avalon_devenv::load()`
+//! the same way `make test-live` expects.
 //!
 //! These tests exercise `avalon-chain` directly rather than through
 //! `avalon-server`'s outbox/HTTP surface: `SettlementProvider` is `chain`'s
@@ -237,7 +237,7 @@ async fn commit_of_an_empty_batch_is_rejected() {
     assert!(result.is_err(), "an empty batch should never be committed");
 }
 
-// --- Real Merkle root + Signed Tree Head (issue #210) ---
+// --- Real Merkle root + Signed Tree Head ---
 
 #[tokio::test]
 #[ignore]
@@ -351,7 +351,7 @@ async fn verify_detects_entry_tampering_via_merkle_recomputation() {
     );
 }
 
-// --- Genesis / network identity (issue #173) ---
+// --- Genesis / network identity ---
 //
 // `chain_genesis` is a real singleton — at most one row per database — so
 // these tests can't share the same `public` schema as the tests above (and
@@ -451,7 +451,7 @@ async fn connect_fails_fast_on_network_id_mismatch() {
     );
 }
 
-// --- Node-tiered retention / payload pruning (issue #208) ---
+// --- Node-tiered retention / payload pruning ---
 
 /// Backdates `batch`'s entries' `committed_at` directly via SQL, the same
 /// tamper/seed style the tests above use for state the provider itself has

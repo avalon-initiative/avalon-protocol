@@ -1,4 +1,4 @@
-//! Exercises the Integrator Registry schema-discovery projection (issue #255)
+//! Exercises the Integrator Registry schema-discovery projection
 //! against a real, migrated Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make migrate`, same convention
 //! `postgres_indexer.rs` already uses. `cargo test --workspace` (this

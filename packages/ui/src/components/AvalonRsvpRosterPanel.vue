@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks, glue-only script. Who's going/maybe/can't
-// go for one guild event (issue #248) — a thin wrapper around AvalonModal
+// go for one guild event — a thin wrapper around AvalonModal
 // so it gets the same backdrop/panel/close treatment as every other modal
 // in the Hub. One shared component reused from both the Events tab and the
 // Calendar tab's selected-day list in apps/hub/src/views/Guild.vue, rather

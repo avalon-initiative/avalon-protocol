@@ -1,7 +1,7 @@
 //! Exercises integrator registration and the challenge-response integrator-auth flow
-//! (issue #26) against a real, running `avalon-server` and Postgres. Gated
+//! against a real, running `avalon-server` and Postgres. Gated
 //! `--ignored` since it needs live infra — see `make test-live` / `make
-//! start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no reachable
+//! start`. Skipped in this sandbox (no reachable
 //! Postgres here); written but not run against a live database.
 
 use base64::engine::general_purpose::STANDARD as BASE64;

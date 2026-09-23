@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Integrator directory (#270, generalized in #282). Apps/Services tabs
+// Integrator directory. Apps/Services tabs
 // render empty rather than hidden — no real registrants yet.
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'

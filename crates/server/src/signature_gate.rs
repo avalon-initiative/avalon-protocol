@@ -1,5 +1,5 @@
-//! Shared "fresh signature" enforcement for #697's signature-required
-//! account-action tier (#698) — see
+//! Shared "fresh signature" enforcement for the signature-required
+//! account-action tier — see
 //! `docs/architecture/identity.md`'s "Action-tier classification" section
 //! for the endpoint-by-endpoint list this backs. Deliberately reuses
 //! `auth::verify_event_signature` rather than inventing a new signing

@@ -1,5 +1,4 @@
-// Full guild administration (issues #20/#21/#22/#152/#153/#169/#242/#250/
-// #442) on AccountSession — creation, roles, per-resource permission
+// Full guild administration on AccountSession — creation, roles, per-resource permission
 // overrides, ownership transfer, membership, invites, join requests,
 // channels, chat, and events, as an identity acting with its own authority.
 // See crates/server/src/guilds.rs/channels.rs/guild_messages.rs/

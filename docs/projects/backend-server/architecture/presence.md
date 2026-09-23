@@ -3,8 +3,7 @@
 **Realtime presence is ephemeral state. It never enters durable protocol history.**
 It is the third logical vertical of the network alongside settlement and
 query/indexing, and it is the one whose loss costs nothing: if presence storage
-disappears, identities look offline until their next heartbeat. Decided in
-[#78](https://github.com/LunarVagabond/avalon-protocol/issues/78).
+disappears, identities look offline until their next heartbeat.
 
 ## Two kinds of fact
 
@@ -81,13 +80,14 @@ nothing anyone needs to prove later.
 
 ## Deployment
 
-Milestone 1 runs presence inside `avalon-server`. Because presence shares no
+Presence runs inside `avalon-server` by default. Because presence shares no
 storage with settlement or indexing and emits no events, it can move to its own
-process or node role later ([nodes](./nodes.md)) without touching either. Scaling
-realtime connections is a separate axis from scaling history or queries
-([scalability](./scalability.md)).
+process or node role ([nodes](./nodes.md)) without touching either — see
+[nodes.md](./nodes.md)'s Realtime extraction section for the real, working
+version of that split. Scaling realtime connections is a separate axis from
+scaling history or queries ([scalability](./scalability.md)).
 
-## Today in the repo
+## Current implementation
 
 - `crates/protocol/src/social.rs` — `PresenceStatus { Online, Away, DoNotDisturb, Offline }` and
   `Presence { identity_id, status, playing: Option<IntegratorId>, updated_at }`.
@@ -96,103 +96,85 @@ realtime connections is a separate axis from scaling history or queries
   `avalon-chain`. `PUT /me/presence` lets the caller publish their own
   `status`; they can never set `playing`. `PUT /presence/:identity_id` lets
   an integrator publish presence on behalf of an identity it's bound to —
-  authenticated via `crate::authz`'s `Caller`/`require_capability` (#28):
-  the caller must resolve to `Caller::Integrator`, hold an active
-  `presence.publish` grant under an active [binding](./bindings.md)
-  to that identity (`crates/server/src/connections.rs`, #26/#83), and
-  `playing`, if set at all, must equal the integrator's own id — an integrator claiming
-  to be a *different* integrator's `playing` value is rejected
-  (`AppError::PresencePlayingMismatch`) even with a valid grant. `GET
-  /presence?ids=…` and `GET /ws/presence` default to friends-only
+  authenticated via `crate::authz`'s `Caller`/`require_capability`: the
+  caller must resolve to `Caller::Integrator`, hold an active
+  `presence.publish` grant under an active [binding](./bindings.md) to that
+  identity, and `playing`, if set at all, must equal the integrator's own id
+  — an integrator claiming to be a *different* integrator's `playing` value
+  is rejected (`AppError::PresencePlayingMismatch`) even with a valid grant.
+  `GET /presence?ids=…` and `GET /ws/presence` default to friends-only
   visibility: the caller's own entry is always visible; anyone else's is
   visible only if they're currently friends
   (`crates/server/src/friends.rs`'s `friend_partners`) and there's no
-  block between them (issue #97, checked first). This is a literal
-  implementation of `docs/architecture/privacy.md`'s proposed default for
-  this one resource, **not** the full per-resource visibility-scope model
-  #87 still owns (guild visibility, a private setting, etc.) — see that
-  file's own "Today in the repo" note. An identity can independently opt
-  `playing` out of ever being shown, regardless of any integrator's grant
-  (`presence_preferences.hide_playing`, set via `PUT /me/presence`,
-  `crates/server/db/migrations/0017_presence_preferences`) — deliberately
-  a durable Postgres row, not part of the ephemeral store, since it's a
-  standing preference rather than a realtime fact. An entry not refreshed
-  within the TTL (120s by default, `AVALON_PRESENCE_TTL_SECS` overrides it
-  for testing) reads as `Offline`, never a guess — **unless** its last
-  explicitly-published status was `Away`, `DoNotDisturb`, or `Offline`
-  itself, in which case it's a sticky manual override and keeps reading as
-  that status past the TTL, until explicitly set back to `Online`
-  (`PresenceStore::get`'s own doc comment has the full mechanism). Sticky
-  overrides live in the same in-memory `PresenceStore` as everything else
-  here, not `presence_preferences` — a reconnect never touches this store
-  (only a server restart clears it), so in-memory already satisfies
+  block between them (checked first). This is a literal implementation of
+  [`privacy.md`](./privacy.md)'s default for this one resource, not the full
+  per-resource visibility-scope model that governs other resources. An
+  identity can independently opt `playing` out of ever being shown,
+  regardless of any integrator's grant (`presence_preferences.hide_playing`,
+  set via `PUT /me/presence`) — deliberately a durable Postgres row, not
+  part of the ephemeral store, since it's a standing preference rather than
+  a realtime fact. An entry not refreshed within the TTL (120s by default,
+  `AVALON_PRESENCE_TTL_SECS` overrides it for testing) reads as `Offline`,
+  never a guess — **unless** its last explicitly-published status was
+  `Away`, `DoNotDisturb`, or `Offline` itself, in which case it's a sticky
+  manual override and keeps reading as that status past the TTL, until
+  explicitly set back to `Online` (`PresenceStore::get`'s own doc comment
+  has the full mechanism). Sticky overrides live in the same in-memory
+  `PresenceStore` as everything else here — a reconnect never touches this
+  store (only a server restart clears it), so in-memory already satisfies
   "survives reconnect"; the accepted tradeoff is that, like all presence
   state, an override is lost on server restart.
-- **Deferred, documented, not silently missing**: the full per-resource
-  visibility-scope model (friends/guild/private, per resource, identity- and
-  guild-configurable) is #87's open decision — presence's friends-only
-  default above is one literal instance of it, not the general mechanism.
-- `GET /ws/presence?token=…` (#136, transport chosen in #119) — a live push
-  transport, additive to `GET /presence`, not a replacement. Auth is a
-  `?token=` query parameter,
-  not the usual `Authorization` header — a browser `WebSocket` handshake
-  can't set custom headers (`handlers::authenticate_token`). A connected
-  client sends `{"type":"subscribe","ids":[...]}` (additive — sending it
-  again with more ids grows the subscription, doesn't replace it); the
-  server immediately replies with a catch-up snapshot for each newly
-  subscribed id, then pushes every subsequent `PresenceStore::set()` for a
-  subscribed id as it happens. Fan-out is a bounded, lossy
-  `tokio::sync::broadcast` channel (`PresenceStore::subscribe`) — a slow
+- `GET /ws/presence?token=…` — a live push transport, additive to `GET
+  /presence`, not a replacement. Auth is a `?token=` query parameter, not the
+  usual `Authorization` header — a browser `WebSocket` handshake can't set
+  custom headers. A connected client sends
+  `{"type":"subscribe","ids":[...]}` (additive — sending it again with more
+  ids grows the subscription, doesn't replace it); the server immediately
+  replies with a catch-up snapshot for each newly subscribed id, then pushes
+  every subsequent `PresenceStore::set()` for a subscribed id as it happens.
+  Fan-out is a bounded, lossy `tokio::sync::broadcast` channel — a slow
   consumer drops interim ticks rather than backing up the publisher, an
   acceptable tradeoff for ephemeral presence, unlike the outbox's durable
-  delivery guarantee for real protocol events. Same "no visibility
-  filtering yet" cut as `GET /presence` above (deferred to #87) — any valid
-  session may subscribe to any ids it names.
-- `crates/sdk/src/social.rs::Session::subscribe_presence` — the Rust SDK's
-  client for the above, additive to `presence()`/`presence_of()`. Returns a
-  `tokio::sync::mpsc::UnboundedReceiver<Presence>`; a background task
-  forwards every pushed update onto it, and dropping the receiver ends that
-  task on its next send attempt (no separate unsubscribe call).
-- `apps/hub/src/api/client.ts::openPresenceSocket` — the Hub's client for
-  the same endpoint (a plain browser `WebSocket`, not the Rust SDK, which
-  the Hub doesn't consume directly). `Friends.vue` (#18) uses it to keep
-  each friend's presence live; the friend-*list* poll (membership changes —
-  a request accepted/declined, a friend removed) still runs, just much
-  slower now that presence itself doesn't depend on it for liveness.
-- **Cross-node relay (#539, implementing #535's decision).** Everything
-  above describes one process's own `PresenceStore` — until #539, a
-  `PresenceStore::set()` never reached a *different* `avalon-server`
-  process, so two friends connected to two different Realtime/Gateway
-  nodes couldn't see each other online. `update_my_presence`/
-  `update_integrator_presence` now also call
-  `crate::realtime_relay::relay_to_peers` (spawned, not awaited inline,
-  so an unreachable peer never delays the HTTP response) after every
-  `set()`, posting once to every same-`network_id` peer in this node's
-  own `nodes::PeerTable` that advertises a `realtime`/`gateway`/`combined`
-  role. The receiving node's `POST /nodes/relay` handler calls the new
-  `PresenceStore::apply_relayed` — the same local map-insert-plus-broadcast
-  `set()` does, preserving the *origin* node's `updated_at` rather than
-  re-stamping it, and never itself relaying again (single-hop by
-  construction — see `crate::realtime_relay`'s own module doc comment).
-  A single-node deployment (no peers) is unaffected: `relay_to_peers`
-  returns immediately when the peer table is empty. Live-verified with two
-  real `avalon-server` processes sharing one Postgres
-  (`crates/server/tests/realtime_relay.rs`). #541 separately verified the
-  failover consequence #535's decision claimed follows "for free": a
-  client that reconnects to a different node after losing its connection
-  resumes live delivery with the same session token and zero special
-  hand-off (`crates/server/tests/realtime_reconnect.rs`), with any gap
-  bounded to the disconnect window itself.
+  delivery guarantee for real protocol events. Same "no visibility filtering
+  yet" cut as `GET /presence` above — any valid session may subscribe to any
+  ids it names.
+- The Rust SDK's `Session::subscribe_presence` is the client for the above,
+  additive to `presence()`/`presence_of()`. Returns an unbounded receiver of
+  `Presence`; a background task forwards every pushed update onto it, and
+  dropping the receiver ends that task on its next send attempt (no separate
+  unsubscribe call).
+- `apps/hub/src/api/client.ts::openPresenceSocket` — the Hub's client for the
+  same endpoint (a plain browser `WebSocket`, not the Rust SDK, which the Hub
+  doesn't consume directly). `Friends.vue` uses it to keep each friend's
+  presence live; the friend-*list* poll (membership changes — a request
+  accepted/declined, a friend removed) still runs, just much slower now that
+  presence itself doesn't depend on it for liveness.
+- **Cross-node relay.** Everything above describes one process's own
+  `PresenceStore`. Without relay, a `PresenceStore::set()` never reaches a
+  *different* `avalon-server` process, so two friends connected to two
+  different Realtime/Gateway nodes couldn't see each other online.
+  `update_my_presence`/`update_integrator_presence` also call
+  `crate::realtime_relay::relay_to_peers` (spawned, not awaited inline, so an
+  unreachable peer never delays the HTTP response) after every `set()`,
+  posting once to every same-`network_id` peer in this node's own peer table
+  that advertises a `realtime`/`gateway`/`combined` role. The receiving
+  node's `POST /nodes/relay` handler calls `PresenceStore::apply_relayed` —
+  the same local map-insert-plus-broadcast `set()` does, preserving the
+  *origin* node's `updated_at` rather than re-stamping it, and never itself
+  relaying again (single-hop by construction). A single-node deployment (no
+  peers) is unaffected: `relay_to_peers` returns immediately when the peer
+  table is empty. Live-verified with two real `avalon-server` processes
+  sharing one Postgres (`crates/server/tests/realtime_relay.rs`). The
+  failover consequence follows for free: a client that reconnects to a
+  different node after losing its connection resumes live delivery with the
+  same session token and zero special hand-off
+  (`crates/server/tests/realtime_reconnect.rs`), with any gap bounded to the
+  disconnect window itself.
 
-## Decisions and tickets
+## Open questions
 
-- [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) — ADR:
-  realtime presence is ephemeral and never enters durable history.
-- [#16](https://github.com/LunarVagabond/avalon-protocol/issues/16) — presence
-  tracking (status + playing integrator) + update endpoint.
-- [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) — visibility
-  scopes.
-- [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry read
-  model, where realtime counts are labeled as such.
-- [#14](https://github.com/LunarVagabond/avalon-protocol/issues/14) — Epic: Social
-  Graph (Friends & Presence).
+The full per-resource visibility-scope model (friends/guild/private, per
+resource, identity- and guild-configurable) remains an open decision beyond
+what's built for presence and guild rosters — see [`privacy.md`](./privacy.md).
+</content>
+</invoke>

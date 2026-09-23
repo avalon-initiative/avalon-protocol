@@ -66,8 +66,8 @@ export class ProtocolError extends AvalonSdkError {
 }
 
 /** The server rejected a conversation read/send with "not a participant" —
- * deliberately carries nothing beyond that (issue #97: never reveal a
- * block, not even indirectly). */
+ * deliberately carries nothing beyond that: never reveal a
+ * block, not even indirectly. */
 export class NotConversationParticipantError extends AvalonSdkError {
   constructor() {
     super('not a participant in this conversation')

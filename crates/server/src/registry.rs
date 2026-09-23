@@ -1,8 +1,7 @@
-//! `GET /integrations/{slug}/registry` (and, per issue #95, the identical
+//! `GET /integrations/{slug}/registry` (and the identical
 //! `GET /registry/{slug}` under a dedicated top-level namespace for
 //! anything that isn't the Hub) — the Integrator Registry's derived-metrics
-//! read surface (issue #261, the first concrete slice of the epic-sized
-//! #89): four durable-derived facts about an integrator/issuer, each
+//! read surface: four durable-derived facts about an integrator/issuer, each
 //! carrying its own definition and class label, per
 //! `docs/architecture/registry.md`. No composite score, no ranking — see
 //! that doc's "statistics inform trust; they do not determine it."
@@ -27,7 +26,7 @@
 //! endpoints use (`AppError::IntegratorNotFound` is still returned for a slug
 //! that doesn't exist at all, same as `integrators::get_integrator`).
 //!
-//! **Minimum cohort size (issue #96).** A raw count under
+//! **Minimum cohort size.** A raw count under
 //! `avalon_indexer::registry`'s configured floor is coarsened to the floor
 //! itself with `exact: false` before it ever reaches this handler — see
 //! that module's own doc comment for the enforcement point. This handler
@@ -93,7 +92,7 @@ pub async fn get_integrator_registry(
 ) -> Result<Json<IntegratorRegistryResponse>, AppError> {
     let integrator_id = fetch_integrator_id_by_slug(&state, &slug).await?;
     // Matches `projections::attestations`'s own fixture convention for the
-    // `issuer` field ahead of achievement issuing (Epic #30) actually
+    // `issuer` field ahead of achievement issuing actually
     // landing — see `avalon_indexer::registry::compute_for_integrator`'s doc
     // comment.
     let issuer = format!("game:{slug}");

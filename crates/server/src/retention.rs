@@ -10,7 +10,7 @@
 //! pruning left disabled, never runs this loop at all, rather than running
 //! it and having it no-op every tick forever.
 //!
-//! **Archive-confirmation gating (issue #569).** `avalon_chain::retention::RetentionConfig`'s
+//! **Archive-confirmation gating.** `avalon_chain::retention::RetentionConfig`'s
 //! `archive_peers`/`min_archive_confirmations` are pure config — the
 //! *chain* crate deliberately has no network I/O of its own (see its own
 //! module doc comment). This module is where that config actually becomes

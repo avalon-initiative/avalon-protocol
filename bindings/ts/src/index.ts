@@ -1,4 +1,4 @@
-// bindings/ts — TypeScript reference SDK for Avalon Protocol (issue #701).
+// bindings/ts — TypeScript reference SDK for Avalon Protocol.
 // Self-contained: no dependency on packages/api-client, apps/hub, or
 // apps/mobile-hub. See docs/architecture/sdk.md for the full surface.
 export { AvalonClient } from './client.js'

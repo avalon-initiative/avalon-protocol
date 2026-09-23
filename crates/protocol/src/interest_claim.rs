@@ -31,15 +31,15 @@
 //! local (ledger-derived) membership projection at lookup time
 //! (`avalon-server`'s `crate::interest::lookup_claimed`), the same
 //! two-questions-not-one split `docs/architecture/achievements.md`'s
-//! authenticity-vs-validity distinction (ADR #76) already establishes for a
+//! authenticity-vs-validity distinction already establishes for a
 //! different kind of signed claim.
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// What an [`InterestClaim`] can vouch for — mirrors `avalon-server`'s own
-/// `interest::InterestScope`, minus the `Network` variant (issue #596's
-/// mirror-sync use of the same DHT mechanism is node-to-node, not
+/// `interest::InterestScope`, minus the `Network` variant (mirror-sync's
+/// use of the same DHT mechanism is node-to-node, not
 /// identity-scoped, and is deliberately out of scope here — see this
 /// module's own doc comment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

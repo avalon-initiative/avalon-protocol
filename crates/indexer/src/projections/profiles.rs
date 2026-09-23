@@ -1,4 +1,4 @@
-//! The `profiles` projection — display name (issue #510: the globally
+//! The `profiles` projection — display name (the globally
 //! unique, case-insensitive handle itself, no discriminator), avatar —
 //! built from `identity.created` and `profile.updated`.
 //!
@@ -6,7 +6,7 @@
 //! real `profiles` table `crates/server` already had before this ticket
 //! (`crates/server/db/migrations/0001_identity_and_auth`,
 //! `.../0005_friend_handles`, `.../0063_drop_discriminator_unique_display_names`):
-//! closing issue #42 for profiles means retargeting who is allowed to write
+//! retargeting who is allowed to write
 //! that table, not standing up a new one. `handlers::register_finish`/
 //! `update_profile` no longer INSERT/UPDATE `profiles` themselves — they
 //! call [`crate::postgres::PostgresIndexer::apply_in_tx`] with the same
@@ -14,7 +14,7 @@
 //! inside the same transaction, so the identity/profile/outbox rows commit
 //! or roll back together. See `docs/architecture/query-and-indexing.md`.
 //!
-//! Closing issue #44's `profiles` slice: [`fetch`] and [`fetch_many`] are
+//! The `profiles` read slice: [`fetch`] and [`fetch_many`] are
 //! the read half — every function generic over `sqlx::PgExecutor` so a
 //! caller can pass either the shared pool
 //! (`handlers::me`/`get_identity_profile`/`list_profiles`) or an open
@@ -24,7 +24,7 @@
 //! `handlers.rs` no longer has any SQL against `profiles` at all — every
 //! read goes through here.
 //!
-//! Issue #510: `display_name` uniqueness (case-insensitive, via
+//! `display_name` uniqueness (case-insensitive, via
 //! `profiles_display_name_lower_idx`) is enforced by [`apply`]'s own
 //! INSERT/UPDATE statement — the real, atomic enforcement point, not a
 //! separate prior check a concurrent writer could race past. A violation
@@ -48,7 +48,7 @@ use crate::IndexError;
 /// `handlers::profile_updated_payload`), so a full row isn't always
 /// available to decode. `avatar_url`/`bio`/`pronouns`: `Some(None)` is the
 /// third state — explicitly cleared, distinct from both "leave alone" and
-/// "set to a value." `favorite_genres` has only two states (issue #155): a
+/// "set to a value." `favorite_genres` has only two states: a
 /// present key always fully replaces the list (including to empty), since
 /// there's no meaningful "clear to null" distinct from "clear to empty" for
 /// a list.
@@ -60,9 +60,9 @@ pub struct ProfileWrite {
     pub bio: Option<Option<String>>,
     pub favorite_genres: Option<Vec<String>>,
     pub pronouns: Option<Option<String>>,
-    /// Expanded self-described fields (issue #372) — same three-state
+    /// Expanded self-described fields — same three-state
     /// (`banner_url`/`status`/`timezone`/`theme_color`/`location`) or
-    /// two-state (`links`) semantics as their #155 counterparts above.
+    /// two-state (`links`) semantics as their counterparts above.
     pub banner_url: Option<Option<String>>,
     pub status: Option<Option<String>>,
     pub links: Option<Vec<String>>,

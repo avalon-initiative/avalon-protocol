@@ -1,4 +1,4 @@
-// Live push over WebSocket (issues #136/#438) on AccountSession — additive
+// Live push over WebSocket on AccountSession — additive
 // to the point-in-time reads `social.ts`/`guildAdmin.ts`/`conversations.ts`
 // already cover, not a replacement for them. Mirrors
 // packages/api-client/src/client.ts's `openPresenceSocket`/
@@ -124,12 +124,12 @@ function subscribeAfterNodeInfo(
 
 declare module './core.js' {
   interface AccountSession {
-    /** `GET /ws/presence` (issue #136) — live presence push, additive to
+    /** `GET /ws/presence` — live presence push, additive to
      * `presenceOf`'s point-in-time reads. `onUpdate` fires once per pushed
      * update, including the immediate catch-up snapshot the server sends
      * for each newly-subscribed id. */
     subscribePresence(onUpdate: (presence: PresenceUpdate) => void): PresenceSubscription
-    /** `GET /ws/messages` (issue #438) — live push for one guild channel's
+    /** `GET /ws/messages` — live push for one guild channel's
      * messages, additive to `channelMessages`'s cursor-paginated reads. One
      * connection per subscription; a caller viewing a different channel
      * closes this one and opens a fresh one. `onDeleted` (optional) fires

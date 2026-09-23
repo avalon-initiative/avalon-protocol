@@ -1,5 +1,5 @@
-//! The shared read-side authorization helper issue #87 asks for — the
-//! counterpart to `crate::authz::require_capability` (issue #28) for reads:
+//! The shared read-side authorization helper — the
+//! counterpart to `crate::authz::require_capability` for reads:
 //! every read path that exposes one identity's data to a *different*
 //! identity (as opposed to an integrator, which goes through its own
 //! capability-grant check) should call [`is_visible`] rather than deciding
@@ -12,8 +12,8 @@
 //! an integrator's capability grant is a wholly separate, already-existing
 //! mechanism (`crate::authz::require_capability`) and this module never
 //! composes with it — the two dimensions (viewer relationship, and "which
-//! integrator was granted what") are independent, matching this issue's
-//! own "a game's capability grant never widens what non-game viewers can
+//! integrator was granted what") are independent, matching the
+//! "a game's capability grant never widens what non-game viewers can
 //! see" invariant: neither should ever fold into the other.
 //!
 //! **Scope of this first pass.** Two resources are wired through this
@@ -22,7 +22,7 @@
 //! `profiles.presence_visibility`) and guild rosters (`crate::guilds::list_members`,
 //! previously entirely unscoped — now gated by `guilds.roster_visibility`,
 //! a guild-level setting). Profile fields already have their own
-//! established field-level exposure system (issue #403); there is no
+//! established field-level exposure system; there is no
 //! endpoint today that lets one identity read another's *friends list* at
 //! all, so there's nothing to gate there yet; achievement history's own
 //! per-claim hide/feature control is a separate, larger feature this pass
@@ -106,7 +106,7 @@ async fn is_guild_member(
     Ok(guild_rosters::is_member(&state.pool, guild_id, identity_id).await?)
 }
 
-/// Sets `identity_id`'s own `profiles.presence_visibility` (issue #87) —
+/// Sets `identity_id`'s own `profiles.presence_visibility` —
 /// called from `handlers::update_profile`, outside that request's own
 /// transaction and with no `profile.updated` payload entry, the same
 /// not-durable-history treatment `discovery::set_discoverable` already

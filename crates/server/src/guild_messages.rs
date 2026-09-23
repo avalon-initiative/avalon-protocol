@@ -1,9 +1,9 @@
-//! Guild chat messages (issue #22) — deliberately NOT protocol history:
+//! Guild chat messages — deliberately NOT protocol history:
 //! never touches the ledger/outbox, high-volume, non-interoperable. See
 //! `docs/architecture/guilds.md` ("Guild chat is a network primitive",
 //! "Today in the repo") and `docs/architecture/guilds-implementation-log.md`
-//! for the archive-tier retention (#253), announcement-only channels
-//! (#250), and moderation-deletion-vs-archive semantics.
+//! for the archive-tier retention, announcement-only channels,
+//! and moderation-deletion-vs-archive semantics.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -59,8 +59,8 @@ fn archive_retention_days() -> i64 {
         .unwrap_or(DEFAULT_ARCHIVE_RETENTION_DAYS)
 }
 
-/// `view_details` gate for reading a channel's message content (issue
-/// #458) — the resource-aware sibling of `channels::require_member`, used
+/// `view_details` gate for reading a channel's message content —
+/// the resource-aware sibling of `channels::require_member`, used
 /// by both [`list_messages`] and [`list_archive`]. `channel_public` is
 /// the caller's own already-fetched `guild_channels.public` for this
 /// exact channel.
@@ -117,8 +117,8 @@ pub struct ListMessagesQuery {
 }
 
 /// `GET /guilds/{id}/channels/{cid}/messages?before=&limit=` — newest
-/// first, cursor-paginated. Requires `view_details` on this channel
-/// (issue #458) — baseline for a member is exactly the old plain
+/// first, cursor-paginated. Requires `view_details` on this channel —
+/// baseline for a member is exactly the old plain
 /// membership gate (unchanged for a channel with no overrides), and a
 /// non-member of a `public` channel in a public guild can now read it
 /// too, same "public flag widens exposure" shape events already have.
@@ -199,7 +199,7 @@ pub struct ArchivedMessageResponse {
 /// `GET /guilds/{id}/channels/{cid}/messages/archive?before=&limit=` — same
 /// newest-first, cursor-paginated shape as [`list_messages`], over
 /// `guild_messages_archive` instead of the live table. Requires
-/// *current* `view_details` on the channel (issue #458), same gate
+/// *current* `view_details` on the channel, same gate
 /// [`list_messages`] uses — see the module doc comment's "Archive read
 /// access" section for why this doesn't try to reconstruct membership as
 /// of when each message was originally sent.
@@ -353,7 +353,7 @@ pub async fn send_message(
 /// Keeps at most `message_cap()` newest messages in `channel_id` (ordered
 /// newest-first the same way `list_messages` orders them); anything past
 /// that moves into `guild_messages_archive` instead of being deleted
-/// outright (issue #253, implementing #193's decision). The
+/// outright. The
 /// insert-then-delete pair runs inside one transaction so a row is never
 /// visible in neither table (or, worse, in both) if this is interrupted
 /// partway through. Both statements independently recompute "the newest N
@@ -529,12 +529,12 @@ pub struct GuildAnnouncementAlert {
     pub sent_at: OffsetDateTime,
 }
 
-/// `GET /me/guild-announcements` (issue #280) — the most recent posts to
+/// `GET /me/guild-announcements` — the most recent posts to
 /// any announcement-only channel in any guild the caller currently belongs
 /// to, newest first. This is a plain read, not a notification/unread
 /// tracker: read/unread state is the Hub's own client-local concern (see
 /// `docs/architecture/guilds.md`'s "Guild announcement alerts" section),
-/// matching #22/#74/#253's "chat is operational-tier, not protocol
+/// matching "chat is operational-tier, not protocol
 /// history" posture — there is nothing here to promote to durable state,
 /// so there is nothing here to track server-side either.
 ///
@@ -690,7 +690,7 @@ mod tests {
     /// what `prune_channel` is supposed to do with the rest: nothing is
     /// silently lost — every pruned id plus every kept id must together
     /// account for the full input set, modeling "moved to the archive"
-    /// rather than "deleted outright" (issue #253).
+    /// rather than "deleted outright".
     #[test]
     fn pruned_ids_land_in_archive_not_deleted_outright() {
         let base = OffsetDateTime::now_utc();

@@ -1,4 +1,4 @@
-//! Exercises guild CRUD, roles, and ownership transfer (issue #20) against
+//! Exercises guild CRUD, roles, and ownership transfer against
 //! a real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!
@@ -446,7 +446,7 @@ async fn deleting_a_role() {
 }
 
 /// A custom role still held by a member can't be deleted — the database's
-/// own explicit application check (issue #506; the old `guild_members.role_index -> guild_roles.name_index` foreign key no longer applies)
+/// own explicit application check (the old `guild_members.role_index -> guild_roles.name_index` foreign key no longer applies)
 /// catches this, mapped to a clean 409 rather than a raw DB error.
 #[tokio::test]
 #[ignore]
@@ -749,7 +749,7 @@ async fn guild_endpoints_require_a_session_token() {
     assert_eq!(get.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
-// --- Membership lifecycle (issue #21) --------------------------------------
+// --- Membership lifecycle --------------------------------------
 
 #[tokio::test]
 #[ignore]
@@ -1071,7 +1071,7 @@ async fn an_officer_cannot_remove_another_officer_without_manage_roles() {
         // Index 1 is "officer" — see the starter-role ordering asserted in
         // `creating_a_guild_makes_the_creator_the_owner`. Officer grants
         // `manage_members`, so this promotion is an escalation and needs a
-        // fresh signature (#697/#698).
+        // fresh signature.
         let signature = sign_action(
             &signing_key,
             "guild.member_role.update",
@@ -1401,7 +1401,7 @@ async fn a_member_still_sees_their_own_non_recruiting_guild_in_default_browse() 
 }
 
 /// Issue #258: Discover cards carry `banner`/`icon`, round-tripping the
-/// values set via `PATCH /guilds/{id}` (#153/#246), and reporting `null`
+/// values set via `PATCH /guilds/{id}`, and reporting `null`
 /// for a guild that never set them — same shape `GET /guilds/{id}` already
 /// returns, just also reachable from the browse listing.
 #[tokio::test]
@@ -1569,7 +1569,7 @@ async fn pagination_does_not_skip_or_duplicate_rows_across_pages() {
     }
 }
 
-// -- Issue #206 (implementing decision #160): integrator affinity breakdown --
+// -- Integrator affinity breakdown --
 
 /// Seeds a `integrators` row directly (bypassing the integrator registration ceremony,
 /// same "seed via SQL, endpoint behavior doesn't depend on how the row got
@@ -1657,7 +1657,7 @@ async fn invite_and_accept(
 }
 
 /// #206's core acceptance criteria: the breakdown is computed from real
-/// `IntegratorBinding` (#83) data only, updates as bindings change, and is never
+/// `IntegratorBinding` data only, updates as bindings change, and is never
 /// something a manager can add for an integrator with zero bound members (there's
 /// no add action at all — this test never calls one).
 #[tokio::test]
@@ -2440,7 +2440,7 @@ async fn only_the_applicant_can_withdraw_their_own_join_request() {
     assert!(withdraw.status().is_success(), "{:?}", withdraw.status());
 }
 
-/// `GET .../join-requests/mine` (issue #256) returns the applicant's own
+/// `GET .../join-requests/mine` returns the applicant's own
 /// pending request once one exists, and `null` beforehand — no
 /// `manage_members` grant required either way, since it's the caller's own
 /// data.
@@ -2563,7 +2563,7 @@ async fn my_join_request_never_returns_another_identitys_request() {
 }
 
 /// End-to-end: an applicant can discover their own pending request via
-/// `mine`, then withdraw it via the existing `DELETE` route (issue #256's
+/// `mine`, then withdraw it via the existing `DELETE` route (its
 /// motivation — the Hub previously had no way to reach this at all), and
 /// `mine` reflects the withdrawal afterward.
 #[tokio::test]

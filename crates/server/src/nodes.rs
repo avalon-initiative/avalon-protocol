@@ -42,9 +42,9 @@
 //! re-announcing) is dropped from `active_peers` too on the next tick,
 //! making room for others rather than permanently pinning a dead slot.
 //!
-//! **Issue #599, Layer 2: shard-existence gossip rides on the same
-//! mechanism**, the same way DHT identity already rides along announce
-//! (#582). [`ShardAnnouncement`]/[`ShardRegistry`] are this node's
+//! **Layer 2: shard-existence gossip rides on the same
+//! mechanism**, the same way DHT identity already rides along announce.
+//! [`ShardAnnouncement`]/[`ShardRegistry`] are this node's
 //! anti-entropy view of "every shard I currently know exists, and a URL
 //! that claims to serve it" — gossiped bidirectionally on every announce
 //! exchange (both the request and the response now carry a
@@ -407,11 +407,11 @@ pub struct AnnounceRequest {
     /// Issue #582 — see `PeerInfo::libp2p_listen_addrs`.
     #[serde(default)]
     pub libp2p_listen_addrs: Vec<String>,
-    /// Issue #599, Layer 2: this node's own current [`ShardRegistry`]
+    /// Layer 2: this node's own current [`ShardRegistry`]
     /// snapshot — gossiped to the callee on every announce, merged into
     /// its own registry the same way [`AnnounceResponse::known_shards`] is
     /// merged back into this node's. `#[serde(default)]` so an older
-    /// peer's announce (pre-#599) still decodes, just with nothing to
+    /// peer's announce still decodes, just with nothing to
     /// merge.
     #[serde(default)]
     pub known_shards: Vec<ShardAnnouncement>,
@@ -604,10 +604,10 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
     })
 }
 
-/// This node's own libp2p DHT identity (issue #582), computed once at
+/// This node's own libp2p DHT identity, computed once at
 /// startup by `crate::dht::start` — `None` when `AVALON_DHT_ENABLED` isn't
-/// set, in which case this node announces exactly as it did before #582
-/// existed. Threaded into [`run_worker`] so every outbound announce also
+/// set, in which case this node announces exactly as it did before DHT
+/// identity existed. Threaded into [`run_worker`] so every outbound announce also
 /// tells peers how to find this node in the DHT, the same way `roles`/
 /// `protocol_version` already do for the HTTP peer table.
 #[derive(Debug, Clone)]
@@ -632,7 +632,7 @@ pub struct AnnounceConfig {
     /// regardless. `None` here means this node can still be announced TO,
     /// it just can't announce itself anywhere.
     pub own_base_url: Option<String>,
-    /// `AVALON_NODE_MAX_PEERS` (issue #599, Layer 1) — the cap on this
+    /// `AVALON_NODE_MAX_PEERS` (Layer 1) — the cap on this
     /// node's *active* announce/exchange set (bootstrap peers plus
     /// peers promoted from what's been discovered through them). Bounds
     /// this node's own direct-connection count regardless of how large the
@@ -650,9 +650,8 @@ const DEFAULT_ANNOUNCE_INTERVAL_SECS: u64 = 180;
 const PRUNE_INTERVAL_MULTIPLE: u32 = 3;
 /// Default for `AVALON_NODE_MAX_PEERS` — generous enough that a real
 /// small-to-mid-size deployment never bumps into it in practice, but still
-/// a real, enforced bound rather than "unlimited" (issue #599's own stated
-/// invariant: a node's direct-connection count must stay bounded
-/// regardless of network size).
+/// a real, enforced bound rather than "unlimited" — a node's direct-connection
+/// count must stay bounded regardless of network size.
 const DEFAULT_MAX_PEERS: usize = 50;
 
 /// Pure resolution logic, split out for direct unit testing (same "pure
@@ -662,7 +661,7 @@ const DEFAULT_MAX_PEERS: usize = 50;
 /// it a controlled anchor list instead of depending on
 /// `docs/trusted-networks.json`'s actual (currently empty) `seed_nodes`.
 ///
-/// `pub` (issue #511): `avalon-cli`'s `discover-mirror-peers` command
+/// `pub`: `avalon-cli`'s `discover-mirror-peers` command
 /// reuses this exact same resolution — `AVALON_BOOTSTRAP_PEERS` verbatim,
 /// or this network's seed nodes — rather than re-implementing it, so the
 /// two never drift apart on what "the configured bootstrap peers" means.
@@ -727,14 +726,14 @@ impl AnnounceConfig {
 /// to `combined` — milestone 1's "one `avalon-server` process" reality, per
 /// that doc's own capability table.
 ///
-/// This used to be purely advisory (peer-table bookkeeping and #539's
+/// This used to be purely advisory (peer-table bookkeeping and the
 /// realtime relay routing only) — `main.rs` now also reads it to decide
 /// what actually gets wired up at startup: whether to run local presence/
-/// WebSocket handling at all (issue #663, see [`role_included`]/
+/// WebSocket handling at all (see [`role_included`]/
 /// [`realtime_mode_from_env`]), whether to construct a local
-/// `PostgresIndexer` or a `RemoteIndexer` (issue #662, see
+/// `PostgresIndexer` or a `RemoteIndexer` (see
 /// [`indexer_role_is_local`]), and whether this process is a genuinely
-/// standalone Settlement node (issue #664, see [`is_settlement_only`]).
+/// standalone Settlement node (see [`is_settlement_only`]).
 /// `pub` for all three reasons, and so `main.rs` doesn't reimplement the
 /// same env-var parsing.
 pub fn node_roles() -> Vec<String> {

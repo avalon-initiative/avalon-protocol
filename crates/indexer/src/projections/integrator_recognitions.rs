@@ -1,4 +1,4 @@
-//! Public recognition relationships (issue #89) — the graph
+//! Public recognition relationships — the graph
 //! `crates/server/src/recognitions.rs` writes to and reads from.
 //! `integrator.recognition_published`/`.recognition_revoked` decode into
 //! an upsert of the `(recognizer_id, recognized_id)` row; replaying either

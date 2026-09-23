@@ -1,12 +1,12 @@
 // Guild membership, rosters, channels, chat, and events — capability-gated
-// reads/writes on Session (issue #23), mirroring crates/sdk/src/guilds.rs.
+// reads/writes on Session, mirroring crates/sdk/src/guilds.rs.
 //
 // The SDK never lets an integrator act with guild authority — creating
 // guilds, inviting, kicking, changing roles, and managing channels all stay
 // identity-authority-only actions taken through the Hub, not exposed here.
 //
 // RosterAsync/ChannelsAsync/MessagesAsync apply no visibility scoping yet
-// (issue #87) — this returns exactly what the server returns, matching the
+// this returns exactly what the server returns, matching the
 // Rust SDK's own documented gap rather than inventing stricter behavior.
 
 using System;
@@ -270,7 +270,7 @@ namespace Avalon.Sdk
         }
 
         /// <summary>GET /guilds/{id}/members — requires guilds.read. Full roster, no
-        /// visibility scoping (issue #87). Embeds each member's Presence when presence.read
+        /// visibility scoping. Embeds each member's Presence when presence.read
         /// is granted too, via one batched PresenceOfAsync call.</summary>
         public async Task<IReadOnlyList<GuildRosterMember>> RosterAsync(CancellationToken ct = default)
         {
@@ -320,7 +320,7 @@ namespace Avalon.Sdk
 
         /// <summary>GET /guilds/{id}/integrator-breakdown — requires guilds.read. How many
         /// current members are actively bound to each integrator the guild plays, most-played
-        /// first (ties broken alphabetically). A display of real counts (issue #160), never a
+        /// first (ties broken alphabetically). A display of real counts, never a
         /// system verdict — no minimum-member threshold, no fixed cap.</summary>
         public async Task<Avalon.Sdk.Generated.GameBreakdownResponse> GameBreakdownAsync(CancellationToken ct = default)
         {

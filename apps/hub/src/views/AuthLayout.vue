@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The pre-authentication page frame (issue #148): wordmark above a
+// The pre-authentication page frame: wordmark above a
 // centered card on the dark background. App-level layout, not a library
 // component — it's only ever used by Login and CreateIdentity.
 import { AvalonIcon } from '@avalon/ui'

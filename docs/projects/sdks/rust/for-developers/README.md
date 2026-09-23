@@ -1,14 +1,14 @@
 # For Developers
 
 Documentation for developers integrating Avalon into their own game, app, or
-service — the audience the SDKs (`crates/sdk`, `bindings/csharp`) exist for.
+service — the audience the SDKs (the Rust SDK, `bindings/csharp`) exist for.
 
 Start with [`WhyBuildOnAvalon.md`](WhyBuildOnAvalon.md) for the case for
 integrating your game, app, or service with Avalon at all — a vision
 document, not an integration guide. The pages below are the integration
-guide, for the Rust SDK (`crates/sdk`), the reference implementation.
+guide, for the Rust SDK, the reference implementation.
 `bindings/csharp/AvalonSdk` mirrors most of that surface but doesn't have
-its own parallel guide yet — it'll get one once #51 catches it up.
+its own parallel guide yet.
 
 ## Guides
 
@@ -28,13 +28,14 @@ its own parallel guide yet — it'll get one once #51 catches it up.
 These pages are about *doing* — they link into
 [`../../../backend-server/architecture/`](../../../backend-server/architecture/) for the concepts behind what you're
 doing (the trust model, capability grants, revocation, visibility) rather
-than restating it. Runnable, `make check`-compiled examples for each guide's
-core flow live in `crates/sdk/examples/` (`authenticate.rs`,
-`issue_achievement.rs`, `list_friends.rs`).
+than restating it. Runnable examples for each guide's core flow live in
+`avalon-sdks`' `rust/examples/` (`authenticate.rs`, `issue_achievement.rs`,
+`list_friends.rs`).
 
 See also [`../../architecture/sdk.md`](../../architecture/sdk.md) for the SDK
 design principle (protocol capabilities, not infrastructure),
 [`../../../backend-server/architecture/trust-model.md`](../../../backend-server/architecture/trust-model.md) for what an
-integrator is and isn't told about an attestation, [`../../../stakeholders/Proposal.md`](../../../../stakeholders/Proposal.md)
-§17–19 and §24 for the intended developer experience, and the repository root
-`README.md` for the current build status.
+integrator is and isn't told about an attestation,
+[`../../../stakeholders/Proposal.md`](../../../../stakeholders/Proposal.md)
+for the intended developer experience, and the repository root `README.md`
+for the current build status.

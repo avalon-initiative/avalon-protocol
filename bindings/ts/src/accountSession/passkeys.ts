@@ -1,4 +1,4 @@
-// Multi-passkey management (issue #200) on AccountSession — WebAuthn login
+// Multi-passkey management on AccountSession — WebAuthn login
 // credentials, distinct from devices.ts (event-signing keys). See
 // crates/server/src/passkeys.rs.
 import { AccountSession } from './core.js'

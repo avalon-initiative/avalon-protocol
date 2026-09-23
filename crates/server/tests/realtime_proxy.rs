@@ -5,7 +5,7 @@
 //! client connects to the Gateway's own `/ws/presence`/`/ws/messages` and
 //! genuinely receives presence/chat events that originated from another
 //! identity's REST call against the *Gateway*, proving the full round
-//! trip: Gateway REST handler -> `crate::realtime_relay` (#539/#584) ->
+//! trip: Gateway REST handler -> `crate::realtime_relay` ->
 //! Realtime node's local `PresenceStore`/`ChatBus` -> the proxied
 //! connection (`crate::realtime_proxy`) -> this test's client. Also
 //! covers the Realtime process restarting mid-session: the client must
@@ -18,7 +18,7 @@
 //! **Own isolated schema, same reason `internal_role_protocol.rs` uses
 //! one**: `PostgresSettlementProvider::connect` refuses to start against a
 //! database whose ledger genesis already belongs to a different
-//! `network_id` (issue #173) — sharing this environment's own default
+//! `network_id` — sharing this environment's own default
 //! schema (already genesis-rooted at `avalon-dev-local`) would make every
 //! run of this test fail that check for an unrelated reason. `setup_schema`
 //! below creates (if needed) and migrates `test_realtime_proxy_663` via a
@@ -153,7 +153,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
         .execute(pool)
         .await
         .expect("failed to seed identity");
-    // `presence_visibility` defaults to `friends` (issue #87/#55) — set to
+    // `presence_visibility` defaults to `friends` — set to
     // `public` here so this test's two freshly-seeded, never-friended
     // identities can see each other's presence without also seeding a
     // friendship, which isn't otherwise relevant to what this test proves.
@@ -236,7 +236,7 @@ fn mint_channel_claim(
 /// Waits until `peer_base`'s own `/nodes/peers` knows about `origin_base`
 /// — same convergence-wait `realtime_reconnect.rs::wait_until_peered`
 /// establishes, needed here so the Gateway's `relay_to_peers` call
-/// (#539) actually has the Realtime node in its peer table by the time
+/// actually has the Realtime node in its peer table by the time
 /// this test starts asserting on delivery.
 async fn wait_until_peered(http: &reqwest::Client, peer_base: &str, origin_base: &str) {
     for _ in 0..60 {

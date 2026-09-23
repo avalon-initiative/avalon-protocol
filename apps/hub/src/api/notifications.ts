@@ -1,4 +1,4 @@
-// Pure logic backing useNotificationSummary (issue #466) — the Hub-wide
+// Pure logic backing useNotificationSummary — the Hub-wide
 // pending-action badge. Two of the seven aggregated sources need actual
 // "have I seen this" state that doesn't exist anywhere server-side yet
 // (direct messages have no unread tracking at all; being named a

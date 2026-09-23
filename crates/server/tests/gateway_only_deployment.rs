@@ -1,12 +1,12 @@
-//! Issue #662: live proof that a Gateway-only `avalon-server` process
+//! Live proof that a Gateway-only `avalon-server` process
 //! (`AVALON_NODE_ROLES=gateway`, no local `PostgresIndexer`) produces the
 //! exact same persisted projection state as a combined process, by routing
-//! every indexer write through `IndexerHandle::Remote` (#661's
+//! every indexer write through `IndexerHandle::Remote` (the
 //! `RemoteIndexer`/`/internal/indexer/*` protocol) to a separately-running
 //! Indexer-capable process instead.
 //!
 //! Gated `--ignored`, same convention as
-//! `crates/server/tests/internal_role_protocol.rs` (#661), whose
+//! `crates/server/tests/internal_role_protocol.rs`, whose
 //! schema-scoped, manually-started-second-process setup this file reuses
 //! directly — see that file's own module doc comment for the general
 //! pattern. Unlike that file (which talks to the second process only via a

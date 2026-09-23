@@ -1,4 +1,4 @@
-// Cross-node login grants (epic #623) — mints
+// Cross-node login grants — mints
 // `avalon_protocol::cross_node_login::CrossNodeLoginGrant` /
 // `crates/server/src/cross_node_login.rs` locally. A free function rather
 // than an AccountSession method: apps/hub's own call site

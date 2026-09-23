@@ -1,4 +1,4 @@
-// Unit tests for AccountSession (issue #700) — the canonical-message shape byte-for-byte
+// Unit tests for AccountSession — the canonical-message shape byte-for-byte
 // against the known avalon:<action_tag>:v1:... format, plus representative signed-call round
 // trips through StubHttpMessageHandler proving the signature header/body actually gets
 // attached correctly (or, with no local signing key, that it's sent as explicit JSON nulls

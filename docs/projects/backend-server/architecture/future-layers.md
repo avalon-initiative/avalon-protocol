@@ -2,8 +2,8 @@
 
 Two phases sit deliberately after the network, the SDK, and external
 integrations have proven themselves. **Portable assets are Phase 4. Economic
-interoperability is Phase 5. Neither is foundational, and neither has tickets
-yet.** What this document does is state what today's design must not preclude,
+interoperability is Phase 5. Neither is foundational, and neither has active
+tickets yet.** What this document does is state what today's design must not preclude,
 so that when the time comes nothing has to be torn out.
 
 ## Portable assets (Phase 4)
@@ -44,9 +44,8 @@ Boundaries that hold from day one:
   rewrite Integrator B's, and it cannot alter ownership history.
 - **Standardized asset schemas are still open**, listed in
   [`../stakeholders/Proposal.md#32-open-questions`](../../../stakeholders/Proposal.md#32-open-questions).
-  [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181)
-  (decided, closed) settled the general schema model, representation, and
-  versioning strategy for integrator data broadly — see
+  The general schema model, representation, and versioning strategy for
+  integrator data broadly is already settled — see
   [`./integrator-space.md`](./integrator-space.md) — but this phase's asset-specific
   application of it isn't itself decided. A schema reference on the asset,
   like the one attestations carry, is the likely shape; a universal item
@@ -98,21 +97,11 @@ than defining it.
   [`../stakeholders/Proposal.md#13-permission-model`](../../../stakeholders/Proposal.md#13-permission-model) are
   reserved names, not a commitment to build them.
 
-## Today in the repo
+## Current implementation
 
-- No `assets` module, type, event, or ticket. Per
-  [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69), when one
-  exists it is `crates/protocol/src/assets.rs`, not a new crate.
-- `GlobalId` and `AchievementAttestation` in `crates/protocol/src/` are the
-  patterns an asset issuance would follow.
-- No economic primitive of any kind.
-
-## Decisions and tickets
-
-- [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) ownership
-  and provenance are in the must-reconstruct set once they exist
-- [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) recognition
-  is scoped and consumer-decided — applies to assets unchanged
-- [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) integrator
-  inventory stays with the integrator; portability is opt-in per item
-- No open tickets; filed when Phase 4 is in reach, not before.
+No `assets` module, type, event, or ticket exists yet. When one does, it is
+`crates/protocol/src/assets.rs`, a module of the existing `protocol` crate, not a new
+crate. `GlobalId` and `AchievementAttestation` in `crates/protocol/src/` are the
+patterns an asset issuance would follow. No economic primitive of any kind exists.
+</content>
+</invoke>

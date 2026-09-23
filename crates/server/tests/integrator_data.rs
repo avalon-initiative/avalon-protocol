@@ -1,5 +1,5 @@
 //! Exercises Integrator Space instance-data publication and its visibility-aware
-//! read endpoint (issue #384, implementing #381's decided policy) against a
+//! read endpoint against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!

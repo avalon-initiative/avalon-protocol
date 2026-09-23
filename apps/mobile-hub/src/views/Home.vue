@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The signed-in placeholder screen: proves the shared session/API wiring
-// works end to end (#60) — guild chat/friends/presence views are separate,
-// later work under epic #59, not part of wiring the API itself.
+// works end to end — guild chat/friends/presence views are separate,
+// later work, not part of wiring the API itself.
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAvatar, AvalonButton, AvalonCard } from '@avalon/ui'

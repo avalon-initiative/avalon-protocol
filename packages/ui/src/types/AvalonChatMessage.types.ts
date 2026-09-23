@@ -8,7 +8,7 @@ export interface AvalonChatMessageProps {
   // the avatar; never shown for the viewer's own messages (isOwn), since a
   // reader always knows their own status.
   presenceStatus?: PresenceStatus
-  // Resolved via GET /identities/profiles (issue #161) by the caller,
+  // Resolved via GET /identities/profiles by the caller,
   // e.g. useGuildChat. Falls back to authorId when unresolved (a fresh
   // author this session hasn't looked up yet, or the lookup failed).
   authorDisplayName?: string
@@ -18,7 +18,7 @@ export interface AvalonChatMessageProps {
   // only, no logic" rule.
   sentAtLabel: string
   // Whether the caller may hard-delete this message — decided by the app
-  // (issue #24's UI-gating invariant), never by this component.
+  // never by this component.
   canDelete?: boolean
   // Whether the viewing session authored this message — decided by the
   // caller (authorId === selfId), never guessed here. Drives the

@@ -160,7 +160,7 @@ describe('IntegrationDirectory', () => {
     expect(router.currentRoute.value.params.slug).toBe('ashen-realms')
   })
 
-  // Issue #432/ADR #437: a tier-2 browse view — should pick up a newly
+  // A tier-2 browse view — should pick up a newly
   // published integrator without a manual reload.
   it('polls for newly published integrators without a manual reload', async () => {
     vi.useFakeTimers()

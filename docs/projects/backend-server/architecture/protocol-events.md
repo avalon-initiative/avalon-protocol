@@ -5,9 +5,8 @@ every integrator action is a protocol event; ordinary gameplay never becomes one
 See [`./worked-ledger-example.md`](./worked-ledger-example.md) for one
 hypothetical user's ledger rendered as real, ordered JSON instances of the
 catalogue below, alongside what never appears on it.
-**Events are the canonical record — every table is a projection of them**
-([#75](https://github.com/LunarVagabond/avalon-protocol/issues/75)), and
-**history is append-only: a correction is a new event, never an edit.**
+**Events are the canonical record — every table is a projection of them**,
+and **history is append-only: a correction is a new event, never an edit.**
 
 ## Hot gameplay vs durable events
 
@@ -48,7 +47,7 @@ pub struct Commitment { pub batch_id: Uuid, pub proof: Vec<u8>, pub committed_at
 `kind` stays a plain `String` on the wire/storage type itself — the ledger
 schema and every existing consumer keep working byte-for-byte — but domain
 code no longer hand-types that string: `ProtocolEventKind`
-(`crates/protocol/src/events.rs`, issue #82) is an enum with a permanent
+(`crates/protocol/src/events.rs`) is an enum with a permanent
 wire-string mapping and an `Other(String)` escape hatch, the same template
 `Capability` established, so a new kind still never requires a protocol
 version bump (`Other` covers it), while every *known* kind gets real
@@ -70,14 +69,14 @@ Protocol Event
       +----> Event Buffer
                   |
                   v
-              Batching                  (EventBatch; #38)
+              Batching                  (EventBatch)
                   |
                   v
           Commitment / Merkle Root      (batch_root plus a real RFC 6962 Merkle
-                                          root/STH now, #40 decided, #210)
+                                          root/STH)
                   |
                   v
-              Settlement                (SettlementProvider; Avalon's own chain, #79/#93)
+              Settlement                (SettlementProvider; Avalon's own chain)
 ```
 
 An event fans out to the read model and to the settlement path. The projection
@@ -93,8 +92,7 @@ not a durable fact anyone issues, indexes, or replays on its own.
 Every durable event must be able to be:
 
 - **signed** — by the actor asserting it (an issuer's key for attestations, the
-  identity's key for identity and profile claims once
-  [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) lands)
+  identity's key for identity and profile claims)
 - **verified** — signature against the key that was valid at `timestamp`
 - **indexed** — applied idempotently to a projection
 - **replayed** — in order, from genesis, to rebuild any projection
@@ -113,10 +111,9 @@ stored twice.
 The full row-by-row list of every `ProtocolEvent` kind — issuer/subject,
 payload, what it drives, and who signs it — lives in its own file:
 [`./protocol-events-catalogue.md`](./protocol-events-catalogue.md).
-Normative as of [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82):
-every "(done)" row has a real `ProtocolEventKindVariant` and typed payload
-struct backing it, kept honest by the compiler rather than by convention
-alone.
+Every "(done)" row there has a real `ProtocolEventKindVariant` and typed
+payload struct backing it, kept honest by the compiler rather than by
+convention alone.
 
 Two conventions worth knowing before you open that table: `issuer` and
 `subject` are `GlobalId`s (`crates/protocol/src/ids.rs`), namespaced so two
@@ -158,72 +155,64 @@ be thrown away and rebuilt. A "current status" column on a projection row (e.g.
 an attestation's revoked flag) is a cache of the latest relevant event, never
 the record — [`./revocation.md`](./revocation.md).
 
-## Today in the repo
+## Current implementation
 
-**Issue #82 (kind catalogue + typed payloads + versioning policy): done.**
-`ProtocolEventKind`/`ProtocolEventKindVariant` (`crates/protocol/src/events.rs`)
-and one payload struct per kind (`crates/protocol/src/event_payloads.rs`)
-back every kind the codebase actually emits — every real emitter across
-`crates/server/src` builds its `kind` and `payload` through these types,
-not a hand-typed string or an ad-hoc `serde_json::json!({...})`. Round-trip
-and fixture-decoding tests exist for every payload struct
-(`crates/protocol/src/event_payloads.rs`'s own test module); one real bug
-was caught by them before it ever reached live infra (an `Option<Option<T>>`
-field's default serde `Deserialize` collapsed "absent" and "explicit
-`null`" into the same value on the read side — fixed with the standard
-`deserialize_with` workaround). `docs/architecture/protocol-events-catalogue.md`
-is normative now, not proposed — kept honest by the compiler, not just
-convention.
+The kind catalogue, typed payloads, and versioning policy are all real and
+normative: `ProtocolEventKind`/`ProtocolEventKindVariant`
+(`crates/protocol/src/events.rs`) and one payload struct per kind
+(`crates/protocol/src/event_payloads.rs`) back every kind the codebase
+actually emits — every real emitter across `crates/server/src` builds its
+`kind` and `payload` through these types, not a hand-typed string or an
+ad-hoc `serde_json::json!({...})`. Round-trip and fixture-decoding tests
+exist for every payload struct.
 
 Types live in `crates/protocol/src/events.rs`, as shown above. There's no
 single dispatcher — each domain module emits its own kinds directly into
 `protocol_outbox` (`crates/server/src/outbox.rs`), in the same transaction as
 the row change it accompanies. Two signing postures recur throughout: a real
 per-event signature (rare so far — see `identity.created` and issuance
-below), or "network as signer," today's milestone-1 stand-in where the node
-attributes the event to whichever identity authenticated the request instead
-of embedding a signature. Almost every emitter below still uses the latter;
+below), or "network as signer," a current stand-in where the node attributes
+the event to whichever identity authenticated the request instead of
+embedding a signature. Almost every emitter below still uses the latter;
 where an emitter is genuinely signed, it's called out explicitly.
 
 - **`crates/server/src/handlers.rs`** — identity and profile.
   - `register_finish` emits `identity.created`, signed by the identity's own
     Ed25519 event-signing key (verified independently of the WebAuthn
     ceremony that authenticated registration). Payload: `identity_id` and
-    initial `display_name` — no `username` field exists anywhere (#73).
-    Issue #510: `display_name` is the globally-unique handle itself, no
-    discriminator suffix. Issue #525 surfaced that this identity's very
-    first signing key never got a durable event of its own — fixed in the
-    same handler, now also emitting `identity.signing_key_added` right
-    alongside `identity.created`, `approved_by_signing_key_id` set to
-    itself (self-approved, no separate approver exists yet at creation).
-  - `update_profile` emits `profile.updated` (#86, widened by #155) only
-    when `display_name`, `avatar_url`, `bio`, `favorite_genres`, or
-    `pronouns` actually changes; a no-op request emits nothing. Payload
-    carries only the changed fields. `avatar_url`/`bio`/`pronouns` use
-    `null` for an explicit clear vs. an absent key for untouched;
-    `favorite_genres` has no separate clear state — a present key is always
-    the field's complete new value, including `[]` to clear it.
-    Network-attributed, not identity-signed.
-- **`crates/server/src/friends.rs`** (#15) — `friend.requested`,
+    initial `display_name` — no `username` field exists anywhere.
+    `display_name` is the globally-unique handle itself, no discriminator
+    suffix. The same handler also emits `identity.signing_key_added` right
+    alongside `identity.created` (this identity's very first signing key),
+    `approved_by_signing_key_id` set to itself (self-approved, no separate
+    approver exists yet at creation).
+  - `update_profile` emits `profile.updated` only when `display_name`,
+    `avatar_url`, `bio`, `favorite_genres`, or `pronouns` actually changes; a
+    no-op request emits nothing. Payload carries only the changed fields.
+    `avatar_url`/`bio`/`pronouns` use `null` for an explicit clear vs. an
+    absent key for untouched; `favorite_genres` has no separate clear state —
+    a present key is always the field's complete new value, including `[]`
+    to clear it. Network-attributed, not identity-signed.
+- **`crates/server/src/friends.rs`** — `friend.requested`,
   `friend.accepted`, `friend.removed`. `issuer`/`subject` are both
   `identity:<id>:self:<verb>` `GlobalId`s naming the acting identity and the
   counterpart. Network-attributed — no general per-event signing ceremony
   exists yet. Declining or withdrawing a request emits no event — see
   [social-graph.md](./social-graph.md).
-- **`crates/server/src/devices.rs`** (#135) — `identity.signing_key_added`
+- **`crates/server/src/devices.rs`** — `identity.signing_key_added`
   when a device grant is approved (signed by the approving device's own
   Ed25519 key, verified the same way as `identity.created`) and
   `identity.signing_key_revoked` when a key is revoked
-  (network-attributed). Issue #525: both now also apply to
+  (network-attributed). Both also apply to
   `avalon_indexer::projections::identity_signing_keys`
   (`indexer_identity_signing_keys`) in the same transaction as the outbox
   enqueue — the projection a mirror-only node's replay reconstructs the
   same table from, and what session-continuation token verification
   (`crates/server/src/continuation.rs`) reads on any node.
 - **`crates/server/src/passkeys.rs`** and **`crates/server/src/handlers.rs`**
-  (#523, Part 1 of #521's decision) — `identity.passkey_registered` (the
-  identity's very first passkey, from `handlers::register_finish`, and every
-  later one from `passkeys::register_finish`) and `identity.passkey_revoked`
+  — `identity.passkey_registered` (the identity's very first passkey, from
+  `handlers::register_finish`, and every later one from
+  `passkeys::register_finish`) and `identity.passkey_revoked`
   (`passkeys::revoke_passkey`), both network-attributed. Payload carries the
   credential's *public* material only (base64 `credential_id`, the full
   serialized WebAuthn `Passkey`, an optional `label`) — never anything
@@ -232,23 +221,23 @@ where an emitter is genuinely signed, it's called out explicitly.
   is what a mirror-only node's replay reconstructs
   (`indexer_identity_passkeys`), while an authoring node keeps writing
   `identity_keys` directly as before, applying the same event to its own
-  projection alongside it (same dual-write shape `recognitions.rs` uses).
-- **`crates/server/src/integrators.rs`** (#26) — `game.registered` on
+  projection alongside it.
+- **`crates/server/src/integrators.rs`** — `game.registered` on
   `POST /integrations`. `issuer`/`subject` are both `game:<slug>:self:registered`
   (`integrator_ref`). Network-attributed rather than integrator-key-signed — nothing has
   verified the registrant controls the submitted key yet at the point this
   event is built, so a real signature claim would be false. Payload:
   `integrator_id`, `slug`, `name`, `developer`, `requested_capabilities`, and the
   initial key's id/algorithm/public key.
-- **`crates/server/src/connections.rs`** (#27/#83) — `game.binding_established`
+- **`crates/server/src/connections.rs`** — `game.binding_established`
   (only on the first `POST /integrations/{slug}/connect` for a given identity/integrator
   pair; reconnecting emits nothing), `game.binding_ended`
   (`DELETE /integrations/{slug}/connect`), and one `permission.granted`/
   `permission.revoked` per capability. `issuer` is the acting identity;
   `subject` is `game:<slug>:self:<verb>` for binding events and
   `game:<slug>:self:<capability>` for grant events. Network-attributed.
-- **`crates/server/src/achievements.rs`** (#31, generalized to App/Service by
-  #324/#325) — definitions and issuance, two different signing postures:
+- **`crates/server/src/achievements.rs`** — definitions and issuance, two
+  different signing postures:
   - *Definitions* (`achievement.defined`/`milestone.defined` on creation,
     `.definition_updated`, `.definition_retired`) share one table
     (`achievement_definitions`) across both claim vocabularies. Which
@@ -256,14 +245,14 @@ where an emitter is genuinely signed, it's called out explicitly.
     category (`IntegratorCategory::claim_kind`), never caller-chosen: `Game`
     issuers get `achievement.*`, `App`/`Service` issuers get `milestone.*`.
     Network-attributed, same reason as `game.registered`.
-  - **Issuance (#32) is genuinely issuer-signed, not network-attributed** —
-    the first event kind in this catalogue where that's true.
+  - **Issuance is genuinely issuer-signed, not network-attributed** — the
+    first event kind in this catalogue where that's true.
     `POST /integrations/{slug}/achievements/{key}/issue` and its milestone
     equivalent write `achievement.issued`/`milestone.issued` with a real
     detached Ed25519 signature in the payload's `proof` field, verified
-    server-side against the issuer's own key set (#84's
-    `resolve_valid_signing_key`) before the event is built.
-  - **Revocation (#85) follows the same signed posture.**
+    server-side against the issuer's own key set (`resolve_valid_signing_key`)
+    before the event is built.
+  - **Revocation follows the same signed posture.**
     `POST /attestations/{id}/revoke` writes `achievement.revoked`/
     `milestone.revoked` with its own embedded signature, requires the
     caller to authenticate as the attestation's original issuer, and
@@ -272,7 +261,7 @@ where an emitter is genuinely signed, it's called out explicitly.
     (`attestation.superseded`) and attestation-level reinstatement (no
     event kind yet) remain unbuilt — `attestation_revocations` is capped at
     one row per attestation for exactly that reason.
-- **`crates/server/src/recovery.rs`** (#201) — `identity.recovery_configured`
+- **`crates/server/src/recovery.rs`** — `identity.recovery_configured`
   (guardian-set/threshold change), `identity.recovery_requested` (a new
   device completes the recovery ceremony), `identity.recovery_approved`
   (one per guardian approval), `identity.recovery_cancelled` (owner or
@@ -286,45 +275,28 @@ where an emitter is genuinely signed, it's called out explicitly.
   `guild.game_associated`, `guild.favorite_games_updated`.
 - **`crates/server/src/channels.rs`** — `guild.channel_created`,
   `.channel_renamed`, `.channel_archived`.
-- **`crates/server/src/integrator_schemas.rs`** (#255) — `game_schema.published`,
+- **`crates/server/src/integrator_schemas.rs`** — `game_schema.published`,
   consumed by `crates/indexer/src/projections/integrator_schemas.rs` for
   schema-version discovery (see [registry.md](./registry.md)).
-- **`crates/server/src/integrators.rs`** (#84, implementing #80's two-tier key
+- **`crates/server/src/integrators.rs`** (implementing the two-tier key
   model) — `issuer.key_added` (`POST /integrations/{slug}/keys`) and
   `issuer.key_revoked` (`POST /integrations/{slug}/keys/{key_id}/revoke`). Both
   require a currently-valid **root** key (`authenticate_integrator_root`) — an
   operational key can't author either event, even its own revocation.
   `issuer.key_expired` and the `issuer.suspended`/`.reinstated`/`.revoked`/
   `.deprecated` family remain unimplemented: no expiry-sweep mechanism
-  exists, and the latter's network-level authorization model is #84's own
-  explicit deferred scope.
+  exists, and the latter's network-level authorization model is deferred
+  scope.
 
 The ledger row itself: shape defined across
 `crates/server/db/migrations/0002_ledger/up.sql`,
-`0014_ledger_batches/up.sql` (#38, adds `batch_id`),
-`0024_signed_tree_heads/up.sql` (#210, Merkle root + Signed Tree Heads), and
+`0014_ledger_batches/up.sql` (adds `batch_id`),
+`0024_signed_tree_heads/up.sql` (Merkle root + Signed Tree Heads), and
 `0027_ledger_payload_retention/up.sql` (retention tiering). The content hash
 covers `event_id`, `kind`, `issuer`, `subject`, `payload`, `timestamp`,
 `version` (`crates/chain/src/postgres.rs`). Every event lands in
 `protocol_outbox` and is committed as part of whatever `EventBatch` the
 settlement worker's current drain tick assembles — batches close on a worker
 tick, not on size or a timer, so a single-event batch is legal.
-
-## Decisions and tickets
-
-- #75 durable history is canonical
-- #82 event kind catalogue and versioning policy — done, see "Today in the
-  repo" above
-- [#38](https://github.com/LunarVagabond/avalon-protocol/issues/38) batching
-  (buffer → `EventBatch` → `Commitment`, real as of `batch_id`/
-  `ledger_batches`)
-- [#71](https://github.com/LunarVagabond/avalon-protocol/issues/71) events must
-  commit atomically with the projection change
-- #86 profile events; #73 identity signs its own events
-- [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) revocation
-  entry shape (decided; implementation #85)
-- [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) —
-  guardian-based recovery event kinds (`identity.recovery_*`,
-  `identity.recovered`), described above.
-- [#210](https://github.com/LunarVagabond/avalon-protocol/issues/210) —
-  Merkle root / Signed Tree Head implementation (decided by #40).
+</content>
+</invoke>

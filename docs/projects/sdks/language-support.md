@@ -9,9 +9,9 @@ their own copies of this list.
 
 | Language | Package | Status | Notes |
 |---|---|---|---|
-| **Rust** | `crates/sdk` | **Reference implementation** | Built alongside `backend-server` itself, so it's the most complete SDK and the one every other language is checked against. Both `Session` (integrator) and `AccountSession` (first-party) surfaces. See [`rust/README.md`](rust/README.md). |
+| **Rust** | `avalon-sdks` repo's `rust/` | **Reference implementation** | Built alongside `backend-server` itself, so it's the most complete SDK and the one every other language is checked against. Both `Session` (integrator) and `AccountSession` (first-party) surfaces. See [`rust/README.md`](rust/README.md). |
 | **C#** | `bindings/csharp/AvalonSdk` (NuGet `Avalon.Sdk`) | **Fully supported** | The flagship external, developer-facing SDK — targets netstandard2.1 for Unity. Mirrors the Rust surface, including `AccountSession`, with one deliberate gap: no WebAuthn-ceremony-driving registration/login (no ceremony library available for this SDK's actual Unity/native audience). See [`csharp/README.md`](csharp/README.md). |
-| **TypeScript** | `bindings/ts` | **Fully supported** | Real and shipped (#701), browser-facing — drives a real WebAuthn ceremony (unlike C#). A self-contained package, not dependent on `packages/api-client`/`apps/hub`. What `apps/hub` is actively migrating onto (epic #712), so it's exercised by a real production frontend, not only its own test suite. See [`typescript/README.md`](typescript/README.md). |
+| **TypeScript** | `bindings/ts` | **Fully supported** | Real and shipped, browser-facing — drives a real WebAuthn ceremony (unlike C#). A self-contained package, not dependent on `packages/api-client`/`apps/hub`. What `apps/hub` runs on, so it's exercised by a real production frontend, not only its own test suite. See [`typescript/README.md`](typescript/README.md). |
 
 **Status key:** *Reference implementation* — the language the server and
 protocol are developed against first; every other SDK is checked against

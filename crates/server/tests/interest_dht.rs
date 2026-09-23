@@ -13,7 +13,7 @@
 //! ```
 //!
 //! `redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead`
-//! (issue #585) additionally needs a real, reachable Redis —
+//! additionally needs a real, reachable Redis —
 //! `AVALON_REDIS_URL=redis://<host>:<port> cargo test -p avalon-server
 //! --test interest_dht -- --ignored redis_fast_path`. Panics with a clear
 //! message rather than silently skipping if unset, matching this file's

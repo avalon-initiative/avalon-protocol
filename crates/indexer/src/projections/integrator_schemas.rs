@@ -1,5 +1,5 @@
-//! The Integrator Registry's schema-discovery projection (issue #255, decided by
-//! #181): an integrator's published `IntegratorSchemaVersion`s, surfaced through the
+//! The Integrator Registry's schema-discovery projection: an integrator's
+//! published `IntegratorSchemaVersion`s, surfaced through the
 //! same indexer-projection machinery every other read model in this crate
 //! already uses, rather than a separate discovery path
 //! (`docs/architecture/registry.md`).
@@ -29,11 +29,11 @@ pub struct IntegratorSchemaPublished {
     /// The immediately-prior version's id, if this publication supersedes
     /// one — `None` for an integrator's first published version.
     pub supersedes: Option<String>,
-    /// `"public"`/`"private"` (#384/#381) — absent on an event emitted
-    /// before #384 landed, in which case this defaults to `"public"`,
+    /// `"public"`/`"private"` — absent on an event emitted
+    /// before this field existed, in which case this defaults to `"public"`,
     /// preserving that publication's original fully-open behavior.
     pub default_visibility: String,
-    /// Field name -> `"public"`/`"private"`; empty for a pre-#384 event.
+    /// Field name -> `"public"`/`"private"`; empty for an event that predates this field.
     pub field_visibility: serde_json::Value,
 }
 
@@ -112,7 +112,7 @@ pub async fn apply(
 }
 
 /// Visibility metadata for one schema, as recorded by the indexer's own
-/// projection — what `integrator_data`'s read endpoint (#384) resolves per
+/// projection — what `integrator_data`'s read endpoint resolves per
 /// instance to apply the bidirectional visibility rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaVisibility {

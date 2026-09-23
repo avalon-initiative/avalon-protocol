@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The "you" page: profile, device setup/recovery (#134/#135), the device
+// The "you" page: profile, device setup/recovery, the device
 // list, and log out. Everything is a styled read-only display until the
 // user presses Edit (AvalonEditableField) or a button that starts an
 // action — no open inputs sit on the page by default.
@@ -82,7 +82,7 @@ const effectiveMainGuild = ref('')
 const savingMainGuild = ref(false)
 const mainGuildError = ref('')
 
-// `links` is a small fixed-size list (issue #372), same "saves as one
+// `links` is a small fixed-size list, same "saves as one
 // explicit action" shape favorite_genres already uses below rather than a
 // per-field save — up to MAX_LINKS text inputs, blank slots trimmed out on
 // save.
@@ -185,7 +185,7 @@ async function onUnblock(identityId: string) {
   }
 }
 
-// Accepts either a raw identity id or a display_name handle (#128, #510),
+// Accepts either a raw identity id or a display_name handle,
 // same convention Friends.vue's onAddFriend already uses for the
 // analogous "add by id/handle" flow.
 async function onBlockById() {
@@ -262,7 +262,7 @@ onMounted(async () => {
   pollHandle = setInterval(() => {
     if (hasSigningKey.value) refreshDevicesAndPendingGrants()
     if (pendingRequest.value) pollMyGrant()
-    // Social recovery (#201) is exactly the kind of security-relevant state
+    // Social recovery is exactly the kind of security-relevant state
     // that must stay visible without a manual refresh — an in-progress
     // recovery against this identity, and any friend's request waiting on
     // this identity's approval, are both polled the same cadence as the
@@ -283,7 +283,7 @@ async function onLogout() {
 }
 
 // Each profile field saves on its own — PATCH /me takes any subset, and
-// the display name and avatar are independently promised-durable (#86),
+// the display name and avatar are independently promised-durable,
 // so one edit is one change, one event.
 type ProfileField =
   | 'display_name'
@@ -607,7 +607,7 @@ async function onRenameDevice(device: Device, label: string) {
   }
 }
 
-// Multi-passkey registration (#200) — WebAuthn login credentials, kept
+// Multi-passkey registration — WebAuthn login credentials, kept
 // deliberately separate from the signing-key device list above (see
 // crates/server/src/passkeys.rs's module doc comment for why). Every
 // identity has at least one passkey from account creation, so this list
@@ -709,7 +709,7 @@ async function onRevokePasskey(passkey: Passkey) {
   }
 }
 
-// Social recovery (#201) — guardian configuration. Every guardian must be
+// Social recovery — guardian configuration. Every guardian must be
 // a current friend (crates/server/src/recovery.rs enforces this
 // server-side too; the checkbox list below only ever offers friends as
 // candidates, so there's no client path that could even attempt an

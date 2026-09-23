@@ -63,8 +63,8 @@ a reference while you read the architecture docs.
 |---|---|---|---|
 | **Passkey** | A WebAuthn credential used to log in to an Avalon identity. An identity can register multiple passkeys/devices. | The signing key (see Ed25519 signing key). | [identity.md](projects/backend-server/architecture/identity.md) |
 | **Ed25519 signing key** | The separate key (not the login passkey) that signs the protocol events an identity authors. | The login credential. | [identity.md](projects/backend-server/architecture/identity.md) |
-| **Social recovery (M-of-N guardians)** | Recovering an identity when passkeys are lost via approval from M of N designated guardians, rather than a password reset. | A centrally-held recovery backdoor. | `docs/projects/backend-server/architecture/identity.md`, issue #201 |
-| **Cross-device pairing** | Registering an additional device/passkey to an existing identity without starting over. | Creating a second identity. | `docs/projects/backend-server/architecture/identity.md`, issue #307 |
+| **Social recovery (M-of-N guardians)** | Recovering an identity when passkeys are lost via approval from M of N designated guardians, rather than a password reset. | A centrally-held recovery backdoor. | [identity.md](projects/backend-server/architecture/identity.md) |
+| **Cross-device pairing** | Registering an additional device/passkey to an existing identity without starting over. | Creating a second identity. | [identity.md](projects/backend-server/architecture/identity.md) |
 | **Capability (grant)** | An explicit, scoped permission an identity grants an integrator (e.g. "read my friends list") — the mechanism behind least-privilege access. Every SDK method checks its own required grant. | Blanket access to an identity's whole history. | [sdk.md](projects/sdks/architecture/sdk.md), [security-model.md](projects/backend-server/architecture/security-model.md) |
 
 ## Workspace and code map

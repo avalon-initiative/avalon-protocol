@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// Consent view for connecting to an integrator (#27): shows the integrator's name and
+// Consent view for connecting to an integrator: shows the integrator's name and
 // owner plus every requested capability with a plain-language
 // description and an unchecked-by-default checkbox — no "approve all".
 // Submitting posts only the checked subset to POST /integrations/{slug}/connect,
-// which is also where the IntegratorBinding (#83) gets established.
+// which is also where the IntegratorBinding gets established.
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AvalonButton, AvalonCapabilityConsentRow, AvalonCard, AvalonForm } from '@avalon/ui'

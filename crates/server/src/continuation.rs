@@ -1,5 +1,4 @@
-//! Session-continuation token verification (issue #525, Part 2 of #521's
-//! decision) — the server-side half of `avalon_protocol::continuation`.
+//! Session-continuation token verification — the server-side half of `avalon_protocol::continuation`.
 //! See that module's doc comment for the wire shape and the "never a login
 //! credential by itself" invariant this preserves.
 //!

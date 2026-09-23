@@ -1,7 +1,6 @@
-//! Exercises `GET /integrations/{slug}/registry` (issue #261, first slice of the
-//! epic-sized #89) against a real, running `avalon-server` and Postgres.
+//! Exercises `GET /integrations/{slug}/registry` against a real, running `avalon-server` and Postgres.
 //! Gated `--ignored` since it needs live infra — see `make test-live` /
-//! `make start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no
+//! `make start`. Skipped in this sandbox (no
 //! reachable Postgres here); written but not run against a live database.
 //!
 //! Mirrors `crates/server/tests/integrations.rs`'s own pattern for the
@@ -158,7 +157,7 @@ async fn a_integrator_with_no_activity_returns_zeros_for_every_labeled_metric() 
 /// attestations are seeded directly into `indexer_attestations` (one
 /// later revoked) for a second identity — every resulting cohort here
 /// (1 player, 2 issued, 1 revoked, 1 unique holder) sits below the
-/// server's default minimum-cohort floor (issue #96,
+/// server's default minimum-cohort floor,
 /// `avalon_indexer::registry::DEFAULT_MIN_COHORT` = 5 unless
 /// `AVALON_REGISTRY_MIN_COHORT` overrides it), so every metric here comes
 /// back coarsened to the floor itself with `exact: false` — never the real
@@ -249,7 +248,7 @@ async fn a_integrator_with_activity_below_the_floor_reports_coarsened_not_exact_
 }
 
 /// Five distinct identities bind to the integrator — a cohort exactly at the
-/// server's default minimum-cohort floor (issue #96,
+/// server's default minimum-cohort floor,
 /// `avalon_indexer::registry::DEFAULT_MIN_COHORT` = 5) — so `players`/
 /// `total_players_ever` come back as the real, exact count rather than
 /// coarsened. Proves the floor is a lower bound on what's ever withheld,

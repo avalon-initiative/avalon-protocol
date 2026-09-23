@@ -1,4 +1,4 @@
-// Tab switching and the Channels tab's persistent sidebar (issue #241):
+// Tab switching and the Channels tab's persistent sidebar:
 // Guild.vue used to be one long scrolling page, with guild chat entirely on
 // its own route (GuildChannel.vue). This covers the new tabbed layout, that
 // picking a different channel in the Channels tab updates in place (no
@@ -371,7 +371,7 @@ describe('Guild', () => {
     expect(headerIcon.attributes('src')).toBe('https://example.com/icon.png')
   })
 
-  // Per-member RSVP roster (issue #248): clicking an event card on the
+  // Per-member RSVP roster: clicking an event card on the
   // Events tab opens the shared roster panel, which fetches the raw
   // guild_event_rsvps rows and resolves display names via the batched
   // profiles endpoint.
@@ -633,8 +633,8 @@ describe('Guild', () => {
     expect(tabLabels).toContain('Members')
   })
 
-  // Issue #448: a non-member of a `public` guild (independent of
-  // recruiting, #449) sees a read-only Events tab scoped to that guild's
+  // A non-member of a `public` guild (independent of
+  // recruiting) sees a read-only Events tab scoped to that guild's
   // public events, with no RSVP controls.
   it('shows only public events, read-only, to a non-member of a public guild', async () => {
     mockFetchByPath({

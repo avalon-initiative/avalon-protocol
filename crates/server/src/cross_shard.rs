@@ -1,20 +1,19 @@
-//! Cross-shard root computation, server side (issue #529, implementing
-//! #527's decided sharded-settlement design). `avalon_chain::cross_shard`
+//! Cross-shard root computation, server side. `avalon_chain::cross_shard`
 //! has the pure aggregation math; this module is the network-facing
 //! half — gathering `(shard_id, SignedTreeHead)` pairs from configured
 //! shard peers (`GET /ledger/sth/latest`, the same read every mirror
 //! already uses — no new transport), verifying each, and serving the
 //! result at `GET /ledger/cross-shard-root`.
 //!
-//! **Shard discovery (issue #599): `AVALON_KNOWN_SHARDS` is now additive,
-//! not the only source.** Before #599, which shards to even ask about was
-//! purely config-based — this module's own doc comment used to say so
+//! **Shard discovery: `AVALON_KNOWN_SHARDS` is now additive,
+//! not the only source.** Which shards to even ask about was
+//! previously purely config-based — this module's own doc comment used to say so
 //! plainly. Now [`combined_shard_urls`] unions `AVALON_KNOWN_SHARDS`'s
 //! static map with whatever `crate::nodes::ShardRegistry` has learned via
-//! peer-announce gossip (#599's Layer 2), so a node with zero
+//! peer-announce gossip, so a node with zero
 //! `AVALON_KNOWN_SHARDS` configured at all can still aggregate a real,
 //! multi-shard cross-shard root purely from what it's discovered. Trust is
-//! unchanged either way: #543's real mechanism,
+//! unchanged either way: the real mechanism,
 //! [`resolve_shard_verify_keys_from_db`], resolves a shard's authorized
 //! key(s) directly from this node's own `issuer_keys` table (`purpose =
 //! 'shard_settlement'`) — the same registration flow attestation-issuance
@@ -36,8 +35,8 @@
 //! **Neither configured nor discovered: the one-shard degenerate case, no
 //! network calls.** This node's own local STH (if it has one) is the
 //! entire cross-shard root, computed directly from `state.chain` rather
-//! than an HTTP round trip to itself — exactly #529's own "a network with
-//! one shard degenerates to a tree over a single leaf" case, not a
+//! than an HTTP round trip to itself — a network with
+//! one shard degenerates to a tree over a single leaf, not a
 //! separate code path.
 
 use std::collections::{BTreeSet, HashMap};
@@ -121,7 +120,7 @@ impl KnownShardsConfig {
         self.urls.keys().cloned().collect()
     }
 
-    /// Issue #599: read access for [`combined_shard_urls`]/mirror_watcher's
+    /// Read access for [`combined_shard_urls`]/mirror_watcher's
     /// own auto-discovery pass, which need to know what's *already*
     /// explicitly configured so they don't treat an explicit entry as a
     /// newly-discovered one.
@@ -131,7 +130,7 @@ impl KnownShardsConfig {
 }
 
 /// Unions `config`'s static `AVALON_KNOWN_SHARDS` map with whatever
-/// `registry` has learned via peer-announce gossip (issue #599) — the
+/// `registry` has learned via peer-announce gossip — the
 /// static config wins for a `shard_id` present in both, since an operator
 /// who explicitly configured a URL presumably wants that one used, not
 /// whatever a peer happens to be gossiping. A `shard_id` known only to the
@@ -189,12 +188,12 @@ impl From<FetchedSth> for SignedTreeHead {
     }
 }
 
-/// Issue #543: resolves a shard's currently-authorized
+/// Resolves a shard's currently-authorized
 /// `shard_settlement`-purpose issuer keys directly from this node's own
 /// `issuer_keys` table — the real per-shard trust-anchor mechanism,
-/// composing with #529's aggregation rather than relying solely on the
+/// composing with cross-shard aggregation rather than relying solely on the
 /// interim `AVALON_SHARD_VERIFY_KEYS` static config. `shard_id` must be
-/// `"{namespace}:{owner}"` (#532's own derivation, e.g.
+/// `"{namespace}:{owner}"` (e.g.
 /// `"game:ashen-realms"`) to resolve at all — `"core"` (no owning
 /// integrator) and any other unparseable id return no keys, same as an
 /// integrator that has never registered a `shard_settlement` key. Only
@@ -234,12 +233,12 @@ pub(crate) async fn resolve_shard_verify_keys_from_db(
 
 /// Fetches, verifies, and aggregates every known shard's current STH —
 /// "known" meaning [`combined_shard_urls`]'s union of static config and
-/// gossip-discovered shards (issue #599). Returns the [`CrossShardRoot`]
+/// gossip-discovered shards. Returns the [`CrossShardRoot`]
 /// plus the exact `(shard_id, SignedTreeHead)` pairs it was computed from
-/// — #529's own "publishes the root plus the full list it used, so anyone
-/// can independently verify by recomputing" requirement.
+/// — publishing the root plus the full list it used, so anyone
+/// can independently verify by recomputing.
 ///
-/// **Verification order (#543 composing with #529)**: a shard's STH is
+/// **Verification order**: a shard's STH is
 /// checked against every currently-authorized `shard_settlement` key this
 /// node can resolve from its own `issuer_keys` table first — the real
 /// mechanism, and the *only* one available for a purely gossip-discovered
@@ -272,7 +271,7 @@ pub async fn fetch_and_compute(
         let fetched: Result<FetchedSth, String> = async {
             let response = client
                 .get(format!("{url}/ledger/sth/latest"))
-                // Issue #573: explicit, not implicit — a peer answering
+                // Explicit, not implicit — a peer answering
                 // for more than one shard (mirroring one, authoring
                 // another) needs to be told which one this request is
                 // about; omitting it would silently get whichever shard
@@ -332,7 +331,7 @@ pub async fn fetch_and_compute(
 /// is always included when it has any local history at all, resolved
 /// directly from `state.chain` rather than an HTTP round trip to itself —
 /// never gated behind whether any *other* shard happens to be known too.
-/// Before issue #599 this was an either/or branch (either the full
+/// This previously was an either/or branch (either the full
 /// multi-shard fetch-and-aggregate path, or a "no other shards known"
 /// degenerate default of just the local shard) — that silently dropped a
 /// node's own shard out of the aggregation the moment it also discovered
@@ -388,8 +387,8 @@ pub struct CrossShardRootResponse {
     pub partial: bool,
     pub missing_shard_ids: Vec<String>,
     /// The exact `(shard_id, sth)` pairs `root_hash` was computed from —
-    /// #529's own "publishes the root plus the full list it used, so
-    /// anyone can independently verify by recomputing" requirement. Never
+    /// publishing the root plus the full list it used, so
+    /// anyone can independently verify by recomputing. Never
     /// itself signed — see `avalon_chain::cross_shard`'s module doc
     /// comment for why signing this would reintroduce a designated-
     /// aggregator chokepoint.

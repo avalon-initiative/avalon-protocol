@@ -43,7 +43,7 @@ type OverrideState = 'inherit' | 'allow' | 'deny'
 // The permissions each resource kind actually has something to attach to —
 // the other flat permissions (manage_guild/manage_roles/manage_members)
 // are guild-wide by design (see docs/architecture/guilds.md). `view`/
-// `view_details` (#458) apply to both kinds identically.
+// `view_details` apply to both kinds identically.
 const OVERRIDE_PERMISSIONS = computed(() =>
   props.resourceKind === 'channel'
     ? (['channel_post', 'manage_channels', 'view', 'view_details'] as const)

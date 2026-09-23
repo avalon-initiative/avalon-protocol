@@ -17,20 +17,19 @@ it doesn't share compilation or dependency resolution with
 is a thin entry point only (required by Tauri's build); real logic lives in
 `src-tauri/src/lib.rs` so it stays testable outside a bundled app context.
 
-**Status (2026-09-21):** further along than pure scaffolding, but a small
-slice of the Hub, not a parity build. `src/router/` is a small, standalone
-router — mirrors `apps/hub`'s auth-screen shape (#55/#60) but doesn't carry
-its full route tree. What exists today: `Login`, `CreateIdentity`,
-`CrossNodeLogin`, `Home`, `Settings`, behind an `AuthLayout`. Guild/friends/
-chat views are separate, later work tracked under epic #59 — not built yet.
-`Settings` is deliberately reachable whether logged in or not, since a
-fresh install needs to be able to point at a non-default server before an
-identity even exists.
+**Status:** further along than pure scaffolding, but a small slice of the
+Hub, not a parity build. `src/router/` is a small, standalone router —
+mirrors `apps/hub`'s auth-screen shape but doesn't carry its full route
+tree. What exists today: `Login`, `CreateIdentity`, `CrossNodeLogin`,
+`Home`, `Settings`, behind an `AuthLayout`. Guild/friends/chat views are
+separate, later work — not built yet. `Settings` is deliberately reachable
+whether logged in or not, since a fresh install needs to be able to point
+at a non-default server before an identity even exists.
 
 ## In this folder
 
-Nothing yet beyond this overview — once guild/friends/chat views land
-(epic #59), this project's docs will grow the same `for-users.md`
+Nothing yet beyond this overview — once guild/friends/chat views land,
+this project's docs will grow the same `for-users.md`
 [`../hub/for-users.md`](../hub/for-users.md) already has, adapted for what's
 actually different about the mobile/desktop shell (e.g. background presence,
 notifications) rather than duplicating Hub content that's identical here.

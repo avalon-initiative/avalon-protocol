@@ -198,10 +198,10 @@ async fn register_identity_on_owner(
 /// is what actually appends it to `ledger_entries` and folds it into the
 /// Merkle tree/STH — there's a real window, on the order of that poll
 /// interval, where the event is durable but not yet ledger-visible or
-/// cross-shard-fetchable. #635's locator propagates independently of the
+/// cross-shard-fetchable. The locator propagates independently of the
 /// outbox and can resolve before the outbox worker has caught up, so
 /// waiting on the locator alone isn't sufficient here — this is a second,
-/// separate real-world race the cross-shard fallback (#656) has to survive
+/// separate real-world race the cross-shard fallback has to survive
 /// in production too, just one this test needs to wait out rather than hit.
 async fn wait_for_signing_key_ledger_entry(http: &reqwest::Client, identity_id: Uuid) {
     let owner = identity_owner_url();
@@ -234,7 +234,7 @@ async fn wait_for_signing_key_ledger_entry(http: &reqwest::Client, identity_id: 
     }
 }
 
-/// Polls node B's own `GET /identities/{id}/locations` (#635) until it
+/// Polls node B's own `GET /identities/{id}/locations` until it
 /// resolves node A's real `base_url` — the real DHT propagation this test
 /// depends on, not a fixed sleep. Panics with a clear message on timeout,
 /// since a silent empty-locations result would otherwise look identical to

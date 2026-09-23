@@ -658,7 +658,7 @@ pub struct LedgerEntryResponse {
     pub kind: String,
     pub issuer: String,
     pub subject: String,
-    /// `None` if this row's payload has been pruned (issue #208) — same
+    /// `None` if this row's payload has been pruned — same
     /// meaning as `avalon_chain::LedgerEntryView::payload_pruned`.
     pub payload: Option<serde_json::Value>,
     pub payload_pruned: bool,
@@ -689,9 +689,9 @@ impl From<LedgerEntryView> for LedgerEntryResponse {
     }
 }
 
-/// Issue #520: a mirrored entry (`mirrored_entries`) never has a pruned
+/// A mirrored entry (`mirrored_entries`) never has a pruned
 /// payload — the mirror-watcher only ever stores what it fetched and
-/// independently verified, and this codebase's retention/pruning (#208)
+/// independently verified, and this codebase's retention/pruning
 /// only ever touches `ledger_entries`, this node's own authored rows.
 impl From<mirror::MirroredEntry> for LedgerEntryResponse {
     fn from(entry: mirror::MirroredEntry) -> Self {
@@ -712,8 +712,8 @@ impl From<mirror::MirroredEntry> for LedgerEntryResponse {
     }
 }
 
-/// `GET /ledger/entries?since_seq={n}&limit={m}&subject={id}` — issue
-/// #299's bulk entries endpoint, the read path a mirror needs to hold real
+/// `GET /ledger/entries?since_seq={n}&limit={m}&subject={id}` — the
+/// bulk entries endpoint, the read path a mirror needs to hold real
 /// ledger content rather than only verify STHs. Public, unauthenticated,
 /// same rationale as every other endpoint in this module (see module
 /// docs).
@@ -721,7 +721,7 @@ impl From<mirror::MirroredEntry> for LedgerEntryResponse {
 /// Returns entries with `seq` strictly greater than `since_seq`, oldest
 /// first, capped at [`MAX_ENTRIES_LIMIT`] rows regardless of what `limit`
 /// asks for. When `subject` is given, pre-filters to that subject's own
-/// entries (#364) — same pagination/ordering semantics, just scoped, so an
+/// entries — same pagination/ordering semantics, just scoped, so an
 /// integrator that only cares about one of its own users doesn't have to
 /// replay the whole ledger to find their entries. A subject with no
 /// entries yet returns an empty list, not an error. **Not itself a
@@ -798,7 +798,7 @@ pub struct MirrorProgressResponse {
     /// in its own `mirrored_entries` for `network_id` — `0` if it has
     /// never mirrored anything for that network at all. Compared against
     /// a would-be pruning node's own boundary `seq` for archive-
-    /// confirmation gating (issue #569) — see
+    /// confirmation gating — see
     /// `avalon_server::retention`'s module doc comment.
     pub last_seq: i64,
 }

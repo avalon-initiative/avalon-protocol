@@ -1,4 +1,4 @@
-// Friends, blocks, presence, and discovery (issues #15/#97/#136/#204/#205) on AccountSession
+// Friends, blocks, presence, and discovery on AccountSession
 // — the first-party counterpart to Social.cs's capability-gated integrator methods. Mirrors
 // crates/sdk/src/account/social.rs. Presence/PresenceStatus are reused directly from
 // Social.cs — same wire shape on both the integrator and account surfaces.
@@ -121,7 +121,7 @@ namespace Avalon.Sdk
     }
 
     /// <summary>Another identity's full self-description profile (<c>GET
-    /// /identities/{id}/profile</c>, issue #403) — same fields <c>GET /me</c> exposes for the
+    /// /identities/{id}/profile</c>) — same fields <c>GET /me</c> exposes for the
     /// caller's own profile. Mirrors the Rust SDK's
     /// <c>account::social::PublicIdentityProfile</c>.</summary>
     public sealed class PublicIdentityProfile
@@ -167,7 +167,7 @@ namespace Avalon.Sdk
     }
 
     /// <summary>A recent announcement-only channel post (<c>GET
-    /// /me/guild-announcements</c>, issue #280). Mirrors the Rust SDK's
+    /// /me/guild-announcements</c>). Mirrors the Rust SDK's
     /// <c>account::social::GuildAnnouncementAlert</c>.</summary>
     public sealed class GuildAnnouncementAlert
     {
@@ -314,7 +314,7 @@ namespace Avalon.Sdk
         public async Task<PublicIdentityProfile> IdentityProfileAsync(Guid identityId, CancellationToken ct = default) =>
             await GetAsync<PublicIdentityProfile>($"/identities/{identityId}/profile", ct).ConfigureAwait(false);
 
-        /// <summary><c>GET /me/guild-announcements</c> (issue #280) — recent
+        /// <summary><c>GET /me/guild-announcements</c> — recent
         /// announcement-only channel posts across every guild the caller currently belongs
         /// to.</summary>
         public async Task<IReadOnlyList<GuildAnnouncementAlert>> GuildAnnouncementsAsync(CancellationToken ct = default) =>

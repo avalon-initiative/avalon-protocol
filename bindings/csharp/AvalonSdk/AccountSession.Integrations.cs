@@ -1,4 +1,4 @@
-// Integrator connect/consent (issue #27/#83) on AccountSession — an identity granting or
+// Integrator connect/consent on AccountSession — an identity granting or
 // revoking its own consent to an integrator, not anything the integrator does on its own
 // behalf. Mirrors crates/sdk/src/account/integrations.rs.
 

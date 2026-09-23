@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 // Data comes in as props only — no fetch, token, or route awareness here
-// (issue #24's invariant, matching AvalonFriendRow's pattern).
+// matching AvalonFriendRow's pattern.
 import { computed } from 'vue'
 import styles from '../styles/AvalonGuildMemberRow.module.scss'
 import AvalonAvatar from './AvalonAvatar.vue'

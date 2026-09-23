@@ -3,11 +3,11 @@
 //! Always available, in any build: `avalon inspect-ledger`,
 //! `avalon inspect-ledger-full` (same view, plus each entry's payload),
 //! `avalon outbox-status` — read-only diagnostics, safe against any
-//! deployment including a real one. `avalon logs export` (issue #659)
+//! deployment including a real one. `avalon logs export`
 //! reads `avalon-server`'s own log file, strips ANSI codes, redacts
 //! known-sensitive values, and normalizes it to line-delimited JSON so a
 //! hoster can safely attach it to a filed GitHub issue — see
-//! `logs_export.rs`'s own module doc comment. `avalon prune-ledger` (issue #208) is
+//! `logs_export.rs`'s own module doc comment. `avalon prune-ledger` is
 //! the operator-facing entry point for node-tiered retention pruning — see
 //! `avalon_chain::retention`'s module doc comment for the full design;
 //! this command itself only reads `AVALON_RETENTION_*` from the
@@ -15,19 +15,18 @@
 //! more.
 //!
 //! Available only when this binary is built with the default `dev-tools`
-//! Cargo feature (issue #173 — see `dev_tools.rs`'s own doc comment for the
-//! full rationale): `avalon create-identity`, `avalon login <identity_id>`
-//! (issue #115), `avalon register-integrator` (issue #29, renamed from
-//! `register-game` by #290 — the old name stays a working alias), and
+//! Cargo feature (see `dev_tools.rs`'s own doc comment for the
+//! full rationale): `avalon create-identity`, `avalon login <identity_id>`,
+//! `avalon register-integrator` (renamed from
+//! `register-game` — the old name stays a working alias), and
 //! `avalon pair-device`
-//! (issue #307 — drives the `start`/`poll` side of cross-device pairing,
+//! (drives the `start`/`poll` side of cross-device pairing,
 //! standing in for a real WebAuthn-incapable client so that flow is
 //! testable without a real console/engine), `avalon issue-achievement`
-//! (issue #48 — issues an already-defined achievement to the identity
+//! (issues an already-defined achievement to the identity
 //! behind `--token`, through `avalon-sdk`, resolving the issuer's
 //! signing key/key id from what `register-integrator` saved unless
-//! overridden), and `avalon register-issuer` (issue #483, on top of
-//! #481's endpoint — registers an integrator's key as an issuer on an
+//! overridden), and `avalon register-issuer` (registers an integrator's key as an issuer on an
 //! explicitly declared target network, `--network-id <id>` or
 //! `--env <dev|int|mainnet>`, refusing client-side on a mismatch against
 //! the server's independently STH-verified network rather than trusting
@@ -156,8 +155,8 @@ async fn main() {
     }
 }
 
-/// `register-integrator` is the primary command name (#290); `register-game`
-/// (the original, #29) stays a working deprecated alias so existing scripts
+/// `register-integrator` is the primary command name; `register-game`
+/// (the original) stays a working deprecated alias so existing scripts
 /// keep running. Both route here to the exact same
 /// `RegisterIntegratorArgs::parse`/`register_integrator` call — see
 /// `docs/architecture/issuers.md`.
@@ -261,7 +260,7 @@ async fn list_equivocations(network_id_arg: Option<String>) {
 /// playbook (`docs/maintainers/equivocation-response.md`) and determined
 /// which of the two disagreeing root hashes at `tree_size` was legitimate.
 ///
-/// `--shard-id` (issue #604, defaults to `"core"`) — every shard under a
+/// `--shard-id` (defaults to `"core"`) — every shard under a
 /// `network_id` has its own independent `tree_size` numbering, so a
 /// finding is only ever identified by `network_id`/`shard_id`/`tree_size`
 /// together, not `network_id`/`tree_size` alone (two unrelated shards can
@@ -972,7 +971,7 @@ fn switch_verdict(
 /// payload, since it needs it to re-verify each entry's hash) — this only
 /// changes what gets printed.
 ///
-/// Prints a batch boundary header (issue #38) whenever the entry stream
+/// Prints a batch boundary header whenever the entry stream
 /// crosses into a new `batch_id`, showing that batch's seq range and root —
 /// entries within a batch stay hash-chained exactly as before, this only
 /// adds where the batch lines are drawn.
@@ -984,7 +983,7 @@ async fn inspect_ledger(full: bool) {
         .await
         .expect("failed to connect to Postgres");
 
-    // Read-only: reports whatever genesis is already there (issue #173)
+    // Read-only: reports whatever genesis is already there
     // without creating or asserting one — an operator pointing this at an
     // unfamiliar database should see which network it belongs to before
     // anything else.
@@ -1088,7 +1087,7 @@ async fn inspect_ledger(full: bool) {
         );
     }
 
-    // Signed Tree Head verification (issue #210) — a second, independent
+    // Signed Tree Head verification — a second, independent
     // tamper-evidence layer on top of the hash-chain check above: the
     // latest Merkle root is recomputed fresh from every stored entry_hash
     // and checked against what was actually signed, then that signature is

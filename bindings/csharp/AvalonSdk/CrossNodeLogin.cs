@@ -1,9 +1,9 @@
-// Cross-node login (epic #623, issue #638) — mirrors crates/sdk/src/cross_node_login.rs,
+// Cross-node login — mirrors crates/sdk/src/cross_node_login.rs,
 // itself mirroring device_login's own start-then-poll shape almost exactly: from a caller's
 // perspective both flows look identical (POST .../start on this node, show the user a code,
 // poll until approved, get back a real Session). The one structural difference: POST
 // /auth/cross-node/start returns no verification_uri the way device pairing's would — there
-// is no Hub route for cross-node approval yet (#639, not built), just a UserCode and
+// is no Hub route for cross-node approval yet, just a UserCode and
 // RequestingContext to show however this integrator's own UI displays a pairing code.
 //
 // Also exposes the same-device fast path (AvalonClient.SubmitCrossNodeLoginGrantAsync):
@@ -48,7 +48,7 @@ namespace Avalon.Sdk
     }
 
     /// <summary>
-    /// A pending cross-node login (epic #623), returned by
+    /// A pending cross-node login, returned by
     /// <see cref="AvalonClient.CrossNodeLoginAsync"/>. Mirrors the Rust SDK's
     /// <c>cross_node_login::CrossNodeLogin</c>.
     /// </summary>
@@ -149,7 +149,7 @@ namespace Avalon.Sdk
 
     public sealed partial class AvalonClient
     {
-        /// <summary>Starts a cross-node login (epic #623) via POST /auth/cross-node/start
+        /// <summary>Starts a cross-node login via POST /auth/cross-node/start
         /// against this client's own <see cref="AvalonConfig.ServerUrl"/> — the node being
         /// logged into, which may not be the identity's "home" node at all.</summary>
         public async Task<CrossNodeLogin> CrossNodeLoginAsync(CancellationToken ct = default)
@@ -238,7 +238,7 @@ namespace Avalon.Sdk
             var expiresAt = issuedAt.AddSeconds(60);
             var nonce = Guid.NewGuid();
             var destinationBaseUrl = ServerUrl;
-            // No Hub-driven context yet to show a human (#639) — the destination itself is the
+            // No Hub-driven context yet to show a human — the destination itself is the
             // most honest context this caller can supply on its own behalf.
             var requestingContext = destinationBaseUrl;
 
@@ -275,12 +275,12 @@ namespace Avalon.Sdk
             return await AuthenticateAsync(body.Token, ct).ConfigureAwait(false);
         }
 
-        // --- The approving device's own half (issue #741/#749) ---
+        // --- The approving device's own half ---
         //
         // CrossNodeLoginAsync/WaitAsync/SubmitCrossNodeLoginGrantAsync above are
         // the *requester's* side (the node being logged into). LookupCrossNodeLoginAsync/
         // DenyCrossNodeLoginAsync are the *approver's* side — whatever surface shows a human
-        // the pairing code (no Hub route for this yet, #639) looks the request up by its
+        // the pairing code (no Hub route for this yet) looks the request up by its
         // short user code and can explicitly deny it. Neither call carries a bearer token:
         // the user code itself is the only credential, same shape device pairing's own
         // deny/resolve endpoints already use.

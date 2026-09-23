@@ -1,4 +1,4 @@
-//! Exercises node-to-node announce/bootstrap discovery (issue #362) against
+//! Exercises node-to-node announce/bootstrap discovery against
 //! a real, running `avalon-server`. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!
@@ -11,7 +11,7 @@
 //! The real two-node round trip (`two_nodes_see_each_other_via_announce`)
 //! needs a second `avalon-server` process — set
 //! `AVALON_SECOND_NODE_SERVER_URL` to run it; it's skipped (not failed)
-//! when unset, same pattern `tests/remote_settlement.rs` (#313) already
+//! when unset, same pattern `tests/remote_settlement.rs` already
 //! uses for its own second-node scenario.
 
 use uuid::Uuid;

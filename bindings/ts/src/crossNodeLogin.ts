@@ -1,4 +1,4 @@
-// Cross-node login (epic #623) — free-standing functions, not
+// Cross-node login — free-standing functions, not
 // AccountSession methods: these target an arbitrary destination node
 // (`baseUrl`), not this session's own configured server, and
 // `submitCrossNodeLoginGrant` needs no session at all for the identity

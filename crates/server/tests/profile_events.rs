@@ -1,4 +1,4 @@
-//! Exercises `profile.updated` (issue #86) against a real, running
+//! Exercises `profile.updated` against a real, running
 //! `avalon-server`, Postgres, and outbox worker. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!

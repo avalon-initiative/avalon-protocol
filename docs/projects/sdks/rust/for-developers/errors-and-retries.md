@@ -4,7 +4,7 @@ Every fallible SDK call returns `Result<T, SdkError>` — a small, stable,
 protocol-level taxonomy, never a raw `reqwest::Error`/HTTP status code you'd
 have to know HTTP to interpret. The full design rationale and server-side
 half live in [`../../../backend-server/architecture/sdk.md`](../../architecture/sdk.md)'s "Error
-handling and retries" section (issue #47) — this page is the short version
+handling and retries" section — this page is the short version
 for someone integrating against it.
 
 ## The `SdkError` variants
@@ -69,7 +69,7 @@ a reasonable starting point for most integrations.
 None of the above is "offline support" — a call that fails still fails,
 synchronously, to the caller. For queuing intent locally and draining it
 once connectivity returns, see `crate::sync_journal`/`crate::submission`
-(issue #110/#111/#113) and
+and
 [`../../../backend-server/architecture/synchronization.md`](../../../backend-server/architecture/synchronization.md).
 That layer has its own, coarser-grained retry/backoff policy
 (`BackoffPolicy`) suited to a queue an integrator drains on its own

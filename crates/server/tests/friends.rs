@@ -1,4 +1,4 @@
-//! Exercises the friend request/accept/remove flow (issue #15) against a
+//! Exercises the friend request/accept/remove flow against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!

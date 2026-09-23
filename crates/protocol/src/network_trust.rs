@@ -3,13 +3,11 @@
 //! resolution, cross-node-login anchor checks, mirror-watcher STH
 //! verification).
 //!
-//! This is a deliberate, independent duplicate of `crates/sdk/src/network.rs`'s
-//! own copy of the same shape (found via #780, filed while executing epic
-//! #771's #775): `crates/sdk` is decoupled from every in-workspace crate as
-//! of #774, including this one, so it cannot depend on `avalon-protocol` for
+//! This is a deliberate, independent duplicate of the Rust SDK's own copy
+//! of the same shape: the SDK is decoupled from every in-workspace crate,
+//! including this one, so it cannot depend on `avalon-protocol` for
 //! this. Both copies parse the same `docs/trusted-networks.json` — the Rust
-//! SDK's copy travels with it once #775 physically moves `crates/sdk` out of
-//! this workspace, vendored and kept in sync by hand, the same convention
+//! SDK's copy travels with it in its own repo, vendored and kept in sync by hand, the same convention
 //! the C#/TS SDKs' own generated files already use.
 
 use std::sync::OnceLock;

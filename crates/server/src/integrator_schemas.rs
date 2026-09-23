@@ -1,5 +1,4 @@
-//! Integrator Space schema publication (issue #255, closing the decision
-//! made in #181) — an integrator publishing how its own data is
+//! Integrator Space schema publication — an integrator publishing how its own data is
 //! structured, versioned and immutable once published. See
 //! `docs/architecture/integrator-space.md`'s "Today in the repo" for
 //! namespacing, the owning-integrator auth check, and the
@@ -27,7 +26,7 @@ use crate::state::AppState;
 
 /// `"public"` | `"private"` — the fixed vocabulary both
 /// `default_visibility` and each `field_visibility` value are restricted
-/// to (#384/#381). Not an enum serialized directly from the request body:
+/// to. Not an enum serialized directly from the request body:
 /// kept as validated strings so the stored JSONB and the wire request
 /// shape match byte-for-byte, same choice this module already makes for
 /// `proto_source`.
@@ -107,13 +106,13 @@ pub struct PublishIntegratorSchemaVersionRequest {
     /// type for both `field_visibility` validation here and instance
     /// validation in `crate::integrator_data`.
     pub proto_source: String,
-    /// `"public"` (default) or `"private"` — #381's schema-level opt-out.
-    /// Omitted entirely by a pre-#384 publisher, which keeps today's
+    /// `"public"` (default) or `"private"` — schema-level opt-out.
+    /// Omitted entirely by a pre-existing publisher, which keeps today's
     /// fully-open behavior.
     #[serde(default = "default_visibility_public")]
     pub default_visibility: String,
     /// Field name -> `"public"`/`"private"`, overriding `default_visibility`
-    /// for that field specifically, in either direction (#381). Every key
+    /// for that field specifically, in either direction. Every key
     /// must name a real field of the parsed root message — see
     /// `proto_schema::validate_field_visibility_keys`.
     #[serde(default)]
@@ -249,12 +248,12 @@ pub async fn publish_schema_version(
     };
     outbox::enqueue(&mut tx, &event).await?;
 
-    // `indexer_integrator_schemas` is a projection (issue #42): populated by the
+    // `indexer_integrator_schemas` is a projection: populated by the
     // indexer applying `event` in this same transaction, not by a direct
     // `INSERT` here — same "read model updates commit atomically with the
     // write it derives from" posture `handlers::register_finish` already
     // established. This is what makes `integrator_data`'s visibility-aware read
-    // endpoint (#384) see a schema's visibility metadata immediately,
+    // endpoint see a schema's visibility metadata immediately,
     // rather than only after some separate replay pass.
     state.indexer.apply_in_tx(&mut tx, &event).await?;
 

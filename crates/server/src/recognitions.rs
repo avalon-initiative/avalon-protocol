@@ -1,4 +1,4 @@
-//! Public recognition relationships (issue #89) — one integrator declaring
+//! Public recognition relationships — one integrator declaring
 //! "I recognize `<other integrator>`'s claims, for `<scope>`" as a durable,
 //! queryable fact. See `docs/architecture/registry.md`'s "Recognition
 //! relationships and the network graph" section: this is a graph in its

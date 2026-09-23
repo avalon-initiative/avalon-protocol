@@ -1,4 +1,4 @@
-// Cross-SDK conformance suite (issue #727, epic #722) — loads the shared
+// Cross-SDK conformance suite — loads the shared
 // test vectors under conformance/vectors/ (repo root) and asserts this
 // SDK's real implementation produces byte-for-byte identical output.
 // Offline, no server needed — runs in the default `npm test` (vitest) job

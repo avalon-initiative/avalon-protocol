@@ -1,4 +1,4 @@
-# Issue #545: optional, per-hoster Redis-backed rate limit/concurrency
+# Optional, per-hoster Redis-backed rate limit/concurrency
 # ceiling. Applied as a compose *override* file, not folded into
 # docker-compose.yml directly, because AVALON_REDIS_URL genuinely can't be
 # "present but harmless" — `avalon-server` hard-fails at startup if it's

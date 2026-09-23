@@ -1,4 +1,4 @@
-//! Exercises the social-recovery flow (issue #201) against a real, running
+//! Exercises the social-recovery flow against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!

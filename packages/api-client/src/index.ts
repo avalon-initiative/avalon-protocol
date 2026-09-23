@@ -1,4 +1,4 @@
-// Barrel export for @avalon/api-client (#60). apps/hub's own domain-specific
+// Barrel export for @avalon/api-client. apps/hub's own domain-specific
 // api/*.ts modules (friends.ts, guilds.ts, achievements.ts, ...) keep living
 // in apps/hub — only the fetch client, session store, WebAuthn/signing-key
 // auth ceremony, and shared wire types moved here, since those are exactly

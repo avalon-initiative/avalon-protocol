@@ -122,8 +122,7 @@ impl From<ObservedSth> for SignedTreeHead {
 /// not an equivocation at all) produced two different trees at the same
 /// size.
 ///
-/// `resolved_at`/`resolved_root_hash` (issue #316, implementing #300's
-/// decided scope) record a human's after-the-fact investigation: `None`
+/// `resolved_at`/`resolved_root_hash` record a human's after-the-fact investigation: `None`
 /// means still open (the mirror-watcher's equivocation gate keeps refusing
 /// to backfill this network); `Some` means an operator determined which of
 /// `root_hash_a`/`root_hash_b` was the legitimate tree, via
@@ -456,7 +455,7 @@ pub async fn resolve_equivocation(
 
 /// Discards every `mirrored_entries` row for `network_id`/`shard_id`
 /// verified against a tree at or beyond `from_tree_size` — the recovery
-/// half of resolving an equivocation (issue #316). Once an operator has
+/// half of resolving an equivocation. Once an operator has
 /// determined which branch at `from_tree_size` was legitimate
 /// ([`resolve_equivocation`]), any entries this node already mirrored
 /// using the *other* branch's tree must be discarded before the
@@ -470,11 +469,11 @@ pub async fn resolve_equivocation(
 /// just the losing one — there is no local way to tell which of those
 /// already-mirrored rows came from which branch after the fact, since both
 /// were independently signature/inclusion-verified at the time. The
-/// mirror-watcher's own multi-peer backfill (issue #299) re-fetches and
+/// mirror-watcher's own multi-peer backfill re-fetches and
 /// re-verifies everything dropped here from the now-resolved-legitimate
 /// branch on its next tick — re-verification, not data loss of anything
 /// the network itself considers canonical. Other shards under the same
-/// `network_id` are completely unaffected (issue #604).
+/// `network_id` are completely unaffected.
 ///
 /// Returns the number of rows discarded.
 pub async fn discard_mirrored_entries_from(
@@ -551,10 +550,10 @@ pub struct MirroredEntry {
 /// `(network_id, shard_id, seq)`, **not** `source_url`: a re-fetch of an
 /// already-mirrored entry, whether from the same peer or a different
 /// configured peer of the same shard, is a no-op. This is what makes
-/// multi-peer backfill (issue #299) safe — every configured peer of a
+/// multi-peer backfill safe — every configured peer of a
 /// given shard is an interchangeable source of the same
 /// independently-verified content, so failing over from peer A to peer B
-/// mid-backfill never double-counts or restarts progress. Issue #604:
+/// mid-backfill never double-counts or restarts progress.
 /// `shard_id` joined the key alongside `network_id` — two different
 /// shards' entries, even at the same `seq`, are never the same row.
 /// Callers must have already independently verified `entry`'s inclusion
@@ -604,7 +603,7 @@ where
 
 /// How many entries this node has already verified and mirrored for
 /// `network_id`/`shard_id` — across *every* configured peer of that shard,
-/// not just one (issue #299's multi-peer backfill: any configured peer of
+/// not just one (multi-peer backfill: any configured peer of
 /// a shard is an interchangeable source of the same verified content).
 /// Both the next `since_seq` to backfill from (the highest mirrored `seq`
 /// for this shard) and the leaf-index counter to hand the next entry's

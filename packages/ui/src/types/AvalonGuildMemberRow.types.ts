@@ -3,7 +3,7 @@ import type { AvalonRoleBadgeProps } from './AvalonRoleBadge.types'
 
 export interface AvalonGuildMemberRowProps {
   identityId: string
-  // Resolved via GET /identities/profiles (issue #161) by
+  // Resolved via GET /identities/profiles by
   // listMembersWithPresence. Undefined only if that lookup has no
   // profile for this id (shouldn't happen for a real member) or the
   // caller skipped it — the component falls back to a shortened
@@ -17,7 +17,7 @@ export interface AvalonGuildMemberRowProps {
   // different permissions (`manage_roles` for a role change,
   // `manage_members` — plus `manage_roles` again for a non-member-tier
   // target — for a kick; see crates/server/src/guilds.rs). Decided by the
-  // app from the caller's own permissions (issue #24's "hide the button,
+  // app from the caller's own permissions ("hide the button,
   // don't crash on a 403 anyway" invariant), never by this component.
   canChangeRole?: boolean
   canKick?: boolean

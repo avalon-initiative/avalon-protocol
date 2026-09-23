@@ -1,5 +1,5 @@
-//! Exercises `PostgresSettlementProvider::prepare`/`finalize` (issue #531
-//! — managed settlement hosting's two-phase remote-signing flow) against a
+//! Exercises `PostgresSettlementProvider::prepare`/`finalize`
+//! (managed settlement hosting's two-phase remote-signing flow) against a
 //! real Postgres instance. Gated `--ignored` since it needs live infra —
 //! see `make test-live` / `make start`; same pattern
 //! `crates/chain/tests/settlement.rs` already established for exercising

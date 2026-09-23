@@ -16,17 +16,15 @@ deciding which one they actually want.
    Transparency pattern, not federation. **Read-only** with respect to
    mainnet's history: a mirror never has its own write authority over any
    part of the shared state.
-2. **Running as a shard operator.** [#527](https://github.com/LunarVagabond/avalon-protocol/issues/527)
-   (decided) shards settlement *authority* per-integrator rather than
-   leaving one operator as mainnet's sole committer. A shard operator runs
-   `avalon-server` configured with its own shard's settlement signing key,
-   under the **same** `network_id` (shared genesis) as every other shard,
-   and is cryptographically part of mainnet via the cross-shard root
-   ([`./settlement.md`](./settlement.md)'s "Cross-shard commitment"
-   section, #529) — but is the real, authoritative write target for its
-   own shard's events, not a read-only copy of someone else's. This is the
-   category this document previously had no answer for: "run your own
-   settlement node that's actually part of mainnet." See
+2. **Running as a shard operator.** Sharded settlement *authority* per
+   integrator, rather than leaving one operator as mainnet's sole committer.
+   A shard operator runs `avalon-server` configured with its own shard's
+   settlement signing key, under the **same** `network_id` (shared genesis)
+   as every other shard, and is cryptographically part of mainnet via the
+   cross-shard root ([`./settlement.md`](./settlement.md)'s "Cross-shard
+   commitment" section) — but is the real, authoritative write target for
+   its own shard's events, not a read-only copy of someone else's. This is
+   "run your own settlement node that's actually part of mainnet." See
    [Invariants](#shard-operator-invariants) below for exactly how this
    stays distinct from both mirroring and forking.
 3. **Running a private, disconnected instance.** An organization runs the
@@ -52,8 +50,8 @@ completely different shard at the same time, since authored history
 separate storage by construction. See
 [`./nodes.md`](./nodes.md)'s "A node's three configuration axes are
 independent" section for the full breakdown (this is one of those three
-axes) — `avalon-peer` in this environment runs exactly this dual role for
-real, live-verified.
+axes) — a real deployment in this environment's sandbox runs exactly this
+dual role, live-verified.
 
 ### Shard operator invariants
 
@@ -67,38 +65,37 @@ real, live-verified.
   actually changing `network_id`, which is deliberately a one-time,
   write-once value.
 - **Write authority is scoped, never network-wide.** A shard operator's
-  settlement key signs STHs for its own shard's log only — #527's
-  per-integrator sharding, not a second copy of mainnet's single log. It
-  never commits on another shard's behalf, and the cross-shard root is
-  computed the same deterministic way regardless of which node computes
-  it (see #529's "no designated aggregator" invariant) — a shard operator
-  gains write authority over its own shard, never influence over anyone
-  else's.
+  settlement key signs STHs for its own shard's log only — per-integrator
+  sharding, not a second copy of mainnet's single log. It never commits on
+  another shard's behalf, and the cross-shard root is computed the same
+  deterministic way regardless of which node computes it (no designated
+  aggregator) — a shard operator gains write authority over its own shard,
+  never influence over anyone else's.
 - **A shard is never a fork by omission.** A shard operator that stops
   publishing its STH, or that a node can't currently reach, shows up as a
-  named gap in that node's `CrossShardRoot` (`partial: true`, per #529) —
-  never as a silent, undetectable divergence that could be confused with
-  an intentional fork. The distinction between "this shard is temporarily
+  named gap in that node's `CrossShardRoot` (`partial: true`) — never as a
+  silent, undetectable divergence that could be confused with an
+  intentional fork. The distinction between "this shard is temporarily
   unreachable" and "this deployment deliberately forked" stays legible
   from the outside, by construction, the same way this document's mirror/
   fork boundary already is (see below).
 - **A `shard_id` alone proves nothing — the same standing rule this
   document already applies to `network_id`.** See
   [`./network-trust-anchors.md`](./network-trust-anchors.md)'s "Per-shard
-  trust anchors" section (#543) for how a client verifies a shard
-  operator's key is genuinely authorized for that shard, reusing issuer-key
-  registration rather than a second trust mechanism.
+  trust anchors" section for how a client verifies a shard operator's key
+  is genuinely authorized for that shard, reusing issuer-key registration
+  rather than a second trust mechanism.
 
-### Managed hosting for a shard operator without their own infrastructure (#531)
+### Managed hosting for a shard operator without their own infrastructure
 
 Not every shard-authoritative integrator wants to run `avalon-server`
 themselves. A managed host — first-party or third-party — can run the
 storage/batching/Merkle-computation/STH-production infrastructure for an
 integrator's shard while the integrator keeps its own settlement signing
 key exactly as if it were self-hosting. This is deliberately a different
-mechanism from [#313's existing `POST /ledger/submit`](./settlement.md)
-node-to-node forwarding: that endpoint has the *receiving* node sign with
-its *own* local settlement key (`crates/server/src/settlement.rs::submit_ledger_batch`
+mechanism from the node-to-node `POST /ledger/submit` forwarding described in
+[`settlement.md`](./settlement.md): that endpoint has the *receiving* node
+sign with its *own* local settlement key (`crates/server/src/settlement.rs::submit_ledger_batch`
 calls `state.chain.commit`, which signs with whatever key that process
 holds) — correct when a remote node genuinely owns full settlement
 authority, wrong here, since a managed host must never hold the
@@ -136,7 +133,7 @@ keys. Hosting is infrastructure only; it carries no elevated trust over
 the integrator's own history, matching this document's shard-operator
 invariants above.
 
-**Implemented (#531).** `POST /ledger/prepare-batch` returns a read-only
+**Implemented.** `POST /ledger/prepare-batch` returns a read-only
 preview (`avalon_protocol::sth::PreparedTreeHead`) that never touches
 `ledger_entries`/`ledger_batches`/the shared Merkle cache — a preview
 that mutated shared state or burned real `seq` values on every call,
@@ -159,27 +156,26 @@ intervening commit, are both cleanly rejected with nothing persisted.
 **Interim, single-key-per-node** (`AVALON_MANAGED_HOSTING_VERIFY_KEY`): a
 managed-hosting node is presumed dedicated to exactly one hosted
 integrator's shard for now — this env var names that one integrator's
-public settlement key directly, rather than resolving it from #543's
-real per-shard trust-anchor mechanism (issuer-key registration), which
-isn't built yet. Both endpoints refuse every request when it's unset,
-matching `submit_ledger_batch`'s own "exists but accepts nothing until
-configured" posture.
+public settlement key directly, rather than resolving it from the real
+per-shard trust-anchor mechanism (issuer-key registration) at scale. Both
+endpoints refuse every request when it's unset, matching
+`submit_ledger_batch`'s own "exists but accepts nothing until configured"
+posture.
 
 **A managed-hosting operator is exactly who wants a genuinely
-Settlement-only deployment (#664).** This section's whole premise is that
-the host never holds the integrator's signing key — but before #664, the
-host's own `avalon-server` process still had every Gateway-facing module
-(WebAuthn, sessions, guilds, presence, friends...) mounted and reachable
-regardless, purely because that's what the combined binary always ran.
-None of that surface has any legitimate caller on a process whose only
+Settlement-only deployment.** This section's whole premise is that the host
+never holds the integrator's signing key — but without role extraction, the
+host's own `avalon-server` process would still have every Gateway-facing
+module (WebAuthn, sessions, guilds, presence, friends...) mounted and
+reachable regardless, purely because that's what the combined binary always
+ran. None of that surface has any legitimate caller on a process whose only
 job is `prepare-batch`/`finalize-batch` plus ordinary `/ledger/*` reads —
 it's attack surface with no corresponding feature for this operator.
-`AVALON_NODE_ROLES=settlement` (see [`./nodes.md`](./nodes.md)'s "Today in
-the repo" entry for #664) is how that operator now gets a process that
-genuinely never mounts any of it, not just one that happens not to be
-called.
+`AVALON_NODE_ROLES=settlement` (see [`./nodes.md`](./nodes.md)'s Settlement
+extraction section) is how that operator gets a process that genuinely
+never mounts any of it, not just one that happens not to be called.
 
-### Censorship recourse: switching hosts, or self-hosting, without losing the shard (#544)
+### Censorship recourse: switching hosts, or self-hosting, without losing the shard
 
 Two-phase signing means a managed host can never forge an integrator's
 history — but it can still simply refuse to `prepare-batch`, or go dark,
@@ -190,23 +186,23 @@ claims to fully solve). The recourse is that an integrator is never
 cryptographically bound to one host:
 
 - **The shard's identity is the integrator's own key, never the host's.**
-  #543's per-shard trust anchors authorize a shard via the integrator's
+  Per-shard trust anchors authorize a shard via the integrator's
   `issuer.key_added(purpose: shard_settlement)` event, not via anything
   the hosting operator holds or controls. A host stalling an integrator
   has no power to reassign, freeze, or otherwise touch that authorization
   — it can only decline to help.
 - **Switching hosts (or to self-hosting) has zero continuity break.** The
-  shard's own log is a normal, mirrorable log like any other (#529/#530)
-  — a new host, or a self-hosted node, syncs the shard's existing history
-  from any mirror the same way any node bootstraps into serving content
-  it didn't originally author, then resumes `prepare-batch`/`finalize-batch`
-  (or local `chain.commit`, for self-hosting) from where the stalled host
-  left off. Nothing about the shard's identity or history changes; only
-  which infrastructure is currently serving it does.
-- **Automatic multi-host failover (issue #564).** An integrator wanting
-  live failover, rather than a manual switch after noticing a stall, can
-  use `avalon_sdk::managed_hosting::ManagedHostingClient` with more than
-  one candidate host. It fans `prepare-batch` out to every candidate
+  shard's own log is a normal, mirrorable log like any other — a new host,
+  or a self-hosted node, syncs the shard's existing history from any
+  mirror the same way any node bootstraps into serving content it didn't
+  originally author, then resumes `prepare-batch`/`finalize-batch` (or
+  local `chain.commit`, for self-hosting) from where the stalled host left
+  off. Nothing about the shard's identity or history changes; only which
+  infrastructure is currently serving it does.
+- **Automatic multi-host failover.** An integrator wanting live failover,
+  rather than a manual switch after noticing a stall, can use
+  `avalon_sdk::managed_hosting::ManagedHostingClient` with more than one
+  candidate host. It fans `prepare-batch` out to every candidate
   concurrently and uses whichever answers first — safe because `prepare`
   is read-only (see `PostgresSettlementProvider::prepare`'s own doc
   comment) — then `finalize-batch`es against that *one* host only, never
@@ -222,12 +218,11 @@ cryptographically bound to one host:
   existing commitment instead of erroring — that only de-duplicates
   retries against one host, not across two, which is why the client's own
   single-finalize discipline is what actually prevents a fork.
-- **Manual switch-readiness tooling (implemented).** The design above
-  describes a manual switch as always cryptographically safe, but until
-  now nothing concretely answered the actual operational question an
-  integrator faces mid-switch: has the candidate new host actually caught
-  up, and does it agree with the old one, *before* traffic is cut over?
-  `avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id
+- **Manual switch-readiness tooling.** A manual switch is always
+  cryptographically safe, but the actual operational question an
+  integrator faces mid-switch is: has the candidate new host actually
+  caught up, and does it agree with the old one, *before* traffic is cut
+  over? `avalon check-switch-readiness <old-host-url> <new-host-url> [--shard-id
   <id>] [--verify-key <hex>]` answers exactly that, read-only, against two
   real running nodes: fetches the old host's latest STH for the shard,
   fetches the new host's STH at that *exact* `tree_size`, and reports
@@ -247,8 +242,7 @@ cryptographically bound to one host:
 ## Why this is safe to offer, and exactly where the line is
 
 Every ledger entry is hashed with its `network_id` folded in ahead of the
-rest of the content ([`./settlement.md`](./settlement.md),
-[#173](https://github.com/LunarVagabond/avalon-protocol/issues/173)), and
+rest of the content ([`./settlement.md`](./settlement.md)), and
 `network_id` is committed once, at genesis, into a dedicated
 `chain_genesis` row — every later boot reads that stored value back and
 refuses to start if the configured `AVALON_NETWORK_ID` doesn't match it
@@ -281,7 +275,7 @@ integrators. What it does **not** get is the reason most of this exists:
   can only ever happen among integrators pointed at the same `network_id`.
 - None of the cross-integrator discovery, shared communities, or "your friends are
   already here" effects in
-  [`../developers/WhyBuildOnAvalon.md`](../../sdks/rust/for-developers/WhyBuildOnAvalon.md)
+  [`../../sdks/rust/for-developers/WhyBuildOnAvalon.md`](../../sdks/rust/for-developers/WhyBuildOnAvalon.md)
   apply — those come from the network, not the code.
 - It's a fork in substance, even though it's zero effort in practice (set a
   different `AVALON_NETWORK_ID` and stand up your own Postgres). Nothing
@@ -303,18 +297,18 @@ public network:
 
 None of these are the goal of the project. Avalon exists to be the shared
 identity and social layer between *independent* integrators — the value described
-in [`../developers/WhyBuildOnAvalon.md`](../../sdks/rust/for-developers/WhyBuildOnAvalon.md)
+in [`../../sdks/rust/for-developers/WhyBuildOnAvalon.md`](../../sdks/rust/for-developers/WhyBuildOnAvalon.md)
 compounds with the size of the *public* network, not with how many private
 forks of the code exist. A studio is always welcome to run their own
-instance; we'd just rather have their games on the actual network, where
-their users' identities and communities are worth something beyond that
-one studio's games. If a private deployment starts asking "how do we
-eventually connect this to the real network" — the honest answer today is
-"there isn't one yet beyond re-registering integrators and re-issuing attestations
-on the public network" — that's a real gap, not a hidden feature; see
-[Decisions and tickets](#decisions-and-tickets) below.
+instance; a studio's games are still better served by joining the actual
+network, where their users' identities and communities are worth something
+beyond that one studio's games. If a private deployment starts asking "how do
+we eventually connect this to the real network" — the honest answer today is
+"there isn't one yet beyond re-registering integrators and re-issuing
+attestations on the public network" — that's a real gap, not a hidden
+feature.
 
-## Today in the repo
+## Current implementation
 
 - `AVALON_NETWORK_ID` is a required env var
   (`crates/server/src/main.rs`); there is no default, and no way to boot
@@ -337,40 +331,39 @@ on the public network" — that's a real gap, not a hidden feature; see
   private instance today means a wholly separate deployment, not a mode flag.
 - Whether a private instance or a mirror of the public network, any instance
   reachable beyond localhost must run behind TLS termination — see
-  [`../hosters/deployment.md`](../for-hosters/deployment.md).
+  [`../for-hosters/deployment.md`](../for-hosters/deployment.md).
 - Standing up a single instance no longer requires a Rust toolchain —
-  `make stack-up` (issue #289, root `Dockerfile` + `docker-compose.yml`)
-  builds and runs `avalon-server` + Postgres from a fresh checkout,
-  generating a fresh `AVALON_SETTLEMENT_SIGNING_KEY`/`AVALON_NETWORK_ID`
-  into `.env` on first run rather than requiring either to be hand-set
-  first. See [`../hosters/hosting-quickstart.md`](../for-hosters/hosting-quickstart.md).
+  `make stack-up` (root `Dockerfile` + `docker-compose.yml`) builds and
+  runs `avalon-server` + Postgres from a fresh checkout, generating a fresh
+  `AVALON_SETTLEMENT_SIGNING_KEY`/`AVALON_NETWORK_ID` into `.env` on first
+  run rather than requiring either to be hand-set first. See
+  [`../for-hosters/hosting-quickstart.md`](../for-hosters/hosting-quickstart.md).
 - Plain `.env` storage for `AVALON_SETTLEMENT_SIGNING_KEY` is a decided
-  floor (issue #352), not an oversight — a dedicated secrets backend was
-  weighed and rejected as the default because it would fork `make
-  stack-up`'s single zero-manual-steps bring-up path per OS/platform.
-  `make stack-up` now `chmod`s the generated `.env` to `600` (#354), and
-  [`../maintainers/key-rotation.md`](../for-maintainers/key-rotation.md)
-  documents the rotation procedure that decision left open (#315).
-- Structured logging (issue #265): `avalon-server` logs via `tracing`, with
-  an HTTP request span (method/path/status/latency) per request via
-  `tower-http`'s `TraceLayer`. `RUST_LOG` (standard env-filter syntax)
-  controls level without a rebuild; `AVALON_LOG_FORMAT=json` switches from
-  the human-readable dev format to one JSON object per line, the shape a
-  self-hoster's log aggregator (Grafana/Loki, etc.) expects. See
-  [`../maintainers/local-development.md`](../../../maintainers/local-development.md#logs-and-run-state).
-- **Runtime log-level control (issue #658)**: `RUST_LOG` above only ever
-  sets the *starting* filter — bumping verbosity to chase a live issue
-  used to mean a restart, losing in-memory state (DHT peer table, host-
-  metrics warm-up, in-flight requests). `GET`/`POST /nodes/log-level`
+  floor, not an oversight — a dedicated secrets backend was weighed and
+  rejected as the default because it would fork `make stack-up`'s single
+  zero-manual-steps bring-up path per OS/platform. `make stack-up` `chmod`s
+  the generated `.env` to `600`, and
+  [`../for-maintainers/key-rotation.md`](../for-maintainers/key-rotation.md)
+  documents the rotation procedure that decision left open.
+- Structured logging: `avalon-server` logs via `tracing`, with an HTTP
+  request span (method/path/status/latency) per request via `tower-http`'s
+  `TraceLayer`. `RUST_LOG` (standard env-filter syntax) controls level
+  without a rebuild; `AVALON_LOG_FORMAT=json` switches from the
+  human-readable dev format to one JSON object per line, the shape a
+  self-hoster's log aggregator (Grafana/Loki, etc.) expects.
+- **Runtime log-level control**: `RUST_LOG` above only ever sets the
+  *starting* filter — bumping verbosity to chase a live issue would
+  otherwise mean a restart, losing in-memory state (DHT peer table,
+  host-metrics warm-up, in-flight requests). `GET`/`POST /nodes/log-level`
   (`crate::admin`) reads/swaps the active filter live via
   `tracing_subscriber::reload`, taking effect on the very next log call —
   `POST` body is `{"filter": "<RUST_LOG-style string>"}`, an unparseable
   one is a clean `400` that leaves the current filter untouched. **Gated on
   a separate shared secret, `AVALON_ADMIN_TOKEN`** — deliberately not the
-  existing `AVALON_SETTLEMENT_SUBMIT_KEY` (below), since that key's trust
-  domain is "this operator's own nodes talking to each other" and may be
-  shared across two nodes one hoster runs, which would let one of *their
-  own* nodes flip the other's log level; admin control is narrower, only
+  existing `AVALON_SETTLEMENT_SUBMIT_KEY`, since that key's trust domain is
+  "this operator's own nodes talking to each other" and may be shared
+  across two nodes one hoster runs, which would let one of *their own*
+  nodes flip the other's log level; admin control is narrower, only
   whoever holds this one process's own credential. Unset (the default),
   both endpoints refuse every request. Live-verified: a token-less or
   wrong-token request 401s, a correct one reads the active filter, a
@@ -378,26 +371,20 @@ on the public network" — that's a real gap, not a hidden feature; see
   `tower_http::trace` lines on the very next request with no restart, and
   an intentionally invalid filter string 400s without changing what's
   active.
-- Issue #564's prepare-race/finalize-once multi-host client:
-  `avalon_sdk::managed_hosting::ManagedHostingClient` (`crates/sdk/src/managed_hosting.rs`),
+- The prepare-race/finalize-once multi-host client:
+  the Rust SDK's `avalon_sdk::managed_hosting::ManagedHostingClient` (`rust/src/managed_hosting.rs`),
   live-verified over real HTTP against two independently-running
-  `avalon-server` processes (`crates/sdk/tests/managed_hosting_live.rs`,
+  `avalon-server` processes (the Rust SDK's `tests/managed_hosting_live.rs`,
   `--ignored`). `PostgresSettlementProvider::commit`/`finalize`'s
   replayed-`batch_id` idempotency (`crates/chain/src/postgres.rs`) is the
   companion server-side piece, covered by
   `finalize_is_idempotent_on_a_replayed_batch_id`
   (`crates/chain/tests/managed_hosting.rs`, `--ignored`).
 
-## Decisions and tickets
+## Open questions
 
-- [#173](https://github.com/LunarVagabond/avalon-protocol/issues/173)
-  `network_id` genesis commitment and mismatch-is-fatal design
-- [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70),
-  [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79),
-  [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) —
-  why mirroring the *same* network is the decentralization story, not
-  federation between different ones
-- No open ticket yet on whether/how a private instance's history could ever
-  be selectively re-issued onto the public network (see the last paragraph
-  above) — worth filing as a `decision` issue if a studio actually asks for
-  it, rather than speculating here
+Whether/how a private instance's history could ever be selectively
+re-issued onto the public network remains genuinely open — worth deciding
+explicitly if a studio actually asks for it, rather than speculating here.
+</content>
+</invoke>

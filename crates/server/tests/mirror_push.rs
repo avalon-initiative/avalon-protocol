@@ -17,7 +17,7 @@
 //! # node A (authority)
 //! AVALON_SERVER_ADDR=127.0.0.1:8080
 //! AVALON_NODE_URL=http://127.0.0.1:8080
-//! AVALON_DHT_ENABLED=true      # default since ADR #593; spelled out for clarity
+//! AVALON_DHT_ENABLED=true      # default; spelled out for clarity
 //!
 //! # node B (mirror) — a distinct port, pointed at node A
 //! AVALON_SERVER_ADDR=127.0.0.1:8090

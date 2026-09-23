@@ -2,7 +2,7 @@
 //!
 //! Dispatches by `event.kind` to the matching module under
 //! [`crate::projections`], guarded by an `indexer_applied_events(event_id)`
-//! dedup table so a redelivered or replayed (rebuild, #43) event is a no-op
+//! dedup table so a redelivered or replayed (rebuild) event is a no-op
 //! the second time — the two-layer idempotency design in the ticket:
 //! per-event dedup here, natural-key upserts inside each projection.
 //!
@@ -63,8 +63,8 @@ impl PostgresIndexer {
     }
 
     /// Drops and rebuilds every projection table from `events` alone —
-    /// issue #43's disaster-recovery proof that Postgres really is just a
-    /// projection (ADR #75), not a second source of truth. `events` must
+    /// a disaster-recovery proof that Postgres really is just a
+    /// projection, not a second source of truth. `events` must
     /// already be in ledger `seq` order (the caller — `avalon
     /// rebuild-index`, or a test driving this directly — is the one
     /// reading `ledger_entries`, so it owns that ordering).

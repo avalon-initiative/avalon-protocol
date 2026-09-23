@@ -1,8 +1,7 @@
 # Local Development
 
 Running the milestone-1 vertical slice end to end against a real local
-server, no game/app/service client required — `avalon-cli` (issue #48) plus
-`make`.
+server, no game/app/service client required — `avalon-cli` plus `make`.
 
 ## 1. Bring up the server
 
@@ -12,8 +11,7 @@ make start     # run avalon-server in the background
 ```
 
 Needs `.env` at the repo root with `DATABASE_URL` (a real Postgres) and
-`AVALON_SERVER_ADDR` — see `.env.example` and the repo root `CLAUDE.md`/
-`README.md`.
+`AVALON_SERVER_ADDR` — see `.env.example` and the repo root `README.md`.
 
 ## 2. Create and log in an identity
 

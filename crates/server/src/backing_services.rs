@@ -1,12 +1,11 @@
-//! Issue #665: the coherent configuration surface for a Gateway process's
-//! backing-service URLs — `AVALON_INDEXER_REMOTE_URL` (#662),
-//! `AVALON_REALTIME_URL` (#663), and `AVALON_SETTLEMENT_REMOTE_URL(S)`
-//! (#313/#664). Each of those three tickets independently added its own
-//! env var and its own small parsing function once its own role got a
+//! The coherent configuration surface for a Gateway process's
+//! backing-service URLs — `AVALON_INDEXER_REMOTE_URL`,
+//! `AVALON_REALTIME_URL`, and `AVALON_SETTLEMENT_REMOTE_URL(S)`.
+//! Each of those three vars has its own
+//! small parsing function once its own role got a
 //! remote mode — this module is the piece that makes the *set* of them
-//! coherent, not a fourth, competing discovery mechanism (the ticket's own
-//! design section is explicit: static config is enough for a first pass,
-//! not a dynamic service registry).
+//! coherent, not a fourth, competing discovery mechanism: static config is
+//! enough for a first pass, not a dynamic service registry.
 //!
 //! **What's shared, and what deliberately isn't.** All three vars name a
 //! base URL an operator hand-configures, and all three should be

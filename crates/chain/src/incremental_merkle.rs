@@ -190,7 +190,7 @@ mod tests {
         (0..n).map(|i| vec![i as u8, 0xCD]).collect()
     }
 
-    /// The core bar (issue #349): every root/inclusion/consistency proof
+    /// The core bar: every root/inclusion/consistency proof
     /// this incremental tree produces must exactly match the from-scratch
     /// `merkle` implementation, for every size and every valid index/pair.
     #[test]

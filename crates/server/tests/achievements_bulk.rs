@@ -1,5 +1,5 @@
-//! Exercises bulk attestation issuance (issue #495, implementing #492's
-//! decided shape) against a real, running `avalon-server` and Postgres.
+//! Exercises bulk attestation issuance against a real, running
+//! `avalon-server` and Postgres.
 //! Gated `--ignored` since it needs live infra — see `make test-live` /
 //! `make start`.
 //!

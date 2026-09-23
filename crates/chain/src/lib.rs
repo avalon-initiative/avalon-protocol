@@ -1,12 +1,12 @@
 //! The `SettlementProvider` boundary and its milestone-1 implementation:
-//! a signed, append-only ledger, not a blockchain (#68/#70/#40/#39). See
+//! a signed, append-only ledger, not a blockchain. See
 //! `docs/architecture/settlement.md` for the decided design. [`merkle`] is
-//! the RFC 6962 Merkle tree/proof machinery (#210/#211), [`sth`] the
-//! STH-signing scheme (#39, moved into `avalon_protocol::sth` by #773 so
+//! the RFC 6962 Merkle tree/proof machinery, [`sth`] the
+//! STH-signing scheme (moved into `avalon_protocol::sth` so
 //! the SDK can depend on it without pulling in chain's Postgres stack —
 //! re-exported here so existing callers of `avalon_chain::sth` keep
-//! working), [`mirror`] the mirror-watcher storage (#299), and
-//! [`retention`] node-tiered payload retention (#208/#180) — see each
+//! working), [`mirror`] the mirror-watcher storage, and
+//! [`retention`] node-tiered payload retention — see each
 //! module's own doc comment. Nothing outside this crate should depend on
 //! *how* commitments are produced, only on this trait.
 
@@ -40,7 +40,7 @@ pub enum SettlementError {
 
 /// Anything capable of durably committing event batches and letting a caller
 /// verify a commitment later. Deliberately minimal — no consensus, block
-/// production, or P2P networking belongs on this trait (issues #68, #70):
+/// production, or P2P networking belongs on this trait:
 /// the target shape is a transparency log, which needs verifiability and
 /// mirrorability, not a validator network.
 #[async_trait]
@@ -49,7 +49,7 @@ pub trait SettlementProvider: Send + Sync {
 
     /// `Ok(true)` means every check this implementation runs passed — it
     /// does **not** promise every entry's content was independently
-    /// re-verified. A retention-tiered implementation (issue #208) may
+    /// re-verified. A retention-tiered implementation may
     /// have locally pruned some entries' payloads; content for those
     /// specific entries can't be independently re-checked (an expected
     /// local-retention outcome, not evidence of tampering), while the

@@ -1,4 +1,4 @@
-//! Exercises `GET /people/discover` (issue #204) against a real, running
+//! Exercises `GET /people/discover` against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`. Same seeding approach as
 //! `crates/server/tests/friends.rs`/`crates/server/tests/blocks.rs`:
@@ -340,7 +340,7 @@ async fn opting_in_then_out_of_search_takes_effect_immediately() {
 }
 
 /// A non-opted-in identity never appears in search, even to a caller who
-/// searches its exact handle (`display_name`, issue #510) — that
+/// searches its exact handle (`display_name`) — that
 /// exact-match path is `GET /friends/handle/:handle`, deliberately
 /// untouched and separate from this fuzzy endpoint.
 #[tokio::test]

@@ -1,4 +1,4 @@
-// Pure helpers for the integrator directory (issue #270) — no fetch/token
+// Pure helpers for the integrator directory — no fetch/token
 // awareness here, same "logic stays out of client.ts" split
 // apps/hub/src/api/guilds.ts already established for guilds.
 import type { IntegratorRegistry, RegistryMetric } from '@avalon/sdk'

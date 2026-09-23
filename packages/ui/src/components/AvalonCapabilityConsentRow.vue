@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A single requested capability in the integrator-connect consent view (#27):
+// A single requested capability in the integrator-connect consent view:
 // wire capability string, its plain-language description, and a checkbox.
 // The caller owns which capabilities are checked (the "no approve all"
 // invariant lives one level up, in whichever view/composable tracks the

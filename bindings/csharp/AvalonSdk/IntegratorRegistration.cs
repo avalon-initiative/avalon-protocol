@@ -1,5 +1,4 @@
-// Integrator registration and per-network issuer-key registration (issue
-// #26/#481, closed out for C#'s share of #741 by #746) — mirrors
+// Integrator registration and per-network issuer-key registration — mirrors
 // crates/server/src/integrators.rs's register_integrator and
 // crates/server/src/issuer_registration.rs's register_issuer/
 // create_registration_challenge. Both live on AvalonClient, not Session:
@@ -69,7 +68,7 @@ namespace Avalon.Sdk
         }
 
         /// <summary>POST /issuers/registration-challenge — the first half of issuer network
-        /// registration (issue #481): a short-lived, single-use nonce for
+        /// registration: a short-lived, single-use nonce for
         /// <see cref="RegisterIssuerAsync"/> to sign as proof of possession of
         /// <paramref name="issuerPubkeyBase64"/>. No auth: obtaining a challenge proves
         /// nothing by itself.</summary>
@@ -88,7 +87,7 @@ namespace Avalon.Sdk
             return await Session.ReadJsonAsync<Avalon.Sdk.Generated.RegistrationChallengeResponse>(response, ct).ConfigureAwait(false);
         }
 
-        /// <summary>POST /issuers/register (issue #481) — admits
+        /// <summary>POST /issuers/register — admits
         /// <paramref name="signingKeySeed"/>'s public half to write on
         /// <paramref name="declaredNetworkId"/> under <paramref name="issuerRef"/>. Drives the
         /// whole challenge/proof-of-possession round trip itself
@@ -136,7 +135,7 @@ namespace Avalon.Sdk
 
     public sealed partial class Session
     {
-        // --- Integrator directory reads (issue #746) — all public, unauthenticated. ---
+        // --- Integrator directory reads — all public, unauthenticated. ---
 
         /// <summary>GET /integrations?q=&amp;sort=&amp;limit=&amp;cursor= — paginated integrator
         /// discovery. <paramref name="sort"/> is <c>"newest"</c> (default) or
@@ -183,7 +182,7 @@ namespace Avalon.Sdk
             return body.IntegratorId;
         }
 
-        /// <summary>POST /integrations/{slug}/keys (issue #84/#746) — adds a new key to this
+        /// <summary>POST /integrations/{slug}/keys — adds a new key to this
         /// integrator's own key set. Requires this session's configured key to itself be a
         /// currently-valid <b>root</b> key (<paramref name="role"/> of the key being added may
         /// be <c>"root"</c> or <c>"operational"</c> — that's independent of what authorizes
@@ -217,7 +216,7 @@ namespace Avalon.Sdk
             return await ReadJsonAsync<Avalon.Sdk.Generated.IssuerKeyResponse>(response, ct).ConfigureAwait(false);
         }
 
-        /// <summary>POST /integrations/{slug}/keys/{key_id}/revoke (issue #84/#746) — same
+        /// <summary>POST /integrations/{slug}/keys/{key_id}/revoke — same
         /// root-key requirement as <see cref="AddIssuerKeyAsync"/>. Revoking an already-revoked
         /// or nonexistent key is an error, not a silent no-op.</summary>
         public async Task<Avalon.Sdk.Generated.IssuerKeyResponse> RevokeIssuerKeyAsync(

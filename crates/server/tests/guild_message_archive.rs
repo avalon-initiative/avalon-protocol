@@ -1,5 +1,5 @@
-//! Exercises the guild message archive tier (issue #253, implementing
-//! #193's decision) against a real, running `avalon-server` and Postgres.
+//! Exercises the guild message archive tier against a real, running
+//! `avalon-server` and Postgres.
 //! Gated `--ignored` since it needs live infra — see `make test-live` /
 //! `make start`. Same seeding pattern as `crates/server/tests/guild_channels.rs`.
 //!

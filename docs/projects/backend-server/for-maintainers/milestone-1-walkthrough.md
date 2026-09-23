@@ -1,14 +1,14 @@
 # Milestone 1 — End-to-End Vertical Slice Walkthrough
 
 This is the hand-run version of `Proposal.md` §23's fourteen-step
-definition of milestone 1, plus two architecture checks beyond it
-(issue #64). It proves the epics compose into one working network rather
+definition of milestone 1, plus two architecture checks beyond it.
+It proves the epics compose into one working network rather
 than fourteen features that each pass their own tests: two players, a
 friendship, a guild with a channel, two games, an issued and verified
 achievement, all visible in the Hub — then a ledger inspection and a full
 projection rebuild.
 
-`crates/cli/tests/milestone_1_walkthrough.rs` (issue #65) is the automated
+`crates/cli/tests/milestone_1_walkthrough.rs` is the automated
 equivalent of every step below and runs under `make test-live`. Steps 1–7
 here were executed by hand against a real local `avalon-server` and
 Postgres; steps 8–16 use the identical HTTP/SDK/CLI calls the automated
@@ -18,15 +18,14 @@ here as the equivalent hand-run commands.
 Every step uses only public interfaces — HTTP endpoints, the SDK, the CLI,
 and the Hub. No direct SQL.
 
-`crates/cli/tests/milestone_1_three_node.rs` (issue #670) is a real
-distributed variant of the same story: a player registers on exactly one
-node, then friends, forms a guild, and receives a verified achievement
-entirely on a second and third node that never saw her register — reached
-only through a real cross-node login (epic #623) each of those nodes can
-only complete by fetching her signing key cross-shard (#636) from her
-actual registration node over the real DHT locator (#635). Needs this
-sandbox's live 3-node topology (`.claude/CLAUDE.md`), not just
-`make start` — gated `--ignored`, not part of `make test-live`.
+`crates/cli/tests/milestone_1_three_node.rs` is a real distributed variant
+of the same story: a player registers on exactly one node, then friends,
+forms a guild, and receives a verified achievement entirely on a second and
+third node that never saw her register — reached only through a real
+cross-node login each of those nodes can only complete by fetching her
+signing key cross-shard from her actual registration node over the real DHT
+locator. Needs a live multi-node topology, not just `make start` — gated
+`--ignored`, not part of `make test-live`.
 
 ## Setup
 
@@ -37,8 +36,7 @@ export BASE=http://127.0.0.1:8080   # or wherever AVALON_SERVER_ADDR points
 
 ## Step 1 — Player A creates an Avalon identity
 
-Provided by: epic #2 (`POST /identities/register/start|finish`),
-`avalon create-identity`.
+Provided by: `POST /identities/register/start|finish`, `avalon create-identity`.
 
 ```bash
 echo "Walkthrough Alice" | avalon create-identity
@@ -76,7 +74,7 @@ avalon login 4e1b01cd-92f6-4178-8d7f-ac688180447d   # -> BOB token
 
 ## Step 3 — They become friends
 
-Provided by: issue #15 (`POST /friends/requests`, `.../accept`).
+Provided by: `POST /friends/requests`, `.../accept`.
 
 ```bash
 curl -s -X POST "$BASE/friends/requests" \
@@ -99,7 +97,7 @@ Bob's identity id. Run live:
 
 ## Step 4 — Player A creates a guild
 
-Provided by: issue #20 (`POST /guilds`).
+Provided by: `POST /guilds`.
 
 ```bash
 curl -s -X POST "$BASE/guilds" \
@@ -118,7 +116,7 @@ Run live:
 
 ## Step 5 — Player B joins
 
-Provided by: issue #21 (`POST /guilds/{id}/invites`, `.../accept`). Guilds
+Provided by: `POST /guilds/{id}/invites`, `.../accept`. Guilds
 default to `invite_only`, so this walkthrough uses a real invite rather
 than flipping the guild open — the realistic path for two friends forming
 a guild together.
@@ -142,7 +140,7 @@ Expected observation: a `guild_members`-shaped response for Bob
 
 ## Step 6 — The guild creates a channel
 
-Provided by: issue #22 (`POST /guilds/{id}/channels`).
+Provided by: `POST /guilds/{id}/channels`.
 
 ```bash
 curl -s -X POST "$BASE/guilds/$GUILD_ID/channels" \
@@ -159,7 +157,7 @@ Run live:
 
 ## Step 7 — They communicate
 
-Provided by: issue #22 (`POST`/`GET .../messages`).
+Provided by: `POST`/`GET .../messages`.
 
 ```bash
 curl -s -X POST "$BASE/guilds/$GUILD_ID/channels/$CHANNEL_ID/messages" \
@@ -181,7 +179,7 @@ Expected observation: both messages round-trip, newest first. Run live:
 
 ## Step 8 — Game A registers with Avalon
 
-Provided by: issue #26, `avalon register-game` (#29/#48).
+Provided by: `POST /integrations`, `avalon register-game`.
 
 ```bash
 avalon register-game --slug walkthrough-game-a --name "Walkthrough Game A" \
@@ -205,13 +203,12 @@ integrator challenge-response endpoint
 `POST /integrations/{slug}/achievements`, signed with the key just
 printed) — this is one-time integrator setup, not a player-facing step,
 and is exactly what `crates/cli/tests/milestone_1_walkthrough.rs`'s
-`define_dragon_slayer` helper does and was verified live by that test's
-own run.
+`define_dragon_slayer` helper does.
 
 ## Step 9 — Player A authenticates through Game A
 
-Provided by: SDK `AvalonClient::authenticate()` (done) plus real
-binding/consent (#83/#27, `POST /integrations/{slug}/connect`).
+Provided by: the Rust SDK's `AvalonClient::authenticate()` plus real
+binding/consent (`POST /integrations/{slug}/connect`).
 
 Player A first consents (the Hub side — real HTTP, no game code):
 
@@ -236,20 +233,18 @@ let session = client.authenticate(&alice_token).await?;
 ```
 
 Expected observation: `authenticate()` succeeds and `session.profile()`
-shows Alice's real display name — verified live by
-`crates/cli/tests/milestone_1_walkthrough.rs`.
+shows Alice's real display name.
 
 ## Step 10 — Game A issues `Dragon Slayer`
 
-Provided by: #31, #32, #34 (`Session::issue_achievement`).
+Provided by: `Session::issue_achievement`.
 
 ```rust
 let attestation_id = session.issue_achievement("dragon_slayer").await?;
 ```
 
 Expected observation: a fresh attestation id, and `session.achievements()`
-afterward shows exactly that one attestation in Player A's history —
-verified live by the automated test.
+afterward shows exactly that one attestation in Player A's history.
 
 ## Step 11 — Game B registers
 
@@ -263,8 +258,8 @@ avalon register-game --slug walkthrough-game-b --name "Walkthrough Game B" \
 
 ## Step 12 — Game B verifies the achievement
 
-Provided by: #33 — authenticity and validity, reported separately, never
-merged into one server verdict (ADR #76).
+Authenticity and validity are reported separately, never merged into one
+server verdict.
 
 Public, unauthenticated read (no session/consent required for this
 specific call — this is the one place in the walkthrough that isn't
@@ -292,7 +287,7 @@ rather than the raw public endpoint, proving both paths agree.
 
 ## Step 13 — Game B chooses to recognize it
 
-A consumer's own policy decision, never a server verdict (#33/ADR #76).
+A consumer's own policy decision, never a server verdict.
 `avalon_protocol::achievements::recognize()` takes a `TrustRelationship`
 (who Game B trusts, and under what scope) and the claim being evaluated,
 and returns `Recognition::Recognized` or `::NotRecognized { reason }` —
@@ -301,8 +296,7 @@ step by design.
 
 ## Step 14 — The Hub displays identity, friends, guild, and achievement
 
-Provided by: #55, #56, #57, #58. The Hub's own reads, all with Player A's
-session token:
+The Hub's own reads, all with Player A's session token:
 
 ```bash
 curl -s "$BASE/me" -H "Authorization: Bearer $ALICE"
@@ -324,12 +318,10 @@ avalon inspect-ledger
 Expected observation: one entry per durable event this run produced —
 `identity.created` ×2, `guild.created`, `guild.member_added`,
 `guild.channel_created`, `game.registered` ×2, `achievement.issued` — each
-marked `✓`. This is a correction to this ticket's own original status
-table, which described this step as "partial (identity.created only)" —
-every one of those kinds is a real, wired-up ledger entry as of this
-walkthrough (see `crates/protocol/src/events.rs::ProtocolEventKindVariant`).
+marked `✓`. Every one of those kinds is a real, wired-up ledger entry (see
+`crates/protocol/src/events.rs::ProtocolEventKindVariant`).
 
-Two things found live while running this step, worth knowing:
+Two things worth knowing when running this step:
 
 - **Writes are atomic with an outbox row, not with the ledger entry
   itself** (`crates/server/src/outbox.rs`) — a background worker drains
@@ -339,23 +331,21 @@ Two things found live while running this step, worth knowing:
   yet. `avalon outbox-status` (`outbox: N pending` vs. `outbox: empty,
   nothing pending`) is the way to confirm it has caught up before
   inspecting. `crates/cli/tests/milestone_1_walkthrough.rs` polls it.
-- **This sandbox's own shared dev database already carries pre-existing
-  broken links** (217 as of this writing) from unrelated historical
-  activity, predating this walkthrough and unaffected by it — a long-lived
-  shared dev ledger with many sessions/agents writing to it over time has
-  no cleanup story yet. This means the `chain intact ✓` summary line at
-  the bottom of `avalon inspect-ledger`'s output will *not* read clean
-  against this specific database; what's actually load-bearing is that
-  every block belonging to *this run* (its own identity ids, guild id,
-  game slugs) individually reports `verified: ✓`, which is what the
-  automated test checks rather than the blanket summary line. Worth a
-  follow-up ticket (a real cleanup/reconciliation story for a long-lived
-  shared dev ledger), not something this walkthrough fixes.
+- **A long-lived shared dev database can carry pre-existing broken links**
+  from unrelated historical activity, predating any one walkthrough run and
+  unaffected by it — many sessions/agents writing to the same dev ledger
+  over time has no cleanup story yet. This means the `chain intact ✓`
+  summary line at the bottom of `avalon inspect-ledger`'s output may *not*
+  read clean against a long-lived shared database; what's actually
+  load-bearing is that every block belonging to *this run* (its own
+  identity ids, guild id, game slugs) individually reports `verified: ✓`,
+  which is what the automated test checks rather than the blanket summary
+  line.
 
 ## Step 16 — Rebuild from the ledger, then repeat step 14
 
-Provided by: #43, #75 (`avalon rebuild-index` /
-`avalon_server::rebuild::rebuild_index_from_ledger`).
+Provided by: `avalon rebuild-index` /
+`avalon_server::rebuild::rebuild_index_from_ledger`.
 
 ```bash
 avalon rebuild-index
@@ -367,33 +357,30 @@ token returns exactly the same identity, friends, guild membership, and
 achievement — proving the projections are truly derived, not
 independently authoritative state.
 
-Found live while running this step: the rebuild logs `indexer: skipping
-unrecognized event kind "..."` for several real kinds
-(`game.registered`, `achievement.defined`, `guild.channel_created`,
-`permission.granted`, `issuer.key_added`) — none of those happen to be
-kinds step 14's own read model depends on, so the rebuild guarantee holds
-for everything this walkthrough actually checks, but it means the
-indexer's `rebuild` path doesn't yet have a projection for every kind the
-ledger carries. Worth its own ticket under #43's umbrella rather than
-something this walkthrough resolves.
+One thing worth knowing when running this step: the rebuild may log
+`indexer: skipping unrecognized event kind "..."` for kinds this walkthrough's
+own read model doesn't depend on — the rebuild guarantee holds for
+everything this walkthrough actually checks even so, but it's a sign the
+indexer's `rebuild` path may not yet have an explicit projection arm for
+every kind the ledger carries.
 
 ## Result
 
-Steps 1–7 were executed by hand, live, exactly as shown above. Steps
-8–16 were verified live via `crates/cli/tests/milestone_1_walkthrough.rs`,
-which drives the identical HTTP/SDK/CLI calls end to end against this same
-server and database and passed on this run. That file also has a
-companion test, `tampering_a_ledger_entry_breaks_the_chain`, proving step
-15's chain-intact check actually catches a tampered ledger row — run
-against its own throwaway Postgres *schema* inside the same database
-(never a separate database: this sandbox's `avalon` Postgres role has no
-`CREATEDB` privilege, a real and correct restriction found live while
-writing this test, not a bug) and never against the shared dev ledger,
-since corrupting a real row there would permanently break every later
-entry's chain for every other session sharing this database.
+Steps 1–7 are meant to be executed by hand, live, exactly as shown above.
+Steps 8–16 are verified live via `crates/cli/tests/milestone_1_walkthrough.rs`,
+which drives the identical HTTP/SDK/CLI calls end to end against a real
+server and database. That file also has a companion test,
+`tampering_a_ledger_entry_breaks_the_chain`, proving step 15's
+chain-intact check actually catches a tampered ledger row — run against its
+own throwaway Postgres *schema* inside the same database (never a separate
+database, when the Postgres role in use has no `CREATEDB` privilege) and
+never against a shared dev ledger, since corrupting a real row there would
+permanently break every later entry's chain for every other session sharing
+that database.
 
 Both tests are `--ignored` and run under `make test-live` (needs
 `AVALON_SERVER_URL`, `AVALON_WEBAUTHN_ORIGIN`, `DATABASE_URL`, and
 `AVALON_SETTLEMENT_SIGNING_KEY` in the environment — `.env`'s values work
-when exported, same as every other `crates/sdk/tests/*.rs` live test in
-this repo).
+when exported, same as every other live integration test in this repo).
+</content>
+</invoke>

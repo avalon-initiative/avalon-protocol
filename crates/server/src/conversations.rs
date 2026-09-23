@@ -1,8 +1,8 @@
-//! Direct/small-group conversations (issue #102) — the identity-to-identity
+//! Direct/small-group conversations — the identity-to-identity
 //! sibling of `crate::guild_messages`: never touches the outbox or ledger,
 //! participant-only, blocking-aware. See `docs/architecture/communication.md`'s
-//! "Today in the repo" for idempotent creation, the relationship gate
-//! (#269), and how blocking is enforced identically on read and write.
+//! "Today in the repo" for idempotent creation, the relationship gate,
+//! and how blocking is enforced identically on read and write.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -166,7 +166,7 @@ pub async fn create_conversation(
         return Err(AppError::InvalidConversationParticipants);
     }
 
-    // Relationship gate (#269) — also closes the existence oracle, since a
+    // Relationship gate — also closes the existence oracle, since a
     // nonexistent id can never be a friend or guild-mate.
     let others: Vec<Uuid> = participants
         .iter()
@@ -266,7 +266,7 @@ pub async fn list_my_conversations(
     Ok(Json(conversations))
 }
 
-// Renamed in the published schema (issue #726 found this): a bare
+// Renamed in the published schema: a bare
 // `ToSchema` name collides with `guild_messages::MessageResponse` — both
 // register as `MessageResponse` in `openapi.rs`'s `components(schemas(...))`
 // list, and utoipa's aggregation silently lets the second-registered one
@@ -360,8 +360,8 @@ pub async fn list_messages(
     Ok(Json(messages))
 }
 
-// Renamed in the published schema (issue #742, same class of bug #726
-// found and fixed for `MessageResponse`/`ConversationMessageResponse`): a
+// Renamed in the published schema (same class of bug found and fixed for
+// `MessageResponse`/`ConversationMessageResponse`): a
 // bare `ToSchema` name collides with `guild_messages::SendMessageRequest`
 // (both register as `SendMessageRequest` in `openapi.rs`'s aggregator;
 // utoipa lets the second-registered one win silently) — without this,
@@ -370,7 +370,7 @@ pub async fn list_messages(
 #[schema(as = ConversationSendMessageRequest)]
 pub struct SendMessageRequest {
     pub body: String,
-    /// The submitting client's journal `EntryId` (issue #110/#111), when
+    /// The submitting client's journal `EntryId`, when
     /// this request came from the SDK's deferred submission engine rather
     /// than a direct online send. Optional — a message sent directly online
     /// never sets this and never needs to dedupe against anything (see
@@ -391,7 +391,7 @@ pub struct SendMessageRequest {
 /// read and write" section for why the rejection is indistinguishable from
 /// a non-participant's, on both this endpoint and [`list_messages`].
 ///
-/// **Idempotent when `client_entry_id` is set** (issue #111): inserts with
+/// **Idempotent when `client_entry_id` is set**: inserts with
 /// `ON CONFLICT (conversation_id, client_entry_id) DO NOTHING` against the
 /// partial unique index from migration `0037_conversation_message_idempotency`
 /// and, if that hit an existing row instead of inserting a new one, looks
@@ -614,7 +614,7 @@ mod tests {
         assert_ne!(participants_key(&[a, b]), participants_key(&[a, c]));
     }
 
-    // --- Relationship gate (issue #269) ------------------------------
+    // --- Relationship gate ------------------------------
 
     #[test]
     fn unrelated_participant_is_denied() {

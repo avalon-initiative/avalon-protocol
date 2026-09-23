@@ -6,12 +6,6 @@ case for existence; this set states the invariants, the authority boundaries,
 and what the code is held to. When the two disagree, this set wins and the
 Proposal gets updated.
 
-Decisions that constrain the architecture are recorded as closed GitHub issues
-labeled [`architecture-decision-record`](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record).
-Questions still being decided are open issues labeled
-[`decision`](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Adecision+is%3Aopen).
-Each document below links the ones that govern it.
-
 > **Don't build the universe. Build the infrastructure that lets others build
 > worlds.** Avalon is the railroad between integrators, not an attempt to own every
 > destination.
@@ -48,8 +42,8 @@ Each document below links the ones that govern it.
 | Privacy | [privacy.md](privacy.md) | Visibility is intentionally scoped; nothing is public because it can be |
 | Scalability | [scalability.md](scalability.md) | 1,000 integrators × 100,000 identities, without becoming a gameplay bottleneck |
 | Future layers | [future-layers.md](future-layers.md) | Portable assets and economy: later phases, not foundations |
-| Integrator Space | [integrator-space.md](integrator-space.md) | Integrator-defined schemas, publication, versioning, and mappings; not built yet — the design a decision has to close before it starts |
-| Distributed topology | [distributed-topology.md](distributed-topology.md) | Target shape, not today's reality: sharded settlement with no designated aggregator, interest-scoped realtime mesh instead of full broadcast |
+| Integrator Space | [integrator-space.md](integrator-space.md) | Integrator-defined schemas, publication, versioning, and mappings |
+| Distributed topology | [distributed-topology.md](distributed-topology.md) | Sharded settlement with no designated aggregator, interest-scoped realtime mesh instead of full broadcast |
 
 These are the protocol-domain docs that live with `backend-server` (the crates
 that ship as one `avalon-server` process: `protocol`, `chain`, `indexer`,
@@ -63,51 +57,44 @@ of the network, not the network).
 
 ## Invariants
 
-These hold unless an explicit decision changes them. Each links the record that
-established it.
+These hold unless an explicit, documented decision changes them.
 
-| Area | Invariant | Record |
-|---|---|---|
-| Identity | Avalon identity is self-owned and integrator-independent. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
-| Identity | An identity is a self-custodied keypair — a WebAuthn passkey for login, a separate Ed25519 key that signs the events it authors. No password, no shared secret. | [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) |
-| Characters | Characters, and every integrator-defined attribute, belong to the integrator unless explicitly promoted. | [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) |
-| Guilds | Avalon guilds are network-level, integrator-independent social primitives. | [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74) |
-| Achievements | Achievements are issuer attestations, not shared rows. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
-| Provenance | Durable interoperable claims preserve provenance. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75), [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
-| Trust | Authenticity, validity, and recognition are separate concepts. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
-| Recognition | Consuming integrators choose what they recognize. No network-wide trust list. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
-| History | Revocation adds history; it does not erase history. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
-| Settlement | Settlement is not the general-purpose query database. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68), [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
-| Settlement | Settlement is a public, verifiable, mirrorable log — never federation. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
-| Settlement | No blockchain, no validator/BFT consensus; a transparency log on Postgres. No native currency or token at launch. | [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186), [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) |
-| Settlement | Settlement storage is Postgres, permanently — not a per-node embedded store, since there's no validator/full-node model requiring one. | [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) |
-| Trust anchors | `network_id` alone is never sufficient to trust a server; a client verifies STHs against the pinned key for the `network_id` claimed. | [#232](https://github.com/LunarVagabond/avalon-protocol/issues/232), [network-trust-anchors.md](network-trust-anchors.md) |
-| Batching | One event is never one settlement transaction. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
-| Gameplay | Real-time gameplay stays game-side. | [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) |
-| Query | Query databases are projections. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
-| Rebuild | Promised-durable state is reconstructable from canonical history. | [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) |
-| Presence | Realtime presence is ephemeral and never enters durable history. | [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) |
-| Integrator Space | Schema publication and data exposure are independently authorized; historical data is read under the schema version it was recorded against, never reinterpreted. | [integrator-space.md](integrator-space.md), [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) |
-| Nodes | Nodes are infrastructure providers, not authorities. A node cannot fabricate an issuer's claim. | [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) |
-| Self-hosting | A private instance (its own `network_id`) is cryptographically incapable of merging with the public network's log — running the code privately is supported, but it is a fork, not membership. | [#173](https://github.com/LunarVagabond/avalon-protocol/issues/173), [self-hosting.md](self-hosting.md) |
-| SDK | SDKs expose protocol capabilities, not infrastructure topology. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
-| Hub | The Hub is a client of the network, not the network. | [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77) |
-| Registry | Network statistics inform decisions; they never determine trust. | [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) |
-| Privacy | Network visibility is intentionally scoped. | [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78), [#87](https://github.com/LunarVagabond/avalon-protocol/issues/87) |
-| Economy | Universal economic interoperability is not foundational. | [`../stakeholders/Proposal.md` §15](../../../stakeholders/Proposal.md#15-economy-and-currency) |
-| Workspace | Six domain crates plus one proc-macro support crate (`schema-derive`); new domains are modules of `protocol`, not new crates. | [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) |
-
-Still open, and deliberately so:
-
-| Question | Issue |
+| Area | Invariant |
 |---|---|
-| Transparency log design (hash structure, signed tree heads, mirror sync) — no validator/consensus/storage-engine design needed, decided closed per [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) | [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) |
-| Identity recovery when every passkey is lost | [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) |
-| Issuer signing keys and key lifecycle | [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) |
-| Revocation mechanics | [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) |
-| Ledger entry / tree-head signing (the operator's key) | [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) |
-| Offline operation capability classification | [#109](https://github.com/LunarVagabond/avalon-protocol/issues/109) |
-| Offline trust model: client-recorded claims vs server-attested attestations | [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112) |
+| Identity | Avalon identity is self-owned and integrator-independent. |
+| Identity | An identity is a self-custodied keypair — a WebAuthn passkey for login, a separate Ed25519 key that signs the events it authors. No password, no shared secret. |
+| Characters | Characters, and every integrator-defined attribute, belong to the integrator unless explicitly promoted. |
+| Guilds | Avalon guilds are network-level, integrator-independent social primitives. |
+| Achievements | Achievements are issuer attestations, not shared rows. |
+| Provenance | Durable interoperable claims preserve provenance. |
+| Trust | Authenticity, validity, and recognition are separate concepts. |
+| Recognition | Consuming integrators choose what they recognize. No network-wide trust list. |
+| History | Revocation adds history; it does not erase history. |
+| Settlement | Settlement is not the general-purpose query database. |
+| Settlement | Settlement is a public, verifiable, mirrorable log — never federation. |
+| Settlement | No blockchain, no validator/BFT consensus; a transparency log on Postgres. No native currency or token at launch. |
+| Settlement | Settlement storage is Postgres, permanently — not a per-node embedded store, since there's no validator/full-node model requiring one. |
+| Trust anchors | `network_id` alone is never sufficient to trust a server; a client verifies STHs against the pinned key for the `network_id` claimed. See [network-trust-anchors.md](network-trust-anchors.md). |
+| Batching | One event is never one settlement transaction. |
+| Gameplay | Real-time gameplay stays game-side. |
+| Query | Query databases are projections. |
+| Rebuild | Promised-durable state is reconstructable from canonical history. |
+| Presence | Realtime presence is ephemeral and never enters durable history. |
+| Integrator Space | Schema publication and data exposure are independently authorized; historical data is read under the schema version it was recorded against, never reinterpreted. See [integrator-space.md](integrator-space.md). |
+| Nodes | Nodes are infrastructure providers, not authorities. A node cannot fabricate an issuer's claim. |
+| Self-hosting | A private instance (its own `network_id`) is cryptographically incapable of merging with the public network's log — running the code privately is supported, but it is a fork, not membership. See [self-hosting.md](self-hosting.md). |
+| SDK | SDKs expose protocol capabilities, not infrastructure topology. |
+| Hub | The Hub is a client of the network, not the network. |
+| Registry | Network statistics inform decisions; they never determine trust. |
+| Privacy | Network visibility is intentionally scoped. |
+| Economy | Universal economic interoperability is not foundational. See [`../stakeholders/Proposal.md` §15](../../../stakeholders/Proposal.md#15-economy-and-currency). |
+| Workspace | Domain functionality grows by module, not by new crate, unless a real compilation, ownership, or deployment boundary appears. |
+
+Open design questions, deliberately not yet settled: identity recovery when
+every passkey is lost beyond the guardian-based social recovery already
+built; revocation mechanics beyond the append-only history model already in
+place; offline operation capability classification, and the offline trust
+model for client-recorded claims versus server-attested attestations.
 
 ## What survives an integrator's death
 
@@ -136,7 +123,7 @@ Ask these of any proposed change. The expected answer is in bold.
 - Could it still make sense if the settlement backend changed? **Yes.**
 - Could it still make sense if HTTP were replaced? **Yes.**
 - Could an integrator use Avalon without knowing the database topology? **Yes.**
-- Could Avalon rebuild durable query state after losing PostgreSQL? **In principle, yes** — and [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43) proves it.
+- Could Avalon rebuild durable query state after losing PostgreSQL? **Yes** — real, tested projection-rebuild machinery backs this.
 - Can a node operator fabricate an issuer claim? **No.**
 - Can Avalon prove that an achievement is meaningful? **No.**
 - Can a receiving integrator choose not to recognize a valid achievement? **Yes.**
@@ -175,7 +162,8 @@ throughput is not optimized before the semantics it settles are right.
 
 ## Conventions for this directory
 
-One file per topic. Each states its invariants up front, describes the model,
-ends with "Today in the repo" (what actually exists, with paths) and "Decisions
-and tickets" (the issues that govern it). Update the relevant file in the same
-PR as the code it describes; a doc that lags the code is a bug.
+One file per topic. Each states its invariants up front and describes the
+current model and implementation. Update the relevant file in the same
+change as the code it describes; a doc that lags the code is a bug.
+</content>
+</invoke>

@@ -7,15 +7,14 @@ both `IntegratorSession` (capability-gated, mirrors Rust/C#'s `Session`) and
 applies to every language's SDK — this page is the TypeScript-specific
 "how," not the "why."
 
-**Status (2026-09-21):** real and shipped (#701), not speculative — ES
-modules, `vitest` for tests. Not a workspace member: intentionally outside
-the root `package.json`'s `workspaces` array and `npm install`ed
-separately from inside `bindings/ts` itself, since the design is for this
-package to eventually move into its own `avalon-sdks` org repo with no
-internal dependency on `packages/api-client`, `apps/hub`, or
-`apps/mobile-hub` anywhere in its source. It is, however, actively
-consumed by `apps/hub` — epic #712 is migrating the Hub frontend off the
-older `packages/api-client` and onto this SDK, batch by batch.
+**Status:** real and shipped, not speculative — ES modules, `vitest` for
+tests. Not a workspace member: intentionally outside the root
+`package.json`'s `workspaces` array and `npm install`ed separately from
+inside `bindings/ts` itself, since the design is for this package to
+eventually move into its own `avalon-sdks` org repo with no internal
+dependency on `packages/api-client`, `apps/hub`, or `apps/mobile-hub`
+anywhere in its source. It is, however, the SDK `apps/hub` itself runs on
+— its entire data-fetching surface goes through `@avalon/sdk`.
 
 Unlike the C# port (which scoped WebAuthn ceremony-driving out entirely)
 and the Rust port (which drives a virtual/software authenticator, since it
@@ -43,7 +42,7 @@ are both implemented for real, not stubbed out.
   actual security boundary — the server enforces the same thing
   independently).
 - No implicit conversion between `AccountSession` and `IntegratorSession`
-  anywhere in this package — no shared base class, no cast — #696's hard
+  anywhere in this package — no shared base class, no cast — this
   invariant holds at the type level here too, same as Rust/C#.
 - Errors are typed subclasses of `AvalonSdkError`
   (`UnauthorizedError`/`CapabilityNotGrantedError`/`NotFoundError`/
@@ -58,10 +57,9 @@ are both implemented for real, not stubbed out.
 Unlike the Rust SDK's `for-developers/` set, this SDK doesn't have its own
 numbered guide series yet — noted honestly rather than left to look
 finished. Until one exists, the most accurate reference is
-[`../architecture/sdk.md`](../architecture/sdk.md)'s own "Today in the
-repo" section (search for `bindings/ts`), which is kept current alongside
-the code, plus the `*.test.ts` files under `bindings/ts/test/`, which
-double as runnable usage examples for every domain.
+[`../architecture/sdk.md`](../architecture/sdk.md)'s TypeScript coverage,
+plus the `*.test.ts` files under `bindings/ts/test/`, which double as
+runnable usage examples for every domain.
 
 ## Related
 

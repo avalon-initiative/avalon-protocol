@@ -1,4 +1,4 @@
-// Guild overview + roster + channels for Guild.vue (issue #24): loads once,
+// Guild overview + roster + channels for Guild.vue: loads once,
 // then polls — matching the ticket's own design note ("poll for updates,
 // no WebSocket needed for milestone 1, matching how presence/friends
 // already poll"). Roster presence is merged client-side via

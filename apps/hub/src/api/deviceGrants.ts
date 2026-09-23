@@ -1,4 +1,4 @@
-// Device-registration / linked-device grant model (issue #135) — the
+// Device-registration / linked-device grant model — the
 // requesting side only. A requesting device (no local signing key yet)
 // generates a fresh keypair and asks for a grant; Profile.vue then polls
 // `session.session.getDeviceGrant(...)` until it's approved. The approving

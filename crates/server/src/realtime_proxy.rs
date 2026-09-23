@@ -1,5 +1,5 @@
-//! Gateway-side WebSocket proxying to a remote Realtime node — issue #663,
-//! extracting `crate::presence`/`crate::chat`'s WebSocket service (#16/#438)
+//! Gateway-side WebSocket proxying to a remote Realtime node,
+//! extracting `crate::presence`/`crate::chat`'s WebSocket service
 //! into its own genuinely separate deployable role.
 //!
 //! **Connection-topology decision: proxy-through-Gateway, not
@@ -7,8 +7,8 @@
 //! `architecture-decision-record`-labeled issue (see `docs/architecture/nodes.md`'s
 //! "Today in the repo" section for the issue number) — the short version:
 //! a client keeps talking to exactly one node's URL for everything, the
-//! same invariant every other role extraction in epic #291 (#661's
-//! internal RPC, #662's Indexer) already preserves, and #665's client
+//! same invariant every other role extraction (internal RPC,
+//! Indexer) already preserves, and client
 //! routing/discovery doesn't have to exist yet for this to work. The
 //! tradeoff accepted: every realtime message now crosses one extra
 //! network hop (client -> Gateway -> Realtime -> Gateway -> client)

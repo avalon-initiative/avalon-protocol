@@ -7,21 +7,18 @@ of it is actually exposed.** Neither one gives Avalon an opinion about what a
 integrator make its data *structurally describable, versioned, discoverable, and
 attributable to itself* without Avalon standardizing what that data means.
 
-**Schema publication, data exposure, and mapping are all now built.**
-#181 decided the representation and #255 built the first implementation
-slice — an integrator can publish a versioned, immutable `.proto` description of
-its own data model and have that publication discoverable through the Integrator
-Registry. #384 built data exposure (actual instances, with visibility
-control). #491 built mapping — a documented relationship between two
-schema versions, explicitly not an execution engine — see
-[Today in the repo](#today-in-the-repo).
+**Schema publication, data exposure, and mapping are all built.** An integrator can
+publish a versioned, immutable `.proto` description of its own data model and have
+that publication discoverable through the Integrator Registry. Data exposure (actual
+instances, with visibility control) and mapping — a documented relationship between
+two schema versions, explicitly not an execution engine — are both built too. See
+[Current implementation](#current-implementation).
 
 ## Integrator Space is not a new participation record
 
 [Integrator bindings](./bindings.md) already establish "this identity
-participates in this integrator," deliberately with no integrator-data field, per
-[#67](https://github.com/LunarVagabond/avalon-protocol/issues/67). A **Integrator
-Space** is a different thing: it belongs to the *integrator*, not to an
+participates in this integrator," deliberately with no integrator-data field.
+A **Integrator Space** is a different thing: it belongs to the *integrator*, not to an
 identity-integrator pair, and it is where an integrator optionally publishes *how its data is
 shaped* (schemas) and optionally exposes *instances of that data* (data
 exposure). It does not replace the integrator's own database, and it does not
@@ -72,11 +69,10 @@ requires an integrator to expose its full model to participate.
 
 ## Schema vs. data exposure — do not conflate these
 
-**Built as of #384** (decided by #381): schema publication and instance-data
-publication are two separate write paths with independent authorization, and
-data exposure defaults to network-readable the same way attestations already
-do — publishing is the opt-in. See "Today in the repo" below for the actual
-mechanism.
+Schema publication and instance-data publication are two separate write paths
+with independent authorization, and data exposure defaults to network-readable
+the same way attestations already do — publishing is the opt-in. See
+[Current implementation](#current-implementation) for the actual mechanism.
 
 ```text
 Schema publication  =  "Here is how our data is structured."
@@ -149,27 +145,24 @@ JSON (or whatever wire format is eventually chosen) is the transport. The
 schema reference is what makes the payload interpretable — the same relationship
 `AchievementDefinition.schema` already has to an attestation's payload
 ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)).
-Data exposure (#384) and mapping validation (#491) are both now built —
-see [Today in the repo](#today-in-the-repo). Mapping *validation* stops at
-structural sanity (both referenced schema versions exist and belong to the
+Data exposure and mapping validation are both built — see
+[Current implementation](#current-implementation). Mapping *validation* stops
+at structural sanity (both referenced schema versions exist and belong to the
 publishing integrator) — never semantic correctness of the correspondence
 itself, per this section's own "the integrator owns the semantic
 transformation" invariant.
 
-## Representation and versioning (decided by #181, built by #255, parsing added by #384)
+## Representation and versioning
 
 A published integrator schema is protobuf IDL (`.proto`) — mature
 field-numbering/evolution rules, broad developer familiarity. It is stored,
 versioned, and served back verbatim, exactly as submitted (`proto_source`
-itself is never rewritten or re-encoded). #181 originally specified this
-text as opaque to Avalon; #384's amendment revised that — Avalon now
-actually parses it (pure-Rust, no `protoc` binary) to resolve its root
-message, both to validate `field_visibility`'s field names for real and to
-validate submitted instance data against it. This keeps the actual network
-surface JSON-only (per [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82)'s
-protocol-event-payload policy): protobuf's canonical JSON mapping
-(`protobuf-json-mapping`) is the bridge #384 actually uses, not a reason to
-make Avalon's API gRPC or binary-protobuf-on-the-wire.
+itself is never rewritten or re-encoded). Avalon actually parses it
+(pure-Rust, no `protoc` binary) to resolve its root message, both to validate
+`field_visibility`'s field names for real and to validate submitted instance
+data against it. This keeps the actual network surface JSON-only: protobuf's
+canonical JSON mapping (`protobuf-json-mapping`) is the bridge actually used,
+not a reason to make Avalon's API gRPC or binary-protobuf-on-the-wire.
 
 Version identity is a monotonic `version: u32` per integrator — the same
 precedent `AchievementDefinition.version` already established — plus an
@@ -182,10 +175,8 @@ a schema means publishing a new version, never editing one in place. See
 `crates/server/src/integrator_schemas.rs` (`POST`/`GET
 /integrations/{slug}/schemas[/{version}]`).
 
-Still not decided or built: server-side validation of exposed data against
-a published schema, and mapping between schema versions — both explicitly
-deferred to their own follow-up tickets under Epic
-[#182](https://github.com/LunarVagabond/avalon-protocol/issues/182).
+Not yet built: server-side capability-mapping between universal Avalon-defined
+concepts and an integrator's own fields — see below.
 
 ## Historical interpretation
 
@@ -233,7 +224,7 @@ required; a schema/mapping reference on an event or attestation is enough.
 Publication *metadata* (schema id, version, owner, lineage) is the kind of
 durable-derived fact the [Integrator Registry](./registry.md) already exists
 to surface — the same place capabilities, keys, and activity metrics live
-today. #255 built exactly this: `crates/indexer/src/projections/integrator_schemas.rs`
+today. `crates/indexer/src/projections/integrator_schemas.rs`
 projects `game_schema.published` events into the registry's read model,
 reusing the same decode/apply projection shape every other read model in
 that crate already uses, rather than a separate discovery path. Full schema
@@ -253,27 +244,22 @@ guarantee is actually needed, following the same discipline
   any kind stays opt-in and per-entity, per
   [`./future-layers.md`](./future-layers.md).
 - Does validate exposed data against a published schema, and does parse
-  `.proto` IDL to do so — see #384 in [Representation and
-  versioning](#representation-and-versioning-decided-by-181-built-by-255-parsing-added-by-384).
-  Compiling to a language binding (codegen) is still out of scope; parsing
-  here is only ever for structural validation.
+  `.proto` IDL to do so. Compiling to a language binding (codegen) is out of
+  scope; parsing is only ever for structural validation.
 - Does not extend `IntegratorBinding` or the achievement `schema` field to carry
   general integrator data; both stay exactly as narrowly scoped as they are today.
 
-## Today in the repo
+## Current implementation
 
 - `avalon_protocol::integrator_schemas::IntegratorSchemaVersion`
   (`crates/protocol/src/integrator_schemas.rs`) is the one domain type: integrator id,
   raw `.proto` source, monotonic `version: u32`, `published_at`, and an
-  optional `superseded_by: Option<GlobalId>` lineage pointer — the
-  `AchievementDefinition.schema`/`version` precedent
-  ([`./achievements-and-attestations.md`](./achievements-and-attestations.md)),
-  generalized from a bare reference field to the schema description itself.
-  No `IntegratorSpace`/`Mapping`/`Entity` type exists yet — mapping between schema
-  versions remains unbuilt. Data exposure (this section's own gap) is now
-  built, per #384.
-- **`proto_source` is now actually parsed** (#384's amendment to #181's
-  original "protobuf IDL, stored opaque" decision). `crate::proto_schema`
+  optional `superseded_by: Option<GlobalId>` lineage pointer — a
+  generalization of the `AchievementDefinition.schema`/`version` precedent
+  from a bare reference field to the schema description itself.
+  No `IntegratorSpace`/`Mapping`/`Entity` type exists yet outside what's
+  described below.
+- **`proto_source` is actually parsed.** `crate::proto_schema`
   (`crates/server/src/proto_schema.rs`) parses it at publish time with
   `protobuf-parse`'s pure-Rust parser — no `protoc` binary, since this parses
   untrusted third-party text at request time — into a `FileDescriptorProto`,
@@ -286,20 +272,19 @@ guarantee is actually needed, following the same discipline
 - **Schema-level and field-level visibility** (`default_visibility`:
   `"public"`/`"private"`, `field_visibility`: field name ->
   `"public"`/`"private"`, overriding the default for that field in either
-  direction) live on `integrator_schemas`/`indexer_integrator_schemas`
-  (`crates/server/db/migrations/0051_game_data_visibility`). Both default
-  to fully open (`"public"`, `{}`) — a schema published before #384 landed
-  keeps behaving exactly as it did before. `field_visibility`'s keys are
-  validated against the parsed root message's real field names at publish
-  time (`proto_schema::validate_field_visibility_keys`); a nonexistent
-  field name is rejected, not silently accepted.
+  direction) live on `integrator_schemas`/`indexer_integrator_schemas`.
+  Both default to fully open (`"public"`, `{}`) — a schema published before
+  visibility support landed keeps behaving exactly as it did before.
+  `field_visibility`'s keys are validated against the parsed root message's
+  real field names at publish time (`proto_schema::validate_field_visibility_keys`);
+  a nonexistent field name is rejected, not silently accepted.
 - **Instance-data publication**: `POST
   /integrations/{slug}/schemas/{version}/data` (`crates/server/src/integrator_data.rs`) —
-  a new `game_data.published` event kind, with `integrator_data_instances` +
+  a `game_data.published` event kind, with `integrator_data_instances` +
   `indexer_integrator_data_instances` tables mirroring the
   `integrator_schemas`/`indexer_integrator_schemas` pairing exactly (append-only,
   `superseded_by` lineage, no PATCH).
-- **Instance deletion (#533)**: `DELETE
+- **Instance deletion**: `DELETE
   /integrations/{slug}/schemas/{version}/data/{subject}` — a deleted
   character (or any other published instance) gets a `game_data.deleted`
   tombstone, never a physical delete; see
@@ -319,31 +304,28 @@ guarantee is actually needed, following the same discipline
   stored.
 - **Read**: `GET /identities/{id}/integrator-data`
   (`integrator_data::get_identity_integrator_data`) — public, unauthenticated, same
-  posture `GET /attestations/{id}` already has (#381's whole point).
-  Reads the indexer's own projection
-  (`avalon_indexer::projections::integrator_data_instances`), never raw
+  posture `GET /attestations/{id}` already has. Reads the indexer's own
+  projection (`avalon_indexer::projections::integrator_data_instances`), never raw
   ledger/outbox data, and applies the bidirectional visibility rule
   (`integrator_data::resolve_visible_fields`, a pure function unit-tested
   directly) per instance: a field is included iff `default_visibility` is
   `"public"` and the field isn't marked `"private"`, or `default_visibility`
   is `"private"` and the field is marked `"public"`. Only literal top-level
   JSON key matching — no nested-field visibility in this pass (documented
-  limitation, not silently attempted). The Hub reads this endpoint too
-  ([#465](https://github.com/LunarVagabond/avalon-protocol/issues/465),
-  done): `UserProfile.vue`'s "Published by connected apps" card, rendering
+  limitation, not silently attempted). The Hub reads this endpoint too:
+  `UserProfile.vue`'s "Published by connected apps" card, rendering
   each visible instance generically (field name -> value, no per-schema
   custom rendering yet) — a profile with nothing published, and one with
   published data none of it currently visible to the caller, render
   identically (an empty state), matching this endpoint's own
   by-design "can't tell those two apart" posture.
-- **Rust SDK codegen** (#386): `#[derive(AvalonSchema)]`
-  (`crates/sdk/schema-derive`, `avalon-schema-derive`) generates a struct's
-  `.proto` message text plus its `default_visibility`/`field_visibility`
-  maps, so an integrator using the Rust SDK never hand-writes `.proto`
-  source or the raw publish request — see
-  [sdk.md](../../sdks/architecture/sdk.md)'s own "Today in the repo" entry for the macro's
-  supported-type scope and `Session::publish_schema_version`/
-  `publish_instance`.
+- **Rust SDK codegen**: `#[derive(AvalonSchema)]`
+  (in the Rust SDK's `schema-derive` crate, `avalon-schema-derive`) generates
+  a struct's `.proto` message text plus its
+  `default_visibility`/`field_visibility` maps, so an integrator using the
+  Rust SDK never hand-writes `.proto` source or the raw publish request — see
+  [sdk.md](../../sdks/rust/README.md) for the macro's supported-type scope
+  and `Session::publish_schema_version`/`publish_instance`.
 - **In-process parse cache.** `proto_schema` caches each schema's parsed
   root message (keyed by schema id, which is permanently immutable once
   published) so repeated instance-data writes against the same schema
@@ -361,19 +343,13 @@ guarantee is actually needed, following the same discipline
   the integrator owns the slug, not an identity-granted capability), `GET
   /integrations/{slug}/schemas` (list, public), `GET
   /integrations/{slug}/schemas/{version}` (one version, public). `integrator_schemas`
-  (`crates/server/db/migrations/0034_game_schemas`) is the request-serving
-  projection; `proto_source` is never updated once inserted.
-- The [Integrator Registry](./registry.md)'s read model now covers schema
+  is the request-serving projection; `proto_source` is never updated once
+  inserted.
+- The [Integrator Registry](./registry.md)'s read model covers schema
   discovery: `crates/indexer/src/projections/integrator_schemas.rs` projects
   `game_schema.published` into `indexer_integrator_schemas`, queried by
   `list_for_integrator`.
-- [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) is a
-  versioning policy for `ProtocolEvent.kind`/payload, i.e. Avalon's own
-  events — not a mechanism for versioning an integrator's data model. Schema
-  versioning follows the same discipline without #82 itself being widened
-  to cover it.
-- **Schema-to-schema mapping model** (#491, closing #182's last unfiled
-  acceptance item) — `crates/server/src/integrator_schema_mappings.rs`:
+- **Schema-to-schema mapping model** — `crates/server/src/integrator_schema_mappings.rs`:
   `POST /integrations/{slug}/mappings` (publish, integrator-credential-
   authenticated, same ownership check as schema publication), `GET
   /integrations/{slug}/mappings` (list, public), `GET
@@ -389,53 +365,9 @@ guarantee is actually needed, following the same discipline
   through the same indexer-projection machinery schema versions use
   (`crates/indexer/src/projections/integrator_schema_mappings.rs`,
   `game_schema_mapping.published`). SDK: `Session::publish_mapping`,
-  `AvalonClient::list_schema_mappings`/`get_schema_mapping`
-  (`crates/sdk/src/schema.rs`). Verified live against a real server,
-  including the ownership-rejection and nonexistent-schema-rejection
-  paths (`crates/server/tests/integrator_schema_mappings.rs`, `--ignored`).
-
-## Decisions and tickets
-
-- [Proposal §32](../../../stakeholders/Proposal.md#32-open-questions) — "should
-  assets have standardized schemas?" is the existing, still-open question this
-  document generalizes from assets to integrator data broadly.
-- [#181](https://github.com/LunarVagabond/avalon-protocol/issues/181) —
-  Decision: integrator-defined schema model, representation, and versioning
-  strategy. Decided 2026-09-09: protobuf IDL as the description format,
-  originally stored opaque; #384's amendment revised this to real parsing —
-  see below.
-- [#255](https://github.com/LunarVagabond/avalon-protocol/issues/255) —
-  Integrator Schema Publication: the first implementation ticket under #182,
-  building publication, immutability/lineage, and registry discovery per
-  #181's decision.
-- [#381](https://github.com/LunarVagabond/avalon-protocol/issues/381) —
-  Decision: data exposure defaults to network-readable once an integrator
-  publishes instance data against its own published schema, with a
-  schema-level opt-out and a bidirectional field-level override.
-- [#384](https://github.com/LunarVagabond/avalon-protocol/issues/384) —
-  Integrator Space data exposure: builds #381's decision — schema visibility
-  metadata, real instance-data publication (`game_data.published`), the
-  visibility-enforcing read endpoint, and (its own amendment) real
-  protobuf parsing/validation of both `proto_source` and submitted
-  instances, replacing #181's original "stored opaque, never parsed"
-  stance for schema text specifically.
-- [#182](https://github.com/LunarVagabond/avalon-protocol/issues/182) — Epic:
-  Integrator Space & Schema Publication, gated on #181.
-- [#491](https://github.com/LunarVagabond/avalon-protocol/issues/491) —
-  schema-to-schema mapping model, closing #182's last unfiled acceptance
-  item, described above.
-- [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) — ADR:
-  identity is separate from game characters; the reason Integrator Space does not
-  become a second integrator database.
-- [#83](https://github.com/LunarVagabond/avalon-protocol/issues/83) — integrator
-  bindings; Integrator Space is explicitly not an extension of this.
-- [#94](https://github.com/LunarVagabond/avalon-protocol/issues/94) — Epic:
-  Integrator Registry & Network Intelligence; schema discovery lives in its read
-  surface (`crates/indexer/src/projections/integrator_schemas.rs`), not a new
-  service.
-- [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — protocol
-  event kind/versioning policy; the pattern a schema versioning policy would
-  follow, not extend.
-- [#98](https://github.com/LunarVagabond/avalon-protocol/issues/98) — typed,
-  enum-backed capability strings; the pattern a schema/entity-kind catalogue
-  would reuse if one is ever built.
+  `AvalonClient::list_schema_mappings`/`get_schema_mapping`. Verified live
+  against a real server, including the ownership-rejection and
+  nonexistent-schema-rejection paths
+  (`crates/server/tests/integrator_schema_mappings.rs`, `--ignored`).
+</content>
+</invoke>

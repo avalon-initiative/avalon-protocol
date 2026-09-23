@@ -1,4 +1,4 @@
-// The one module allowed to call `fetch` (issue #55's invariant, extracted
+// The one module allowed to call `fetch` (extracted
 // into this shared package by #60 so apps/hub and apps/mobile-hub both go
 // through it rather than duplicating it). Owns the base URL and bearer
 // header; every other module goes through the typed functions below rather
@@ -203,7 +203,7 @@ async function tryMintReconnectToken(failedToken: string): Promise<string | null
 }
 
 /**
- * The three things needed to mint an `InterestClaim` (issue #610), read
+ * The three things needed to mint an `InterestClaim`, read
  * through the same pluggable storage adapter `tryMintReconnectToken` above
  * already uses (and for the same reason: this module can't depend on
  * `session.ts`'s Pinia store). `null` when this device has no cached
@@ -302,7 +302,7 @@ export function sessionFinish(body: SessionFinishRequest): Promise<SessionFinish
   return request('/sessions/finish', { method: 'POST', body })
 }
 
-// Cross-device pairing (issue #307): bootstraps a session for a
+// Cross-device pairing: bootstraps a session for a
 // WebAuthn-incapable client. `approvePairing`/`denyPairing` use the
 // user's existing authenticated Hub session — no new auth surface.
 
@@ -320,7 +320,7 @@ export function denyPairing(
   return request('/auth/device/deny', { method: 'POST', body, token })
 }
 
-// Cross-node login (epic #623, issue #639): unlike every other call in this
+// Cross-node login: unlike every other call in this
 // file, these three target an arbitrary requesting node's own base_url —
 // the whole point of cross-node login is that the node a human is
 // approving login *into* is routinely not this Hub's own configured
@@ -478,7 +478,7 @@ export function removeBlock(token: string, identityId: string): Promise<void> {
   return request(`/blocks/${identityId}`, { method: 'DELETE', token })
 }
 
-// Resolves a display_name handle (issue #128, #510 — display_name itself
+// Resolves a display_name handle (display_name itself
 // is the globally-unique handle now) to an identity id for the "add
 // friend" flow — exact match only. URL-encoded since a display name can
 // contain characters that aren't safe unencoded in a URL path segment.
@@ -486,14 +486,14 @@ export function resolveHandle(token: string, handle: string): Promise<ResolveHan
   return request(`/friends/handle/${encodeURIComponent(handle)}`, { token })
 }
 
-// GET /people/discover (issue #204) — "people you may know", scoped to
+// GET /people/discover — "people you may know", scoped to
 // friends-of-friends and mutual guild membership. No parameters: the
 // caller's own session is the only input, never a search term.
 export function discoverPeople(token: string): Promise<DiscoverPeopleResponse> {
   return request('/people/discover', { token })
 }
 
-// GET /identities/search?q=&limit= (issue #205) — the opt-in global
+// GET /identities/search?q=&limit= — the opt-in global
 // name/handle search counterpart to discoverPeople above. Matches only
 // identities that have turned on their own `discoverable` preference (see
 // updateProfile's `discoverable` field). An empty/blank query returns no
@@ -525,7 +525,7 @@ export function getPresence(token: string, ids: string[]): Promise<PresenceRespo
   return request(`/presence?${params.toString()}`, { token })
 }
 
-// GET /identities/profiles?ids=... (issue #161) — batched, public-fields-only
+// GET /identities/profiles?ids=... — batched, public-fields-only
 // profile lookup, used to resolve display names for friends/guild rosters.
 export function getProfiles(token: string, ids: string[]): Promise<PublicProfileResponse[]> {
   if (ids.length === 0) {
@@ -535,7 +535,7 @@ export function getProfiles(token: string, ids: string[]): Promise<PublicProfile
   return request(`/identities/profiles?${params.toString()}`, { token })
 }
 
-// GET /identities/:id/profile (issue #403) — a single identity's full
+// GET /identities/:id/profile — a single identity's full
 // self-description profile, same exposure level as GET /me, for a real
 // profile-card view rather than a roster resolve.
 export function getIdentityProfile(
@@ -545,7 +545,7 @@ export function getIdentityProfile(
   return request(`/identities/${identityId}/profile`, { token })
 }
 
-// GET /identities/:id/integrator-data (#384) — public, unauthenticated
+// GET /identities/:id/integrator-data — public, unauthenticated
 // (no token param, matching getIntegratorPublic's own posture below):
 // every current instance a connected integrator has published about this
 // identity, already filtered server-side to only the fields that
@@ -556,7 +556,7 @@ export function getIdentityIntegratorData(
   return request(`/identities/${identityId}/integrator-data`)
 }
 
-// Device-registration / linked-device grant model (issue #135).
+// Device-registration / linked-device grant model.
 
 export function requestDeviceGrant(
   token: string,
@@ -601,7 +601,7 @@ export function revokeDevice(token: string, signingKeyId: string): Promise<void>
   return request(`/me/devices/${signingKeyId}/revoke`, { method: 'POST', token })
 }
 
-// Multi-passkey registration (issue #200): WebAuthn login credentials,
+// Multi-passkey registration: WebAuthn login credentials,
 // distinct from the signing-key device list above.
 
 export function startAddPasskey(token: string): Promise<AddPasskeyStartResponse> {
@@ -639,7 +639,7 @@ export function revokePasskey(
   return request(`/me/passkeys/${passkeyId}/revoke`, { method: 'POST', body, token })
 }
 
-// Social recovery (issue #201), matching crates/server/src/recovery.rs.
+// Social recovery, matching crates/server/src/recovery.rs.
 // `startRecoveryRequest`/`finishRecoveryRequest` are the one pair of
 // exported functions here that must never be called with a `token` — the
 // whole premise is the caller has none for the identity being recovered.
@@ -712,7 +712,7 @@ export function getIdentityRecoveryStatus(
   return request(`/identities/${identityId}/recovery/status`)
 }
 
-// Guilds, roles, membership (issues #20/#21), matching
+// Guilds, roles, membership, matching
 // crates/server/src/guilds.rs field-for-field.
 
 export function createGuild(token: string, body: CreateGuildRequest): Promise<GuildResponse> {
@@ -723,7 +723,7 @@ export function getGuild(token: string, guildId: string): Promise<GuildResponse>
   return request(`/guilds/${guildId}`, { token })
 }
 
-// GET /guilds/discover (issue #154) — a browsable/searchable listing of
+// GET /guilds/discover — a browsable/searchable listing of
 // guilds, same public-metadata visibility as getGuild above. The query
 // string is built by api/guilds.ts::buildDiscoverQueryString so that logic
 // stays testable without a fetch.
@@ -769,7 +769,7 @@ export function deleteRole(
   return request(`/guilds/${guildId}/roles/${nameIndex}`, { method: 'DELETE', body, token })
 }
 
-// Per-resource permission overrides (issue #250), matching
+// Per-resource permission overrides, matching
 // crates/server/src/guilds.rs's `/guilds/{id}/permission-overrides` routes.
 
 export function listPermissionOverrides(
@@ -819,7 +819,7 @@ export function associateIntegrator(
   return request(`/guilds/${guildId}/integrations/${integratorId}`, { method: 'POST', token })
 }
 
-// GET /guilds/{id}/integrator-breakdown (issue #206) — gated server-side to a
+// GET /guilds/{id}/integrator-breakdown — gated server-side to a
 // manage_guild holder (always) or anyone when the guild has set
 // `game_breakdown_public` (see api/guilds.ts's own note and
 // crates/server/src/guilds.rs::game_breakdown). A 403 here is expected and
@@ -828,8 +828,8 @@ export function getGameBreakdown(token: string, guildId: string): Promise<GameBr
   return request(`/guilds/${guildId}/integrator-breakdown`, { token })
 }
 
-// GET/PUT /guilds/{id}/favorite-integrators (issue #207, implementing decision
-// #160): a manage_guild-curated top-5 pin list drawn only from integrators with
+// GET/PUT /guilds/{id}/favorite-integrators — a manage_guild-curated top-5 pin
+// list drawn only from integrators with
 // real affinity per getGameBreakdown above. GET is unrestricted (same
 // visibility as getGuild — favorites are always part of the public
 // profile, see GuildResponse.favorite_games); PUT is manage_guild-gated
@@ -887,7 +887,7 @@ export function leaveGuild(token: string, guildId: string): Promise<void> {
   return request(`/guilds/${guildId}/leave`, { method: 'POST', token })
 }
 
-// Guild join requests (issue #242) — the applicant-initiated counterpart to
+// Guild join requests — the applicant-initiated counterpart to
 // createGuildInvite above.
 
 export function createJoinRequest(
@@ -951,7 +951,7 @@ export function listMyGuilds(token: string): Promise<MyGuildMembershipResponse[]
   return request('/me/guilds', { token })
 }
 
-// Guild channels + messages (issue #22), matching
+// Guild channels + messages, matching
 // crates/server/src/channels.rs and crates/server/src/guild_messages.rs.
 
 export function listChannels(token: string, guildId: string): Promise<ChannelResponse[]> {
@@ -1046,7 +1046,7 @@ export function deleteMessage(
   })
 }
 
-// Direct/small-group conversations (issue #102/#105) —
+// Direct/small-group conversations —
 // crates/server/src/conversations.rs.
 
 export function listConversations(token: string): Promise<ConversationResponse[]> {
@@ -1091,7 +1091,7 @@ export function sendConversationMessage(
   })
 }
 
-// Guild events calendar + RSVP (issue #169) —
+// Guild events calendar + RSVP —
 // crates/server/src/guild_events.rs.
 
 export function listEvents(
@@ -1142,7 +1142,7 @@ export function rsvpToEvent(
   return request(`/guilds/${guildId}/events/${eventId}/rsvp`, { method: 'PUT', body, token })
 }
 
-// Per-member RSVP roster (issue #248) — any current guild member, no
+// Per-member RSVP roster — any current guild member, no
 // `manage_*` permission required. See
 // crates/server/src/guild_events.rs::list_rsvps.
 export function listEventRsvps(
@@ -1153,8 +1153,8 @@ export function listEventRsvps(
   return request(`/guilds/${guildId}/events/${eventId}/rsvps`, { token })
 }
 
-// Integrator registration read (#26) + the binding/grant consent flow (#27,
-// #83), matching crates/server/src/integrations.rs's #27 companion module
+// Integrator registration read + the binding/grant consent flow, matching
+// crates/server/src/integrations.rs's companion module
 // field-for-field. Issue #293 made `/integrations` the server's canonical
 // path for these reads (`/integrations` still works as a compatibility redirect,
 // but this repo's own client calls the canonical path directly).
@@ -1213,7 +1213,7 @@ export function listMyConnections(token: string): Promise<MyConnectionsResponse>
   return request('/me/connections', { token })
 }
 
-// GET /ledger/sth/latest (issues #210/#211) — the current Signed Tree Head,
+// GET /ledger/sth/latest — the current Signed Tree Head,
 // a public unauthenticated read (no `token`, matching
 // crates/server/src/settlement.rs's own module doc comment). This Hub's
 // first settlement/ledger API client — issue #232 adds it so the Hub can
@@ -1245,7 +1245,7 @@ export interface PresenceSocket {
   close(): void
 }
 
-// GET /ws/presence (issue #136) — live presence push, additive to
+// GET /ws/presence — live presence push, additive to
 // getPresence's point-in-time reads. `onUpdate` fires once per pushed
 // PresenceResponse, including the immediate catch-up snapshot the server
 // sends for each newly-subscribed id (so a caller doesn't need a separate
@@ -1285,7 +1285,7 @@ export function openPresenceSocket(
   }
 }
 
-// GET /ws/messages (issue #438) — live push for guild channel and
+// GET /ws/messages — live push for guild channel and
 // conversation messages, additive to listMessages'/listConversationMessages'
 // point-in-time reads. Mirrors openPresenceSocket's shape (a plain browser
 // WebSocket, additive subscribe, queued until `open`), one connection per

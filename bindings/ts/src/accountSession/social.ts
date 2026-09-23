@@ -1,4 +1,4 @@
-// Friends, blocks, presence, and discovery (issues #15/#97/#136/#204/#205)
+// Friends, blocks, presence, and discovery
 // on AccountSession — the first-party counterpart to the integrator
 // Session's own social methods. See
 // crates/server/src/friends.rs/blocks.rs/presence.rs/discovery.rs.
@@ -39,9 +39,9 @@ type PublicProfileWire = components['schemas']['PublicProfileResponse']
 // version of this type declared `displayName`/`avatarUrl`/`mutualFriends`/
 // `mutualGuilds` fields the server has never actually sent, so every real
 // `discoverPeople()` call returned `undefined` for all four. Found and
-// fixed migrating onto the generated type (issue #726), matching
+// fixed migrating onto the generated type, matching
 // `crates/server/src/discovery.rs::DiscoveryCandidate`'s real (narrower)
-// shape — the Rust SDK's own migration (#724) found and fixed the same
+// shape — the Rust SDK's own migration found and fixed the same
 // bug independently.
 export interface DiscoveryCandidate {
   identityId: string

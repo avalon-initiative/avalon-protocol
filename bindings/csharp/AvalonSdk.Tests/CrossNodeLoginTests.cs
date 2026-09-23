@@ -12,7 +12,7 @@ namespace Avalon.Sdk.Tests;
 
 /// <summary>
 /// Stubbed-HTTP unit tests for CrossNodeLogin/AvalonClient's cross-node-login methods
-/// (epic #623, issue #638) — mirrors crates/sdk/tests/cross_node_login.rs's orchestration
+/// — mirrors crates/sdk/tests/cross_node_login.rs's orchestration
 /// assertions (what gets called, in what order, with what request/response shape), without a
 /// real server. Live, end-to-end signature-verification coverage lives in LiveTests.cs.
 /// </summary>

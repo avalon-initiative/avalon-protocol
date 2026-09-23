@@ -1,4 +1,4 @@
-// Multi-passkey management (issue #200) on AccountSession — WebAuthn login credentials,
+// Multi-passkey management on AccountSession — WebAuthn login credentials,
 // distinct from AccountSession.Devices.cs (event-signing keys). Mirrors
 // crates/sdk/src/account/passkeys.rs.
 //

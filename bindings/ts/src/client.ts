@@ -39,7 +39,7 @@ export interface AvalonClientConfig {
 // Hand-written, not generated — `challenge` is an opaque blob in the
 // schema (`webauthn-rs`'s own types have no `ToSchema` impl), same reason
 // the Rust SDK's own `RegisterStartResponse`/`SessionStartResponse` stay
-// hand-written (issue #724/#726).
+// hand-written.
 interface RegisterStartResponseWire {
   ticket_id: string
   challenge: { publicKey: PublicKeyCredentialCreationOptionsJSON }
@@ -71,7 +71,7 @@ export class AvalonClient {
   }
 
   /** Same as `register()`, but the event-signing key is deterministically
-   * derived from a fresh BIP39 recovery phrase (issue #134) rather than
+   * derived from a fresh BIP39 recovery phrase rather than
    * generated purely at random — the same disaster-recovery fallback
    * `packages/api-client`'s `createIdentity` already gives Hub's users
    * today. Returns the phrase alongside the session so the caller can
@@ -205,7 +205,7 @@ export class AvalonClient {
     })
   }
 
-  /** Starts a cross-device pairing (#307) via `POST /auth/device/start`,
+  /** Starts a cross-device pairing via `POST /auth/device/start`,
    * resolving to an `AccountSession` via `.wait()` rather than the
    * integrator `IntegratorSession` `login()`-equivalent resolves to. Use
    * this instead of `register()`/`login()` when this process has no

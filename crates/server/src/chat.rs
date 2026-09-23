@@ -1,9 +1,8 @@
-//! Live push for guild channel messages and DM/conversation messages
-//! (issue #438) — the same transport shape `crate::presence` established
-//! for presence (issue #136), extended to the two other realtime surfaces
-//! #119's original decision always intended it to cover. See
-//! `docs/architecture/communication.md`'s "Today in the repo" and
-//! [ADR #437](https://github.com/LunarVagabond/avalon-protocol/issues/437)'s
+//! Live push for guild channel messages and DM/conversation messages —
+//! the same transport shape `crate::presence` established
+//! for presence, extended to the two other realtime surfaces it was
+//! always intended to cover. See
+//! `docs/architecture/communication.md`'s "Today in the repo" section for the
 //! freshness-tier policy for why chat/DMs are push, not poll.
 
 use std::collections::HashMap;
@@ -132,7 +131,7 @@ pub async fn chat_ws(
 /// channels/conversations grows the connection's subscription sets rather
 /// than replacing them.
 ///
-/// `claim` (issue #610): an optional wire-encoded (`serde_json`)
+/// `claim`: an optional wire-encoded (`serde_json`)
 /// `avalon_protocol::interest_claim::InterestClaim`, self-signed by the
 /// caller's own Ed25519 event-signing key against the `base_url` this
 /// connection's own [`ChatServerMessage::NodeInfo`] just told it. `None`

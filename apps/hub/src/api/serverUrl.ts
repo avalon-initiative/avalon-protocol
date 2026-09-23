@@ -1,9 +1,9 @@
-// Which avalon-server this Hub talks to (issue #232's network selector) —
+// Which avalon-server this Hub talks to (the network selector) —
 // localStorage (checked first) lets a viewer's choice persist across
 // reloads; VITE_AVALON_SERVER_URL stays the build-time default for a Hub
 // that's never had one explicitly picked. Ported from
 // packages/api-client/src/client.ts's own getServerUrl/setServerUrl as
-// part of migrating off that package (issue #712) — same behavior, same
+// part of migrating off that package — same behavior, same
 // storage key, so an existing viewer's stored choice keeps working
 // unchanged across the migration.
 const SERVER_URL_STORAGE_KEY = 'avalon.serverUrl'

@@ -1,6 +1,6 @@
-//! Claim-definition CRUD per issuer (issue #31 for `Game`, generalized to
-//! `App`/`Service` by #324/#325) — an issuer defines its achievements or
-//! milestones before it can issue them (#32). See
+//! Claim-definition CRUD per issuer, generalized to
+//! `App`/`Service` — an issuer defines its achievements or
+//! milestones before it can issue them. See
 //! `docs/architecture/achievements-and-attestations.md`'s "Today in the
 //! repo" and "Namespacing" sections for the category-driven claim
 //! vocabulary, auth model, and update/retirement semantics.
@@ -39,7 +39,7 @@ use crate::issuer_registration::ensure_issuer_registered;
 use crate::outbox;
 use crate::state::AppState;
 
-/// The built-in icon set shipped with `packages/ui` (issue #332) — a key
+/// The built-in icon set shipped with `packages/ui` — a key
 /// into `AchievementIconName` on the frontend
 /// (`packages/ui/src/components/AvalonAchievementCard.types.ts`), generic
 /// enough to cover integrators/apps/services alike. Kept as a small, fixed list
@@ -47,19 +47,19 @@ use crate::state::AppState;
 /// silently render as a blank/broken slot in the Hub.
 const BUILTIN_ICONS: &[&str] = &["trophy", "star", "shield", "sword"];
 
-/// The `endpoint` component of this write's idempotency-cache key (issue
-/// #47) — shared by `achievements`/`milestones` routes since both go
+/// The `endpoint` component of this write's idempotency-cache key —
+/// shared by `achievements`/`milestones` routes since both go
 /// through [`issue_attestation`], the one place an idempotency key is
 /// actually honored today.
 const ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.issue";
 
-/// Cache key for bulk issuance's own idempotency entries (#495) — deliberately
+/// Cache key for bulk issuance's own idempotency entries — deliberately
 /// distinct from [`ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT`] so a bulk call and
 /// a single-claim call can never collide on the same idempotency key by
 /// accident.
 const BULK_ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.bulk_issue";
 
-/// A bulk call's own claim-count cap (#495) — generous enough for "a
+/// A bulk call's own claim-count cap — generous enough for "a
 /// veteran player's full in-game achievement history" (this ticket's own
 /// motivating case), small enough that a single request body/transaction
 /// can't grow unbounded. An oversized or empty list is
@@ -67,8 +67,7 @@ const BULK_ISSUE_ATTESTATION_IDEMPOTENCY_ENDPOINT: &str = "achievements.bulk_iss
 pub(crate) const MAX_BULK_CLAIMS: usize = 1000;
 
 /// Default cap on how many attestations one issuer may write about one
-/// subject within [`DEFAULT_WRITE_QUOTA_WINDOW_HOURS`] (#365, #306's
-/// abuse-floor piece) — overridable via `AVALON_ACHIEVEMENT_WRITE_QUOTA`
+/// subject within [`DEFAULT_WRITE_QUOTA_WINDOW_HOURS`] — overridable via `AVALON_ACHIEVEMENT_WRITE_QUOTA`
 /// so live tests can exercise the rejection path without actually writing
 /// hundreds of attestations. Deliberately generous: a legitimate bulk
 /// issuance ([`MAX_BULK_CLAIMS`]) can still land in one window; this is a
@@ -92,7 +91,7 @@ fn write_quota_window_hours_from_env() -> i64 {
         .unwrap_or(DEFAULT_WRITE_QUOTA_WINDOW_HOURS)
 }
 
-/// Volume-only abuse floor (#365) — never evaluates *what* is being
+/// Volume-only abuse floor — never evaluates *what* is being
 /// attested to, only how many writes one issuer has made about one
 /// subject recently. `additional` is however many writes this call would
 /// add (1 for a single issuance, `body.claims.len()` for a bulk call) so a
@@ -130,7 +129,7 @@ async fn recent_issuer_subject_write_count(
 }
 
 /// A definition with neither `icon` nor `icon_url` set still renders
-/// *something* (issue #332's invariant) — this is what every reader falls
+/// *something* — this is what every reader falls
 /// back to.
 const DEFAULT_ICON: &str = "trophy";
 
@@ -138,13 +137,12 @@ const DEFAULT_ICON: &str = "trophy";
 /// (same class of integrator-hosted-image field, same cap).
 const MAX_ICON_URL_LEN: usize = 2048;
 
-/// Picks the right typed kind for a dynamically-chosen claim vocabulary
-/// (issue #82) — `claim_kind` is `"achievement"` or `"milestone"`
+/// Picks the right typed kind for a dynamically-chosen claim vocabulary —
+/// `claim_kind` is `"achievement"` or `"milestone"`
 /// (`IntegratorCategory::claim_kind`), never caller-chosen. The two kinds
 /// share one payload schema per row (see
 /// `docs/architecture/protocol-events-catalogue.md`); only the *kind
-/// string* differs, matching #324/#325's own "which vocabulary, never a
-/// payload difference" split.
+/// string* differs.
 pub(crate) fn claim_kind_variant(
     claim_kind: &str,
     achievement: ProtocolEventKindVariant,
@@ -181,13 +179,13 @@ fn validate_icon_url(icon_url: Option<&str>) -> Result<(), AppError> {
 
 /// `<category.as_str()>:<slug>:<category.claim_kind()>:<key>` — the
 /// definition's immutable, globally unique id. `pub(crate)` so a future
-/// issuing endpoint (#32) can build the same id to look up the definition
+/// issuing endpoint can build the same id to look up the definition
 /// an attestation points at, rather than reimplementing this format.
 pub(crate) fn definition_ref(category: IntegratorCategory, slug: &str, key: &str) -> GlobalId {
     GlobalId::new(category.as_str(), slug, category.claim_kind(), key)
 }
 
-/// Which route a definition-CRUD call came in on — #324's category split.
+/// Which route a definition-CRUD call came in on — the category split.
 /// Not caller-asserted: [`authenticate_owning_issuer`] checks the
 /// authenticating issuer's *actual* registered category against this
 /// before allowing the call through.
@@ -211,9 +209,9 @@ impl ClaimRoute {
     }
 
     /// The capability a user must have granted before this route's
-    /// issuing endpoint may act on their behalf (issue #32/#28) — distinct
-    /// wire strings per route (`achievements.issue` vs `milestones.issue`,
-    /// #324) so a user's consent grant reads correctly for whichever
+    /// issuing endpoint may act on their behalf — distinct
+    /// wire strings per route (`achievements.issue` vs `milestones.issue`)
+    /// so a user's consent grant reads correctly for whichever
     /// vocabulary the issuer actually uses.
     fn issue_capability(self) -> Capability {
         match self {
@@ -318,7 +316,7 @@ pub struct AchievementDefinitionResponse {
     /// Always populated — falls back to [`DEFAULT_ICON`] when the
     /// definition has neither `icon` nor `icon_url` set, so every reader
     /// (the Hub's `AvalonAchievementCard`) always has *something* to
-    /// render (issue #332's invariant), never a blank slot.
+    /// render, never a blank slot.
     pub icon: String,
     /// When present, takes precedence over `icon` on the client — never a
     /// silent fallback to the default just because both happen to be set.
@@ -366,7 +364,7 @@ pub struct CreateAchievementDefinitionRequest {
     #[schema(value_type = String, nullable)]
     pub schema: Option<GlobalId>,
     /// One of [`BUILTIN_ICONS`]; omitted/`null` falls back to
-    /// [`DEFAULT_ICON`] at read time (issue #332).
+    /// [`DEFAULT_ICON`] at read time.
     #[serde(default)]
     pub icon: Option<String>,
     /// An integrator-hosted image URL, taking precedence over `icon` when
@@ -376,7 +374,7 @@ pub struct CreateAchievementDefinitionRequest {
 }
 
 /// Shared core of [`create_achievement_definition`]/
-/// [`create_milestone_definition`] (#324/#325) — 409 on a duplicate key for
+/// [`create_milestone_definition`] — 409 on a duplicate key for
 /// this issuer; a different issuer (or the same issuer under a different
 /// category — can't happen, category is fixed at registration) defining
 /// the same key is a distinct id and always succeeds (namespacing's whole
@@ -492,7 +490,7 @@ pub async fn create_achievement_definition(
     create_definition(&state, &headers, &slug, ClaimRoute::Achievements, body).await
 }
 
-/// `POST /integrations/{slug}/milestones` (#324/#325).
+/// `POST /integrations/{slug}/milestones`.
 #[utoipa::path(
     post,
     path = "/integrations/{slug}/milestones",
@@ -532,7 +530,7 @@ pub struct UpdateAchievementDefinitionRequest {
 }
 
 /// Shared core of [`update_achievement_definition`]/
-/// [`update_milestone_definition`] (#324/#325) — updates
+/// [`update_milestone_definition`] — updates
 /// name/description/schema (bumping `version`) and/or retires the
 /// definition. The id never changes.
 async fn update_definition(
@@ -703,7 +701,7 @@ pub async fn update_achievement_definition(
     update_definition(&state, &headers, &slug, key, ClaimRoute::Achievements, body).await
 }
 
-/// `PATCH /integrations/{slug}/milestones/{key}` (#324/#325).
+/// `PATCH /integrations/{slug}/milestones/{key}`.
 #[utoipa::path(
     patch,
     path = "/integrations/{slug}/milestones/{key}",
@@ -722,8 +720,8 @@ pub async fn update_milestone_definition(
 }
 
 /// Shared core of [`list_achievement_definitions`]/
-/// [`list_milestone_definitions`] (#324/#325) — public listing (feeds the
-/// registry, #89). No auth required, same visibility level
+/// [`list_milestone_definitions`] — public listing (feeds the
+/// registry). No auth required, same visibility level
 /// `integrators::get_integrator` and `guilds::get_guild` already use. Includes retired
 /// definitions (marked `retired: true`) rather than hiding them — a
 /// retired definition's past attestations are still real and still need
@@ -792,7 +790,7 @@ pub async fn list_achievement_definitions(
     list_definitions(&state, &slug, ClaimRoute::Achievements).await
 }
 
-/// `GET /integrations/{slug}/milestones` (#324/#325).
+/// `GET /integrations/{slug}/milestones`.
 #[utoipa::path(
     get,
     path = "/integrations/{slug}/milestones",
@@ -846,9 +844,8 @@ pub struct AttestationResponse {
     pub proof: AttestationSignatureResponse,
 }
 
-/// Shared core of [`issue_achievement`]/[`issue_milestone`] (#32,
-/// implementing #80/#84's key model and #324's category-driven vocabulary
-/// over the same mechanism). See the module doc comment's "Auth" section
+/// Shared core of [`issue_achievement`]/[`issue_milestone`] — a
+/// category-driven claim vocabulary over the same mechanism. See the module doc comment's "Auth" section
 /// for the two independent checks every issuance goes through: the calling
 /// integrator/app/service's own credential (who is this, on whose behalf), and
 /// the *user's* consent grant for the issue capability — neither
@@ -864,7 +861,7 @@ async fn issue_attestation(
     body: IssueAttestationRequest,
 ) -> Result<Json<AttestationResponse>, AppError> {
     // Who's calling, and on whose behalf — never a user's own session;
-    // only an integrator/app/service issues attestations, per #32's own design.
+    // only an integrator/app/service issues attestations.
     let caller = authenticate_caller(state, headers).await?;
     let Caller::Integrator {
         integrator_id,
@@ -881,7 +878,7 @@ async fn issue_attestation(
         return Err(AppError::AchievementDefinitionForbidden);
     }
 
-    // Issue #47: a caller that supplied an `Idempotency-Key` gets exactly
+    // A caller that supplied an `Idempotency-Key` gets exactly
     // the same response replayed on a retry, never a second issuance — see
     // `crate::idempotency`'s own doc comment for why this endpoint is
     // where that first lands.
@@ -900,7 +897,7 @@ async fn issue_attestation(
     }
 
     // The issuer's actual registered category must match this route's
-    // claim vocabulary (#324) — an App/Service can't issue "achievements"
+    // claim vocabulary — an App/Service can't issue "achievements"
     // and an Integrator can't issue "milestones".
     let category = fetch_integrator_category(state, integrator_id).await?;
     if !route.allows(category) {
@@ -908,13 +905,12 @@ async fn issue_attestation(
     }
 
     // The *user*'s own consent: an active binding to this issuer plus an
-    // active grant for this route's issue capability (#28's guard, #32's
-    // own "integrator caller with achievements.issue for the subject user"
-    // requirement).
+    // active grant for this route's issue capability (integrator caller
+    // with achievements.issue for the subject user).
     require_capability(&caller, route.issue_capability(), state).await?;
 
     // The definition must exist and not be retired — no new issuances
-    // against a retired definition (#31's invariant, still enforced here).
+    // against a retired definition.
     let definition = fetch_definition(state, integrator_id, &key).await?;
     if definition.retired_at.is_some() {
         return Err(AppError::AttestationDefinitionRetired);
@@ -1068,7 +1064,7 @@ async fn issue_attestation(
     Ok(Json(response))
 }
 
-/// `POST /integrations/{slug}/achievements/{key}/issue` (#32).
+/// `POST /integrations/{slug}/achievements/{key}/issue`.
 #[utoipa::path(
     post,
     path = "/integrations/{slug}/achievements/{key}/issue",
@@ -1086,7 +1082,7 @@ pub async fn issue_achievement(
     issue_attestation(&state, &headers, &slug, key, ClaimRoute::Achievements, body).await
 }
 
-/// `POST /integrations/{slug}/milestones/{key}/issue` (#32/#324/#325).
+/// `POST /integrations/{slug}/milestones/{key}/issue`.
 #[utoipa::path(
     post,
     path = "/integrations/{slug}/milestones/{key}/issue",
@@ -1116,14 +1112,13 @@ pub struct BulkClaimRequest {
 }
 
 /// `POST /integrations/{slug}/achievements/bulk-issue` /
-/// `.../milestones/bulk-issue` (issue #495, implementing #492's decided
-/// shape). One challenge-response proof that this integrator's key is
+/// `.../milestones/bulk-issue`. One challenge-response proof that this integrator's key is
 /// making the call, plus **one** signature over
 /// [`bulk_attestation_signing_bytes`] of the whole ordered `claims` list —
 /// never a per-claim signature. Every claim still becomes its own ordinary
 /// attestation server-side, through the exact same write path
 /// [`issue_attestation`] uses per-item; this endpoint is purely an
-/// API/transport-layer convenience over that, per #492's own invariant.
+/// API/transport-layer convenience over that.
 #[derive(Deserialize, ToSchema)]
 pub struct BulkIssueAttestationRequest {
     /// Which of the issuer's own keys signed the whole ordered list.
@@ -1134,8 +1129,7 @@ pub struct BulkIssueAttestationRequest {
     pub claims: Vec<BulkClaimRequest>,
 }
 
-/// One claim's own outcome — a bulk call is never all-or-nothing (#495's
-/// own invariant): a claim referencing an unknown or retired definition
+/// One claim's own outcome — a bulk call is never all-or-nothing: a claim referencing an unknown or retired definition
 /// fails on its own, every other claim in the same call still succeeds.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -1280,7 +1274,7 @@ async fn bulk_issue_attestation(
     let mut results = Vec::with_capacity(body.claims.len());
     for (claim, achievement_ref) in body.claims.iter().zip(achievement_refs.iter()) {
         // Per-claim definition existence/retirement — a per-item failure,
-        // never aborting the rest of the batch (#495's own invariant). Any
+        // never aborting the rest of the batch. Any
         // other error (a real database failure) still propagates as a
         // whole-call failure, same as it would for a single issuance.
         let definition = match fetch_definition(state, integrator_id, &claim.key).await {
@@ -1390,7 +1384,7 @@ async fn bulk_issue_attestation(
     Ok(Json(response))
 }
 
-/// `POST /integrations/{slug}/achievements/bulk-issue` (#495).
+/// `POST /integrations/{slug}/achievements/bulk-issue`.
 #[utoipa::path(
     post,
     path = "/integrations/{slug}/achievements/bulk-issue",
@@ -1408,7 +1402,7 @@ pub async fn bulk_issue_achievements(
     bulk_issue_attestation(&state, &headers, &slug, ClaimRoute::Achievements, body).await
 }
 
-/// `POST /integrations/{slug}/milestones/bulk-issue` (#495).
+/// `POST /integrations/{slug}/milestones/bulk-issue`.
 #[utoipa::path(
     post,
     path = "/integrations/{slug}/milestones/bulk-issue",
@@ -1429,7 +1423,7 @@ pub async fn bulk_issue_milestones(
 /// A pure, DB-free projection of a definition's current state from its own
 /// event history — proves `achievement_definitions` is genuinely derived
 /// from `achievement.defined`/`.definition_updated`/`.definition_retired`
-/// rather than a second source of truth (issue #31's "rebuild" test,
+/// rather than a second source of truth (a "rebuild" test,
 /// mirroring `avalon_indexer::Indexer::rebuild`'s fold-over-events shape,
 /// since no concrete per-domain projection exists yet in the still-stub
 /// `indexer` crate for this or any other table). `pub(crate)` for this
@@ -1536,7 +1530,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    /// #324/#325: an App/Service issuer's definitions use "milestone", not
+    /// An App/Service issuer's definitions use "milestone", not
     /// "achievement" — same key, same slug, a genuinely different id.
     #[test]
     fn app_and_service_issuers_get_the_milestone_vocabulary_not_achievement() {

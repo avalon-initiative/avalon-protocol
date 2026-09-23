@@ -3,10 +3,10 @@
 The full, row-by-row list of `ProtocolEvent` kinds for
 [`./protocol-events.md`](./protocol-events.md) — pulled into its own file so
 that document can stay focused on the design properties and versioning
-policy around events, rather than being interrupted by a ~40-row table.
+policy around events, rather than being interrupted by a large table.
 
-Naming: `<domain>.<past-tense-verb>`. **Normative as of #82**: every row
-marked "done" below has a real, enum-backed `ProtocolEventKindVariant`
+Naming: `<domain>.<past-tense-verb>`. **Normative**: every row marked "done"
+below has a real, enum-backed `ProtocolEventKindVariant`
 (`crates/protocol/src/events.rs`) and a typed payload struct
 (`crates/protocol/src/event_payloads.rs`) — the server builds and
 serializes that struct, never an ad-hoc `serde_json::json!({...})`, so
@@ -14,35 +14,34 @@ this table's "Payload (canonical)" column is kept honest by the compiler,
 not just by convention. A row with no "(done)" marker describes a kind
 that isn't emitted anywhere yet — `ProtocolEventKind::Other` is what a
 decoder sees for it today, and it gets a real variant exactly when its
-emitter is built (see `ProtocolEventKindVariant`'s own doc comment for why
-that's deliberate, not an oversight). "Network" as signer means the node
-records the fact on behalf of an authenticated actor and is the
-milestone-1 stand-in until actor signatures exist.
+emitter is built. "Network" as signer means the node records the fact on
+behalf of an authenticated actor and is the current stand-in until actor
+signatures exist for that kind.
 
 | Kind | Issuer → subject | Payload (canonical) | Drives | Signed by |
 |---|---|---|---|---|
-| `identity.created` (done) | identity → identity | `identity_id`, `display_name` (issue #510: the globally-unique handle itself, no discriminator) | identities | identity's Ed25519 event-signing key (#73, done) |
-| `identity.signing_key_added` (done) | identity → identity | `signing_key_id`, `public_key`, `device_label`, `approved_by_signing_key_id`, `identity_id` (#525) | `identity_signing_keys` (authoring node) / `indexer_identity_signing_keys` (mirror-only node, #525) | the approving device's key, or self (the very first key, #525) (#135, done) |
-| `identity.signing_key_revoked` (done) | identity → identity | `signing_key_id` | identity signing keys | network (milestone-1 stand-in, #135, done) |
-| `identity.passkey_registered` (done) | identity → identity | `passkey_id`, `identity_id`, `credential_id` (base64), `passkey_data` (full serialized WebAuthn `Passkey` — public credential material only), `label` | `identity_keys` (authoring node) / `indexer_identity_passkeys` (mirror-only node) | network (milestone-1 stand-in, #523, done) |
-| `identity.passkey_revoked` (done) | identity → identity | `passkey_id`, `identity_id` | `identity_keys` (authoring node) / `indexer_identity_passkeys` (mirror-only node) | network (milestone-1 stand-in, #523, done) |
-| `identity.recovery_configured` (done) | identity → identity | `guardian_ids`, `threshold` | recovery guardian settings | identity key (session-authenticated, #201, done) |
-| `identity.recovery_requested` (done) | identity → identity | `request_id`, `threshold` | recovery requests | network (milestone-1 stand-in — the requester by definition has no session; #201, done) |
-| `identity.recovery_approved` (done) | identity (guardian) → identity | `request_id`, `guardian_id`, `approvals_count`, `threshold`, `delay_ends_at` | recovery requests/approvals | network (milestone-1 stand-in, #201, done) |
-| `identity.recovery_cancelled` (done) | identity (owner or guardian) → identity | `request_id`, `cancelled_by`, `reason` | recovery requests | network (milestone-1 stand-in, #201, done) |
-| `identity.recovered` (done) | identity → identity | `request_id`, `device_label` | identity keys | network (milestone-1 stand-in, #201, done) |
-| `profile.updated` (done) | identity → identity | sparse — only the changed promised-durable fields are present at all: `display_name`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`, `banner_url`, `status`, `links`, `timezone`, `theme_color`, `location`, `main_guild` (#86, widened by #155; discriminator removed by #510) | profiles | identity key |
+| `identity.created` (done) | identity → identity | `identity_id`, `display_name` (the globally-unique handle itself, no discriminator) | identities | identity's Ed25519 event-signing key |
+| `identity.signing_key_added` (done) | identity → identity | `signing_key_id`, `public_key`, `device_label`, `approved_by_signing_key_id`, `identity_id` | `identity_signing_keys` (authoring node) / `indexer_identity_signing_keys` (mirror-only node) | the approving device's key, or self (the very first key) |
+| `identity.signing_key_revoked` (done) | identity → identity | `signing_key_id` | identity signing keys | network (stand-in) |
+| `identity.passkey_registered` (done) | identity → identity | `passkey_id`, `identity_id`, `credential_id` (base64), `passkey_data` (full serialized WebAuthn `Passkey` — public credential material only), `label` | `identity_keys` (authoring node) / `indexer_identity_passkeys` (mirror-only node) | network (stand-in) |
+| `identity.passkey_revoked` (done) | identity → identity | `passkey_id`, `identity_id` | `identity_keys` (authoring node) / `indexer_identity_passkeys` (mirror-only node) | network (stand-in) |
+| `identity.recovery_configured` (done) | identity → identity | `guardian_ids`, `threshold` | recovery guardian settings | identity key (session-authenticated) |
+| `identity.recovery_requested` (done) | identity → identity | `request_id`, `threshold` | recovery requests | network (stand-in — the requester by definition has no session) |
+| `identity.recovery_approved` (done) | identity (guardian) → identity | `request_id`, `guardian_id`, `approvals_count`, `threshold`, `delay_ends_at` | recovery requests/approvals | network (stand-in) |
+| `identity.recovery_cancelled` (done) | identity (owner or guardian) → identity | `request_id`, `cancelled_by`, `reason` | recovery requests | network (stand-in) |
+| `identity.recovered` (done) | identity → identity | `request_id`, `device_label` | identity keys | network (stand-in) |
+| `profile.updated` (done) | identity → identity | sparse — only the changed promised-durable fields are present at all: `display_name`, `avatar_url`, `bio`, `favorite_genres`, `pronouns`, `banner_url`, `status`, `links`, `timezone`, `theme_color`, `location`, `main_guild` | profiles | identity key |
 | `game.registered` (done) | integrator → integrator | `game_id`, `slug`, `name`, `developer`, `category`, `requested_capabilities`, `initial_key` (`key_id`/`algorithm`/`public_key`) | integrators, registry | integrator key |
 | `game.binding_established` (done) | identity → integrator | `binding_id`, `identity_id`, `game_id`, `slug` | bindings, registry identities | identity key |
 | `game.binding_ended` (done) | identity → integrator | `binding_id`, `identity_id`, `game_id`, `slug` | bindings | identity key |
 | `permission.granted` (done) | identity → integrator (per capability) | `binding_id`, `identity_id`, `game_id`, `capability` | permission grants | identity key |
 | `permission.revoked` (done) | identity → integrator (per capability) | `binding_id`, `identity_id`, `game_id`, `capability`, `reason` (optional — present only when the revoke was a side effect of ending the whole binding) | permission grants | identity key |
-| `issuer.registered` (done) | issuer → network | `issuer_ref`, `network_id`, `registered_at` — issue #481's per-network admission record, distinct from `game.registered`'s own integrator-registration-with-initial-key event above | issuer network registrations | network (auto-admission on first valid write, or explicit registration) |
+| `issuer.registered` (done) | issuer → network | `issuer_ref`, `network_id`, `registered_at` — the per-network admission record, distinct from `game.registered`'s own integrator-registration-with-initial-key event above | issuer network registrations | network (auto-admission on first valid write, or explicit registration) |
 | `issuer.key_added` (done) | issuer → issuer | `game_id`, `slug`, `key_id`, `algorithm`, `public_key`, `role`, `valid_until` | issuer keys | existing root issuer key |
 | `issuer.key_revoked` (done) | issuer → issuer | `game_id`, `slug`, `key_id`, `revoked_at`, `reason` | issuer keys | existing root issuer key |
 | `issuer.key_expired` | issuer → issuer | key id | issuer keys | issuer key or network |
 | `issuer.suspended` / `.reinstated` / `.revoked` / `.deprecated` | network or issuer → issuer | reason, effective at | issuer status | operator (audited) or issuer |
-| `friend.requested` / `.accepted` / `.removed` (done) | identity → identity | `.requested`: `from`, `to`, `actor`; `.accepted`: `from`, `to`, `actor`; `.removed`: `a`, `b`, `actor` | friendships | acting identity's key — decided promised-durable; see [social-graph.md](./social-graph.md) |
+| `friend.requested` / `.accepted` / `.removed` (done) | identity → identity | `.requested`: `from`, `to`, `actor`; `.accepted`: `from`, `to`, `actor`; `.removed`: `a`, `b`, `actor` | friendships | acting identity's key — promised-durable; see [social-graph.md](./social-graph.md) |
 | `guild.created` (done) | identity → guild | `guild_id`, `name`, `tag`, `description`, `owner` | guilds | founder key |
 | `guild.updated` (done) | guild → guild | full replace, always all fields: `guild_id`, `name`, `tag`, `description`, `motd`, `banner`, `icon`, `links`, `recruiting`, `public`, `game_breakdown_public`, `join_policy`, `roster_visibility`, `actor` | guilds | acting officer's key |
 | `guild.role_defined` (done) | identity → guild | `guild_id`, `name_index`, `name`, `permissions`, `description`, `badge` (`icon`/`color`), `actor` | role definitions | acting member's key |
@@ -54,10 +53,10 @@ milestone-1 stand-in until actor signatures exist.
 | `guild.game_associated` (done) | guild → integrator | `guild_id`, `game_id`, `actor` | associations | guild officer key |
 | `guild.favorite_games_updated` (done) | guild → guild | `guild_id`, `game_ids`, `actor` | favorites | acting officer's key |
 | `guild.channel_created` (done) | guild → channel | `guild_id`, `channel_id`, `name`, `actor` | channels | acting officer's key |
-| `guild.channel_renamed` (done) | guild → channel | `guild_id`, `channel_id`, `name`, `announcement_only`, `topic`, `public` (#458), `actor` | channels | acting officer's key |
+| `guild.channel_renamed` (done) | guild → channel | `guild_id`, `channel_id`, `name`, `announcement_only`, `topic`, `public`, `actor` | channels | acting officer's key |
 | `guild.channel_archived` (done) | guild → channel | `guild_id`, `channel_id`, `actor` | channels | acting officer's key |
-| `game_schema.published` (done) | integrator → schema | `id`, `game_id`, `slug`, `version`, `proto_source`, `supersedes`, `default_visibility`, `field_visibility` | schema discovery (#255) | integrator key |
-| `game_schema_mapping.published` (done) | integrator → mapping | `id`, `integrator_id`, `slug`, `from_schema_id`, `to_schema_id`, `description`, `field_correspondence` | mapping discovery (#491) | integrator key |
+| `game_schema.published` (done) | integrator → schema | `id`, `game_id`, `slug`, `version`, `proto_source`, `supersedes`, `default_visibility`, `field_visibility` | schema discovery | integrator key |
+| `game_schema_mapping.published` (done) | integrator → mapping | `id`, `integrator_id`, `slug`, `from_schema_id`, `to_schema_id`, `description`, `field_correspondence` | mapping discovery | integrator key |
 | `achievement.defined` (done) | integrator → achievement id | `id`, `game_id`, `slug`, `key`, `name`, `description`, `schema`, `icon`, `icon_url`, `version` | definitions | integrator key |
 | `achievement.definition_updated` (done) | integrator → achievement id | same shape as `.defined` above | definitions | integrator key |
 | `achievement.definition_retired` (done) | integrator → achievement id | `id`, `game_id`, `slug`, `key` | definitions | integrator key |
@@ -76,5 +75,6 @@ Conventions: `issuer` and `subject` are `GlobalId`s
 never collide ([`./provenance.md`](./provenance.md)). Each kind has exactly one
 payload schema per version. `achievement.*`/`milestone.*` share one payload
 struct per row (`crate::event_payloads::Claim*Payload`) — the claim-vocabulary
-split (#324/#325) is which *kind string* gets used, never a payload
-difference.
+split is which *kind string* gets used, never a payload difference.
+</content>
+</invoke>

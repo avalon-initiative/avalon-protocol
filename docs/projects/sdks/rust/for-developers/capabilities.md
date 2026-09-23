@@ -7,12 +7,12 @@ capability before making a request — a method with no grant fails fast with
 
 For the full permission-model design and how a grant is stored, see
 [`../../../backend-server/architecture/bindings.md`](../../../backend-server/architecture/bindings.md) and
-[Proposal §13](../../../../stakeholders/Proposal.md#13-permission-model).
+[Proposal: Permission Model](../../../../stakeholders/Proposal.md#permission-model).
 
 ## The capability list
 
-`avalon_protocol::permissions::Capability` (`crates/protocol/src/permissions.rs`,
-issue #98) is an enum with a permanent wire-string mapping — the string, not
+`avalon_protocol::permissions::Capability` (`crates/protocol/src/permissions.rs`)
+is an enum with a permanent wire-string mapping — the string, not
 the Rust variant name, is the stable identifier a grant is stored/compared
 against. `Capability::Other(String)` preserves any string this build doesn't
 know about yet rather than erroring, so a newly-added server-side capability
@@ -35,8 +35,9 @@ A few more (`identity.read`, `profile.read`, `presence.publish`,
 `guilds.issue`, `milestones.issue`, `assets.*`, `wallet.*`) exist in the
 protocol's own vocabulary but have no SDK method checking them yet — either
 the underlying server capability isn't enforced yet either, or the SDK
-surface for it hasn't been built. Check `crates/sdk/src/*.rs` for the
-current, authoritative set; this table is a snapshot, not a contract.
+surface for it hasn't been built. Check `rust/src/*.rs` in the `avalon-sdks`
+repo for the current, authoritative set; this table is a snapshot, not a
+contract.
 
 ## How a player grants one
 

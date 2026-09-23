@@ -448,7 +448,7 @@ impl AppError {
     /// variant, screaming-snake-case of its own Rust name, never the
     /// human-readable `{error}` message text (which stays free to reword
     /// without becoming a breaking change). The SDK maps on this, not on
-    /// `{error}` or the HTTP status alone (issue #47) — several variants
+    /// `{error}` or the HTTP status alone — several variants
     /// share a status code (e.g. many `NOT_FOUND`s), and message text isn't
     /// contractually stable.
     pub fn code(&self) -> &'static str {
@@ -723,8 +723,8 @@ impl IntoResponse for AppError {
             // "Not a guild member" is an authorization fact, not a missing
             // resource — the guild exists, the caller just isn't in it —
             // so this is 403 everywhere it's used, whether that's a
-            // membership-gated read/write (#22) or a row-not-affected
-            // check on a leave/remove/role-change mutation (#21).
+            // membership-gated read/write or a row-not-affected
+            // check on a leave/remove/role-change mutation.
             AppError::NotGuildMember => StatusCode::FORBIDDEN,
             AppError::ChannelNotFound | AppError::MessageNotFound => StatusCode::NOT_FOUND,
             AppError::InvalidChannelName
@@ -747,7 +747,7 @@ impl IntoResponse for AppError {
             AppError::InvalidIntegratorsListQuery => StatusCode::BAD_REQUEST,
             AppError::InvalidAchievementsListQuery => StatusCode::BAD_REQUEST,
             // Auth-failure reasons for the integrator challenge-response scheme
-            // (#26) all collapse to 401, same as `WebauthnFailed`/
+            // all collapse to 401, same as `WebauthnFailed`/
             // `InvalidEventSignature` above — the specific reason is useful
             // for a legitimate caller debugging its own integration, not
             // something worth a different status code for.
@@ -764,7 +764,7 @@ impl IntoResponse for AppError {
             | AppError::IssuerRegistrationChallengeExpired
             | AppError::InvalidProofOfPossession => StatusCode::UNAUTHORIZED,
             AppError::DeclaredNetworkMismatch => StatusCode::BAD_REQUEST,
-            // Signature-authentic but not admitted on this network (#481) —
+            // Signature-authentic but not admitted on this network —
             // a real, distinct 403, not folded into the 401s above: the
             // caller proved key possession just fine, this network simply
             // hasn't admitted the key.
@@ -774,7 +774,7 @@ impl IntoResponse for AppError {
             AppError::IssuerKeyForbidden => StatusCode::FORBIDDEN,
             AppError::CapabilityNotRequested => StatusCode::BAD_REQUEST,
             AppError::BindingNotFound | AppError::GrantNotFound => StatusCode::NOT_FOUND,
-            // Issue #28's guard: authenticated (as *some* integrator), but that
+            // Authenticated (as *some* integrator), but that
             // integrator lacks the specific capability it needs for this
             // request. Generic 403 body, same as every other authorization
             // (as opposed to authentication) failure in this file — see
@@ -858,7 +858,7 @@ impl IntoResponse for AppError {
             AppError::DevicePairingCodeGenerationFailed => StatusCode::CONFLICT,
             AppError::CrossNodeLoginRequestNotFound => StatusCode::NOT_FOUND,
             AppError::CrossNodeLoginRequestCodeGenerationFailed => StatusCode::CONFLICT,
-            // Mirrors the genesis-mismatch-is-fatal precedent (#173): this
+            // Mirrors the genesis-mismatch-is-fatal precedent: this
             // node's own network_id is never negotiable against a peer's
             // claim, but it's a per-request rejection, not fatal to the
             // node itself the way a genesis mismatch at startup is.
@@ -879,7 +879,7 @@ impl IntoResponse for AppError {
             // "Doesn't exist *yet*," not "never will" — a request for a
             // seq/tree_size beyond what's actually committed so far. 404,
             // matching every other not-found in this file, and explicitly
-            // never a fabricated/empty proof (issue #211's own invariant).
+            // never a fabricated/empty proof.
             AppError::LedgerRangeNotCommitted => StatusCode::NOT_FOUND,
             // Should never actually happen — every proof this server
             // returns is self-verified before the response is built (see

@@ -585,7 +585,7 @@ public class LiveTests
         var guild = await session.CreateGuildAsync($"Guild {Guid.NewGuid():N}".Substring(0, 20), FreshGuildTag(), "a test guild");
         Assert.Equal(identityId, guild.Owner);
 
-        // guild.role.create is signature-required (#697/#698) — this only succeeds if
+        // guild.role.create is signature-required — this only succeeds if
         // AccountSession.CreateRoleAsync actually attached a valid signature the server
         // verified against signature_gate::canonical_message("guild.role.create", ...).
         var role = await session.CreateRoleAsync(guild.Id, "Quartermaster", new[] { "manage_members" }, "trusted role");
@@ -622,7 +622,7 @@ public class LiveTests
     }
 
     /// <summary>Mirrors crates/sdk/tests/account_device_login.rs's own
-    /// wait_resolves_to_a_real_account_session_once_approved (issue #707) — the approving
+    /// wait_resolves_to_a_real_account_session_once_approved — the approving
     /// side is exercised directly over HTTP against a seeded identity/session/signing key,
     /// same approach the Rust test and this file's own cross-node-login test above use.</summary>
     [Fact]

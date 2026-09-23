@@ -1,6 +1,5 @@
 // AccountSession — a first-party client for an identity's own account
-// (mirrors #699/#700's Rust/C# AccountSession, built here from scratch for
-// #701). Entirely distinct from IntegratorSession: no shared base class, no
+// (mirrors the Rust/C# AccountSession, built here from scratch). Entirely distinct from IntegratorSession: no shared base class, no
 // conversion between the two in either direction — an integrator credential
 // must never yield account-level power.
 //
@@ -109,7 +108,7 @@ export class AccountSession {
 
   /** Attaches a locally-held Ed25519 secret key to this already-built
    * session in place — for the "this browser has no signing key stored
-   * for me yet" recovery path (issue #134's mnemonic-derived key, or any
+   * for me yet" recovery path (a mnemonic-derived key, or any
    * other out-of-band way a caller obtained the identity's secret key),
    * distinct from constructing a whole new session the way
    * `AvalonClient.resumeAccountSessionWithSigningKey` does. Resolves the

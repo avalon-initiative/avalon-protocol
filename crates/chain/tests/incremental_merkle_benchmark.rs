@@ -49,7 +49,7 @@ async fn commit_n(chain: &PostgresSettlementProvider, n: usize) {
 
 /// How many leaf indices to sample per measurement — bounded regardless of
 /// `tree_size` so this test's runtime depends only on this constant, never
-/// on how large an already-existing ledger happens to be (issue #358: this
+/// on how large an already-existing ledger happens to be (this
 /// used to iterate every leaf in `0..tree_size`, so against a long-lived
 /// dev database with thousands of pre-existing entries it scaled with the
 /// *entire* accumulated ledger rather than the ~1000 entries the test
@@ -137,7 +137,7 @@ async fn inclusion_proof_cost_does_not_scale_linearly_with_ledger_size() {
          {old_large_avg:.2}µs @ tree_size={large_size} ({old_ratio:.2}x proof-cost growth)"
     );
 
-    // Compared against `old_ratio` measured in this same run (issue #358),
+    // Compared against `old_ratio` measured in this same run,
     // rather than a fixed absolute threshold: against a long-lived dev
     // database, `small_size`/`large_size` are dominated by a pre-existing
     // `baseline` and aren't reliably ~10x apart in absolute tree size, so a

@@ -5,14 +5,12 @@ you connect your game to it, as distinct from [`../../../WhyAvalon.md`](../../..
 (why the protocol needs to exist at all) and
 [`../../../stakeholders/Proposal.md`](../../../../stakeholders/Proposal.md) (the full design).
 
-**This describes the target, not today's build.** Avalon is early — identity/auth
-is real and working end-to-end (see the root `README.md` and
-[`../../../backend-server/architecture/overview.md`](../../../backend-server/architecture/overview.md) for current status);
-guilds, achievements, presence, communication, and discovery are still
-protocol design and scaffolding. Treat everything below as the destination the
-architecture is being built toward, not a feature list you can integrate against
-this week. Once `crates/sdk` and `bindings/csharp/AvalonSdk` have real
-implementations, this document is what they're for.
+Identity/auth, social graph, guilds, achievements, and the Hub are all real
+and working end to end against a live server — see the root `README.md` and
+[`../../../backend-server/architecture/overview.md`](../../../backend-server/architecture/overview.md)
+for current status. The Rust, C#, and TypeScript SDKs all have real
+implementations of the surface this document describes; an economic and
+portable-asset layer remains future work, not yet built.
 
 ## The short version
 
@@ -306,9 +304,8 @@ owning the destinations.
 
 `bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works in Unity)
 has a real, building surface for friends/presence, guilds, and
-conversations — see [`../../../backend-server/architecture/sdk.md`](../../architecture/sdk.md) for
-the full method list and what's still a gap (e.g. `roster()`/`channels()`/
-`messages()` apply no visibility scoping yet — issue #87).
+conversations — see [`../../architecture/sdk.md`](../../architecture/sdk.md) for
+the full method list and current known limitations.
 
 ```csharp
 using Avalon.Sdk;

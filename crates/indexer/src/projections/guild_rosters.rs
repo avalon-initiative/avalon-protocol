@@ -16,8 +16,8 @@
 //! `role_index` (`docs/architecture/query-and-indexing.md`: "the indexer
 //! consumes protocol semantics; it never redefines them").
 //!
-//! `guild.created` gets its own [`decode`] case (issue #43's rebuild test
-//! surfaced this gap, closed by #506): a guild's owner is never issued a
+//! `guild.created` gets its own [`decode`] case (a rebuild test
+//! surfaced this gap): a guild's owner is never issued a
 //! separate `guild.member_added`, since guild creation already carries
 //! `owner` in its own payload (see `worked-ledger-example.md`) — decoding it
 //! here into the same `role_index = 0` (owner) upsert every other member row
@@ -299,7 +299,7 @@ where
 /// Every identity that shares at least one guild membership with
 /// `identity_id`, not yet filtered against the caller's own friends/blocks/
 /// self — the "mutual guild members" set `crate::server::discovery` and
-/// `crate::server::conversations` need (issue #506).
+/// `crate::server::conversations` need.
 pub async fn mutual_members<'e, E>(
     executor: E,
     identity_id: Uuid,

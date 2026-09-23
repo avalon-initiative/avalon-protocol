@@ -1,7 +1,7 @@
 //! Async at-rest replication of guild chat / conversation history to at
-//! least one additional node (issue #540, implementing #535's decided
-//! "replicated to ≥1 additional node" standard). Separate concern from
-//! `crate::realtime_relay` (#539): that module is about *live* delivery
+//! least one additional node, meeting a "replicated to ≥1 additional node"
+//! standard. Separate concern from
+//! `crate::realtime_relay`: that module is about *live* delivery
 //! to an already-connected subscriber and never touches Postgres; this
 //! module is about *durability* — surviving the originating node's loss —
 //! and never touches a live broadcast channel.

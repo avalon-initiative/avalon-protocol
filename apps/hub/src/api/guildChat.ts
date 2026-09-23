@@ -1,7 +1,6 @@
-// Pure guild-chat logic (issue #24) kept separate from apps/hub/src/api/guilds.ts
+// Pure guild-chat logic kept separate from apps/hub/src/api/guilds.ts
 // since it's about message composition/ordering rather than roster/role
-// merging — following the ticket's own suggested split
-// (guilds.ts / guildChat.ts "or similar").
+// merging.
 
 // Matches crates/server/src/guild_messages.rs::MESSAGE_BODY_MAX_CHARS
 // exactly — surfaced here so the composer can show a live counter/hard

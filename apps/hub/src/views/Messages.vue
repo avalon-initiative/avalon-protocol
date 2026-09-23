@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Direct-message UI (issue #105): a persistent conversation-list sidebar
+// Direct-message UI: a persistent conversation-list sidebar
 // next to the active conversation's thread — the same "swap selection in
 // place, no remount" shape #241 established for Guild.vue's Channels tab.
 // Reuses the exact same message components guild chat does
@@ -42,7 +42,7 @@ function selectConversation(id: string) {
 
 // Label for a conversation row / the open thread's header — the other
 // participant's name for a 1:1, joined names for a group. Falls back to
-// the raw id for anyone not yet resolved (issue #161's same posture as
+// the raw id for anyone not yet resolved, the same posture as
 // guild chat's authorNames).
 function conversationLabel(id: string): string {
   const conversation = conversations.value.find((c) => c.id === id)

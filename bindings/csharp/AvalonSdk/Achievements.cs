@@ -1,16 +1,16 @@
-// Achievements (issue #34, wired here for #51) — read a user's own attestation
+// Achievements — read a user's own attestation
 // history and issue a new attestation on this integrator's own behalf.
 // Mirrors crates/sdk/src/achievements.rs's single-claim (non-bulk,
-// non-revocation) surface; bulk issuance (#495) and revocation (#498) are
-// separate, later Rust-side tickets with no C# equivalent yet — #51's own
-// invariant ("never exposes a method the Rust SDK doesn't have, and vice
-// versa") is about keeping the two surfaces from silently diverging, not
-// about building every Rust method on day one.
+// non-revocation) surface; bulk issuance and revocation are
+// separate, later Rust-side tickets with no C# equivalent yet — the
+// invariant that this SDK never exposes a method the Rust SDK doesn't have,
+// and vice versa, is about keeping the two surfaces from silently diverging,
+// not about building every Rust method on day one.
 //
 // Reading (GetAchievementsAsync) uses the identity's own bearer token
 // against GET /me/achievements — authenticity/validity come back as the
-// server computed them; recognition is deliberately never present (ADR #76:
-// authenticity, validity, and recognition are three separate questions —
+// server computed them; recognition is deliberately never present
+// (authenticity, validity, and recognition are three separate questions —
 // this SDK never collapses them into one boolean).
 //
 // Issuing (IssueAchievementAsync) needs this integrator's own signing key —
@@ -89,7 +89,7 @@ namespace Avalon.Sdk
 
     /// <summary>One attestation from the caller's own history, with its computed authenticity
     /// and validity attached — deliberately no combined "trusted" field; see this file's own
-    /// header comment (ADR #76). Mirrors <c>avalon_sdk::achievements::VerifiedAttestation</c>.
+    /// header comment. Mirrors <c>avalon_sdk::achievements::VerifiedAttestation</c>.
     /// </summary>
     public sealed class VerifiedAttestation
     {
@@ -161,8 +161,8 @@ namespace Avalon.Sdk
             string claimKind, string issuerRef, Guid subject, string achievement) =>
             Encoding.UTF8.GetBytes($"avalon:{claimKind}.issued:v1:{issuerRef}:{subject}:{achievement}");
 
-        /// <summary>The exact bytes this integrator's key signs to authorize a bulk issuance
-        /// (#495): one signature over the whole ordered list, each ref length-prefixed
+        /// <summary>The exact bytes this integrator's key signs to authorize a bulk issuance:
+        /// one signature over the whole ordered list, each ref length-prefixed
         /// big-endian so two different orderings or splits of the same refs can never sign
         /// identically. Checked against the same shared vectors as
         /// <see cref="AttestationSigningBytes"/>.</summary>
@@ -181,8 +181,8 @@ namespace Avalon.Sdk
             return message.ToArray();
         }
 
-        /// <summary>The exact bytes this integrator's key signs to authorize a revocation
-        /// (#85). Checked against the same shared vectors as
+        /// <summary>The exact bytes this integrator's key signs to authorize a revocation.
+        /// Checked against the same shared vectors as
         /// <see cref="AttestationSigningBytes"/>.</summary>
         private static byte[] RevocationSigningBytes(
             string claimKind, string issuerRef, Guid attestationId, string reasonCode) =>
@@ -255,7 +255,7 @@ namespace Avalon.Sdk
             request.Headers.Add("x-avalon-integrator-challenge-id", challenge.ChallengeId.ToString());
             request.Headers.Add("x-avalon-integrator-signature", Convert.ToBase64String(challengeSignature));
             request.Headers.Add("x-avalon-identity-id", IdentityGuid.ToString());
-            // A fresh Idempotency-Key per call (issue #47): a caller that retries this whole
+            // A fresh Idempotency-Key per call: a caller that retries this whole
             // call after a dropped response mints a new key, same as the Rust SDK's
             // `submit_achievement_issuance` — this method doesn't itself retry.
             request.Headers.Add("idempotency-key", Guid.NewGuid().ToString());
@@ -277,7 +277,7 @@ namespace Avalon.Sdk
         }
 
         /// <summary>GET /attestations/{id} — public, unauthenticated. Reuses
-        /// <see cref="VerifiedAttestation"/> as the return shape (issue #744): its fields are a
+        /// <see cref="VerifiedAttestation"/> as the return shape: its fields are a
         /// strict subset of the wire response (which also carries a <c>proof</c> this SDK has no
         /// use for outside issuance), so the same hand-written type this file already needs for
         /// <see cref="GetAchievementsAsync"/> — deliberately not
@@ -296,7 +296,7 @@ namespace Avalon.Sdk
         }
 
         /// <summary>POST /attestations/{id}/revoke — only the attestation's original issuer may
-        /// revoke it (issue #85/#744). Authenticated the same challenge-response way every
+        /// revoke it. Authenticated the same challenge-response way every
         /// issuer-credentialed write in this file is; not gated behind a user capability grant,
         /// since this is the issuer asserting something about its own issuance, not acting on a
         /// specific player's behalf. The embedded signature covers
@@ -335,7 +335,7 @@ namespace Avalon.Sdk
             return await ReadJsonAsync<Avalon.Sdk.Generated.RevocationResponse>(response, ct).ConfigureAwait(false);
         }
 
-        // --- Achievement/milestone definition CRUD (issue #744) ---
+        // --- Achievement/milestone definition CRUD ---
         //
         // Create/update/list, for both claim vocabularies. Milestones share the
         // exact same request/response wire shapes as achievements
@@ -374,7 +374,7 @@ namespace Avalon.Sdk
         }
 
         /// <summary>POST /integrations/{slug}/milestones — the App/Service-category
-        /// equivalent of <see cref="CreateAchievementDefinitionAsync"/> (issue #744/#324/#325);
+        /// equivalent of <see cref="CreateAchievementDefinitionAsync"/>;
         /// rejected server-side with a claim-vocabulary mismatch if this integrator is
         /// registered as a Game.</summary>
         public async Task<Avalon.Sdk.Generated.AchievementDefinitionResponse> CreateMilestoneDefinitionAsync(
@@ -479,7 +479,7 @@ namespace Avalon.Sdk
             ?? new List<Avalon.Sdk.Generated.AchievementDefinitionResponse>();
 
         /// <summary>POST /integrations/{slug}/milestones/{key}/issue — the App/Service-category
-        /// equivalent of <see cref="IssueAchievementAsync"/> (issue #744/#324/#325).
+        /// equivalent of <see cref="IssueAchievementAsync"/>.
         /// <paramref name="category"/> is <c>"app"</c> or <c>"service"</c> — whichever this
         /// integrator actually registered as — since the signed achievement-ref namespace
         /// (<c>&lt;category&gt;:&lt;slug&gt;:milestone:&lt;key&gt;</c>) depends on it and this
@@ -530,7 +530,7 @@ namespace Avalon.Sdk
             return body.Id;
         }
 
-        // --- Bulk issuance (issue #495/#744) ---
+        // --- Bulk issuance ---
         //
         // One challenge-response proof plus one signature over the whole ordered
         // claim list (avalon_protocol::achievements::bulk_attestation_signing_bytes)
@@ -630,7 +630,7 @@ namespace Avalon.Sdk
                 Encoding.UTF8, "application/json");
         }
 
-        /// <summary>POST /integrations/{slug}/achievements/bulk-issue (issue #495/#744) —
+        /// <summary>POST /integrations/{slug}/achievements/bulk-issue —
         /// requires achievements.issue, same capability a single issuance does. Never
         /// all-or-nothing: one claim failing (an unknown/retired key) doesn't fail the rest —
         /// see each result's own <see cref="BulkClaimOutcome.Status"/>.</summary>

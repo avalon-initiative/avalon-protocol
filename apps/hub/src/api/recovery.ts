@@ -1,4 +1,4 @@
-// Social recovery (issue #201) — the unauthenticated recovery-initiation
+// Social recovery — the unauthenticated recovery-initiation
 // half only (`crates/server/src/recovery.rs`'s unauthenticated endpoints).
 // The session-authenticated half (guardian configuration, status,
 // approve/cancel) now lives directly on `AccountSession`

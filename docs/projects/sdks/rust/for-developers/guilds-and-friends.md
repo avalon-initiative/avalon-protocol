@@ -21,8 +21,8 @@ automatically via one batched `presence_of` call rather than one request per
 friend. `friend.display_name` is always `None` today: no endpoint resolves
 another identity's profile yet (a documented gap, not silently dropped).
 
-A complete, runnable version: `crates/sdk/examples/list_friends.rs` —
-`cargo run -p avalon-sdk --example list_friends`.
+A complete, runnable version: `rust/examples/list_friends.rs` in the
+`avalon-sdks` repo — `cargo run -p avalon-sdk --example list_friends`.
 
 ## Presence
 
@@ -33,11 +33,11 @@ session.update_presence(PresenceStatus::Away).await?; // no capability required 
 ```
 
 `presence_of` is filtered server-side by each subject's own presence
-visibility setting (issue #87, default `friends`) — a caller only sees a
+visibility setting (default `friends`) — a caller only sees a
 real status back for an identity that's currently friends with them (or
 themselves), public, or authenticated-only; everyone else reads as
 `Offline`, indistinguishable from a genuinely missing entry, the same
-posture a block already gets (issue #97). See
+posture a block already gets. See
 [`../../../backend-server/architecture/privacy.md`](../../../backend-server/architecture/privacy.md) for the full
 scope model — this is real and enforced, not a documented gap.
 
@@ -77,12 +77,12 @@ handle.send("hi").await?;                                          // messages.s
 A rejected read/send — whether the caller was never a participant or is a
 blocked one — surfaces as the same `SdkError::NotConversationParticipant`
 either way, deliberately: revealing which case applied would leak that a
-block exists (issue #97's "never reveal you've been blocked" rule).
+block exists ("never reveal you've been blocked" is a hard rule).
 
 ## Visibility scoping: what's real, what isn't yet
 
 Presence (`presence_of`/`presence`/`subscribe_presence`) and guild rosters
-(`roster()`) are both scoped server-side now (issue #87) — see the sections
+(`roster()`) are both scoped server-side now — see the sections
 above and [`../../../backend-server/architecture/privacy.md`](../../../backend-server/architecture/privacy.md).
 Guild `channels()`/`messages()` are **not** — any member with `guilds.chat`
 sees every channel regardless of any per-channel visibility a guild might

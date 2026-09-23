@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Cross-node login approval (epic #623, issue #639): lets the user approve
+// Cross-node login approval: lets the user approve
 // logging their identity into a node other than this Hub's own — the
 // requesting device (a game, a console, a browser that's never talked to
 // this identity before) started the request there, not here. Unlike

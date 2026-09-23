@@ -1,5 +1,5 @@
-// Direct/small-group conversations — capability-gated reads/writes on Session
-// (issue #104), mirroring crates/sdk/src/conversations.rs.
+// Direct/small-group conversations — capability-gated reads/writes on Session,
+// mirroring crates/sdk/src/conversations.rs.
 //
 // messages.read covers discovering and reading conversations an identity is
 // already in; messages.send covers starting a conversation and posting into
@@ -60,7 +60,7 @@ namespace Avalon.Sdk
     public sealed partial class Session
     {
         /// <summary>Translates a non-success /conversations response. The server collapses
-        /// "never a participant" and "blocked" into the same 403 (issue #97) — mapped here
+        /// "never a participant" and "blocked" into the same 403 — mapped here
         /// without inspecting the response body, so the SDK never leaks more than the server
         /// already refused to provide.</summary>
         internal static Exception ConversationError(HttpStatusCode status) =>

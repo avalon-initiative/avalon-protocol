@@ -10,15 +10,13 @@ See [`../architecture/sdk.md`](../architecture/sdk.md) for the design that
 applies to every language's SDK — this page is the C#-specific "how," not
 the "why."
 
-**Status (2026-09-20, last verified):** real, building, and tested —
-`dotnet build` / `dotnet test` both work, 52+ passing tests including
-opt-in live ones against a real server and database (see
-`AvalonSdk.Tests/LiveTests.cs`'s own header comment for the exact
-`DATABASE_URL` format it needs — an Npgsql keyword/value string, not this
-repo's own `.env`-style Postgres URI). Not a skeleton — see
-[`../architecture/sdk.md`](../architecture/sdk.md)'s own "Today in the
-repo" section for the real, live-verified surface it covers alongside the
-Rust SDK.
+**Status:** real, building, and tested — `dotnet build` / `dotnet test`
+both work, 52+ passing tests including opt-in live ones against a real
+server and database (see `AvalonSdk.Tests/LiveTests.cs`'s own header
+comment for the exact `DATABASE_URL` format it needs — an Npgsql
+keyword/value string, not this repo's own `.env`-style Postgres URI). Not
+a skeleton — see [`../architecture/sdk.md`](../architecture/sdk.md) for
+the real, live-verified surface it covers alongside the Rust SDK.
 
 ## Dependencies, and why
 
@@ -46,7 +44,7 @@ conversations/`sync_journal` without a full web framework:
   everything else. Every method fast-fails client-side with
   `CapabilityNotGrantedException` if the integrator wasn't granted the
   capability it needs, mirroring `SdkError::CapabilityNotGranted` — the
-  server enforces the same check independently (issue #28); this is a fast
+  server enforces the same check independently; this is a fast
   fail, not the actual security boundary.
 - **`AccountSession`** (and its partial-class split —
   `AccountSession.Social.cs`, `.GuildAdmin.cs`, `.Conversations.cs`,
@@ -99,8 +97,8 @@ itself.
 
 Unlike the [Rust SDK](../rust/README.md), this one doesn't have its own
 step-by-step guide set (getting started / capabilities / achievements /
-guilds-and-friends / errors-and-retries) yet — tracked as issue #51. Until
-then, the Rust guides under
+guilds-and-friends / errors-and-retries) yet. Until then, the Rust guides
+under
 [`../rust/for-developers/`](../rust/for-developers/README.md) are the best
 walkthrough of the *concepts* (capability grants, achievement lifecycle,
 error taxonomy); the method names and types above are this SDK's concrete

@@ -2,7 +2,7 @@
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 // Renders a real avatar image when a URL is given, otherwise the name's
 // first letter on a tinted circle — a caller never has to special-case
-// "no avatar yet" (issue #148).
+// "no avatar yet".
 import styles from '../styles/AvalonAvatar.module.scss'
 import type { AvalonAvatarProps } from '../types/AvalonAvatar.types'
 

@@ -1,5 +1,4 @@
-//! Exercises the per-network issuer registration gate (issue #481,
-//! implementing the ADR decided in #479) against a real, running
+//! Exercises the per-network issuer registration gate against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!

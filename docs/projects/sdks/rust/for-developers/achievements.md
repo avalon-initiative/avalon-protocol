@@ -1,8 +1,9 @@
 # Achievements
 
 Define, issue, read, verify, and revoke — the full lifecycle an integrator
-(a game, an app, a service) drives through `crates/sdk/src/achievements.rs`
-and a handful of raw HTTP calls not yet wrapped by the SDK. For the
+(a game, an app, a service) drives through `rust/src/achievements.rs` (in
+the `avalon-sdks` repo) and a handful of raw HTTP calls not yet wrapped by
+the SDK. For the
 underlying design (issuer keys, the authenticity/validity/recognition
 split, revocation history), see
 [`../../../backend-server/architecture/achievements-and-attestations.md`](../../../backend-server/architecture/achievements-and-attestations.md)
@@ -20,7 +21,7 @@ command, which also saves the resulting private signing key locally. See
 
 Separate from integrator registration above: before you can issue on a real
 network, your integrator's signing key must be admitted to write on it
-(#479/#480's per-network isolation — a signature valid against your key
+(per-network isolation — a signature valid against your key
 history isn't itself enough, see
 [`../../../backend-server/architecture/network-trust-anchors.md`](../../../backend-server/architecture/network-trust-anchors.md)).
 `AvalonClient::register_issuer` requires you to **explicitly declare which
@@ -52,8 +53,8 @@ let registration = client
 `IssuerRegistrationError::NetworkTarget(NetworkTargetError::Mismatch { declared, actual })`,
 the server really is a verifiable Avalon network — just not the one you
 meant. Double-check `server_url` against which deployment you intended to
-target; this is the exact case #483 exists to catch (a copy-pasted `.env`
-pointing at the wrong environment, most commonly). A
+target; this is the exact case client-side declaration is meant to catch
+(a copy-pasted `.env` pointing at the wrong environment, most commonly). A
 `NetworkTargetError::Unverified` instead means the server's claimed network
 couldn't be confirmed as trustworthy at all (unknown, key mismatch, or
 unreachable) — refused regardless of what you declared, since there's
@@ -64,8 +65,8 @@ nothing to compare it against.
 
 ## 3. Define the achievement
 
-Also not an SDK call yet (issue #49's own scope is issuance, reading,
-verifying — defining is a documented gap, not silently skipped):
+Also not an SDK call yet (the SDK's scope so far is issuance, reading,
+and verifying — defining is a documented gap, not silently skipped):
 
 ```text
 POST /integrations/{slug}/achievements
@@ -77,8 +78,8 @@ x-avalon-integrator-signature: <that challenge's nonce, signed>
 ```
 
 `crates/server/src/achievements.rs` documents the full challenge-response
-shape; `crates/sdk/tests/achievements.rs`'s own test helpers are a working
-reference implementation of the same request.
+shape; `rust/tests/achievements.rs`'s own test helpers (in the `avalon-sdks`
+repo) are a working reference implementation of the same request.
 
 ## 4. Get the player's consent
 
@@ -113,13 +114,13 @@ themselves). Two independent proofs go out on the wire: a challenge-response
 proving your key is making this call right now, and a signature embedded in
 the request body over the attestation's own canonical bytes, proving your
 key specifically authorized *this* attestation — see
-`crates/sdk/src/achievements.rs`'s own doc comment for the exact byte
-format. This call also carries a real `Idempotency-Key` (issue #47) — a
-transient network failure never risks a double issuance.
+`rust/src/achievements.rs`'s own doc comment (in the `avalon-sdks` repo)
+for the exact byte format. This call also carries a real `Idempotency-Key`
+— a transient network failure never risks a double issuance.
 
-A complete, runnable version: `crates/sdk/examples/issue_achievement.rs` —
-`cargo run -p avalon-sdk --example issue_achievement`. `avalon-cli`'s
-`issue-achievement` command drives the exact same SDK call.
+A complete, runnable version: `rust/examples/issue_achievement.rs` in the
+`avalon-sdks` repo — `cargo run -p avalon-sdk --example issue_achievement`.
+`avalon-cli`'s `issue-achievement` command drives the exact same SDK call.
 
 **C#**: same shape, `IssueAchievementAsync`, requires
 `AvalonConfig.IntegratorSlug`/`SigningKey` (a 32-byte Ed25519 seed) —
@@ -160,7 +161,7 @@ foreach (var attestation in history)
 
 Deliberately **no `recognition` field** — `authentic` (the signature
 verifies), `valid` (not revoked), and `recognized` are three separate
-questions per [ADR #76](../../../backend-server/architecture/trust-model.md). The server answers
+questions; see the [trust model](../../../backend-server/architecture/trust-model.md). The server answers
 the first two; *recognition* is inherently a judgment call only the
 consuming integrator can make (do you trust the issuer? does the claim
 matter to you?) — evaluate it yourself against
@@ -192,7 +193,7 @@ subsequent `achievements()` read shows `validity: Invalid` and a second
 returns `SdkError::CapabilityNotGranted`.
 
 **A bulk-issued attestation revokes exactly the same way as any other**
-— `issue_achievements_bulk`'s own claim shape (#492) is deliberately N
+— `issue_achievements_bulk`'s own claim shape is deliberately N
 ordinary, independent attestations, not one claim-set attestation, so
 there's no separate "bulk revoke" call: pull the `attestation_id` out of
 whichever `BulkClaimOutcome::Issued` you want to remediate and call

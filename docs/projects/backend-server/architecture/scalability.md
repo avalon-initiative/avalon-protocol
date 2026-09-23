@@ -22,14 +22,14 @@ week to rebuild an index is not scalable.
 
 | Dimension | The question | Where it lands |
 |---|---|---|
-| Durable event volume | how many protocol events per day, network-wide? | [`./settlement.md`](./settlement.md), #38 |
-| Batch size and commitment cadence | how many events per batch; how often is a commitment produced; what latency to "settled"? | #38, #40 |
+| Durable event volume | how many protocol events per day, network-wide? | [`./settlement.md`](./settlement.md) |
+| Batch size and commitment cadence | how many events per batch; how often is a commitment produced; what latency to "settled"? | [`./settlement.md`](./settlement.md) |
 | Query volume | how many profile / friend / guild / registry reads per second? | [`./query-and-indexing.md`](./query-and-indexing.md) |
 | Realtime connections | how many identities are connected at once; how does presence fan out to friends and guild rosters? | [`./presence.md`](./presence.md) |
-| Historical volume | how large is the log after 5 / 10 / 20 years? | #40 |
-| Rebuild time | how long to reconstruct every projection from genesis? | [`./disaster-recovery.md`](./disaster-recovery.md), #43 |
+| Historical volume | how large is the log after 5 / 10 / 20 years? | [`./settlement.md`](./settlement.md) |
+| Rebuild time | how long to reconstruct every projection from genesis? | [`./disaster-recovery.md`](./disaster-recovery.md) |
 | Node specialization | can settlement, indexing, realtime, and gateway scale separately? | [`./nodes.md`](./nodes.md) |
-| SDK routing | does discovery and failover stay cheap as node count grows? | [`./sdk.md`](../../sdks/architecture/sdk.md), #91 |
+| SDK routing | does discovery and failover stay cheap as node count grows? | [`./sdk.md`](../../sdks/architecture/sdk.md) |
 
 ## Back-of-envelope (assumptions, not measurements)
 
@@ -69,7 +69,7 @@ Asked of every design, with the intended answer:
   [`./disaster-recovery.md`](./disaster-recovery.md)).
 - **The settlement log stalls** — events queue in the buffer; projections
   keep serving; commitments resume once the settlement operator does. No
-  validator set to stall in the first place ([ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186)).
+  validator set to stall in the first place.
 
 ## Scenario L — 1,000 integrators, 100M identities
 
@@ -78,65 +78,48 @@ as the hot/durable line holds. The parts that do scale with population — event
 volume, history size, read volume, presence fan-out — each have an independent
 lever, which is what the three verticals and the node roles exist to provide.
 
-## Resource limits (#287/#363)
+## Resource limits
 
 Nothing above touches per-process safety under load — a single
 `avalon-server` instance still needs floors that stop it from falling over
 under a burst, independent of whatever the durable-history scaling story
-eventually becomes. #287 decided the shape (four independently-configurable
-limits, all enforced in `avalon-server` itself, every one defaulted so an
-unconfigured node is exactly as safe as it always was); #363 is the
-implementation, real today: `AVALON_MAX_DB_CONNECTIONS` (Postgres pool
+eventually becomes. Four independently-configurable limits are enforced in
+`avalon-server` itself, every one defaulted so an unconfigured node is
+exactly as safe as it always was: `AVALON_MAX_DB_CONNECTIONS` (Postgres pool
 size), `AVALON_MAX_CONCURRENT_REQUESTS` (`tower::limit::ConcurrencyLimitLayer`
 — backpressures, never drops), `AVALON_RATE_LIMIT_PER_MINUTE`
 (`tower_governor`, GCRA, keyed by integrator key id with an IP fallback for
 pre-auth endpoints — always `429` + `Retry-After`, never a silent drop or a
 generic `500`), and `AVALON_OUTBOX_POLL_INTERVAL_SECS` (drain cadence). See
-[`./nodes.md`](./nodes.md)'s own "Today in the repo" for the exact defaults
-and where each is wired.
+[`./nodes.md`](./nodes.md) for the exact defaults and where each is wired.
 
-## Today in the repo
+## Current implementation
 
-- Nothing is load-tested. Milestone 1 is one `avalon-server` process, one
-  Postgres database. Batching (#38), a Merkle root, and Signed Tree Heads
-  are real (`crates/chain/src/postgres.rs`'s `ledger_batches`,
-  `crates/chain/src/merkle.rs`, `crates/protocol/src/sth.rs`) — one ledger row per event, closed
-  over into batches rather than committed one at a time. Commit and
-  proof-serving cost is O(log n) in total ledger size, not O(n)
-  (`crate::incremental_merkle`, #349) — see `settlement.md`'s "Today in the
-  repo". `PostgresIndexer`
-  (#42) is a real indexer, and `presence.rs` runs a real WebSocket realtime
-  service — both still in-process with settlement, not split onto their own
-  nodes yet.
-- The trait boundaries (`SettlementProvider`, `Indexer`) are the only scaling
-  affordances that exist; they are the right ones.
-- **Rebuild-time baseline (#43).** `crates/server/tests/rebuild_from_events.rs`
-  logs the wall-clock cost of its own rebuild each run: ~21ms for its
-  16-ledger-entry fixture (a handful of identities/friend/guild actions) on
-  this environment's Postgres. That is a tiny synthetic fixture, not a
-  real-scale measurement — it exists so a future session re-running this
-  test at a much larger ledger size has a first data point to compare
-  against, not a capacity claim. The whole rebuild runs in one transaction
-  (`PostgresIndexer::rebuild_from_scratch`), so wall-clock time will scale
-  with total ledger size, not just the new-entries-since-last-rebuild
-  count — see "What breaks today" in `disaster-recovery.md` for why a
-  cheaper incremental/checkpointed rebuild isn't built yet.
+Nothing is load-tested at real scale. The current deployment shape is one
+`avalon-server` process, one Postgres database (with node-role extraction
+available for splitting Settlement/Indexer/Realtime/Gateway — see
+[`nodes.md`](./nodes.md)). Batching, a Merkle root, and Signed Tree Heads are
+real (`crates/chain/src/postgres.rs`'s `ledger_batches`,
+`crates/chain/src/merkle.rs`, `crates/protocol/src/sth.rs`) — one ledger row
+per event, closed over into batches rather than committed one at a time.
+Commit and proof-serving cost is O(log n) in total ledger size, not O(n)
+(`crate::incremental_merkle`) — see [`settlement.md`](./settlement.md).
+`PostgresIndexer` is a real indexer, and `presence.rs` runs a real WebSocket
+realtime service.
 
-## Decisions and tickets
+The trait boundaries (`SettlementProvider`, `Indexer`) are the load-bearing
+scaling affordances.
 
-- [#38](https://github.com/LunarVagabond/avalon-protocol/issues/38) batching
-- [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) log
-  structure and mirror sync (history size, verification cost)
-- [#79](https://github.com/LunarVagabond/avalon-protocol/issues/79) /
-  [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93) backend
-  decided (Avalon's own chain); throughput, cost over decades, and stall
-  behavior are now #40's consensus-design criteria
-- [#43](https://github.com/LunarVagabond/avalon-protocol/issues/43) rebuild
-- [#91](https://github.com/LunarVagabond/avalon-protocol/issues/91) discovery
-  and failover
-- [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) presence is
-  its own vertical
-- [#287](https://github.com/LunarVagabond/avalon-protocol/issues/287)
-  decided (hoster-configurable resource limits — see the section above),
-  implemented by
-  [#363](https://github.com/LunarVagabond/avalon-protocol/issues/363)
+**Rebuild-time baseline.** `crates/server/tests/rebuild_from_events.rs` logs
+the wall-clock cost of its own rebuild each run: on the order of tens of
+milliseconds for its small fixture ledger (a handful of identities/friend/
+guild actions) on this environment's Postgres. That is a tiny synthetic
+fixture, not a real-scale measurement — it exists so a future run at a much
+larger ledger size has a first data point to compare against, not a capacity
+claim. The whole rebuild runs in one transaction
+(`PostgresIndexer::rebuild_from_scratch`), so wall-clock time scales with
+total ledger size, not just the new-entries-since-last-rebuild count — see
+[`disaster-recovery.md`](./disaster-recovery.md) for why a cheaper
+incremental/checkpointed rebuild isn't built yet.
+</content>
+</invoke>

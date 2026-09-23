@@ -39,5 +39,5 @@ first-run failures. Beyond that:
 [`../architecture/nodes.md`](../architecture/nodes.md) cover the concepts
 behind what these guides walk through — what a node's roles mean today,
 running a private instance versus joining the public network, and the
-current single-combined-binary reality versus the target multi-role
-topology — if you want the "why," not just the "how."
+combined-binary default versus the multi-role topology available today —
+if you want the "why," not just the "how."

@@ -1,5 +1,5 @@
-//! Exercises attestation revocation (issue #85, implementing #81's decided
-//! mechanics) against a real, running `avalon-server` and Postgres. Gated
+//! Exercises attestation revocation against a real, running
+//! `avalon-server` and Postgres. Gated
 //! `--ignored` since it needs live infra — see `make test-live` / `make
 //! start`.
 //!

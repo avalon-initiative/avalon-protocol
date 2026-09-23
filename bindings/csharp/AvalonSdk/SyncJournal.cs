@@ -1,4 +1,4 @@
-// Local durable event journal (issue #110) — the storage half of offline
+// Local durable event journal — the storage half of offline
 // participation described in docs/architecture/synchronization.md, mirroring
 // crates/sdk/src/sync_journal.rs. Records intent locally and durably; does
 // not submit, dedupe, sign, or judge worth of a recorded entry.

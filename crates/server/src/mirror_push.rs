@@ -1,6 +1,6 @@
-//! Push notification for mirror sync (issue #596) — the delivery half of
+//! Push notification for mirror sync — the delivery half of
 //! push-based mirror sync, built entirely on top of `crate::interest`'s
-//! already-existing DHT-backed registration (#583, epic #580) rather than
+//! already-existing DHT-backed registration rather than
 //! a new addressing mechanism. See `crate::interest`'s own module doc for
 //! why `InterestScope::Network` reuses that exact registration/lookup
 //! path instead of inventing a second one.

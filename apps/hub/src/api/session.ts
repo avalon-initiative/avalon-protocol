@@ -1,5 +1,5 @@
-// Session state, backed by a real @avalon/sdk AccountSession (issue #712 —
-// replaces packages/api-client's own token-only useSessionStore). Unlike
+// Session state, backed by a real @avalon/sdk AccountSession —
+// replaces packages/api-client's own token-only useSessionStore. Unlike
 // the old store, this one holds a live AccountSession object, not just a
 // bearer token: every other api/*.ts file calls methods on `session.value`
 // directly rather than passing a raw token to a free function.

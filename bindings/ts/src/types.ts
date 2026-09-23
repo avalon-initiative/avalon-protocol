@@ -40,7 +40,7 @@ export interface Profile {
 }
 
 /** `GET /me`'s wire response, field-for-field — generated from
- * `docs/generated/openapi.json` (issue #726) rather than hand-written. */
+ * `docs/generated/openapi.json` rather than hand-written. */
 export type MeResponseWire = components['schemas']['ProfileResponse']
 
 export function fromMeResponse(body: MeResponseWire): { identity: Identity; profile: Profile } {
@@ -74,7 +74,7 @@ export interface DeviceRowWire {
 
 /** `GET /ledger/sth/latest`'s wire response, field-for-field — matches
  * `crates/server/src/settlement.rs::SignedTreeHeadResponse`. Hub's own
- * `apps/hub/src/network/verifyNetwork.ts` (issue #232) reconstructs
+ * `apps/hub/src/network/verifyNetwork.ts` reconstructs
  * `crates/chain/src/sth.rs::signing_message` from `tree_size`/`root_hash`/
  * `network_id`/`created_at` itself — this type only carries the shape,
  * verification stays Hub's own logic. */

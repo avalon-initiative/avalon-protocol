@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// Connected-integrators view (#27, #83): every IntegratorBinding the caller has, with
+// Connected-integrators view: every IntegratorBinding the caller has, with
 // its currently-active grants, a per-grant revoke button, and a disconnect
 // button. GET /me/connections is the source of truth — no client-side
-// merging needed, unlike the guild roster (issue #24's presence merge).
+// merging needed, unlike the guild roster's presence merge.
 import { ref } from 'vue'
 import { AvalonCard, AvalonConnectionCard } from '@avalon/ui'
 import { capabilityDescription } from '../api/connections'

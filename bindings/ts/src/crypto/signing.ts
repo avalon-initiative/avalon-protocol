@@ -1,6 +1,6 @@
-// Ed25519 event-signing primitives (issue #73) — reimplemented here rather
+// Ed25519 event-signing primitives — reimplemented here rather
 // than imported from packages/api-client/src/crypto/signingKey.ts, since
-// #701's hard invariant is zero dependency on that package. Same library
+// this SDK's hard invariant is zero dependency on that package. Same library
 // (@noble/curves), same wire shapes.
 import { ed25519 } from '@noble/curves/ed25519'
 

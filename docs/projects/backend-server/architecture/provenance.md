@@ -73,26 +73,26 @@ elsewhere — are published as labelled statistics in the
 [integrator registry](./registry.md). They inform a consumer's decision and
 never replace it.
 
-## Today in the repo
+## Current implementation
 
-- `crates/protocol/src/achievements.rs` — issuer, subject, `issued_at`, and
-  opaque `proof` on `AchievementAttestation`; no key reference yet, so
-  "which key signed this" cannot be answered.
-- `crates/protocol/src/ids.rs` — namespaced `GlobalId`.
-- `crates/chain/src/postgres.rs` — every committed event gets a position
-  (`seq`) and a hash chained to its predecessor, which is the log-side half of
-  "when".
-- No ownership or asset types exist; that is a later phase by design.
+`crates/protocol/src/achievements.rs`'s `AchievementAttestation` carries issuer,
+subject, `issued_at`, and an opaque `proof`. `crates/protocol/src/ids.rs` defines the
+namespaced `GlobalId` (`<namespace>:<owner>:<kind>:<key>`) every provenance-bearing
+record uses to unambiguously identify who issued and what it concerns.
+`crates/chain/src/postgres.rs` gives every committed event a position (`seq`) and a
+hash chained to its predecessor, which is the log-side half of "when" and "where in
+history."
 
-## Decisions and tickets
+Durable history is canonical — provenance is exactly what that history preserves, and
+authenticity, validity, and recognition remain three separate questions: a signature
+proves who signed a claim, a point-in-time check over history proves whether it still
+stands, and recognition is always the receiving integrator's own policy decision, never
+something Avalon's records assert on an integrator's behalf.
 
-- [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) — ADR:
-  durable history is canonical; provenance is what that history preserves.
-- [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
-  attestation trust model (provenance ≠ meaning).
-- [#84](https://github.com/LunarVagabond/avalon-protocol/issues/84) — issuer
-  identity and key history (the "which key" half).
-- [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85) —
-  revocation as history.
-- [#89](https://github.com/LunarVagabond/avalon-protocol/issues/89) — registry
-  read model derived from provenance.
+No ownership or asset types exist yet; portable assets and ownership provenance are a
+later phase, not a foundational one — see [`./future-layers.md`](./future-layers.md).
+There is currently no key reference on `AchievementAttestation`, so "which key signed
+this specific claim" cannot yet be answered from the attestation alone; issuer key
+history is tracked separately (see [`./issuers.md`](./issuers.md)).
+</content>
+</invoke>

@@ -1,8 +1,8 @@
-//! Exercises `GET /attestations/{id}` (issue #33) against a real, running
+//! Exercises `GET /attestations/{id}` against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!
-//! "Scenario D" (issue #33's own design text — not one of
+//! "Scenario D" (not one of
 //! `docs/architecture/issuers.md`'s lettered scenarios, which
 //! only goes up through F today): an authentic, valid claim from an
 //! issuer the reader doesn't trust must still read as

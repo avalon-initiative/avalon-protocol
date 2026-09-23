@@ -1,4 +1,4 @@
-//! Exercises cross-device pairing (issue #307) against a real, running
+//! Exercises cross-device pairing against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!

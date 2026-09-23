@@ -1,10 +1,10 @@
-// Orchestrates guild rosters + presence + display names for issue #24:
+// Orchestrates guild rosters + presence + display names:
 // fetches all three separately and merges them client-side, since
 // GET /guilds/{id}/members embeds neither presence nor a display name
 // server-side (see crates/server/src/guilds.rs) — the same gap
 // apps/hub/src/api/friends.ts's listFriendsWithPresence already documents
 // and merges around for friends. Display names are resolved via
-// GET /identities/profiles (issue #161); mirrors that module's shape
+// GET /identities/profiles; mirrors that module's shape
 // closely.
 import type {
   AccountSession,
@@ -50,9 +50,9 @@ export interface GuildMember {
   // Mirrors PresenceResponse.playing exactly: an integrator id, or null/absent.
   // Always null in practice today (types.ts's own note — no real integrator
   // publishes presence yet), carried through here so the "members
-  // currently playing" summary (#57) is correct once an integrator does, rather
+  // currently playing" summary is correct once an integrator does, rather
   // than needing a second wiring pass later. Optional (not just
-  // nullable) so existing fixtures/tests built before #57 don't all need
+  // nullable) so existing fixtures/tests don't all need
   // updating — absent is treated identically to null everywhere it's read.
   playing?: string | null
   joinedAt: string
@@ -171,9 +171,9 @@ export function filterGuildsByNameOrTag<T extends Pick<Guild, 'name' | 'tag'>>(
 }
 
 // Case-insensitive, partial match against identity id — the only field
-// there's anything to search on until #161 (batch identity lookup)
+// there's anything to search on until batch identity lookup
 // resolves display names. Pure, unit-testable independent of any fetch.
-// Matches against the resolved display name when available (#161), and
+// Matches against the resolved display name when available, and
 // always against the identity id too — a caller who still only has an id
 // on hand (e.g. from an invite) can still find the row.
 export function filterMembersByIdentityId(members: GuildMember[], query: string): GuildMember[] {
@@ -188,7 +188,7 @@ export function filterMembersByIdentityId(members: GuildMember[], query: string)
 
 export type MemberSortOrder = 'role' | 'name'
 
-// "by name" sorts by the resolved display name (#161) when available,
+// "by name" sorts by the resolved display name when available,
 // falling back to the identity id for any member it isn't (shouldn't
 // normally happen, but stays honest rather than assuming). "by role" is a
 // no-op here; role ordering is applied by groupMembersByRole itself, so
@@ -266,12 +266,12 @@ export function canChangeMemberRole(
   return hasGuildPermission(guild, actorIdentityId, actorPermissions, 'manage_roles')
 }
 
-// "Members currently playing", grouped by integrator id, counts descending
-// (#57). Pure, unit-testable independent of any fetch. Only members with a
+// "Members currently playing", grouped by integrator id, counts descending.
+// Pure, unit-testable independent of any fetch. Only members with a
 // non-null `playing` count toward any group — offline/idle/no-integrator members
 // are simply absent from the result, not a "null" bucket, since there's
 // nothing true to say about them per-integrator. This is realtime presence, not
-// a durable guild stat: an integrator is never "the guild's integrator" (#74) — a
+// a durable guild stat: an integrator is never "the guild's integrator" — a
 // member merely happens to be playing it right now. `playing` is always
 // null in every guild today (no integrator has a live presence-publish binding
 // yet, see api/types.ts's own note on PresenceResponse.active_in), so this
@@ -330,7 +330,7 @@ export function permissionsForMember(
 }
 
 // Builds the `?q=&recruiting=&...` query string for GET /guilds/discover
-// (issue #154) from a params object — pure and unit-testable independent
+// from a params object — pure and unit-testable independent
 // of any fetch, same "logic stays out of client.ts" split every other
 // function in this module follows. Omits a key entirely rather than
 // sending an empty/undefined value, matching
@@ -364,7 +364,7 @@ export function buildDiscoverQueryString(params: DiscoverGuildsParams): string {
   return query ? `?${query}` : ''
 }
 
-// --- Integrator affinity breakdown (issue #206, implementing decision #160) -----
+// --- Integrator affinity breakdown -----
 
 // Renders one GameBreakdownEntry against the guild's total membership as
 // "N of M members play <integrator>" — the exact phrasing the ticket's design
@@ -384,7 +384,7 @@ export function hasNoGameBreakdownData(breakdown: GameBreakdownEntry[]): boolean
   return breakdown.length === 0
 }
 
-// --- Favorite integrators pin list (issue #207, implementing decision #160) -----
+// --- Favorite integrators pin list -----
 // Mirrors crates/server/src/guilds.rs::MAX_GUILD_FAVORITE_GAMES exactly —
 // the server is the real authority (a stale client constant here can only
 // ever under- or over-disable the "Pin" button a request would then be

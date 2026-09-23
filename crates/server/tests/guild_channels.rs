@@ -1,4 +1,4 @@
-//! Exercises guild channels and messages (issue #22) against a real,
+//! Exercises guild channels and messages against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 //!
@@ -562,7 +562,7 @@ async fn a_message_body_over_the_length_cap_is_rejected() {
     assert_eq!(send.status(), reqwest::StatusCode::BAD_REQUEST);
 }
 
-// --- Per-resource permission overrides (issue #250) ---------------------
+// --- Per-resource permission overrides ---------------------
 
 /// Sets/upserts a permission override as `token` (must hold `manage_roles`)
 /// and asserts success.
@@ -797,7 +797,7 @@ async fn owner_bypasses_a_deny_override_on_a_channel() {
 }
 
 // --- view/view_details role overrides + non-member public channels
-// (issue #458) --------------------------------------------------------
+// --------------------------------------------------------
 
 async fn set_guild_public(
     http: &reqwest::Client,

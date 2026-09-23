@@ -1,5 +1,5 @@
-// Orchestrates GET /identities/:id/integrator-data (issue #384) for
-// UserProfile.vue (#465): resolves each instance's integrator slug/name
+// Orchestrates GET /identities/:id/integrator-data for
+// UserProfile.vue: resolves each instance's integrator slug/name
 // client-side, mirroring achievements.ts's issuer-resolution pattern —
 // the response itself only carries a raw schema id and integrator_id,
 // no display name.

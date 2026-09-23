@@ -1,6 +1,6 @@
-//! `avalon logs export` — issue #659. Turns `avalon-server`'s own log file
+//! `avalon logs export`. Turns `avalon-server`'s own log file
 //! (`make start`'s `_running/logs/avalon-server.log`, human-readable or
-//! JSON-per-line depending on `AVALON_LOG_FORMAT`, see #265) into a
+//! JSON-per-line depending on `AVALON_LOG_FORMAT`) into a
 //! redacted, normalized, line-delimited-JSON export a hoster can safely
 //! attach to a filed GitHub issue without hand-copying raw log text (which
 //! may carry ANSI color codes, and worse, a real secret that ended up in a

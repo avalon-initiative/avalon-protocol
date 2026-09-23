@@ -80,15 +80,14 @@ deployment units second.
 - **Realtime / presence** — online state, current integrator, heartbeat. Ephemeral,
   never ledgered. [`./presence.md`](./presence.md).
 
-**Do not prematurely microservice — but the boundaries are load-bearing now,
-not just future-proofing.** All four crates still compile into one binary,
-`avalon-server`. What changed with epic #291 (closed 2026-09-20, #661–665) is
-that `AVALON_NODE_ROLES` went from purely advisory metadata to a real
-startup-mode gate: you can run several instances of that one binary, each
-configured as settlement-only, indexer-only, realtime-only, gateway-only, or
-combined, talking to each other over an internal RPC protocol (#661). One
-compiled artifact, multiple deployable node processes. [`./nodes.md`](./nodes.md)
-describes the roles and the config knob.
+**These boundaries are load-bearing now, not just future-proofing**, though the
+implementation deliberately does not prematurely microservice. All four crates still
+compile into one binary, `avalon-server`. `AVALON_NODE_ROLES` is a real startup-mode
+gate, not just advisory metadata: several instances of that one binary can run, each
+configured as settlement-only, indexer-only, realtime-only, gateway-only, or combined,
+talking to each other over an internal RPC protocol. One compiled artifact, multiple
+deployable node processes. [`./nodes.md`](./nodes.md) describes the roles and the
+config knob.
 
 ## The big picture
 
@@ -132,16 +131,9 @@ Avalon is the connective tissue. The integrators are the experiences.
 
 ## The workspace
 
-Six domain crates, confirmed by
-[#69](https://github.com/LunarVagabond/avalon-protocol/issues/69), plus one
-proc-macro support crate (`schema-derive`, added for #386/#423) that generates
-code rather than owning a domain — it doesn't reopen #69's invariant below.
-Since #772, `schema-derive` lives at `crates/sdk/schema-derive` (a nested
-workspace member) rather than top-level under `crates/`, reflecting that
-only `sdk` ever consumed it — it has no relationship to the domain crates
-below and doesn't become one by being counted alongside them.
-Each domain crate has a concrete boundary; none exists merely because a
-concept has a name.
+This workspace holds the four crates that build into `avalon-server`
+(`protocol`, `chain`, `indexer`, `server`) plus `cli`. Each has a concrete
+boundary; none exists merely because a concept has a name.
 
 | Crate | May know about | Must not know about |
 |---|---|---|
@@ -149,13 +141,23 @@ concept has a name.
 | `chain` | settlement: commitments, verification, the ledger/log | general domain semantics (those live in `protocol`) |
 | `indexer` | consuming events, projections, read models, aggregates | redefining what an event means |
 | `server` | everything — it composes protocol, chain, indexer, realtime, API | being reached around by clients (Hub, integrators use the API/SDK) |
-| `sdk` | protocol capabilities, auth, retries, discovery, routing | exposing Postgres, chain RPC, Merkle trees, or node topology to an integrator |
 | `cli` | dev/ops workflows: registration, inspection, diagnostics, migrations | being a second server |
-| `schema-derive` | deriving `.proto` text + visibility maps from a Rust struct (`#[derive(AvalonSchema)]`) | anything domain-specific — purely a codegen helper, re-exported through `sdk` rather than used directly |
 
 Internal growth is by module (`protocol/src/{identity,guilds,achievements,...}.rs`),
 not by crate. A new domain such as assets becomes a module of `protocol` unless a
 real compilation, ownership, or deployment boundary appears.
+
+The Rust reference SDK (`sdk`) and its `schema-derive` proc-macro support
+crate live in a separate `avalon-sdks` repository rather than this
+workspace — see [`docs/projects/sdks/rust/README.md`](../../sdks/rust/README.md)
+and [`bindings.md`](./bindings.md). The SDK's own boundary: it may know
+about protocol capabilities, auth, retries, discovery, and routing; it must
+not expose Postgres, chain RPC, Merkle trees, or node topology to an
+integrator. `schema-derive` derives `.proto` text plus visibility maps from
+a Rust struct (`#[derive(AvalonSchema)]`) — a codegen helper with no
+domain-specific knowledge of its own, re-exported through the SDK rather
+than used directly. This workspace's `cli` crate depends on the SDK as a
+git dependency on that repository rather than a workspace path.
 
 ## Architectural tests
 
@@ -196,74 +198,42 @@ developer experience, indexing/query, the Hub, settlement optimization, advanced
 assets, economy. Settlement throughput is not optimized before the semantics it
 settles are correct.
 
-## Today in the repo
+## Current implementation
 
 - `crates/protocol/src/` — `identity`, `ids`, `integrators`, `integrator_schemas`,
   `guilds`, `social`, `achievements`, `permissions`, `events` modules; pure
-  types, no I/O. Also `sth` (moved from `crates/chain` by #773) — the
-  Ed25519 Signed Tree Head signing/verification scheme, pure enough to need
-  no chain/Postgres dependency, re-exported by `crates/chain` for its own
-  callers.
+  types, no I/O. Also `sth` — the Ed25519 Signed Tree Head signing/verification
+  scheme, pure enough to need no chain/Postgres dependency, re-exported by
+  `crates/chain` for its own callers.
 - `crates/chain/` — `SettlementProvider` trait and a hash-chained,
   RFC 6962 Merkle-batched Postgres ledger (`postgres.rs`, `merkle.rs`,
   `avalon_protocol::sth`). Real, not stubbed, and signed at the tree-head
-  level (not per-entry) since #39/#210.
-- `crates/indexer/` — `PostgresIndexer` (`postgres.rs`, #42) is a real,
-  dispatched, idempotent `Indexer`, with one projection module per read
-  model under `projections/` (`profiles`, `friendships`, `guild_rosters`,
-  `attestations`, `integrator_bindings`, `integrator_schemas`) plus a `registry` module.
+  level, not per-entry.
+- `crates/indexer/` — `PostgresIndexer` (`postgres.rs`) is a real, dispatched,
+  idempotent `Indexer`, with one projection module per read model under
+  `projections/` (`profiles`, `friendships`, `guild_rosters`, `attestations`,
+  `integrator_bindings`, `integrator_schemas`) plus a `registry` module.
   See [`./query-and-indexing.md`](./query-and-indexing.md).
-- `crates/server/` — far beyond identity/login/profile now: friends, blocks,
+- `crates/server/` — far beyond identity/login/profile: friends, blocks,
   guilds/channels/events, conversations, achievements, integrator/issuer
   registration and discovery, the integrator registry, a real WebSocket presence
   service (`presence.rs`), settlement/outbox, retention, and recovery all
-  have their own module. #44 migrated `profiles`; #506 migrated
-  `friends.rs`/`guilds.rs` onto `indexer_friendships`/`indexer_guild_members`
-  too. `connections.rs`'s own `bindings`/`permission_grants` tables were
-  deliberately left out of #506's scope — they're genuinely server-owned
-  data (capability/grant state, not "two writers of one projection"), not
-  a gap still to close.
-- `crates/sdk/` — `authenticate()` wired to a live server; friends/presence,
-  guilds (roster/channels/chat), and conversations are real, not stubbed;
-  `sync_journal`/`submission` (#110/#111) implement offline durability and
-  deferred submission. Achievement issuance still returns `NotImplemented`.
+  have their own module. `friends.rs`/`guilds.rs` read from
+  `indexer_friendships`/`indexer_guild_members` projections.
+  `connections.rs`'s own `bindings`/`permission_grants` tables are genuinely
+  server-owned data (capability/grant state, not "two writers of one
+  projection"), not a projection migration gap.
+- The Rust reference SDK (now in the separate `avalon-sdks` repository) has
+  `authenticate()` wired to a live server; friends/presence, guilds
+  (roster/channels/chat), and conversations are real, not stubbed;
+  offline durability and deferred submission (`sync_journal`/`submission`)
+  are implemented. Achievement issuance still returns `NotImplemented`.
 - `crates/cli/` — `avalon create-identity`, `login`, `register-integrator`,
   `inspect-ledger`/`inspect-ledger-full`, `outbox-status`, `prune-ledger`.
 - `apps/hub` — a real Vue3 client (identity, friends, guilds, conversations,
   integrator discovery), not just scaffolding. `apps/mobile-hub`, `packages/ui`,
-  `bindings/csharp` — still scaffolding/skeleton.
-
-## Decisions and tickets
-
-- [#67](https://github.com/LunarVagabond/avalon-protocol/issues/67) identity is
-  separate from game characters
-- [#68](https://github.com/LunarVagabond/avalon-protocol/issues/68) attestations
-  before blockchain
-- [#69](https://github.com/LunarVagabond/avalon-protocol/issues/69) six-crate
-  workspace confirmed
-- [#70](https://github.com/LunarVagabond/avalon-protocol/issues/70) settlement is
-  a public transparency log
-- [#74](https://github.com/LunarVagabond/avalon-protocol/issues/74) guilds are
-  network-level primitives
-- [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) durable
-  history is canonical; query databases are projections
-- [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) attestation
-  trust model
-- [#77](https://github.com/LunarVagabond/avalon-protocol/issues/77) the Hub is a
-  client of the network
-- [#78](https://github.com/LunarVagabond/avalon-protocol/issues/78) realtime
-  presence is ephemeral
-- Open decisions: [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80)
-  issuer keys. Implementation still open on decided questions:
-  [#210](https://github.com/LunarVagabond/avalon-protocol/issues/210) (Merkle
-  root / Signed Tree Heads, decided by #40) and
-  [#201](https://github.com/LunarVagabond/avalon-protocol/issues/201) (guardian
-  recovery, decided by #99). Decided since: [ADR #186](https://github.com/LunarVagabond/avalon-protocol/issues/186) —
-  no blockchain or validator consensus, a transparency log on Postgres,
-  superseding part of [ADR #93](https://github.com/LunarVagabond/avalon-protocol/issues/93);
-  [#73](https://github.com/LunarVagabond/avalon-protocol/issues/73) —
-  identity is a self-custodied keypair; [#40](https://github.com/LunarVagabond/avalon-protocol/issues/40) —
-  log/Merkle design; [#99](https://github.com/LunarVagabond/avalon-protocol/issues/99) —
-  identity recovery; [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
-  revocation mechanics; [#39](https://github.com/LunarVagabond/avalon-protocol/issues/39) —
-  log operator signing (Signed Tree Heads only, not per-entry).
+  `bindings/csharp` are more actively developed than plain scaffolding but
+  earlier-stage than the Hub — see each project's own architecture docs for
+  current status.
+</content>
+</invoke>

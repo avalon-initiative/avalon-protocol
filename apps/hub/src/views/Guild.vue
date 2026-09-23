@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Guild overview / roster / roles / channels (issue #24), restructured into
-// tabs by issue #241 — Overview / Members / Channels / Events / Roles /
+// Guild overview / roster / roles / channels, restructured into
+// tabs — Overview / Members / Channels / Events / Roles /
 // Settings, same activeTab-ref + local.tabs/tab/tabActive pattern
 // Guilds.vue's "My guilds"/"Discover" tabs already use. Management controls
 // are shown only when the caller's own role grants the matching permission
@@ -71,7 +71,7 @@ import styles from '../styles/page.module.scss'
 // permissions, same as the original four. Per-resource overrides on top
 // of these are a separate surface (ResourcePermissionOverrides.vue on the
 // Channels and Events tabs), not this guild-wide matrix. `view`/
-// `view_details` (#458) are deliberately NOT listed here — their
+// `view_details` are deliberately NOT listed here — their
 // resolution (`resolve_view_permission`) never even reads a role's base
 // permission list, only its per-resource overrides, so a guild-wide base
 // grant here would have no effect and would be misleading to show.
@@ -124,7 +124,7 @@ const canManageChannels = computed(
   () =>
     guild.value !== null && hasGuildPermission(guild.value, selfId.value, selfPermissions.value, 'manage_channels'),
 )
-// Issue #463: events have their own `event_manage` permission (#250) —
+// Events have their own `event_manage` permission —
 // previously ungated in the Hub, which fell back to reusing
 // canManageChannels for the "+ New event" button. This is still the flat
 // (non-resource-aware) check: a plain member granted event_manage on one
@@ -136,7 +136,7 @@ const canManageEvents = computed(
 )
 const isMember = computed(() => members.value.some((m) => m.identityId === selfId.value))
 
-// Author presence for chat messages (issue #438 follow-up) — `members`
+// Author presence for chat messages — `members`
 // already carries each member's presence via `listMembersWithPresence`
 // (useGuildDetail.ts), refreshed on that composable's own poll cadence
 // rather than a separate live subscription just for chat.
@@ -148,7 +148,7 @@ const memberPresence = computed(() => {
   return map
 })
 
-// --- Tabs (issue #241) ---------------------------------------------------
+// --- Tabs ---------------------------------------------------
 // Overview/Members/Events/Roles/Settings are plain client-side state, same
 // as Guilds.vue's "My guilds"/"Discover" tabs — no route involved. Channels
 // is the one exception: a channel is independently deep-linkable
@@ -166,9 +166,9 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'settings', label: 'Settings' },
 ]
 
-// Issue #391: channels are member-only server-side — hidden entirely for a
-// non-member. Issue #448 carves events/calendar out of this: a non-member
-// of a public guild (guild.public, #449) now sees a read-only Events/
+// Channels are member-only server-side — hidden entirely for a
+// non-member. Events/calendar are carved out of this: a non-member
+// of a public guild (guild.public) now sees a read-only Events/
 // Calendar tab (server-filtered to that guild's public events), so those
 // two are no longer flatly member-only — only channels stays that way.
 const MEMBER_ONLY_TABS: TabKey[] = ['channels']
@@ -221,7 +221,7 @@ function selectTab(tab: TabKey) {
   }
 }
 
-// --- Channels (issue #22/#24, folded into this tab by #241) --------------
+// --- Channels --------------
 // AvalonChannelList renders as a persistent left sidebar; the active
 // channel's messages/composer render beside it via useGuildChat, which is
 // reused as-is (no polling/pagination logic duplicated here) — it already
@@ -346,14 +346,14 @@ function onMessageScroll(event: Event) {
   }
 }
 
-// --- Channel topic + announcement-only (issue #276) -----------------------
+// --- Channel topic + announcement-only -----------------------
 // Both live on the active channel itself now, next to its name/messages —
 // previously the announcement-only toggle was buried inside
 // ResourcePermissionOverrides.vue's role x permission grid, a strange home
 // for a simple per-channel setting. `activeChannel` (from useGuildChat) is
 // patched in place from each PATCH response rather than waiting on a
 // reload, since useGuildChat only refetches channel metadata when
-// guildId/channelId themselves change (#241), not on demand.
+// guildId/channelId themselves change, not on demand.
 const savingChannelTopic = ref(false)
 const channelTopicError = ref('')
 
@@ -423,9 +423,9 @@ async function onToggleChannelPublic() {
   }
 }
 
-// --- Integrator affinity breakdown (issue #206, implementing decision #160) -----
-// Aggregated from real IntegratorBinding (#83) data only — never a manager-added
-// association (that's #20's superseded associate_integrator flow below). A
+// --- Integrator affinity breakdown -----
+// Aggregated from real IntegratorBinding data only — never a manager-added
+// association (that's the superseded associate_integrator flow below). A
 // manage_guild holder always sees it, gated server-side; anyone else only
 // once the guild opts into public exposure via the toggle just below.
 const integratorBreakdownLines = computed(() => {
@@ -454,8 +454,8 @@ async function onToggleGameBreakdownPublic(next: boolean) {
   }
 }
 
-// --- Favorite integrators: curated top-5 pin list (issue #207, implementing -----
-// decision #160). Always part of the public profile (`guild.favorite_games`
+// --- Favorite integrators: curated top-5 pin list -----
+// Always part of the public profile (`guild.favorite_games`
 // — unlike the breakdown above, no public-exposure toggle of its own), so
 // it's readable here whether or not the caller can manage the guild.
 // Pinning is only ever offered from `integratorBreakdown.value.breakdown` — the
@@ -499,9 +499,9 @@ function onReorderFavorite(integratorId: string, direction: 'up' | 'down') {
 
 // Roster search/filter/sort — milestone-1 polish, plain pure functions
 // from api/guilds.ts (mirroring groupMembersByRole's own pattern). Search
-// only matches identity id since display names aren't resolvable yet
-// (#161). "By role" keeps groupMembersByRole's own ordering; "by name"
-// really means "by identity id string" until #161 lands.
+// only matches identity id since display names aren't resolvable yet.
+// "By role" keeps groupMembersByRole's own ordering; "by name"
+// really means "by identity id string" until that lands.
 const memberQuery = ref('')
 const memberSortOrder = ref<MemberSortOrder>('role')
 const memberSortOptions = [
@@ -520,7 +520,7 @@ const roleGroups = computed(() => {
 })
 const membershipStatus = computed(() => membershipStatusText(isOwner.value, isMember.value))
 
-// "Members currently playing" (#57): realtime presence grouped by integrator,
+// "Members currently playing": realtime presence grouped by integrator,
 // never a durable stat and never phrased as the guild belonging to an integrator
 // (#74 — "N members playing X", not "Integrator X's guild"). Computed from the
 // same roster/presence merge the roles view already loads, so it's always
@@ -591,7 +591,7 @@ async function onSaveGuildInfo() {
   }
 }
 
-// --- Recruiting toggle + links (issue #153) -------------------------------
+// --- Recruiting toggle + links -------------------------------
 
 const guildLinks = computed(() => guild.value?.links ?? [])
 const savingRecruiting = ref(false)
@@ -632,8 +632,8 @@ async function onTogglePublic(next: boolean) {
   }
 }
 
-// Issue #87 — the guild's roster-visibility baseline. Recruiting/Public
-// above (#449/#455) can still widen exposure beyond whatever this is set
+// The guild's roster-visibility baseline. Recruiting/Public
+// above can still widen exposure beyond whatever this is set
 // to; this only controls the underlying value.
 const VISIBILITY_OPTIONS = [
   { value: 'public', label: 'Anyone' },
@@ -977,7 +977,7 @@ async function onKick(identityId: string) {
   }
 }
 
-// --- Join requests (issue #242) ------------------------------------------
+// --- Join requests ------------------------------------------
 // `joinRequests` (pending-only, per useGuildDetail's default listJoinRequests
 // call) is manage_members-gated server-side — empty here for anyone who
 // isn't a manager, same non-fatal-403 posture integratorBreakdown already has.
@@ -1070,8 +1070,8 @@ function cancelInvite() {
   inviteError.value = ''
 }
 
-// Issue #392: accepts either a raw identity id or a display_name handle
-// (#128, #510), the same convenience Friends.vue's onAddFriend already
+// Accepts either a raw identity id or a display_name handle,
+// the same convenience Friends.vue's onAddFriend already
 // offers — a handle (anything that isn't a UUID) is resolved to an
 // identity id first, since createGuildInvite always targets an identity
 // id on the wire.
@@ -1223,7 +1223,7 @@ async function onArchiveChannel(channelId: string) {
   }
 }
 
-// --- Events (issue #169) -----------------------------------------------
+// --- Events -----------------------------------------------
 
 const sortedEvents = computed(() => sortByStartsAt(events.value))
 
@@ -1362,7 +1362,7 @@ async function onRsvp(eventId: string, status: 'going' | 'maybe' | 'not_going') 
   }
 }
 
-// Per-member RSVP roster panel (issue #248), shared between the Events tab
+// Per-member RSVP roster panel, shared between the Events tab
 // and the Calendar tab's selected-day list below — one instance, opened by
 // clicking either tab's event card. Destructured to top-level refs, same
 // convention useGuildChat's call site uses, so the template gets plain
@@ -1442,7 +1442,7 @@ const {
     </div>
 
     <!-- Overview: header info already above (MOTD is now its own banner
-         above the tab bar, issue #276), plus links, integrator affinity, favorite
+         above the tab bar), plus links, integrator affinity, favorite
          integrators, associated integrators, and guild history — all read-only here;
          editing lives in Settings. -->
     <div v-if="activeTab === 'overview'" :class="styles.grid">
@@ -1535,10 +1535,9 @@ const {
 
         <!--
           Associated integrators (#20's original manual associate_integrator flow,
-          superseded by #206/#207's real-binding-derived affinity above but
+          superseded by the real-binding-derived affinity above but
           still live): now visible to any member, read-only — only the
-          "associate an integrator" action itself stays canManageGuild-gated
-          (issue #241).
+          "associate an integrator" action itself stays canManageGuild-gated.
         -->
         <AvalonCard v-if="canManageGuild || guild.integrators.length > 0" title="Associated integrators">
           <p v-for="integratorId in guild.integrators" :key="integratorId" :class="styles.empty">{{ integratorId }}</p>
@@ -1774,7 +1773,7 @@ const {
       </div>
     </div>
 
-    <!-- Channels (issue #241): a persistent sidebar of channels next to the
+    <!-- Channels: a persistent sidebar of channels next to the
          active channel's messages — switching channels updates
          `selectedChannelId` and lets useGuildChat reload in place, never a
          route navigation or component remount. -->
@@ -1817,7 +1816,7 @@ const {
               This channel is archived — history is readable, but new messages can't be sent.
             </p>
 
-            <!-- Channel topic (issue #276): read-only for anyone who can't
+            <!-- Channel topic: read-only for anyone who can't
                  manage channels, inline-editable (AvalonEditableField, same
                  component Settings uses for the guild's own MOTD/banner/icon)
                  for whoever can. -->
@@ -1833,7 +1832,7 @@ const {
             />
             <p v-else-if="activeChannel?.topic" :class="local.channelTopic">{{ activeChannel.topic }}</p>
 
-            <!-- Announcement-only (issue #250, relocated by #276 out of
+            <!-- Announcement-only (relocated out of
                  ResourcePermissionOverrides.vue's role x permission grid —
                  a channel manager expects to find this next to the
                  channel's own settings, not buried in a permissions
@@ -1852,7 +1851,7 @@ const {
             </label>
             <p v-if="announcementOnlyError" :class="styles.error">{{ announcementOnlyError }}</p>
 
-            <!-- Non-member visibility (issue #458) — only matters while
+            <!-- Non-member visibility — only matters while
                  this guild is Public (Settings), same framing the event
                  public toggle already uses. -->
             <label v-if="activeChannel && canManageChannels" :class="local.announcementRow">
@@ -1899,10 +1898,10 @@ const {
             />
           </AvalonCard>
 
-          <!-- Per-resource permission overrides (issue #250, generalized
-               by #458 to also cover view/view_details): per-role
+          <!-- Per-resource permission overrides (generalized
+               to also cover view/view_details): per-role
                overrides for the active channel — the announcement-only
-               toggle moved above (issue #276) so this stays focused
+               toggle moved above so this stays focused
                purely on the role x permission grid. Visible to anyone who
                can manage roles — server re-checks each action
                independently. -->
@@ -1920,11 +1919,11 @@ const {
     </div>
 
     <!--
-      Guild events calendar + RSVP (issue #169). Neither an event nor
+      Guild events calendar + RSVP. Neither an event nor
       an RSVP row is durable protocol history — see
       docs/architecture/guilds.md's "Guild events calendar + RSVP"
       section — so nothing here claims to be permanent. `EventResponse`
-      includes the caller's own RSVP status (issue #463), so
+      includes the caller's own RSVP status, so
       AvalonRsvpControl pre-selects it correctly.
     -->
     <div v-else-if="activeTab === 'events'" :class="styles.mainColumn">
@@ -1993,7 +1992,7 @@ const {
               </template>
             </AvalonForm>
 
-            <!-- Per-resource permission overrides (issue #458) — only
+            <!-- Per-resource permission overrides — only
                  while editing an existing event (there's no resource id
                  yet while creating one). Same role x permission grid the
                  Channels tab uses. -->
@@ -2401,7 +2400,7 @@ const {
       <p v-else :class="styles.empty">Only this guild's managers can view its settings.</p>
     </div>
 
-    <!-- Per-member RSVP roster (issue #248): shared between the Events tab
+    <!-- Per-member RSVP roster: shared between the Events tab
          and the Calendar tab's selected-day list above, one panel instance
          opened by clicking either tab's event card. -->
     <AvalonRsvpRosterPanel

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 // A tiny inline-SVG icon set — deliberately no icon-library dependency
-// (issue #148); every glyph is a 24x24 stroke path using currentColor, so
+// every glyph is a 24x24 stroke path using currentColor, so
 // it takes the color of whatever text it sits in.
 import styles from '../styles/AvalonIcon.module.scss'
 import type { AvalonIconProps } from '../types/AvalonIcon.types'

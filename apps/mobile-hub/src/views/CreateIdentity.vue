@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Same identity-creation ceremony as apps/hub's CreateIdentity.vue (#55),
+// Same identity-creation ceremony as apps/hub's CreateIdentity.vue,
 // composed from the same @avalon/ui components and the shared
-// @avalon/api-client module (#60).
+// @avalon/api-client module.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon/ui'
@@ -22,7 +22,7 @@ const error = ref('')
 const createdIdentityId = ref('')
 const copied = ref(false)
 
-// The signing key's BIP39 recovery phrase (#134) — shown exactly once.
+// The signing key's BIP39 recovery phrase — shown exactly once.
 const signingKeyMnemonic = ref('')
 const mnemonicCopied = ref(false)
 

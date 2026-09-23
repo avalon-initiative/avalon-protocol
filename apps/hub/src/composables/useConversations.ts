@@ -1,7 +1,7 @@
-// The caller's own conversation list (issue #105) — loads once, then polls,
+// The caller's own conversation list — loads once, then polls,
 // same "no WebSocket needed for milestone 1" shape useMyConnections.ts
 // establishes. Also resolves display names for every participant seen
-// across the list (via GET /identities/profiles, issue #161), so
+// across the list (via GET /identities/profiles), so
 // Messages.vue never has to know an identity by its raw id, and — same
 // live-presence pattern useFriendsPresence.ts uses — subscribes to every
 // participant's presence so a chat message can show their current status.

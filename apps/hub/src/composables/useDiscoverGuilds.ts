@@ -1,4 +1,4 @@
-// Guild discovery board (issue #154): GET /guilds/discover behind reactive
+// Guild discovery board: GET /guilds/discover behind reactive
 // filters (search text, recruiting-only toggle, tag). Unlike
 // useMyGuilds.ts's client-side membership poll, filtering/sorting happens
 // server-side — this composable just re-fetches page one whenever a filter
@@ -7,7 +7,7 @@
 // re-derived or re-sorted client-side, since only the server's `ORDER BY`
 // matches its own cursor comparison).
 //
-// Issue #432/ADR #437: a tier-2 view — polls once activated, same interval
+// A tier-2 view — polls once activated, same interval
 // useMyConnections/useMyGuilds already use. Unlike those composables this
 // one doesn't fetch on mount: Guilds.vue's Discover tab is lazy (only
 // loaded the first time a reader actually opens it), so polling only
@@ -86,7 +86,7 @@ export function useDiscoverGuilds() {
 
   // Re-runs page one whenever a filter changes — the search box included,
   // debounce-free for now (milestone-1 stand-in, same posture as the
-  // endpoint itself); a real read model (#42) is the point to revisit
+  // endpoint itself); a real read model is the point to revisit
   // request-shaping like debouncing too.
   watch([query, recruitingOnly, tag, integratorSlug], refresh)
 

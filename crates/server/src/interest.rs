@@ -1,22 +1,21 @@
-//! DHT-backed interest registration and lookup — issue #583, part of epic
-//! #580 implementing #542's decision. A node with a local subscriber to a
+//! DHT-backed interest registration and lookup. A node with a local subscriber to a
 //! guild channel or conversation registers that interest as a
 //! [`crate::dht::DhtCommand::PutRecord`] — immediately on first
 //! registration (see [`InterestRegistry::register`]'s own doc comment for
 //! why waiting on the first [`REFRESH_INTERVAL`] tick isn't good enough),
 //! then re-put every `REFRESH_INTERVAL` for as long as at least one local
-//! subscriber remains. `crate::realtime_relay::relay_to_peers` (#584) is
+//! subscriber remains. `crate::realtime_relay::relay_to_peers` is
 //! the one real caller of [`lookup`]/`GetRecord`, looking up who else is
-//! interested instead of #539's original "loop over every peer."
+//! interested instead of the original "loop over every peer."
 //!
-//! **Registration has no explicit "deregister"**, by the ticket's own
-//! design: a record's TTL ([`RECORD_TTL`], refreshed every
+//! **Registration has no explicit "deregister"**, by design: a record's
+//! TTL ([`RECORD_TTL`], refreshed every
 //! [`REFRESH_INTERVAL`]) simply lapses once nothing refreshes it. What
 //! *is* tracked locally is a plain refcount per scope
 //! ([`InterestRegistry`]) — [`InterestGuard`]'s `Drop` decrements it, so a
 //! websocket handler only has to hold one guard per subscription and let
 //! normal Rust scoping handle "this connection went away, stop
-//! refreshing," the same way #582's peer table handles a departed peer via
+//! refreshing," the same way the peer table handles a departed peer via
 //! pruning rather than an explicit "goodbye" message.
 //!
 //! Interest is tracked at whatever granularity `crate::chat`'s own
@@ -184,7 +183,7 @@ impl RedisFastPath {
 }
 
 /// What a node can hold local-subscriber interest in — the two shapes
-/// `crate::chat::ChatUpdate` actually routes on, plus (issue #596) a
+/// `crate::chat::ChatUpdate` actually routes on, plus a
 /// mirror's interest in a specific settlement `network_id`'s STH stream.
 /// Not `PartialOrd`/`Ord`: nothing here needs to sort scopes, only
 /// hash/compare them.
@@ -192,14 +191,14 @@ impl RedisFastPath {
 pub enum InterestScope {
     Channel(Uuid),
     Conversation(Uuid),
-    /// Issue #596: never constructed directly — see [`Self::for_network`],
+    /// Never constructed directly — see [`Self::for_network`],
     /// which derives this deterministically from a `network_id` string so
     /// `InterestScope` can stay `Copy`/fixed-size like every other variant
     /// rather than growing a `String` payload that would force every
     /// existing call site (registration, lookup, the DHT/Redis worker
     /// loops) off `Copy` for the sake of one variant.
     Network(Uuid),
-    /// Epic #623, issue #635: the identity-locator scope — registered by
+    /// The identity-locator scope — registered by
     /// `crate::identity_locator::run_worker` for every identity this node
     /// durably has (authors or mirrors) `identity_signing_keys` for, so any
     /// node can resolve *every* shard an identity has real history on, not
@@ -207,13 +206,13 @@ pub enum InterestScope {
     /// as `Network` (a bare `own_base_url`, no signed claim): a node
     /// advertising this scope is asserting a fact about its own local data,
     /// not vouching for the identity itself — a consumer still verifies
-    /// whatever it actually fetches from a resolved location independently
-    /// (issue #636), so a false or stale registration here only ever wastes
+    /// whatever it actually fetches from a resolved location independently,
+    /// so a false or stale registration here only ever wastes
     /// a lookup, never a security bypass.
     Identity(Uuid),
 }
 
-/// Fixed, arbitrary namespace UUID (issue #596) used only to derive
+/// Fixed, arbitrary namespace UUID used only to derive
 /// [`InterestScope::Network`] deterministically from a `network_id`
 /// string via `Uuid::new_v5` — never persisted or exposed, just a domain
 /// separator so two different processes deriving a scope for the same
@@ -272,7 +271,7 @@ impl InterestScope {
         bytes
     }
 
-    /// This scope's key in the optional Redis fast-path (#585). Unlike
+    /// This scope's key in the optional Redis fast-path. Unlike
     /// [`dht_key`](Self::dht_key), which can safely omit `network_id`
     /// because the libp2p swarm itself is already network-isolated,
     /// Redis has no such structural boundary — see
@@ -394,17 +393,17 @@ impl InterestRegistry {
     /// fresh subscription otherwise invisible to a lookup for up to 45s,
     /// far too slow to be useful.
     ///
-    /// Only ever used for [`InterestScope::Network`] (issue #596's mirror
+    /// Only ever used for [`InterestScope::Network`] (mirror
     /// registration — never identity-scoped, see this struct's own
     /// `claims` field doc comment). `Channel`/`Conversation` registration
     /// goes through [`register_with_claim`](Self::register_with_claim)
-    /// instead as of issue #610.
+    /// instead.
     pub fn register(&self, scope: InterestScope) -> InterestGuard {
         self.bump(scope)
     }
 
     /// Registers one local subscriber's interest in a `Channel`/
-    /// `Conversation` `scope` (issue #610), storing `claim` (the wire-
+    /// `Conversation` `scope`, storing `claim` (the wire-
     /// encoded, already-verified [`InterestClaim`] — see
     /// `crate::interest::verify_claim`, which every caller of this must run
     /// first) as exactly what [`run_worker`] will `PutRecord` for as long as
@@ -440,9 +439,9 @@ impl InterestRegistry {
     /// observable given the storage-before-bump order above, but `run_worker`
     /// treats it as "skip this tick, try again next refresh" rather than
     /// panicking either way), or a `Network` scope, which was never
-    /// claim-based to begin with (issue #596, unaffected by #610 — see
+    /// claim-based to begin with (see
     /// `claims`' own doc comment) and just advertises `own_base_url`
-    /// directly, exactly as before this ticket.
+    /// directly, exactly as before.
     fn dht_value(&self, scope: InterestScope, own_base_url: &str) -> Option<Vec<u8>> {
         match scope {
             InterestScope::Channel(_) | InterestScope::Conversation(_) => self
@@ -488,14 +487,13 @@ impl InterestRegistry {
 /// Deduplicated: live-testing this against two real nodes
 /// (`crates/server/tests/interest_dht.rs`) found `get_record` reporting
 /// the same value more than once (once per peer that happened to answer
-/// with a copy) — #584's relay path needs a plain "who to notify" list,
+/// with a copy) — the relay path needs a plain "who to notify" list,
 /// not one entry per DHT replica that happened to respond.
 /// `dht_commands` being unavailable to the caller (e.g. `AVALON_DHT_ENABLED`
 /// unset) is the caller's own concern — this function assumes a live
 /// channel.
 ///
-/// #584 is the ticket that actually calls this from the relay path; #583
-/// only has to prove it works. `redis_fast_path`, when `Some` (#585),
+/// `redis_fast_path`, when `Some`,
 /// is checked first — a non-empty answer from it skips the DHT `GetRecord`
 /// entirely; `None`/empty falls straight through to the DHT exactly as if
 /// no fast path were configured at all.
@@ -536,7 +534,7 @@ pub async fn lookup(
     base_urls
 }
 
-/// Issue #610's replacement for [`lookup`] on `Channel`/`Conversation`
+/// Replacement for [`lookup`] on `Channel`/`Conversation`
 /// scopes — `crate::realtime_relay`'s only caller for those two variants
 /// now, `lookup` itself remaining exactly as it was for `crate::mirror_push`'s
 /// `Network`-scope use (see `crate::interest_claim`'s module doc comment on
@@ -553,7 +551,7 @@ pub async fn lookup(
 /// — a forged/stale registration and "nobody's actually interested" must
 /// look identical to this relay path.
 ///
-/// **No Redis fast-path** (#585): that cache only ever stored a bare
+/// **No Redis fast-path**: that cache only ever stored a bare
 /// `own_base_url` string (see `RedisFastPath::put`'s call sites in
 /// [`run_worker`], unchanged by this ticket) with no claim/signature
 /// attached to verify — trusting it here would silently reopen exactly the
@@ -675,7 +673,7 @@ async fn verify_claim_signature(
     Some(claim)
 }
 
-/// Registration-side verification (issue #610) — run by `crate::chat`
+/// Registration-side verification — run by `crate::chat`
 /// before ever calling [`InterestRegistry::register_with_claim`]. Beyond
 /// [`verify_claim_signature`]'s checks, requires `claim.identity_id` to
 /// equal `expected_identity` (the already-authenticated websocket caller —
@@ -683,7 +681,7 @@ async fn verify_claim_signature(
 /// authenticated it, never on behalf of some other identity whose claim it
 /// happened to be handed) and `claim.base_url` to equal this node's own
 /// `own_base_url` exactly. That second check is the one that actually
-/// closes #610's redirection risk: `base_url` lives *inside* the signed
+/// closes the redirection risk: `base_url` lives *inside* the signed
 /// bytes precisely so a client can't have it silently rewritten later, but
 /// nothing stops a malicious or compromised client from self-signing a
 /// claim naming some *other* node's `base_url` in the first place — this
@@ -755,7 +753,7 @@ pub async fn run_worker(
                         // this tick, try again next refresh.
                         continue;
                     };
-                    // Issue #610: the Redis fast-path (#585) only ever
+                    // The Redis fast-path only ever
                     // cached a bare `own_base_url`, never a verifiable
                     // claim — `interest::lookup_claimed` no longer
                     // consults it at all for `Channel`/`Conversation`

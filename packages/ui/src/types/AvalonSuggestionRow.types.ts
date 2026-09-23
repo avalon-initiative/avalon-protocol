@@ -6,6 +6,6 @@ export interface AvalonSuggestionRowProps {
   avatarUrl?: string | null
   // True once an add-friend request has just been sent for this
   // suggestion, so the row can swap its button to a disabled "Requested"
-  // state instead of disappearing outright (issue #204).
+  // state instead of disappearing outright.
   requested?: boolean
 }

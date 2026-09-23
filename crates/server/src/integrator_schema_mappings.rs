@@ -1,5 +1,4 @@
-//! Integrator Space schema-to-schema mapping model (issue #491, the last
-//! unfiled acceptance item under epic #182). See
+//! Integrator Space schema-to-schema mapping model. See
 //! `crates/protocol/src/integrator_schema_mappings.rs`'s own module doc
 //! comment: a mapping documents a correspondence between two of an
 //! integrator's own already-published schema versions — never an

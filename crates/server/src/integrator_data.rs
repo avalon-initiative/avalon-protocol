@@ -1,5 +1,5 @@
-//! Integrator Space instance-data publication and read (issue #384, implementing
-//! #381's decided policy on top of #255's schema publication). Two halves:
+//! Integrator Space instance-data publication and read, implementing
+//! the decided policy on top of schema publication. Two halves:
 //!
 //! **Write** (`POST /integrations/{slug}/schemas/{version}/data`): the schema's
 //! own publishing integrator — proven the same way `integrator_schemas::publish_schema_version`
@@ -108,7 +108,7 @@ pub async fn publish_instance(
 ) -> Result<Json<IntegratorDataInstanceResponse>, AppError> {
     // Proves the caller *is* {slug} — combined with resolving the schema
     // by (slug, version) below, this is what makes "only the schema's own
-    // publishing integrator can publish instances against it" (#384)
+    // publishing integrator can publish instances against it"
     // structurally true, not just a convention: the schema id used below
     // is derived from the authenticated slug, never taken from the
     // request body.
@@ -220,7 +220,7 @@ pub async fn publish_instance(
     };
     outbox::enqueue(&mut tx, &event).await?;
 
-    // `indexer_integrator_data_instances` is a projection (issue #42), populated
+    // `indexer_integrator_data_instances` is a projection, populated
     // by the indexer applying `event` in this same transaction — so the
     // read endpoint below sees this write immediately, matching
     // `integrator_schemas::publish_schema_version`'s own posture.
@@ -252,7 +252,7 @@ fn default_delete_reason_code() -> String {
     "deleted".to_string()
 }
 
-/// `DELETE /integrations/{slug}/schemas/{version}/data/{subject}` (#533) —
+/// `DELETE /integrations/{slug}/schemas/{version}/data/{subject}` —
 /// append-only tombstone for the schema's current (non-superseded,
 /// non-deleted) instance belonging to `subject`, following
 /// `docs/architecture/revocation.md`'s pattern: the original
@@ -352,13 +352,13 @@ pub async fn delete_instance(
 }
 
 /// The entire visibility decision, pure and DB-free — the field-inclusion
-/// rule #384/#381 define, applied to one instance's top-level JSON keys
+/// rule, applied to one instance's top-level JSON keys
 /// against its schema's visibility metadata. Matches
 /// `avalon_chain::mirror::detect_equivocation`'s "small pure function,
 /// unit-tested directly, no I/O" precedent for this style of logic.
 ///
 /// Only literal top-level JSON key matching against `field_visibility` —
-/// no nested-field visibility (documented limitation, #384).
+/// no nested-field visibility (a documented limitation).
 pub(crate) fn resolve_visible_fields(
     instance: &serde_json::Map<String, serde_json::Value>,
     default_visibility: &str,
@@ -372,7 +372,7 @@ pub(crate) fn resolve_visible_fields(
                 "private" => overridden == Some("public"),
                 // "public" (and any unrecognized value — never restrict on
                 // an unrecognized default, since "public" is the safe,
-                // pre-#384 default every existing schema keeps behaving
+                // pre-existing default every existing schema keeps behaving
                 // as) — visible unless explicitly marked private.
                 _ => overridden != Some("private"),
             }
@@ -394,7 +394,7 @@ pub struct VisibleIntegratorDataInstanceResponse {
     pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
-/// `GET /identities/{id}/integrator-data` (#384) — public, unauthenticated (see
+/// `GET /identities/{id}/integrator-data` — public, unauthenticated (see
 /// module doc comment). Every current (non-superseded) instance published
 /// about `id`, across every integrator/schema, each filtered to only the fields
 /// its schema currently makes visible. A schema whose visibility metadata

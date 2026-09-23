@@ -1,6 +1,6 @@
-//! Device-registration / linked-device grant model for signing-key custody
-//! (issue #135) — the primary path #122 decided on for moving an identity
-//! to a new device, complementing #134's mnemonic-phrase fallback.
+//! Device-registration / linked-device grant model for signing-key custody —
+//! the primary path for moving an identity
+//! to a new device, complementing a mnemonic-phrase fallback.
 //!
 //! No new "device" concept lives anywhere but `identity_signing_keys`
 //! itself: a device *is* one row there (it already supports multiple rows

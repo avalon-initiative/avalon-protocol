@@ -16,7 +16,7 @@ function newIdentityId(): string {
 
 export interface CreateIdentityResult {
   identityId: string
-  // The BIP39 recovery phrase (#134) the signing key was derived from —
+  // The BIP39 recovery phrase the signing key was derived from —
   // shown to the user exactly once, immediately after this call returns.
   // Never stored anywhere; the caller's own state is the only copy once
   // this function returns.
@@ -52,10 +52,10 @@ export async function createIdentity(
 }
 
 // Re-derives and re-stores the signing key for an existing identity from a
-// previously saved recovery phrase (#134) — the "new device" / "cleared
+// previously saved recovery phrase — the "new device" / "cleared
 // storage" path. Does not touch WebAuthn/login at all: recovering the
 // signing key and logging in are unrelated (see crypto/signingKey.ts's
-// module docs and #99).
+// module docs).
 export function recoverSigningKey(identityId: string, mnemonic: string): void {
   recoverAndStoreSigningKey(identityId, mnemonic)
 }

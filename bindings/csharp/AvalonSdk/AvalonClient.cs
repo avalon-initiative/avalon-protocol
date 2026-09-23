@@ -97,7 +97,7 @@ namespace Avalon.Sdk
         /// Exchanges an identity's existing Avalon session token (obtained via the Hub or a
         /// direct login, not by this SDK — an integrator never creates identities itself) for
         /// a Session scoped to this integrator. GET /me for the identity/profile, GET /me/grants
-        /// (issue #27) for this integrator's own active capability grants — a non-success
+        /// for this integrator's own active capability grants — a non-success
         /// grants response is treated as "no grants" rather than an authentication failure.
         /// </summary>
         public async Task<Session> AuthenticateAsync(string identityToken, CancellationToken ct = default)

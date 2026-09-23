@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
 // No route awareness — the caller decides which item is active and what a
-// `select` means (issue #130's invariant, carried into the #148 shell).
+// `select` means.
 // A disabled item never emits: it's a roadmap marker, not a link.
 import AvalonIcon from './AvalonIcon.vue'
 import styles from '../styles/AvalonSidebarNav.module.scss'

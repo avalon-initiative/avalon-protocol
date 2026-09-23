@@ -1,10 +1,10 @@
-//! Postgres-backed `SettlementProvider` — milestone 1's implementation
-//! (issue #210, implementing #39/#40's decided design): a sequential hash
+//! Postgres-backed `SettlementProvider` — milestone 1's implementation:
+//! a sequential hash
 //! chain plus a real RFC 6962 Merkle tree with signed tree heads. See
 //! `docs/architecture/settlement.md` and `settlement-implementation-notes.md`
 //! for the two tamper-evidence structures, why `tree_size` is a derived
-//! leaf count rather than raw `seq`, batching (#38), and node-tiered
-//! payload retention (#208).
+//! leaf count rather than raw `seq`, batching, and node-tiered
+//! payload retention.
 
 use async_trait::async_trait;
 use avalon_protocol::events::{Commitment, EventBatch, ProtocolEvent};
@@ -24,7 +24,7 @@ const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000
 /// a hash (at insert time from a `ProtocolEvent`, or at verify time from a
 /// stored row) takes one argument, not eight.
 ///
-/// `pub` (epic #623, issue #636): a cross-shard verifier fetching a
+/// `pub`: a cross-shard verifier fetching a
 /// specific entry from a remote node it doesn't mirror needs to
 /// independently recompute that entry's `entry_hash` from its fetched
 /// content and compare — proving the *payload* it received is actually
@@ -95,7 +95,7 @@ fn canonical_json(value: &serde_json::Value) -> String {
     out
 }
 
-/// `network_id` (issue #173) is hashed in ahead of everything else, so two
+/// `network_id` is hashed in ahead of everything else, so two
 /// ledgers with different network identities produce disjoint hash spaces
 /// by construction — an entry hashed under one `network_id` can never
 /// collide with, or be mistaken for a valid link in, a chain rooted in a
@@ -141,7 +141,7 @@ fn hash_event(network_id: &str, prev_hash: &str, event: &ProtocolEvent) -> Strin
 ///
 /// A pure, DB-free function on purpose, directly unit-testable without
 /// Postgres. `PostgresSettlementProvider::verify` no longer calls this
-/// directly (issue #208: it needs a *per-entry* link/content check, not an
+/// directly — it needs a *per-entry* link/content check, not an
 /// all-or-nothing batch replay, so a batch with one pruned entry doesn't
 /// lose tamper detection for its other entries — see `verify`'s own doc
 /// comment) but it stays here as a from-scratch reference implementation
@@ -189,7 +189,7 @@ pub enum GenesisError {
 }
 
 /// The in-memory leaf-hash prefix plus its incrementally-maintained Merkle
-/// tree (issue #349), kept together so they can never drift apart. Rebuilt
+/// tree, kept together so they can never drift apart. Rebuilt
 /// from Postgres (`ledger_entries.entry_hash`) whenever a process starts, or
 /// whenever `commit`/`entry_hashes_up_to` find it isn't caught up to what's
 /// actually been committed — see [`PostgresSettlementProvider::leaf_cache`]'s
@@ -279,7 +279,7 @@ impl PostgresSettlementProvider {
             .map_err(|e| SettlementError::Storage(e.to_string()))
     }
 
-    /// The real boot-time entry point (issue #173). If this database has no
+    /// The real boot-time entry point. If this database has no
     /// `chain_genesis` row yet, this is genesis: `expected_network_id` is
     /// written once and never touched again. If a row already exists, it
     /// must match `expected_network_id` exactly, or this returns
@@ -335,7 +335,7 @@ impl PostgresSettlementProvider {
         }
     }
 
-    /// The network identity this provider is bound to (issue #173) — every
+    /// The network identity this provider is bound to — every
     /// hash it computes or verifies is rooted in this value.
     pub fn network_id(&self) -> &str {
         &self.network_id
@@ -397,7 +397,7 @@ impl PostgresSettlementProvider {
 
             let link_intact = prev_hash == expected_prev;
             // Content can only be independently re-verified when the
-            // payload is still present — a pruned row (issue #208) has had
+            // payload is still present — a pruned row has had
             // its payload deliberately discarded, so recomputing its
             // content hash is impossible by design, not a sign of
             // tampering. `chain_intact` therefore only asserts what's
@@ -469,8 +469,8 @@ impl PostgresSettlementProvider {
     }
 
     /// Same pagination/ordering semantics as [`Self::list_entries_since`],
-    /// pre-filtered to one `subject` when `Some` (issue #364, implementing
-    /// #306's "make the common one-subject-at-a-time case cheap" piece).
+    /// pre-filtered to one `subject` when `Some` (making the common
+    /// one-subject-at-a-time case cheap).
     /// Filtering by subject is purely a read-side convenience — it never
     /// changes an entry's hash-chain position, and `chain_intact` carries
     /// the exact same "not verified here" caveat
@@ -573,7 +573,7 @@ impl PostgresSettlementProvider {
         Ok(batches)
     }
 
-    /// Every Signed Tree Head, oldest (`tree_size`) first (issue #210) —
+    /// Every Signed Tree Head, oldest (`tree_size`) first —
     /// `avalon inspect-ledger` uses the latest one to report STH
     /// verification (Merkle recompute + Ed25519 signature check) alongside
     /// the hash-chain check `list_entries` already reports. Like
@@ -607,11 +607,11 @@ impl PostgresSettlementProvider {
         Ok(heads)
     }
 
-    /// Issue #208's settlement-state checkpoint: a thin, purely-naming
-    /// wrapper over [`Self::latest_signed_tree_head`], closing #180's
+    /// The settlement-state checkpoint: a thin, purely-naming
+    /// wrapper over [`Self::latest_signed_tree_head`], satisfying the
     /// "periodic durable-state checkpoint" ask for the commitment layer
     /// only — not the indexer/projection read-model snapshot half (still
-    /// open, issue #43). See `docs/architecture/nodes.md`'s
+    /// open). See `docs/architecture/nodes.md`'s
     /// "Settlement-state checkpoint" section for why the latest
     /// `SignedTreeHead` already satisfies this with no new storage.
     pub async fn checkpoint(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
@@ -711,8 +711,8 @@ impl PostgresSettlementProvider {
         Ok(())
     }
 
-    /// The RFC 6962 root at `tree_size` — O(log n) via the incremental tree
-    /// (issue #349), `None` if `tree_size` exceeds what's been committed.
+    /// The RFC 6962 root at `tree_size` — O(log n) via the incremental tree,
+    /// `None` if `tree_size` exceeds what's been committed.
     pub async fn root_at(&self, tree_size: i64) -> Result<Option<[u8; 32]>, SettlementError> {
         self.ensure_cache_covers(tree_size).await?;
         let cached = self.leaf_cache.read().await;
@@ -720,7 +720,7 @@ impl PostgresSettlementProvider {
     }
 
     /// The leaf's hex hash plus its O(log n) RFC 6962 inclusion (audit)
-    /// path at `tree_size` (issue #349) — `entry_hashes_up_to` +
+    /// path at `tree_size` — `entry_hashes_up_to` +
     /// `merkle::inclusion_proof_of_hex_hashes`'s O(n) equivalent.
     pub async fn inclusion_proof(
         &self,
@@ -738,7 +738,7 @@ impl PostgresSettlementProvider {
     }
 
     /// The O(log n) RFC 6962 consistency proof from `first` to `second`
-    /// leaves (issue #349) — `entry_hashes_up_to` +
+    /// leaves — `entry_hashes_up_to` +
     /// `merkle::consistency_proof_of_hex_hashes`'s O(n) equivalent.
     pub async fn consistency_proof(
         &self,
@@ -928,14 +928,14 @@ impl PostgresSettlementProvider {
     }
 }
 
-/// One event from a single issuer's own history (issue #121) — a plain
+/// One event from a single issuer's own history — a plain
 /// projection, not a verified ledger entry; see
 /// [`PostgresSettlementProvider::list_entries_for_issuer_prefix`].
 pub struct IssuerHistoryEntry {
     pub event_id: Uuid,
     pub kind: String,
     pub subject: String,
-    /// `None` if this row's payload has been pruned (issue #208) — a
+    /// `None` if this row's payload has been pruned — a
     /// hot-tier node's "my activity" view degrades to showing that an
     /// event of this `kind` happened, without its content, rather than
     /// erroring or fabricating one.
@@ -954,7 +954,7 @@ pub struct LedgerEntryView {
     pub kind: String,
     pub issuer: String,
     pub subject: String,
-    /// `None` once this row's payload has been pruned (issue #208, a
+    /// `None` once this row's payload has been pruned (a
     /// hot-tier node with pruning enabled) — the entry itself, its hash,
     /// and its position in the chain/Merkle tree all survive regardless;
     /// only the content is gone. See [`Self::payload_pruned`].
@@ -981,9 +981,9 @@ pub struct LedgerEntryView {
 impl LedgerEntryView {
     /// Decodes this entry back into the same [`ProtocolEvent`] shape
     /// `outbox::drain_once` built it from — the read half of the
-    /// settlement/indexer boundary, used by `avalon rebuild-index` (issue
-    /// #43) to replay ledger history back through an `Indexer`. `None` for
-    /// a pruned payload (issue #208 — the entry survives, but its content
+    /// settlement/indexer boundary, used by `avalon rebuild-index`
+    /// to replay ledger history back through an `Indexer`. `None` for
+    /// a pruned payload (the entry survives, but its content
     /// doesn't) or an `issuer`/`subject` that isn't a well-formed
     /// `GlobalId`, which should never happen for a genuine ledger entry but
     /// is handled as a skip, not a panic. Same conversion
@@ -1010,13 +1010,13 @@ fn global_id_from_str(raw: &str) -> Option<avalon_protocol::ids::GlobalId> {
     serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
 }
 
-/// One committed batch — the unit of settlement (issue #38): entries are
+/// One committed batch — the unit of settlement: entries are
 /// hash-chained individually, but a batch is what `get_commitment` looks up
 /// and what `avalon inspect-ledger` prints boundaries for. `batch_root` is
 /// the real RFC 6962 Merkle Tree Hash of the whole ledger (not just this
-/// batch's own entries), covering every entry committed so far (issue
-/// #210) — not a per-batch sub-tree, and not the placeholder chain-tip
-/// value #38 shipped. Its corresponding `tree_size` (the leaf *count*, not
+/// batch's own entries), covering every entry committed so far
+/// — not a per-batch sub-tree, and not a placeholder chain-tip
+/// value. Its corresponding `tree_size` (the leaf *count*, not
 /// `last_seq`) is recorded separately in `signed_tree_heads`, not on this
 /// row — `seq` can have gaps (see module doc comment), so `last_seq` here
 /// is a row-identity bookmark, never a leaf count.
@@ -1029,7 +1029,7 @@ pub struct LedgerBatchView {
 }
 
 impl PostgresSettlementProvider {
-    /// Issue #564: `commit`/`finalize`'s shared idempotency check —
+    /// `commit`/`finalize`'s shared idempotency check —
     /// `Ok(None)` if `batch_id` has never been committed on this node,
     /// `Ok(Some(commitment))` if it has (a replayed retry). A thin
     /// `Option`-returning wrapper around [`SettlementProvider::get_commitment`],
@@ -1048,7 +1048,7 @@ impl PostgresSettlementProvider {
 
     /// Inserts `batch`'s events as `ledger_entries`, computes the
     /// resulting Merkle tree size/root, and inserts the `ledger_batches`
-    /// row — everything `commit`/`finalize` (issue #531) share, up to but
+    /// row — everything `commit`/`finalize` share, up to but
     /// not including who signs the resulting Signed Tree Head (a local
     /// key for `commit`, a caller-provided already-verified signature for
     /// `finalize`). Callers commit or roll back `tx` themselves; nothing
@@ -1068,8 +1068,8 @@ impl PostgresSettlementProvider {
         let mut first_seq: Option<i64> = None;
         let mut last_seq: i64 = 0;
 
-        // Entries stay hash-chained across batch boundaries (issue #38's
-        // invariant) — `prev_hash` continues from the ledger's global tip,
+        // Entries stay hash-chained across batch boundaries
+        // — `prev_hash` continues from the ledger's global tip,
         // not reset per batch. `batch_id` is what groups these rows as one
         // settlement unit; `ledger_entries_batch_id_fkey` is deferred to the
         // end of this transaction, so it's fine that `ledger_batches` doesn't
@@ -1111,7 +1111,7 @@ impl PostgresSettlementProvider {
         let first_seq = first_seq.expect("checked batch.events is non-empty above");
 
         // batch_root is the real RFC 6962 Merkle Tree Hash of the whole
-        // ledger, computed via the incremental tree (issue #349): fast path
+        // ledger, computed via the incremental tree: fast path
         // extends `leaf_cache`'s tree by this batch's own already-computed
         // hashes — O(log n) per leaf, not O(n) — assuming this process is
         // the ledger's sole writer; falls back to a full re-fetch and
@@ -1186,7 +1186,7 @@ impl PostgresSettlementProvider {
 
     /// Inserts a Signed Tree Head row using an already-built
     /// [`SignedTreeHead`] — shared by `commit` (locally signed) and
-    /// `finalize` (issue #531, caller-signed and independently verified
+    /// `finalize` (caller-signed and independently verified
     /// before this is ever called).
     async fn insert_signed_tree_head(
         &self,
@@ -1296,7 +1296,7 @@ impl PostgresSettlementProvider {
     /// closes both failure modes, and the transaction rolls back on
     /// either, so a rejected finalize never burns real `seq`/tree state.
     ///
-    /// **Idempotent on a replayed `batch_id`** (issue #564): if `batch.id`
+    /// **Idempotent on a replayed `batch_id`**: if `batch.id`
     /// already has a `ledger_batches` row — this exact finalize call was
     /// already applied, e.g. the caller retried after a timeout without
     /// knowing whether its first attempt landed — this returns that
@@ -1392,7 +1392,7 @@ impl SettlementProvider for PostgresSettlementProvider {
         let (tree_size, batch_root, committed_at) =
             self.insert_batch_and_compute_root(&mut tx, batch).await?;
 
-        // Signed Tree Head (issue #210/#39): one per batch commit, in this
+        // Signed Tree Head: one per batch commit, in this
         // same transaction, STH-only signing — no per-entry signature is
         // ever produced. The private key is loaded from the environment
         // fresh here (never persisted) — see `crate::sth`'s doc comment.
@@ -1423,7 +1423,7 @@ impl SettlementProvider for PostgresSettlementProvider {
     /// replay, and a from-scratch RFC 6962 Merkle recompute against
     /// `commitment.proof`. See `docs/architecture/settlement-implementation-notes.md`'s
     /// "`verify`'s two independent checks" bullet for why both exist and
-    /// how pruned payloads (#208) interact with each.
+    /// how pruned payloads interact with each.
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {
         let rows = sqlx::query(
             r#"
@@ -1720,7 +1720,7 @@ mod tests {
         assert_eq!(root, hash_entry("avalon-test", GENESIS_HASH, &entries[0]));
     }
 
-    // --- Merkle root / STH (issue #210) ---
+    // --- Merkle root / STH ---
     //
     // `merkle.rs` owns MTH correctness against RFC 6962 reference vectors;
     // these tests are specifically about what `commit`/`verify` build on top

@@ -8,8 +8,8 @@
 // GET /identities/profiles shape used elsewhere for roster resolution.
 // Issue #460 added an actions row (add/remove friend, block/unblock) and
 // rendering of effective_main_guild/banner_url, which this card already
-// fetched but never showed. Issue #465 added a "Published by connected
-// apps" card: GET /identities/:id/integrator-data (#384) already resolves
+// fetched but never showed. Added a "Published by connected
+// apps" card: GET /identities/:id/integrator-data already resolves
 // everything a connected integrator has published about this identity,
 // pre-filtered to visible fields, but nothing in the Hub read it.
 import { computed, onMounted, ref } from 'vue'

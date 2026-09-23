@@ -117,24 +117,16 @@ applies its own policy. If Integrator A later revokes the result (a disputed mat
 a scoring correction), the history shows both the issuance and the
 [revocation](./revocation.md); Integrator B re-evaluates.
 
-## Today in the repo
+## Current implementation
 
-- Nothing integrator-event-specific exists. `crates/protocol/src/achievements.rs` has
-  `AchievementAttestation` and `crates/protocol/src/ids.rs` has `GlobalId`, both
-  of which the design reuses.
-- The schema reference field (#88) lives on `AchievementDefinition.schema`
-  (`Option<GlobalId>`), not on `AchievementAttestation` itself — an
-  attestation only references its achievement, which carries the schema.
-- Filed as on-hold: not a milestone-1 item, tracked now so the attestation and
-  event designs don't preclude it.
+Nothing integrator-event-specific exists yet as its own module.
+`crates/protocol/src/achievements.rs`'s `AchievementAttestation` and
+`crates/protocol/src/ids.rs`'s `GlobalId` are what the design reuses. The schema
+reference field lives on `AchievementDefinition.schema` (`Option<GlobalId>`), not on
+`AchievementAttestation` itself — an attestation only references its achievement,
+which carries the schema.
 
-## Decisions and tickets
-
-- [#88](https://github.com/LunarVagabond/avalon-protocol/issues/88) — integrator
-  event result attestations (on-hold).
-- [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
-  attestation trust model.
-- [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event kind
-  catalogue, where the game-event schema is registered.
-- [#30](https://github.com/LunarVagabond/avalon-protocol/issues/30) — Epic:
-  Achievements & Attestations.
+This is filed as on-hold: not currently prioritized work, tracked now so the
+attestation and event designs already in place don't preclude it.
+</content>
+</invoke>

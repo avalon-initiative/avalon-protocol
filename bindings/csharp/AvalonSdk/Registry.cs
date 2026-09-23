@@ -1,6 +1,5 @@
 // Public recognition relationships and the Integrator Registry's derived
-// metrics (issue #89/#95/#96/#261, closed out for C#'s share of #741 by
-// #748) — mirrors crates/server/src/recognitions.rs and registry.rs.
+// metrics — mirrors crates/server/src/recognitions.rs and registry.rs.
 //
 // publish_recognition/revoke_recognition are challenge-authenticated only
 // (an integrator declaring/withdrawing its own policy about another
@@ -83,9 +82,9 @@ namespace Avalon.Sdk
                 $"{ServerUrl}/integrations/{slug}/recognized-by", ct).ConfigureAwait(false)
             ?? new List<Avalon.Sdk.Generated.RecognitionResponse>();
 
-        /// <summary>GET /integrations/{slug}/registry (issue #261) — four durable-derived
+        /// <summary>GET /integrations/{slug}/registry — four durable-derived
         /// metrics about an integrator, each carrying its own definition/class label and
-        /// whether it's exact or floor-coarsened for a small cohort (issue #96). No composite
+        /// whether it's exact or floor-coarsened for a small cohort. No composite
         /// score, no ranking. Public, unauthenticated.</summary>
         public async Task<Avalon.Sdk.Generated.IntegratorRegistryResponse> GetIntegratorRegistryAsync(
             string slug, CancellationToken ct = default) =>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Convention: no <style> blocks and no non-trivial logic in .vue files.
-// A clickable summary card for the integrator directory (issue #270) — the
+// A clickable summary card for the integrator directory — the
 // caller decides what a click does (usually a route push to the integrator's
 // profile page); this component knows nothing about routing. Formatting
 // (e.g. a relative/localized registeredAt) is the caller's job, same

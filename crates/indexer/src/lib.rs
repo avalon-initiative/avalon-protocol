@@ -11,7 +11,7 @@
 //! conflated — settlement is not querying; see
 //! `docs/architecture/settlement.md` and issue #75.
 //!
-//! [`postgres::PostgresIndexer`] is the first real [`Indexer`] (issue #42):
+//! [`postgres::PostgresIndexer`] is the first real [`Indexer`]:
 //! `projections` holds one module per read model (profiles, friendships,
 //! guild rosters, attestations), each exposing a pure `decode` (event →
 //! typed write, no I/O, unit-testable without Postgres) and an `apply`

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Issue #728: diffs `server`'s real, SDK-facing route table (`docs/generated/
-openapi.json`, #723) against each SDK's (`bindings/csharp`, `bindings/ts`,
+"""Diffs `server`'s real, SDK-facing route table (`docs/generated/
+openapi.json`) against each SDK's (`bindings/csharp`, `bindings/ts`,
 and Rust when checked out locally) actual HTTP call sites, and fails when the
 server has an endpoint no SDK declares.
 
-Issue #775 (epic #771) moved the Rust SDK's source to the `avalon-sdks`
+The Rust SDK's source moved to the `avalon-sdks`
 repo — this script skips Rust coverage checking when `crates/sdk` isn't
 present locally rather than reporting a false wall of missing routes; a
-real cross-repo version of this check is future work, not part of #775.
+real cross-repo version of this check is future work.
 
 This deliberately does NOT try to understand each SDK's method-naming
 conventions (a Rust `friends()` vs. a C# `FriendsAsync()` vs. a TS
@@ -22,7 +22,7 @@ are treated as equivalent without caring what either side calls it.
 Per-language extraction, in order of preference within each SDK (see each
 `extract_*` function's own comment for why):
 
-- Rust (`crates/sdk/src/**/*.rs`): the account/auth domain (issue #724)
+- Rust (`crates/sdk/src/**/*.rs`): the account/auth domain
   calls through `crate::generated::paths::<tag>::<OPERATION_ID>` constants
   (build.rs-generated from the *whole* spec, not just the account domain —
   see `crates/sdk/build.rs`'s `generate_path_stubs`), which we resolve back
@@ -356,7 +356,7 @@ def main() -> int:
         "typescript (bindings/ts)": extract_ts_calls(),
         "csharp (bindings/csharp)": extract_csharp_calls(),
     }
-    # Issue #775 (epic #771): the Rust SDK physically moved to the avalon-sdks
+    # The Rust SDK physically moved to the avalon-sdks
     # repo, so its source isn't checked out here to scan. Skip it rather than
     # silently reporting every route as missing (an empty `rglob` on a
     # nonexistent directory yields nothing, not an error) — real Rust

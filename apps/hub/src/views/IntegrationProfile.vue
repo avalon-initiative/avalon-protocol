@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Per-integrator profile page (issue #270, first buildable slice of #90):
+// Per-integrator profile page:
 // GET /integrations/{slug}'s public fields plus GET /integrations/{slug}/registry's five
-// metrics (#261), each rendered through AvalonMetricTile with its
+// metrics, each rendered through AvalonMetricTile with its
 // definition and class label — never a bare number. `status` renders
 // through a visibly distinct badge whenever it isn't "active". Key history
 // (#84/#80, both since decided/closed) now reads from GET /integrations/{slug}/keys.

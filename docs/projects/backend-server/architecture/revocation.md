@@ -6,9 +6,7 @@ and later revoked leaves two facts in durable history — "Integrator A issued i
 the issuer level: suspending or revoking an issuer is an appended entry, not a
 deletion of everything it ever signed.
 
-Narrative context: [`../stakeholders/Proposal.md` §9](../../../stakeholders/Proposal.md#9-trust-and-attestations)
-and the durable-history rule in
-[ADR #75](https://github.com/LunarVagabond/avalon-protocol/issues/75).
+Narrative context: [`../stakeholders/Proposal.md` §9](../../../stakeholders/Proposal.md#9-trust-and-attestations).
 
 ## Individual revocation
 
@@ -35,7 +33,7 @@ User X — Dragon Slayer (Ashen Realms)
 The original issuance remains observable. The Hub shows both, not an empty
 slot ([`./hub.md`](../../hub/architecture/hub.md)).
 
-## Reason code vocabulary and visibility (#534)
+## Reason code vocabulary and visibility
 
 Not every revocation reason means the same thing for what should stay
 visible. `reason_code` is `avalon_protocol::revocation::RevocationReasonCode`
@@ -73,14 +71,14 @@ shown at all.
 
 **Only known codes get a defined policy; an unrecognized code defaults to
 visible.** `RevocationReasonCode` mirrors `ProtocolEventKind`'s own
-`Known`/`Other` open-enum shape (#82) — a code this build doesn't
-recognize (including every revocation recorded before #534 existed, e.g.
-historical `"cheating_detected"` strings) decodes to `Other` rather than
-an error, and `Other`'s `hides_after_revocation()` is `false`. Staying
-visible is the safe default to fail toward; silently hiding history
-because a code wasn't recognized would be the wrong one. Adding a new
-known code later (with its own visibility policy) is purely additive —
-it never changes what an already-recorded reason code means.
+`Known`/`Other` open-enum shape — a code this build doesn't recognize
+(including every revocation recorded before this vocabulary existed, e.g.
+historical `"cheating_detected"` strings) decodes to `Other` rather than an
+error, and `Other`'s `hides_after_revocation()` is `false`. Staying visible
+is the safe default to fail toward; silently hiding history because a code
+wasn't recognized would be the wrong one. Adding a new known code later
+(with its own visibility policy) is purely additive — it never changes what
+an already-recorded reason code means.
 
 ## Issuer-level suspension and revocation
 
@@ -112,15 +110,6 @@ valid(attestation, history, at) =
 answers, and both must be answerable — see
 [`./issuers.md`](./issuers.md) for the key half.
 
-## What is being replaced
-
-`AchievementAttestation.revoked_at: Option<OffsetDateTime>` in
-`crates/protocol/src/achievements.rs` is a mutable field on the original record.
-That is an edit to history, not an addition to it. Its `is_valid(now)` also
-treats a *future-dated* `revoked_at` as "still valid until then", a
-scheduled-revocation semantic nobody asked for. Both go away under #85: the
-projection may cache a current status, but the record is the chain of entries.
-
 ## Who may revoke
 
 Only the original issuer, signing with a key valid at revocation time (or a
@@ -135,44 +124,41 @@ with its own audit trail — see
 Hub shows both. Integrator B's validity check flips at the revocation timestamp.
 Rebuilding the projection from history reproduces the same status.
 
-**F — Integrator A's signing key is compromised.** Integrator A (or the network, per
-#80) revokes the key as of time T. Claims signed at T−1 stay authentic and
-valid; claims signed at T+1 are rejected. Nothing historical is destroyed.
+**F — Integrator A's signing key is compromised.** Integrator A (or the network)
+revokes the key as of time T. Claims signed at T−1 stay authentic and valid;
+claims signed at T+1 are rejected. Nothing historical is destroyed.
 
 ## Mechanics
 
-Settled: the invariant above, and — as of
-[#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) (decided) —
-the mechanics too: a signed revocation entry (reason code, timestamp, signed
-by an issuer key valid at revocation time), supersession (an issuer can
-replace an attestation rather than revoke-and-reissue), reinstatement (a
-later entry can reverse a revocation — validity computed by walking history,
-never read from a flag), and issuer-level suspend/revoke as their own
-events. Consumer policy under issuer revocation stays the consumer's choice;
-no network-wide default is imposed. Implementation (replacing `revoked_at`
-with these entries) is [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85),
-still open.
+The invariant above, and the mechanics: a signed revocation entry (reason
+code, timestamp, signed by an issuer key valid at revocation time),
+supersession (an issuer can replace an attestation rather than
+revoke-and-reissue), reinstatement (a later entry can reverse a revocation —
+validity computed by walking history, never read from a flag), and
+issuer-level suspend/revoke as their own events. Consumer policy under issuer
+revocation stays the consumer's choice; no network-wide default is imposed.
+Individual attestation revocation (replacing a mutable `revoked_at` field
+with these entries) is implemented for the core case; supersession and
+reinstatement remain open.
 
-## Today in the repo
+## Current implementation
 
-- **Individual revocation, landed (#85), scoped to exactly scenario C.**
+- **Individual revocation, landed, scoped to exactly scenario C.**
   `avalon_protocol::achievements::AttestationStatus { Active, Revoked }` —
-  computed by [`attestation_status_at`], never a mutable field on the
-  attestation (`revoked_at` was already removed from
-  `AchievementAttestation` by #32, ahead of this ticket). `validity()`
-  (#33) now takes the computed `AttestationStatus` alongside the issuer's
+  computed by `attestation_status_at`, never a mutable field on the
+  attestation (`revoked_at` is not a field on `AchievementAttestation`).
+  `validity()` takes the computed `AttestationStatus` alongside the issuer's
   `IntegratorStatus`. `POST /attestations/{id}/revoke`
   (`crates/server/src/attestations.rs`) inserts an append-only row into a
   brand-new `attestation_revocations` table — `achievement_attestations`
   itself is never touched — requires the caller to authenticate as the
   attestation's *original* issuer, and additionally verifies an embedded
   signature over `revocation_signing_bytes` against that issuer's key
-  history at revocation time
-  (`avalon_chain::attestations::verify_signature`, the same generic core
-  `verify_authenticity` uses — one cryptographic check backing both
-  issuance and revocation, not two). Emits
+  history at revocation time (`avalon_chain::attestations::verify_signature`,
+  the same generic core `verify_authenticity` uses — one cryptographic
+  check backing both issuance and revocation, not two). Emits
   `achievement.revoked`/`milestone.revoked`. `GET /attestations/{id}`'s
-  `history` array now shows both `issued` and (if applicable) `revoked`
+  `history` array shows both `issued` and (if applicable) `revoked`
   entries with their reason. Verified live end to end, including
   scenario C itself (`crates/server/tests/attestation_revocations.rs`):
   before-revoke reads `valid`/1-entry history, after-revoke reads
@@ -180,72 +166,53 @@ still open.
   authenticity stays `authentic` throughout (revocation doesn't retroactively
   un-sign anything) — plus double-revocation and wrong-issuer-revokes
   rejection.
-- **Not built in this pass, honestly**: supersession and reinstatement.
-  Neither has a catalogued protocol event kind yet
-  (`docs/architecture/protocol-events.md` lists `achievement.revoked` and
-  `attestation.superseded`, but no attestation-level "reinstated" kind at
-  all), and neither is required by scenario C. `attestation_revocations`
-  is deliberately capped at one row per attestation
-  (`UNIQUE (attestation_id)`) precisely because there's no reinstatement
-  path to need more than one yet — lifting that constraint is what
-  building reinstatement will need to do.
+- **Not built yet, honestly**: supersession and reinstatement. Neither has a
+  catalogued protocol event kind yet
+  (`docs/projects/backend-server/architecture/protocol-events.md` lists
+  `achievement.revoked` and `attestation.superseded`, but no
+  attestation-level "reinstated" kind at all), and neither is required by
+  scenario C. `attestation_revocations` is deliberately capped at one row
+  per attestation (`UNIQUE (attestation_id)`) precisely because there's no
+  reinstatement path to need more than one yet — lifting that constraint is
+  what building reinstatement will need to do.
 - Issuer-level suspend/revoke/reinstate/deprecate transitions (a separate
-  axis from attestation revocation) remain exactly where #84 left them:
-  the `IntegratorStatus` variants exist and `validity()` already reads whichever
-  one is set, but nothing in this repo can transition an issuer into any
-  of them yet — that authorization model is still open, tracked
-  separately (see [issuers.md](issuers.md)).
+  axis from attestation revocation): the `IntegratorStatus` variants exist
+  and `validity()` already reads whichever one is set, but nothing in this
+  repo can transition an issuer into any of them yet — that authorization
+  model is still open (see [issuers.md](issuers.md)).
 - `crates/protocol/src/permissions.rs` — `PermissionGrant.revoked_at` still
   uses the mutable-field shape; grants are not promised-durable protocol
-  history (a projection concern, not covered by #81's ruling), left
-  untouched by this pass.
-- **Entity/instance deletion, landed (#533).** The same "append, never
-  erase" standard applied to Integrator Space instance data
-  ([`./integrator-space.md`](./integrator-space.md)) — a deleted
-  character (or any other integrator-published instance) gets a
-  `game_data.deleted` tombstone event (`crates/server/src/integrator_data.rs::delete_instance`)
+  history (a projection concern, left untouched here).
+- **Entity/instance deletion, landed.** The same "append, never erase"
+  standard applied to Integrator Space instance data
+  ([`./integrator-space.md`](./integrator-space.md)) — a deleted character
+  (or any other integrator-published instance) gets a `game_data.deleted`
+  tombstone event (`crates/server/src/integrator_data.rs::delete_instance`)
   referencing the original instance by id, never a physical delete or a
   mutation of the original `instance`/`published_at` fields. Differs
   slightly in mechanics from achievement revocation above: rather than a
   separate `attestation_revocations`-style table, the tombstone sets
   `deleted_at`/`delete_reason_code`/`delete_reason` columns directly on
-  `integrator_data_instances`' own row — the same shape this table
-  already used for `superseded_by` before #533 existed, so this reuses an
-  established local pattern rather than introducing a second one. The
-  substantive content (`instance`, `published_at`) is never touched
-  either way; only a lifecycle marker changes. `GET
-  /identities/{id}/integrator-data` filters `deleted_at IS NULL`, same
-  posture as its existing `superseded_by IS NULL` filter — a deleted
-  instance simply stops appearing there while staying fully observable in
-  raw ledger history and the indexer's own row. Live-verified end to end,
-  including a full rebuild from `ledger_entries` alone reproducing the
-  tombstoned projection state byte-for-byte
+  `integrator_data_instances`' own row — the same shape this table already
+  used for `superseded_by`, reusing an established local pattern rather
+  than introducing a second one. The substantive content (`instance`,
+  `published_at`) is never touched either way; only a lifecycle marker
+  changes. `GET /identities/{id}/integrator-data` filters `deleted_at IS
+  NULL`, same posture as its existing `superseded_by IS NULL` filter — a
+  deleted instance simply stops appearing there while staying fully
+  observable in raw ledger history and the indexer's own row.
+  Live-verified end to end, including a full rebuild from `ledger_entries`
+  alone reproducing the tombstoned projection state byte-for-byte
   (`crates/server/tests/rebuild_from_events.rs::rebuild_reproduces_integrator_data_deletion`).
-  **Scoping decision, made while building #534**: `GameDataDeletedPayload.reason_code`
-  deliberately stays a free-text string, not
-  `avalon_protocol::revocation::RevocationReasonCode`. #534's vocabulary
-  (`cheating`/`mistake`/`duplicate`/`policy_change`) describes *why an
-  issuer revoked something it issued* — a judgment call about validity.
-  Instance deletion here is the opposite shape: the *subject themselves*
-  choosing to delete their own published data (a character retired, an
-  account cleaned up), which isn't a validity judgment at all and doesn't
-  map onto that vocabulary. Always stays visible-with-a-marker either way
-  (see above) — there's no hidden-vs-visible question for this event to
-  answer, so there's nothing for the enum to gain here beyond what a
-  free-text reason already gives.
-
-## Decisions and tickets
-
-- [#75](https://github.com/LunarVagabond/avalon-protocol/issues/75) — ADR:
-  history is append-only.
-- [#81](https://github.com/LunarVagabond/avalon-protocol/issues/81) —
-  decision, closed: revocation mechanics (revocation entries, supersession,
-  reinstatement, issuer-status events), described above.
-- [#85](https://github.com/LunarVagabond/avalon-protocol/issues/85) —
-  implementation: replaced `revoked_at` with revocation entries for
-  individual attestations (landed, scenario C only — see above).
-  Supersession, reinstatement, and issuer-status transitions remain open
-  follow-up work, not solved by this pass.
-- [#80](https://github.com/LunarVagabond/avalon-protocol/issues/80) —
-  decision, closed: issuer keys (scenario F) — see
-  [issuers.md](issuers.md).
+  `GameDataDeletedPayload.reason_code` deliberately stays a free-text
+  string, not `avalon_protocol::revocation::RevocationReasonCode`: that
+  vocabulary describes *why an issuer revoked something it issued* — a
+  judgment call about validity. Instance deletion here is the opposite
+  shape: the *subject themselves* choosing to delete their own published
+  data (a character retired, an account cleaned up), which isn't a
+  validity judgment at all and doesn't map onto that vocabulary. Always
+  stays visible-with-a-marker either way — there's no hidden-vs-visible
+  question for this event to answer, so there's nothing for the enum to
+  gain here beyond what a free-text reason already gives.
+</content>
+</invoke>

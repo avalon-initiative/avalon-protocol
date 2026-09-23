@@ -2,16 +2,15 @@
 
 How to replace `AVALON_SETTLEMENT_SIGNING_KEY` — the key that signs this
 node's Signed Tree Heads (STHs) — without breaking a mirror's ability to
-verify this node's history. Scope decided in #300/#315: this covers
-routine rotation and the "an old key is no longer trusted" mechanics;
-it does not cover *how you decide* a key is compromised in the first
-place (see [`equivocation-response.md`](equivocation-response.md) for
-that judgment call) or alerting/paging (also #315, blocked on nothing now
-that #265's structured logging has landed, but not built yet).
+verify this node's history. This covers routine rotation and the "an old
+key is no longer trusted" mechanics; it does not cover *how you decide* a
+key is compromised in the first place (see
+[`equivocation-response.md`](equivocation-response.md) for that judgment
+call) or alerting/paging (not built yet).
 
 This is the settlement/log operator key specifically (`crates/protocol/src/sth.rs`)
-— a different key domain from issuer keys (#80/#84) or user keys (#73).
-Nothing here rotates those.
+— a different key domain from issuer keys or user keys. Nothing here
+rotates those.
 
 ## Why this needs a procedure at all
 
@@ -68,8 +67,8 @@ limitation above:
    during a transition window either — if a mirror updates its verify key
    before the authority rotates, or the authority rotates before every
    mirror has updated, that mirror's verification fails until both sides
-   agree. For the POC's small, coordinated operator set this means picking
-   a maintenance window and confirming everyone is ready before step 3, not
+   agree. For a small, coordinated operator set this means picking a
+   maintenance window and confirming everyone is ready before step 3, not
    relying on the protocol to make this safe automatically.
 3. Once every mirror confirms readiness, perform steps 1–4 from the
    single-node procedure above on the authority node.
@@ -89,3 +88,5 @@ If trust in the network's history up to that point cannot be
 re-established at all, a fresh `AVALON_NETWORK_ID` genesis is the fallback
 of last resort — see `docs/projects/backend-server/architecture/self-hosting.md` on why
 `network_id` is load-bearing, not just a label.
+</content>
+</invoke>

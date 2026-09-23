@@ -1,14 +1,14 @@
-//! Operator-internal, node-to-node RPC — issue #661, the foundational
-//! sub-issue of epic #291 (Node Role Separation). Once a Gateway process
-//! and its Indexer/Realtime/Settlement processes are genuinely separate
-//! (#662/#663/#664), the Gateway's call sites (today's direct in-process
+//! Operator-internal, node-to-node RPC — the foundational
+//! piece of Node Role Separation. Once a Gateway process
+//! and its Indexer/Realtime/Settlement processes are genuinely separate,
+//! the Gateway's call sites (today's direct in-process
 //! trait calls, e.g. `state.indexer.apply(...)`) need a way to reach a
 //! role that isn't running in the same process anymore. This module is
-//! that mechanism, built once here so #662-#665 don't each invent their
+//! that mechanism, built once here so each role doesn't invent its
 //! own wire format.
 //!
 //! **Explicitly distinct from `crate::settlement`'s `/ledger/*` mirror-sync
-//! protocol (issue #40).** That protocol is multi-operator and
+//! protocol.** That protocol is multi-operator and
 //! trust-minimized: independent Settlement nodes, run by different
 //! operators, verifying and mirroring one log with no assumption that the
 //! other side is honest. This protocol is the opposite: one operator's
@@ -47,7 +47,7 @@
 //! other two keys already establish.
 //!
 //! **Pattern proven here: the Indexer role.** `avalon_indexer::Indexer`
-//! (issue #42) is the cleanest first target — already a small, well-
+//! is the cleanest first target — already a small, well-
 //! defined trait (`apply`, `rebuild`) in a crate (`avalon-indexer`) that
 //! depends only on `avalon-protocol`, not `avalon-server`. This module
 //! adds:
@@ -158,11 +158,11 @@ pub async fn rebuild_indexer(
 /// short of a caller-visible stall.
 const REMOTE_INDEXER_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A real `Indexer` (issue #42), backed by HTTP calls to another node's
+/// A real `Indexer`, backed by HTTP calls to another node's
 /// [`apply_indexer_event`]/[`rebuild_indexer`] endpoints instead of a
-/// local Postgres pool — the concrete, live-verified instance of #661's
+/// local Postgres pool — the concrete, live-verified instance of the
 /// remote-role pattern. Any code holding an `impl Indexer` (or, once
-/// #662 gets there, a `dyn Indexer`) can use this exactly as it would
+/// this becomes a `dyn Indexer`) can use this exactly as it would
 /// `avalon_indexer::postgres::PostgresIndexer`, without knowing the
 /// difference.
 #[derive(Clone)]
@@ -195,7 +195,7 @@ impl RemoteIndexer {
 
     /// `AVALON_INDEXER_REMOTE_URL`/`AVALON_INTERNAL_ROLE_KEY`. `Ok(None)`
     /// when the URL isn't set, meaning this node has no remote Indexer role
-    /// configured at all — `main.rs`'s own call site (#662) is what turns
+    /// configured at all — `main.rs`'s own call site is what turns
     /// that into a hard startup failure when the Indexer role is also
     /// excluded locally, exactly the same shape
     /// `nodes::realtime_mode_from_env` already establishes for

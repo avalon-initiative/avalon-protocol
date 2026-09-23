@@ -1,4 +1,4 @@
-//! Exercises `GET /me/history` (issue #121) against a real, running
+//! Exercises `GET /me/history` against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!
@@ -60,7 +60,7 @@ async fn seed_identity_session(pool: &PgPool) -> (Uuid, String) {
 /// own docs on why), only reads issuer/kind/subject/payload/timestamp back.
 async fn seed_ledger_entry(pool: &PgPool, identity_id: Uuid, kind: &str, verb: &str) {
     // ledger_entries.batch_id is NOT NULL with an FK to ledger_batches
-    // (issue #38) — this endpoint doesn't care about real batching either
+    // this endpoint doesn't care about real batching either
     // (same "junk is fine" reasoning as prev_hash/entry_hash above), but a
     // referenced row still has to exist.
     let batch_id = Uuid::new_v4();

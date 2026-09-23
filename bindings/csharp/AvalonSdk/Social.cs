@@ -1,4 +1,4 @@
-// Friends and presence — capability-gated reads/writes on Session (issue #17),
+// Friends and presence — capability-gated reads/writes on Session,
 // mirroring crates/sdk/src/social.rs.
 //
 // Every method here checks its own capability *before* making any request,
@@ -7,7 +7,7 @@
 //
 // update_presence/presence_of/subscribe_presence match the Rust SDK's own
 // documented gaps rather than inventing stricter behavior: no visibility
-// scoping on presence_of (issue #87), and update_presence is an identity
+// scoping on presence_of, and update_presence is an identity
 // publishing its own status, not an integrator-authority publish (no
 // IntegratorCredential/IntegratorBinding capability-grant system exists yet).
 
@@ -220,7 +220,7 @@ namespace Avalon.Sdk
         }
 
         /// <summary>
-        /// Subscribes to live presence updates for the given ids (issue #136), additive to
+        /// Subscribes to live presence updates for the given ids, additive to
         /// PresenceOfAsync's point-in-time reads. Connects to GET /ws/presence (auth via a
         /// ?token= query parameter — a websocket handshake can't carry a bearer header), sends
         /// one subscribe message, then forwards every pushed Presence into the returned
@@ -316,7 +316,7 @@ namespace Avalon.Sdk
             return channel.Reader;
         }
 
-        /// <summary>PUT /presence/{identity_id} (issue #749) — an <i>integrator</i> setting
+        /// <summary>PUT /presence/{identity_id} — an <i>integrator</i> setting
         /// presence on behalf of an identity within a capability grant (distinct from
         /// <see cref="UpdatePresenceAsync"/>, which is the identity publishing its own status
         /// directly). Requires presence.publish and this session's own configured

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// Cross-node login approval (epic #623, issue #640) — mobile-hub's own
+// Cross-node login approval — mobile-hub's own
 // entry point into the same approval logic
-// `apps/hub/src/views/CrossNodeLogin.vue` (#639) already established:
-// `lookupCrossNodeLogin` before rendering anything approvable (#642's
+// `apps/hub/src/views/CrossNodeLogin.vue` already established:
+// `lookupCrossNodeLogin` before rendering anything approvable (the
 // decided phishing-context requirement), then a locally signed grant
 // submitted directly to the *requesting* node — never a bearer token sent
 // anywhere, never this app's own configured server unless that happens to

@@ -1,6 +1,6 @@
 //! Real protobuf parsing/validation for Integrator Space schemas and
-//! instance data (issue #384's amendment — replacing the original
-//! "store `proto_source` opaquely, never parse it" stance). See
+//! instance data — replacing the original
+//! "store `proto_source` opaquely, never parse it" stance. See
 //! `docs/architecture/integrator-space.md`'s "Today in the repo" for the
 //! parser toolchain, the single-root-message convention, and why parsing
 //! happens in a scoped `TempDir` with no panics on integrator input.

@@ -1,6 +1,6 @@
-//! Signed Tree Heads — issue #210, implementing #39's decision (STH-only
+//! Signed Tree Heads — STH-only
 //! signing, matching Certificate Transparency precedent: no per-entry
-//! signatures, only the tree head is signed). One [`SignedTreeHead`] is
+//! signatures, only the tree head is signed. One [`SignedTreeHead`] is
 //! produced per batch commit (`PostgresSettlementProvider::commit`),
 //! always in the same transaction as the batch itself, and stored in the
 //! `signed_tree_heads` table (`crates/server/db/migrations/0024_signed_tree_heads`).
@@ -15,15 +15,15 @@
 //! - `AVALON_SETTLEMENT_VERIFY_KEY` — the corresponding 32-byte Ed25519
 //!   public key, hex-encoded. This is all `avalon inspect-ledger` or a
 //!   read-only mirror ever needs — verification must never require the
-//!   private key ([#39](https://github.com/LunarVagabond/avalon-protocol/issues/39)'s
-//!   "a mirror must be able to verify the log with the public key alone").
+//!   private key: a mirror must be able to verify the log with the public
+//!   key alone.
 //!   If unset but `AVALON_SETTLEMENT_SIGNING_KEY` is, the verify key is
 //!   derived from it as a single-operator dev convenience — see
 //!   [`load_verify_key_from_env`].
 //!
 //! `signing_key_id` is a caller-chosen label distinguishing this
-//! settlement-operator key domain from issuer keys (#80/#84) and user
-//! keys (#73) — three separate lifecycles, per #39's own scoping. It is
+//! settlement-operator key domain from issuer keys and user
+//! keys — three separate lifecycles. It is
 //! not a foreign key into anything; nothing here enforces its shape beyond
 //! "non-empty text."
 

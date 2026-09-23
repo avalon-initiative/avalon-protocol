@@ -1,15 +1,15 @@
-//! Attestation authenticity verification (issue #33, implementing ADR
-//! #76's first of three separate questions: authentic, valid, recognized —
-//! never merged into one boolean). Lives here, not in `avalon-protocol`,
+//! Attestation authenticity verification (the first of three separate
+//! questions: authentic, valid, recognized — never merged into one
+//! boolean). Lives here, not in `avalon-protocol`,
 //! for the same reason `sth::verify_tree_head` does: it needs real Ed25519
 //! verification, and this crate is where actual cryptographic checks
 //! against ledger-adjacent data already live.
 //!
 //! [`verify_authenticity`] is the one function both the issuing endpoint
-//! (`crates/server/src/achievements.rs`, #32) and a future independent
+//! (`crates/server/src/achievements.rs`) and a future independent
 //! reader (`GET /attestations/{id}`) should call — the same signature
 //! check either way, never reimplemented at each call site. [`verify_signature`]
-//! is its generic core, reused by revocation verification (#85) for the
+//! is its generic core, reused by revocation verification for the
 //! exact same reason — a different canonical byte shape
 //! ([`avalon_protocol::achievements::revocation_signing_bytes`]), the same
 //! "resolve the key at this point in time, then check the signature" logic.

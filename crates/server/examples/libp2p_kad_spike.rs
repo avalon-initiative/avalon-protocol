@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if mode == "dial" && !get_started {
                     // Give the listener's put_record a moment to actually
                     // land before querying for it — a real interest-lookup
-                    // caller (#583) will need its own retry/backoff for
+                    // caller will need its own retry/backoff for
                     // this, not assumed here.
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     swarm

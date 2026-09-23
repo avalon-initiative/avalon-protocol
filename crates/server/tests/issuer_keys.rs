@@ -1,4 +1,4 @@
-//! Exercises the issuer key-lifecycle endpoints (issue #84, implementing
+//! Exercises the issuer key-lifecycle endpoints against
 //! #80's decided two-tier root/operational key model) against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
@@ -313,7 +313,7 @@ async fn a_integrators_root_key_cannot_manage_a_different_integrators_keys() {
     assert_eq!(attempt.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
-/// `GET /integrations/{slug}/keys` (#90): public, no auth required, shows every
+/// `GET /integrations/{slug}/keys`: public, no auth required, shows every
 /// key an issuer has ever registered — root and operational, valid and
 /// revoked — as a timeline.
 #[tokio::test]

@@ -1,12 +1,12 @@
-//! Cross-node login pending-request lifecycle and verification — epic #623,
-//! issue #634, the server-side counterpart of
+//! Cross-node login pending-request lifecycle and verification — the
+//! server-side counterpart of
 //! `avalon_protocol::cross_node_login::CrossNodeLoginGrant`. See that
 //! module's doc comment for the wire shape and the security posture this
 //! preserves.
 //!
 //! Structurally close to `crate::device_pairing`'s create/poll/approve
 //! shape, but genuinely cross-node: approval never requires a live session
-//! on *this* (the requesting) node at all, unlike #307's same-node pairing
+//! on *this* (the requesting) node at all, unlike same-node pairing
 //! — the grant is signed and submitted from wherever the identity's own
 //! signing key lives, which may be a browser tab that has never talked to
 //! this node before.
@@ -15,17 +15,16 @@
 //! the identity's signing key locally, it can skip `start`/`poll` entirely
 //! and call [`submit`] directly with a grant it minted itself — the
 //! `start`+poll dance below exists only for the cross-device case (an
-//! unfamiliar browser, a console, a friend's machine), same distinction
-//! epic #623's own scope note draws.
+//! unfamiliar browser, a console, a friend's machine).
 //!
-//! **Cross-shard verification fallback (issue #656)**: a fresh
+//! **Cross-shard verification fallback**: a fresh
 //! `identity_signing_keys` lookup only ever finds a key this node already
 //! has locally (authored or mirrored) — without a fallback, cross-node
 //! login could never complete for an identity whose signing-key
 //! projection isn't already replicated to the node being logged into,
-//! which defeats a real part of what this epic exists to unlock. When the
-//! local lookup misses, [`verify_grant`] falls back to #635's locator
-//! (`crate::identity_locator::resolve`) plus #636's cross-shard
+//! which defeats a real part of what cross-node login exists to unlock. When the
+//! local lookup misses, [`verify_grant`] falls back to the locator
+//! (`crate::identity_locator::resolve`) plus cross-shard
 //! fetch-and-verify (`crate::cross_shard_fetch::fetch_verified_entries`)
 //! — see [`resolve_signing_key_cross_shard`]'s own doc comment for the
 //! shard-id simplification this relies on.
@@ -52,8 +51,8 @@ use utoipa::ToSchema;
 /// Identity-level signing keys (Layer 1, per
 /// `docs/architecture/identity-aggregate-view.md`'s two-layer model)
 /// typically live on one shared shard — using `"core"` here is a
-/// documented, honest simplification (see issue #656), not a silent
-/// assumption: #543's own per-integrator `issuer_keys` trust mechanism
+/// documented, honest simplification, not a silent
+/// assumption: the per-integrator `issuer_keys` trust mechanism
 /// never resolves anything for `"core"` (it has no owning integrator by
 /// construction), so [`core_shard_verify_keys`] supplies the real trust
 /// anchor instead.
@@ -169,12 +168,11 @@ pub struct LookupCrossNodeLoginResponse {
     pub status: String,
     pub requesting_context: String,
     pub expires_in: i64,
-    /// Epic #623, issue #649, implementing #642's decided requirement:
-    /// whether this node — the one the identity is being asked to log
+    /// Whether this node — the one the identity is being asked to log
     /// into — resolves to a real, registered integrator (or a known
     /// network anchor for the default shard). See
     /// [`resolve_requester_verification`]'s own doc comment for exactly
-    /// what "verified" means here. `#639`/`#640` render this as a visual
+    /// what "verified" means here. Rendered as a visual
     /// distinction, never a hard gate — an unverified requester still
     /// gets a prompt, just a clearly flagged one.
     pub integrator_verified: bool,
@@ -190,7 +188,7 @@ pub struct LookupCrossNodeLoginResponse {
 /// `lookup` call reaches it, since this handler's own `state` always
 /// describes the node it's running on — is a "verified" requester for
 /// cross-node login purposes, and a real display name to show in place of
-/// the raw `base_url` when it is. Two paths, deliberately reusing #543's
+/// the raw `base_url` when it is. Two paths, deliberately reusing the
 /// existing shard-trust mechanism rather than a second registry:
 ///
 /// - **An owned shard** (`own_shard_id` shaped `"{namespace}:{owner}"`,
@@ -268,10 +266,9 @@ fn is_verified_seed_node(
         .unwrap_or(false)
 }
 
-/// `GET /auth/cross-node/lookup?user_code=...` — unauthenticated, epic
-/// #623 issue #639's own gap: the Hub/mobile-hub approval screen has to
-/// show real context (#642's decided phishing-context requirement)
-/// *before* a human decides whether to approve, but `submit`/`deny` only
+/// `GET /auth/cross-node/lookup?user_code=...` — unauthenticated: the
+/// Hub/mobile-hub approval screen has to
+/// show real context before a human decides whether to approve, but `submit`/`deny` only
 /// ever take a `user_code` with no read path to go with it. Deliberately
 /// returns nothing beyond what's needed to render the prompt — never
 /// `request_code` (the polling device's own bearer credential, not the
@@ -464,14 +461,14 @@ pub struct SubmitGrantResponse {
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// Resolves the verify key for #636's cross-shard fetch of
-/// `"core"`-shard data. #543's own per-integrator `issuer_keys` mechanism
+/// Resolves the verify key for the cross-shard fetch of
+/// `"core"`-shard data. The per-integrator `issuer_keys` mechanism
 /// never resolves anything for `"core"`, so the trust anchor here is this
 /// network's own pinned key from `docs/trusted-networks.json`
 /// (`avalon_protocol::network_trust::bundled_trust_anchors`) — the exact same source
-/// issue #649's `resolve_requester_verification` already reuses for its
+/// `resolve_requester_verification` already reuses for its
 /// own `"core"`-shard trust path. Empty (not an error) when this network
-/// has no bundled entry, or its `verify_key` doesn't parse — #636's own
+/// has no bundled entry, or its `verify_key` doesn't parse — the cross-shard
 /// fetch simply reports every `"core"`-shard STH as unverifiable in that
 /// case, same as a genuinely unresolvable shard.
 fn core_shard_verify_keys(network_id: &str) -> HashMap<String, VerifyingKey> {
@@ -491,8 +488,8 @@ fn core_shard_verify_keys(network_id: &str) -> HashMap<String, VerifyingKey> {
     keys
 }
 
-/// The real gap issue #656 closes: falls back to #635's locator plus
-/// #636's cross-shard fetch-and-verify when `signing_key_id` isn't in this
+/// The real gap this closes: falls back to the locator plus
+/// cross-shard fetch-and-verify when `signing_key_id` isn't in this
 /// node's own local `identity_signing_keys` at all. Checks every candidate
 /// location the locator returns, in order, stopping at the first that
 /// yields a real, currently-unrevoked matching key — `None` once every
@@ -663,7 +660,7 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
         return Err(AppError::Unauthorized);
     }
 
-    // Destination binding (#610's lesson, applied here): a grant approved
+    // Destination binding: a grant approved
     // for a different node must never verify here, even with a perfectly
     // valid signature and nonce.
     if grant.destination_base_url != own_base_url(state)? {
@@ -678,7 +675,7 @@ async fn verify_grant(state: &AppState, grant: &CrossNodeLoginGrant) -> Result<U
                 }
                 key.public_key
             }
-            // Not local — issue #656's fallback. A cross-shard-fetched entry
+            // Not local — falls back to cross-shard resolution. A cross-shard-fetched entry
             // is already scoped to `grant.identity_id` by construction (it's
             // fetched from that exact identity's own `identity:{id}:...`
             // subject), so there's no separate identity-id cross-check to

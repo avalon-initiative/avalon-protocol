@@ -1,5 +1,4 @@
-//! RFC 6962 (Certificate Transparency) Merkle Tree Hash — issue #210,
-//! implementing the design decided in #40/#39 (see
+//! RFC 6962 (Certificate Transparency) Merkle Tree Hash (see
 //! `docs/architecture/settlement.md`'s "What is decided (continued)"
 //! section). This is a layered addition on top of `postgres.rs`'s existing
 //! sequential hash chain (`prev_hash`/`entry_hash`), not a replacement for
@@ -7,7 +6,7 @@
 //! `avalon inspect-ledger` already walks end-to-end; this module computes a
 //! single append-only Merkle tree over the *whole ledger's* `entry_hash`
 //! values, ordered by `seq`, which is what makes succinct inclusion/
-//! consistency proofs possible for a remote mirror (built in issue #211) —
+//! consistency proofs possible for a remote mirror —
 //! something a plain hash chain alone can't give without transferring every
 //! entry.
 //!
@@ -22,8 +21,7 @@
 //! ```
 //!
 //! Computed on demand from stored `entry_hash` values, in Postgres — no new
-//! storage, no embedded engine, per ADR #186 and this decision's own "no
-//! new storage required to start" note. An incremental frontier/proof-cache
+//! storage, no embedded engine required to start. An incremental frontier/proof-cache
 //! table remains a valid future optimization if recompute cost ever matters
 //! at real ledger scale; it isn't required to close this ticket.
 
@@ -111,7 +109,7 @@ fn decode_hex_leaves(hashes: &[String]) -> Result<Vec<Vec<u8>>, String> {
 //
 // where k is the largest power of two strictly less than n (as in `mth`),
 // and PATH(m, D[n]) is the audit path for leaf m in a tree of n leaves.
-// Reproduced here verbatim from RFC 6962 text (issue #211) — this is not
+// Reproduced here verbatim from RFC 6962 text — this is not
 // an approximation; it's the literal recursive definition, sharing `mth`'s
 // `split_point`/`node_hash` so the tree structure a proof is generated
 // against can never drift from the structure `mth` itself computes.
@@ -492,10 +490,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------
-    // Inclusion / consistency proofs (issue #211)
+    // Inclusion / consistency proofs
     // -------------------------------------------------------------
     //
-    // Correctness strategy, per the ticket's own bar ("don't just check the
+    // Correctness strategy ("don't just check the
     // proof looks reasonable"):
     //
     //  1. Every generated proof is round-tripped through `verify_path`/

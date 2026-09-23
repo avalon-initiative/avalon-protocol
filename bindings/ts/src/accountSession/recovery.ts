@@ -1,4 +1,4 @@
-// Social recovery (issue #201/#443) on AccountSession — M-of-N
+// Social recovery on AccountSession — M-of-N
 // guardian-based recovery when every passkey is lost. See
 // crates/server/src/recovery.rs.
 import { AccountSession } from './core.js'

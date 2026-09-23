@@ -1,4 +1,4 @@
-//! Exercises the guild events calendar + RSVP (issue #169) against a real,
+//! Exercises the guild events calendar + RSVP against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`.
 //!
@@ -131,7 +131,7 @@ fn event_body(title: &str) -> serde_json::Value {
     })
 }
 
-/// Same as [`event_body`] but with an explicit `public` flag (issue #448).
+/// Same as [`event_body`] but with an explicit `public` flag.
 fn event_body_with_public(title: &str, public: bool) -> serde_json::Value {
     let mut body = event_body(title);
     body["public"] = serde_json::json!(public);
@@ -447,7 +447,7 @@ async fn a_member_without_manage_channels_cannot_create_events() {
         &pool,
         Uuid::parse_str(&guild_id).unwrap(),
         member_id,
-        2, // plain member role index, no event_manage (issue #250)
+        2, // plain member role index, no event_manage
     )
     .await;
 
@@ -462,7 +462,7 @@ async fn a_member_without_manage_channels_cannot_create_events() {
     assert_eq!(create.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
-// --- Per-resource permission overrides (issue #250) ---------------------
+// --- Per-resource permission overrides ---------------------
 
 #[allow(clippy::too_many_arguments)]
 async fn set_override(
@@ -884,8 +884,8 @@ async fn requesting_another_guilds_event_id_under_a_different_guild_is_not_found
     assert_eq!(cross_guild.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
-/// Issue #448: a non-member of a `public` guild (independent of
-/// `recruiting`, #449) sees only that guild's `public` events via
+/// A non-member of a `public` guild (independent of
+/// `recruiting`) sees only that guild's `public` events via
 /// `GET /guilds/{id}/events`, not its member-only ones — and still can't
 /// RSVP or view the roster, since `public` only widens the *list*, never
 /// the RSVP/roster endpoints (those stay member-only per the ticket's
@@ -1027,7 +1027,7 @@ async fn a_member_sees_every_event_regardless_of_public_flag() {
     assert_eq!(events.len(), 2);
 }
 
-// --- view/view_details role overrides (issue #458) -----------------------
+// --- view/view_details role overrides -----------------------
 
 #[tokio::test]
 #[ignore]

@@ -1,4 +1,4 @@
-//! Integrator registration and server-to-server integrator authentication (issue #26).
+//! Integrator registration and server-to-server integrator authentication.
 //! See `docs/architecture/issuers.md` and `docs/architecture/registry.md`'s
 //! "Today in the repo" sections for registration, key rotation, and listing details.
 
@@ -33,7 +33,7 @@ use crate::state::AppState;
 const GAME_CHALLENGE_TTL_MINUTES: i64 = 5;
 const GAME_CHALLENGE_NONCE_BYTES: usize = 32;
 
-/// Default/maximum page size for `GET /integrations` (issue #270) — same
+/// Default/maximum page size for `GET /integrations` — same
 /// "small default, capped maximum" shape
 /// `guilds::DEFAULT_DISCOVER_PAGE_SIZE`/`MAX_DISCOVER_PAGE_SIZE` already use.
 const DEFAULT_GAMES_LIST_PAGE_SIZE: i64 = 20;
@@ -42,7 +42,7 @@ const MAX_GAMES_LIST_PAGE_SIZE: i64 = 100;
 /// Header names accepted for integrator/integrator server-to-server auth.
 ///
 /// `x-avalon-integrator-*` is the original name; `x-avalon-integrator-*` is the
-/// generic replacement added by #293 (mirroring #282's `IntegratorCategory`
+/// generic replacement (mirroring the `IntegratorCategory`
 /// generalization on the server's public API). Both are accepted from any
 /// caller indefinitely — see [`header_value`] — but this repo's own
 /// outbound code (SDK, CLI) sends only the `integrator` name from now on.
@@ -56,7 +56,7 @@ const INTEGRATOR_SIGNATURE_HEADER: &str = "x-avalon-integrator-signature";
 /// later authenticate.
 const SUPPORTED_KEY_ALGORITHM: &str = "ed25519";
 
-/// `pub(crate)` so `connections.rs` (#27/#83) can build the same
+/// `pub(crate)` so `connections.rs` can build the same
 /// `game:<slug>:self:<verb>` `GlobalId` shape for `game.binding_established`/
 /// `game.binding_ended` subjects, rather than reimplementing this format.
 pub(crate) fn integrator_ref(slug: &str, verb: &str) -> GlobalId {
@@ -65,15 +65,15 @@ pub(crate) fn integrator_ref(slug: &str, verb: &str) -> GlobalId {
 
 /// Generic form of [`integrator_ref`] — `<namespace>:<slug>:self:<verb>` for any
 /// issuer category's namespace (`"game"`/`"app"`/`"service"`, matching
-/// `IntegratorCategory::as_str()`). `pub(crate)` so `achievements.rs` (#324)
+/// `IntegratorCategory::as_str()`). `pub(crate)` so `achievements.rs`
 /// can mint the same shape for `App`/`Service` issuers, not just `Game`.
 pub(crate) fn issuer_ref(namespace: &str, slug: &str, verb: &str) -> GlobalId {
     GlobalId::new(namespace, slug, "self", verb)
 }
 
 /// The category (`integrator`/`app`/`service`) a registered integrator/app/service was
-/// recorded under — what determines its claim vocabulary (#324:
-/// `IntegratorCategory::claim_kind`). `pub(crate)` so `achievements.rs` can
+/// recorded under — what determines its claim vocabulary
+/// (`IntegratorCategory::claim_kind`). `pub(crate)` so `achievements.rs` can
 /// reject a caller acting under the wrong claim-vocabulary route (an
 /// `Issuer::Game` hitting `/integrations/{slug}/milestones`, or vice versa)
 /// rather than silently accepting a mismatched label.
@@ -96,7 +96,7 @@ pub(crate) async fn fetch_integrator_category(
     Ok(IntegratorCategory::parse(&category_raw).unwrap_or(IntegratorCategory::Game))
 }
 
-/// The issuer's current `IntegratorStatus` (issue #33's `Validity` check — see
+/// The issuer's current `IntegratorStatus` (`Validity` check — see
 /// `avalon_protocol::achievements::validity`). Same "defaults to `Active`
 /// on an unparseable value rather than panicking a live request" posture
 /// as [`fetch_integrator_category`], for the same reason: the column only ever
@@ -116,8 +116,8 @@ pub(crate) async fn fetch_integrator_status(
 
 /// The batched sibling of [`fetch_integrator_category`]/
 /// [`fetch_integrator_status`] — one query for every id in `integrator_ids`
-/// instead of two queries per id, for a caller (issue #377's
-/// `list_my_achievements`) building a response across many attestations at
+/// instead of two queries per id, for a caller (`list_my_achievements`)
+/// building a response across many attestations at
 /// once. An id with no matching row is simply absent from the result map,
 /// same "caller decides how to handle a miss" posture
 /// [`crate::handlers::list_profiles`] already takes for its own batch read.
@@ -182,7 +182,7 @@ pub struct CreateIntegratorRequest {
     #[serde(default)]
     pub requested_capabilities: Vec<String>,
     pub initial_key: InitialKeyRequest,
-    /// `integrator` / `app` / `service` (#282); omitted means `integrator`.
+    /// `integrator` / `app` / `service`; omitted means `integrator`.
     #[serde(default)]
     pub category: Option<String>,
 }
@@ -279,7 +279,7 @@ pub async fn register_integrator(
         .await?;
     }
 
-    // #80/#84: the key registered here is always `root` — it doubles as
+    // The key registered here is always `root` — it doubles as
     // the issuer's root key and its first operational key by default (any
     // non-revoked, non-expired key may sign attestations regardless of
     // role; only key-*set* changes require root specifically).
@@ -304,7 +304,7 @@ pub async fn register_integrator(
         issuer: integrator_ref(&body.slug, "registered"),
         subject: integrator_ref(&body.slug, "registered"),
         // Durable ledger payload key: stays `developer` even though the
-        // Rust/API field is now `owner_name` (#290) — see
+        // Rust/API field is now `owner_name` — see
         // `GameRegisteredPayload::developer`.
         payload: serde_json::to_value(GameRegisteredPayload {
             game_id: integrator_id,
@@ -373,7 +373,7 @@ pub struct IntegratorPublicResponse {
 
 /// A public read of an integrator's registration — no credential fields, unlike
 /// [`IntegratorResponse`] (which only `register_integrator` itself ever returns, to the
-/// registrant, once). This is what the Hub's consent view (#27) and
+/// registrant, once). This is what the Hub's consent view and
 /// `connections.rs`'s `POST /integrations/{slug}/connect` (to validate approved
 /// capabilities against what the integrator actually declared) both read; same
 /// visibility level `crates/server/src/guilds.rs`'s `get_guild` uses — no
@@ -421,8 +421,8 @@ pub async fn get_integrator(
     }))
 }
 
-/// `sort=` values `GET /integrations` (issue #270) accepts — deliberately just
-/// these two, matching #89's "no ranking, no score" invariant: `newest`
+/// `sort=` values `GET /integrations` accepts — deliberately just
+/// these two, matching the "no ranking, no score" invariant: `newest`
 /// (default) and `name`, mirroring `guilds::DiscoverSort` minus the
 /// membership-derived `most_members` option integrators have no equivalent of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,7 +530,7 @@ fn build_integrators_list_query(
     builder
 }
 
-/// `GET /integrations?q=&sort=&limit=&cursor=` (issue #270). Public, unauthenticated
+/// `GET /integrations?q=&sort=&limit=&cursor=`. Public, unauthenticated
 /// — same visibility level [`get_integrator`] already uses. See the module doc
 /// comment for the pagination/sort design.
 #[utoipa::path(
@@ -626,7 +626,7 @@ pub async fn create_integrator_challenge(
 }
 
 /// Reads a header by trying `new_name` first, then `old_name` — either
-/// name is accepted from a caller (#293), preferring the generic
+/// name is accepted from a caller, preferring the generic
 /// `integrator` name when both happen to be present.
 fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AppError> {
     headers
@@ -657,8 +657,8 @@ fn issuer_key_from_row(row: &sqlx::postgres::PgRow) -> Result<IssuerKey, AppErro
 }
 
 /// Every key (any role, any status) this issuer has ever registered —
-/// exactly the "issuer's key set" #84's `resolve_valid_signing_key`/
-/// `resolve_valid_root_key` search over. `pub(crate)` so #32's attestation
+/// exactly the "issuer's key set" `resolve_valid_signing_key`/
+/// `resolve_valid_root_key` search over. `pub(crate)` so attestation
 /// issuance can resolve which of an issuer's keys signed a given
 /// attestation, at that attestation's own point in time — not just
 /// whichever key happens to be valid right now.
@@ -705,10 +705,10 @@ pub(crate) async fn fetch_issuer_keys_batch(
     Ok(result)
 }
 
-/// `GET /integrations/{slug}/keys` (#90) — public, unauthenticated: an issuer's
+/// `GET /integrations/{slug}/keys` — public, unauthenticated: an issuer's
 /// full key history (any role, any status), the read side of
 /// [`add_issuer_key`]/[`revoke_issuer_key`]. Public keys are already public
-/// by definition, and #90's design calls for the Hub to show an integrator's "key
+/// by definition, and the design calls for the Hub to show an integrator's "key
 /// history and status" on its profile page — nothing here is sensitive the
 /// way the integrator's own root-key-authenticated endpoints are. Ordered oldest
 /// first so a viewer reads it as a timeline.
@@ -743,9 +743,8 @@ pub async fn list_issuer_keys(
 
 /// Shared core of [`authenticate_integrator`]/[`authenticate_integrator_root`]: verifies
 /// an integrator's server-to-server request via the challenge-response scheme this
-/// module's doc comment describes (the milestone-1 stand-in pending #80 —
-/// now decided, this scheme's own future is a separate matter #84 doesn't
-/// touch). Reads `key_id` / `challenge_id` / a base64 detached Ed25519
+/// module's doc comment describes (a milestone-1 stand-in, now decided,
+/// with this scheme's own future a separate matter). Reads `key_id` / `challenge_id` / a base64 detached Ed25519
 /// signature from fixed headers, consumes the matching `integrator_challenges` row
 /// with a single `DELETE ... RETURNING` — the same single-use pattern
 /// `handlers::register_finish` uses for `webauthn_ceremonies`, so a captured
@@ -753,7 +752,7 @@ pub async fn list_issuer_keys(
 /// then verifies the signature against the stored public key for that
 /// `key_id` via [`verify_event_signature`]. Returns the authenticated integrator's
 /// id and the full [`IssuerKey`] record that authenticated it, so callers
-/// can apply their own role/point-in-time check (#80/#84) — this function
+/// can apply their own role/point-in-time check — this function
 /// itself only proves "this request was signed by whichever key `key_id`
 /// names", nothing about whether that key is currently valid or what role
 /// it holds.
@@ -804,9 +803,9 @@ async fn authenticate_integrator_key(
 }
 
 /// Authenticates an integrator via any currently-valid key, root or operational
-/// (#80/#84 — role only gates key-*set* changes, never ordinary
+/// (role only gates key-*set* changes, never ordinary
 /// integrator-credentialed calls). Returns the authenticated integrator's id.
-/// `pub(crate)` so integrator-authenticated endpoints (#27's capability grants,
+/// `pub(crate)` so integrator-authenticated endpoints (capability grants,
 /// achievement definitions, etc.) can reuse it.
 pub(crate) async fn authenticate_integrator(
     state: &AppState,
@@ -819,8 +818,8 @@ pub(crate) async fn authenticate_integrator(
     Ok(integrator_id)
 }
 
-/// Authenticates an integrator via a currently-valid **root** key specifically
-/// (#80/#84) — what [`add_issuer_key`]/[`revoke_issuer_key`] require, since
+/// Authenticates an integrator via a currently-valid **root** key specifically —
+/// what [`add_issuer_key`]/[`revoke_issuer_key`] require, since
 /// only a root key may authorize a key-set change. An otherwise-valid
 /// operational key fails this with the same [`AppError::IssuerKeyNotRoot`]
 /// a caller would see for a role it doesn't hold, not a generic auth
@@ -849,9 +848,9 @@ pub struct AddIssuerKeyRequest {
     pub public_key: String,
     /// `"root"` or `"operational"` — see `avalon_protocol::integrators::KeyRole`.
     pub role: String,
-    /// `"attestation"` (the default, omit for existing pre-#543 caller
+    /// `"attestation"` (the default, omit for existing pre-existing caller
     /// behavior) or `"shard_settlement"` — see
-    /// `avalon_protocol::integrators::KeyPurpose`, issue #543.
+    /// `avalon_protocol::integrators::KeyPurpose`.
     #[serde(default = "default_key_purpose")]
     pub purpose: String,
     #[serde(default, with = "time::serde::rfc3339::option")]
@@ -880,7 +879,7 @@ pub struct IssuerKeyResponse {
     pub revoked_at: Option<OffsetDateTime>,
 }
 
-/// `POST /integrations/{slug}/keys` (#84, implementing #80's decided two-tier key
+/// `POST /integrations/{slug}/keys` (implementing the decided two-tier key
 /// model) — adds a new key to the issuer's key set. Requires the caller to
 /// authenticate as the named `slug` with a currently-valid **root** key
 /// ([`authenticate_integrator_root`]); an operational key, or a root key
@@ -975,7 +974,7 @@ pub struct RevokeIssuerKeyRequest {
     pub reason: Option<String>,
 }
 
-/// `POST /integrations/{slug}/keys/{key_id}/revoke` (#84) — revokes a key in the
+/// `POST /integrations/{slug}/keys/{key_id}/revoke` — revokes a key in the
 /// issuer's key set (root or operational; a root key can revoke itself, the
 /// same "any key genuinely under your control" trust already implied by
 /// authenticating as root at all). Same root-key-of-the-named-issuer

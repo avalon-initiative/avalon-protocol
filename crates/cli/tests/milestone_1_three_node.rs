@@ -1,12 +1,12 @@
-//! The 3-node variant of #65's milestone-1 walkthrough (issue #670): the
+//! The 3-node variant of the milestone-1 walkthrough: the
 //! same real social/achievement story, but proving it works across
 //! genuinely separate, independently-deployed nodes rather than one
 //! process. Gated `--ignored` since it needs this sandbox's own live
-//! 3-node topology (this sandbox + `avalon-peer` + `avalon-peer-two`, see
-//! `.claude/CLAUDE.md`), not just `make start`. Never runs under
+//! 3-node topology (this sandbox + `avalon-peer` + `avalon-peer-two`),
+//! not just `make start`. Never runs under
 //! `make test` or `make test-live`.
 //!
-//! `crates/cli/tests/milestone_1_walkthrough.rs` (#65) already proves the
+//! `crates/cli/tests/milestone_1_walkthrough.rs` already proves the
 //! full vertical slice against one node — this test doesn't repeat that
 //! proof, it proves a different thing: that an identity has no
 //! operationally-relevant "home node" (`docs/architecture/nodes.md`'s own
@@ -14,14 +14,13 @@
 //! Every other action she takes — friending Player B, forming a guild,
 //! receiving an achievement — happens on Node 2, a node that has *never
 //! seen her before*, reached only through a real `POST
-//! /auth/cross-node/submit` (epic #623) whose verification Node 2 can only
+//! /auth/cross-node/submit` whose verification Node 2 can only
 //! complete by fetching her signing key cross-shard from Node 1 over the
-//! real DHT locator (#635) and a signed inclusion proof (#636) — not two
-//! local processes sharing one Postgres via schema isolation (as #656's
-//! own test already covers), genuinely separate, independently-deployed
-//! infrastructure.
+//! real DHT locator and a signed inclusion proof — not two
+//! local processes sharing one Postgres via schema isolation, genuinely
+//! separate, independently-deployed infrastructure.
 //!
-//! Reuses the exact same three-layer shape #65 established (`hub_side`:
+//! Reuses the exact same three-layer shape the walkthrough established (`hub_side`:
 //! raw HTTP; `game_side`: `avalon_sdk`/`avalon_protocol` only; the
 //! top-level test drives the real `avalon` CLI binary) — duplicated here
 //! rather than shared via a `tests/common` module, matching this crate's
@@ -413,10 +412,10 @@ mod hub_side {
         }
     }
 
-    /// Issue #635: polls `verifier_base`'s own `GET /identities/{id}/locations`
+    /// Polls `verifier_base`'s own `GET /identities/{id}/locations`
     /// until it resolves `owner_base`'s real location — the real DHT
-    /// propagation #670 depends on, not a fixed sleep. Same pattern
-    /// `crates/server/tests/cross_node_login_cross_shard.rs` (#656) already
+    /// propagation this test depends on, not a fixed sleep. Same pattern
+    /// `crates/server/tests/cross_node_login_cross_shard.rs` already
     /// established for two local processes, here against real,
     /// independently-deployed nodes instead.
     pub async fn wait_for_locator_propagation(
@@ -770,7 +769,7 @@ async fn define_dragon_slayer(
 }
 
 /// Node URLs for the real 3-node sandbox topology — this sandbox's own
-/// server plus the two disposable dev peers (`.claude/CLAUDE.md`).
+/// server plus the two disposable dev peers.
 /// Overridable via env for a future differently-addressed topology.
 fn node1_url() -> String {
     std::env::var("AVALON_NODE1_URL").unwrap_or_else(|_| "http://192.168.7.113:8080".to_string())
@@ -786,8 +785,8 @@ fn node3_url() -> String {
 /// subsequent action — friending Player B, forming a guild, receiving and
 /// having an achievement verified — happens on Node 2 and Node 3, nodes
 /// that never saw her register, reached only through a real cross-node
-/// login (#623) that Node 2/3 can only complete by fetching her signing
-/// key cross-shard (#636) from Node 1 over the real DHT locator (#635).
+/// login that Node 2/3 can only complete by fetching her signing
+/// key cross-shard from Node 1 over the real DHT locator.
 /// Proves `docs/architecture/nodes.md`'s own claim — "an identity has no
 /// home node in any operationally ongoing sense" — against genuinely
 /// separate, independently-deployed infrastructure, not two local
@@ -825,7 +824,7 @@ async fn identity_has_no_operational_home_node_across_real_separate_infrastructu
     // Node 2, submits a grant signed with her Node-1-registered key
     // directly to Node 2. Node 2 has no local copy of her signing key, so
     // this only succeeds if it genuinely fetches and verifies it
-    // cross-shard from Node 1 (#636) — the real proof #670 exists for.
+    // cross-shard from Node 1 — the real proof this test exists for.
     let alice_token_on_node2 =
         hub_side::cross_node_login(&http, &node2, alice.identity_id, &alice_key).await;
     let alice_on_node2 = hub_side::Player {

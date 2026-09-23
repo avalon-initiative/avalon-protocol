@@ -1,10 +1,10 @@
-//! Exercises the mirror-watcher's read-side surface (issue #299) against a
+//! Exercises the mirror-watcher's read-side surface against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`, same convention
-//! `tests/settlement.rs` (#211) already uses.
+//! `tests/settlement.rs` already uses.
 //!
 //! This ticket's POC topology is "one canonical Settlement authority, one
-//! mirror node watching it" (see the ticket body / issue #301), which
+//! mirror node watching it", which
 //! needs two real `avalon-server` processes to exercise end-to-end —
 //! not available in this sandbox even with a live Postgres reachable. What
 //! *is* exercisable against a single running server plus its own Postgres:
@@ -115,9 +115,9 @@ async fn entry_rank(pool: &PgPool, seq: i64) -> i64 {
 /// This shared dev ledger's history has grown large enough over this
 /// project's life that a test walking every entry/proof up to a real
 /// `tree_size` can legitimately trip this server's own rate limiter
-/// (issue #363/#545, `AVALON_RATE_LIMIT_PER_MINUTE`) mid-loop — discovered
+/// (`AVALON_RATE_LIMIT_PER_MINUTE`) mid-loop — discovered
 /// live while investigating what looked at first like unrelated flakiness
-/// here (issue #604's own investigation). A 429 isn't a real failure, just
+/// here. A 429 isn't a real failure, just
 /// this test being a genuinely busy client of its own target server;
 /// retrying with backoff (respecting `Retry-After` when the server sends
 /// one) is what a real client should do too — see

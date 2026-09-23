@@ -6,7 +6,7 @@ there, covering what changes once that node needs to be reachable from
 anywhere other than `127.0.0.1`.
 
 `avalon-server` speaks plain HTTP only — there is no native TLS listener in
-the Rust app, and that's deliberate (see [Decisions and tickets](#decisions-and-tickets)).
+the Rust app, and that's deliberate (see [Current implementation](#current-implementation)).
 On `localhost` that's a non-issue: loopback traffic never leaves the machine.
 The moment `avalon-server` is reachable over any real network, it isn't —
 login and registration send credentials in the request body, and nothing but
@@ -58,9 +58,8 @@ either header — see [Server-side awareness](#server-side-awareness-of-running-
 they're there if a future feature needs them).
 
 If `avalon-server` runs behind a load balancer instead of directly behind
-Caddy (e.g. the multi-machine POC deployment tracked under milestone "POC
-Launch", epic [#301](https://github.com/LunarVagabond/avalon-protocol/issues/301)),
-put Caddy (or nginx) on each app node terminating TLS for that node, with the
+Caddy (e.g. a multi-machine deployment), put Caddy (or nginx) on each app
+node terminating TLS for that node, with the
 load balancer either doing TCP passthrough on 443 or itself terminating TLS
 and re-encrypting (or using plain HTTP) to each node over a private network —
 the requirement is just that no unencrypted hop crosses a network boundary
@@ -126,7 +125,7 @@ variables from `.env.example` (see
 [`../../../maintainers/local-development.md`](../../../maintainers/local-development.md)) simply pointed at production
 values instead of the local-dev ones.
 
-## Today in the repo
+## Current implementation
 
 - `avalon-server` has no TLS listener and no dependency that would give it
   one — `crates/server/src/main.rs` binds a plain `tokio::net::TcpListener`
@@ -135,18 +134,6 @@ values instead of the local-dev ones.
   inside the app.
 - `avalon-server` does not read the client's peer address anywhere in
   `crates/server/src`, so there's no `X-Forwarded-For`/trusted-proxy
-  handling to add for this ticket — if a future feature needs the real
-  client IP (abuse detection, geolocation, ...), that's the point to wire up
+  handling needed yet — if a future feature needs the real client IP (abuse
+  detection, geolocation, ...), that's the point to wire up
   `axum::extract::ConnectInfo` plus explicit proxy trust, not before.
-- Passwords are hashed with Argon2id at rest (`crates/server/src/auth.rs`)
-  independent of all of the above — this document is about the wire, not
-  storage.
-
-## Decisions and tickets
-
-- [#72](https://github.com/LunarVagabond/avalon-protocol/issues/72) —
-  `avalon-server` must run behind TLS before any non-local deployment
-  (this document)
-- [#301](https://github.com/LunarVagabond/avalon-protocol/issues/301) —
-  POC Launch epic; the first deployment this document's guidance applies to
-  for real

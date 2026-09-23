@@ -14,7 +14,7 @@ setActivePinia(pinia)
 app.use(pinia)
 
 // initialize() does a real GET /me round trip to build the AccountSession
-// (issue #712) — await it before mounting so the router's very first
+// — await it before mounting so the router's very first
 // navigation guard (`useSessionStore().isAuthenticated()`) sees final
 // state, not a still-loading one.
 useSessionStore()

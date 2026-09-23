@@ -1,5 +1,5 @@
 //! Integrator bindings and capability grants — the user consent flow
-//! (issue #27) that establishes an `IntegratorBinding` (issue #83). See
+//! that establishes an `IntegratorBinding`. See
 //! `docs/architecture/bindings.md`'s "Today in the repo" for why one
 //! endpoint owns both concerns, the durable event history, and the
 //! no-grant-without-a-binding invariants enforced here.
@@ -89,8 +89,8 @@ pub struct ConnectResponse {
     pub granted_capabilities: Vec<String>,
 }
 
-/// `POST /integrations/{slug}/connect` — the consent flow (#27) and the endpoint
-/// that establishes a `IntegratorBinding` (#83). Idempotent: reconnecting to a
+/// `POST /integrations/{slug}/connect` — the consent flow and the endpoint
+/// that establishes a `IntegratorBinding`. Idempotent: reconnecting to a
 /// integrator the caller already has an active binding to does not create a
 /// second binding or emit a second `game.binding_established`, but it does
 /// still grant any newly-approved capabilities.

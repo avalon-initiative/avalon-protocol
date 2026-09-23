@@ -1,4 +1,4 @@
-//! Exercises multi-passkey registration/revocation (issue #200) against a
+//! Exercises multi-passkey registration/revocation against a
 //! real, running `avalon-server` and Postgres. Gated `--ignored` since it
 //! needs live infra — see `make test-live` / `make start`.
 //!

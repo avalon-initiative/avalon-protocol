@@ -1,4 +1,4 @@
-// Direct/small-group conversations (issue #102/#105) on AccountSession. Mirrors
+// Direct/small-group conversations on AccountSession. Mirrors
 // crates/sdk/src/account/conversations.rs. Named with an Account prefix since Conversation/
 // ConversationMessage already exist as the integrator Session's own (differently-shaped)
 // types in Conversations.cs.

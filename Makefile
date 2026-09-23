@@ -23,7 +23,7 @@ help:
 	@echo "avalon-protocol — local dev commands"
 	@echo ""
 	@echo "Rust workspace (crates/) — protocol, chain, indexer, server, cli"
-	@echo "  (the Rust reference SDK lives in the avalon-sdks repo as of issue #775 — 'cargo build/test' here reach it via a git dependency, not a workspace member)"
+	@echo "  (the Rust reference SDK lives in the avalon-sdks repo — 'cargo build/test' here reach it via a git dependency, not a workspace member)"
 	@echo "  make build         cargo build --workspace"
 	@echo "  make run           run avalon-server in the foreground"
 	@echo "  make start         run avalon-server in the background (pid/log under $(RUN_DIR)/)"
@@ -35,19 +35,19 @@ help:
 	@echo "  make fmt           cargo fmt --all"
 	@echo "  make fmt-check     cargo fmt --all -- --check"
 	@echo "  make lint          cargo clippy --workspace --all-targets -- -D warnings"
-	@echo "  make openapi       regenerate docs/generated/openapi.json from server's annotated routes (issue #723)"
+	@echo "  make openapi       regenerate docs/generated/openapi.json from server's annotated routes"
 	@echo "  make openapi-check fail if docs/generated/openapi.json is stale relative to the real routes"
-	@echo "  make openapi-version-check fail if the schema's shape changed vs. main without a version bump (issue #735)"
-	@echo "  make ts-sdk-types       regenerate bindings/ts/src/generated.ts from docs/generated/openapi.json (issue #726)"
+	@echo "  make openapi-version-check fail if the schema's shape changed vs. main without a version bump"
+	@echo "  make ts-sdk-types       regenerate bindings/ts/src/generated.ts from docs/generated/openapi.json"
 	@echo "  make ts-sdk-types-check fail if bindings/ts/src/generated.ts is stale relative to the schema"
-	@echo "  make csharp-sdk-types       regenerate bindings/csharp/AvalonSdk/Generated.cs from docs/generated/openapi.json (issue #725)"
+	@echo "  make csharp-sdk-types       regenerate bindings/csharp/AvalonSdk/Generated.cs from docs/generated/openapi.json"
 	@echo "  make csharp-sdk-types-check fail if bindings/csharp/AvalonSdk/Generated.cs is stale relative to the schema"
-	@echo "  make sdk-coverage-check fail if a server route has no call site in one or more SDKs (issue #728)"
+	@echo "  make sdk-coverage-check fail if a server route has no call site in one or more SDKs"
 	@echo "  make migrate       apply pending db/migrations/ (up)"
 	@echo "  make migrate-down  revert the most recently applied migration"
 	@echo "  make db-reset      wipe the database (drop+recreate public schema) and reapply all migrations"
-	@echo "  make stack-up          Docker Compose bring-up: postgres + redis + avalon-server, migrated and started, no Rust/Node toolchain needed (issue #289/#545)"
-	@echo "  make stack-up-no-redis same as stack-up, without the Redis-backed rate limit/concurrency ceiling (issue #545)"
+	@echo "  make stack-up          Docker Compose bring-up: postgres + redis + avalon-server, migrated and started, no Rust/Node toolchain needed"
+	@echo "  make stack-up-no-redis same as stack-up, without the Redis-backed rate limit/concurrency ceiling"
 	@echo "  make stack-down        stop what 'make stack-up'/'make stack-up-no-redis' started"
 	@echo "  make stack-logs        follow avalon-server's logs inside the compose stack"
 	@echo "  make check         fmt-check + lint + test — what CI runs"
@@ -70,7 +70,7 @@ help:
 	@echo "  make inspect-ledger-full   same, plus each entry's actual payload"
 	@echo "  make create-identity  register a new self-custodied (passkey) identity via avalon-cli"
 	@echo "  make login IDENTITY_ID=<uuid>  log in an identity create-identity saved locally, print a session token"
-	@echo "  make outbox-status    pending/oldest-pending count for the settlement outbox (issue #71)"
+	@echo "  make outbox-status    pending/oldest-pending count for the settlement outbox"
 	@echo "  make register-integrator SLUG=<slug> NAME=<name> OWNER=<owner>  register a test integrator, save its key locally"
 	@echo "  make issue-achievement INTEGRATOR=<slug> ACHIEVEMENT=<key> TOKEN=<session-token>  issue an already-defined achievement to the identity behind TOKEN"
 	@echo ""
@@ -135,16 +135,16 @@ fmt-check:
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 
-# Issue #775 (epic #771): the Rust SDK's own examples/rustdoc checks
-# (formerly `sdk-examples`/`sdk-doc`, issue #49) moved with it into the
+# The Rust SDK's own examples/rustdoc checks
+# (formerly `sdk-examples`/`sdk-doc`) moved with it into the
 # avalon-sdks repo — `cargo build -p avalon-sdk --examples`/`cargo doc -p
 # avalon-sdk` don't work here anymore since it's a git dependency, not a
 # workspace member. Run them from avalon-sdks directly.
 
-# Issue #723: `docs/generated/openapi.json` is a generated artifact, not
+# `docs/generated/openapi.json` is a generated artifact, not
 # hand-maintained — regenerate it whenever an in-scope route/type changes.
-# Issue #726 found a real bootstrapping bug here (still guarded against even
-# though issue #775 moved `avalon-sdk`'s own build.rs to read its own
+# A real bootstrapping bug here is still guarded against (even
+# though `avalon-sdk`'s own build.rs now reads its own
 # vendored copy in avalon-sdks, no longer this file directly): a plain
 # `cargo run ... > docs/generated/openapi.json` redirect truncates the file
 # the instant the shell opens it, before cargo even starts — this repo's
@@ -223,7 +223,7 @@ migrate-down:
 db-reset:
 	cargo run -p avalon-server --bin migrate -- reset
 
-# --- One-command hoster bring-up (issue #289) -------------------------------
+# --- One-command hoster bring-up --------------------------------------------
 # No Rust/Node toolchain needed on the host — Docker Compose builds and runs
 # avalon-server + Postgres from a fresh checkout. Distinct from
 # start/stop/status above, which assume a local cargo/npm dev setup; this is

@@ -3,8 +3,8 @@
 //! path (mirror-watcher backfilling into its own local `PostgresIndexer`,
 //! not just `mirrored_entries`).
 //!
-//! Gated `--ignored`, same convention `tests/settlement.rs` (#211) and
-//! `tests/mirror_watcher.rs` (#299) already use for anything needing live
+//! Gated `--ignored`, same convention `tests/settlement.rs` and
+//! `tests/mirror_watcher.rs` already use for anything needing live
 //! infra. The full scenario needs **two** real `avalon-server` processes
 //! against **two** separate Postgres databases sharing one `AVALON_NETWORK_ID`
 //! — one plain Settlement authority (`make start`'s usual config), one
@@ -22,7 +22,7 @@
 //! AVALON_SETTLEMENT_VERIFY_KEY=<authority's public key>
 //! ```
 //!
-//! This sandbox has no live database access (see `.claude/CLAUDE.md`), so
+//! This sandbox has no live database access, so
 //! this file is written and expected to compile/lint here, but was not run
 //! against real infra from this environment — it needs the same
 //! `make test-live`-style verification `tests/mirror_watcher.rs` already

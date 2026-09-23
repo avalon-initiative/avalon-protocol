@@ -1,5 +1,4 @@
-//! Durable event-signing keys (issue #525, surfaced while implementing
-//! Part 2 of #521's decision) — `identity.signing_key_added`/
+//! Durable event-signing keys — `identity.signing_key_added`/
 //! `.signing_key_revoked` decode into an upsert of
 //! `indexer_identity_signing_keys`. Same shape and rationale as
 //! `identity_passkeys`: a live node keeps writing `identity_signing_keys`

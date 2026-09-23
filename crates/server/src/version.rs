@@ -19,8 +19,8 @@
 
 use std::sync::OnceLock;
 
-/// This node's own build version — reported in `POST /nodes/announce`
-/// (#362), `GET /nodes/status`, and the mirror-watcher's STH fetches.
+/// This node's own build version — reported in `POST /nodes/announce`,
+/// `GET /nodes/status`, and the mirror-watcher's STH fetches.
 /// `env!("CARGO_PKG_VERSION")` rather than a separate hand-maintained
 /// constant: the workspace version *is* the wire/protocol version at this
 /// stage (milestone 1, one crate graph, one release cadence) — nothing yet

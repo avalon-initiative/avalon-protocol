@@ -1,4 +1,4 @@
-// The caller's own attestation history (issue #34/#35/#377) on
+// The caller's own attestation history on
 // AccountSession — a player's read of their own achievements, distinct
 // from IntegratorSession's achievements(), which is capability-gated and
 // issuance-focused. See crates/server/src/attestations.rs.
@@ -29,7 +29,7 @@ export interface AttestationHistoryEntry {
 }
 
 /** One issued claim against this identity — active or revoked alike.
- * Deliberately no `recognition` field: per ADR #76, that's a consumer's
+ * Deliberately no `recognition` field: that's a consumer's
  * own trust-policy call, never the server's (or this SDK's). */
 export interface Attestation {
   id: string

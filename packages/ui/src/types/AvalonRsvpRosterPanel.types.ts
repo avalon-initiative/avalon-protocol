@@ -2,7 +2,7 @@ export type AvalonRsvpRosterStatus = 'going' | 'maybe' | 'not_going'
 
 // One status bucket of already-resolved display names — the caller (Hub)
 // owns fetching guild_event_rsvps rows and resolving identity ids to their
-// display_name (issue #510: globally unique, no discriminator) via GET
+// display_name (globally unique, no discriminator) via GET
 // /identities/profiles; this component only renders the result, same
 // "props in, click out" split AvalonEventCard/AvalonRsvpControl already use.
 export interface AvalonRsvpRosterGroup {

@@ -11,7 +11,7 @@ export interface RequestOptions {
   token?: string
   query?: Record<string, string>
   headers?: Record<string, string>
-  /** AccountSession-only (issue #525): called once on a 401 against
+  /** AccountSession-only: called once on a 401 against
    * `token`, to mint a replacement bearer token to retry with. Returning
    * `null` (or omitting this entirely) leaves the 401 to propagate as-is —
    * `IntegratorSession`'s own call sites never pass this, since an

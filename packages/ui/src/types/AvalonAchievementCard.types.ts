@@ -18,13 +18,13 @@ export interface AvalonAchievementHistoryEntry {
   reason?: string
 }
 
-// One claim on the achievements view (#35). Issuer name/slug come in
+// One claim on the achievements view. Issuer name/slug come in
 // separate so this card can render a provenance chip without owning
 // routing itself — same "props in, event out, caller owns navigation"
 // split AvalonIntegratorCard/AvalonGuildCard already use.
 export interface AvalonAchievementCardProps {
   achievementName: string
-  // Both optional (#332): `iconUrl`, when present, always wins over
+  // Both optional: `iconUrl`, when present, always wins over
   // `icon` — never a silent fallback to the built-in icon just because
   // both happen to be set. Absent/undefined `icon` with no `iconUrl`
   // renders the 'trophy' default so a claim never shows a blank slot.
@@ -36,7 +36,7 @@ export interface AvalonAchievementCardProps {
   // Mirrors avalon_protocol::achievements::Validity's two cases
   // (crates/server/src/attestations.rs's ValidityResponse) — a claim is
   // never scored or ranked here, only ever valid/invalid, each a fact with
-  // its own reason (ADR #77: the Hub renders verification results, it
+  // its own reason (the Hub renders verification results, it
   // never computes trust or rank).
   status: 'valid' | 'invalid'
   invalidReason?: string

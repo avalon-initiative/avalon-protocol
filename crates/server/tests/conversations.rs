@@ -1,4 +1,4 @@
-//! Exercises direct/small-group conversations (issue #102) against a real,
+//! Exercises direct/small-group conversations against a real,
 //! running `avalon-server` and Postgres. Gated `--ignored` since it needs
 //! live infra — see `make test-live` / `make start`. Same "seed state via
 //! SQL rather than a real ceremony/flow" pattern
@@ -65,7 +65,7 @@ async fn seed_friendship(pool: &PgPool, x: Uuid, y: Uuid) {
         .expect("failed to seed friendship");
 }
 
-/// Opts `identity_id` into global discoverability (issue #205).
+/// Opts `identity_id` into global discoverability.
 async fn seed_discoverable(pool: &PgPool, identity_id: Uuid) {
     sqlx::query("INSERT INTO discovery_preferences (identity_id, discoverable) VALUES ($1, true)")
         .bind(identity_id)

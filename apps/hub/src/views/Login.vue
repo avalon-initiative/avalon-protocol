@@ -19,7 +19,7 @@ async function onSubmit() {
   submitting.value = true
   try {
     const accountSession = await avalonClient().loginWithIdentityId(identityId.value)
-    // The reconnect-across-nodes signing key (issue #525), when this
+    // The reconnect-across-nodes signing key, when this
     // device already holds one for this identity — a brand-new device
     // that hasn't been granted one yet simply logs in without it.
     const secretKey = loadSigningKeySeed(identityId.value)

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// Achievements view (issue #35): every authentic claim the caller holds,
+// Achievements view: every authentic claim the caller holds,
 // across every issuer, shown with its own provenance and verification
-// result — never ranked, scored, or collapsed when revoked (ADR #77,
-// #81/#85). Reads only; issuing/revoking stays the issuer's own action via
+// result — never ranked, scored, or collapsed when revoked. Reads only;
+// issuing/revoking stays the issuer's own action via
 // its own credentials, never something the Hub does on a user's behalf.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'

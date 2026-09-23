@@ -1,4 +1,4 @@
-//! Exercises attestation issuance (issue #32) against a real, running
+//! Exercises attestation issuance against a real, running
 //! `avalon-server` and Postgres. Gated `--ignored` since it needs live
 //! infra — see `make test-live` / `make start`.
 //!

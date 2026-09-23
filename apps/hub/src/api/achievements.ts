@@ -1,4 +1,4 @@
-// Orchestrates the achievements view (issue #35) on top of #34's
+// Orchestrates the achievements view on top of
 // GET /me/achievements: an attestation only ever carries its
 // achievement/milestone's GlobalId ref, never a display name or the
 // issuer's own name, so both get resolved separately and merged
@@ -6,8 +6,7 @@
 // apps/hub/src/api/friends.ts/guilds.ts already establish for data the
 // primary response doesn't embed. Sorting/filtering below is entirely
 // client-side presentation, never a protocol event or server computation
-// — matching ADR #77's "the Hub renders verification results, it never
-// computes trust or rank" rule.
+// — the Hub renders verification results, it never computes trust or rank.
 import type { AchievementIconName } from '@avalon/ui'
 import { getIntegrator, listAchievementDefinitions, listMilestoneDefinitions } from '@avalon/sdk'
 import type { AccountSession, Attestation, AttestationHistoryEntry as AttestationHistoryEntryWire } from '@avalon/sdk'

@@ -1,6 +1,6 @@
 {
   "$schema": "./SCHEMA.md#bip39-mnemonic",
-  "description": "BIP39 recovery-phrase-derived signing keys (issue #134/#712). A 12-word BIP39 mnemonic must deterministically derive the same Ed25519 event-signing keypair every time: SHA-256(bip39_seed(mnemonic) || 'avalon:signing-key-seed:v1') is used directly as the 32-byte Ed25519 secret key seed. Byte-for-byte identical across every SDK is required, or a phrase recovered through one SDK derives a different key than the one issued by another.",
+  "description": "BIP39 recovery-phrase-derived signing keys. A 12-word BIP39 mnemonic must deterministically derive the same Ed25519 event-signing keypair every time: SHA-256(bip39_seed(mnemonic) || 'avalon:signing-key-seed:v1') is used directly as the 32-byte Ed25519 secret key seed. Byte-for-byte identical across every SDK is required, or a phrase recovered through one SDK derives a different key than the one issued by another.",
   "supportedIn": ["typescript"],
   "notSupported": {
     "rust": "crates/sdk has no BIP39/mnemonic dependency or derivation code anywhere (`grep -ri bip39/mnemonic crates/sdk` finds nothing) — AccountSession registration (AvalonClient::register) generates a genuinely random signing key with no recovery phrase at all. Real gap, not just untested.",

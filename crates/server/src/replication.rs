@@ -18,9 +18,9 @@
 //! — since a registration-eligibility gate only needs to know a shard has
 //! *some* independent copy elsewhere, not that every peer is fully caught
 //! up. [`run_worker`] is the background poller that produces that answer
-//! by actually asking every known peer (`crate::nodes::PeerTable`, #362)
+//! by actually asking every known peer (`crate::nodes::PeerTable`)
 //! about every known shard (this node's own `own_shard_id` plus whatever
-//! `crate::nodes::ShardRegistry` has gossiped in, #599), storing the
+//! `crate::nodes::ShardRegistry` has gossiped in), storing the
 //! result in [`MirrorConfirmationRegistry`] — nothing here ever trusts a
 //! `POST`ed claim; every confirmation is this node's own independent HTTP
 //! call to the peer being credited.

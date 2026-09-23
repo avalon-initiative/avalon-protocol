@@ -4,7 +4,7 @@
 //! #313's existing `AVALON_SETTLEMENT_REMOTE_URL` mechanism can still
 //! commit writes through to it.
 //!
-//! Gated `--ignored`, same convention `tests/remote_settlement.rs` (#313)
+//! Gated `--ignored`, same convention `tests/remote_settlement.rs`
 //! already uses for anything needing a second real `avalon-server` process.
 //! Needs two real processes against two independent Postgres
 //! schemas/databases, sharing one `AVALON_NETWORK_ID`:

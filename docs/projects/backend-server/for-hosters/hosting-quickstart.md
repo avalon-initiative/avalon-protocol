@@ -3,8 +3,7 @@
 The fastest path from a fresh checkout to a running `avalon-server` node —
 no Rust or Node toolchain needed, only [Docker](https://docs.docker.com/get-docker/)
 (with Compose, bundled with Docker Desktop and modern Docker Engine
-installs). Issue [#289](https://github.com/LunarVagabond/avalon-protocol/issues/289),
-part of the self-hosting epic [#288](https://github.com/LunarVagabond/avalon-protocol/issues/288).
+installs).
 
 This is the "get a node running to see it work, or to actually host for your
 community" path. If you're contributing code to this repository itself, see
@@ -37,18 +36,18 @@ That's it for a first-time, single-node bring-up. What it does:
    (or a network's bundled seed nodes) resolves to a reachable peer on this
    first run, you're prompted interactively to pick which discovered peer(s),
    if any, to mirror — the selection is written straight into
-   `AVALON_MIRROR_PEERS`, no hand-copying URLs (issue #511). Skipped silently
+   `AVALON_MIRROR_PEERS`, no hand-copying URLs. Skipped silently
    (no prompt, no behavior change) if nothing's discoverable or this isn't
    running in a real terminal.
 2. **Starts Postgres and Redis** (`docker compose ... up -d postgres redis`)
    and waits for both to report healthy. Redis backs the rate limit/
-   concurrency ceiling (issue #545) — it's on by default so a node that's
+   concurrency ceiling — it's on by default so a node that's
    later scaled to more than one `avalon-server` replica already has it
    running, rather than silently reverting to per-process limits the
    moment it does; a single-instance node gets no functional difference
    from having it. `make stack-up-no-redis` skips it entirely — no Redis
    container, and `avalon-server` runs with its original, purely
-   per-process limits, same as before #545 existed.
+   per-process limits.
 3. **Runs migrations** (`docker compose ... run --rm migrate`) — a one-shot
    container that applies everything under `crates/server/db/migrations/`
    and exits.
@@ -105,9 +104,7 @@ later — routine hygiene or a suspected compromise? See
 [`../for-maintainers/key-rotation.md`](../for-maintainers/key-rotation.md).
 
 Plain `.env` storage is the accepted floor for a single-operator deployment
-at this project's current scale — see
-[issue #352](https://github.com/LunarVagabond/avalon-protocol/issues/352)
-for the reasoning. A local, filesystem-level `.env` is a weaker guarantee
+at this project's current scale. A local, filesystem-level `.env` is a weaker guarantee
 than a real secrets store; keep any backup copy of it under the same `600`
 permissions `make stack-up` sets, rather than treating it as an ordinary
 config file.
@@ -121,7 +118,7 @@ actually up. If migrations fail, `make stack-up` again re-runs the one-shot
 `migrate` container safely — it only applies whatever hasn't already been
 applied.
 
-## Today in the repo
+## Current implementation
 
 - `Dockerfile` — multi-stage build producing `avalon-server` and its
   `migrate` companion binary. Not yet layer-cached for fast incremental
@@ -136,7 +133,7 @@ applied.
   reach it, e.g. for `AVALON_MIRROR_PEERS`/`AVALON_BOOTSTRAP_PEERS` on
   another deployment. Docker refuses to bind a port to an IP not actually
   assigned to a local interface.
-- `docker-compose.redis.yml` — issue #545's Redis-backed rate limit/
+- `docker-compose.redis.yml` — the Redis-backed rate limit/
   concurrency ceiling, applied as a Compose *override* file (not folded
   into `docker-compose.yml` directly — `avalon-server` hard-fails at
   startup if `AVALON_REDIS_URL` is set but unreachable, so it has to be
@@ -148,13 +145,5 @@ applied.
   default via `.env.compose.example` — see `.env.example` for the full,
   commented list of what's configurable and why.
 
-## Decisions and tickets
-
-- [#289](https://github.com/LunarVagabond/avalon-protocol/issues/289) — this
-  ticket; implements the bring-up path described above.
-- [#288](https://github.com/LunarVagabond/avalon-protocol/issues/288) — the
-  epic this is the first concrete step under. Resource-limit defaults
-  (`AVALON_*` tuning) are explicitly out of scope here — see
-  [#287](https://github.com/LunarVagabond/avalon-protocol/issues/287).
-- [`deployment.md`](deployment.md) — required reading before exposing this
-  node beyond `127.0.0.1`.
+See also [`deployment.md`](deployment.md), required reading before exposing
+this node beyond `127.0.0.1`.

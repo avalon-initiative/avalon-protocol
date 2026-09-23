@@ -1,4 +1,4 @@
-// Home page "Latest Messages" panel (issue #312): the most recent message
+// Home page "Latest Messages" panel: the most recent message
 // per guild the caller belongs to, newest guild-message first. Only the
 // guild's first (oldest-created) non-archived channel is checked per
 // guild — a full cross-channel merge is more than a Home summary widget

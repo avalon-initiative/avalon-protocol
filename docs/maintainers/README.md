@@ -102,15 +102,15 @@ Run `make help` for the full command list, including the C# SDK
 
 See
 [`milestone-1-walkthrough.md`](../projects/backend-server/for-maintainers/milestone-1-walkthrough.md)
-for the hand-run, numbered walkthrough of `Proposal.md` §23's fourteen steps
-(plus two architecture checks beyond it) — two players, a friendship, a
-guild with a channel, two games, an issued and verified achievement, all
-visible in the Hub, ending with a ledger inspection and a full projection
-rebuild. `crates/cli/tests/milestone_1_walkthrough.rs` is the automated
-equivalent, runnable via `make test-live`.
+for the hand-run, numbered walkthrough of the full vertical slice (plus two
+architecture checks beyond it) — two players, a friendship, a guild with a
+channel, two games, an issued and verified achievement, all visible in the
+Hub, ending with a ledger inspection and a full projection rebuild.
+`crates/cli/tests/milestone_1_walkthrough.rs` is the automated equivalent,
+runnable via `make test-live`.
 
 ## Related projects
 
-`world_zero` is a related Rust MMO server framework and the first candidate
-external integration for Avalon (see WorldZero issue #309 — an opt-in
-`AuthProvider`/account system there).
+`world_zero` is a related Rust MMO server framework and a candidate
+external integration for Avalon, evaluated as an opt-in `AuthProvider`/
+account system there.

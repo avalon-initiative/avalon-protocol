@@ -1,7 +1,6 @@
-// AvalonClient.startAccountDeviceLogin() (issue #707's pattern, included in
-// this SDK from day one per #701) — the AccountSession-returning
+// AvalonClient.startAccountDeviceLogin() — the AccountSession-returning
 // counterpart to the integrator IntegratorSession's own device-login
-// wrapper around #307's cross-device pairing
+// wrapper around cross-device pairing
 // (crates/server/src/device_pairing.rs). For a client with no WebAuthn
 // surface of its own (a game engine, a headless client) to originate a
 // first-party account login.

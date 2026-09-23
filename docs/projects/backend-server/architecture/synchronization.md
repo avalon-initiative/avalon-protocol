@@ -62,10 +62,8 @@ if internet_available {
 Some things need a live round trip by their nature: an achievement needs
 *someone* to eventually issue it, but guild membership is shared state that
 can't be unilaterally granted client-side, and voice needs a live connection,
-full stop. The classification is decided — see
-[#109](https://github.com/LunarVagabond/avalon-protocol/issues/109) (closed) —
-and this table is now the authoritative version, referenced by every
-operation ticket rather than each re-deriving its own answer:
+full stop. This table is the authoritative classification, referenced by every
+operation rather than each re-deriving its own answer:
 
 | Operation | Offline? | Behavior |
 |---|---|---|
@@ -92,11 +90,11 @@ it can forge arbitrary achievements for any user, retroactively, and
 rotating the key afterward doesn't invalidate what already verifies against
 its old validity window.
 
-This is the trust model ([trust-model.md](./trust-model.md), ADR #76 —
+This is the trust model ([trust-model.md](./trust-model.md) —
 authentic, valid, and recognized are separate) applied to a new axis: *how*
 a claim came to exist changes what a receiving integrator should be willing to
-believe, even when the signature checks out. [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112)
-(closed) decided **deferred requests, not deferred attestations**: the
+believe, even when the signature checks out. The decided answer is
+**deferred requests, not deferred attestations**: the
 offline period queues an unsigned local record of intent, not a valid
 attestation — no issuer key exists client-side at all. On reconnect the
 request goes to the integrator's *own* server, which independently decides
@@ -116,41 +114,39 @@ isn't where this defaults.
 
 ## Mechanism
 
-- **Local durable journal** ([#110](https://github.com/LunarVagabond/avalon-protocol/issues/110),
-  done) — a crash-safe local store for offline-capable operations, behind a
-  `SyncJournal` trait so each SDK (Rust, C#, future) backs it with whatever's
-  appropriate. Every entry gets a client-generated, stable id (`EntryId`,
-  a `Uuid`) — the idempotency key everything downstream depends on. Shipped
-  in `avalon-sdk` (`crates/sdk/src/sync_journal.rs`) with a dependency-light
-  reference implementation, `FileJournal`, backed by an append-only,
-  `fsync`-per-write JSON-lines file rather than embedded SQLite: it adds no
-  new dependencies (no C toolchain requirement from a bundled SQLite),
-  crash safety only needs one property an `fsync`'d append gets directly
-  (fully landed or didn't, no transaction machinery needed), and recovery
-  is "replay the file, stop at the first line that doesn't parse" —
-  trivial to reason about for what is deliberately not a hot path. The
-  trade-off (no concurrent-writer story, O(n) replay on open) doesn't
-  matter for a single integrator client's local journal; `SyncJournal` is
-  a trait specifically so another SDK can swap in SQLite or platform
-  storage instead. Nothing calls `append()` from `AvalonClient`/`Session`
-  yet; that wiring, plus draining/submitting what's recorded, is #111.
-- **Deferred submission** ([#111](https://github.com/LunarVagabond/avalon-protocol/issues/111),
-  done) — `SubmissionEngine` (`crates/sdk/src/submission.rs`) drains a
-  `SyncJournal`'s `pending()` entries, grouped by `kind` and submitted
-  oldest-first *within* each group — cross-kind ordering is never
-  guaranteed or meaningful (a queued chat message and a queued friend
-  request have no ordering relationship to each other). Each entry is
-  submitted through a `Transport`, an async trait with one method
-  (`submit`) that classifies the result into exactly one of: `Applied`,
-  `Rejected { reason }` (terminal — a 4xx meaning the request itself is now
-  invalid), a retryable failure (network error or 5xx/429), or — as of this
-  pass — `AuthenticationRequired`, split out from the retryable/terminal
-  buckets specifically for a `401`. A retryable failure schedules the next
-  attempt using `BackoffPolicy` — exponential, capped, tracked in memory per
-  `EntryId` (not persisted; a process restart resets backoff, which is
-  fine). `SubmissionEngine` owns no journal or transport itself; an integrator
-  calls `drain(&journal, &transport)` from whatever loop/timer/reconnect-hook
-  it wants, so draining never blocks gameplay.
+- **Local durable journal** — a crash-safe local store for offline-capable
+  operations, behind a `SyncJournal` trait so each SDK (Rust, C#, future)
+  backs it with whatever's appropriate. Every entry gets a
+  client-generated, stable id (`EntryId`, a `Uuid`) — the idempotency key
+  everything downstream depends on. Shipped in the Rust SDK
+  (`avalon-sdks` repository, `rust/src/sync_journal.rs`) with a
+  dependency-light reference implementation, `FileJournal`, backed by an
+  append-only, `fsync`-per-write JSON-lines file rather than embedded
+  SQLite: it adds no new dependencies (no C toolchain requirement from a
+  bundled SQLite), crash safety only needs one property an `fsync`'d append
+  gets directly (fully landed or didn't, no transaction machinery needed),
+  and recovery is "replay the file, stop at the first line that doesn't
+  parse" — trivial to reason about for what is deliberately not a hot path.
+  The trade-off (no concurrent-writer story, O(n) replay on open) doesn't
+  matter for a single integrator client's local journal; `SyncJournal` is a
+  trait specifically so another SDK can swap in SQLite or platform storage
+  instead.
+- **Deferred submission** — `SubmissionEngine` (Rust SDK,
+  `rust/src/submission.rs`) drains a `SyncJournal`'s `pending()` entries,
+  grouped by `kind` and submitted oldest-first *within* each group —
+  cross-kind ordering is never guaranteed or meaningful (a queued chat
+  message and a queued friend request have no ordering relationship to
+  each other). Each entry is submitted through a `Transport`, an async
+  trait with one method (`submit`) that classifies the result into exactly
+  one of: `Applied`, `Rejected { reason }` (terminal — a 4xx meaning the
+  request itself is now invalid), a retryable failure (network error or
+  5xx/429), or `AuthenticationRequired`, split out from the
+  retryable/terminal buckets specifically for a `401`. A retryable failure
+  schedules the next attempt using `BackoffPolicy` — exponential, capped,
+  tracked in memory per `EntryId` (not persisted; a process restart resets
+  backoff, which is fine). `SubmissionEngine` owns no journal or transport
+  itself; an integrator calls `drain(&journal, &transport)` from whatever
+  loop/timer/reconnect-hook it wants, so draining never blocks gameplay.
   - **A `401` is not a terminal rejection.** `HttpTransport` classifies a
     `401` (session token missing/unknown/expired,
     `crates/server/src/handlers.rs::authenticate_token`) as
@@ -162,18 +158,18 @@ isn't where this defaults.
     `AvalonClient::authenticate()` call, i.e. a new `Session` and
     `submission_transport()`, fixes it), and reported to the caller as
     `DrainOutcome::AuthenticationRequired` so it knows to re-authenticate
-    before its next `drain()`. Before this, an integrator that queued messages
-    offline and later drained with an expired token would have every one of
-    those messages permanently discarded as `Rejected`.
+    before its next `drain()`. Without this, an integrator that queued
+    messages offline and later drained with an expired token would have
+    every one of those messages permanently discarded as `Rejected`.
   - A `403` on `POST /conversations/{id}/messages`, by contrast, stays a
     terminal `Rejected`: that endpoint only ever returns 403 from
     `require_unblocked_participant` (not a participant, or blocked — see
     `SdkError::NotConversationParticipant`'s doc comment for why those two
-    cases are indistinguishable on purpose), and this codebase has no
-    separate capability/authorization layer on this endpoint yet (#26–#28)
-    that a 403 could also mean "re-grant and retry" for. A queued message's
-    target-conversation/block state isn't expected to change on its own, so
-    retrying it automatically wouldn't help.
+    cases are indistinguishable on purpose), and this endpoint has no
+    separate capability/authorization layer that a 403 could also mean
+    "re-grant and retry" for. A queued message's target-conversation/block
+    state isn't expected to change on its own, so retrying it automatically
+    wouldn't help.
   - A `404` from this same endpoint, with `client_entry_id` always set by
     `HttpTransport`, is treated as `Applied` rather than `Rejected`: the
     server's idempotency lookup (`find_message_by_client_entry_id`) only
@@ -183,19 +179,18 @@ isn't where this defaults.
     applied once, it just isn't findable by that lookup anymore. A missing
     conversation or non-participant caller both surface as the 403 above
     instead, so a 404 here has no other cause.
-- **Reconciliation** (same ticket, done) — a submission can come back
-  rejected because the world moved on while it was pending (a guild
-  disbanded, a target blocked the sender, an achievement definition
-  retired). Surfaced as an explicit `DrainOutcome::Rejected { reason }`,
-  never silently dropped and never retried forever — a rejected entry is
-  marked submitted in the journal (so it leaves `pending()`) the same as an
-  applied one, the difference being entirely in what's reported back to the
-  caller.
-- **Sync status** ([#113](https://github.com/LunarVagabond/avalon-protocol/issues/113)) —
-  a read-only, local-only API (`pending_count`, `status_of(entry_id)`, a
-  subscription for transitions) so an integrator can render "🕓 Pending" for a
-  queued message the same way it would for anything else, per
-  [communication.md](./communication.md)'s direct-message example.
+- **Reconciliation** — a submission can come back rejected because the
+  world moved on while it was pending (a guild disbanded, a target blocked
+  the sender, an achievement definition retired). Surfaced as an explicit
+  `DrainOutcome::Rejected { reason }`, never silently dropped and never
+  retried forever — a rejected entry is marked submitted in the journal (so
+  it leaves `pending()`) the same as an applied one, the difference being
+  entirely in what's reported back to the caller.
+- **Sync status** — a read-only, local-only API (`pending_count`,
+  `status_of(entry_id)`, a subscription for transitions) so an integrator
+  can render "🕓 Pending" for a queued message the same way it would for
+  anything else, per [communication.md](./communication.md)'s direct-message
+  example.
 
 ## What this is not
 
@@ -211,59 +206,62 @@ isn't where this defaults.
   no `AvalonClient`/`Session` method appends to the journal on its own or
   calls `drain` for you. Wiring that convenience in — so
   `avalon.achievements().issue(...)` really is one call either way — is
-  future SDK polish, not part of #111's scope.
-- Sync status (#113, done) is Rust-only so far — `SyncJournal::status`/
-  `status_of` and `SubmissionEngine::subscribe` exist in `crates/sdk`; the
-  C# mirror is deferred, same "settle the Rust surface first" posture
-  `bindings/csharp` has taken for #398/#396's other additions.
+  future SDK polish.
+- Sync status is Rust-only so far — `SyncJournal::status`/`status_of` and
+  `SubmissionEngine::subscribe` exist in the Rust SDK; the C# mirror is
+  deferred, same "settle the Rust surface first" posture `bindings/csharp`
+  has taken for other additions.
 
-## Today in the repo
+## Current implementation
 
-- The local durable journal (#110, done) — `SyncJournal` trait and
-  `FileJournal` reference implementation in `crates/sdk/src/sync_journal.rs`
-  — `append`/`pending`/`all`/`entry`/`mark_submitted`/`mark_rejected`/
+The Rust reference SDK now lives in a separate repository
+(`avalon-sdks`, `rust/` — see
+[`docs/projects/sdks/rust/README.md`](../../sdks/rust/README.md)) rather than
+this workspace's own `crates/`, so the SDK-side pieces below are described by
+module path within that repository, not `crates/sdk`.
+
+- The local durable journal — `SyncJournal` trait and `FileJournal`
+  reference implementation in the Rust SDK's `src/sync_journal.rs` —
+  `append`/`pending`/`all`/`entry`/`mark_submitted`/`mark_rejected`/
   `mark_failed`, crash-recovery tested by dropping a `FileJournal`
   mid-session (no clean-shutdown method exists to call) and reopening it
   from the same path.
-- Sync status (#113, done, Rust only) — `SyncJournal::status() ->
-  SyncStatus { pending_count, oldest_pending_at, last_synced_at }` and
+- Sync status (Rust only) — `SyncJournal::status() -> SyncStatus {
+  pending_count, oldest_pending_at, last_synced_at }` and
   `SyncJournal::status_of(id) -> EntryStatus { Pending, Submitted, Rejected
   { reason } }`, both default trait methods built on `all`/`entry`, so
-  every `SyncJournal` implementation gets them for free. Required
-  `mark_rejected` as a genuine third terminal state distinct from
-  `mark_submitted` — before #113, `SubmissionEngine` recorded a rejection
-  as a diagnostic `Failed` entry and then called `mark_submitted` on it as
-  a workaround to remove it from `pending()`, which meant a rejected entry
-  and a truly-submitted one were indistinguishable after the fact. No
-  subscription mechanism on the journal itself: `SubmissionEngine::subscribe`
-  (`crates/sdk/src/submission.rs`) registers a synchronous, in-process
-  callback that fires exactly once per entry, inline within `drain`, the
-  moment it produces a terminal `DrainOutcome::Applied`/`Rejected` — no
-  polling, no background thread, no async channel built in (an integrator
-  wanting async delivery sends into its own channel from the callback).
-- The deferred submission engine (#111, done) —
-  `crates/sdk/src/submission.rs`: `SubmissionEngine::drain` (per-kind
-  ordering, in-memory capped exponential backoff via `BackoffPolicy`), the
-  `Transport` trait, and `HttpTransport` — the real transport, wired for
-  exactly one journal `kind` end-to-end: `CONVERSATION_MESSAGE_KIND`
-  (`"chat.message"`), submitted via
-  `Session::conversation(id).send_with_client_entry_id(...)` — the same
-  `crates/sdk/src/conversations.rs` code path an integrator's own direct
-  `Session::conversation(id).send()` call uses for
-  `POST /conversations/{id}/messages`, rather than `HttpTransport` building
-  a second, parallel `reqwest` request of its own. `HttpTransport` borrows
+  every `SyncJournal` implementation gets them for free. `mark_rejected` is
+  a genuine third terminal state distinct from `mark_submitted`, so a
+  rejected entry and a truly-submitted one stay distinguishable after the
+  fact. No subscription mechanism on the journal itself:
+  `SubmissionEngine::subscribe` (Rust SDK's `src/submission.rs`) registers
+  a synchronous, in-process callback that fires exactly once per entry,
+  inline within `drain`, the moment it produces a terminal
+  `DrainOutcome::Applied`/`Rejected` — no polling, no background thread, no
+  async channel built in (an integrator wanting async delivery sends into
+  its own channel from the callback).
+- The deferred submission engine — Rust SDK's `src/submission.rs`:
+  `SubmissionEngine::drain` (per-kind ordering, in-memory capped
+  exponential backoff via `BackoffPolicy`), the `Transport` trait, and
+  `HttpTransport` — the real transport, wired for exactly one journal
+  `kind` end-to-end: `CONVERSATION_MESSAGE_KIND` (`"chat.message"`),
+  submitted via `Session::conversation(id).send_with_client_entry_id(...)`
+  — the same conversations code path an integrator's own direct
+  `Session::conversation(id).send()` call uses for `POST
+  /conversations/{id}/messages`, rather than `HttpTransport` building a
+  second, parallel `reqwest` request of its own. `HttpTransport` borrows
   the `Session` it was built from (`Session::submission_transport()`) so it
   can call through it. One consequence: a missing `messages.send` grant now
   fails identically (an instant local `SdkError`/`SubmitOutcome::Rejected`,
-  no request sent) whichever path an integrator uses, instead of the direct path
-  rejecting locally and the submission-engine path only discovering the
-  same problem after a round trip through the server. Every other `kind`
-  gets `SubmitError::UnsupportedKind` from `HttpTransport` — left pending,
-  untouched, not a failure — since only conversation messages were wired
-  this pass; friend requests and guild join requests are equally
-  offline-capable per the table above but were deliberately left for a
-  future ticket to wire, one endpoint at a time, rather than bulk-adding
-  idempotency handling to every endpoint speculatively.
+  no request sent) whichever path an integrator uses, instead of the direct
+  path rejecting locally and the submission-engine path only discovering
+  the same problem after a round trip through the server. Every other
+  `kind` gets `SubmitError::UnsupportedKind` from `HttpTransport` — left
+  pending, untouched, not a failure — since only conversation messages are
+  wired so far; friend requests and guild join requests are equally
+  offline-capable per the table above but remain for a future pass to
+  wire, one endpoint at a time, rather than bulk-adding idempotency
+  handling to every endpoint speculatively.
 - Idempotency for that one endpoint: `conversation_messages.client_entry_id`
   (migration `0037_conversation_message_idempotency`) carries the journal
   entry's `EntryId` through, with a partial unique index on
@@ -275,12 +273,12 @@ isn't where this defaults.
   discovers which case it's in" shape `create_conversation` already uses
   for `participants_key`. A message sent directly online (not through the
   journal) never sets `client_entry_id` and never dedupes against anything.
-- Reconciliation (#111, done): `DrainOutcome::Rejected { reason }` — see
-  above. No separate reconciliation-specific code path exists; it's the
-  same `drain` call classifying `Transport::submit`'s result.
-- `crates/sdk/src/lib.rs`'s `AvalonClient` methods either succeed against a
-  live server or fail outright — no code path appends to the journal on its
-  own yet, so there is no *automatic* end-to-end offline path today, even
+- Reconciliation: `DrainOutcome::Rejected { reason }` — see above. No
+  separate reconciliation-specific code path exists; it's the same `drain`
+  call classifying `Transport::submit`'s result.
+- The Rust SDK's `AvalonClient` methods either succeed against a live
+  server or fail outright — no code path appends to the journal on its own
+  yet, so there is no *automatic* end-to-end offline path today, even
   though the local storage and submission halves both now exist and are
   tested end-to-end when driven explicitly.
 - `SubmissionEngine::drain` submits `SyncJournal::pending` entries in
@@ -291,26 +289,23 @@ isn't where this defaults.
 - `Transport::submit` classifies every outcome into one of five cases:
   `Applied` (marked submitted, never retried), `Rejected { reason }` (a
   terminal 4xx meaning the request itself is now invalid — marked rejected
-  via `SyncJournal::mark_rejected`, issue #113's genuine terminal state,
-  replacing the old workaround of recording it as `Failed` diagnostics and
-  then calling `mark_submitted`), `Retryable` (network error or 5xx — stays
-  pending, scheduled via `BackoffPolicy`), `UnsupportedKind` (an engine-
-  internal case: this ticket wires up only `CONVERSATION_MESSAGE_KIND`
-  end-to-end, so any other kind is left pending, untouched, no backoff
-  consumed — not a failure), and `AuthenticationRequired` (a stale/expired
-  session token, not an invalid request — left pending with no backoff,
-  since retrying against the same token would fail identically forever;
-  the caller must re-authenticate via a fresh `Session` before its next
-  `drain()`).
+  via `SyncJournal::mark_rejected`, a genuine terminal state), `Retryable`
+  (network error or 5xx — stays pending, scheduled via `BackoffPolicy`),
+  `UnsupportedKind` (an engine-internal case: only
+  `CONVERSATION_MESSAGE_KIND` is wired end-to-end so far, so any other kind
+  is left pending, untouched, no backoff consumed — not a failure), and
+  `AuthenticationRequired` (a stale/expired session token, not an invalid
+  request — left pending with no backoff, since retrying against the same
+  token would fail identically forever; the caller must re-authenticate
+  via a fresh `Session` before its next `drain()`).
 - `HttpTransport` maps HTTP status codes to those cases carefully: a `401`
   from `crates/server/src/handlers.rs::authenticate_token` becomes
   `AuthenticationRequired`, not `Rejected`, since the credential (not the
   request) is stale. A `403` from
   `crates/server/src/conversations.rs::require_unblocked_participant`
   stays a terminal `Rejected` — this endpoint has no separate capability/
-  authorization layer a 403 could also mean "re-grant and retry" for
-  (server-side capability enforcement, #26-#28, isn't wired up yet), and a
-  queued message's target conversation/block state isn't expected to
+  authorization layer a 403 could also mean "re-grant and retry" for, and
+  a queued message's target conversation/block state isn't expected to
   change on its own. A `404` from `send_message`'s idempotency lookup
   (`find_message_by_client_entry_id`) is mapped to `Applied` rather than
   `Rejected`: on this endpoint the only way to hit it is a retry that lost
@@ -321,34 +316,11 @@ isn't where this defaults.
   `EntryId` through to `Transport::submit`, which includes it in the
   request so the receiving endpoint can dedupe — see the conversation-
   message row above.
-- `crates/server/src/outbox.rs` (issue #71, done) is the *server-side*
-  analog of the same pattern — durable local recording before a slower,
-  retriable downstream step — applied to the settlement ledger rather than
-  the SDK. Worth reading as a reference for the shape, not reusable code:
-  the outbox lives in Postgres on a machine that's always online; this
-  epic's journal lives on a client that, by definition, sometimes isn't.
-
-## Decisions and tickets
-
-- [#108](https://github.com/LunarVagabond/avalon-protocol/issues/108) —
-  Epic: Offline & Deferred Protocol Synchronization.
-- [#109](https://github.com/LunarVagabond/avalon-protocol/issues/109) —
-  decision: operation capability classification (closed/decided — table
-  above is authoritative).
-- [#110](https://github.com/LunarVagabond/avalon-protocol/issues/110) —
-  SDK local event journal + persistence abstraction.
-- [#111](https://github.com/LunarVagabond/avalon-protocol/issues/111) —
-  deferred submission engine: retry, idempotency, ordering, reconciliation.
-- [#112](https://github.com/LunarVagabond/avalon-protocol/issues/112) —
-  decision: offline trust model, client-recorded vs server-attested
-  (closed/decided — deferred requests, not deferred attestations).
-- [#113](https://github.com/LunarVagabond/avalon-protocol/issues/113) —
-  SDK sync status API.
-- [#76](https://github.com/LunarVagabond/avalon-protocol/issues/76) — ADR:
-  attestation trust model, the framework #112 extends.
-- [#82](https://github.com/LunarVagabond/avalon-protocol/issues/82) — event
-  catalogue; a new provenance field may be needed depending on #112's
-  outcome.
-- [communication.md](./communication.md), [sdk.md](../../sdks/architecture/sdk.md) — the first
-  consumer, and the "capabilities, not infrastructure" principle this
-  epic serves.
+- `crates/server/src/outbox.rs` is the *server-side* analog of the same
+  pattern — durable local recording before a slower, retriable downstream
+  step — applied to the settlement ledger rather than the SDK. Worth
+  reading as a reference for the shape, not reusable code: the outbox
+  lives in Postgres on a machine that's always online; the SDK's journal
+  lives on a client that, by definition, sometimes isn't.
+</content>
+</invoke>

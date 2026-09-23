@@ -1,7 +1,7 @@
-//! Exercises the integrator-connect / capability grant / revoke flow (issues #27
-//! and #83) against a real, running `avalon-server` and Postgres. Gated
+//! Exercises the integrator-connect / capability grant / revoke flow
+//! against a real, running `avalon-server` and Postgres. Gated
 //! `--ignored` since it needs live infra — see `make test-live` / `make
-//! start`. Skipped in this sandbox per `.claude/CLAUDE.md` (no reachable
+//! start`. Skipped in this sandbox (no reachable
 //! Postgres here); written but not run against a live database.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -11,7 +11,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// #697/#698: seeds a real signing key for `identity_id` so a test can
+/// Seeds a real signing key for `identity_id` so a test can
 /// produce a genuine fresh-signature over HTTP, same pattern
 /// `crates/server/tests/device_grants.rs` already established.
 async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey) {
@@ -41,7 +41,7 @@ fn sign_action(signing_key: &SigningKey, action_tag: &str, fields: &[&str]) -> S
 
 /// Signs a `POST /integrations/{slug}/connect` request for `identity_id`
 /// requesting exactly `capabilities`, seeding a fresh signing key each
-/// call — every `connect` in this file needs one now (#697/#698).
+/// call — every `connect` in this file needs one now.
 async fn connect_body(
     pool: &PgPool,
     identity_id: Uuid,

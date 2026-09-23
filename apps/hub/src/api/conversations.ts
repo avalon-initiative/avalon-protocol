@@ -1,4 +1,4 @@
-// Pure direct-message logic (issue #105), kept separate from
+// Pure direct-message logic, kept separate from
 // apps/hub/src/api/client.ts for the same reason guildChat.ts is split out
 // from guilds.ts — composition/ordering, not roster/relationship merging.
 import type { ConversationMessage, Conversation } from '@avalon/sdk'

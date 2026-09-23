@@ -302,7 +302,7 @@ impl<'de> Deserialize<'de> for ProtocolEventKind {
 /// `game.registered`, `attestation.issued`. `kind` stays a plain `String`
 /// on the wire/storage type itself (unchanged shape, so the ledger schema
 /// and every existing consumer keep working byte-for-byte) — domain code
-/// builds/matches it through [`ProtocolEventKind`] (issue #82) instead of
+/// builds/matches it through [`ProtocolEventKind`] instead of
 /// hand-typing strings, but the type stored and hashed is still exactly
 /// the string it always was.
 #[derive(Debug, Clone, Serialize, Deserialize)]

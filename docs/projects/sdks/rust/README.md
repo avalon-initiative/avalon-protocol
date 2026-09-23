@@ -1,19 +1,18 @@
 # Rust SDK
 
 The reference implementation of the [Avalon SDK](../README.md). Physically
-lives in the `avalon-sdks` repo (`rust/`) as of issue #775 (epic #771) — no
-longer `crates/sdk` in this repo, and no longer an in-workspace dependency
-(`crates/cli` reaches it via a real git dependency). "Reference" means it's
-maintained by the same team as `backend-server`, so it's the most complete
-SDK and the one other languages are checked against — that hasn't changed,
-only where the source lives. See [`../architecture/sdk.md`](../architecture/sdk.md)
-for the design that applies to every language's SDK, not just this one.
+lives in the `avalon-sdks` repo (`rust/`) — not `crates/sdk` in this repo,
+and not an in-workspace dependency (`crates/cli` reaches it via a real git
+dependency). "Reference" means it's maintained by the same team as
+`backend-server`, so it's the most complete SDK and the one other languages
+are checked against. See
+[`../architecture/sdk.md`](../architecture/sdk.md) for the design that
+applies to every language's SDK, not just this one.
 
-**Status (2026-09-21):** real, not stubbed. `authenticate()` is wired to a
-live server; friends/presence, guilds (roster/channels/chat), and
-conversations work end to end; `sync_journal`/`submission` implement
-offline durability and deferred submission. Achievement issuance still
-returns `NotImplemented` — the one known gap in an otherwise live surface.
+**Status:** real, not stubbed. `authenticate()` is wired to a live server;
+friends/presence, guilds (roster/channels/chat), conversations, and
+achievement issuance all work end to end; `sync_journal`/`submission`
+implement offline durability and deferred submission.
 
 ## Guides
 

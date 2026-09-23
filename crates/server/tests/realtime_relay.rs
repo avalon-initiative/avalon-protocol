@@ -109,7 +109,7 @@ async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey
     (signing_key_id, signing_key)
 }
 
-/// Mints a wire-encoded, self-signed `InterestClaim` (issue #610) for
+/// Mints a wire-encoded, self-signed `InterestClaim` for
 /// `channel_id`, bound to `base_url` — the same thing
 /// `packages/api-client/src/crypto/interestClaim.ts` mints in the browser,
 /// just constructed directly against `avalon_protocol`'s own types rather
@@ -148,7 +148,7 @@ fn mint_channel_claim(
     serde_json::to_string(&claim).expect("InterestClaim always serializes")
 }
 
-/// Reads node B's `node_info` hello (issue #610) — sent once, immediately
+/// Reads node B's `node_info` hello — sent once, immediately
 /// after upgrade, before this test can mint a claim bound to the right
 /// `base_url` (see `crate::chat::ChatServerMessage::NodeInfo`'s own doc
 /// comment for why a client can't just assume its own connect URL is it).

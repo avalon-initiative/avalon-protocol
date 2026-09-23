@@ -1,11 +1,10 @@
-//! Node-tiered durable history retention — issue #208, implementing #180's
-//! decision. See `docs/architecture/nodes.md`'s "Settlement retention
+//! Node-tiered durable history retention. See `docs/architecture/nodes.md`'s "Settlement retention
 //! tiers" section for the two-tier design, the env config, and the
 //! honest milestone-1 caveat that pruning today means real permanent
 //! data loss since no archive-tier mirror network exists yet.
 //!
-//! **Archive-confirmation gating (issue #569, closing the gap the note
-//! above used to describe as pure operator discipline).** `archive_peers`/
+//! **Archive-confirmation gating** (closing the gap the note
+//! above used to describe as pure operator discipline). `archive_peers`/
 //! `min_archive_confirmations` below are this crate's pure config half —
 //! the actual HTTP confirmation check (querying each peer's own mirrored
 //! progress before pruning) lives in `avalon_server::retention`, since
@@ -112,7 +111,7 @@ impl RetentionConfig {
     /// - `AVALON_RETENTION_PRUNING_ENABLED` — `true`/`false` (default
     ///   `false`). Only meaningful for the `hot` tier; see
     ///   [`Self::should_prune`].
-    /// - `AVALON_RETENTION_ARCHIVE_PEERS` (issue #569) — comma-separated
+    /// - `AVALON_RETENTION_ARCHIVE_PEERS` — comma-separated
     ///   base URLs of nodes expected to mirror this one; unset/empty means
     ///   no archive-confirmation gating at all.
     /// - `AVALON_RETENTION_MIN_ARCHIVE_CONFIRMATIONS` — positive integer,

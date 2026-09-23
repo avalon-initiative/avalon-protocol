@@ -2,8 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useSessionStore } from '@avalon/api-client'
 
 // Small, standalone router — mirrors apps/hub's shape for the auth screens
-// (#55/#60) but doesn't carry the rest of hub's route tree; guild/friends/
-// chat views are separate, later work under epic #59.
+// but doesn't carry the rest of hub's route tree; guild/friends/
+// chat views are separate, later work.
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -28,10 +28,10 @@ const router = createRouter({
     // Reachable whether logged in or not — a fresh install needs to be able
     // to point at a non-default server before an identity even exists.
     { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue') },
-    // Epic #623, issue #640: cross-node login approval, reached via a
+    // Cross-node login approval, reached via a
     // `?node=...&user_code=...` deep link (see `src-tauri/src/lib.rs`'s
     // deep-link listener) or typed in by hand — same shape
-    // `apps/hub/src/views/CrossNodeLogin.vue` (#639) already established.
+    // `apps/hub/src/views/CrossNodeLogin.vue` already established.
     {
       path: '/cross-node-login',
       name: 'cross-node-login',

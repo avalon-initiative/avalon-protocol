@@ -1,4 +1,4 @@
-// Social recovery (issue #201) — the Profile page's guardian-management
+// Social recovery — the Profile page's guardian-management
 // card and the "a recovery is in progress against you" notice. Same
 // mounting approach Profile.test.ts already established.
 import { createPinia, setActivePinia } from 'pinia'

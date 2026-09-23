@@ -1,4 +1,4 @@
-//! Black-box test of `avalon issue-achievement` (issue #48) — spawns the
+//! Black-box test of `avalon issue-achievement` — spawns the
 //! real built binary (`env!("CARGO_BIN_EXE_avalon")`) against a real,
 //! running `avalon-server` and Postgres, exactly the way an operator would
 //! run it from a shell. Gated `--ignored` since it needs live infra — see

@@ -1,6 +1,6 @@
 //! Automated equivalent of `docs/maintainers/milestone-1-walkthrough.md`
-//! (issue #64) — one continuous run of `Proposal.md` §23's fourteen-step
-//! milestone-1 vertical slice, plus #64's two extra checks (ledger
+//! — one continuous run of `Proposal.md` §23's fourteen-step
+//! milestone-1 vertical slice, plus two extra checks (ledger
 //! integrity, rebuild-from-ledger), against a real, running `avalon-server`
 //! and Postgres. Gated `--ignored` since it needs live infra — see
 //! `make test-live` / `make start`. Never runs under `make test`.
@@ -391,7 +391,7 @@ mod hub_side {
 
     /// Step 9's consent half, and step 12's for Game B: the player
     /// connects to an integrator and grants it exactly `capabilities` —
-    /// the real binding/consent flow (#83/#27), driven the way the Hub
+    /// the real binding/consent flow, driven the way the Hub
     /// would drive it (bearer token, no integrator credentials involved).
     pub async fn consent_to_integrator(
         http: &reqwest::Client,
@@ -564,7 +564,7 @@ mod game_side {
 
     /// Step 12: Game B reads the player's attestation history through the
     /// SDK and reports authenticity and validity as the two separate
-    /// questions they are (#76) — never merged into one boolean.
+    /// questions they are — never merged into one boolean.
     pub async fn verify_dragon_slayer(session: &Session) -> VerifiedAttestation {
         let history = session
             .achievements()
@@ -623,7 +623,7 @@ fn cli_bin() -> PathBuf {
 }
 
 /// Step 8/11: `avalon register-game` (the CLI's own name for
-/// `register-integrator`, #290), run as a real subprocess exactly as an
+/// `register-integrator`), run as a real subprocess exactly as an
 /// operator would from a shell, then its stdout parsed for the credentials
 /// it prints — the server never returns the private key a second time.
 fn register_game_via_cli(base: &str, slug: &str, name: &str) -> game_side::GameCredentials {
@@ -790,8 +790,8 @@ fn inspect_ledger_output() -> String {
 /// Step 15's own chain-integrity check, scoped to the entries *this run*
 /// produced rather than the whole shared `make start` dev ledger. Found
 /// live while writing this test: this repo's own long-lived shared dev
-/// database (accumulated across many sessions/agents over time, per
-/// `.claude/CLAUDE.md`) already carries pre-existing broken links from
+/// database (accumulated across many sessions over time)
+/// already carries pre-existing broken links from
 /// unrelated historical activity — a real, worth-a-ticket environment gap
 /// (a long-lived shared dev ledger has no cleanup story), not a defect in
 /// anything this test exercises. Asserting a blanket "chain intact" over
