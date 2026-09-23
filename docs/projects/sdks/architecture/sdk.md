@@ -100,6 +100,13 @@ funnels through); the message text carried inside that bucket is
 error variant) whenever the response has one, never the free-text `error`
 message, which stays free to reword without being a breaking change.
 
+**The stable code is always reachable.** Every SDK exposes the server's
+`code` so a caller can tell apart failures that share one status (for
+example a not-reversible versus an already-reversed rollback, both `409`):
+Rust carries it as the variant's message, C# as
+`AvalonRequestException.Code`, TypeScript as `AvalonSdkError.code`. Only the
+code is exposed, never the server's reworded prose.
+
 **Retries.** Connection errors, timeouts, and 502/503/504 — the transient
 class a node hiccup produces — are retried with exponential backoff and
 full jitter, *but only for a call that opts in as idempotent*: every read
