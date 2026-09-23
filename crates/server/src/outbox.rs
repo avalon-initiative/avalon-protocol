@@ -110,6 +110,15 @@ pub async fn enqueue(
 const DRAIN_BATCH_SIZE: i64 = 20;
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 3;
 
+/// A remote submit with no bound at all can hang a whole drain tick
+/// forever: `drain_locked` awaits each shard's commit in sequence while
+/// still holding `OUTBOX_DRAIN_LOCK_KEY`, so one unresponsive (not just
+/// erroring — genuinely hung) remote authority wedges every shard's
+/// pending rows, not just its own, and blocks every later tick from even
+/// acquiring the lock. Same 10s convention as
+/// `internal_role::REMOTE_INDEXER_TIMEOUT`.
+const REMOTE_SETTLEMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Issue #363, implementing #287's decision: hoster-configurable drain
 /// cadence, same default this constant always hardcoded.
 fn poll_interval_from_env() -> std::time::Duration {
@@ -297,7 +306,10 @@ impl RemoteSubmitConfig {
             .ok()
             .filter(|s| !s.is_empty());
         Some(Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(REMOTE_SETTLEMENT_TIMEOUT)
+                .build()
+                .expect("reqwest client with only a timeout set should always build"),
             targets,
             submit_key,
             status: RemoteSubmitStatus::default(),
