@@ -88,7 +88,7 @@ function statusTone(): 'ok' | 'warn' | 'danger' | 'pending' {
         build's pinned trust-anchor list — treated as unverified, not trusted.
       </p>
       <p v-else-if="state.kind === 'unreachable'" :class="styles.detail">
-        {{ state.message }}
+        {{ state.detail }}
       </p>
 
       <section :class="styles.section">

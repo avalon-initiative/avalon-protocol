@@ -2,14 +2,10 @@
 import { execSync } from 'node:child_process'
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
-import { generateTrustedNetworks } from './scripts/generate-trusted-networks.mjs'
 
 // The Hub is a client only — it holds no protocol state of its own. It talks
 // to avalon-server over HTTP/WebSocket at whatever AVALON_SERVER_URL points
 // to; there is no bundled backend here.
-
-// Also called here (not just from package.json's prebuild) since dev/test load this config directly.
-generateTrustedNetworks()
 
 // Footer build info: the exact git tag when built from a release, otherwise
 // the short commit hash for dev/CI builds — mirrors mobile-hub's Tauri
