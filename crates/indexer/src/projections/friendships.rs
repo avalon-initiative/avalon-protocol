@@ -7,7 +7,7 @@
 //!
 //! `friend.requested` is a recognized kind with no effect here — a pending
 //! request has no current-state row in a friendship roster (see
-//! `docs/architecture/social-graph.md`); [`decode`] returns `None` for it,
+//! `docs/projects/backend-server/architecture/social-graph.md`); [`decode`] returns `None` for it,
 //! same as for a kind this projection has never heard of.
 //!
 //! Issue #506: [`are_friends`], [`list_for`], and [`partners_of`] are the

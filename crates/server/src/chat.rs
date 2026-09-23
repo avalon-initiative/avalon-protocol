@@ -2,7 +2,7 @@
 //! the same transport shape `crate::presence` established
 //! for presence, extended to the two other realtime surfaces it was
 //! always intended to cover. See
-//! `docs/architecture/communication.md`'s "Today in the repo" section for the
+//! `docs/projects/backend-server/architecture/communication.md`'s "Today in the repo" section for the
 //! freshness-tier policy for why chat/DMs are push, not poll.
 
 use std::collections::HashMap;

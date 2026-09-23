@@ -1,5 +1,5 @@
 -- Mirror-watcher storage (issue #299, implementing #40's decided
--- no-consensus mirror model — see docs/architecture/settlement.md's
+-- no-consensus mirror model — see docs/projects/backend-server/architecture/settlement.md's
 -- "Mirror sync stays minimal" section): any mirror that independently
 -- observes and stores every Signed Tree Head it sees for a network can be
 -- compared against another mirror's (or its own past) observations at the

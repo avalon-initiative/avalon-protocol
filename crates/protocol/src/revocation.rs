@@ -28,7 +28,7 @@ pub enum RevocationReasonCodeVariant {
     /// The claim/instance was real and correctly earned/created, and the
     /// *fact that it was later revoked* is itself trust-relevant history
     /// (e.g. an achievement pulled for cheating). Stays visible, marked
-    /// revoked — the worked example `docs/architecture/revocation.md`
+    /// revoked — the worked example `docs/projects/backend-server/architecture/revocation.md`
     /// already documents for scenario C.
     Cheating,
     /// The claim/instance should never have existed in the first place —

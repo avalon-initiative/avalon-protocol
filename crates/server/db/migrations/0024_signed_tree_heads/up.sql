@@ -1,5 +1,5 @@
 -- Signed Tree Heads (issue #210, implementing #39/#40's decided design —
--- see docs/architecture/settlement.md's "What is decided (continued)"
+-- see docs/projects/backend-server/architecture/settlement.md's "What is decided (continued)"
 -- section): one row per batch commit, `tree_size` equal to that batch's
 -- `ledger_batches.last_seq` — the STH-only signing scheme #39 settled on
 -- (Certificate Transparency precedent: no per-entry signatures, only the

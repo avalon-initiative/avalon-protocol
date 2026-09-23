@@ -227,7 +227,7 @@ settles are correct.
   `authenticate()` wired to a live server; friends/presence, guilds
   (roster/channels/chat), and conversations are real, not stubbed;
   offline durability and deferred submission (`sync_journal`/`submission`)
-  are implemented. Achievement issuance still returns `NotImplemented`.
+  are implemented, as is signed achievement issuance.
 - `crates/cli/` — `avalon create-identity`, `login`, `register-integrator`,
   `inspect-ledger`/`inspect-ledger-full`, `outbox-status`, `prune-ledger`.
 - `apps/hub` — a real Vue3 client (identity, friends, guilds, conversations,

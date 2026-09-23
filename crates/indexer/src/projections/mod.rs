@@ -7,7 +7,7 @@
 //!   for a kind this projection doesn't handle or a payload it can't parse.
 //!   `None` is never an error — [`crate::postgres::PostgresIndexer`] treats
 //!   it exactly like an unrecognized event kind (see
-//!   `docs/architecture/query-and-indexing.md`: "unknown kinds are logged
+//!   `docs/projects/backend-server/architecture/query-and-indexing.md`: "unknown kinds are logged
 //!   and skipped, never an error, so old indexers survive new events").
 //!   Being pure, `decode` is unit-tested directly, with no Postgres needed.
 //! - `apply(&mut Transaction, &Write) -> Result<(), IndexError>` — the SQL

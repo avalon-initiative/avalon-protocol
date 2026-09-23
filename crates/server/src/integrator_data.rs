@@ -255,7 +255,7 @@ fn default_delete_reason_code() -> String {
 /// `DELETE /integrations/{slug}/schemas/{version}/data/{subject}` —
 /// append-only tombstone for the schema's current (non-superseded,
 /// non-deleted) instance belonging to `subject`, following
-/// `docs/architecture/revocation.md`'s pattern: the original
+/// `docs/projects/backend-server/architecture/revocation.md`'s pattern: the original
 /// `integrator_data_instances` row's `instance`/`published_at` are never
 /// touched, only `deleted_at`/`delete_reason_code`/`delete_reason` are
 /// set — the same "add a lifecycle marker, never mutate the substantive

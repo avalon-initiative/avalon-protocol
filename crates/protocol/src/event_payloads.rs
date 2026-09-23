@@ -1,11 +1,11 @@
 //! Typed `ProtocolEvent::payload` shapes, one per [`crate::events::ProtocolEventKindVariant`]
 //! — the emitter builds one of these and serializes it via
 //! `serde_json::to_value`, instead of hand-typing an ad-hoc
-//! `serde_json::json!({...})` at each call site. `docs/architecture/protocol-events-catalogue.md`
+//! `serde_json::json!({...})` at each call site. `docs/projects/backend-server/architecture/protocol-events-catalogue.md`
 //! is the normative, human-readable description of the same shapes.
 //!
 //! Deliberately **not** `#[serde(deny_unknown_fields)]` on any of these —
-//! per the versioning policy (`docs/architecture/protocol-events.md`), an
+//! per the versioning policy (`docs/projects/backend-server/architecture/protocol-events.md`), an
 //! additive field never bumps `version`, so a decoder must silently ignore
 //! a field it doesn't yet know about rather than erroring on it.
 //!
@@ -14,7 +14,7 @@
 //! added-alongside-and-deprecated the way the versioning policy otherwise
 //! requires for a field removal (which would normally bump `version` and
 //! keep the old shape decodable forever). Same grounds
-//! `docs/architecture/nodes.md`'s #290 exception already documents: this
+//! `docs/projects/backend-server/architecture/nodes.md`'s #290 exception already documents: this
 //! repo has no real deployed network and zero external integrators yet,
 //! so there is no real historical data anywhere that needs the old shape
 //! to stay decodable. Once the repo is public this exception is gone
@@ -521,14 +521,14 @@ pub struct GameDataPublishedPayload {
 }
 
 /// Issue #533: append-only tombstone for a published instance (e.g. a
-/// deleted character) — `docs/architecture/revocation.md`'s pattern
+/// deleted character) — `docs/projects/backend-server/architecture/revocation.md`'s pattern
 /// applied to Integrator Space instance data. Never mutates or removes
 /// `instance_id`'s original row; a projection marks it deleted from this
 /// event forward while the original `game_data.published` event (and this
 /// one) both stay observable in raw history. `reason_code`/`reason` match
 /// `ClaimRevokedPayload`'s *shape* but deliberately stay a free-text
 /// `String`, not #534's `RevocationReasonCode` — see
-/// `docs/architecture/revocation.md`'s "Entity/instance deletion" section
+/// `docs/projects/backend-server/architecture/revocation.md`'s "Entity/instance deletion" section
 /// for why that vocabulary (an issuer's judgment call about validity)
 /// doesn't fit a subject's own choice to delete their own data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

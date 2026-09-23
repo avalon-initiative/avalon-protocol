@@ -9,7 +9,7 @@
 -- not a realtime fact like "playing right now" — it must survive a server
 -- restart the same way any other player setting would, unlike the
 -- ephemeral store itself (ADR #78). It is also not a `ProtocolEvent`: same
--- reasoning `docs/architecture/privacy.md` already gives for visibility
+-- reasoning `docs/projects/backend-server/architecture/privacy.md` already gives for visibility
 -- settings generally ("player state, not durable protocol history, unless
 -- a later decision promotes them").
 --

@@ -15,8 +15,8 @@
 --                                that never actually registered — the
 --                                ledger entry itself carries a signature any
 --                                mirror can verify independently of trusting
---                                the node. See docs/architecture/identity.md
---                                and docs/architecture/security-model.md.
+--                                the node. See docs/projects/backend-server/architecture/identity.md
+--                                and docs/projects/backend-server/architecture/security-model.md.
 --
 -- Neither key is modeled in crates/protocol on purpose — this is server-side
 -- implementation detail, not a protocol-level concept, same reasoning the

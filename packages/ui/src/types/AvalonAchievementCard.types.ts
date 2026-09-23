@@ -9,7 +9,7 @@ export type AchievementIconName = 'trophy' | 'star' | 'shield' | 'sword'
 // One entry in an attestation's history (#81/#85's revocation model) —
 // "issued" is always present, "revoked" appended once a revocation exists.
 // No "superseded"/"reinstated" event kind exists in the protocol yet (see
-// docs/architecture/revocation.md), so this stays an open string rather
+// docs/projects/backend-server/architecture/revocation.md), so this stays an open string rather
 // than a closed union that would need updating the moment one is added.
 export interface AvalonAchievementHistoryEntry {
   event: string

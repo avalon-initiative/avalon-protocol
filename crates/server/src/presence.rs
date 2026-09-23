@@ -1,6 +1,6 @@
 //! Presence tracking: publish + read. Ephemeral realtime
 //! state — never a `ProtocolEvent`, never durable, lost on
-//! restart. See `docs/architecture/presence.md`'s "Rules" and "Today in
+//! restart. See `docs/projects/backend-server/architecture/presence.md`'s "Rules" and "Today in
 //! the repo" sections for the publish/read auth model, sticky manual
 //! overrides, and the durable `hide_active_in` opt-out.
 

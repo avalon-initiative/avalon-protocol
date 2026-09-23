@@ -6,7 +6,7 @@
 //! see this crate's exhaustive equivalence tests for the actual correctness
 //! bar.
 //!
-//! Design/tradeoff notes live in `docs/architecture/settlement.md`, not here.
+//! Design/tradeoff notes live in `docs/projects/backend-server/architecture/settlement.md`, not here.
 
 use crate::merkle::{leaf_hash, node_hash, split_point};
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 pub struct IncrementalMerkleTree {
     /// `frontier[level]` holds a completed subtree hash still awaiting its
     /// pair at that level (RFC 6962's append-only "carry" — see
-    /// `docs/architecture/settlement.md`).
+    /// `docs/projects/backend-server/architecture/settlement.md`).
     frontier: Vec<Option<[u8; 32]>>,
     nodes: HashMap<(u32, u64), [u8; 32]>,
     size: u64,

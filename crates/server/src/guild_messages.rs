@@ -1,7 +1,7 @@
 //! Guild chat messages — deliberately NOT protocol history:
 //! never touches the ledger/outbox, high-volume, non-interoperable. See
-//! `docs/architecture/guilds.md` ("Guild chat is a network primitive",
-//! "Today in the repo") and `docs/architecture/guilds-implementation-log.md`
+//! `docs/projects/backend-server/architecture/guilds.md` ("Guild chat is a network primitive",
+//! "Today in the repo") and `docs/projects/backend-server/architecture/guilds.md`
 //! for the archive-tier retention, announcement-only channels,
 //! and moderation-deletion-vs-archive semantics.
 
@@ -533,7 +533,7 @@ pub struct GuildAnnouncementAlert {
 /// any announcement-only channel in any guild the caller currently belongs
 /// to, newest first. This is a plain read, not a notification/unread
 /// tracker: read/unread state is the Hub's own client-local concern (see
-/// `docs/architecture/guilds.md`'s "Guild announcement alerts" section),
+/// `docs/projects/backend-server/architecture/guilds.md`'s "Guild announcement alerts" section),
 /// matching "chat is operational-tier, not protocol
 /// history" posture — there is nothing here to promote to durable state,
 /// so there is nothing here to track server-side either.

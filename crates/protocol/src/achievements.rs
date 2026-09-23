@@ -2,8 +2,8 @@
 //!
 //! Avalon records that an issuer made a claim about a user. It never
 //! dictates what a receiving integrator does with that claim — see
-//! `docs/stakeholders/Proposal.md` §8–9, `docs/architecture/achievements-and-attestations.md`, and the trust
-//! model in `docs/architecture/trust-model.md`.
+//! `docs/stakeholders/Proposal.md` §8–9, `docs/projects/backend-server/architecture/achievements-and-attestations.md`, and the trust
+//! model in `docs/projects/backend-server/architecture/trust-model.md`.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -22,7 +22,7 @@ pub struct AchievementDefinition {
     pub schema: Option<GlobalId>,
     /// Bumped on every `achievement.definition_updated`; the definition's
     /// `id` never changes, so this is what lets a consumer notice a
-    /// definition evolved (see `docs/architecture/achievements-and-attestations.md`).
+    /// definition evolved (see `docs/projects/backend-server/architecture/achievements-and-attestations.md`).
     pub version: u32,
 }
 
@@ -337,9 +337,9 @@ mod issuer_tests {
 /// when it took effect, not read from a flag. Reinstatement (a later entry
 /// reversing a revocation) and supersession are deliberately not
 /// built in this pass — no protocol event kind for either exists yet
-/// (`docs/architecture/protocol-events.md` catalogues `achievement.revoked`
+/// (`docs/projects/backend-server/architecture/protocol-events.md` catalogues `achievement.revoked`
 /// but no attestation-level "reinstated"/"superseded" kind), and neither
-/// is required by scenario C (`docs/architecture/revocation.md`), the one
+/// is required by scenario C (`docs/projects/backend-server/architecture/revocation.md`), the one
 /// this ticket's acceptance criteria actually requires. Tracked as
 /// deferred follow-up, not silently assumed unnecessary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -550,7 +550,7 @@ mod verification_tests {
         );
     }
 
-    /// Scenario C (`docs/architecture/revocation.md`): validity flips
+    /// Scenario C (`docs/projects/backend-server/architecture/revocation.md`): validity flips
     /// exactly at the revocation timestamp, never before it.
     #[test]
     fn scenario_c_validity_flips_exactly_at_the_revocation_timestamp() {

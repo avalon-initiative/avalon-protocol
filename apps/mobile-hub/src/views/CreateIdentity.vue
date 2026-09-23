@@ -17,7 +17,7 @@ const deviceLabel = ref('')
 const submitting = ref(false)
 const error = ref('')
 
-// Login is identity-id-first (see docs/architecture/identity.md) — save it
+// Login is identity-id-first (see docs/projects/backend-server/architecture/identity.md) — save it
 // explicitly before leaving this screen, same reasoning as apps/hub.
 const createdIdentityId = ref('')
 const copied = ref(false)

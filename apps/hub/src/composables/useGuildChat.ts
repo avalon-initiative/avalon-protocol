@@ -4,7 +4,7 @@
 // crates/server/src/guild_messages.rs), newest at the bottom, load-older on
 // demand. New messages arrive live over the /ws/messages socket
 // rather than a poll — a channel that used to be milestone-1 poll-only
-// per its own now-outdated design note; see docs/architecture/communication.md.
+// per its own now-outdated design note; see docs/projects/backend-server/architecture/communication.md.
 //
 // `channelId` is expected to change while this composable stays mounted —
 // the Channels tab sidebar swaps it as the reader picks a different channel,

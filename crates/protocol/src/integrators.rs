@@ -13,7 +13,7 @@ use crate::ids::IntegratorId;
 use crate::permissions::Capability;
 
 /// An integrator's registration status, catalogueing the
-/// full set `docs/architecture/issuers.md`'s status column always
+/// full set `docs/projects/backend-server/architecture/issuers.md`'s status column always
 /// named (`Active`/`Suspended`/`Revoked`/`Deprecated`) — milestone 1 still
 /// only ever *sets* `Active`; the network-level authorization model for who
 /// can transition an issuer into the other three, and the endpoints that do
@@ -101,7 +101,7 @@ impl KeyRole {
 /// sharded settlement: a shard operator's settlement-signing key
 /// is authorized through this exact same issuer-key registration flow,
 /// scoped with `ShardSettlement` rather than a second, separate registry
-/// — see `docs/architecture/network-trust-anchors.md`'s "Per-shard trust
+/// — see `docs/projects/backend-server/architecture/network-trust-anchors.md`'s "Per-shard trust
 /// anchors" section. Defaults to `Attestation` (`#[serde(default)]` at
 /// every call site that reads one) so every key registered before this
 /// purpose axis existed — including pre-existing recorded ledger history — keeps
@@ -196,7 +196,7 @@ impl IssuerKey {
     /// Issue #543: now also gated on `purpose` — a `ShardSettlement`
     /// key was never registered to speak for attestations at all, the
     /// same "two distinct domains, never interchangeable" boundary
-    /// `docs/architecture/issuers.md`'s key-domain table already draws.
+    /// `docs/projects/backend-server/architecture/issuers.md`'s key-domain table already draws.
     pub fn may_sign_attestations(&self) -> bool {
         self.purpose == KeyPurpose::Attestation
     }
@@ -335,7 +335,7 @@ pub struct IntegratorCredential {
 /// "This identity participates in this integrator" — nothing more. No
 /// characters, race, class, level, appearance, or progression: those stay in
 /// the integrator's own database, and this type deliberately has no field for any
-/// of them. See `docs/architecture/bindings.md`.
+/// of them. See `docs/projects/backend-server/architecture/bindings.md`.
 ///
 /// A binding is established by the **user**, through the consent flow
 /// (`POST /integrations/{slug}/connect`) — never created by an integrator
@@ -486,7 +486,7 @@ mod tests {
         assert!(!k.is_valid_at(t(10)));
     }
 
-    /// Scenario E (`docs/architecture/issuers.md`): a claim
+    /// Scenario E (`docs/projects/backend-server/architecture/issuers.md`): a claim
     /// signed by k1 in the past stays authentic after k1 is later retired —
     /// rotation never invalidates history.
     #[test]
@@ -503,7 +503,7 @@ mod tests {
         assert!(resolve_valid_signing_key(std::slice::from_ref(&k1), k1.key_id, t(20)).is_none());
     }
 
-    /// Scenario F (`docs/architecture/issuers.md`): claims signed
+    /// Scenario F (`docs/projects/backend-server/architecture/issuers.md`): claims signed
     /// by a compromised key before revocation remain authentic; claims
     /// "signed" after revocation are rejected.
     #[test]

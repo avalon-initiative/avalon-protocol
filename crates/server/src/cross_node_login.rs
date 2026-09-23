@@ -49,7 +49,7 @@ use crate::state::AppState;
 use utoipa::ToSchema;
 
 /// Identity-level signing keys (Layer 1, per
-/// `docs/architecture/identity-aggregate-view.md`'s two-layer model)
+/// `docs/projects/backend-server/architecture/identity-aggregate-view.md`'s two-layer model)
 /// typically live on one shared shard — using `"core"` here is a
 /// documented, honest simplification, not a silent
 /// assumption: the per-integrator `issuer_keys` trust mechanism

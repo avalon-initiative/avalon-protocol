@@ -14,7 +14,7 @@
 --
 -- One `event JSONB` column, not flattened columns: `ProtocolEvent` is
 -- already `Serialize`, so this is a straight round-trip with no schema
--- drift risk as the event shape evolves (see docs/architecture/protocol-events.md,
+-- drift risk as the event shape evolves (see docs/projects/backend-server/architecture/protocol-events.md,
 -- issue #82). `batch_id` is reserved for real event batching (issue #38) —
 -- unused until then, always NULL.
 CREATE TABLE protocol_outbox (

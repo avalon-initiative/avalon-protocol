@@ -754,7 +754,7 @@ impl AnnounceConfig {
     }
 }
 
-/// `AVALON_NODE_ROLES` — comma-separated (matching `docs/architecture/nodes.md`'s
+/// `AVALON_NODE_ROLES` — comma-separated (matching `docs/projects/backend-server/architecture/nodes.md`'s
 /// `Settlement`/`Indexer`/`Realtime`/`Gateway` capability names), defaulting
 /// to `combined` — milestone 1's "one `avalon-server` process" reality, per
 /// that doc's own capability table.
@@ -850,7 +850,7 @@ pub fn realtime_mode_from_env(roles: &[String]) -> Result<Option<String>, String
 /// rather than reading the env var itself, so it's trivially testable
 /// without touching process-global state.
 ///
-/// `combined` means "every role" (the table in `docs/architecture/nodes.md`'s
+/// `combined` means "every role" (the table in `docs/projects/backend-server/architecture/nodes.md`'s
 /// "Capabilities" section — Settlement/Indexer/Realtime/Gateway — describes
 /// `combined` as running all four, not as a fifth, distinct role name), so
 /// it counts as including `indexer` here exactly as it already implicitly
@@ -871,7 +871,7 @@ pub fn indexer_role_is_local(roles: &[String]) -> bool {
 /// doesn't need a new predicate here at all: #313's `AVALON_SETTLEMENT_REMOTE_URL(S)`
 /// already exists and is checked independently by `crate::outbox`, so a
 /// node can already run `combined` (or any roles list) while forwarding its
-/// own outbox writes elsewhere. See `docs/architecture/nodes.md`'s "Today in
+/// own outbox writes elsewhere. See `docs/projects/backend-server/architecture/nodes.md`'s "Today in
 /// the repo" section for why these are one config surface, not two.
 pub fn is_settlement_only(roles: &[String]) -> bool {
     roles.len() == 1 && roles[0] == "settlement"

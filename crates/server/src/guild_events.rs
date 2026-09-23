@@ -1,6 +1,6 @@
 //! Guild events calendar + RSVP — deliberately NOT protocol
 //! history, same posture as `crate::guild_messages`. See
-//! `docs/architecture/guilds-implementation-log.md`'s "Guild events
+//! `docs/projects/backend-server/architecture/guilds.md`'s "Guild events
 //! calendar + RSVP" section for the durability call, and "`event_manage`"
 //! for the per-resource-override authorization model.
 

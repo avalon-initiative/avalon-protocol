@@ -25,7 +25,7 @@ pub struct Identity {
 /// `favorite_genres`, and `pronouns` are the "later" tier:
 /// small, user-optional, non-game-specific self-description,
 /// same promised-durable tier as `display_name`/`avatar_url` — see
-/// `docs/architecture/identity.md`'s durable-field table. Server-side
+/// `docs/projects/backend-server/architecture/identity.md`'s durable-field table. Server-side
 /// validation of these (length caps, vocabulary membership) lives in
 /// `crates/server/src/handlers.rs`, not here — this crate is domain types
 /// only, no I/O, no validation logic.

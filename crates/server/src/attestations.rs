@@ -14,7 +14,7 @@
 //! consumer's own `TrustRelationship`. Publishing/serving an integrator's own
 //! declared recognition policy (the ticket's `PUT
 //! /integrations/{slug}/recognition`) is deferred, not built in this pass — see
-//! this module's own tracking note in `docs/architecture/trust-model.md`.
+//! this module's own tracking note in `docs/projects/backend-server/architecture/trust-model.md`.
 //!
 //! **Revocation is a signed, appended entry, never a mutation.**
 //! `POST /attestations/{id}/revoke` inserts a new row into the separate

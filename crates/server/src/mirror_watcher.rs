@@ -1,6 +1,6 @@
 //! The mirror-watcher — verifies and stores STHs/entries
 //! polled from configured peers, run as a background task inside
-//! `avalon-server`. See `docs/architecture/nodes.md`'s "Today in the
+//! `avalon-server`. See `docs/projects/backend-server/architecture/nodes.md`'s "Today in the
 //! repo" section for the multi-peer polling/backfill/equivocation-
 //! detection design and why it lives in-process rather than as a CLI
 //! daemon.
@@ -144,7 +144,7 @@ impl MirrorWatcherConfig {
     /// (a missed push costs at most two minutes of extra staleness, not
     /// thirty seconds) while cutting this worker's at-idle HTTP overhead
     /// by 4x for every deployment, registered or not — see
-    /// `docs/architecture/nodes.md`'s mirror-sync section for the same
+    /// `docs/projects/backend-server/architecture/nodes.md`'s mirror-sync section for the same
     /// reasoning written up for operators.
     pub fn from_env() -> Option<Self> {
         let raw = std::env::var("AVALON_MIRROR_PEERS")

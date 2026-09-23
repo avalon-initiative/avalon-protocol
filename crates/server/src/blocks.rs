@@ -2,7 +2,7 @@
 //!
 //! Never a protocol/settlement event and never a `crates/protocol` type,
 //! unlike friendship — see `crates/server/db/migrations/0006_blocks/up.sql`
-//! and `docs/architecture/social-graph.md` for the full "why" (privacy: the
+//! and `docs/projects/backend-server/architecture/social-graph.md` for the full "why" (privacy: the
 //! settlement log is a public transparency log anyone can mirror, and
 //! nobody ever needs to verify a block the way an integrator verifies an
 //! attestation). Losing this table means users re-block people — the

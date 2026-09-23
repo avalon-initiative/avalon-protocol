@@ -11,7 +11,7 @@
 //! (`create_identity`, `login`) or performs an administrative write that, in
 //! a real deployment, should be self-service by the actual user or integrator
 //! developer through the real API — not an operator running a CLI on their
-//! behalf (see `docs/architecture/settlement.md`). `dev-tools` is on by default (this crate is exactly the
+//! behalf (see `docs/projects/backend-server/architecture/settlement.md`). `dev-tools` is on by default (this crate is exactly the
 //! "local dev/ops CLI" its own top-level doc comment describes), but a build
 //! meant to ship anywhere near a production deployment should be built with
 //! `--no-default-features` — at which point this entire module, and every
@@ -143,7 +143,7 @@ pub(crate) async fn create_identity() {
     let base = server_url();
     let http = reqwest::Client::new();
 
-    // The identity's event-signing key (see docs/architecture/identity.md
+    // The identity's event-signing key (see docs/projects/backend-server/architecture/identity.md
     // and crates/server/src/auth.rs) — separate from the WebAuthn passkey
     // below, and the only thing that signs `identity.created`.
     let mut csprng = rand::rng();

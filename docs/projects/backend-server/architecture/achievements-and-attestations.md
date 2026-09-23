@@ -195,9 +195,9 @@ the other.
 - `crates/protocol/src/ids.rs` — `GlobalId::new(namespace, owner, kind, key)`,
   `AttestationId`, `IdentityId` (`Display`-able, `"{subject}"` in the
   signing bytes above).
-- The Rust SDK's `Session::achievements()` and `issue_achievement()` check the
-  capability, then return `NotImplemented` — the server endpoint exists, the SDK
-  client wrapper for single-claim issuance does not.
+- The Rust SDK's `Session::achievements()`, `issue_achievement()` and
+  `issue_achievements_bulk()` check the capability, then call the server
+  endpoint below with an idempotency key.
 - `crates/server/src/achievements.rs` — `POST
   /integrations/{slug}/achievements/{key}/issue` /
   `POST /integrations/{slug}/milestones/{key}/issue`: verifies the caller

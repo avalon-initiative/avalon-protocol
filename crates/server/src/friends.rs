@@ -6,7 +6,7 @@
 //! routes only ever accepting a session bearer token in the first place, not
 //! by an explicit per-request check against a credential kind.
 //!
-//! A friendship is promised-durable per `docs/architecture/social-graph.md`:
+//! A friendship is promised-durable per `docs/projects/backend-server/architecture/social-graph.md`:
 //! `friend.requested` and `friend.accepted` (or `friend.removed`) are
 //! written into the outbox in the same transaction as the `friendships`/
 //! `friend_requests` projection change, same pattern `handlers::register_finish`
@@ -16,7 +16,7 @@
 //! Events here are session-authenticated but not yet individually signed —
 //! no general per-event signing ceremony exists in this repo, only
 //! `identity.created`'s one-off Ed25519 signature. This matches
-//! `docs/architecture/protocol-events.md`'s "network as signer" milestone-1
+//! `docs/projects/backend-server/architecture/protocol-events.md`'s "network as signer" milestone-1
 //! stand-in, attributed to the acting identity via `issuer` rather than to
 //! the node, since the request already proves the actor's session.
 

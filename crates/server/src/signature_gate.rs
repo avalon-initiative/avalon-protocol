@@ -1,6 +1,6 @@
 //! Shared "fresh signature" enforcement for the signature-required
 //! account-action tier — see
-//! `docs/architecture/identity.md`'s "Action-tier classification" section
+//! `docs/projects/backend-server/architecture/identity.md`'s "Action-tier classification" section
 //! for the endpoint-by-endpoint list this backs. Deliberately reuses
 //! `auth::verify_event_signature` rather than inventing a new signing
 //! scheme, mirroring `devices::device_grant_approval_signing_bytes`'s wire

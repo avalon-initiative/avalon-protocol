@@ -1,6 +1,6 @@
 //! Mirror-watcher storage and equivocation detection — issue #299,
 //! implementing #40's decided no-consensus mirror model. See
-//! `docs/architecture/settlement-implementation-notes.md`'s equivocation-
+//! `docs/projects/backend-server/architecture/settlement.md`'s equivocation-
 //! detection section for the storage tables, why `detect_equivocation` is
 //! a pure I/O-free function, and the durable-row-plus-structured-log
 //! surfacing mechanism.

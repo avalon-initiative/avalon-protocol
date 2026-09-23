@@ -1,4 +1,4 @@
-//! Node-tiered durable history retention. See `docs/architecture/nodes.md`'s "Settlement retention
+//! Node-tiered durable history retention. See `docs/projects/backend-server/architecture/nodes.md`'s "Settlement retention
 //! tiers" section for the two-tier design, the env config, and the
 //! honest milestone-1 caveat that pruning today means real permanent
 //! data loss since no archive-tier mirror network exists yet.

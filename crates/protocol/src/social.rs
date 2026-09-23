@@ -19,7 +19,7 @@ pub struct Friendship {
 /// A friend request awaiting a response. Distinct from [`Friendship`] — a
 /// request never becomes durable history on its own; only the resulting
 /// `friend.accepted` (or nothing, if declined/withdrawn) does. See
-/// `docs/architecture/social-graph.md`.
+/// `docs/projects/backend-server/architecture/social-graph.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FriendRequest {
     pub from: IdentityId,
@@ -56,7 +56,7 @@ pub struct Presence {
 /// sibling of [`crate::guilds::GuildChannel`], mirroring its shape: pure
 /// structure, no integrator reference anywhere. A conversation between users is
 /// a fact about their relationship, not about whichever integrator either of them
-/// had open when it started — see `docs/architecture/communication.md`.
+/// had open when it started — see `docs/projects/backend-server/architecture/communication.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: uuid::Uuid,

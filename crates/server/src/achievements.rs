@@ -1,7 +1,7 @@
 //! Claim-definition CRUD per issuer, generalized to
 //! `App`/`Service` — an issuer defines its achievements or
 //! milestones before it can issue them. See
-//! `docs/architecture/achievements-and-attestations.md`'s "Today in the
+//! `docs/projects/backend-server/architecture/achievements-and-attestations.md`'s "Today in the
 //! repo" and "Namespacing" sections for the category-driven claim
 //! vocabulary, auth model, and update/retirement semantics.
 
@@ -141,7 +141,7 @@ const MAX_ICON_URL_LEN: usize = 2048;
 /// `claim_kind` is `"achievement"` or `"milestone"`
 /// (`IntegratorCategory::claim_kind`), never caller-chosen. The two kinds
 /// share one payload schema per row (see
-/// `docs/architecture/protocol-events-catalogue.md`); only the *kind
+/// `docs/projects/backend-server/architecture/protocol-events-catalogue.md`); only the *kind
 /// string* differs.
 pub(crate) fn claim_kind_variant(
     claim_kind: &str,

@@ -1,4 +1,4 @@
-//! Cross-shard commitment. See `docs/architecture/settlement.md`'s
+//! Cross-shard commitment. See `docs/projects/backend-server/architecture/settlement.md`'s
 //! "Cross-shard commitment" section for the full design this
 //! implements — this module is the aggregation math alone, deliberately
 //! pure and DB-free (no network I/O, no Postgres): given the set of
@@ -20,7 +20,7 @@ use crate::sth::SignedTreeHead;
 /// state, as gossiped/fetched from wherever a node learned about it. The
 /// caller is responsible for having already verified `sth`'s signature
 /// against that shard's own registered key (see
-/// `docs/architecture/network-trust-anchors.md`'s "Per-shard trust
+/// `docs/projects/backend-server/architecture/network-trust-anchors.md`'s "Per-shard trust
 /// anchors" section) before handing it to this module — aggregation
 /// itself does not re-verify shard-level authenticity, only combines
 /// already-trusted inputs deterministically.

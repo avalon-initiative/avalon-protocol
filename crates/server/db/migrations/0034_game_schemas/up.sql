@@ -33,7 +33,7 @@ CREATE INDEX game_schemas_game_id_idx ON game_schemas (game_id);
 
 -- The indexer's own read model (`crates/indexer/src/projections/game_schemas.rs`),
 -- kept as its own table per this repo's settlement-vs-querying split
--- (`docs/architecture/query-and-indexing.md`) rather than the server
+-- (`docs/projects/backend-server/architecture/query-and-indexing.md`) rather than the server
 -- querying `game_schemas` above directly for registry discovery — the
 -- server's table is this endpoint's own request-serving cache; the
 -- indexer's is the durable-event-derived read model the registry surfaces,

@@ -24,7 +24,7 @@
 -- (renames), mirroring `integrator_schemas.field_visibility`'s own
 -- shape; `description` is free text for whatever a flat map can't
 -- capture (merges, splits, dropped fields, default values) — see
--- `docs/architecture/integrator-space.md`'s worked example.
+-- `docs/projects/backend-server/architecture/integrator-space.md`'s worked example.
 CREATE TABLE integrator_schema_mappings (
     id TEXT PRIMARY KEY,
     integrator_id UUID NOT NULL REFERENCES integrators(id) ON DELETE CASCADE,
@@ -44,7 +44,7 @@ CREATE INDEX integrator_schema_mappings_integrator_id_idx
 -- The indexer's own read model
 -- (`crates/indexer/src/projections/integrator_schema_mappings.rs`), kept as
 -- its own table per this repo's settlement-vs-querying split
--- (`docs/architecture/query-and-indexing.md`) — same posture
+-- (`docs/projects/backend-server/architecture/query-and-indexing.md`) — same posture
 -- `indexer_integrator_schemas` already established for schema versions.
 CREATE TABLE indexer_integrator_schema_mappings (
     id TEXT PRIMARY KEY,

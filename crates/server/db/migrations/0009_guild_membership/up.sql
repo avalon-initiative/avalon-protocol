@@ -1,5 +1,5 @@
 -- Membership lifecycle backing `GuildMember`, closing issue #21. See
--- `docs/architecture/guilds.md` and issues #74/#75 for why membership is a
+-- `docs/projects/backend-server/architecture/guilds.md` and issues #74/#75 for why membership is a
 -- durable, network-owned fact and this table (like `guild_invites` below)
 -- is a rebuildable projection, not the record — the canonical history is
 -- `guild.member_added` / `guild.member_removed` / `guild.role_changed` in

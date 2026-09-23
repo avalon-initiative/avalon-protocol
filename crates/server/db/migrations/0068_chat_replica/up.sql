@@ -8,7 +8,7 @@
 -- `identities(id)`, which a node receiving a replicated message may not
 -- itself hold a copy of (today's architecture replicates core
 -- identity/guild data only to a node that's also authoring it directly —
--- see docs/architecture/nodes.md; the indexer-projection replication
+-- see docs/projects/backend-server/architecture/nodes.md; the indexer-projection replication
 -- #506 built covers membership rosters, not the core
 -- `guild_channels`/`identities` tables these foreign keys point at). A
 -- disaster-recovery copy that can fail to insert because of an unrelated

@@ -159,7 +159,7 @@ async fn main() {
 /// (the original) stays a working deprecated alias so existing scripts
 /// keep running. Both route here to the exact same
 /// `RegisterIntegratorArgs::parse`/`register_integrator` call — see
-/// `docs/architecture/issuers.md`.
+/// `docs/projects/backend-server/architecture/issuers.md`.
 #[cfg(feature = "dev-tools")]
 fn is_register_integrator_command(command: &str) -> bool {
     matches!(command, "register-integrator" | "register-game")
@@ -564,7 +564,7 @@ fn arg_value(raw_args: &[String], flag: &str) -> Option<String> {
 /// capture directly.
 ///
 /// **"ALL" is never a silent default** — mirroring another node's data is a
-/// deliberate trust decision (`docs/architecture/nodes.md`'s node-authority
+/// deliberate trust decision (`docs/projects/backend-server/architecture/nodes.md`'s node-authority
 /// model), not something that should happen just because a peer showed up
 /// in discovery. An empty selection (just pressing enter) mirrors nothing,
 /// same as skipping the prompt entirely.
@@ -1082,7 +1082,7 @@ async fn inspect_ledger(full: bool) {
         println!("retention: full — every entry's payload is present");
     } else {
         println!(
-            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see docs/architecture/nodes.md)",
+            "retention: hot-tier / pruned — {pruned} of {} entries have had their payload pruned locally (still fully present in every other node/mirror the network guarantees, or, at milestone-1 scale with one settlement database, permanently gone — see docs/projects/backend-server/architecture/nodes.md)",
             entries.len()
         );
     }

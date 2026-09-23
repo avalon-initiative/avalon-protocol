@@ -11,7 +11,7 @@ export interface AvalonIntegratorCardProps {
   // key rotation/suspension/revocation yet), but the badge below treats
   // anything other than exactly "active" as visibly distinct rather than
   // assuming the full active/suspended/revoked/deprecated vocabulary
-  // docs/architecture/registry.md sketches.
+  // docs/projects/backend-server/architecture/registry.md sketches.
   status: string
   registeredAt: string
 }

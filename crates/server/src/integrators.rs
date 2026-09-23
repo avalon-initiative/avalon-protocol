@@ -1,5 +1,5 @@
 //! Integrator registration and server-to-server integrator authentication.
-//! See `docs/architecture/issuers.md` and `docs/architecture/registry.md`'s
+//! See `docs/projects/backend-server/architecture/issuers.md` and `docs/projects/backend-server/architecture/registry.md`'s
 //! "Today in the repo" sections for registration, key rotation, and listing details.
 
 use std::collections::HashMap;

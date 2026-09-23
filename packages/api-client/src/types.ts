@@ -364,7 +364,7 @@ export interface CrossNodeLoginDenyResponse {
 // `identity_signing_keys` (event-authorship keys), these manage
 // `identity_keys` (WebAuthn login credentials) — same "device with a label
 // and a revoke button" shape in the UI, different underlying table and
-// security property, per docs/architecture/identity.md.
+// security property, per docs/projects/backend-server/architecture/identity.md.
 
 export interface AddPasskeyStartResponse {
   ticket_id: string
@@ -405,7 +405,7 @@ export interface SetGuardiansRequest {
   threshold: number
   // #697/#698: only enforced server-side when this write removes an
   // existing guardian or raises the threshold — see
-  // docs/architecture/identity.md.
+  // docs/projects/backend-server/architecture/identity.md.
   signing_key_id?: string
   signature?: string
 }
@@ -610,7 +610,7 @@ export interface UpdateGuildRequest {
 // GET /guilds/{id}/integrator-breakdown:
 // aggregated count of guild members holding an active IntegratorBinding per
 // integrator, computed on read — never a manager-declared association (superseded
-// #20 behavior, see docs/architecture/guilds.md). No minimum-member
+// #20 behavior, see docs/projects/backend-server/architecture/guilds.md). No minimum-member
 // threshold: every integrator with at least one bound member appears.
 export interface GameBreakdownEntry {
   integrator_id: string
@@ -1055,7 +1055,7 @@ export type MyConnectionsResponse = IntegratorBindingResponse[]
 }
 
 // Guild events calendar + RSVP. See
-// `crates/server/src/guild_events.rs` and `docs/architecture/guilds.md`'s
+// `crates/server/src/guild_events.rs` and `docs/projects/backend-server/architecture/guilds.md`'s
 // "Guild events calendar + RSVP" section for the durability call: no
 // `guild_events`/`guild_event_rsvps` row is protocol history, both are
 // plain projections, same "hot state, not history" posture chat messages

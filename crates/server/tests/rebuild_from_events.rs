@@ -446,7 +446,7 @@ async fn rebuild_reproduces_integrator_data_deletion() {
 
     // The tombstone event is real, durable ledger history — never a
     // physical delete/mutation of the original entry, per
-    // docs/architecture/revocation.md's own standard.
+    // docs/projects/backend-server/architecture/revocation.md's own standard.
     let ledger_kinds: Vec<String> = sqlx::query_scalar(
         "SELECT kind FROM ledger_entries WHERE payload->>'id' = $1 OR payload->>'instance_id' = $1 ORDER BY seq",
     )
@@ -712,7 +712,7 @@ async fn replay_onto_rebuilt_index_is_noop() {
 /// Issue #43's acceptance criterion that the exclusion list is a
 /// deliberate, checked decision, not an accident: every table this repo's
 /// disaster-recovery doc names as out of scope
-/// (`docs/architecture/disaster-recovery.md`) must NOT appear in
+/// (`docs/projects/backend-server/architecture/disaster-recovery.md`) must NOT appear in
 /// [`PROJECTION_TABLES`] — a promised-durable projection and an explicitly
 /// ephemeral/credential table must never be the same table.
 #[test]

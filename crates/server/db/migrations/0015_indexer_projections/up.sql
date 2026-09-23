@@ -1,5 +1,5 @@
 -- The indexer's own tables, closing issue #42. See
--- `crates/indexer/src/postgres.rs` and `docs/architecture/query-and-indexing.md`.
+-- `crates/indexer/src/postgres.rs` and `docs/projects/backend-server/architecture/query-and-indexing.md`.
 --
 -- `profiles` is not touched here — it already exists
 -- (0001_identity_and_auth, 0005_friend_handles) and becomes a projection in

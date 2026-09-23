@@ -6,11 +6,11 @@
 # /crates/chain/       @LunarVagabond
 # /crates/indexer/     @LunarVagabond
 # /crates/server/      @LunarVagabond
-# /crates/sdk/         @LunarVagabond
+# /crates/devenv/      @LunarVagabond
 # /crates/cli/         @LunarVagabond
 # /apps/hub/           @LunarVagabond
 # /apps/mobile-hub/    @LunarVagabond
 # /packages/ui/        @LunarVagabond
-# /bindings/csharp/    @LunarVagabond
+# /packages/api-client/ @LunarVagabond
 # /docs/               @LunarVagabond
 # /.github/            @LunarVagabond

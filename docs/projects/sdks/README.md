@@ -19,14 +19,14 @@ capability/grant model, one error taxonomy, one wire protocol) documented
 once in [`architecture/sdk.md`](architecture/sdk.md); each language gets a
 thin subfolder for what's actually language-specific.
 
-**Why one folder, not one per language:** SDKs are planned to move to
-generated bindings off a shared protobuf/schema definition rather than
-hand-written per-language code — at that point "the C# SDK" and "the Rust
-SDK" stop being separately maintained projects and become two output
-targets of the same generator, likely living in one repo together. Keeping
-them as one project here now, rather than splitting language-by-language,
-matches where this is actually headed instead of a structure that would
-need undoing later.
+**Why one folder, not one per language:** every SDK's wire types are
+generated from one shared schema — the OpenAPI document `avalon-server`
+publishes at `docs/generated/openapi.json` (`typify` for Rust,
+`openapi-typescript` for TypeScript, an NSwag-based generator for C#), with
+a shared conformance suite guarding the hand-written signing logic. The
+languages are output targets of one schema, and they live in one repo
+together (`avalon-sdks`), so they are documented as one project rather than
+one per language.
 
 ## Languages
 

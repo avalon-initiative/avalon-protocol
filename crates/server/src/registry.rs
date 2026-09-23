@@ -3,7 +3,7 @@
 //! anything that isn't the Hub) — the Integrator Registry's derived-metrics
 //! read surface: four durable-derived facts about an integrator/issuer, each
 //! carrying its own definition and class label, per
-//! `docs/architecture/registry.md`. No composite score, no ranking — see
+//! `docs/projects/backend-server/architecture/registry.md`. No composite score, no ranking — see
 //! that doc's "statistics inform trust; they do not determine it."
 //!
 //! A separate endpoint rather than folding these fields into `GET
@@ -19,7 +19,7 @@
 //!
 //! Public and unauthenticated, same visibility level `integrators::get_integrator`
 //! already uses: aggregates only, never per-player data
-//! (`docs/architecture/registry.md`'s privacy invariant), so nothing
+//! (`docs/projects/backend-server/architecture/registry.md`'s privacy invariant), so nothing
 //! returned here is sensitive. An integrator with no binding/achievement activity
 //! at all returns zeros for every metric, not an error — same "absence
 //! means nothing happened yet" posture the rest of this crate's read

@@ -7,7 +7,7 @@
 -- the column type.
 --
 -- `location` is self-described free text only — never IP-derived or
--- geocoded (see docs/architecture/identity.md and
+-- geocoded (see docs/projects/backend-server/architecture/identity.md and
 -- crates/protocol/src/identity.rs's `Profile::location` doc comment).
 ALTER TABLE profiles ADD COLUMN banner_url TEXT;
 ALTER TABLE profiles ADD COLUMN status TEXT;

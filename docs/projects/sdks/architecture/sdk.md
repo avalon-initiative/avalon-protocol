@@ -457,7 +457,7 @@ currently report full route coverage against the published API.
 
 ## Known limitations
 
-- **Zero-URL `connect()` discovery is real in all three SDKs (#91), but
+- **Zero-URL `connect()` discovery is real in all three SDKs, but
   unranked.** `AvalonClient::connect(target, config)` (Rust),
   `AvalonClient.ConnectAsync(target, config)` (C#) and
   `AvalonClient.connect(target)` (TypeScript) resolve a `TargetNetwork` (an

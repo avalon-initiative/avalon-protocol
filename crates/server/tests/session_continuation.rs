@@ -12,7 +12,7 @@
 //! original ceremony: it only ever reads
 //! `avalon_indexer::projections::identity_signing_keys`, exactly what a
 //! mirror-only node would also read from replayed history. See
-//! `docs/architecture/identity.md`'s session-continuation section.
+//! `docs/projects/backend-server/architecture/identity.md`'s session-continuation section.
 
 use ed25519_dalek::{Signer, SigningKey};
 use passkey_authenticator::{Authenticator, MemoryStore, MockUserValidationMethod};

@@ -338,8 +338,8 @@ broken/misconfigured node.
 
 A developer should not need to know `postgres://...` or
 `http://node-37.example.com`. Every official SDK (Rust, C#, TypeScript) resolves a
-node itself, given a target network rather than a URL (#91,
-`discover`/`AvalonClient::connect`; Rust shown):
+node itself, given a target network rather than a URL
+(`discover`/`AvalonClient::connect`; Rust shown):
 
 ```rust
 let avalon = AvalonClient::connect(
@@ -350,9 +350,8 @@ let avalon = AvalonClient::connect(
 
 Candidates come from `docs/trusted-networks.json`'s `server_url`/`seed_nodes`
 for the matching network entry — no separate discovery registry yet, since
-that file is already exactly "a published node list" (#91's design lists
-this as one of three acceptable discovery sources, alongside a well-known
-endpoint or DNS). Each candidate is verified the same way an already-known
+that file is already exactly "a published node list" (one of three
+plausible discovery sources, alongside a well-known endpoint or DNS). Each candidate is verified the same way an already-known
 URL is (`GET /ledger/sth/latest` against the entry's pinned `verify_key`);
 the first that verifies wins. Selection is "first that verifies," not yet
 ranked by latency, geographic proximity, health, or operator preference —
@@ -365,8 +364,8 @@ mirroring the public network and a private, disconnected instance both
 [`./self-hosting.md`](./self-hosting.md).
 
 `GET /nodes/discover`
-(`crates/server/src/nodes.rs`, #802) is the standalone server-side
-discovery endpoint #91 originally called for: given one already-verified
+(`crates/server/src/nodes.rs`) is the standalone server-side
+discovery endpoint: given one already-verified
 node, it returns that node's own `GET /nodes/status` output plus its full
 `GET /nodes/peers` table in a single response, so a client that has
 reached exactly one node can expand its candidate pool without a second
@@ -525,7 +524,7 @@ Concrete node-to-node version awareness (`crates/server/src/version.rs`):
   when known via peer gossip, a `stale` flag — a self-diagnostic "you may
   want to upgrade" signal only; nothing reads `stale` to change behavior.
   `roles` is what a caller that already has this node's URL uses for
-  capability negotiation (#91) — settlement/indexer/realtime/gateway,
+  capability negotiation — settlement/indexer/realtime/gateway,
   before routing a request to it. The same response also carries a
   `resources` block — this node's own host-level
   CPU/memory/disk/process metrics plus its DB pool size/in-use — with the

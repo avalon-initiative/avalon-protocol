@@ -17,7 +17,7 @@
 -- history" treatment `guild_messages` and presence already established,
 -- not the "structure is durable, content isn't" split channels/messages
 -- use. See `crates/server/src/guild_events.rs`'s module doc comment and
--- `docs/architecture/guilds.md` for the same reasoning stated for readers
+-- `docs/projects/backend-server/architecture/guilds.md` for the same reasoning stated for readers
 -- of the architecture doc.
 --
 -- Nothing here is promised-durable or reconstructable from protocol
