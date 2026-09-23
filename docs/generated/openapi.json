@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.3.0"
+    "version": "0.3.1"
   },
   "paths": {
     "/attestations/{id}": {
@@ -5142,7 +5142,7 @@
         "parameters": [
           {
             "name": "since",
-            "in": "path",
+            "in": "query",
             "description": "RFC 3339 timestamp at which the owner believes the compromise began.",
             "required": true,
             "schema": {
