@@ -337,9 +337,9 @@ broken/misconfigured node.
 ## Discovery
 
 A developer should not need to know `postgres://...` or
-`http://node-37.example.com`. The Rust SDK resolves a node itself, given a
-target network rather than a URL (#91's first landed slice, `network.rs`'s
-`discover`/`AvalonClient::connect`):
+`http://node-37.example.com`. Every official SDK (Rust, C#, TypeScript) resolves a
+node itself, given a target network rather than a URL (#91,
+`discover`/`AvalonClient::connect`; Rust shown):
 
 ```rust
 let avalon = AvalonClient::connect(
@@ -364,13 +364,13 @@ mirroring the public network and a private, disconnected instance both
 "self-host" the same code — they are not the same thing; see
 [`./self-hosting.md`](./self-hosting.md).
 
-Not yet ported to C#/TypeScript. `GET /nodes/discover`
+`GET /nodes/discover`
 (`crates/server/src/nodes.rs`, #802) is the standalone server-side
 discovery endpoint #91 originally called for: given one already-verified
 node, it returns that node's own `GET /nodes/status` output plus its full
 `GET /nodes/peers` table in a single response, so a client that has
 reached exactly one node can expand its candidate pool without a second
-round trip. Not yet wired into any SDK's `connect()` — the Rust SDK still
+round trip. Not yet wired into any SDK's `connect()` — each SDK still
 only tries `docs/trusted-networks.json`'s static `server_url`/`seed_nodes`
 list, one candidate at a time — and still not ranked candidate selection:
 `/nodes/discover` hands back a node's raw peer set, not a set ordered by
@@ -392,10 +392,9 @@ announce/exchange peer set grows past its bootstrap list over time —
 `run_worker` keeps its own growing `active_peers` list, seeded from the
 bootstrap set (never evicted) and extended, capped by `AVALON_NODE_MAX_PEERS`
 (default 50), with peers discovered through announce exchanges. Not built:
-capability-aware routing — the Rust SDK's own zero-URL `connect()` (below)
+capability-aware routing — every SDK's zero-URL `connect()` (below)
 picks any STH-verified candidate from `docs/trusted-networks.json`, not
-the best one by role/latency/health; C# and TypeScript SDKs still take
-only a bare `server_url`, with no discovery of their own yet.
+the best one by role/latency/health.
 
 **Realtime relay and DHT bootstrap consume this peer table.** The realtime
 relay (see [`presence.md`](./presence.md)/[`communication.md`](./communication.md))
@@ -468,10 +467,9 @@ larger mesh is exactly what the DHT-scoped interest routing above narrows the
 targeting to.
 
 **No capability-aware SDK-side routing yet**: the peer table above is a
-server-to-server mechanism, not consumed by client-side routing — the Rust
-SDK's `connect()` (above) only picks a verified server to talk to, it
-doesn't route individual calls by role. C# and TypeScript client configs
-still take only a bare URL. No export format for the log exists yet either.
+server-to-server mechanism, not consumed by client-side routing — the
+SDKs' `connect()` (above) only pick a verified server to talk to, they
+don't route individual calls by role. No export format for the log exists yet either.
 
 ## Version rollout
 

@@ -457,22 +457,21 @@ currently report full route coverage against the published API.
 
 ## Known limitations
 
-- **`Avalon::connect()` discovery lands first in the Rust SDK only, not
-  yet C#/TypeScript (#91).** `AvalonClient::connect(target, config)`
-  resolves a `TargetNetwork` (an exact `network_id` or a deployment tier)
-  to a live server with no URL supplied up front: candidates come only
-  from `docs/trusted-networks.json`'s own `server_url`/`seed_nodes` fields
-  for matching entries, each one fetched and verified via the same
-  `GET /ledger/sth/latest` STH check `verify_network()` already used for
-  an already-known URL — so a candidate that answers but isn't
-  cryptographically the target network is rejected, not silently
-  accepted. First candidate that verifies wins; every rejected candidate
-  is retained so a caller can see why. `AvalonConfig { server_url }`
-  remains fully supported for self-hosted/local-dev connections — this is
-  additive. Porting `connect()`/the underlying STH trust-anchor
-  verification (`network.rs`'s whole module, #482) to C#/TypeScript, and
-  the standalone server-side discovery/health/capabilities endpoint #91
-  originally called for, are both still open. Capability negotiation for
+- **Zero-URL `connect()` discovery is real in all three SDKs (#91), but
+  unranked.** `AvalonClient::connect(target, config)` (Rust),
+  `AvalonClient.ConnectAsync(target, config)` (C#) and
+  `AvalonClient.connect(target)` (TypeScript) resolve a `TargetNetwork` (an
+  exact `network_id` or a deployment tier) to a live server with no URL
+  supplied up front: candidates come only from `docs/trusted-networks.json`'s
+  own `server_url`/`seed_nodes` fields for matching entries, each fetched and
+  verified via the same `GET /ledger/sth/latest` STH check `verify_network()`
+  uses for an already-known URL — so a candidate that answers but isn't
+  cryptographically the target network is rejected, not silently accepted.
+  First candidate that verifies wins; every rejected candidate is retained so
+  a caller can see why. Explicit-URL construction remains fully supported for
+  self-hosted/local-dev connections — this is additive. No SDK yet consumes
+  the server's `GET /nodes/discover` peer-set expansion or ranks candidates by
+  latency/health/role. Capability negotiation for
   an already-known URL is real, across all three official SDKs:
   `GET /nodes/status` reports a node's own `roles`
   (settlement/indexer/realtime/gateway), exposed as
