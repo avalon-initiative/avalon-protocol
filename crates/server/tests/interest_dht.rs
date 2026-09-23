@@ -238,6 +238,18 @@ async fn nodes_on_different_networks_never_see_each_others_interest_records() {
 /// DHT command channel (its receiver dropped before the call) — any
 /// attempt to actually fall through to the DHT would find nobody home. If
 /// this still finds the right answer, Redis alone must have supplied it.
+///
+/// Uses an `Identity` scope, not `Channel`: #610 (after this test was
+/// first written) moved `Channel`/`Conversation` scopes onto a
+/// signed-claim-only model (`InterestRegistry::register_with_claim`,
+/// never Redis, never a bare `register()`) — a plain `register()` on a
+/// `Channel` scope now makes `dht_value` return `None`, so `run_worker`
+/// never puts *anything* for it, DHT included, and this test would
+/// silently prove nothing at all. This went uncaught for a while because
+/// `AVALON_REDIS_URL` being unset meant the whole test short-circuited on
+/// the `expect` above before ever reaching the part that would have
+/// shown it. `Identity`/`Network` scopes still use the plain
+/// `own_base_url`-in-Redis model this test actually exercises.
 #[tokio::test]
 #[ignore]
 async fn redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead() {
@@ -257,7 +269,7 @@ async fn redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead() {
         Some(redis_fast_path.clone()),
     ));
 
-    let scope = InterestScope::Channel(Uuid::new_v4());
+    let scope = InterestScope::Identity(Uuid::new_v4());
     let _guard = registry.register(scope);
 
     // Real network round trip for run_worker's immediate-on-registration
