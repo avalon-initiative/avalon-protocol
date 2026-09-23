@@ -29,7 +29,7 @@ import {
   AvalonTextField,
 } from '@avalon/ui'
 import type { AvalonIconName } from '@avalon/ui'
-import type { Role, GuildEvent } from '@avalon/sdk'
+import type { Role, GuildEvent } from '@avalon-initiative/protocol-sdk'
 import ResourcePermissionOverrides from '../components/ResourcePermissionOverrides.vue'
 import { MESSAGE_BODY_MAX_CHARS } from '../api/guildChat'
 import { localDateKey, sortByStartsAt, toLocalDateTimeInput, validateEventForm } from '../api/guildEvents'

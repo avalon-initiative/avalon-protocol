@@ -17,7 +17,7 @@ import {
   markChannelSeen,
   previewBody,
 } from '../api/guildAnnouncements'
-import type { GuildAnnouncementAlert } from '@avalon/sdk'
+import type { GuildAnnouncementAlert } from '@avalon-initiative/protocol-sdk'
 import NetworkStatus from '../components/NetworkStatus.vue'
 import { useNotificationSummary } from '../composables/useNotificationSummary'
 import { useSessionStore } from '../api/session'

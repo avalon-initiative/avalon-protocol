@@ -8,8 +8,8 @@
 // client-side presentation, never a protocol event or server computation
 // — the Hub renders verification results, it never computes trust or rank.
 import type { AchievementIconName } from '@avalon/ui'
-import { getIntegrator, listAchievementDefinitions, listMilestoneDefinitions } from '@avalon/sdk'
-import type { AccountSession, Attestation, AttestationHistoryEntry as AttestationHistoryEntryWire } from '@avalon/sdk'
+import { getIntegrator, listAchievementDefinitions, listMilestoneDefinitions } from '@avalon-initiative/protocol-sdk'
+import type { AccountSession, Attestation, AttestationHistoryEntry as AttestationHistoryEntryWire } from '@avalon-initiative/protocol-sdk'
 import { getServerUrl } from './serverUrl'
 
 // `issuer` on the wire is "<namespace>:<slug>" (crates/server/src/achievements.rs's

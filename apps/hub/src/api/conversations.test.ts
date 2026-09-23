@@ -5,7 +5,7 @@ import {
   toOldestFirst,
   validateComposerBody,
 } from './conversations'
-import type { ConversationMessage, Conversation } from '@avalon/sdk'
+import type { ConversationMessage, Conversation } from '@avalon-initiative/protocol-sdk'
 
 describe('validateComposerBody', () => {
   it('rejects an empty body', () => {

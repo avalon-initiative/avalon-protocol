@@ -7,7 +7,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { AvalonCard, AvalonIcon } from '@avalon/ui'
 import { formatActivityTimestamp, summarizeActivityEntry } from '../api/activityFeed'
-import type { HistoryEntry } from '@avalon/sdk'
+import type { HistoryEntry } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'
 import page from '../styles/page.module.scss'
 import styles from '../styles/Activity.module.scss'

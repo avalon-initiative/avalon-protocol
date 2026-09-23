@@ -1,7 +1,7 @@
 // Turns a raw HistoryEntryResponse into something an actual
 // user would want to read. Kept as pure functions, testable
 // without mounting Activity.vue: given an event, what should the feed say.
-import type { HistoryEntry } from '@avalon/sdk'
+import type { HistoryEntry } from '@avalon-initiative/protocol-sdk'
 
 // `payload` comes back as `unknown` — every accessor here checks its own
 // shape rather than assuming, so a malformed or future-shaped payload never

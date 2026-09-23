@@ -16,7 +16,7 @@
 // approving/rejecting), not merely by visiting the page — unlike the two
 // "have I seen this yet" sources above, resolving is the correct signal
 // for something the caller must actually act on.
-import type { ConversationMessage } from '@avalon/sdk'
+import type { ConversationMessage } from '@avalon-initiative/protocol-sdk'
 
 const DM_LAST_SEEN_STORAGE_KEY = 'avalon:conversations:lastSeen'
 const GUARDIAN_OF_SEEN_STORAGE_KEY = 'avalon:guardianOf:seen'

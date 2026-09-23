@@ -19,10 +19,6 @@ apps/hub/src/generated/
 apps/mobile-hub/src-tauri/target/
 apps/mobile-hub/src-tauri/gen/
 
-# .NET (bindings/csharp)
-bindings/csharp/**/bin/
-bindings/csharp/**/obj/
-
 # -----------------------------------------------------------------------------
 # Common patterns — OS junk, editors, secrets, scratch. Stack-specific entries
 # (target/, node_modules/, __pycache__/, etc.) go above this block, added
@@ -88,7 +84,6 @@ Session.vim
 *.ntvs*
 *.njsproj
 *.sln
-!bindings/csharp/*.sln
 *.sw?
 
 # Debug and profiling

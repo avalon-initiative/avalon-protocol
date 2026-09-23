@@ -3,7 +3,7 @@
 // can show — always visibly, never buried in settings — whether this
 // session is actually talking to a pinned, verified Avalon network.
 import { onMounted, ref } from 'vue'
-import { getLatestSth } from '@avalon/sdk'
+import { getLatestSth } from '@avalon-initiative/protocol-sdk'
 import { getBundledTrustAnchors, type TrustAnchorEntry } from '../network/trustAnchors'
 import { evaluateNetworkTrust, type NetworkTrustStatus } from '../network/verifyNetwork'
 import { getServerUrl } from '../api/serverUrl'

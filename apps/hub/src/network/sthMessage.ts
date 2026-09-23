@@ -6,7 +6,7 @@
 // root hash, network_id unambiguous as the last variable-length field
 // before the fixed-width timestamp suffix).
 import { concatBytes } from '@noble/hashes/utils'
-import type { SignedTreeHeadResponse } from '@avalon/sdk'
+import type { SignedTreeHeadResponse } from '@avalon-initiative/protocol-sdk'
 
 const DOMAIN_TAG = new TextEncoder().encode('avalon-settlement-sth-v1')
 

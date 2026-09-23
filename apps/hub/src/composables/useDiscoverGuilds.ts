@@ -16,7 +16,7 @@
 import { onUnmounted, ref, watch } from 'vue'
 import { buildDiscoverQueryString } from '../api/guilds'
 import type { DiscoverGuildsParams } from '../api/guilds'
-import type { DiscoverGuildSummary } from '@avalon/sdk'
+import type { DiscoverGuildSummary } from '@avalon-initiative/protocol-sdk'
 import { useSessionStore } from '../api/session'
 
 const POLL_INTERVAL_MS = 5 * 60_000

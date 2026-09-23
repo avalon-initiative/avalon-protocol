@@ -4,7 +4,7 @@
 // (crates/server/src/blocks.rs's Block has only `blocked`/`createdAt`),
 // so it's resolved client-side via the same batch GET /identities/profiles
 // lookup.
-import type { AccountSession, Block } from '@avalon/sdk'
+import type { AccountSession, Block } from '@avalon-initiative/protocol-sdk'
 
 export interface BlockedUser {
   identityId: string

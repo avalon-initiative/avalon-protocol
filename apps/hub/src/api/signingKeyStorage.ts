@@ -2,7 +2,7 @@
 // unencrypted, keyed by identity id. Ported from
 // packages/api-client/src/crypto/signingKey.ts's own storage half as part
 // of migrating off that package; the actual key
-// generation/mnemonic-derivation logic now lives in `@avalon/sdk`
+// generation/mnemonic-derivation logic now lives in `@avalon-initiative/protocol-sdk`
 // (crypto/mnemonic.ts) — this file only ever stores/loads/clears bytes,
 // same storage key as before so an existing viewer's stored key keeps
 // working unchanged across the migration.

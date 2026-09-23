@@ -6,7 +6,7 @@
 // live-presence pattern useFriendsPresence.ts uses — subscribes to every
 // participant's presence so a chat message can show their current status.
 import { onMounted, onUnmounted, ref } from 'vue'
-import type { Conversation, PresenceStatus, PresenceSubscription, PresenceUpdate } from '@avalon/sdk'
+import type { Conversation, PresenceStatus, PresenceSubscription, PresenceUpdate } from '@avalon-initiative/protocol-sdk'
 import { otherParticipants } from '../api/conversations'
 import { useSessionStore } from '../api/session'
 

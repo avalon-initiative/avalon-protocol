@@ -12,11 +12,11 @@ const runRegistrationCeremonyMock = vi.fn<(options: unknown) => Promise<Registra
 const runAuthenticationCeremonyMock = vi.fn<(options: unknown) => Promise<AuthenticationResponseJSON>>()
 
 // This view's `startRecovery`/`loginWithIdentityId` calls reach the
-// WebAuthn ceremony through @avalon/sdk's *internal* ./crypto/webauthn
+// WebAuthn ceremony through @avalon-initiative/protocol-sdk's *internal* ./crypto/webauthn
 // import (recovery.ts/client.ts call it directly, not via the package's
 // own barrel) — mocking that resolved submodule, rather than the
-// @avalon/sdk entrypoint, is what actually intercepts it.
-vi.mock('@avalon/sdk/src/crypto/webauthn', () => ({
+// @avalon-initiative/protocol-sdk entrypoint, is what actually intercepts it.
+vi.mock('@avalon-initiative/protocol-sdk/src/crypto/webauthn', () => ({
   runRegistrationCeremony: (options: unknown) => runRegistrationCeremonyMock(options),
   runAuthenticationCeremony: (options: unknown) => runAuthenticationCeremonyMock(options),
 }))

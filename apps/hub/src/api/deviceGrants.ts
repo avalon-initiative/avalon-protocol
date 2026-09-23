@@ -7,7 +7,7 @@
 // sends a private key over the network — only public keys and signatures,
 // matching #134's "server never sees private key material" invariant, now
 // per-device.
-import { generateSigningKey, bytesToBase64, type AccountSession, type DeviceGrant } from '@avalon/sdk'
+import { generateSigningKey, bytesToBase64, type AccountSession, type DeviceGrant } from '@avalon-initiative/protocol-sdk'
 
 export interface PendingDeviceGrantRequest {
   grant: DeviceGrant

@@ -18,9 +18,9 @@ inside a project folder stays valid as-is.
 | Project | What it is | Status |
 |---|---|---|
 | [`backend-server/`](backend-server/README.md) | The network: `protocol` + `chain` + `indexer` + `server` — one compiled binary (`avalon-server`) that can run as one combined process or as several role-specialized node processes talking to each other. This is the thing everything else talks to. | Real, live-tested, the most mature project here. |
-| [`sdks/`](sdks/README.md) | Every official SDK: the Rust reference SDK (lives in the `avalon-sdks` repo's `rust/`, not `crates/sdk` here), the C# SDK (`bindings/csharp/AvalonSdk`, Unity-targeted), and the TypeScript SDK (`bindings/ts`, browser-facing), plus one shared design reference. One project, not one per language — see below for why. | Rust SDK real and live-tested, with independent wire types/signing logic verified against a shared conformance suite. C# SDK real, building, and tested. TypeScript SDK real, shipped, and what `apps/hub` runs on. |
+| [`sdks/`](sdks/README.md) | Every official SDK: the Rust, C#, and TypeScript SDKs all now live in the separate `avalon-sdks` repo (`rust/`/`csharp/`/`typescript/`, moved by #775) — nothing under `sdks/` in this repo is SDK source anymore, only the shared design reference and per-language docs. One project, not one per language — see below for why. | Rust SDK real and live-tested, with independent wire types/signing logic verified against a shared conformance suite. C# SDK real, building, and tested. TypeScript SDK real, shipped, published to GitHub Packages, and what `apps/hub` depends on. |
 | [`cli/`](cli/README.md) | `avalon`, the local dev/ops binary (`crates/cli`) — identity creation, login, integrator registration, ledger inspection, outbox status, pruning. | Real, used for day-to-day dev workflows in this repo. |
-| [`hub/`](hub/README.md) | `apps/hub` — the web client (Vue3 + Vite + TS). A user's first doorway into Avalon with no game or app open: identity setup, friends, guilds, achievements, integrator discovery/connections. | Real, a persistent app with nested routed pages, not a stub, built on `@avalon/sdk`. |
+| [`hub/`](hub/README.md) | `apps/hub` — the web client (Vue3 + Vite + TS). A user's first doorway into Avalon with no game or app open: identity setup, friends, guilds, achievements, integrator discovery/connections. | Real, a persistent app with nested routed pages, not a stub, built on `@avalon-initiative/protocol-sdk`. |
 | [`mobile-hub/`](mobile-hub/README.md) | `apps/mobile-hub` — a Tauri (desktop + mobile) shell around the same Hub UI, for guild/friend presence without a game client open. | Scaffolding/skeleton, not yet built out. |
 | [`ui/`](ui/README.md) | `packages/ui` (`@avalon/ui`) — the shared Vue3 component library used by both Hub apps, documented in Storybook. | Partial; grows alongside `hub`/`mobile-hub`. |
 
@@ -44,13 +44,16 @@ deploys as — an SDK ships inside someone else's game or app, and the CLI is
 a standalone dev-ops tool.
 
 `sdks` is one folder covering every language rather than one folder per
-language (`rust-sdk/`, `csharp-sdk/`, ...), even though the C# SDK lives in
-an entirely separate part of the tree (`bindings/csharp`) today. SDKs are
-planned to move toward generated bindings off a shared protobuf/schema
-definition rather than hand-written per-language code — at that point the
-different languages stop being separately maintained projects and become
-output targets of one generator, likely in one repo together. Splitting
-`sdks` into per-language project folders now would just need undoing later.
+language (`rust-sdk/`, `csharp-sdk/`, ...), even though the Rust and C#
+SDKs' actual source no longer lives in this repo at all — both moved to
+the separate `avalon-sdks` repo (#775), leaving only the TypeScript SDK
+(`bindings/ts`) physically here. SDKs are planned to move toward generated
+bindings off a shared protobuf/schema definition rather than hand-written
+per-language code — at that point the different languages stop being
+separately maintained projects and become output targets of one
+generator, likely in one repo together (which `avalon-sdks` already is,
+ahead of that). Splitting `sdks` into per-language project folders now
+would just need undoing later.
 
 ## What's cross-cutting and stays at the top level
 

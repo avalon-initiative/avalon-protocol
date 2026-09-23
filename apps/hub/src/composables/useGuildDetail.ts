@@ -5,7 +5,7 @@
 // apps/hub/src/api/guilds.ts::listMembersWithPresence, the same pattern
 // apps/hub/src/api/friends.ts's listFriendsWithPresence already uses.
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
-import type { Guild, GuildChannel, GuildEvent, GuildJoinRequest, GameBreakdown, Role } from '@avalon/sdk'
+import type { Guild, GuildChannel, GuildEvent, GuildJoinRequest, GameBreakdown, Role } from '@avalon-initiative/protocol-sdk'
 import { listMembersWithPresence, permissionsForMember } from '../api/guilds'
 import type { GuildMember } from '../api/guilds'
 import { useSessionStore } from '../api/session'

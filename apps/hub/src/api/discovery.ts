@@ -3,7 +3,7 @@
 // GET /identities/profiles lookup api/friends.ts's listFriendsWithPresence
 // already uses. A missing profile falls back to the raw identity id,
 // same posture as Friend.displayName.
-import type { AccountSession } from '@avalon/sdk'
+import type { AccountSession } from '@avalon-initiative/protocol-sdk'
 
 export interface Suggestion {
   identityId: string

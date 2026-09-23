@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { AccountSession } from '@avalon/sdk'
+import { AccountSession } from '@avalon-initiative/protocol-sdk'
 import { beginDeviceGrantRequest } from './deviceGrants'
 
 function testSession(): AccountSession {

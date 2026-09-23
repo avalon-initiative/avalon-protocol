@@ -1,7 +1,7 @@
 // Pure helpers for the integrator directory — no fetch/token
 // awareness here, same "logic stays out of client.ts" split
 // apps/hub/src/api/guilds.ts already established for guilds.
-import type { IntegratorRegistry, RegistryMetric } from '@avalon/sdk'
+import type { IntegratorRegistry, RegistryMetric } from '@avalon-initiative/protocol-sdk'
 
 // Query params for GET /integrations — mirrors
 // crates/server/src/integrations.rs::ListIntegratorsQuery. Purely a

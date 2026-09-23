@@ -5,8 +5,8 @@
 // three. All three reads are public/unauthenticated — no session token.
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
-import { getIntegrator, getIntegratorRegistry, listIssuerKeys } from '@avalon/sdk'
-import type { Integrator, IntegratorRegistry, IssuerKey } from '@avalon/sdk'
+import { getIntegrator, getIntegratorRegistry, listIssuerKeys } from '@avalon-initiative/protocol-sdk'
+import type { Integrator, IntegratorRegistry, IssuerKey } from '@avalon-initiative/protocol-sdk'
 import { listRegistryMetrics } from '../api/integrations'
 import { getServerUrl } from '../api/serverUrl'
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatActivityTimestamp, summarizeActivityEntry } from './activityFeed'
-import type { HistoryEntry } from '@avalon/sdk'
+import type { HistoryEntry } from '@avalon-initiative/protocol-sdk'
 
 function makeEntry(kind: string, payload: unknown = {}): HistoryEntry {
   return {

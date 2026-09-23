@@ -352,21 +352,29 @@ def build_gap_lookup() -> dict[tuple[str, str], set[str]]:
 def main() -> int:
     routes = load_openapi_routes()
 
-    sdk_coverage: dict[str, set[tuple[str, str]]] = {
-        "typescript (bindings/ts)": extract_ts_calls(),
-        "csharp (bindings/csharp)": extract_csharp_calls(),
-    }
-    # The Rust SDK physically moved to the avalon-sdks
-    # repo, so its source isn't checked out here to scan. Skip it rather than
-    # silently reporting every route as missing (an empty `rglob` on a
-    # nonexistent directory yields nothing, not an error) — real Rust
-    # coverage checking would need a cross-repo tool, not this script.
+    sdk_coverage: dict[str, set[tuple[str, str]]] = {}
+    # Each SDK's source may not be checked out locally (all three live in
+    # avalon-sdks) — skipped rather than scanned as an empty dir.
+    if (REPO_ROOT / "bindings" / "ts").exists():
+        sdk_coverage["typescript (bindings/ts)"] = extract_ts_calls()
+    else:
+        print(
+            "skipping typescript SDK coverage — bindings/ts moved to "
+            "avalon-sdks, not checked out in this repo"
+        )
     if (REPO_ROOT / "crates" / "sdk").exists():
         sdk_coverage["rust (crates/sdk)"] = extract_rust_calls(routes)
     else:
         print(
-            "skipping rust SDK coverage — crates/sdk moved to avalon-sdks (#775), "
+            "skipping rust SDK coverage — crates/sdk moved to avalon-sdks, "
             "not checked out in this repo"
+        )
+    if (REPO_ROOT / "bindings" / "csharp").exists():
+        sdk_coverage["csharp (bindings/csharp)"] = extract_csharp_calls()
+    else:
+        print(
+            "skipping csharp SDK coverage — bindings/csharp moved to "
+            "avalon-sdks, not checked out in this repo"
         )
     gap_lookup = build_gap_lookup()
 

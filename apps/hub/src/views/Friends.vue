@@ -16,7 +16,7 @@ import {
 } from '@avalon/ui'
 import { listSuggestions } from '../api/discovery'
 import type { Suggestion } from '../api/discovery'
-import type { SearchResultIdentity } from '@avalon/sdk'
+import type { SearchResultIdentity } from '@avalon-initiative/protocol-sdk'
 import { useFriendsPresence } from '../composables/useFriendsPresence'
 import { useSessionStore } from '../api/session'
 import { isIdentityId } from '../utils/identity'

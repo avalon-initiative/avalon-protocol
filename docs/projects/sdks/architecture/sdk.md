@@ -311,8 +311,9 @@ constant instead of a literal string at every call site.
 
 ### C# SDK surface
 
-`bindings/csharp/AvalonSdk` is a real, building C# port of the same
-surface: auth/session, friends/presence, guilds, conversations,
+`avalon-sdks`' `csharp/AvalonSdk` (moved from this repo's `bindings/csharp`
+by #775) is a real, building C# port of the same surface: auth/session,
+friends/presence, guilds, conversations,
 sync-journal, achievements (including definition CRUD and bulk issuance),
 integrator-space schema/mapping/instance-data, integrator registration and
 key management, social recovery's request-initiation flow, and
@@ -349,12 +350,12 @@ plus opt-in live tests against a real server and Postgres.
 
 ### TypeScript SDK surface
 
-`bindings/ts` is a self-contained TypeScript SDK implementing both
-`AccountSession` and `IntegratorSession` from scratch, ES modules, `vitest`
-for tests. It is not a workspace member — installed separately from inside
-`bindings/ts` itself, with no internal dependency on `packages/api-client`,
-`apps/hub`, or `apps/mobile-hub` anywhere in its source, even though
-`apps/hub`'s entire data-fetching surface runs on it in production.
+`avalon-sdks`' `typescript/` (moved from this repo's `bindings/ts`) is a
+self-contained TypeScript SDK implementing both `AccountSession` and
+`IntegratorSession` from scratch, ES modules, `vitest` for tests.
+Published to GitHub Packages as `@avalon-initiative/protocol-sdk`;
+`apps/hub`'s entire data-fetching surface runs on the published package
+in production, not a local path.
 
 Unlike the C# port (which scopes WebAuthn ceremony-driving out entirely)
 and the Rust port (which drives a virtual/software authenticator, since it
@@ -367,7 +368,7 @@ already-minted-token path, and `.startAccountDeviceLogin()` is the same
 device-originated-login pattern the other SDKs have.
 
 `AccountSession` mirrors the Rust/C# surface field-for-field, split one
-file per domain under `bindings/ts/src/accountSession/`, attached to the
+file per domain under `typescript/src/accountSession/`, attached to the
 class prototype and merged into the `AccountSession` interface via
 TypeScript declaration merging (since TS classes can't be split across
 files the way a C# `partial class` can). Every signature-required action
@@ -460,11 +461,11 @@ currently report full route coverage against the published API.
   the opposite of the target-shape discovery model above — a developer
   configures an explicit server URL today rather than the SDK discovering
   and selecting a node on its own. This remains future work (#91).
-  Capability negotiation for an already-known URL is partially real: `GET
-  /nodes/status` reports a node's own `roles` (settlement/indexer/
-  realtime/gateway), and the TypeScript SDK exposes it via
-  `AvalonClient.status()`/`getNodeStatus()`. Not yet ported to the Rust or
-  C# SDKs.
+  Capability negotiation for an already-known URL is real, across all
+  three official SDKs: `GET /nodes/status` reports a node's own `roles`
+  (settlement/indexer/realtime/gateway), exposed as
+  `AvalonClient.status()`/`getNodeStatus()` (TypeScript),
+  `AvalonClient::node_status()` (Rust), and `GetNodeStatusAsync()` (C#).
 - **Visibility scoping is partial.** Presence reads and guild rosters are
   scoped server-side by the subject's own visibility settings. Guild
   `channels()`/`messages()` are not — any member with `guilds.chat` sees

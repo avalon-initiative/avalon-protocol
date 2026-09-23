@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mergeFriend, splitFriendRequests } from './friends'
-import type { FriendRequest, Friendship } from '@avalon/sdk'
+import type { FriendRequest, Friendship } from '@avalon-initiative/protocol-sdk'
 
 const SELF = 'self-id'
 const OTHER = 'other-id'

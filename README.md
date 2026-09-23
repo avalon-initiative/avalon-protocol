@@ -117,14 +117,13 @@ apps/
 packages/
   ui/           shared Vue3 component library used by both hub apps (Storybook)
   api-client/   shared API client + session store used by hub and mobile-hub
-
-bindings/
-  csharp/     flagship external SDK for game developers (Unity-targeted)
-  ts/         TypeScript reference SDK
 ```
 
-The Rust reference SDK lives in a separate `avalon-sdks` repository rather
-than in this workspace; see the [Rust SDK docs](docs/projects/sdks/rust/README.md).
+Every official SDK (Rust, C#, TypeScript) lives in a separate `avalon-sdks`
+repository rather than in this workspace; see the
+[Rust](docs/projects/sdks/rust/README.md),
+[C#](docs/projects/sdks/csharp/README.md), and
+[TypeScript](docs/projects/sdks/typescript/README.md) SDK docs.
 
 ## Trusted networks
 

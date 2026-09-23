@@ -15,7 +15,7 @@ import { AvalonButton, AvalonCard, AvalonConnectionCard, AvalonGuildCard, Avalon
 import { isActiveIntegratorStatus } from '../api/integrations'
 import { capabilityDescription } from '../api/connections'
 import { buildDiscoverQueryString } from '../api/guilds'
-import type { DiscoverGuildSummary } from '@avalon/sdk'
+import type { DiscoverGuildSummary } from '@avalon-initiative/protocol-sdk'
 import { useIntegrationProfile } from '../composables/useIntegrationProfile'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../api/session'

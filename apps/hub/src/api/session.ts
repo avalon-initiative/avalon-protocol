@@ -1,4 +1,4 @@
-// Session state, backed by a real @avalon/sdk AccountSession —
+// Session state, backed by a real @avalon-initiative/protocol-sdk AccountSession —
 // replaces packages/api-client's own token-only useSessionStore. Unlike
 // the old store, this one holds a live AccountSession object, not just a
 // bearer token: every other api/*.ts file calls methods on `session.value`
@@ -19,7 +19,7 @@
 // rather than logging a viewer out over a flaky connection.
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { AvalonClient, UnauthorizedError, type AccountSession } from '@avalon/sdk'
+import { AvalonClient, UnauthorizedError, type AccountSession } from '@avalon-initiative/protocol-sdk'
 import { getServerUrl } from './serverUrl'
 import { loadSigningKeySeed, clearSigningKeySeed } from './signingKeyStorage'
 

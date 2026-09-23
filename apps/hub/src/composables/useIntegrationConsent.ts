@@ -3,7 +3,7 @@
 // capabilities don't change while a user is looking at the consent
 // screen), and owns the checked-capabilities set the view submits.
 import { ref, type Ref } from 'vue'
-import { getIntegrator, type Integrator } from '@avalon/sdk'
+import { getIntegrator, type Integrator } from '@avalon-initiative/protocol-sdk'
 import { getServerUrl } from '../api/serverUrl'
 
 export function useIntegrationConsent(slug: Ref<string>) {

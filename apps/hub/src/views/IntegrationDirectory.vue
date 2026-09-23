@@ -8,7 +8,7 @@ import type { AvalonFilterBarSortOption } from '@avalon/ui'
 import { useDiscoverIntegrations } from '../composables/useDiscoverIntegrations'
 import { useMyConnections } from '../composables/useMyConnections'
 import { useSessionStore } from '../api/session'
-import type { IntegratorCategory } from '@avalon/sdk'
+import type { IntegratorCategory } from '@avalon-initiative/protocol-sdk'
 import integratorDirectoryStyles from '../styles/IntegrationDirectory.module.scss'
 import styles from '../styles/page.module.scss'
 

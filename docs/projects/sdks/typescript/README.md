@@ -1,20 +1,20 @@
 # TypeScript SDK
 
-`bindings/ts` — the browser-facing [Avalon SDK](../README.md), implementing
-both `IntegratorSession` (capability-gated, mirrors Rust/C#'s `Session`) and
-`AccountSession` (first-party) from scratch. See
-[`../architecture/sdk.md`](../architecture/sdk.md) for the design that
-applies to every language's SDK — this page is the TypeScript-specific
-"how," not the "why."
+The `typescript/` project in the `avalon-sdks` repo — the browser-facing
+[Avalon SDK](../README.md), implementing both `IntegratorSession`
+(capability-gated, mirrors Rust/C#'s `Session`) and `AccountSession`
+(first-party) from scratch. Physically lives in `avalon-sdks` as of this
+move, out of this repo's `bindings/ts` alongside the Rust and C# SDKs'
+own earlier moves. See [`../architecture/sdk.md`](../architecture/sdk.md)
+for the design that applies to every language's SDK — this page is the
+TypeScript-specific "how," not the "why."
 
 **Status:** real and shipped, not speculative — ES modules, `vitest` for
-tests. Not a workspace member: intentionally outside the root
-`package.json`'s `workspaces` array and `npm install`ed separately from
-inside `bindings/ts` itself, since the design is for this package to
-eventually move into its own `avalon-sdks` org repo with no internal
-dependency on `packages/api-client`, `apps/hub`, or `apps/mobile-hub`
-anywhere in its source. It is, however, the SDK `apps/hub` itself runs on
-— its entire data-fetching surface goes through `@avalon/sdk`.
+tests. Published as `@avalon-initiative/protocol-sdk` on GitHub Packages
+(a private registry — this org's repos are still pre-public, so this
+isn't on the public npm registry). `apps/hub` depends on the published
+package now, not a local path — its entire data-fetching surface goes
+through it.
 
 Unlike the C# port (which scoped WebAuthn ceremony-driving out entirely)
 and the Rust port (which drives a virtual/software authenticator, since it
@@ -58,8 +58,8 @@ Unlike the Rust SDK's `for-developers/` set, this SDK doesn't have its own
 numbered guide series yet — noted honestly rather than left to look
 finished. Until one exists, the most accurate reference is
 [`../architecture/sdk.md`](../architecture/sdk.md)'s TypeScript coverage,
-plus the `*.test.ts` files under `bindings/ts/test/`, which double as
-runnable usage examples for every domain.
+plus the `*.test.ts` files under `avalon-sdks`' `typescript/test/`, which
+double as runnable usage examples for every domain.
 
 ## Related
 

@@ -4,7 +4,7 @@
 // setup>` of whichever page needs it; only one page is mounted at a time,
 // so only one presence socket is ever open.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { PresenceSubscription, PresenceUpdate } from '@avalon/sdk'
+import type { PresenceSubscription, PresenceUpdate } from '@avalon-initiative/protocol-sdk'
 import { listFriendsWithPresence, splitFriendRequests } from '../api/friends'
 import type { Friend, FriendRequestView } from '../api/friends'
 import { useSessionStore } from '../api/session'
