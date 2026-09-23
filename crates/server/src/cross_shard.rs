@@ -153,6 +153,20 @@ pub fn combined_shard_urls(
     urls
 }
 
+/// The key pinned for `network_id` in the bundled trust anchors, for the
+/// reserved `core` shard only: the network's core authority signs `core`
+/// tree heads with exactly that key, so any node can verify them without
+/// holding the registrar's database.
+fn pinned_core_verify_key(network_id: &str, shard_id: &str) -> Option<VerifyingKey> {
+    if shard_id != avalon_protocol::shard::CORE_SHARD_ID {
+        return None;
+    }
+    let anchor = avalon_protocol::network_trust::bundled_trust_anchors()
+        .iter()
+        .find(|anchor| anchor.network_id == network_id)?;
+    parse_verify_key(&anchor.verify_key)
+}
+
 fn parse_verify_key(hex_value: &str) -> Option<VerifyingKey> {
     let bytes = hex::decode(hex_value).ok()?;
     let array: [u8; 32] = bytes.as_slice().try_into().ok()?;
@@ -272,7 +286,8 @@ pub async fn fetch_and_compute(
     for (shard_id, url) in urls {
         let db_keys = resolve_shard_verify_keys_from_db(pool, network_id, shard_id).await;
         let static_key = static_verify_keys.get(shard_id);
-        if db_keys.is_empty() && static_key.is_none() {
+        let pinned_key = pinned_core_verify_key(network_id, shard_id);
+        if db_keys.is_empty() && static_key.is_none() && pinned_key.is_none() {
             tracing::warn!(
                 shard_id,
                 "cross-shard root: no verify key resolved (neither issuer-key registration \
@@ -318,6 +333,7 @@ pub async fn fetch_and_compute(
         let verified = db_keys
             .iter()
             .chain(static_key)
+            .chain(pinned_key.as_ref())
             .any(|key| sth::verify_tree_head(key, &sth));
         if !verified {
             tracing::warn!(
@@ -443,6 +459,13 @@ pub async fn cross_shard_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_core_shard_resolves_the_pinned_network_key() {
+        assert!(pinned_core_verify_key("avalon-dev-local", "core").is_some());
+        assert!(pinned_core_verify_key("avalon-dev-local", "game:wow-demo/1").is_none());
+        assert!(pinned_core_verify_key("no-such-network", "core").is_none());
+    }
 
     fn registry_with(shard_id: &str, url: &str) -> ShardRegistry {
         let registry = ShardRegistry::new();
