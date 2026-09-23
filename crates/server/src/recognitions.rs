@@ -1,6 +1,6 @@
 //! Public recognition relationships — one integrator declaring
 //! "I recognize `<other integrator>`'s claims, for `<scope>`" as a durable,
-//! queryable fact. See `docs/architecture/registry.md`'s "Recognition
+//! queryable fact. See `docs/projects/backend-server/architecture/registry.md`'s "Recognition
 //! relationships and the network graph" section: this is a graph in its
 //! own right ("who does A recognize" / "who recognizes A"), never a single
 //! boolean or score on either integrator's own row.

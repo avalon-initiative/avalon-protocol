@@ -12,7 +12,7 @@
 //! call [`crate::postgres::PostgresIndexer::apply_in_tx`] with the same
 //! `identity.created`/`profile.updated` event they enqueue into the outbox,
 //! inside the same transaction, so the identity/profile/outbox rows commit
-//! or roll back together. See `docs/architecture/query-and-indexing.md`.
+//! or roll back together. See `docs/projects/backend-server/architecture/query-and-indexing.md`.
 //!
 //! The `profiles` read slice: [`fetch`] and [`fetch_many`] are
 //! the read half — every function generic over `sqlx::PgExecutor` so a

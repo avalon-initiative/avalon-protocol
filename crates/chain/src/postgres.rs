@@ -1,7 +1,7 @@
 //! Postgres-backed `SettlementProvider` — milestone 1's implementation:
 //! a sequential hash
 //! chain plus a real RFC 6962 Merkle tree with signed tree heads. See
-//! `docs/architecture/settlement.md` and `settlement-implementation-notes.md`
+//! `docs/projects/backend-server/architecture/settlement.md` and `settlement-implementation-notes.md`
 //! for the two tamper-evidence structures, why `tree_size` is a derived
 //! leaf count rather than raw `seq`, batching, and node-tiered
 //! payload retention.
@@ -247,7 +247,7 @@ pub struct PostgresSettlementProvider {
     /// row count on every use and fall back to a correct-but-O(n) rebuild
     /// from Postgres whenever it doesn't hold (e.g. another node wrote
     /// concurrently, or right after process start). Rebuilt in memory, not
-    /// persisted in Postgres — see `docs/architecture/settlement.md` for
+    /// persisted in Postgres — see `docs/projects/backend-server/architecture/settlement.md` for
     /// that tradeoff.
     leaf_cache: std::sync::Arc<tokio::sync::RwLock<LedgerCache>>,
 }
@@ -611,7 +611,7 @@ impl PostgresSettlementProvider {
     /// wrapper over [`Self::latest_signed_tree_head`], satisfying the
     /// "periodic durable-state checkpoint" ask for the commitment layer
     /// only — not the indexer/projection read-model snapshot half (still
-    /// open). See `docs/architecture/nodes.md`'s
+    /// open). See `docs/projects/backend-server/architecture/nodes.md`'s
     /// "Settlement-state checkpoint" section for why the latest
     /// `SignedTreeHead` already satisfies this with no new storage.
     pub async fn checkpoint(&self) -> Result<Option<SignedTreeHead>, SettlementError> {
@@ -1421,7 +1421,7 @@ impl SettlementProvider for PostgresSettlementProvider {
 
     /// Two independent checks, both must pass: a per-entry hash-chain
     /// replay, and a from-scratch RFC 6962 Merkle recompute against
-    /// `commitment.proof`. See `docs/architecture/settlement-implementation-notes.md`'s
+    /// `commitment.proof`. See `docs/projects/backend-server/architecture/settlement.md`'s
     /// "`verify`'s two independent checks" bullet for why both exist and
     /// how pruned payloads interact with each.
     async fn verify(&self, commitment: &Commitment) -> Result<bool, SettlementError> {

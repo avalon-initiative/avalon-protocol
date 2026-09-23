@@ -19,7 +19,7 @@ const deviceLabel = ref('')
 const submitting = ref(false)
 const error = ref('')
 
-// Login is identity-id-first (see docs/architecture/identity.md) — the
+// Login is identity-id-first (see docs/projects/backend-server/architecture/identity.md) — the
 // display name is never enough to log back in with. A passkey manager
 // autofilling the WebAuthn credential's stored username now shows the
 // identity id correctly (server-side fix), but not everyone has one

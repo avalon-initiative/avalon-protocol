@@ -47,7 +47,7 @@
 //! completely unchanged — it's exactly `AVALON_SETTLEMENT_REMOTE_URLS`'s
 //! implicit `core=<url>` entry, so milestone-1's single-shard topology
 //! needs zero configuration change. See
-//! `docs/architecture/settlement.md`'s "Write routing to the correct
+//! `docs/projects/backend-server/architecture/settlement.md`'s "Write routing to the correct
 //! shard" section for the full design.
 //!
 //! **Push-based mirror sync.** Right after a batch commits

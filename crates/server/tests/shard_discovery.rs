@@ -16,7 +16,7 @@
 //!
 //! Set `AVALON_NODE_A_URL`/`AVALON_NODE_B_URL`/`AVALON_NODE_C_URL` to run
 //! this against a real chain topology (see this repo's
-//! `docs/architecture/settlement.md`'s "Automatic shard discovery" section
+//! `docs/projects/backend-server/architecture/settlement.md`'s "Automatic shard discovery" section
 //! for the exact three-machine setup this was live-verified against:
 //! this sandbox, `avalon-peer`, `avalon-peer-two`). Skipped, not failed,
 //! when unset — same pattern `tests/nodes.rs`'s

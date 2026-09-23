@@ -91,7 +91,7 @@ fn base_database_url() -> String {
 
 /// This test's own schema-scoped `DATABASE_URL`, matching the connection
 /// string the manually-started "Indexer role" process above must also be
-/// given — same construction `docs/architecture/nodes.md`'s
+/// given — same construction `docs/projects/backend-server/architecture/nodes.md`'s
 /// `feedback_live_verify_two_local_processes`-style live tests already use.
 fn schema_database_url() -> String {
     let base = base_database_url();

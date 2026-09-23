@@ -2,7 +2,7 @@
 //!
 //! An integrator may publish a description of how its own data is structured, so
 //! other developers and the registry can read its shape — see
-//! `docs/architecture/integrator-space.md`. The representation is
+//! `docs/projects/backend-server/architecture/integrator-space.md`. The representation is
 //! protobuf IDL (`.proto`), stored as opaque source text. Avalon never
 //! parses or compiles it — that would require real `.proto`
 //! parsing/codegen for a description this crate only needs to store,
@@ -30,7 +30,7 @@
 //! [`IntegratorSchemaVersion`] with `version` one higher; the previous version's
 //! `superseded_by` is set to point at it, so lineage is traceable without
 //! ever rewriting the superseded row's actual schema text. This is the same
-//! discipline `docs/architecture/protocol-events.md`'s versioning policy
+//! discipline `docs/projects/backend-server/architecture/protocol-events.md`'s versioning policy
 //! already applies to `ProtocolEvent` kinds: every version stays decodable
 //! forever, decoders are added, not replaced.
 

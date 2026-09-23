@@ -21,7 +21,7 @@
 //! enough of them report having covered the pass's boundary `seq`. This is
 //! what turns "never prune what nothing else retains" from operator
 //! discipline into something the code itself checks — see
-//! `docs/architecture/nodes.md`'s "Settlement retention tiers" section for
+//! `docs/projects/backend-server/architecture/nodes.md`'s "Settlement retention tiers" section for
 //! the full design this closes.
 //!
 //! `avalon prune-ledger`'s manual entry point (`crates/cli/src/main.rs`)

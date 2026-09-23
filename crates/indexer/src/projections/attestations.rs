@@ -1,5 +1,5 @@
 //! The attestation-status cache, built from `achievement.issued` /
-//! `achievement.revoked` — see `docs/architecture/achievements-and-attestations.md`
+//! `achievement.revoked` — see `docs/projects/backend-server/architecture/achievements-and-attestations.md`
 //! and `avalon_protocol::achievements::AchievementAttestation`, whose shape
 //! this projection's payload expectations mirror.
 //!
@@ -10,7 +10,7 @@
 //! ticket's design, and so its own idempotency/decode behavior
 //! is provable now via fixture events rather than only once a real issuer
 //! exists. `revoked_at` is a cache of the latest relevant event, per
-//! `docs/architecture/query-and-indexing.md`'s "current status is a cache"
+//! `docs/projects/backend-server/architecture/query-and-indexing.md`'s "current status is a cache"
 //! rule — the event log remains the record of *when* and *why*.
 
 use std::collections::HashSet;

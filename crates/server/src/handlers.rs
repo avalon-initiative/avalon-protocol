@@ -1,7 +1,7 @@
 //! Identity registration and login.
 //!
 //! Two independent proofs happen at registration, never conflated (see
-//! `crates/server/src/auth.rs` and `docs/architecture/identity.md`): a
+//! `crates/server/src/auth.rs` and `docs/projects/backend-server/architecture/identity.md`): a
 //! WebAuthn ceremony (proves control of a passkey, gates interactive login
 //! from here on) and a detached Ed25519 signature over the intended
 //! `identity.created` event (proves the identity itself — not the node —
@@ -307,7 +307,7 @@ pub async fn register_finish(
     // Self-attributed, not network-attributed: the identity signed its own
     // creation, so the ledger entry's issuer says so — a hosted node cannot
     // fabricate this the way it could when the server itself was the
-    // issuer of record. See docs/architecture/security-model.md.
+    // issuer of record. See docs/projects/backend-server/architecture/security-model.md.
     let event = ProtocolEvent {
         id: Uuid::new_v4(),
         kind: ProtocolEventKindVariant::IdentityCreated
@@ -1452,7 +1452,7 @@ pub async fn update_profile(
 
     // `display_name`, `avatar_url`, `bio`, `favorite_genres`, and `pronouns`
     // are all promised-durable (see the table in
-    // docs/architecture/identity.md), so a change to
+    // docs/projects/backend-server/architecture/identity.md), so a change to
     // any of them emits `profile.updated` in the same transaction as the
     // row — through the outbox, exactly like `register_finish`. A request
     // that changes nothing emits nothing. Network-attributed rather than

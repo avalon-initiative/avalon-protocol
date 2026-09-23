@@ -47,13 +47,11 @@ a standalone dev-ops tool.
 language (`rust-sdk/`, `csharp-sdk/`, ...), even though none of the three
 SDKs' actual source lives in this repo anymore — all moved to the
 separate `avalon-sdks` repo, grouped there under its own `languages/`
-subfolder. SDKs are planned to move toward generated
-bindings off a shared protobuf/schema definition rather than hand-written
-per-language code — at that point the different languages stop being
-separately maintained projects and become output targets of one
-generator, likely in one repo together (which `avalon-sdks` already is,
-ahead of that). Splitting `sdks` into per-language project folders now
-would just need undoing later.
+subfolder. Every SDK's wire types are generated from the one OpenAPI
+document `avalon-server` publishes (`docs/generated/openapi.json`), so the
+languages are output targets of a shared schema, not separately maintained
+projects — and they already live in one repo. Splitting `sdks` into
+per-language project folders would work against that.
 
 ## What's cross-cutting and stays at the top level
 

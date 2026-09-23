@@ -1,6 +1,6 @@
 //! Guild creation, roles, ownership transfer, membership lifecycle, and
 //! discovery. A guild is a network-level primitive,
-//! not an integrator's. See `docs/architecture/guilds.md` and
+//! not an integrator's. See `docs/projects/backend-server/architecture/guilds.md` and
 //! `guilds-implementation-log.md`'s "Today in the repo" for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
@@ -3252,7 +3252,7 @@ pub struct DiscoverGuildsResponse {
 
 /// `GET /guilds/discover?q=&recruiting=&tag=&integrator=&sort=&limit=&cursor=`.
 /// `recruiting=false` is still membership-gated, not a raw
-/// filter — see `docs/architecture/guilds-implementation-log.md`'s
+/// filter — see `docs/projects/backend-server/architecture/guilds.md`'s
 /// discovery-board section for the full `recruiting` visibility rule and
 /// why. Builds the `guilds.discover` query — split out from
 /// [`discover_guilds`] so it's unit-testable without a live Postgres
@@ -3410,7 +3410,7 @@ pub async fn discover_guilds(
 /// guild's current members hold an active [`IntegratorBinding`](avalon_protocol::integrators::IntegratorBinding)
 /// to it. Never includes an integrator with zero bound members — there's no
 /// "add" action here, only real binding data feeds this (see the module
-/// doc comment and `docs/architecture/guilds.md`).
+/// doc comment and `docs/projects/backend-server/architecture/guilds.md`).
 #[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 pub struct GameBreakdownEntry {
     pub integrator_id: Uuid,

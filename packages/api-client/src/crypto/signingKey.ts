@@ -1,6 +1,6 @@
 // The identity's Ed25519 event-signing key — distinct from the
 // WebAuthn passkey, which lives entirely with the browser/platform and never
-// passes through this module. See docs/architecture/identity.md.
+// passes through this module. See docs/projects/backend-server/architecture/identity.md.
 //
 // Storage: plain `localStorage`, unencrypted, keyed by identity id. This is a
 // deliberate milestone-1 stopgap, not a default anyone should assume is
@@ -190,7 +190,7 @@ export function freshActionSigningBytes(actionTag: string, fields: string[]): Ui
  * request without `signing_key_id`/`signature` in that case and let the
  * server's existing `NO_REGISTERED_SIGNING_KEY`/`FRESH_SIGNATURE_REQUIRED`
  * split surface the real problem, rather than inventing new client-side
- * handling for an edge case docs/architecture/identity.md already treats
+ * handling for an edge case docs/projects/backend-server/architecture/identity.md already treats
  * as "losing every device means losing the identity."
  */
 export function signFreshAction(

@@ -74,7 +74,7 @@ read that section for the full reasoning behind each:
 
 Open work lives in GitHub Issues. Design direction lives in
 [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) (narrative)
-and [`docs/architecture/`](../docs/projects/backend-server/architecture/README.md) (normative —
+and [`docs/projects/backend-server/architecture/`](../docs/projects/backend-server/architecture/README.md) (normative —
 invariants and authority boundaries); acceptance criteria for specific work
 items live on their tracking issue, not in a docs file. Architecture
 decisions are closed GitHub issues labeled `architecture-decision-record`;
@@ -219,7 +219,7 @@ addition:
 ## Documentation-First Workflow
 
 For non-trivial work: update the relevant file in
-[`docs/architecture/`](../docs/projects/backend-server/architecture/README.md) (and
+[`docs/projects/backend-server/architecture/`](../docs/projects/backend-server/architecture/README.md) (and
 [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) if the
 narrative changes) in the same PR as the implementation, not after — a doc
 that lags the code is treated as a bug. Each architecture file ends with
@@ -229,11 +229,11 @@ tickets" (the issues that govern it); keep both current.
 ### Protocol event versioning policy
 
 Adding a new `ProtocolEvent` kind or changing an existing one's payload?
-[`docs/architecture/protocol-events.md`](../docs/projects/backend-server/architecture/protocol-events.md#versioning-policy)
+[`docs/projects/backend-server/architecture/protocol-events.md`](../docs/projects/backend-server/architecture/protocol-events.md#versioning-policy)
 is the normative versioning policy (additive fields never bump `version`;
 removing/renaming/re-meaning a field does; every version ever emitted
 stays decodable forever) and
-[`docs/architecture/protocol-events-catalogue.md`](../docs/projects/backend-server/architecture/protocol-events-catalogue.md)
+[`docs/projects/backend-server/architecture/protocol-events-catalogue.md`](../docs/projects/backend-server/architecture/protocol-events-catalogue.md)
 is the full kind-by-kind table. A new kind gets a real
 `ProtocolEventKindVariant` (`crates/protocol/src/events.rs`) and a typed
 payload struct (`crates/protocol/src/event_payloads.rs`) — never a
@@ -272,7 +272,7 @@ two.
   itself is the barrier (integrator vs. issuer vs. node, authentic vs. valid
   vs. recognized, settlement vs. chain vs. ledger, and the rest). Everything
   below assumes these terms.
-- [`docs/architecture/README.md`](../docs/projects/backend-server/architecture/README.md) — start
+- [`docs/projects/backend-server/architecture/README.md`](../docs/projects/backend-server/architecture/README.md) — start
   here: invariants, authority boundaries, the crate layout, "what survives a
   game's death," and the architecture tests every proposed change is held to
 - [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) — the

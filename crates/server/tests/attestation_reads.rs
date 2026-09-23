@@ -3,7 +3,7 @@
 //! infra — see `make test-live` / `make start`.
 //!
 //! "Scenario D" (not one of
-//! `docs/architecture/issuers.md`'s lettered scenarios, which
+//! `docs/projects/backend-server/architecture/issuers.md`'s lettered scenarios, which
 //! only goes up through F today): an authentic, valid claim from an
 //! issuer the reader doesn't trust must still read as
 //! `Authentic`/`Valid` — recognition is a separate, consumer-side

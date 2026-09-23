@@ -1,5 +1,5 @@
 //! The Integrator Registry's derived-metrics read model. See
-//! `docs/architecture/registry.md`'s "Today in the repo" for the metric
+//! `docs/projects/backend-server/architecture/registry.md`'s "Today in the repo" for the metric
 //! definitions, why nothing is ranked/combined, and the `coarsen`/
 //! `min_cohort` privacy floor enforced centrally here.
 
@@ -99,7 +99,7 @@ pub struct IntegratorRegistryMetrics {
 ///
 /// Never errors for an integrator with no activity — every count is `0`, not a
 /// missing field or a distinguished error, matching this crate's "absence
-/// means nothing happened yet" posture (`docs/architecture/query-and-indexing.md`).
+/// means nothing happened yet" posture (`docs/projects/backend-server/architecture/query-and-indexing.md`).
 pub async fn compute_for_integrator(
     pool: &PgPool,
     integrator_id: Uuid,

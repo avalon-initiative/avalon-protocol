@@ -27,7 +27,7 @@
 //! amplification with no correctness benefit here. The target is the
 //! lexicographically-smallest `base_url` among same-`network_id` peers
 //! advertising an `indexer`/`combined` role (storage-capable roles, per
-//! `docs/architecture/nodes.md`'s capability table — distinct from
+//! `docs/projects/backend-server/architecture/nodes.md`'s capability table — distinct from
 //! `realtime_relay`'s `realtime`/`gateway` eligibility, a different
 //! concern) — deterministic, so which peer is "the" replica target is
 //! never ambiguous or flapping between ticks.

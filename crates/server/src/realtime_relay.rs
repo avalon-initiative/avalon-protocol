@@ -99,7 +99,7 @@ pub enum RelayEvent {
 }
 
 /// Role strings (case-insensitive) that make a peer an eligible relay
-/// target — matching `docs/architecture/nodes.md`'s `Realtime`/`Gateway`
+/// target — matching `docs/projects/backend-server/architecture/nodes.md`'s `Realtime`/`Gateway`
 /// capability names, plus `combined` (milestone 1's default —
 /// `nodes::node_roles`'s own fallback), which implies every capability
 /// including these two.

@@ -13,7 +13,7 @@
 //! established). Unlike the server's old `guild_members` table, this one has
 //! no foreign key into `guild_roles` — the indexer decodes payload
 //! independently of whether a locally-known `guild_roles` row exists for
-//! `role_index` (`docs/architecture/query-and-indexing.md`: "the indexer
+//! `role_index` (`docs/projects/backend-server/architecture/query-and-indexing.md`: "the indexer
 //! consumes protocol semantics; it never redefines them").
 //!
 //! `guild.created` gets its own [`decode`] case (a rebuild test

@@ -148,7 +148,7 @@ pub struct AppState {
     /// `apply_after_commit` makes the real HTTP call once the app-data
     /// write is durable — an accepted eventual-consistency window, not
     /// full atomicity. See `IndexerHandle`'s own doc comment and
-    /// `docs/architecture/query-and-indexing.md`.
+    /// `docs/projects/backend-server/architecture/query-and-indexing.md`.
     pub indexer: IndexerHandle,
     /// Built once at startup from `AVALON_WEBAUTHN_RP_ID`/`AVALON_WEBAUTHN_ORIGIN`.
     /// `Webauthn` itself isn't cheap to reconstruct (origin parsing/validation),

@@ -6,7 +6,7 @@
 //! Deliberately its own module, separate from `handlers.rs`'s
 //! `register_start`/`register_finish` (identity *creation*, unauthenticated)
 //! and separate from `devices.rs`'s Ed25519 signing-key device list —
-//! same "not the same concept" distinction `docs/architecture/identity.md`
+//! same "not the same concept" distinction `docs/projects/backend-server/architecture/identity.md`
 //! draws between the two key domains. `identity_keys` (this module) is the
 //! WebAuthn login credential; `identity_signing_keys` (`devices.rs`) is the
 //! event-authorship key. Both happen to look like "a device with a label and
@@ -26,7 +26,7 @@
 //! enqueue, same dual-write shape `recognitions.rs` already uses), which a
 //! mirror-only node's replay reconstructs the same table from. Passkeys
 //! registered before this landed have no such event — see
-//! `docs/architecture/identity.md`'s durability table for the honest
+//! `docs/projects/backend-server/architecture/identity.md`'s durability table for the honest
 //! "only new registrations are portable" note this leaves.
 //!
 //! Revoking a passkey stays a hard delete from `identity_keys` (unlike

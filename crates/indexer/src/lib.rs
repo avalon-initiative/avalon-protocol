@@ -4,12 +4,12 @@
 //! should never require walking settlement data directly. This crate
 //! consumes durable `ProtocolEvent`s and maintains a read model that can be
 //! rebuilt from those events at any time — see
-//! `docs/architecture/query-and-indexing.md`.
+//! `docs/projects/backend-server/architecture/query-and-indexing.md`.
 //!
 //! Milestone 1: a conventional Postgres-backed read model, kept explicitly
 //! separate from `avalon-chain`'s settlement store so the two are never
 //! conflated — settlement is not querying; see
-//! `docs/architecture/settlement.md` and issue #75.
+//! `docs/projects/backend-server/architecture/settlement.md` and issue #75.
 //!
 //! [`postgres::PostgresIndexer`] is the first real [`Indexer`]:
 //! `projections` holds one module per read model (profiles, friendships,

@@ -30,7 +30,7 @@
 //! separate, independent check the verifying node makes against its own
 //! local (ledger-derived) membership projection at lookup time
 //! (`avalon-server`'s `crate::interest::lookup_claimed`), the same
-//! two-questions-not-one split `docs/architecture/achievements.md`'s
+//! two-questions-not-one split `docs/projects/backend-server/architecture/achievements-and-attestations.md`'s
 //! authenticity-vs-validity distinction already establishes for a
 //! different kind of signed claim.
 use serde::{Deserialize, Serialize};

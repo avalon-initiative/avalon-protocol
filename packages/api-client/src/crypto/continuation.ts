@@ -4,7 +4,7 @@
 // assertion that lets an already-logged-in identity keep working against a
 // *different* node than the one that issued its opaque session token —
 // see this module's own exports' doc comments and
-// docs/architecture/identity.md's "Session continuation across nodes"
+// docs/projects/backend-server/architecture/identity.md's "Session continuation across nodes"
 // section for the full design.
 //
 // Never a login credential by itself (#122's decided separation,

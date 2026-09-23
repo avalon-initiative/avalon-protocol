@@ -48,7 +48,7 @@ const REGISTRATION_NONCE_BYTES: usize = 32;
 /// The three deployment tiers `docs/trusted-networks.json`'s `network_id`
 /// prefix convention already establishes (`avalon-dev-<name>` /
 /// `avalon-int-<name>` / `avalon-mainnet-N`) — see
-/// `docs/architecture/network-trust-anchors.md`. An unrecognized prefix (a
+/// `docs/projects/backend-server/architecture/network-trust-anchors.md`. An unrecognized prefix (a
 /// `network_id` following none of these conventions) is treated as
 /// [`NetworkTier::Mainnet`], the strictest tier, rather than guessed as
 /// `Dev` — failing closed on an unrecognized `network_id`, never silently

@@ -3,7 +3,7 @@
 //! `--ignored` since it needs live infra — see `make test-live` / `make
 //! start`.
 //!
-//! "Scenario C" (`docs/architecture/revocation.md`): issue then revoke;
+//! "Scenario C" (`docs/projects/backend-server/architecture/revocation.md`): issue then revoke;
 //! history shows both; `validity(at)` flips at the revocation timestamp.
 
 use base64::engine::general_purpose::STANDARD as BASE64;

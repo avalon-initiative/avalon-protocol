@@ -1,5 +1,5 @@
 //! RFC 6962 (Certificate Transparency) Merkle Tree Hash (see
-//! `docs/architecture/settlement.md`'s "What is decided (continued)"
+//! `docs/projects/backend-server/architecture/settlement.md`'s "What is decided (continued)"
 //! section). This is a layered addition on top of `postgres.rs`'s existing
 //! sequential hash chain (`prev_hash`/`entry_hash`), not a replacement for
 //! it: the chain stays the cheap, no-network, O(1)-per-link integrity check

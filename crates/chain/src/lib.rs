@@ -1,6 +1,6 @@
 //! The `SettlementProvider` boundary and its milestone-1 implementation:
 //! a signed, append-only ledger, not a blockchain. See
-//! `docs/architecture/settlement.md` for the decided design. [`merkle`] is
+//! `docs/projects/backend-server/architecture/settlement.md` for the decided design. [`merkle`] is
 //! the RFC 6962 Merkle tree/proof machinery, [`sth`] the
 //! STH-signing scheme (moved into `avalon_protocol::sth` so
 //! the SDK can depend on it without pulling in chain's Postgres stack —

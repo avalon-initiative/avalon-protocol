@@ -9,7 +9,7 @@
 //! `crates/cli/tests/milestone_1_walkthrough.rs` already proves the
 //! full vertical slice against one node — this test doesn't repeat that
 //! proof, it proves a different thing: that an identity has no
-//! operationally-relevant "home node" (`docs/architecture/nodes.md`'s own
+//! operationally-relevant "home node" (`docs/projects/backend-server/architecture/nodes.md`'s own
 //! claim), by actually relying on it. Player A registers on Node 1 only.
 //! Every other action she takes — friending Player B, forming a guild,
 //! receiving an achievement — happens on Node 2, a node that has *never
@@ -787,7 +787,7 @@ fn node3_url() -> String {
 /// that never saw her register, reached only through a real cross-node
 /// login that Node 2/3 can only complete by fetching her signing
 /// key cross-shard from Node 1 over the real DHT locator.
-/// Proves `docs/architecture/nodes.md`'s own claim — "an identity has no
+/// Proves `docs/projects/backend-server/architecture/nodes.md`'s own claim — "an identity has no
 /// home node in any operationally ongoing sense" — against genuinely
 /// separate, independently-deployed infrastructure, not two local
 /// processes sharing one Postgres.

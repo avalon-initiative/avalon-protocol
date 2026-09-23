@@ -3,7 +3,7 @@
 //!
 //! Not every integrator action is a protocol event; ordinary gameplay (combat,
 //! movement, XP ticks) never becomes one. See `docs/stakeholders/Proposal.md` §14 and
-//! `docs/architecture/protocol-events.md` for the hot-data/durable-fact
+//! `docs/projects/backend-server/architecture/protocol-events.md` for the hot-data/durable-fact
 //! distinction, and issue #75 for why durable history is canonical.
 
 use std::convert::Infallible;
@@ -30,7 +30,7 @@ use crate::ids::GlobalId;
 /// it, is not.
 ///
 /// [`Self::KNOWN`] lists every kind the codebase actually emits today
-/// (`docs/architecture/protocol-events-catalogue.md` is the normative,
+/// (`docs/projects/backend-server/architecture/protocol-events-catalogue.md` is the normative,
 /// human-readable form of the same list, payload shape included) — not
 /// every kind ever *proposed*. A documented-but-unbuilt future kind
 /// (`issuer.key_expired`, the `issuer.suspended`/`.reinstated`/`.revoked`/
@@ -250,7 +250,7 @@ impl fmt::Display for ProtocolEventKind {
 /// `Infallible` rather than `()` or a real error type so the type system
 /// itself documents that this conversion cannot fail — an indexer must
 /// never drop an event just because it doesn't recognize its kind (see
-/// `docs/architecture/protocol-events.md`'s versioning policy).
+/// `docs/projects/backend-server/architecture/protocol-events.md`'s versioning policy).
 impl FromStr for ProtocolEventKind {
     type Err = Infallible;
 

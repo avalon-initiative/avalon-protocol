@@ -14,7 +14,7 @@
 //! migrate-network` in `crates/cli`), not a routine sync mechanism —
 //! consistent with `avalon-mainnet-N` only ever incrementing for a
 //! genuine, maintainer-decided reset (see
-//! `docs/architecture/network-trust-anchors.md`). It works across two
+//! `docs/projects/backend-server/architecture/network-trust-anchors.md`). It works across two
 //! independent `PgPool`s (source and target may be, and in the real
 //! mainnet-reset case always will be, entirely separate databases) rather
 //! than assuming they share a connection.

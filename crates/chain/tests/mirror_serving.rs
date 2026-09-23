@@ -14,7 +14,7 @@
 //! `avalon-server` processes" limitation `crates/server/tests/mirror_watcher.rs`'s
 //! own module doc already calls out. That branch is exercised instead
 //! against a real second node in the two-node LAN sandbox (see
-//! `docs/architecture/nodes.md`'s "Today in the repo" section).
+//! `docs/projects/backend-server/architecture/nodes.md`'s "Today in the repo" section).
 
 use avalon_chain::merkle;
 use avalon_chain::mirror::{self, MirroredEntry, ObservedSth, CORE_SHARD_ID};

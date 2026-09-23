@@ -1086,7 +1086,7 @@ async function onInvite() {
     const to = isIdentityId(input) ? input : await s.resolveHandle(input)
     const invite = await s.createGuildInvite(guildId.value, to)
     // No endpoint lists a user's own pending guild invites yet (a real
-    // gap — see docs/architecture/guilds.md's correction note), so the
+    // gap — see docs/projects/backend-server/architecture/guilds.md's correction note), so the
     // invite id has to be shared with the invitee out of band for them to
     // accept it today.
     inviteSuccessId.value = invite.id
@@ -1567,10 +1567,10 @@ const {
 
         <!--
           Guild history (created / member joined / left / role changed) is
-          durable per docs/architecture/guilds.md, but #82's event catalogue
+          durable per docs/projects/backend-server/architecture/guilds.md, but #82's event catalogue
           and indexer exposure for it isn't necessarily done, and no
           endpoint like GET /guilds/:id/history exists today (see
-          docs/architecture/hub.md's endpoint list). Rather than fabricate a
+          docs/projects/hub/architecture/hub.md's endpoint list). Rather than fabricate a
           history feed from the current roster/role snapshot, this section
           says plainly that it isn't available yet.
         -->
@@ -1921,7 +1921,7 @@ const {
     <!--
       Guild events calendar + RSVP. Neither an event nor
       an RSVP row is durable protocol history — see
-      docs/architecture/guilds.md's "Guild events calendar + RSVP"
+      docs/projects/backend-server/architecture/guilds.md's "Guild events calendar + RSVP"
       section — so nothing here claims to be permanent. `EventResponse`
       includes the caller's own RSVP status, so
       AvalonRsvpControl pre-selects it correctly.

@@ -1,7 +1,7 @@
 //! Mirror-facing, public transparency-log reads — issue #211, the read-side
 //! API surface for the RFC 6962 Merkle tree and Signed Tree Heads issue
 //! #210 already computes and stores (`crates/chain/src/merkle.rs`,
-//! `crates/chain/src/sth.rs`). See `docs/architecture/settlement.md`'s
+//! `crates/chain/src/sth.rs`). See `docs/projects/backend-server/architecture/settlement.md`'s
 //! "What is decided (continued)" section for the design this implements —
 //! #40/#39's decision that mirror sync stays minimal: expose the latest
 //! STH, a historical STH by `tree_size`, RFC 6962 consistency proofs, and
@@ -59,7 +59,7 @@
 //! [`ShardMirrorSources`], to the specific peer configured for that
 //! `shard_id`, not blended across every peer this node happens to mirror.
 //! Live-verified against the exact scenario that surfaced the bug — see
-//! `docs/architecture/nodes.md`'s `avalon-peer` entry.
+//! `docs/projects/backend-server/architecture/nodes.md`'s `avalon-peer` entry.
 
 use avalon_chain::merkle;
 use avalon_chain::mirror;

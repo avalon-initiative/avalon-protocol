@@ -54,7 +54,7 @@ export function isActiveIntegratorStatus(status: string): boolean {
 // renders them via a v-for over AvalonMetricTile rather than five
 // hand-written copies (and so a component test can assert "every metric
 // has a label" without duplicating this list itself). Order matches
-// docs/architecture/registry.md's metric table.
+// docs/projects/backend-server/architecture/registry.md's metric table.
 export interface LabeledMetric extends RegistryMetric {
   key: keyof IntegratorRegistry
   label: string

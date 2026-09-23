@@ -2,7 +2,7 @@
 //!
 //! Human-readable names (an integrator's slug, an achievement's key) are never
 //! assumed to be globally unique on their own — see
-//! `docs/architecture/achievements-and-attestations.md` (claim namespacing).
+//! `docs/projects/backend-server/architecture/achievements-and-attestations.md` (claim namespacing).
 //! A `GlobalId` namespaces a human-readable key under the entity that issued
 //! it, e.g. `game:ashen-realms:achievement:dragon_slayer`.
 
