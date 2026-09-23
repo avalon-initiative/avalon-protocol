@@ -10,7 +10,6 @@ LOG_FILE := $(LOG_DIR)/avalon-server.log
 .PHONY: help \
 	build run start stop restart status test test-live fmt fmt-check lint check clean \
 	openapi openapi-check openapi-version-check \
-	sdk-coverage-check \
 	migrate migrate-down db-reset \
 	stack-up stack-up-no-redis stack-down stack-logs \
 	web-install hub-dev mobile-dev storybook web-build web-lint web-test \
@@ -38,7 +37,6 @@ help:
 	@echo "  make openapi-check fail if docs/generated/openapi.json is stale relative to the real routes"
 	@echo "  make openapi-version-check fail if the schema's shape changed vs. main without a version bump"
 	@echo "  (TS/C# SDK type regeneration lives in avalon-sdks with the SDKs themselves)"
-	@echo "  make sdk-coverage-check fail if a server route has no call site in one or more SDKs"
 	@echo "  make migrate       apply pending db/migrations/ (up)"
 	@echo "  make migrate-down  revert the most recently applied migration"
 	@echo "  make db-reset      wipe the database (drop+recreate public schema) and reapply all migrations"
@@ -68,7 +66,7 @@ help:
 	@echo "  make register-integrator SLUG=<slug> NAME=<name> OWNER=<owner>  register a test integrator, save its key locally"
 	@echo "  make issue-achievement INTEGRATOR=<slug> ACHIEVEMENT=<key> TOKEN=<session-token>  issue an already-defined achievement to the identity behind TOKEN"
 	@echo ""
-	@echo "  make check-all     check (Rust) + web-lint + web-test + sdk-coverage-check"
+	@echo "  make check-all     check (Rust) + web-lint + web-test"
 	@echo "  make clean-all     clean (Rust) + remove node_modules/dist + dotnet bin/obj"
 
 # --- Rust workspace ----------------------------------------------------------
@@ -168,15 +166,6 @@ openapi-version-check:
 # The TypeScript and C# SDKs' own type-regeneration steps (formerly
 # ts-sdk-types/ts-sdk-types-check and csharp-sdk-types/csharp-sdk-types-check)
 # live in the avalon-sdks repo now — run them from there directly.
-
-# Diffs docs/generated/openapi.json's SDK-facing route table against each
-# SDK's real HTTP call sites (method + normalized path template, not exact
-# per-SDK method naming), and fails naming any route a given SDK never
-# calls. Each SDK is skipped when its source isn't checked out locally
-# rather than misreporting every route as missing — see
-# scripts/check-sdk-coverage.py's own handling.
-sdk-coverage-check:
-	python3 scripts/check-sdk-coverage.py
 
 check: fmt-check lint test openapi-check openapi-version-check
 
@@ -330,7 +319,7 @@ issue-achievement:
 
 # --- Everything -------------------------------------------------------------
 
-check-all: check web-lint web-test sdk-coverage-check
+check-all: check web-lint web-test
 
 clean-all: clean
 	rm -rf node_modules apps/*/node_modules apps/*/dist packages/*/node_modules
