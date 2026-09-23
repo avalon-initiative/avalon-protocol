@@ -1,43 +1,35 @@
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/rust-workspace-orange.svg" alt="Rust workspace">
+</p>
+
 # Avalon Protocol
 
-Avalon Protocol is an open, Rust-based interoperability layer for independent
-games, apps, and services: one persistent identity, one social graph, that a
-user carries between the games, apps, and services that would otherwise treat
-every login as a stranger.
+Avalon Protocol is an open, self-hostable identity and social layer: one
+persistent identity, one friends list, one history of guilds and
+achievements, that a person carries between every game, app, and service
+that opts into the network — owned by them, not any single integrator. Build
+on it and your users bring a real identity and community with them instead
+of starting from zero; opt into it and your product gets a working friends
+list, presence, guild membership, and chat backend for free — Avalon runs
+that infrastructure, you wire your client to the SDK and put your own UI on
+top of it, not build and operate the backend yourself.
 
-Every major platform already solved this for the web: sign in once, and that
-identity carries weight across dozens of unrelated apps — the browser or
-platform vouches for who you are everywhere you go, so nobody has to rebuild
-their identity from scratch at every login screen. Gaming never got this. Your
-online presence — who your friends are, what community you're part of, the
-journey you've built — tends to be the same person across every game you
-play, yet today it resets to zero at each one, trapped in whichever studio's
-database happens to run that particular title. There's no reason a friendship
-or a guild built in a shooter should be invisible the moment you log into a
-survival game instead. Avalon is that missing layer for games: the same
-identity, friends, and history carried with you from one game to the next —
-owned by the user, not any single game.
+**In gaming**, this is the clearest and first use case: who your friends
+are, what guild you're in, the achievements you've earned, none of it
+should reset to zero at every new game, trapped in whichever studio's
+database happens to run that title. Avalon carries a player's identity,
+friends, guild membership, and achievement history between the games that
+opt into the network. Gaming is where the idea started and where it's
+furthest along today — the same layer works for any app or service that
+wants persistent identity and community without owning it outright.
+
+## Why Avalon
+
+Games are where the idea is proven out first:
 
 > **Games are experiences. Your identity, friends, guilds, achievements, and
 > history belong to you.**
-
-A user has one Avalon identity. That identity can have completely different,
-unrelated characters in different games — Avalon never dictates a character model.
-Friends, guilds, and achievements are network-level concepts a game opts into, not
-things a game is required to expose or trust blindly. A game stays fully sovereign
-over its own world, economy, and rules; Avalon only provides the connective
-infrastructure between games, not a platform that owns them.
-
-The internet was built to connect people to each other. Identity and social
-connection never became part of that shared foundation the way addressing and
-routing did, so every app and platform built its own incompatible version on
-top instead — and the network built to connect everyone ended up full of
-places that each make you start over. Avalon puts that layer where it always
-should have been: not owned by any one platform, and not rebuilt from scratch
-by every game that needs it. See [Why Avalon](docs/WhyAvalon.md) for the full
-argument.
-
-## Design principles
 
 - **Identity is separate from characters.** One persistent identity, any number of
   unrelated characters across games.
@@ -50,51 +42,35 @@ argument.
   a receiving game can independently verify and decide whether to trust — not
   arbitrary rows in someone else's database.
 - **Settlement is a public transparency log, not federation or blockchain consensus.**
-  Milestone 1 is a signed, append-only ledger. Durable facts are independently
-  verifiable and mirrorable by anyone — not gated behind servers whitelisting
-  each other, and consensus is a permissioned validator set reaching agreement,
-  not mining or a stake-weighted token.
+  Durable facts are independently verifiable and mirrorable by anyone, and
+  consensus is a permissioned validator set reaching agreement — not mining
+  or a stake-weighted token.
 - **Don't build the universe.** Avalon is the railroad between games, not another
-  platform trying to own every destination.
+  platform trying to own every destination — a game stays fully sovereign over
+  its own world, economy, and rules.
 
 Tools already exist that solve part of this problem — Discord is the clearest
 example, with one identity, one friends list, and presence that spans every
 game you play. What none of them give you is anything a game can actually
 build on: an achievement a game can issue and another can independently
-verify, a claim made outside its own database that it can trust, or a social
-graph a user actually owns in a portable sense rather than one that belongs to
-whichever platform happens to host it. Avalon isn't a competitor to Discord,
-Slack, or anything like them — it's the open identity and social layer
-underneath, that any of them could plug into as a client, the same way a game
-or the Hub app can.
+verify, or a social graph a user actually owns in a portable sense rather
+than one that belongs to whichever platform happens to host it. Avalon isn't
+a competitor to Discord or Slack — it's the open identity and social layer
+underneath, that any of them could plug into as a client, the same way a
+game or the Hub app can. See [Why Avalon](docs/WhyAvalon.md) for the full
+argument.
 
-## Status
+## Screenshots
 
-The core vertical slice is real and working end to end against a live
-Postgres instance, not scaffolding. Identity and auth: a self-custodied
-keypair — a WebAuthn passkey for login plus a separate Ed25519 key that
-signs the events an identity authors — with multi-device registration,
-guardian-based social recovery, and cross-device pairing, wired through
-`avalon create-identity`, the Rust SDK, and the C# SDK. The chain crate has
-a real hash-chained, Merkle-rooted Postgres ledger with Signed Tree Heads
-and mirror-facing proof/sync endpoints (`avalon inspect-ledger`); identity,
-guild, and achievement writes are atomic with their ledger entry via an
-outbox pattern. The social graph (friends, blocks, presence, scoped
-discovery) and guilds (roles with per-resource permission overrides,
-membership, channels, chat, events with RSVP, discovery) are built out with
-real server endpoints and a working Hub UI. Achievements/attestations are
-wired end to end — a category-driven claim vocabulary, two-tier
-root/operational issuer keys, signed issuance, authenticity/validity/
-recognition kept as separate questions, signed append-only revocation
-history — through both SDKs and a Hub achievements view. See
-[`docs/projects/backend-server/architecture/`](docs/projects/backend-server/architecture/)
-for the current state of each area, one file per topic.
+<p align="center">
+  <img src=".github/assets/graphics/avalon-pitch-gaming.png" alt="Avalon Network — one identity, friends, guilds, and achievements carried across every game you play" width="720">
+</p>
 
-Login is identity-ID-first today, not fully usernameless: discoverable
-login without an identity ID requires attested resident WebAuthn
-credentials, which isn't built yet.
+The Hub — Avalon's web client for identity, friends, guilds, and
+achievements — is real and working, not a mockup; UI screenshots are coming
+as its surface stabilizes. In the meantime, see the network model above.
 
-## Running locally
+## Getting Started
 
 ```bash
 docker compose up -d && cp .env.compose.example .env
@@ -102,11 +78,27 @@ make migrate && make start
 make create-identity && make inspect-ledger
 ```
 
-See [`docs/maintainers/local-development.md`](docs/maintainers/local-development.md)
+See the [local development guide](docs/maintainers/local-development.md)
 for the full setup path (prerequisites, the Hub web client, Storybook, the
 C# SDK, resetting the database, and running the live test suite).
 
-## Repository structure
+## What can I build with it?
+
+- Give a game, app, or service a persistent player identity — a
+  self-custodied keypair, not another studio-owned account — with WebAuthn
+  passkey login and Ed25519 event signing, wired through
+  `avalon create-identity` or any official SDK.
+- Carry a friends list, presence, and guild membership between unrelated
+  integrators, without either one trusting the other's database directly.
+- Skip building your own friends list, presence, or guild chat backend —
+  Avalon already runs it. Wire the SDK to it and put your own UI on top;
+  you're not standing up servers, storage, or delivery for any of it.
+- Issue an achievement or attestation your integrator vouches for, that
+  another can independently verify without taking your word for it.
+- Stand up your own `avalon-server` node — the network is self-hostable, not
+  a single company's service you have to depend on.
+- Build a client entirely on the [official SDKs](docs/projects/sdks/README.md)
+  without touching this repo's own apps.
 
 ```text
 crates/
@@ -129,28 +121,10 @@ packages/
 bindings/
   csharp/     flagship external SDK for game developers (Unity-targeted)
   ts/         TypeScript reference SDK
-
-docs/
-  README.md      doc-set map: which directory is for you, suggested reading order
-  GLOSSARY.md    Avalon's vocabulary — start here if the terminology is the blocker
-  WhyAvalon.md   the case for why this needs to exist
-  users/         docs for people using games/apps/services that integrate Avalon
-  maintainers/   docs for contributors to this repo (repo-wide)
-  stakeholders/
-    Proposal.md  product overview
-    README.md    docs for people evaluating Avalon from the outside
-  projects/      one folder per deployable, each self-contained enough to
-                 move to its own repo later — see projects/README.md
-    backend-server/  the network itself: architecture/, for-hosters/, for-maintainers/
-    sdks/            every official SDK (rust/, typescript/, csharp/) + one shared architecture/
-    cli/             the `avalon` dev/ops CLI
-    hub/             the web client
-    mobile-hub/      the Tauri desktop/mobile shell
-    ui/              the shared Vue3 component library
 ```
 
 The Rust reference SDK lives in a separate `avalon-sdks` repository rather
-than in this workspace; see [`docs/projects/sdks/rust/README.md`](docs/projects/sdks/rust/README.md).
+than in this workspace; see the [Rust SDK docs](docs/projects/sdks/rust/README.md).
 
 ## Trusted networks
 
@@ -165,7 +139,7 @@ Ed25519 public key, so a client can verify a server's Signed Tree Heads
 rendered from [`docs/trusted-networks.json`](docs/trusted-networks.json), the
 single canonical copy — not a hand-maintained duplicate, and a Hub test fails
 if the two ever drift. See
-[`docs/projects/backend-server/architecture/network-trust-anchors.md`](docs/projects/backend-server/architecture/network-trust-anchors.md)
+[Network trust anchors](docs/projects/backend-server/architecture/network-trust-anchors.md)
 for the full model, how the Hub enforces it, and what this deliberately does
 not solve (a compromised maintainer publishing a bad key here is a
 governance problem, not one client-side pinning can fix).
@@ -183,8 +157,8 @@ and the actual hex from that deployment's `AVALON_SETTLEMENT_VERIFY_KEY`
 are supported — `avalon-dev-<name>` (single-node), `avalon-int-<name>` (a
 1-5 node interconnected test bed for verifying changes integrate before
 mainnet), and `avalon-mainnet-N` (the real, independently growing/shrinking
-validator set) — see
-[`docs/projects/backend-server/architecture/network-trust-anchors.md`](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
+validator set) — see the
+[trust anchor list](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
 
 Avalon Hub bundles this same list at build time and always shows which
@@ -195,6 +169,56 @@ an unpinned network rather than trusting it silently — see
 ## Learn more
 
 [Doc map](docs/README.md) · [Glossary](docs/GLOSSARY.md) · [Proposal](docs/stakeholders/Proposal.md) · [Architecture](docs/projects/backend-server/architecture/README.md) · [Why Avalon](docs/WhyAvalon.md)
+
+## Contributing
+
+Opening a PR here makes you part of the Avalon Initiative, not an outside
+contributor to somebody else's project — the same standard every operator
+and integrator on this network is held to. Every proposal is checked against
+one question: does it keep a game fully sovereign over its own world, giving
+Avalon only the connective infrastructure between games, never authority
+over any single one? See [Contributing](.github/CONTRIBUTING.md) for the
+branch/PR workflow and the full feature proposal gate.
+
+## FAQ
+
+**Is there a token, or is this a blockchain?** No. No native currency at
+launch — a cross-game currency layer is an explicitly later, optional phase
+if ever proposed on its own merits. Settlement is a signed, append-only
+transparency log with a permissioned validator set reaching agreement, not
+mining or a stake-weighted token.
+
+**Who owns my identity and data?** You do. An identity is a self-custodied
+keypair — a WebAuthn passkey for login plus a separate Ed25519 key that
+signs the events you author — not an account any company controls.
+
+**Does a game have to expose everything to join the network?** No.
+Interoperability is opt-in per capability (identity, friends, guilds,
+achievements, ...), and a game decides which other issuers' attestations it
+trusts. Avalon never dictates a game's character model, economy, or rules.
+
+**Can I run my own node?** Yes — Avalon is self-hostable, not a single
+company's service. See the [hosting docs](docs/projects/backend-server/for-hosters/README.md)
+to stand one up, and the [upgrade guide](docs/projects/backend-server/for-hosters/upgrading.md)
+for rolling out new versions and security patches to one already running.
+
+**Is it stable enough for production?** Avalon is pre-release. The core
+vertical slice (identity/auth, social graph, guilds, achievements/
+attestations) runs end to end against a live Postgres instance, not
+scaffolding — see the [architecture docs](docs/projects/backend-server/architecture/)
+for the current state of each area, one file per topic — but no network has
+publicly launched yet.
+
+<!--
+## Related projects
+
+TODO: once the backend, SDKs, Hub, and mobile-hub split into their own
+repositories, list them here.
+-->
+
+## Support the project
+
+<a href="https://www.buymeacoffee.com/lunarvagabond" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 ## License
 

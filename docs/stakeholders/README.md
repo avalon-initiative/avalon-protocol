@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../.github/assets/graphics/avalon-pitch-generic.png" alt="Avalon Network — an open, user-owned identity and social layer connecting people, applications, and services" width="720">
+</p>
+
 # For Stakeholders
 
 Documentation written for people evaluating Avalon from the outside — whether
