@@ -3,7 +3,9 @@
 For getting a node running in the first place, see
 [`hosting-quickstart.md`](hosting-quickstart.md) — this doc picks up from
 there, covering what changes once that node needs to be reachable from
-anywhere other than `127.0.0.1`.
+anywhere other than `127.0.0.1`. Once it's live, see
+[`upgrading.md`](upgrading.md) for rolling out new versions and security
+patches without breaking it.
 
 `avalon-server` speaks plain HTTP only — there is no native TLS listener in
 the Rust app, and that's deliberate (see [Current implementation](#current-implementation)).

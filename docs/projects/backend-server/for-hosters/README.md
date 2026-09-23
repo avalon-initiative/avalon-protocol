@@ -20,6 +20,9 @@ No Rust or Node toolchain is required for anything on this page — only
    reachable from anywhere other than `127.0.0.1`: TLS termination via a
    reverse proxy (Caddy or nginx), example configs, and which env vars need
    real production values instead of local-dev defaults.
+3. [`upgrading.md`](upgrading.md) — once that node is live: backing it up,
+   rolling out a routine upgrade or an emergency security patch, and
+   rolling back if a new version breaks something.
 
 ## If something goes wrong
 
