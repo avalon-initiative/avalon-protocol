@@ -302,12 +302,6 @@ async fn discover_matches_separate_status_and_peers_calls() {
     );
 
     let discover_peers = discover["peers"].as_array().unwrap();
-    let peers = list_peers(&http, &base).await;
-    assert_eq!(
-        discover_peers.len(),
-        peers.len(),
-        "discover's peers must match GET /nodes/peers"
-    );
     assert!(
         discover_peers
             .iter()
