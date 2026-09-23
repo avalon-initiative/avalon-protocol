@@ -1,7 +1,7 @@
 //! Real protobuf parsing/validation for Integrator Space schemas and
 //! instance data — replacing the original
 //! "store `proto_source` opaquely, never parse it" stance. See
-//! `docs/projects/backend-server/architecture/integrator-space.md`'s "Today in the repo" for the
+//! `docs/projects/backend-server/architecture/integrator-space.md` for the
 //! parser toolchain, the single-root-message convention, and why parsing
 //! happens in a scoped `TempDir` with no panics on integrator input.
 

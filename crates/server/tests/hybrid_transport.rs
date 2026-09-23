@@ -11,9 +11,8 @@
 //! What this test can and cannot prove: no headless environment can drive a
 //! real phone over Bluetooth through an actual hybrid ceremony, so this does
 //! NOT exercise hybrid transport itself — only a human with a real browser
-//! and a real phone can do that (see `docs/projects/backend-server/architecture/identity.md`'s
-//! "Today in the repo" note on this ticket for what was and wasn't manually
-//! verified). What this test asserts instead, against a real running
+//! and a real phone can do that (see `docs/projects/backend-server/architecture/identity.md`).
+//! What this test asserts instead, against a real running
 //! server:
 //!
 //! 1. The raw JSON challenge returned by `/identities/register/start` sets

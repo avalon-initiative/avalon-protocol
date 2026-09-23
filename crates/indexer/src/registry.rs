@@ -1,5 +1,5 @@
 //! The Integrator Registry's derived-metrics read model. See
-//! `docs/projects/backend-server/architecture/registry.md`'s "Today in the repo" for the metric
+//! `docs/projects/backend-server/architecture/registry.md` for the metric
 //! definitions, why nothing is ranked/combined, and the `coarsen`/
 //! `min_cohort` privacy floor enforced centrally here.
 

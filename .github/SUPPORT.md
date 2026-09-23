@@ -6,9 +6,7 @@ Use GitHub Issues. Search existing issues first to avoid duplicates.
 
 ## Questions and general help
 
-This repo is currently private, so GitHub Discussions isn't enabled yet —
-use GitHub Issues for design questions and sanity checks too, for now. This
-section will point at Discussions once the repo goes public.
+Use GitHub Issues for design questions and sanity checks too.
 
 ## Contributing
 

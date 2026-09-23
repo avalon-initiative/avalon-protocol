@@ -1,7 +1,7 @@
 //! Social recovery via an M-of-N set of trusted guardians —
 //! the answer decided on for losing every registered device at once.
 //! See `docs/projects/backend-server/architecture/identity.md`'s "Social recovery via M-of-N
-//! guardians" and "Today in the repo" sections for the full
+//! guardians" section for the full
 //! configure/request/approve/finalize state machine and its abuse-
 //! resistance measures.
 

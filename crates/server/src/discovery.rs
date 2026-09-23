@@ -1,6 +1,6 @@
 //! User discovery: scoped, always-on friends-of-friends/mutual-guild
 //! surfacing and opt-in global name/handle search. See
-//! `docs/projects/backend-server/architecture/social-graph.md`'s "Today in the repo" for the
+//! `docs/projects/backend-server/architecture/social-graph.md` for the
 //! discoverable-preference default, why `discover_people` never takes a
 //! query parameter, and the shared block/friend-exclusion logic.
 

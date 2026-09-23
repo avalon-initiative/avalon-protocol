@@ -15,8 +15,8 @@ body:
         deciding, closed means decided. `architecture-decision-record` is a
         separate label for decisions that are filed and closed together in one
         step, not a status this issue graduates into. If the decision changes an
-        invariant or a document under `docs/projects/*/architecture/`, update that document's
-        "Decisions and tickets" section to link back here.
+        invariant or a document under `docs/projects/*/architecture/`, update that document so it reflects
+        the decision.
 
   - type: textarea
     id: context

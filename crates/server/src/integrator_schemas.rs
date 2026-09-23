@@ -1,6 +1,6 @@
 //! Integrator Space schema publication — an integrator publishing how its own data is
 //! structured, versioned and immutable once published. See
-//! `docs/projects/backend-server/architecture/integrator-space.md`'s "Today in the repo" for
+//! `docs/projects/backend-server/architecture/integrator-space.md` for
 //! namespacing, the owning-integrator auth check, and the
 //! immutable-rows-plus-`superseded_by`-lineage write model.
 

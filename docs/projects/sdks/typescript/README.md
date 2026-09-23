@@ -11,8 +11,8 @@ TypeScript-specific "how," not the "why."
 
 **Status:** real and shipped, not speculative — ES modules, `vitest` for
 tests. Published as `@avalon-initiative/protocol-sdk` on GitHub Packages
-(a private registry — this org's repos are still pre-public, so this
-isn't on the public npm registry). `apps/hub` depends on the published
+(a GitHub-hosted npm registry that requires an authenticated token,
+not the public npm registry). `apps/hub` depends on the published
 package now, not a local path — its entire data-fetching surface goes
 through it.
 

@@ -23,21 +23,16 @@ If no, refine or drop the proposal.
 
 ## Questions before you file
 
-This repo is currently private, so GitHub Discussions isn't enabled yet —
-open an issue instead, even for a design question or a sanity check. Once
-the repo goes public, this section will point there instead.
+Open an issue, even for a design question or a sanity check.
 
 ## If A Convention Gets In The Way
 
-The branching model, commit format, and process rules below are a starting
-point, not a settled standard — assembled from what's worked on this user's
-other repos, not handed down from experience running this specific project.
-Follow them as written. But if one is genuinely getting in the way of a
-contribution, doesn't fit a situation, or just seems off, raise it first — an
-issue — before working around it. Same goes for friction in the tools, the
-codebase, or the workflow generally: surfacing it is always welcome. The goal
-is to talk it through and adjust the rule if it's wrong, not to greenlight
-quietly deviating from it.
+The branching model, commit format, and process rules below are the
+project's current working conventions. Follow them as written. If one gets
+in the way of a contribution or doesn't fit a situation, open an issue to
+discuss it before working around it, so the rule can be adjusted if it's
+wrong rather than quietly bypassed. Friction in the tooling, the codebase,
+or the workflow is welcome as an issue too.
 
 ## Contribution Principles
 
@@ -104,9 +99,7 @@ to the repo (the maintainer/named-core-dev list this format is already
 restricted to) — everyone else needs a real issue reference regardless of
 title.
 
-*This repo is currently private, so these Actions workflows stay disabled at
-the repo-settings level per house convention until it goes public — the
-process below is what activates once they're turned on.*
+*The process below is what these Actions workflows enforce.*
 
 ## Commits And Pull Requests
 
@@ -222,9 +215,7 @@ For non-trivial work: update the relevant file in
 [`docs/projects/backend-server/architecture/`](../docs/projects/backend-server/architecture/README.md) (and
 [`docs/stakeholders/Proposal.md`](../docs/stakeholders/Proposal.md) if the
 narrative changes) in the same PR as the implementation, not after — a doc
-that lags the code is treated as a bug. Each architecture file ends with
-"Today in the repo" (what actually exists, with paths) and "Decisions and
-tickets" (the issues that govern it); keep both current.
+that lags the code is treated as a bug.
 
 ### Protocol event versioning policy
 

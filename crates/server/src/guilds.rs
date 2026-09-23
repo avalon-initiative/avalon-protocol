@@ -1,7 +1,6 @@
 //! Guild creation, roles, ownership transfer, membership lifecycle, and
 //! discovery. A guild is a network-level primitive,
-//! not an integrator's. See `docs/projects/backend-server/architecture/guilds.md` and
-//! `guilds-implementation-log.md`'s "Today in the repo" for the durable
+//! not an integrator's. See `docs/projects/backend-server/architecture/guilds.md` for the durable
 //! event history, role-permission resolution, and discovery-board design.
 
 use avalon_indexer::projections::guild_rosters;
