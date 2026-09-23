@@ -42,12 +42,14 @@ signatures exist for that kind.
 | `issuer.key_expired` | issuer → issuer | key id | issuer keys | issuer key or network |
 | `issuer.suspended` / `.reinstated` / `.revoked` / `.deprecated` | network or issuer → issuer | reason, effective at | issuer status | operator (audited) or issuer |
 | `friend.requested` / `.accepted` / `.removed` (done) | identity → identity | `.requested`: `from`, `to`, `actor`; `.accepted`: `from`, `to`, `actor`; `.removed`: `a`, `b`, `actor` | friendships | acting identity's key — promised-durable; see [social-graph.md](./social-graph.md) |
+| `friend.relationship_reversed` (done) | identity → identity | `reverses_event_id`, `recovery_request_id`, `identity_id`, `counterparty_id`, `effect` (`"friendship_removed"`) | friendships | acting identity's key — compensating event that supersedes a `friend.accepted`; the reversed entry is never altered, see [identity.md](./identity.md) |
 | `guild.created` (done) | identity → guild | `guild_id`, `name`, `tag`, `description`, `owner` | guilds | founder key |
 | `guild.updated` (done) | guild → guild | full replace, always all fields: `guild_id`, `name`, `tag`, `description`, `motd`, `banner`, `icon`, `links`, `recruiting`, `public`, `game_breakdown_public`, `join_policy`, `roster_visibility`, `actor` | guilds | acting officer's key |
 | `guild.role_defined` (done) | identity → guild | `guild_id`, `name_index`, `name`, `permissions`, `description`, `badge` (`icon`/`color`), `actor` | role definitions | acting member's key |
 | `guild.role_deleted` (done) | identity → guild | `guild_id`, `name_index`, `actor` | role definitions | acting member's key |
 | `guild.member_added` (done) | guild → identity | `guild_id`, `identity_id`, `role_index`, `via` (`"invite"`/`"join_request"`/`"direct_join"`), `actor` | rosters, history | acting member's key |
 | `guild.member_removed` (done) | guild → identity | `guild_id`, `identity_id`, `reason` (`"left"`/`"removed"`), `actor` | rosters, history | acting member's key |
+| `guild.membership_reversed` (done) | identity → guild | `reverses_event_id`, `recovery_request_id`, `guild_id`, `identity_id`, `effect` (`"membership_removed"`/`"membership_restored"`), `role_index` (the role held after the reversal; the default member role) | rosters, history | acting identity's key — compensating event; the reversed entry is never altered, see [identity.md](./identity.md) |
 | `guild.role_changed` (done) | guild → identity | `guild_id`, `identity_id`, `role_index`, `actor` | rosters, history | acting member's key |
 | `guild.owner_transferred` (done) | guild → identity | `guild_id`, `from`, `to` | guilds | acting owner's key |
 | `guild.game_associated` (done) | guild → integrator | `guild_id`, `game_id`, `actor` | associations | guild officer key |

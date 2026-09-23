@@ -52,6 +52,7 @@ pub mod registry;
 pub mod replication;
 pub mod resources;
 pub mod retention;
+pub mod rollback;
 pub mod settlement;
 pub mod signature_gate;
 pub mod state;
@@ -403,6 +404,14 @@ fn full_routes(state: AppState) -> Router {
         .route("/me/passkeys", get(passkeys::list_passkeys))
         .route("/me/passkeys/{id}", patch(passkeys::rename_passkey))
         .route("/me/passkeys/{id}/revoke", post(passkeys::revoke_passkey))
+        .route(
+            "/me/rollback/candidates",
+            get(rollback::list_rollback_candidates),
+        )
+        .route(
+            "/me/rollback/{event_id}/reverse",
+            post(rollback::reverse_event),
+        )
         // Issue #201: social recovery. Guardian configuration and the
         // caller's own status are session-authenticated (`/me/...`);
         // `/recovery/requests/start` and `/finish` are the one deliberate

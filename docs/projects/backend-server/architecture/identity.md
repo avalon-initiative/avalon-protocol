@@ -177,7 +177,8 @@ ambient session); approving a device-signing-key grant; revoking an identity's l
 remaining passkey; removing a recovery guardian or raising the recovery threshold;
 connecting to an integrator (granting it standing capabilities); creating, updating, or
 deleting a guild role or a guild permission override; transferring guild ownership; and
-changing another guild member's role. Everything else — reads, chat, presence updates,
+changing another guild member's role; and reversing an event through post-compromise
+rollback (`rollback.reverse`, signed over `event_id`, `identity_id`, `since`). Everything else — reads, chat, presence updates,
 reversible social-graph edits, guild membership churn (invite/accept/leave/kick),
 channel/event CRUD gated by an existing permission, and revoking a non-last passkey or
 device — stays authorized by the ambient session alone, since it is either fully
@@ -431,6 +432,58 @@ Not currently built: a background sweep that auto-finalizes every eligible reque
 moment its delay elapses (today, finalize is caller-triggered — the recovering
 device's own client calls it once it observes a ready request past its delay); Rust
 SDK and C# binding surface for this flow beyond the account-level session helpers.
+
+### Post-compromise rollback
+
+Recovery adds a new passkey and marks the request completed; it does not undo anything
+an attacker did while holding the old credentials. Rollback is the self-service way for
+a recovered owner to supersede those actions. It is a signed, append-only
+*compensating event* (`friend.relationship_reversed`, `guild.membership_reversed`),
+never a generic undo: the original ledger entry is neither rewritten nor deleted, the
+same posture achievement revocation takes, and the compensating event is atomic with
+its ledger entry via the outbox like every other write. Projections apply it
+idempotently, so a rebuild from the ledger reproduces the same state.
+
+**Eligibility window.** An event is eligible only if all of these hold:
+
+- it was authored by this identity;
+- its event timestamp is strictly before `completed_at` of the identity's latest
+  completed recovery request; and
+- its event timestamp is at or after `since`, a required timestamp the owner supplies to
+  declare when they believe the compromise began.
+
+Nothing in the system records when a compromise began, so the window is bounded above by
+the recovery and below by the owner's own declaration. An identity with no completed
+recovery has nothing eligible (`ROLLBACK_NO_COMPLETED_RECOVERY`); a `since` at or after
+the recovery time is `INVALID_ROLLBACK_WINDOW`.
+
+**What can be reversed.** Only reversals that need no other party's action are offered.
+
+| Original event | Reversal | Condition |
+|---|---|---|
+| `friend.accepted` | friendship removed | the friendship still exists |
+| `guild.member_added` (subject is the owner) | membership removed | still a member, and not the guild's owner (the owner must transfer ownership or delete the guild) |
+| `guild.member_removed` with reason `left`, actor is the owner | membership restored | the guild exists, its join policy is currently open, and the identity is not currently a member |
+| `friend.removed` | not reversible | restoring a friendship needs the counterparty; the owner sends a new friend request |
+| `guild.member_removed` from an invite-only guild | not reversible | rejoining needs an invitation from a guild authority |
+| any event already reversed | not reversible | a compensating event referencing it already exists; a reversal cannot be applied twice |
+
+A restored membership is granted at the default member role. Any previous role would be
+a grant that needs a guild authority, so it is not restored. Removing a membership also
+clears the identity's `main_guild` if it pointed at that guild, as leaving does.
+
+**Endpoints.** `GET /me/rollback/candidates?since=<RFC 3339>` lists every eligible event
+with `reversible`, `reason` and `already_reversed`. `POST /me/rollback/{event_id}/reverse`
+takes the same `since` and returns `{ reversal_event_id }`; it re-validates the window
+and the current state itself and is in the fresh-signature tier, signing
+`avalon:rollback.reverse:v1:<event_id>:<identity_id>:<since>` with `since` exactly as
+sent. Refusals use `ROLLBACK_EVENT_NOT_ELIGIBLE`, `ROLLBACK_NOT_REVERSIBLE` and
+`ROLLBACK_ALREADY_REVERSED`.
+
+**Deferred.** Reversing anything that changes another party's state (restoring a removed
+friendship, re-inviting into an invite-only guild, restoring previous guild roles); an
+open-ended dispute flow when the owner and another party disagree; and expiry of the
+eligibility window.
 
 ## What identity is not
 
