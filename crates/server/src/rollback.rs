@@ -393,6 +393,7 @@ fn guild_ref(guild_id: Uuid, verb: &str) -> GlobalId {
 // --- HTTP ---------------------------------------------------------------
 
 #[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct RollbackCandidatesQuery {
     /// RFC 3339 timestamp at which the owner believes the compromise began.
     pub since: String,
