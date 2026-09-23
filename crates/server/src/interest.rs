@@ -98,13 +98,37 @@ const RECORD_TTL: Duration = Duration::from_secs(135);
 #[derive(Clone)]
 pub struct RedisFastPath {
     conn: redis::aio::ConnectionManager,
+    /// Prefixed into every key this struct reads or writes — see
+    /// [`Self::from_env`]'s own doc comment on why this can't be left
+    /// implicit the way [`InterestScope::dht_key`] leaves it.
+    network_id: String,
 }
 
 impl RedisFastPath {
     /// `None` when `AVALON_REDIS_URL` is unset — every caller here treats
     /// that identically to "Redis didn't have the answer," so nothing
     /// downstream needs its own separate unconfigured-vs-empty branch.
-    pub async fn from_env() -> Option<Self> {
+    ///
+    /// `network_id` is not optional the way it might look at a glance:
+    /// unlike `InterestScope::dht_key`, whose lack of an embedded
+    /// `network_id` is safe only because two different networks' libp2p
+    /// swarms are already unable to talk to each other at all (a
+    /// different `kad` protocol id per network, peers on the wrong one
+    /// disconnected on `identify` mismatch — see `crate::dht`), and
+    /// unlike Postgres, where each network gets its own separate
+    /// database, Redis has no equivalent structural boundary: this
+    /// struct's own doc comment already says operators may legitimately
+    /// point more than one network's fleet (dev/staging/prod, or
+    /// multiple separate deployments) at the *same* Redis instance,
+    /// since it's just a cache. Without `network_id` in the key, two
+    /// networks sharing one Redis would rely on their scope UUIDs never
+    /// coinciding — astronomically unlikely, but a hope, not a
+    /// guarantee, and a hard boundary is exactly what "environments must
+    /// never cross-contaminate" requires. Every key this struct touches
+    /// is therefore namespaced by `network_id` explicitly, so a
+    /// misconfigured node pointed at the wrong network's Redis can never
+    /// read or write another network's interest data, full stop.
+    pub async fn from_env(network_id: &str) -> Option<Self> {
         let url = std::env::var("AVALON_REDIS_URL")
             .ok()
             .filter(|s| !s.is_empty())?;
@@ -113,7 +137,10 @@ impl RedisFastPath {
         let conn = redis::aio::ConnectionManager::new(client).await.expect(
             "failed to connect to AVALON_REDIS_URL — check the Redis instance is reachable",
         );
-        Some(Self { conn })
+        Some(Self {
+            conn,
+            network_id: network_id.to_string(),
+        })
     }
 
     /// Adds `own_base_url` to `scope`'s member set and refreshes the
@@ -122,7 +149,7 @@ impl RedisFastPath {
     /// Redis-only registration isn't safe to rely on).
     async fn put(&self, scope: InterestScope, own_base_url: &str) {
         let mut conn = self.conn.clone();
-        let key = scope.redis_key();
+        let key = scope.redis_key(&self.network_id);
         let result: redis::RedisResult<()> = async {
             conn.sadd::<_, _, ()>(&key, own_base_url).await?;
             conn.expire::<_, ()>(&key, RECORD_TTL.as_secs() as i64)
@@ -142,7 +169,10 @@ impl RedisFastPath {
     /// this struct's own doc comment).
     async fn lookup(&self, scope: InterestScope) -> Option<Vec<String>> {
         let mut conn = self.conn.clone();
-        match conn.smembers::<_, Vec<String>>(scope.redis_key()).await {
+        match conn
+            .smembers::<_, Vec<String>>(scope.redis_key(&self.network_id))
+            .await
+        {
             Ok(members) if !members.is_empty() => Some(members),
             Ok(_) => None,
             Err(err) => {
@@ -242,15 +272,23 @@ impl InterestScope {
         bytes
     }
 
-    /// This scope's key in the optional Redis fast-path (#585) — same
-    /// namespacing intent as [`dht_key`](Self::dht_key), just a plain
-    /// string since Redis keys are conventionally that, not raw bytes.
-    fn redis_key(&self) -> String {
+    /// This scope's key in the optional Redis fast-path (#585). Unlike
+    /// [`dht_key`](Self::dht_key), which can safely omit `network_id`
+    /// because the libp2p swarm itself is already network-isolated,
+    /// Redis has no such structural boundary — see
+    /// [`RedisFastPath::from_env`]'s doc comment — so `network_id` is
+    /// embedded in every key here as a hard requirement, not an
+    /// afterthought: two networks sharing one Redis instance must never
+    /// be able to read or write each other's entries, regardless of how
+    /// unlikely a bare-UUID collision would have been.
+    fn redis_key(&self, network_id: &str) -> String {
         match self {
-            InterestScope::Channel(id) => format!("avalon:interest:channel:{id}"),
-            InterestScope::Conversation(id) => format!("avalon:interest:conversation:{id}"),
-            InterestScope::Network(id) => format!("avalon:interest:network:{id}"),
-            InterestScope::Identity(id) => format!("avalon:interest:identity:{id}"),
+            InterestScope::Channel(id) => format!("avalon:interest:{network_id}:channel:{id}"),
+            InterestScope::Conversation(id) => {
+                format!("avalon:interest:{network_id}:conversation:{id}")
+            }
+            InterestScope::Network(id) => format!("avalon:interest:{network_id}:network:{id}"),
+            InterestScope::Identity(id) => format!("avalon:interest:{network_id}:identity:{id}"),
         }
     }
 }
@@ -838,8 +876,8 @@ mod tests {
     fn redis_key_never_collides_between_channel_and_conversation() {
         let id = Uuid::new_v4();
         assert_ne!(
-            InterestScope::Channel(id).redis_key(),
-            InterestScope::Conversation(id).redis_key()
+            InterestScope::Channel(id).redis_key("avalon-dev-local"),
+            InterestScope::Conversation(id).redis_key("avalon-dev-local")
         );
     }
 
@@ -847,8 +885,18 @@ mod tests {
     fn redis_key_is_deterministic_for_the_same_scope() {
         let id = Uuid::new_v4();
         assert_eq!(
-            InterestScope::Channel(id).redis_key(),
-            InterestScope::Channel(id).redis_key()
+            InterestScope::Channel(id).redis_key("avalon-dev-local"),
+            InterestScope::Channel(id).redis_key("avalon-dev-local")
+        );
+    }
+
+    #[test]
+    fn redis_key_never_collides_across_network_ids() {
+        let id = Uuid::new_v4();
+        assert_ne!(
+            InterestScope::Channel(id).redis_key("avalon-dev-local"),
+            InterestScope::Channel(id).redis_key("avalon-mainnet-1"),
+            "the same scope UUID in two different networks must never share a Redis key"
         );
     }
 

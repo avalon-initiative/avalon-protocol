@@ -241,7 +241,7 @@ async fn nodes_on_different_networks_never_see_each_others_interest_records() {
 #[tokio::test]
 #[ignore]
 async fn redis_fast_path_answers_a_lookup_even_when_the_dht_channel_is_dead() {
-    let redis_fast_path = interest::RedisFastPath::from_env()
+    let redis_fast_path = interest::RedisFastPath::from_env("avalon-dev-local")
         .await
         .expect("AVALON_REDIS_URL must be set (and reachable) to run this test");
 

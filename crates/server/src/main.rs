@@ -243,7 +243,8 @@ async fn main() {
         host_metrics_sampler.clone(),
     ));
 
-    let interest_redis_fast_path = avalon_server::interest::RedisFastPath::from_env().await;
+    let interest_redis_fast_path =
+        avalon_server::interest::RedisFastPath::from_env(chain.network_id()).await;
     if interest_redis_fast_path.is_some() {
         tracing::info!(
             "avalon-server: interest-lookup Redis fast-path enabled (AVALON_REDIS_URL set)"
