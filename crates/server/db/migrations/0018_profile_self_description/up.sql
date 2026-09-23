@@ -1,6 +1,6 @@
 -- Small, player-optional self-description fields (issue #155), same
 -- promised-durable tier as `display_name`/`avatar_url` — see #86 and
--- docs/projects/backend-server/architecture/identity.md's durable-field table.
+-- docs/architecture/identity.md's durable-field table.
 --
 -- `favorite_genres` is a fixed, small controlled vocabulary
 -- (`avalon_protocol::identity::Genre`), not free text, stored as `TEXT[]`

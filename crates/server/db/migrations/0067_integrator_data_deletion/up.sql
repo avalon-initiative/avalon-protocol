@@ -1,5 +1,5 @@
 -- Issue #533: append-only tombstone for a published Integrator Space
--- instance (e.g. a deleted character), following `docs/projects/backend-server/architecture/revocation.md`'s
+-- instance (e.g. a deleted character), following `docs/architecture/revocation.md`'s
 -- pattern — never a physical delete/mutation of the original row.
 -- `game_data.deleted` sets these columns; the original `instance` JSONB and
 -- `published_at` are never touched. `integrator_data_instances` is the

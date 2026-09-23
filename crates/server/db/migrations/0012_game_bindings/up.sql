@@ -4,7 +4,7 @@
 -- `game.binding_ended` (`crates/server/src/connections.rs`), same posture as
 -- every other projection in this repo: the outbox-written event is
 -- canonical, this row is a cache of it. See
--- `docs/projects/backend-server/architecture/bindings.md`.
+-- `docs/architecture/bindings.md`.
 --
 -- A binding never has game-specific fields (no character, race, class,
 -- level, appearance, progression) — that data stays in the game's own

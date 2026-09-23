@@ -5,8 +5,8 @@
 --
 -- A deliberate, one-time, pre-public break of the wire/versioning
 -- policy's "removing a field bumps version, old versions stay decodable
--- forever" rule (`docs/projects/backend-server/architecture/protocol-events.md`) — same exception
--- `docs/projects/backend-server/architecture/nodes.md` already documents for #290: this repo has
+-- forever" rule (`docs/architecture/protocol-events.md`) — same exception
+-- `docs/architecture/nodes.md` already documents for #290: this repo has
 -- no real deployed network and zero external integrators yet, so there is
 -- no real historical `identity.created`/`profile.updated` data anywhere
 -- that this needs to stay compatible with. The dev database is reset as

@@ -43,7 +43,7 @@ CREATE TABLE guild_roles (
 );
 
 -- Opt-in, non-owning association between a guild and a game (see
--- `docs/projects/backend-server/architecture/guilds.md` "Game as client"). A game never rows here
+-- `docs/architecture/guilds.md` "Game as client"). A game never rows here
 -- itself — only a guild manager, via `POST /guilds/{id}/games/{game_id}`.
 CREATE TABLE guild_game_associations (
     guild_id UUID NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,

@@ -2,7 +2,7 @@
 --
 -- A friendship is a durable, network-owned social fact (issue #75's
 -- promised-durable reasoning applied to friends, same as guild membership
--- would be) — see docs/projects/backend-server/architecture/social-graph.md. `friend_requests` and
+-- would be) — see docs/architecture/social-graph.md. `friend_requests` and
 -- `friendships` are both projections, not the record: the canonical history
 -- is the `friend.requested` / `friend.accepted` / `friend.removed` events in
 -- `protocol_outbox` (crates/server/src/outbox.rs), written in the same

@@ -10,7 +10,7 @@
 -- eagerly for every identity at registration — absence means "not
 -- discoverable", the default, so every identity is off by default with no
 -- backfill required. Deliberately not a `ProtocolEvent`/durable history —
--- same reasoning `docs/projects/backend-server/architecture/privacy.md` already gives for
+-- same reasoning `docs/architecture/privacy.md` already gives for
 -- `hide_playing`: a player preference that removes something from view
 -- entirely, not a fact about the network worth a durable record.
 CREATE TABLE discovery_preferences (

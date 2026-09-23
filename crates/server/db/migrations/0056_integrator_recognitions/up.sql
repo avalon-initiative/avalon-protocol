@@ -1,7 +1,7 @@
 -- Public recognition relationships (issue #89, decided by #290's own
 -- generalized vocabulary) — one integrator publishing "I recognize
 -- <other integrator>'s claims, for <scope>" as a durable fact, not a
--- score or a boolean. See docs/projects/backend-server/architecture/registry.md's "Recognition
+-- score or a boolean. See docs/architecture/registry.md's "Recognition
 -- relationships and the network graph" section.
 --
 -- `recognizer_id`/`recognized_id` are ordered (who recognizes whom), not

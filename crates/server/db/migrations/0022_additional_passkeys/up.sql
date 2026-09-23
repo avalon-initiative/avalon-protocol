@@ -2,7 +2,7 @@
 -- passkeys, not just the one created at account registration. The
 -- `identity_keys` table (migration 0001) already supports multiple rows per
 -- identity, including a `label` column that register_finish never actually
--- populated — no new table needed, per docs/projects/backend-server/architecture/identity.md's own
+-- populated — no new table needed, per docs/architecture/identity.md's own
 -- note that this was schema-ready and just missing an endpoint.
 --
 -- The one real schema gap: `webauthn_ceremonies.kind` only allowed

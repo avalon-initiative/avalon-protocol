@@ -4,7 +4,7 @@
 -- `shard_settlement` (#527/#529's sharded-settlement key domain,
 -- authorized through this exact same issuer-key registration flow rather
 -- than a second, separate registry -- see
--- docs/projects/backend-server/architecture/network-trust-anchors.md's "Per-shard trust anchors"
+-- docs/architecture/network-trust-anchors.md's "Per-shard trust anchors"
 -- section).
 ALTER TABLE issuer_keys
     ADD COLUMN purpose TEXT NOT NULL DEFAULT 'attestation';
