@@ -305,8 +305,8 @@ async fn main() {
     // #313's `remote_submit` (above) is the mechanism that actually makes
     // that true for the outbox write path. This doesn't hard-fail when the
     // two disagree (a `chain`/ledger still exists locally either way, per
-    // `AppState::chain`'s own required field — see `docs/projects/backend-server/architecture/nodes.md`'s
-    // "Today in the repo" entry for this ticket for the full reasoning), but
+    // `AppState::chain`'s own required field — see `docs/projects/backend-server/architecture/nodes.md`
+    // for the full reasoning), but
     // it's worth a loud warning: without `AVALON_SETTLEMENT_REMOTE_URL(S)`,
     // this node's outbox worker falls back to committing locally despite
     // its own declared roles saying it shouldn't be a Settlement authority.

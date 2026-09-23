@@ -1,7 +1,7 @@
 //! Direct/small-group conversations — the identity-to-identity
 //! sibling of `crate::guild_messages`: never touches the outbox or ledger,
-//! participant-only, blocking-aware. See `docs/projects/backend-server/architecture/communication.md`'s
-//! "Today in the repo" for idempotent creation, the relationship gate,
+//! participant-only, blocking-aware. See `docs/projects/backend-server/architecture/communication.md`
+//! for idempotent creation, the relationship gate,
 //! and how blocking is enforced identically on read and write.
 
 use axum::extract::{Path, Query, State};

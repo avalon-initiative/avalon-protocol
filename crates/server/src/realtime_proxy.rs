@@ -3,9 +3,7 @@
 //! into its own genuinely separate deployable role.
 //!
 //! **Connection-topology decision: proxy-through-Gateway, not
-//! direct-connect.** Recorded as a closed
-//! `architecture-decision-record`-labeled issue (see `docs/projects/backend-server/architecture/nodes.md`'s
-//! "Today in the repo" section for the issue number) — the short version:
+//! direct-connect.** See `docs/projects/backend-server/architecture/nodes.md` — the short version:
 //! a client keeps talking to exactly one node's URL for everything, the
 //! same invariant every other role extraction (internal RPC,
 //! Indexer) already preserves, and client

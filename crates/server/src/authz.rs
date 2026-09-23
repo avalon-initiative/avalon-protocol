@@ -2,7 +2,7 @@
 //! "who is calling, on whose behalf" (`Caller`) and "may they exercise this
 //! specific capability" (`require_capability`). See
 //! `docs/projects/backend-server/architecture/security-model.md`'s "Authorization: one capability,
-//! one check" and "Today in the repo" sections for the caller-kind design,
+//! one check" section for the caller-kind design,
 //! why lookups key on `(identity_id, integrator_id)` not `binding_id`, and
 //! why there's no cache yet. The DB-backed live proof lives in this
 //! module's own `live_tests` submodule below (gated `--ignored`), not a
