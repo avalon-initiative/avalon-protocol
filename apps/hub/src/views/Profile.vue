@@ -1314,6 +1314,7 @@ async function onResignGuardian(identityId: string) {
           title="Recovery guardians"
           subtitle="Trusted friends who can jointly authorize recovering this identity if you ever lose every passkey at once. Requires a threshold (M-of-N) so no single guardian can act alone, plus a mandatory public delay before it takes effect."
         >
+          <RouterLink to="/rollback">Undo actions from a compromise</RouterLink>
           <p v-if="guardiansError" :class="page.error">{{ guardiansError }}</p>
           <p v-if="friends.length === 0" :class="page.empty">
             You need at least one friend before you can designate a guardian.
