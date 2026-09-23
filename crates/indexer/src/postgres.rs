@@ -196,9 +196,9 @@ impl PostgresIndexer {
             // rather than falling into the `other` branch below, which
             // would log them as unrecognized on every rebuild even though
             // nothing is actually missing. See
-            // `docs/architecture/query-and-indexing.md`'s "Events with
-            // their own source of truth" section for the full table-by-kind
-            // mapping and why each one is scoped this way.
+            // `docs/projects/backend-server/architecture/query-and-indexing.md`'s
+            // "Events with their own source of truth" section for the full
+            // table-by-kind mapping and why each one is scoped this way.
             "game.registered"
             | "issuer.key_added"
             | "issuer.key_revoked"
@@ -212,12 +212,29 @@ impl PostgresIndexer {
             | "milestone.definition_updated"
             | "milestone.definition_retired"
             | "milestone.issued"
-            | "milestone.revoked" => {}
+            | "milestone.revoked"
+            // #678: the other half of #669's sweep, verified the same way —
+            // each writes its own direct table synchronously, never through
+            // the indexer. See query-and-indexing.md's table for specifics.
+            | "identity.recovery_configured"
+            | "identity.recovery_requested"
+            | "identity.recovery_approved"
+            | "identity.recovery_cancelled"
+            | "identity.recovered"
+            | "issuer.registered"
+            | "guild.updated"
+            | "guild.role_defined"
+            | "guild.role_deleted"
+            | "guild.owner_transferred"
+            | "guild.game_associated"
+            | "guild.favorite_games_updated"
+            | "guild.channel_renamed"
+            | "guild.channel_archived" => {}
 
             other => {
                 // Never an error — an old indexer must survive a new event
                 // kind being introduced elsewhere in the protocol. See
-                // docs/architecture/query-and-indexing.md.
+                // docs/projects/backend-server/architecture/query-and-indexing.md.
                 eprintln!("indexer: skipping unrecognized event kind {other:?}");
             }
         }

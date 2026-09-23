@@ -109,6 +109,20 @@ Server-owned kinds and their table, as of #669:
 | `achievement.defined` / `.definition_updated` / `.definition_retired` | `achievement_definitions` | `crates/server/src/achievements.rs::create_definition`/`update_definition` |
 | `milestone.defined` / `.definition_updated` / `.definition_retired` | `achievement_definitions` | same as above — milestones and achievements share one claim-vocabulary table (#324/#325) |
 | `milestone.issued` / `milestone.revoked` | `achievement_attestations` | `crates/server/src/achievements.rs` |
+| `identity.recovery_configured` | `recovery_guardians` / `recovery_guardian_settings` | `crates/server/src/recovery.rs::set_guardians` |
+| `identity.recovery_requested` | `recovery_requests` | `crates/server/src/recovery.rs::finish_request` |
+| `identity.recovery_approved` | `recovery_approvals` (+ `recovery_requests` status update) | `crates/server/src/recovery.rs::approve_request` |
+| `identity.recovery_cancelled` | `recovery_requests` | `crates/server/src/recovery.rs::cancel_request` |
+| `identity.recovered` | `identity_keys` (+ `recovery_requests` status update) | `crates/server/src/recovery.rs::finalize_request` |
+| `issuer.registered` | `issuer_network_registrations` | `crates/server/src/issuer_registration.rs::register_issuer` — a separate table from `issuer_keys` (the #669-covered kinds); see that module's own doc comment for why registration and keys are split |
+| `guild.updated` | `guilds` | `crates/server/src/guilds.rs::update_guild` |
+| `guild.role_defined` | `guild_roles` | `crates/server/src/guilds.rs::create_role` and `::update_role` — both emit this kind |
+| `guild.role_deleted` | `guild_roles` | `crates/server/src/guilds.rs::delete_role` |
+| `guild.owner_transferred` | `guilds` | `crates/server/src/guilds.rs::transfer_ownership` |
+| `guild.game_associated` | `guild_integrator_associations` | `crates/server/src/guilds.rs::associate_integrator` |
+| `guild.favorite_games_updated` | `guild_favorite_games` | `crates/server/src/guilds.rs::set_favorite_games` |
+| `guild.channel_renamed` | `guild_channels` | `crates/server/src/channels.rs::update_channel` |
+| `guild.channel_archived` | `guild_channels` | `crates/server/src/channels.rs::archive_channel` |
 
 `achievement.issued`/`achievement.revoked` are the one asymmetric case worth
 calling out: they get *both* a direct table write (`achievement_attestations`,
@@ -122,14 +136,11 @@ feed their own or a combined metric is a real open question, not decided
 here; #669 only closes the rebuild-noise gap, it doesn't expand metrics
 scope.
 
-A handful of other real, current kinds (`identity.recovery_*`,
-`issuer.registered`, `guild.updated`/`.role_defined`/`.role_deleted`/
-`.owner_transferred`/`.game_associated`/`.favorite_games_updated`,
-`guild.channel_renamed`/`.channel_archived`) are still uninvestigated and
-still fall into the generic "unrecognized" branch as of #669 — each looks
-like the same server-owned pattern on a quick read, but wasn't verified
-kind-by-kind against this ticket's bar, so is deliberately left alone rather
-than guessed at. A follow-up ticket should give them the same treatment.
+#678 gave the remaining 14 then-uninvestigated kinds (the `identity.recovery_*`
+family, `issuer.registered`, and the rest of the `guild.*` kinds listed in the
+table above) the same kind-by-kind verification #669 did for its original 14
+— every one of them turned out to follow the identical server-owned pattern,
+so there are no known gaps left in this dispatch as of #678.
 
 ## Settlement vs querying
 
