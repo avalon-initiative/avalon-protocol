@@ -991,6 +991,7 @@ pub(crate) struct AddShardKeyArgs {
     integrator: String,
     verify_key: Option<String>,
     key_path: Option<String>,
+    key_id: Option<String>,
     server: Option<String>,
 }
 
@@ -999,6 +1000,7 @@ impl AddShardKeyArgs {
         let mut integrator = None;
         let mut verify_key = None;
         let mut key_path = None;
+        let mut key_id = None;
         let mut server = None;
 
         let mut iter = args.iter();
@@ -1006,6 +1008,9 @@ impl AddShardKeyArgs {
             match arg.as_str() {
                 "--integrator" => {
                     integrator = Some(iter.next().ok_or("--integrator requires a value")?.clone())
+                }
+                "--key-id" => {
+                    key_id = Some(iter.next().ok_or("--key-id requires a value")?.clone())
                 }
                 "--verify-key" => {
                     verify_key = Some(iter.next().ok_or("--verify-key requires a value")?.clone())
@@ -1022,6 +1027,7 @@ impl AddShardKeyArgs {
             integrator: integrator.ok_or("--integrator is required")?,
             verify_key,
             key_path,
+            key_id,
             server,
         })
     }
@@ -1083,9 +1089,27 @@ pub(crate) async fn add_shard_key(args: AddShardKeyArgs) {
             std::process::exit(1);
         });
 
+    let key_id = match args.key_id.clone() {
+        Some(key_id) => key_id,
+        None => {
+            let credentials_path = key_dir().join(format!("integrator-{}.json", args.integrator));
+            let credentials_json = std::fs::read_to_string(&credentials_path).unwrap_or_else(|_| {
+                eprintln!(
+                    "no saved credentials at {} — pass --key-id <uuid> explicitly, or copy the integrator's integrator-{}.json next to its root key.",
+                    credentials_path.display(),
+                    args.integrator
+                );
+                std::process::exit(1);
+            });
+            let credentials: IntegratorCredentialsFile = serde_json::from_str(&credentials_json)
+                .expect("saved integrator credentials file was not valid JSON");
+            credentials.key_id
+        }
+    };
+
     let client = avalon_sdk::AvalonClient::new(avalon_sdk::AvalonConfig {
         server_url: base,
-        integrator_credential_key_id: String::new(),
+        integrator_credential_key_id: key_id,
         integrator_slug: Some(args.integrator.clone()),
         signing_key: Some(key_bytes),
         retry: Default::default(),
@@ -1394,6 +1418,24 @@ mod tests {
     fn add_shard_key_args_requires_integrator() {
         let err = AddShardKeyArgs::parse(&args(&[])).expect_err("missing --integrator");
         assert!(err.contains("--integrator"));
+    }
+
+    #[test]
+    fn add_shard_key_accepts_an_explicit_credential_key_id() {
+        let parsed = AddShardKeyArgs::parse(&args(&[
+            "--integrator",
+            "wow",
+            "--key-id",
+            "38ebbe98-d2e0-4907-8e06-1cacbfc69a16",
+        ]))
+        .expect("parse");
+        assert_eq!(
+            parsed.key_id.as_deref(),
+            Some("38ebbe98-d2e0-4907-8e06-1cacbfc69a16")
+        );
+        let missing_value = AddShardKeyArgs::parse(&args(&["--integrator", "wow", "--key-id"]))
+            .expect_err("--key-id needs a value");
+        assert!(missing_value.contains("--key-id"));
     }
 
     #[test]
