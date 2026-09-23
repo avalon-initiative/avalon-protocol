@@ -17,6 +17,7 @@ pub mod merkle;
 pub mod migration;
 pub mod mirror;
 mod postgres;
+pub mod promotion;
 pub mod retention;
 pub use avalon_protocol::sth;
 

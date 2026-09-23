@@ -23,23 +23,24 @@ blast radius is only that integrator's new issuances.
 | Verify a mirror holds the authority's full history | Built: `avalon verify-mirror-convergence` |
 | Rotate the signing key / update what verifies it | Documented: [`key-rotation.md`](key-rotation.md) |
 | Rebuild projections from the ledger | Built: `avalon rebuild-index` |
-| **Seed the new authority's ledger from a mirror's `mirrored_entries`** | **Not built.** |
+| **Seed the new authority's ledger from a mirror's `mirrored_entries`** | Built: `avalon promote-mirror` |
 
 A mirror stores the authority's entries in `mirrored_entries`, a table that
 is deliberately separate from the `ledger_entries` an authority writes. The
-authority also needs the batch records and its Signed Tree Head history, and
-nothing copies any of that across. Until a promotion tool exists, a mirror
-cannot be turned into a writer by configuration alone. What you can do today:
+authority also needs the batch records and its Signed Tree Head history;
+`avalon promote-mirror` rebuilds all of that into a fresh database (step 4).
+Two ways to get a working ledger onto the replacement host:
 
-- **If the failed authority's database or a backup of it survives**, restore
-  it onto the replacement host and continue from step 4. This is the
-  supported path, and the mirror's job is only to prove the restored data
-  matches what the network already saw (step 2).
-- **If the authority's data is gone**, the mirror's copy is the only
-  surviving record of the shard's history. Preserve it (step 1) and treat
-  the missing seeding step as blocking; do not hand-write rows into
-  `ledger_entries`, because a wrong batch root or sequence produces a
-  ledger that verifies against nothing.
+- **The authority's data is gone**: use `avalon promote-mirror` from a
+  converged mirror (step 4). It is the only path that works from the
+  mirror's copy alone. Do not hand-write rows into `ledger_entries`; a wrong
+  batch root or sequence produces a ledger that verifies against nothing.
+- **The failed authority's database or a backup of it survives**: restoring
+  it onto the replacement host is the alternative. It keeps everything the
+  authority held, including entries no mirror saw, and the mirror's job is
+  only to prove the restored data matches what the network already saw
+  (step 2). Skip the promotion command in step 4 and continue with
+  its remaining items.
 
 ## Step 0: decide it is an outage, not a partition
 
@@ -104,16 +105,50 @@ The new authority signs Signed Tree Heads with `AVALON_SETTLEMENT_SIGNING_KEY`.
 
 ## Step 4: bring up the new authority
 
-1. On the promoted host, set `AVALON_NETWORK_ID` to the network's id (it
+1. **Seed a fresh database from the converged mirror.** The target must be a
+   separate, already-migrated database (`make migrate` against it) whose
+   `ledger_entries`, `ledger_batches` and `signed_tree_heads` are empty, and
+   whose genesis, if it has one, equals the network id. A node that already
+   authors a different shard cannot be seeded in place: give the promoted
+   shard its own database. On the mirror, with `DATABASE_URL` pointing at the
+   mirror's database:
+
+   ```
+   avalon promote-mirror <network_id> [--shard-id <id>] [--source <url>] \
+       --target-database-url <url> [--dry-run]
+   ```
+
+   Run it with `--dry-run` first: every check runs and the plan is printed
+   without writing. The command refuses unless the mirror is `CONVERGED`
+   (it prints the same verdict as step 2), then, in one target transaction,
+   re-verifies every hash link and every entry hash whose payload is still
+   stored, copies each entry with its original `seq`, rebuilds the batch
+   records, carries over every observed Signed Tree Head whose root matches
+   the recomputed tree at that size (a root that does not match is never
+   copied), and moves the sequence past the highest imported `seq`. It then
+   reopens the target and checks the chain, the entry count and the root
+   against the converged values. Entries whose payload the mirror had pruned
+   are carried without content.
+
+   What promotion does not do: it does not carry sessions or login
+   credentials (people log in again); it loses any entry the mirror never
+   saw, which is why step 2 must report `CONVERGED` from the most complete
+   mirror; and the carried Signed Tree Heads stay signed by the old key,
+   whatever key signs from now on.
+2. On the promoted host, set `AVALON_NETWORK_ID` to the network's id (it
    must equal the ledger's genesis network id; a mismatch is fatal at boot),
    `AVALON_SETTLEMENT_SIGNING_KEY`, `AVALON_SETTLEMENT_SIGNING_KEY_ID`, and
    `AVALON_OWN_SHARD_ID` to the shard being taken over (`core` by default).
-2. Unset `AVALON_SETTLEMENT_REMOTE_URL(S)` for that shard, so this node
+   The signing key must be the one registered or pinned for that shard: for
+   `core`, the key pinned in `docs/trusted-networks.json`; for a named shard,
+   a registered `shard_settlement` key (see
+   [`../for-hosters/choosing-your-shard.md`](../for-hosters/choosing-your-shard.md)).
+3. Unset `AVALON_SETTLEMENT_REMOTE_URL(S)` for that shard, so this node
    commits locally rather than forwarding to the dead authority, and remove
    the dead authority from `AVALON_MIRROR_PEERS`.
-3. Start `avalon-server` against the seeded database (see the table at the
-   top for how that database comes to exist).
-4. Rebuild derived state from the ledger:
+4. Set `DATABASE_URL` to the seeded database (or the restored one) and start
+   `avalon-server`.
+5. Rebuild derived state from the ledger:
 
    ```
    avalon rebuild-index
@@ -123,9 +158,9 @@ The new authority signs Signed Tree Heads with `AVALON_SETTLEMENT_SIGNING_KEY`.
    so people log in again; everything the protocol promises durably is
    rebuilt from history
    ([`../architecture/disaster-recovery.md`](../architecture/disaster-recovery.md)).
-5. Run `avalon inspect-ledger` and confirm `chain intact` and an entry count
+6. Run `avalon inspect-ledger` and confirm `chain intact` and an entry count
    equal to the converged `tree_size` from step 2.
-6. Check `GET /ledger/sth/latest`: `network_id` and `tree_size` must match,
+7. Check `GET /ledger/sth/latest`: `network_id` and `tree_size` must match,
    and the root at that size must equal the converged root you recorded.
 
 ## Step 5: repoint the rest of the network
