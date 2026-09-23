@@ -52,6 +52,15 @@ impl Scratch {
             .await
             .expect("clone table");
         }
+        // LIKE does not copy foreign keys; the real ledger has this deferred one.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER TABLE {schema}.ledger_entries ADD CONSTRAINT ledger_entries_batch_id_fkey \
+             FOREIGN KEY (batch_id) REFERENCES {schema}.ledger_batches(batch_id) \
+             DEFERRABLE INITIALLY DEFERRED"
+        )))
+        .execute(&admin)
+        .await
+        .expect("add deferred batch foreign key");
         let owned = schema.clone();
         let pool = PgPoolOptions::new()
             .max_connections(4)

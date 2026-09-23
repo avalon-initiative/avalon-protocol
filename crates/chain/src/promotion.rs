@@ -531,6 +531,11 @@ pub async fn promote_mirror(
         .execute(&mut *tx)
         .await?;
     }
+    // ledger_entries.batch_id is a DEFERRABLE INITIALLY DEFERRED foreign key;
+    // ALTER TABLE is refused while its checks are pending, so run them now.
+    sqlx::query("SET CONSTRAINTS ALL IMMEDIATE")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER TABLE ledger_entries ALTER COLUMN seq RESTART WITH {}",
         report.next_seq
