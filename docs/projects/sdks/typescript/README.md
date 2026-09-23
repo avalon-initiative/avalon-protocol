@@ -58,7 +58,7 @@ Unlike the Rust SDK's `for-developers/` set, this SDK doesn't have its own
 numbered guide series yet — noted honestly rather than left to look
 finished. Until one exists, the most accurate reference is
 [`../architecture/sdk.md`](../architecture/sdk.md)'s TypeScript coverage,
-plus the `*.test.ts` files under `avalon-sdks`' `typescript/test/`, which
+plus the `*.test.ts` files under `avalon-sdks`' `languages/typescript/test/`, which
 double as runnable usage examples for every domain.
 
 ## Related

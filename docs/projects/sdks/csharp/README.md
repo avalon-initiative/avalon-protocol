@@ -3,7 +3,7 @@
 The `csharp/AvalonSdk` project in the `avalon-sdks` repo (NuGet package id
 `Avalon.Sdk`, root namespace `Avalon.Sdk`) — the flagship *external*
 [Avalon SDK](../README.md) for game developers. Physically lives in
-`avalon-sdks` (`csharp/`) as of issue #775 (epic #771), moved out of this
+`avalon-sdks` (`languages/csharp/`) as of issue #775 (epic #771), moved out of this
 repo's `bindings/csharp` alongside the Rust SDK's own earlier move —
 neither this repo's `Makefile` nor its CI touch it anymore; `dotnet
 build`/`dotnet test` run from `avalon-sdks` directly. Targets
