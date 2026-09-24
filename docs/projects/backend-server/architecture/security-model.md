@@ -167,6 +167,18 @@ in front of it — a deployment requirement, not an optional hardening step.
   whole group off with `AVALON_TOPOLOGY_PUBLIC=false`. The measurements are
   the probing node's own claims, not verified facts. See
   [`./nodes.md`](./nodes.md).
+- **The peer table is fed by unauthenticated announces and gossip.** Without
+  bounds, fabricated addresses could grow it without limit, spread through
+  gossip, and become targets of outbound requests. Mitigations: a size cap
+  that evicts the oldest inactive entry and never an active or bootstrap peer
+  (`AVALON_NODE_MAX_KNOWN_PEERS`); every announced and gossiped base URL runs
+  the outbound address policy and a length limit before admission; a
+  per-source budget of new distinct URLs per minute and a per-exchange cap on
+  gossip; a bounded `/nodes/status` reachability check with the same
+  `network_id` before a new announcer is admitted; rejections are explicit
+  4xx/429 responses. Residual risk: an attacker with many reachable public
+  addresses and many source addresses can still churn the inactive part of the
+  table. See [`./nodes.md`](./nodes.md).
 
 ## Current implementation
 

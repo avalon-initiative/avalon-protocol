@@ -959,8 +959,8 @@ Served only while `AVALON_TOPOLOGY_PUBLIC` is true.
 node will contact. A peer table entry arrives through gossip, so the URL is
 attacker influenced. Before this policy the announce worker used a plain HTTP
 client: any scheme reqwest supports, no address checks, redirects followed.
-That path is unchanged for now; the module is written to be reused for
-peer-table validation.
+The announce worker's own requests to active peers are unchanged; the same
+policy now gates what may enter the peer table (see "Peer table bounds").
 
 - Always refused: non-http(s) schemes, URLs with userinfo, query or fragment,
   unspecified (`0.0.0.0`, `::`), `0.0.0.0/8`, multicast, broadcast, reserved
@@ -975,6 +975,54 @@ peer-table validation.
   a different DNS answer at connect time cannot change the destination.
 - Clients built by the policy follow no redirects, use no proxy, and carry a
   timeout.
+
+### Peer table bounds
+
+The peer table and the shard registry are filled by unauthenticated input
+(`POST /nodes/announce`) and by gossip merged from other nodes. Admission is
+bounded and validated (`crates/server/src/peer_admission.rs`).
+
+- **Size cap.** `AVALON_NODE_MAX_KNOWN_PEERS` (default 2000, well above a
+  realistic network). A new entry into a full table evicts the entry with the
+  oldest `last_announced_at` that is neither in the active set nor a bootstrap
+  peer. Active and bootstrap peers are never evicted; if nothing is evictable
+  the newcomer is refused (`503 peer_table_full`, `Retry-After`). Refreshing
+  an entry already in the table never evicts. The cap is independent of
+  `AVALON_NODE_MAX_PEERS`, which bounds the active announce set.
+- **Address validation, announce and gossip alike.** Length limit
+  (`AVALON_NODE_MAX_URL_LENGTH`, default 256), then the outbound address
+  policy: scheme, no userinfo/query/fragment, every resolved address checked
+  against the always-forbidden and private ranges (`AVALON_ALLOW_PRIVATE_PEERS`).
+  A node that does not allow private peers therefore never holds loopback or
+  RFC 1918 entries. The shard registry stays uncapped by design; unseen shard
+  URLs get the same checks (known `(shard, url)` pairs are not re-resolved),
+  and at most `AVALON_GOSSIP_MAX_NEW_SHARD_URLS_PER_EXCHANGE` (default 256)
+  unseen URLs are examined per exchange.
+- **Announce rejections are explicit.** `{ "error", "code" }` bodies:
+  `invalid_base_url` and `base_url_too_long` (400), `base_url_not_allowed`
+  (403), `base_url_unresolvable` and `peer_unreachable` and
+  `peer_network_mismatch` (422), `rate_limited` / `too_many_in_flight` (429,
+  `Retry-After`), `peer_table_full` (503). A `network_id` mismatch keeps its
+  own 409.
+- **Per-source limit.** One source address (client IP, honoring
+  `AVALON_TRUSTED_PROXIES`) may introduce at most
+  `AVALON_ANNOUNCE_NEW_PEERS_PER_SOURCE_PER_MINUTE` (default 10) distinct new
+  base URLs per minute, counted before any resolution or fetch, on top of the
+  node-wide per-IP limit. Refreshing a known entry does not count.
+- **Gossip exchange cap.** At most `AVALON_GOSSIP_MAX_NEW_PEERS_PER_EXCHANGE`
+  (default 20) new entries are accepted from one announce response; the rest
+  are skipped and counted in a `gossip_peers_skipped` log event, as are entries
+  that fail validation. Gossip entries are never contacted for admission; they
+  are checked syntactically and by address only. Gossiped `last_announced_at`
+  values in the future are clamped to now so a peer cannot pin an entry
+  against eviction and pruning.
+- **Reachability.** Before a brand-new entry from `POST /nodes/announce` is
+  admitted, this node fetches its `/nodes/status` through the pinned outbound
+  client (3 second timeout, body capped at 256 KiB) and requires the same
+  `network_id`. At most `AVALON_ANNOUNCE_MAX_CONCURRENT_CHECKS` (default 16)
+  run at once; `AVALON_ANNOUNCE_VERIFY_REACHABILITY=false` turns the fetch off
+  (local test clusters only). The announcing node must therefore be reachable
+  from the node it announces to.
 
 ## Open questions
 
