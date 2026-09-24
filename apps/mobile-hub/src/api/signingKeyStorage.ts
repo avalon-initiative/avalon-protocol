@@ -1,7 +1,7 @@
-// Per-identity local Ed25519 signing-key storage: plain localStorage,
-// unencrypted, keyed by identity id. Key generation and mnemonic derivation live
-// in `@avalon-initiative/protocol-sdk`; this file only stores, loads and clears
-// the bytes.
+// Per-identity local Ed25519 signing-key storage: plain localStorage, keyed by
+// identity id. Key generation and mnemonic derivation live in
+// `@avalon-initiative/protocol-sdk`; this file only stores, loads and clears
+// the bytes. Only the session token goes through the platform's secure storage.
 const STORAGE_PREFIX = 'avalon:signingKey:'
 
 function storageKey(identityId: string): string {
@@ -30,7 +30,7 @@ export function storeSigningKeySeed(identityId: string, secretKey: Uint8Array): 
   localStorage.setItem(storageKey(identityId), toBase64(secretKey))
 }
 
-/** Reads back a previously stored secret key, if this browser has one for `identityId`. */
+/** Reads back a previously stored secret key, if this device has one for `identityId`. */
 export function loadSigningKeySeed(identityId: string): Uint8Array | null {
   const stored = localStorage.getItem(storageKey(identityId))
   return stored ? fromBase64(stored) : null

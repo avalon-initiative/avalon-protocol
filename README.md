@@ -113,10 +113,6 @@ crates/
 apps/
   hub/          web client — Vue3, the first doorway into Avalon
   mobile-hub/   Tauri companion app (desktop/mobile), same UI as hub
-
-packages/
-  ui/           shared Vue3 component library used by both hub apps (Storybook)
-  api-client/   shared API client + session store used by hub and mobile-hub
 ```
 
 Every official SDK (Rust, C#, TypeScript) lives in a separate `avalon-sdks`

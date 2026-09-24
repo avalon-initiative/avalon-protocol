@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// Same identity-creation ceremony as apps/hub's CreateIdentity.vue,
-// composed from the same @avalon-initiative/common-ui components and the shared
-// @avalon/api-client module.
+// Identity-creation ceremony, driven by the SDK's `registerWithMnemonic`.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonButton, AvalonForm, AvalonTextField, AvalonWarningBanner } from '@avalon-initiative/common-ui'
-import { createIdentity, login, useSessionStore } from '@avalon/api-client'
+import { base64ToBytes, type AccountSession } from '@avalon-initiative/protocol-sdk'
+import { avalonClient, useSessionStore } from '../api/session'
+import { storeSigningKeySeed } from '../api/signingKeyStorage'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -26,15 +26,21 @@ const copied = ref(false)
 const signingKeyMnemonic = ref('')
 const mnemonicCopied = ref(false)
 
+// registerWithMnemonic() drives the full register+login ceremony and returns a
+// ready AccountSession. It is held here rather than adopted immediately, so the
+// user sees their id and recovery phrase before leaving this screen.
+let pendingSession: AccountSession | null = null
+
 async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    const { identityId, signingKeyMnemonic: mnemonic } = await createIdentity(
+    const { session: newSession, mnemonic } = await avalonClient().registerWithMnemonic(
       displayName.value,
-      deviceLabel.value.trim() || null,
+      deviceLabel.value.trim() || undefined,
     )
-    createdIdentityId.value = identityId
+    pendingSession = newSession
+    createdIdentityId.value = newSession.identity().id
     signingKeyMnemonic.value = mnemonic
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'
@@ -54,8 +60,12 @@ async function copyMnemonic() {
 }
 
 async function continueToHome() {
-  const { token } = await login(createdIdentityId.value)
-  await session.login(token, createdIdentityId.value, null)
+  if (!pendingSession) return
+  const credentials = pendingSession.credentials()
+  if (credentials) {
+    storeSigningKeySeed(credentials.identityId, base64ToBytes(credentials.signingKeySecretBase64))
+  }
+  await session.setSession(pendingSession)
   await router.push({ name: 'home' })
 }
 </script>

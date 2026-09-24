@@ -176,7 +176,7 @@ export function useGuildDetail(guildId: Ref<string>) {
     try {
       // resumeAccountSession(WithSigningKey) already validated this
       // session's own identity — no separate GET /me round trip needed
-      // just to learn the caller's own id, unlike the old api-client flow.
+      // just to learn the caller's own id.
       if (!selfId.value) {
         selfId.value = s.identity().id
       }

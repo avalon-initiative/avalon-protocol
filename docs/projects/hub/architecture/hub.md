@@ -95,11 +95,10 @@ placeholder screen.
 ### Shell and navigation
 
 `apps/hub/` is Vue 3 + Vite + TypeScript, routed with `vue-router`. The
-fetch client, session store, and WebAuthn/signing-key auth ceremony live in
-`packages/api-client` (`@avalon/api-client`) so nothing calls `fetch`
-directly outside it and `apps/mobile-hub` shares the exact same code rather
-than a copy; `apps/hub/src/api/` keeps its own domain-specific modules
-(`guilds.ts`, `friends.ts`, ...) built on top of it.
+server client is `@avalon-initiative/protocol-sdk`: nothing in the app calls
+`fetch` directly. `apps/hub/src/api/` holds the session store (an SDK
+`AccountSession`) and thin domain modules (`guilds.ts`, `friends.ts`, ...)
+built on it; `apps/mobile-hub` uses the same SDK with its own session store.
 
 The logged-in Hub is a persistent shell, not separate pages: `HubShell.vue`
 renders a fixed left sidebar on desktop (wordmark, nav, the caller's own

@@ -234,7 +234,7 @@ catalogue row, in the same PR that adds its emitter.
 ## Development Interface
 
 The Rust workspace (`crates/`), the JS/TS workspace (`apps/hub`,
-`apps/mobile-hub`, `packages/api-client`), and the C# SDK (`bindings/csharp`) all run
+`apps/mobile-hub`), and the C# SDK (`bindings/csharp`) all run
 through the root `Makefile` — run `make help` for the full list. The common
 ones:
 
@@ -247,7 +247,7 @@ make fmt             # cargo fmt --all
 make check           # fmt-check + lint + test — what CI runs
 make migrate         # apply pending db/migrations/ (up)
 make db-reset        # wipe db and reapply all migrations
-make web-install      # npm install at the workspace root (apps/hub, apps/mobile-hub, packages/api-client)
+make web-install      # npm install at the workspace root (apps/hub, apps/mobile-hub)
 make check-all       # check (Rust) + web-lint + web-test + csharp-build + csharp-test
 ```
 

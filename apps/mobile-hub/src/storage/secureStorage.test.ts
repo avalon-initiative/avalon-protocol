@@ -11,10 +11,9 @@ afterEach(() => {
   vi.mocked(invoke).mockReset()
 })
 
-// Issue #60: the session token goes through this native command, never
-// localStorage, on this platform — these just confirm the adapter calls
-// the right command with the right arguments, matching the
-// KeyValueStore shape @avalon/api-client's client.ts/session.ts expect.
+// The session token goes through these native commands, never localStorage.
+// These confirm the adapter calls the right command with the right arguments,
+// matching the KeyValueStore shape the session store expects.
 describe('createSecureSessionStorage', () => {
   it('getItem invokes secure_storage_get with the key', async () => {
     vi.mocked(invoke).mockResolvedValue('a-token')

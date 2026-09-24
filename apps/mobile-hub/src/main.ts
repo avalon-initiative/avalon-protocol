@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { configureSessionStorage, useSessionStore } from '@avalon/api-client'
+import { configureSessionStorage } from './api/sessionStorage'
+import { useSessionStore } from './api/session'
 // Design tokens + base page styles come from the shared component library
 // so every Avalon client (hub, mobile-hub) renders the same theme.
 import '@avalon-initiative/common-ui/tokens.css'
@@ -16,11 +17,14 @@ const pinia = createPinia()
 setActivePinia(pinia)
 app.use(pinia)
 
-// Issue #60's whole point: the session token goes through the OS keychain
-// (src-tauri/src/lib.rs's native command) on this platform, never
-// `localStorage` — configured once, before the session store reads
-// anything, same as apps/hub leaves this at its `localStorage` default.
-configureSessionStorage(createSecureSessionStorage())
+// Inside Tauri the session token goes through the OS keychain
+// (src-tauri/src/lib.rs's native commands), never `localStorage`; configured
+// once, before the session store reads anything. A plain browser build (dev
+// server, headless checks) has no native commands and keeps the localStorage
+// default.
+if ('__TAURI_INTERNALS__' in window) {
+  configureSessionStorage(createSecureSessionStorage())
+}
 
 useSessionStore()
   .initialize()

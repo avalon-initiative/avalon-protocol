@@ -1,7 +1,7 @@
-// Which avalon-server this Hub talks to (the network selector). localStorage
-// (checked first) lets a viewer's choice persist across reloads;
-// VITE_AVALON_SERVER_URL stays the build-time default for a Hub that has never
-// had one explicitly picked.
+// Which avalon-server this app talks to. localStorage (checked first) lets the
+// user's choice persist across launches; VITE_AVALON_SERVER_URL is the
+// build-time default for an install that has never picked one. The server URL
+// is not a credential, so it stays in localStorage rather than secure storage.
 const SERVER_URL_STORAGE_KEY = 'avalon.serverUrl'
 
 function readStoredServerUrl(): string | null {
@@ -12,13 +12,13 @@ function readStoredServerUrl(): string | null {
   }
 }
 
-/** The server URL this Hub is currently configured to talk to. */
+/** The server URL this app is currently configured to talk to. */
 export function getServerUrl(): string {
   return readStoredServerUrl() ?? import.meta.env.VITE_AVALON_SERVER_URL ?? 'http://127.0.0.1:8080'
 }
 
 /**
- * Switches which server this Hub talks to, persisted across reloads. Does
+ * Switches which server this app talks to, persisted across launches. Does
  * NOT itself reload the page or reset any in-memory session state — a
  * caller (the network selector) is expected to reload immediately after,
  * since an existing session's bearer token/state was established against

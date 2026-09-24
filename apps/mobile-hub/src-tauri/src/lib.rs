@@ -1,8 +1,8 @@
 //! Issue #60's one native surface: on-device secure storage for the
 //! session token. Everything else — the API client, the WebAuthn/signing-key
-//! auth ceremony, the session store — stays in TypeScript in
-//! `@avalon/api-client`, shared with apps/hub; nothing else moves into Rust
-//! here.
+//! auth ceremony, the session store — stays in TypeScript
+//! (`@avalon-initiative/protocol-sdk` plus this app's `src/api/`); nothing else
+//! moves into Rust here.
 //!
 //! Backed by the OS keychain via the `keyring` crate (macOS Keychain,
 //! Windows Credential Manager, the Secret Service D-Bus API on Linux —

@@ -111,7 +111,7 @@ async fn seed_signing_key(pool: &PgPool, identity_id: Uuid) -> (Uuid, SigningKey
 
 /// Mints a wire-encoded, self-signed `InterestClaim` for
 /// `channel_id`, bound to `base_url` — the same thing
-/// `packages/api-client/src/crypto/interestClaim.ts` mints in the browser,
+/// the TypeScript SDK's interest-claim module mints in the browser,
 /// just constructed directly against `avalon_protocol`'s own types rather
 /// than round-tripping through JS.
 fn mint_channel_claim(

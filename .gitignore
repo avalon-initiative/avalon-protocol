@@ -2,12 +2,11 @@
 /target/
 crates/*/target/
 
-# Node / npm workspaces (apps/hub, apps/mobile-hub, packages/api-client)
+# Node / npm workspaces (apps/hub, apps/mobile-hub)
 node_modules/
 dist/
 apps/*/dist/
 apps/*/node_modules/
-packages/*/node_modules/
 storybook-static/
 *.tsbuildinfo
 

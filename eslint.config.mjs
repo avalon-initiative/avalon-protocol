@@ -1,5 +1,5 @@
 // Shared flat config (ESLint 9+) for every JS/TS/Vue package in this
-// workspace (apps/hub, packages/api-client) — a single root config, picked up by
+// workspace (apps/hub, apps/mobile-hub) — a single root config, picked up by
 // `eslint .` run from either package's own directory. apps/mobile-hub has
 // no `lint` script yet (issue #195's own scope is hub only).
 import js from '@eslint/js'

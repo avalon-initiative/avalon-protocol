@@ -1,11 +1,10 @@
 <script setup lang="ts">
-// Same identity-id-first login ceremony as apps/hub's Login.vue,
-// composed from the same @avalon-initiative/common-ui components and the shared
-// @avalon/api-client module — no local WebAuthn/session logic here.
+// Identity-id-first login ceremony, driven by the SDK's `loginWithIdentityId`.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AvalonAuthCard, AvalonForm, AvalonTextField } from '@avalon-initiative/common-ui'
-import { login, useSessionStore } from '@avalon/api-client'
+import { avalonClient, useSessionStore } from '../api/session'
+import { loadSigningKeySeed } from '../api/signingKeyStorage'
 import AuthLayout from './AuthLayout.vue'
 import styles from '../styles/CreateIdentity.module.scss'
 
@@ -20,11 +19,12 @@ async function onSubmit() {
   error.value = ''
   submitting.value = true
   try {
-    const { token } = await login(identityId.value)
-    // This device's local signing key (if any) is resolved lazily later,
-    // same as apps/hub — reconnect-across-nodes support just isn't
-    // available until then, which is fine, not required for login itself.
-    await session.login(token, identityId.value, null)
+    const accountSession = await avalonClient().loginWithIdentityId(identityId.value)
+    // The reconnect-across-nodes signing key, when this device already holds
+    // one for this identity; a device without one logs in without it.
+    const secretKey = loadSigningKeySeed(identityId.value)
+    if (secretKey) await accountSession.attachSigningKey(secretKey)
+    await session.setSession(accountSession)
     await router.push({ name: 'home' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Something went wrong.'

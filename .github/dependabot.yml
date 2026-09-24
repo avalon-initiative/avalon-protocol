@@ -16,7 +16,7 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # JS/TS npm workspace rooted here: apps/hub, apps/mobile-hub, packages/api-client.
+  # JS/TS npm workspace rooted here: apps/hub, apps/mobile-hub.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:

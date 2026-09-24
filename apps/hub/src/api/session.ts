@@ -1,22 +1,13 @@
-// Session state, backed by a real @avalon-initiative/protocol-sdk AccountSession —
-// replaces packages/api-client's own token-only useSessionStore. Unlike
-// the old store, this one holds a live AccountSession object, not just a
-// bearer token: every other api/*.ts file calls methods on `session.value`
-// directly rather than passing a raw token to a free function.
+// Session state, backed by a real @avalon-initiative/protocol-sdk AccountSession.
+// The store holds the live session object, not just a bearer token: every other
+// api/*.ts file calls methods on `session.value` directly rather than passing a
+// raw token to a free function.
 //
-// Storage is plain localStorage (Hub only ever used the default adapter —
-// packages/api-client's pluggable-storage machinery for mobile-hub's Tauri
-// secure storage stays there, mobile-hub isn't migrating in this ticket),
-// same two keys `packages/api-client/src/session.ts` already used, so an
-// existing viewer's stored session survives this migration unchanged.
-//
-// `initialize()` now does a real GET /me round trip (constructing an
-// AccountSession requires one — there's no way to build one from a bare
-// token without validating it) where the old store just trusted
-// localStorage synchronously. Only an actual UnauthorizedError clears the
-// stored session; a network/transient failure leaves storage untouched and
-// `session.value` null for this load, so a later reload can retry cleanly
-// rather than logging a viewer out over a flaky connection.
+// Storage is plain localStorage. `initialize()` does a real GET /me round trip
+// (constructing an AccountSession requires one). Only an actual
+// UnauthorizedError clears the stored session; a network or transient failure
+// leaves storage untouched and `session.value` null for this load, so a later
+// reload can retry rather than logging a viewer out over a flaky connection.
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import { AvalonClient, UnauthorizedError, type AccountSession } from '@avalon-initiative/protocol-sdk'
@@ -30,18 +21,9 @@ export function avalonClient(): AvalonClient {
   return new AvalonClient({ serverUrl: getServerUrl() })
 }
 
-// Pinia id deliberately distinct from packages/api-client/src/session.ts's
-// own `defineStore('session', ...)` — Pinia's registry is keyed by this
-// string, and colliding ids would make whichever store's `useSessionStore()`
-// runs first in a given app "win," silently handing every later caller
-// (old or new) that same instance regardless of which module they imported
-// from. Not yet renamable back to `'session'`: apps/hub still has
-// not-yet-migrated modules (useMyGuilds.ts, friends.ts, etc., #712's later
-// batches) that import the OLD store under that id.
 export const useSessionStore = defineStore('accountSession', () => {
   const session = shallowRef<AccountSession | null>(null)
-  // False until `initialize()` resolves — mirrors the old store's own
-  // `ready` flag; every app's `main.ts` awaits `initialize()` once, before
+  // False until `initialize()` resolves; main.ts awaits it once before
   // mounting, so route guards and every other call site see final state.
   const ready = ref(false)
 
