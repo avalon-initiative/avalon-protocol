@@ -136,3 +136,36 @@ async fn topology_limit_bounds_known_and_response_is_cacheable() {
     assert!(topo["known_total"].as_u64().unwrap() >= 1);
     assert!(cache.unwrap().contains("max-age"));
 }
+
+#[tokio::test]
+#[ignore]
+async fn topology_publishes_finite_coordinates_for_self_and_neighbors() {
+    use avalon_server::network_coordinates::{estimate_rtt_ms, Coordinate};
+
+    let a = env("AVALON_SERVER_URL");
+    let b = env("AVALON_TOPOLOGY_NODE_B_URL");
+    let dead = env("AVALON_TOPOLOGY_DEAD_PEER_URL");
+    let http = reqwest::Client::new();
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let topo = loop {
+        let (topo, _) = fetch(&http, &a, "").await;
+        if neighbor(&topo, &b).is_some_and(|n| n["coordinate"].is_object()) {
+            break topo;
+        }
+        assert!(Instant::now() < deadline, "no neighbor coordinate: {topo}");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+
+    let own: Coordinate = serde_json::from_value(topo["self"]["coordinate"].clone()).unwrap();
+    let theirs: Coordinate =
+        serde_json::from_value(neighbor(&topo, &b).unwrap()["coordinate"].clone()).unwrap();
+    assert!(own.is_valid() && theirs.is_valid(), "{own:?} {theirs:?}");
+    let estimate = estimate_rtt_ms(&own, &theirs);
+    assert!(estimate.is_finite() && estimate >= 0.0);
+
+    let (b_topo, _) = fetch(&http, &b, "").await;
+    let b_own: Coordinate = serde_json::from_value(b_topo["self"]["coordinate"].clone()).unwrap();
+    assert!(b_own.is_valid());
+    assert!(neighbor(&topo, &dead).is_some_and(|n| n["coordinate"].is_null()));
+}

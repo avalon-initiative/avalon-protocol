@@ -10,6 +10,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
+
+use crate::network_coordinates::{self, Coordinate};
 use time::OffsetDateTime;
 
 /// Smoothing factor of the exponentially weighted moving average.
@@ -111,6 +113,10 @@ struct Inner {
     bootstrap: Vec<String>,
     own_libp2p_peer_id: Option<String>,
     stats: HashMap<String, PeerRtt>,
+    own_coordinate: Coordinate,
+    /// Last valid coordinate each active neighbor reported for itself.
+    neighbor_coordinates: HashMap<String, Coordinate>,
+    coordinate_updates_rejected: u64,
 }
 
 /// Shared, cheaply cloneable view of the announce worker's active set and
@@ -145,6 +151,9 @@ impl NeighborTable {
     pub fn set_active(&self, active: &[String], bootstrap: &[String]) {
         let mut inner = self.inner.write().expect("neighbor table lock poisoned");
         inner.stats.retain(|url, _| active.contains(url));
+        inner
+            .neighbor_coordinates
+            .retain(|url, _| active.contains(url));
         inner.active = active.to_vec();
         inner.bootstrap = bootstrap.to_vec();
     }
@@ -159,6 +168,47 @@ impl NeighborTable {
                 .or_default()
                 .record_success(rtt.as_secs_f64() * 1000.0, OffsetDateTime::now_utc());
         }
+    }
+
+    /// This node's own network coordinate; the only coordinate it publishes.
+    pub fn own_coordinate(&self) -> Coordinate {
+        self.inner
+            .read()
+            .expect("neighbor table lock poisoned")
+            .own_coordinate
+    }
+
+    /// Updates the own coordinate from a successful round trip to `peer`
+    /// whose self-reported coordinate is `remote`. An invalid coordinate is
+    /// counted and ignored; peers outside the active set are ignored.
+    pub fn observe_coordinate(&self, peer: &str, remote: &Coordinate, rtt: std::time::Duration) {
+        let mut inner = self.inner.write().expect("neighbor table lock poisoned");
+        if !inner.active.iter().any(|p| p == peer) {
+            return;
+        }
+        match network_coordinates::update(
+            &inner.own_coordinate,
+            remote,
+            rtt.as_secs_f64() * 1000.0,
+            network_coordinates::seed_for(peer),
+        ) {
+            Ok(next) => {
+                inner.own_coordinate = next;
+                inner.neighbor_coordinates.insert(peer.to_string(), *remote);
+            }
+            Err(reason) => {
+                inner.coordinate_updates_rejected += 1;
+                tracing::debug!(peer = %peer, ?reason, "ignored network coordinate");
+            }
+        }
+    }
+
+    /// Number of coordinate updates ignored because of invalid input.
+    pub fn coordinate_updates_rejected(&self) -> u64 {
+        self.inner
+            .read()
+            .expect("neighbor table lock poisoned")
+            .coordinate_updates_rejected
     }
 
     /// Records a failed or timed-out attempt as loss; never as latency.
@@ -183,6 +233,7 @@ impl NeighborTable {
                 base_url: url.clone(),
                 bootstrap: inner.bootstrap.contains(url),
                 round_trip: inner.stats.get(url).map(PeerRtt::snapshot),
+                coordinate: inner.neighbor_coordinates.get(url).copied(),
             })
             .collect()
     }
@@ -193,6 +244,8 @@ pub struct NeighborSnapshot {
     pub base_url: String,
     pub bootstrap: bool,
     pub round_trip: Option<RoundTripStats>,
+    /// The neighbor's own coordinate as it last reported it.
+    pub coordinate: Option<Coordinate>,
 }
 
 #[cfg(test)]
@@ -292,6 +345,32 @@ mod tests {
         assert!(snap[0].round_trip.is_some());
         assert!(snap[1].round_trip.is_none());
         assert!(snap[0].bootstrap && !snap[1].bootstrap);
+    }
+
+    #[test]
+    fn coordinate_moves_on_valid_reports_and_counts_invalid_ones() {
+        let t = NeighborTable::new();
+        t.set_active(&urls(&["a"]), &[]);
+        let start = t.own_coordinate();
+        let remote = Coordinate::default();
+        t.observe_coordinate("a", &remote, Duration::from_millis(40));
+        assert_ne!(t.own_coordinate(), start);
+        assert_eq!(t.snapshot()[0].coordinate, Some(remote));
+
+        let moved = t.own_coordinate();
+        let bad = Coordinate {
+            error: f64::NAN,
+            ..remote
+        };
+        t.observe_coordinate("a", &bad, Duration::from_millis(40));
+        t.observe_coordinate("zzz", &remote, Duration::from_millis(40));
+        assert_eq!(t.own_coordinate(), moved);
+        assert_eq!(t.coordinate_updates_rejected(), 1);
+        assert_eq!(t.snapshot()[0].coordinate, Some(remote));
+
+        t.set_active(&[], &[]);
+        t.set_active(&urls(&["a"]), &[]);
+        assert!(t.snapshot()[0].coordinate.is_none());
     }
 
     #[test]

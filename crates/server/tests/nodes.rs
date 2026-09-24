@@ -88,6 +88,7 @@ async fn announce_with_version(
             "roles": ["combined"],
             "protocol_version": protocol_version,
             "network_id": network_id,
+            "coordinate": {"vector": [0.0, 0.0, 0.0], "height": 0.01, "error": 1.0},
         }))
         .send()
         .await
@@ -102,6 +103,33 @@ async fn list_peers(http: &reqwest::Client, target_base: &str) -> Vec<serde_json
         .json()
         .await
         .expect("GET /nodes/peers response was not JSON")
+}
+
+#[tokio::test]
+#[ignore]
+async fn announcing_without_a_coordinate_is_rejected_and_the_caller_not_admitted() {
+    let http = reqwest::Client::new();
+    let base = server_url();
+    require_isolated_target(&base);
+    let caller_base_url = format!("http://test-harness-{}.invalid", Uuid::new_v4());
+
+    let response = http
+        .post(format!("{base}/nodes/announce"))
+        .json(&serde_json::json!({
+            "base_url": caller_base_url,
+            "roles": ["combined"],
+            "protocol_version": avalon_server::version::PROTOCOL_VERSION,
+            "network_id": network_id(),
+        }))
+        .send()
+        .await
+        .expect("POST /nodes/announce failed");
+    assert!(response.status().is_client_error(), "{}", response.status());
+    let body = response.text().await.unwrap();
+    assert!(body.contains("coordinate"), "{body}");
+
+    let peers = list_peers(&http, &base).await;
+    assert!(!peers.iter().any(|p| p["base_url"] == caller_base_url));
 }
 
 #[tokio::test]

@@ -18,6 +18,7 @@ use time::OffsetDateTime;
 
 use crate::error::AppError;
 use crate::neighbors::{NeighborSnapshot, RoundTripStats};
+use crate::network_coordinates::Coordinate;
 use crate::nodes::PeerInfo;
 use crate::state::AppState;
 
@@ -50,6 +51,8 @@ pub struct SelfView {
     pub resources: crate::resources::NodeResourceMetrics,
     /// Shards this node authors, with their latest signed tree head.
     pub shards: Vec<ShardHead>,
+    /// This node's advisory network coordinate; see `network_coordinates`.
+    pub coordinate: Coordinate,
 }
 
 /// A round-trip measurement together with the node that took it.
@@ -72,6 +75,8 @@ pub struct Neighbor {
     pub last_announced_at: Option<OffsetDateTime>,
     /// `None` until an announce to this peer has been attempted.
     pub latency: Option<ObservedLatency>,
+    /// The neighbor's own coordinate as it last reported it; advisory.
+    pub coordinate: Option<Coordinate>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,6 +196,7 @@ pub fn assemble(inputs: TopologyInputs) -> TopologyResponse {
                     observed_by: observer.clone(),
                     stats,
                 }),
+                coordinate: n.coordinate,
                 base_url: n.base_url,
             }
         })
@@ -279,6 +285,7 @@ pub async fn topology(
         stale: status.stale,
         resources: status.resources,
         shards,
+        coordinate: neighbor_table.own_coordinate(),
     };
     let response = assemble(TopologyInputs {
         self_view,
@@ -320,6 +327,7 @@ mod tests {
             stale: false,
             resources: Default::default(),
             shards: vec![],
+            coordinate: Default::default(),
         }
     }
 
@@ -343,6 +351,7 @@ mod tests {
             base_url: url.to_string(),
             bootstrap,
             round_trip: None,
+            coordinate: None,
         }
     }
 
