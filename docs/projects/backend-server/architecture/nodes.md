@@ -927,6 +927,55 @@ probe and trace routes are served; when `false` they return 404.
 `/nodes/peers` and `/nodes/discover` are always served, since peers rely on
 them. New routes in that group are added in `crates/server/src/topology_access.rs`.
 
+### Probe: `POST /nodes/probe`
+
+A client asks any node it can reach to measure its round trip to another node
+it knows. Body: `{ "target": "<base_url>", "samples": 1..3 }` (default 1).
+The node sends up to `samples` sequential `GET {target}/nodes/status` requests
+and returns `{ target, ok, samples_ms, min_ms, median_ms, error? }`.
+
+- The target must already be in the probing node's peer table and on its
+  network; otherwise `404` with code `unknown_target`. The endpoint is not an
+  open proxy.
+- Timings only. Nothing the target sends back is returned. Timings are the
+  probing node's own observations (first sample includes connection setup),
+  self-reported to the caller and advisory, not verified.
+- A failed sample ends the call with `ok: false` and `error` set to
+  `timeout`, `unreachable` or `bad_status`.
+- Outbound requests go through the outbound address policy (below).
+- Limits: a dedicated per-IP limit (`AVALON_PROBE_RATE_LIMIT_PER_MINUTE`,
+  default 30) and a cap on concurrent probes per node
+  (`AVALON_PROBE_MAX_CONCURRENT`, default 8), on top of the node-wide per-IP
+  ceiling. Hitting either returns `429` with `Retry-After`.
+- Errors use `{ "error": <message>, "code": <snake_case code> }`:
+  `invalid_samples` (400), `target_not_allowed` (403), `unknown_target` (404),
+  `target_unresolvable` (502), `rate_limited` / `too_many_in_flight` (429).
+
+Served only while `AVALON_TOPOLOGY_PUBLIC` is true.
+
+### Outbound address policy
+
+`crates/server/src/outbound_policy.rs` decides which peer-supplied URLs this
+node will contact. A peer table entry arrives through gossip, so the URL is
+attacker influenced. Before this policy the announce worker used a plain HTTP
+client: any scheme reqwest supports, no address checks, redirects followed.
+That path is unchanged for now; the module is written to be reused for
+peer-table validation.
+
+- Always refused: non-http(s) schemes, URLs with userinfo, query or fragment,
+  unspecified (`0.0.0.0`, `::`), `0.0.0.0/8`, multicast, broadcast, reserved
+  `240.0.0.0/4`, and link-local (`169.254.0.0/16` including the cloud metadata
+  address `169.254.169.254`, `fe80::/10`).
+- Refused unless `AVALON_ALLOW_PRIVATE_PEERS` is true (default false):
+  loopback, RFC 1918, `100.64.0.0/10`, ULA `fc00::/7`, site-local `fec0::/10`.
+  The dev fleet and local multi-node tests set it.
+- IPv4-mapped IPv6 addresses are judged as the IPv4 address they carry.
+- The check applies to every address the host resolves to, not just a literal
+  host; the request is then pinned to a checked address (resolve override), so
+  a different DNS answer at connect time cannot change the destination.
+- Clients built by the policy follow no redirects, use no proxy, and carry a
+  timeout.
+
 ## Open questions
 
 SDK-side node discovery and capability negotiation (the SDK still takes a
