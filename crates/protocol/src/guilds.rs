@@ -212,7 +212,7 @@ impl RoleBadgeColor {
 /// opaque badge id) so it can grow into a richer badge system later —
 /// more icons/colors, tiers, an uploaded custom asset as an additional
 /// variant — without a breaking change to callers that just want "an icon
-/// and a color" out of a role (`packages/ui`'s planned `AvalonRoleBadge`
+/// and a color" out of a role (the shared UI library's `AvalonRoleBadge`
 /// is the first such caller).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RoleBadge {

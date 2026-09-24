@@ -9116,7 +9116,7 @@
       },
       "RoleBadge": {
         "type": "object",
-        "description": "A role's small, fixed visual identity: an icon id from a\nclosed enum paired with a color id from a closed enum — deliberately\nnot a free-form asset/upload, no user-supplied image hosting in scope\nfor milestone 1. Shaped as icon+color today (rather than e.g. a single\nopaque badge id) so it can grow into a richer badge system later —\nmore icons/colors, tiers, an uploaded custom asset as an additional\nvariant — without a breaking change to callers that just want \"an icon\nand a color\" out of a role (`packages/ui`'s planned `AvalonRoleBadge`\nis the first such caller).",
+        "description": "A role's small, fixed visual identity: an icon id from a\nclosed enum paired with a color id from a closed enum — deliberately\nnot a free-form asset/upload, no user-supplied image hosting in scope\nfor milestone 1. Shaped as icon+color today (rather than e.g. a single\nopaque badge id) so it can grow into a richer badge system later —\nmore icons/colors, tiers, an uploaded custom asset as an additional\nvariant — without a breaking change to callers that just want \"an icon\nand a color\" out of a role (the shared UI library's `AvalonRoleBadge`\nis the first such caller).",
         "required": [
           "icon",
           "color"

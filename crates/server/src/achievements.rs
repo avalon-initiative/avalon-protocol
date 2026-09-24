@@ -39,9 +39,9 @@ use crate::issuer_registration::ensure_issuer_registered;
 use crate::outbox;
 use crate::state::AppState;
 
-/// The built-in icon set shipped with `packages/ui` — a key
+/// The built-in icon set shipped with the shared UI library — a key
 /// into `AchievementIconName` on the frontend
-/// (`packages/ui/src/components/AvalonAchievementCard.types.ts`), generic
+/// (`AvalonAchievementCard.types.ts` in `avalon-common-ui`), generic
 /// enough to cover integrators/apps/services alike. Kept as a small, fixed list
 /// here (not a caller-extensible enum) so a bogus `icon` value can never
 /// silently render as a blank/broken slot in the Hub.
