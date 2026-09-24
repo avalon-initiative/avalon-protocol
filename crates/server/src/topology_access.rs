@@ -16,7 +16,7 @@
 //! [`PUBLIC_PATHS`]; a route on a new path must be added to that list too.
 
 use axum::http::Method;
-use axum::routing::{any_service, post};
+use axum::routing::{any_service, get, post};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -51,6 +51,7 @@ pub fn topology_public() -> bool {
 /// group is only mounted when [`topology_public`] is true.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/nodes/topology", get(crate::topology::topology))
         .route("/nodes/probe", post(crate::topology_probe::probe))
         .route("/nodes/trace", post(crate::topology_trace::trace))
 }

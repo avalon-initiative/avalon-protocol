@@ -97,6 +97,17 @@ impl ShardMirrorSources {
         Self { sources }
     }
 
+    /// Every configured `(shard_id, source_url)` pair, ordered by shard.
+    pub fn entries(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .sources
+            .iter()
+            .map(|(shard, url)| (shard.clone(), url.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
     /// The configured mirror peer's base URL for `shard_id`, if any —
     /// `None` means either no mirroring is configured at all, or this
     /// specific `shard_id` isn't one of the configured peers (an unscoped

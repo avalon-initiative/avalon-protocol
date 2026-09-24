@@ -150,8 +150,9 @@ Groups: `core` (every test file that needs only one plain server),
 `relay` (two DHT-enabled nodes plus one poll-only mirror: realtime relay and
 reconnect, chat replication, mirror push, identity locator, node discovery),
 `own-shard`, `cross-shard-login`, `aggregator`, `internal-role`,
-`gateway-only`, `realtime-proxy`, `remote-settlement`, `remote-submit` and
-`settlement-only`. Run a subset with `make test-live GROUPS="relay core"`,
+`gateway-only`, `realtime-proxy`, `remote-settlement`, `remote-submit`,
+`settlement-only` and `topology` (three nodes: neighbors versus known peers,
+measured latency, mirror sources). Run a subset with `make test-live GROUPS="relay core"`,
 narrow `core` with `LIVE_ONLY="mirror_watcher"`, pass a test-name filter with
 `LIVE_TEST_ARGS=...`, and keep the schemas for inspection with
 `LIVE_KEEP_SCHEMAS=1`. Server logs and per-test output are kept under

@@ -566,7 +566,7 @@ pub async fn status(State(state): State<AppState>) -> Json<NodeStatusResponse> {
 
 /// Shared by `status` and `discover` so both build the exact same
 /// `NodeStatusResponse` from the same `AppState`.
-fn build_status(state: &AppState) -> NodeStatusResponse {
+pub(crate) fn build_status(state: &AppState) -> NodeStatusResponse {
     let own_version = semver::Version::parse(crate::version::PROTOCOL_VERSION).ok();
     let newest_known_peer_version = state
         .peers
@@ -1005,6 +1005,7 @@ pub async fn run_worker(
     let mut active_peers: Vec<String> = config.peers.clone();
 
     let neighbors = peers.neighbors().clone();
+    neighbors.set_own_libp2p_peer_id(dht_identity.as_ref().map(|d| d.peer_id.clone()));
 
     loop {
         neighbors.set_active(&active_peers, &config.peers);

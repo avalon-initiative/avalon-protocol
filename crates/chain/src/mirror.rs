@@ -654,6 +654,24 @@ pub async fn mirrored_progress(
     })
 }
 
+/// When `network_id`/`shard_id` last had a mirrored entry stored, if ever.
+pub async fn last_mirrored_at(
+    pool: &PgPool,
+    network_id: &str,
+    shard_id: &str,
+) -> Result<Option<OffsetDateTime>, SettlementError> {
+    let row = sqlx::query(
+        "SELECT MAX(mirrored_at) AS at FROM mirrored_entries WHERE network_id = $1 AND shard_id = $2",
+    )
+    .bind(network_id)
+    .bind(shard_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| SettlementError::Storage(e.to_string()))?;
+    row.try_get("at")
+        .map_err(|e| SettlementError::Storage(e.to_string()))
+}
+
 pub struct MirrorProgress {
     pub last_seq: i64,
     pub verified_count: i64,

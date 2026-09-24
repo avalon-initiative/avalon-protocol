@@ -8,7 +8,7 @@
 # usage: scripts/live-tests.sh [group ...]     (default: all groups)
 #   groups: core ledger-writers relay own-shard cross-shard-login aggregator internal-role
 #           gateway-only realtime-proxy remote-settlement remote-submit
-#           settlement-only topology topology-trace
+#           settlement-only topology topology-probe topology-trace
 #
 # env: AVALON_ENV_FILE  .env to read DATABASE_URL and keys from
 #                       (default: <repo>/.env, else the primary checkout's)
@@ -139,7 +139,7 @@ run_test() {
 # the rest against one plain server.
 MULTI_PROCESS="chat_replication cross_node_login_cross_shard cross_node_login_verification \
 cross_shard gateway_only_deployment identity_locator internal_role_protocol mirror_push realtime_proxy \
-realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only \
+realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only topology \
 topology_probe topology_trace"
 
 # Test files that write or rewrite ledger/projection tables directly. Run
@@ -449,6 +449,32 @@ group_settlement_only() {
 }
 
 group_topology() {
+  new_schema live_topo_a || return
+  new_schema live_topo_b || return
+  new_schema live_topo_c || return
+  local a=$((BASE_PORT + 60)) b=$((BASE_PORT + 61)) c=$((BASE_PORT + 62)) dead=1
+  # A's active set is capped at its two bootstrap peers, so C (learned only
+  # through B's gossip) stays a known-but-not-active peer.
+  start_node topo-a live_topo_a "$a" AVALON_BOOTSTRAP_PEERS="http://127.0.0.1:$b,http://127.0.0.1:$dead" \
+    AVALON_NODE_MAX_PEERS=2 AVALON_ANNOUNCE_INTERVAL_SECS=2 \
+    AVALON_MIRROR_PEERS="core=http://127.0.0.1:$b" AVALON_MIRROR_POLL_INTERVAL_SECS=5 || return
+  start_node topo-b live_topo_b "$b" AVALON_BOOTSTRAP_PEERS="http://127.0.0.1:$a,http://127.0.0.1:$c" \
+    AVALON_ANNOUNCE_INTERVAL_SECS=2 || return
+  start_node topo-c live_topo_c "$c" AVALON_BOOTSTRAP_PEERS="http://127.0.0.1:$b" \
+    AVALON_ANNOUNCE_INTERVAL_SECS=2 || return
+  (
+    export AVALON_SERVER_URL="http://127.0.0.1:$a"
+    export AVALON_TOPOLOGY_NODE_B_URL="http://127.0.0.1:$b"
+    export AVALON_TOPOLOGY_NODE_C_URL="http://127.0.0.1:$c"
+    export AVALON_TOPOLOGY_DEAD_PEER_URL="http://127.0.0.1:$dead"
+    run_test topology/topology avalon-server topology
+    printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
+    echo "$FAILED" >"$LOG_DIR/subshell-failed"
+  )
+  merge_subshell
+}
+
+group_topology_probe() {
   new_schema live_topology || return
   local a=$((BASE_PORT + 100)) b=$((BASE_PORT + 101)) s=$((BASE_PORT + 102)) l=$((BASE_PORT + 103))
   local u="http://127.0.0.1"
@@ -466,7 +492,7 @@ group_topology() {
   (
     export TOPOLOGY_A_URL="$u:$a" TOPOLOGY_B_URL="$u:$b" TOPOLOGY_STRICT_URL="$u:$s" \
       TOPOLOGY_LIMITED_URL="$u:$l" TOPOLOGY_CAP_URL="$u:$cap" TOPOLOGY_BLACKHOLE_URL="$u:$hole"
-    run_test topology/topology_probe avalon-server topology_probe
+    run_test topology-probe/topology_probe avalon-server topology_probe
     printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
     echo "$FAILED" >"$LOG_DIR/subshell-failed"
   )
@@ -530,7 +556,7 @@ group_topology_trace() {
   merge_subshell
 }
 
-GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology topology-trace)
+GROUPS_ALL=(core ledger-writers relay own-shard cross-shard-login aggregator internal-role gateway-only realtime-proxy remote-settlement remote-submit settlement-only topology topology-probe topology-trace)
 SELECTED=("$@")
 [ "${#SELECTED[@]}" -eq 0 ] && SELECTED=("${GROUPS_ALL[@]}")
 
@@ -553,6 +579,7 @@ for g in "${SELECTED[@]}"; do
     remote-submit) group_remote_submit ;;
     settlement-only) group_settlement_only ;;
     topology) group_topology ;;
+    topology-probe) group_topology_probe ;;
     topology-trace) group_topology_trace ;;
     *) echo "unknown group: $g" >&2; FAILED=1 ;;
   esac

@@ -77,6 +77,7 @@ pub mod rollback;
 pub mod settlement;
 pub mod signature_gate;
 pub mod state;
+pub mod topology;
 pub mod topology_access;
 pub mod topology_limits;
 pub mod topology_probe;
