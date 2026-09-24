@@ -5,7 +5,7 @@
 -- neither is set, so no backfill is needed here for existing rows.
 --
 -- `icon` is a key into a small, fixed built-in icon set shipped with
--- packages/ui (trophy/star/shield/sword — generic enough to cover
+-- the shared UI library (trophy/star/shield/sword — generic enough to cover
 -- games/apps/services alike). `icon_url` is an integrator-hosted image,
 -- taking precedence over `icon` when present — stored as-is, never
 -- fetched/validated server-side beyond a basic http(s)-scheme check, same
