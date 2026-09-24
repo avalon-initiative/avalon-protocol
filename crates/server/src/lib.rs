@@ -75,6 +75,7 @@ pub mod rollback;
 pub mod settlement;
 pub mod signature_gate;
 pub mod state;
+pub mod topology_access;
 pub mod trusted_proxies;
 pub mod version;
 pub mod visibility;
@@ -234,9 +235,10 @@ fn apply_common_layers(
     // Tracing and CORS wrap the limiters so a 429/503 they produce still
     // carries CORS headers — otherwise the browser reports a limited
     // request as an opaque network failure instead of a readable status.
-    limited
-        .layer(TraceLayer::new_for_http())
-        .layer(cors_layer_from_env())
+    topology_access::apply_cors(
+        limited.layer(TraceLayer::new_for_http()),
+        cors_layer_from_env(),
+    )
 }
 
 /// Issue #664: the reduced route table for a genuinely standalone
@@ -285,6 +287,7 @@ fn settlement_only_routes(state: AppState) -> Router {
         )
         // Issue #596: push-based mirror-sync notification.
         .route("/mirror/notify", post(mirror_push::notify))
+        .merge(topology_access::mount(Router::new()))
         .with_state(state)
 }
 
@@ -809,5 +812,6 @@ fn full_routes(state: AppState) -> Router {
             "/internal/indexer/rebuild",
             post(internal_role::rebuild_indexer),
         )
+        .merge(topology_access::mount(Router::new()))
         .with_state(state)
 }

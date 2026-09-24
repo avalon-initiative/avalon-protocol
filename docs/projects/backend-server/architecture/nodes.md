@@ -842,6 +842,22 @@ tracked size/in-use. Built on the cross-platform `sysinfo` crate rather than
 hand-rolled `/proc` parsing, since hosters aren't guaranteed to run Linux.
 Every leaf field is independently optional and best-effort.
 
+### Public read-only CORS and the topology opt-out
+
+`GET /nodes/status`, `/nodes/peers`, `/nodes/discover`, `/ledger/sth/latest`,
+`/ledger/mirror-progress` and the topology routes `/nodes/topology`,
+`/nodes/probe` and `/nodes/trace` answer any origin
+(`Access-Control-Allow-Origin: *`, no credentials, methods GET/POST/OPTIONS,
+`Content-Type` header only), so a browser application can read many
+independently run nodes without each hoster allowlisting it. The list is a
+fixed set of paths (`topology_access::PUBLIC_PATHS`); every other route keeps
+the `AVALON_HUB_ORIGIN` allowlist.
+
+`AVALON_TOPOLOGY_PUBLIC` (default `true`) controls whether the topology,
+probe and trace routes are served; when `false` they return 404.
+`/nodes/peers` and `/nodes/discover` are always served, since peers rely on
+them. New routes in that group are added in `crates/server/src/topology_access.rs`.
+
 ## Open questions
 
 SDK-side node discovery and capability negotiation (the SDK still takes a
