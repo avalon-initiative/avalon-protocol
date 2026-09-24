@@ -1457,6 +1457,7 @@ mod tests {
 
     #[test]
     fn recovery_delay_env_var_overrides_default() {
+        let _env = crate::test_env::guard();
         // SAFETY-of-intent note: `std::env::set_var` is process-global;
         // this test does not run concurrently with anything else reading
         // this exact var (no other test in this crate touches
@@ -1477,6 +1478,7 @@ mod tests {
 
     #[test]
     fn a_non_positive_recovery_delay_env_var_falls_back_to_default() {
+        let _env = crate::test_env::guard();
         unsafe {
             std::env::set_var("AVALON_RECOVERY_DELAY_HOURS", "0");
         }

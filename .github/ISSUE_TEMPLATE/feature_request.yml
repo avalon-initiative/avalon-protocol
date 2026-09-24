@@ -1,15 +1,15 @@
 name: Feature request
 description: Suggest an improvement or new capability
 title: "[Feature] "
-labels: ["enhancement"]
+labels: ["type: feature"]
 body:
   - type: markdown
     attributes:
       value: |
         Before filing: does this keep a game fully sovereign over its own world,
         economy, and rules, giving Avalon only the connective infrastructure between
-        games? See the [Guiding Principles](https://github.com/LunarVagabond/avalon-protocol/blob/main/docs/stakeholders/Proposal.md#30-guiding-principles)
-        and the [architecture tests](https://github.com/LunarVagabond/avalon-protocol/blob/main/docs/projects/backend-server/architecture/README.md#architecture-tests).
+        games? See the [Guiding Principles](https://github.com/avalon-initiative/avalon-protocol/blob/main/docs/stakeholders/Proposal.md#30-guiding-principles)
+        and the [architecture tests](https://github.com/avalon-initiative/avalon-protocol/blob/main/docs/projects/backend-server/architecture/README.md#architecture-tests).
 
   - type: textarea
     id: problem

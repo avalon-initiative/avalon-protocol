@@ -161,7 +161,7 @@ from the commits since the last tag.
 
 ### 5. Review and publish the draft
 
-Open the draft on the repo's [Releases page](https://github.com/LunarVagabond/avalon-protocol/releases),
+Open the draft on the repo's [Releases page](https://github.com/avalon-initiative/avalon-protocol/releases),
 check the attached binaries and changelog, edit the notes if needed
 (the `X`/`Y`/`Z` meaning above is worth restating plainly for anyone
 skimming release notes to decide whether to upgrade immediately), and

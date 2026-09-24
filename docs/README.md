@@ -85,7 +85,7 @@ folder.
   all, referenced by more than one audience directory above.
 
 Architecture *decisions* are tracked as closed GitHub issues labeled
-[`architecture-decision-record`](https://github.com/LunarVagabond/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record),
+[`architecture-decision-record`](https://github.com/avalon-initiative/avalon-protocol/issues?q=is%3Aissue+label%3Aarchitecture-decision-record),
 not as files anywhere in this tree — see
 [`projects/backend-server/architecture/README.md`](projects/backend-server/architecture/README.md)
 for why and where still-open questions (label `decision`) are tracked

@@ -18,7 +18,7 @@ only as real and as decentralized as the operators actually running it.
 ## One command
 
 ```bash
-git clone https://github.com/LunarVagabond/avalon-protocol.git
+git clone https://github.com/avalon-initiative/avalon-protocol.git
 cd avalon-protocol
 make stack-up
 ```

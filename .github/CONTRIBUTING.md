@@ -23,7 +23,12 @@ If no, refine or drop the proposal.
 
 ## Questions before you file
 
-Open an issue, even for a design question or a sanity check.
+Open an issue or a
+[Discussion](https://github.com/orgs/avalon-initiative/discussions),
+even for a design question or a sanity check. Issues and Discussions are the
+durable record; the [Discord](https://discord.gg/FFDsFw9F4g) is for quick,
+informal chat and is not one. If an idea comes up there, move it into an
+issue or a Discussion so it is preserved and can be referenced.
 
 ## If A Convention Gets In The Way
 
