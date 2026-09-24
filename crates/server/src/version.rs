@@ -92,6 +92,7 @@ mod tests {
 
     #[test]
     fn env_var_below_the_baked_in_floor_has_no_effect() {
+        let _env = crate::test_env::guard();
         // SAFETY-of-intent note: `std::env::set_var`/`remove_var` are
         // process-global; `effective_min_peer_version` caches its result in
         // a `OnceLock` for the life of the process, so this test only
