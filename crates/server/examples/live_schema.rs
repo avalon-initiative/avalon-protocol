@@ -16,6 +16,10 @@ async fn main() -> anyhow::Result<()> {
         if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             anyhow::bail!("invalid schema name: {s}");
         }
+        // Only harness-owned schemas may be created or dropped, never `public`.
+        if !(s.starts_with("live_") || s.starts_with("test_")) {
+            anyhow::bail!("refusing schema outside the live_/test_ prefixes: {s}");
+        }
     }
 
     avalon_devenv::load();
