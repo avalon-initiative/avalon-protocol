@@ -873,6 +873,7 @@ pub async fn submit_ledger_batch(
     Json(batch): Json<EventBatch>,
 ) -> Result<Json<Commitment>, AppError> {
     require_settlement_submit_key(&state, &headers)?;
+    crate::op_trace::participate();
     let commitment = state.chain.commit(&batch).await?;
     Ok(Json(commitment))
 }
@@ -1005,6 +1006,7 @@ pub struct RemoteSubmitStatusResponse {
 pub async fn remote_submit_status(
     State(state): State<AppState>,
 ) -> (axum::http::StatusCode, Json<RemoteSubmitStatusResponse>) {
+    crate::op_trace::attach_stored_result();
     let failing_shards: Vec<FailingShard> = state
         .remote_submit_status
         .as_ref()

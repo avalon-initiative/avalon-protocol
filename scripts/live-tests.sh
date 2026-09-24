@@ -140,7 +140,7 @@ run_test() {
 MULTI_PROCESS="chat_replication cross_node_login_cross_shard cross_node_login_verification \
 cross_shard gateway_only_deployment identity_locator internal_role_protocol mirror_push realtime_proxy \
 realtime_reconnect realtime_relay remote_settlement remote_submit_status settlement_only topology \
-topology_probe topology_trace"
+topology_probe topology_trace op_trace"
 
 # Test files that write or rewrite ledger/projection tables directly. Run
 # beside other tests they desync the server's in-memory Merkle leaf cache and
@@ -241,6 +241,7 @@ group_relay() {
     for t in realtime_relay realtime_reconnect chat_replication mirror_push identity_locator nodes; do
       run_test "relay/$t" avalon-server "$t"
     done
+    run_test relay/op_trace avalon-server op_trace relay_
     printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
     echo "$FAILED" >"$LOG_DIR/subshell-failed"
   )
@@ -403,6 +404,7 @@ group_remote_settlement() {
     export AVALON_REMOTE_SETTLEMENT_SERVER_URL="http://127.0.0.1:$remote"
     export AVALON_REMOTE_SETTLEMENT_DATABASE_URL="$(schema_url live_rs_remote)"
     run_test remote-settlement/remote_settlement avalon-server remote_settlement
+    run_test remote-settlement/op_trace avalon-server op_trace submit_
     printf '%s\n' "${RESULTS[@]}" >"$LOG_DIR/subshell-results"
     echo "$FAILED" >"$LOG_DIR/subshell-failed"
   )

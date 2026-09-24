@@ -100,6 +100,15 @@ pub async fn enqueue(
     event: &ProtocolEvent,
 ) -> Result<(), sqlx::Error> {
     let event_json = serde_json::to_value(event).expect("ProtocolEvent should serialize");
+    if let Some(trace) = crate::op_trace::pending_for_current() {
+        let row_id: Uuid =
+            sqlx::query_scalar("INSERT INTO protocol_outbox (event) VALUES ($1) RETURNING id")
+                .bind(event_json)
+                .fetch_one(&mut **tx)
+                .await?;
+        crate::op_trace::register_pending(row_id, trace);
+        return Ok(());
+    }
     sqlx::query("INSERT INTO protocol_outbox (event) VALUES ($1)")
         .bind(event_json)
         .execute(&mut **tx)
@@ -337,14 +346,47 @@ impl RemoteSubmitConfig {
         &self.targets
     }
 
-    async fn submit(&self, url: &str, batch: &EventBatch) -> Result<Commitment, SettlementError> {
+    async fn submit(
+        &self,
+        url: &str,
+        batch: &EventBatch,
+        trace: Option<&crate::op_trace::PendingTrace>,
+    ) -> Result<Commitment, SettlementError> {
+        use crate::op_trace::{
+            branches_for_forward, from_response, store_result, Downstream, OpTrace,
+        };
         let mut request = self.client.post(format!("{url}/ledger/submit")).json(batch);
         if let Some(key) = &self.submit_key {
             request = request.bearer_auth(key);
         }
-        let response = request
-            .send()
-            .await
+        if let Some(t) = trace {
+            request = request.header(crate::op_trace::TRACE_HEADER, t.trace_id.to_string());
+        }
+        let sent = std::time::Instant::now();
+        let sent_result = request.send().await;
+        if let Some(t) = trace {
+            let down = match &sent_result {
+                Ok(r) if r.status().is_success() => {
+                    Downstream::Answered(from_response(r.headers(), t.trace_id))
+                }
+                Ok(_) => Downstream::Answered(None),
+                Err(e) if e.is_timeout() => Downstream::Timeout,
+                Err(_) => Downstream::Unreachable,
+            };
+            let (branches, truncated) = branches_for_forward(
+                &t.identity,
+                sent.duration_since(t.queued),
+                sent.elapsed(),
+                url,
+                down,
+            );
+            store_result(OpTrace {
+                trace_id: t.trace_id,
+                branches,
+                truncated,
+            });
+        }
+        let response = sent_result
             .map_err(|e| SettlementError::Storage(format!("remote submit request failed: {e}")))?
             .error_for_status()
             .map_err(|e| {
@@ -493,10 +535,14 @@ async fn drain_locked(
         let remote_target = remote.and_then(|r| r.target_for_shard(&shard_id).map(|url| (r, url)));
         let commit_result = match remote_target {
             None => chain.commit(&batch).await,
-            Some((remote, url)) => remote.submit(url, &batch).await,
+            Some((remote, url)) => {
+                let trace = crate::op_trace::find_pending(&pending_ids);
+                remote.submit(url, &batch, trace.as_ref()).await
+            }
         };
         match commit_result {
             Ok(commitment) => {
+                crate::op_trace::clear_pending(&pending_ids);
                 // Issue #526: a shard that just succeeded is no longer
                 // "currently failing" — clear any stale record from an
                 // earlier tick's outage. Local commits (`remote_target`

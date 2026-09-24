@@ -44,7 +44,7 @@ const MAX_VISITED: usize = 32;
 const MAX_URL_LEN: usize = 2048;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_FIELD_LEN: usize = 256;
-const MAX_ROLES: usize = 8;
+pub(crate) const MAX_ROLES: usize = 8;
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct TraceRequest {
@@ -304,11 +304,11 @@ pub async fn run_trace<F: Forwarder>(
     }
 }
 
-fn clip(s: &str) -> String {
+pub(crate) fn clip(s: &str) -> String {
     s.chars().take(MAX_FIELD_LEN).collect()
 }
 
-fn finite(v: f64) -> f64 {
+pub(crate) fn finite(v: f64) -> f64 {
     if v.is_finite() && v >= 0.0 {
         v
     } else {

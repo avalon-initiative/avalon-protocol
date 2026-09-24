@@ -337,10 +337,11 @@ pub async fn send_message(
     // paginated `GET` above if it misses this.
     state.chat.publish_channel_message(response.clone());
     // Issue #539: reach subscribers connected to a different node.
-    tokio::spawn(crate::realtime_relay::relay_to_peers(
+    crate::realtime_relay::relay_from_handler(
         state.clone(),
         crate::realtime_relay::RelayEvent::ChannelMessage(response.clone()),
-    ));
+    )
+    .await;
     // Issue #540: at-rest durability on at least one additional node.
     tokio::spawn(crate::chat_replication::replicate_to_peers(
         state.clone(),
@@ -489,13 +490,14 @@ pub async fn delete_message(
         .chat
         .publish_channel_message_deleted(channel_id, message_id);
     // Issue #539: reach subscribers connected to a different node.
-    tokio::spawn(crate::realtime_relay::relay_to_peers(
+    crate::realtime_relay::relay_from_handler(
         state.clone(),
         crate::realtime_relay::RelayEvent::ChannelMessageDeleted {
             channel_id,
             message_id,
         },
-    ));
+    )
+    .await;
     // Issue #540: mark the replica's copy deleted too.
     tokio::spawn(crate::chat_replication::replicate_to_peers(
         state.clone(),
