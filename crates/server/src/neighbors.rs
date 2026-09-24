@@ -109,6 +109,7 @@ impl PeerRtt {
 struct Inner {
     active: Vec<String>,
     bootstrap: Vec<String>,
+    own_libp2p_peer_id: Option<String>,
     stats: HashMap<String, PeerRtt>,
 }
 
@@ -122,6 +123,22 @@ pub struct NeighborTable {
 impl NeighborTable {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records this node's own libp2p peer id for the topology read model.
+    pub fn set_own_libp2p_peer_id(&self, peer_id: Option<String>) {
+        self.inner
+            .write()
+            .expect("neighbor table lock poisoned")
+            .own_libp2p_peer_id = peer_id;
+    }
+
+    pub fn own_libp2p_peer_id(&self) -> Option<String> {
+        self.inner
+            .read()
+            .expect("neighbor table lock poisoned")
+            .own_libp2p_peer_id
+            .clone()
     }
 
     /// Replaces the active set and drops statistics of peers that left it.
