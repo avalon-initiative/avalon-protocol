@@ -3,9 +3,7 @@
 The `typescript/` project in the `avalon-sdks` repo — the browser-facing
 [Avalon SDK](../README.md), implementing both `IntegratorSession`
 (capability-gated, mirrors Rust/C#'s `Session`) and `AccountSession`
-(first-party) from scratch. Physically lives in `avalon-sdks` as of this
-move, out of this repo's `bindings/ts` alongside the Rust and C# SDKs'
-own earlier moves. See [`../architecture/sdk.md`](../architecture/sdk.md)
+(first-party) from scratch. Lives in `avalon-sdks` (`languages/typescript/`). See [`../architecture/sdk.md`](../architecture/sdk.md)
 for the design that applies to every language's SDK — this page is the
 TypeScript-specific "how," not the "why."
 

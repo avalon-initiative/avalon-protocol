@@ -302,7 +302,7 @@ owning the destinations.
 
 ## Getting started in C#
 
-`bindings/csharp/AvalonSdk` (targets netstandard2.1, so it works in Unity)
+`avalon-sdks`' `languages/csharp/AvalonSdk` (targets netstandard2.1, so it works in Unity)
 has a real, building surface for friends/presence, guilds, and
 conversations — see [`../../architecture/sdk.md`](../../architecture/sdk.md) for
 the full method list and current known limitations.

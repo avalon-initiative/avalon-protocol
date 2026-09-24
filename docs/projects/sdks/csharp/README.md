@@ -2,11 +2,9 @@
 
 The `csharp/AvalonSdk` project in the `avalon-sdks` repo (NuGet package id
 `Avalon.Sdk`, root namespace `Avalon.Sdk`) — the flagship *external*
-[Avalon SDK](../README.md) for game developers. Physically lives in
-`avalon-sdks` (`languages/csharp/`) as of issue #775 (epic #771), moved out of this
-repo's `bindings/csharp` alongside the Rust SDK's own earlier move —
-neither this repo's `Makefile` nor its CI touch it anymore; `dotnet
-build`/`dotnet test` run from `avalon-sdks` directly. Targets
+[Avalon SDK](../README.md) for game developers. Lives in
+`avalon-sdks` (`languages/csharp/`); `dotnet build`/`dotnet test` run from
+that repository. Targets
 `netstandard2.1` deliberately, not `net8+`: Unity's Mono/IL2CPP runtimes
 are the primary target, and netstandard2.1 is Unity's minimum supported
 C# API compatibility level as of writing.

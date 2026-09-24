@@ -131,8 +131,8 @@ pins each known network's `network_id` to the settlement operator's real
 Ed25519 public key, so a client can verify a server's Signed Tree Heads
 (`GET /ledger/sth/latest`) instead of trusting the name alone. This table is
 rendered from [`docs/trusted-networks.json`](docs/trusted-networks.json), the
-single canonical copy — not a hand-maintained duplicate, and a Hub test fails
-if the two ever drift. See
+single canonical copy — not a hand-maintained duplicate, and `make check`
+fails if the two ever drift. See
 [Network trust anchors](docs/projects/backend-server/architecture/network-trust-anchors.md)
 for the full model, how the Hub enforces it, and what this deliberately does
 not solve (a compromised maintainer publishing a bad key here is a
@@ -155,10 +155,11 @@ validator set) — see the
 [trust anchor list](docs/projects/backend-server/architecture/network-trust-anchors.md#the-trust-anchor-list)
 for what each tier's `environment` value means.
 
-Avalon Hub bundles this same list at build time and always shows which
-pinned network the current session is connected to, flagging a mismatch or
-an unpinned network rather than trusting it silently — see
-`avalon-hub/apps/hub/src/network/`.
+The SDKs fetch this same file at runtime from its raw GitHub URL and report
+the network as unreachable if it cannot be fetched. Avalon Hub uses that to
+always show which pinned network the current session is connected to,
+flagging a mismatch or an unpinned network rather than trusting it silently —
+see `avalon-hub/apps/hub/src/composables/useNetworkTrust.ts`.
 
 ## Learn more
 
