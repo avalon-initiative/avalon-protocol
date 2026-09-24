@@ -50,7 +50,9 @@ logic to also have their own file in `src/state/`.
 `AvalonRsvpRosterPanel`.
 
 **Achievements and integrators** — `AvalonAchievementCard`,
-`AvalonIntegratorCard`, `AvalonConnectionCard`.
+`AvalonIntegratorCard`, `AvalonConnectionCard`, `AvalonBadgeIcon` (filled
+hexagonal tier badges: achievement, rare, epic, legendary, event, rank,
+guild, special; separate from `AvalonIcon`'s single-color stroke model).
 
 Each has a Storybook story under `src/stories/` — the fastest way to see a
 component's states and props without wiring up the app around it.
